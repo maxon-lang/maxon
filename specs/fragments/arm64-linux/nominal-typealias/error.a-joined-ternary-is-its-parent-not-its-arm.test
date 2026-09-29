@@ -1,0 +1,25 @@
+// Test: error.a-joined-ternary-is-its-parent-not-its-arm
+typealias Base = int(0 to 1000)
+typealias Left = int(0 to 100) implements Base
+typealias Right = int(0 to 200) implements Base
+
+function leftOf() returns Left
+	return 3
+end 'leftOf'
+
+function rightOf() returns Right
+	return 7
+end 'rightOf'
+
+function takesLeft(l Left) returns Left
+	return l
+end 'takesLeft'
+
+function main() returns ExitCode
+	let a = leftOf() if true else rightOf()
+	print("{takesLeft(a)}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:10: argument type mismatch for 'l': expected 'Left', got 'Base'

@@ -1,0 +1,27 @@
+// Test: error.throws-but-its-only-throw-is-caught-by-a-try-block
+enum Failure implements Error
+	broken
+end 'Failure'
+
+typealias Code = int(0 to 255)
+
+function guarded(n Code) returns Code throws Failure
+	try 'work'
+		if n > 10 'big'
+			throw Failure.broken
+		end 'big'
+	end 'work'
+	otherwise (e) 'handled'
+		match e 'kind'
+			broken then return 0
+		end 'kind'
+	end 'handled'
+	return n
+end 'guarded'
+
+function main() returns ExitCode
+	return try guarded(3) otherwise 1
+end 'main'
+---
+CompilerError:
+error E3168: <fragment>:8:10: 'throws Failure' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause

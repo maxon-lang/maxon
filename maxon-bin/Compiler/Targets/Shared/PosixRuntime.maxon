@@ -165,6 +165,46 @@ export let HostProcTerminateName = b"mrt_host_proc_terminate"
 export let HostProcProbeName = b"mrt_host_proc_probe"
 export let HostTickMsName = b"mrt_host_tick_ms"
 
+// --- The PROCESS-TRACE band ---
+export let HostTraceRequestName = b"mrt_host_trace_request"
+export let HostTraceeReadName = b"mrt_host_tracee_read"
+export let HostAwaitTraceeName = b"mrt_host_await_tracee"
+export let HostThreadSignalName = b"mrt_host_thread_signal"
+export let HostProcessSignalName = b"mrt_host_process_signal"
+
+export function posixTraceChunk(service HostProcessCall) returns ByteArray
+	return match service 'service'
+		traceRequest gives HostTraceRequestName
+		traceeMemoryRead gives HostTraceeReadName
+		awaitTracee gives HostAwaitTraceeName
+		threadGroupSignal gives HostThreadSignalName
+		processSignal gives HostProcessSignalName
+		openProcess or
+			nextThread or
+			threadId or
+			suspendThread or
+			resumeThread or
+			threadContext or
+			queryRegion or
+			readProcessMemory or
+			createHighResTimer or
+			setAbsoluteTimer or
+			moduleSnapshot or
+			moduleFirst or
+			moduleNext or
+			writeProcessMemory or
+			writeThreadContext or
+			attachToProcess or
+			detachFromProcess or
+			waitForDebugEvent or
+			continueDebugEvent or
+			breakProcess or
+			protectRegion or
+			flushCode or
+			closeHandle panic("posixTraceChunk: `{service.name}` is a Windows debug-port or sampling service and no POSIX lane lays out a chunk for it — `installDebugHostRuntime` builds only the trace band's five entries where `debugHostShapeOf` answers `processTrace`")
+	end 'service'
+end 'posixTraceChunk'
+
 // ⚠ **THE MILLISECOND STOPWATCH HAS THREE PRODUCERS AND ONLY ONE IS IN THE PIPE BAND.** A subprocess
 // deadline reads it, every DebugStream entry stamps `now - start_timestamp`, and `__uptime_ms` is the
 // language's own door onto it — so the gate is their union, which is what lets `TargetFacilities` claim
@@ -612,6 +652,88 @@ export let PosixWaitStatusExitMask = 0xFF
 export let PosixSignalExitCodeBase = 128
 export let PosixSigKill = 9
 
+let PosixSigIllegal = 4
+let PosixSigFpe = 8
+let PosixSigSegv = 11
+
+let LinuxSigBus = 7
+let DarwinSigBus = 10
+
+let LinuxSigStop = 19
+let DarwinSigStop = 17
+
+let PosixIllegalInstructionWords = b"illegal instruction"
+let PosixBusErrorWords = b"misaligned or invalid memory access"
+
+export enum PosixFaultSignal
+	illegalInstruction
+	busError
+	arithmetic
+	segmentation
+end 'PosixFaultSignal'
+
+export function posixFaultSignalNumber(kind PosixFaultSignal, on Os) returns MachineWord
+	return match kind 'kind'
+		illegalInstruction gives PosixSigIllegal as MachineWord
+		arithmetic gives PosixSigFpe as MachineWord
+		segmentation gives PosixSigSegv as MachineWord
+		busError gives posixBusSignalNumber(on)
+	end 'kind'
+end 'posixFaultSignalNumber'
+
+function posixBusSignalNumber(on Os) returns MachineWord
+	return match on 'os'
+		macos gives DarwinSigBus as MachineWord
+		linux gives LinuxSigBus as MachineWord
+
+		windows or
+			wasi panic("posixBusSignalNumber: `{on.name}` carries no POSIX signal roster, and only a lane that reports a debuggee's stop as a signal number asks for one")
+	end 'os'
+end 'posixBusSignalNumber'
+
+export function posixStopSignalNumber(on Os) returns MachineWord
+	return match on 'os'
+		macos gives DarwinSigStop as MachineWord
+		linux gives LinuxSigStop as MachineWord
+
+		windows or
+			wasi panic("posixStopSignalNumber: `{on.name}` carries no POSIX signal roster, and only a lane that halts a debuggee with a signal asks for one")
+	end 'os'
+end 'posixStopSignalNumber'
+
+export function posixFaultWords(kind PosixFaultSignal) returns ByteArray
+	return match kind 'kind'
+		illegalInstruction gives PosixIllegalInstructionWords
+		busError gives PosixBusErrorWords
+		arithmetic gives faultWords(HardwareFaultKind.divideByZero)
+		segmentation gives faultWords(HardwareFaultKind.accessViolation)
+	end 'kind'
+end 'posixFaultWords'
+
+export function posixSignalIsAHardwareFault(signal MachineWord, on Os) returns bool
+	for kind in PosixFaultSignal.allCases 'eachOwnedFault'
+		if posixFaultSignalNumber(kind, on: on) == signal 'thisOne'
+			return true
+		end 'thisOne'
+	end 'eachOwnedFault'
+
+	return false
+end 'posixSignalIsAHardwareFault'
+
+// ⛔ **THE MAP IS NOT INJECTIVE AND CANNOT BE**: a kernel reports a divide and an overflow as one SIGFPE,
+// and a nil dereference and a blown stack as one SIGSEGV — the fault ADDRESS is what separates each pair,
+// and a signal number carried out of a wait status does not carry it. So a reader that walks the kinds
+// answers the FIRST of a pair, which is the only honest reading a signal alone supports.
+export function posixFaultSignal(kind HardwareFaultKind, on Os) returns MachineWord
+	return match kind 'kind'
+		divideByZero or
+			overflow gives posixFaultSignalNumber(PosixFaultSignal.arithmetic, on: on)
+
+		accessViolation or
+			stackOverflow gives posixFaultSignalNumber(PosixFaultSignal.segmentation, on: on)
+	end 'kind'
+end 'posixFaultSignal'
+
 export let PosixProbeSignal = 0
 export let PosixShutdownWrite = 1
 
@@ -894,6 +1016,7 @@ export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 		wait gives 4
 		raiseBreak or
 			armSource or
+
 			// The child handle is the third operand and only Windows reads it: these lanes register the SOURCE the
 			// open already answered.
 			armChildSource gives 2

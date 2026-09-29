@@ -1,0 +1,139 @@
+export let DbgClassPlain = 1
+export let DbgClassPcRelativeData = 2
+export let DbgClassDirectCall = 3
+export let DbgClassDirectJump = 4
+export let DbgClassConditionalJump = 5
+export let DbgClassReturn = 6
+export let DbgClassIndirectCall = 7
+export let DbgClassIndirectJump = 8
+
+let DbgCallFormRegister = 1
+let DbgCallFormMemory = 2
+let DbgCallFormPcRelative = 3
+
+let NoFixupWord = 0 as DebugAddress
+
+function callFormCode(form DecodedCallForm) returns DebugAddress
+	return match form 'form'
+		register gives DbgCallFormRegister as DebugAddress
+		memory gives DbgCallFormMemory as DebugAddress
+		programCounterRelative gives DbgCallFormPcRelative as DebugAddress
+	end 'form'
+end 'callFormCode'
+
+export typealias DecodedOffset = int(0 to u64.max) implements ElementIndex
+export typealias DecodedAddress = int(0 to 0x00007FFFFFFFFFFF)
+export typealias DecodedDisplacement = int(i32.min to i32.max)
+export typealias DecodedLength = int(0 to 15)
+export typealias DecodedFixedWidth = int(1 to 15)
+export typealias DecodedClass = int(0 to 8)
+
+export typealias DecodedRegisterNumber = int(0 to 31)
+export typealias DecodedScale = int(1 to 8)
+
+export enum DecodedCallForm
+	register
+	memory
+	programCounterRelative
+end 'DecodedCallForm'
+
+export union DecodedRegisterLookup
+	none
+	register(number DecodedRegisterNumber)
+
+	export function spelled() returns String
+		return match self 'lookup'
+			none gives NoRegisterSpelling
+			register(number) gives "{number}"
+		end 'lookup'
+	end 'spelled'
+end 'DecodedRegisterLookup'
+
+export union DecodedCallOperand
+	none
+	register(number DecodedRegisterNumber)
+	memory(base DecodedRegisterLookup, index DecodedRegisterLookup, scale DecodedScale, displacement DecodedDisplacement)
+	programCounterRelative(address DecodedAddress)
+	addressOverridden(form DecodedCallForm, referent DebugAddress)
+
+	export function callForm() returns DecodedCallForm
+		match self 'operand'
+			none then panic("DecodedCallOperand.callForm: only an indirect call is asked for its form, and every indirect call decodes the operand it calls through")
+			register then return DecodedCallForm.register
+			memory then return DecodedCallForm.memory
+			programCounterRelative then return DecodedCallForm.programCounterRelative
+			addressOverridden(form, _) then return form
+		end 'operand'
+	end 'callForm'
+
+	/// The operand as `maxon debug --classify` prints it after `operand=`, compared byte for byte by
+	/// `tests/debug/x64-classifies-each-instruction-class.maxtest`.
+	export function spelled() returns String
+		match self 'operand'
+			none then panic("DecodedCallOperand.spelled: only an indirect call is asked for its operand, and every indirect call decodes the operand it calls through")
+			register(number) then return "reg:{number}"
+			memory(base, index, scale, displacement) then return "mem:base={base.spelled()},index={index.spelled()},scale={scale},disp={spelledDisplacement(displacement)}"
+			programCounterRelative(address) then return "word:0x{address:x}"
+			addressOverridden(form, _) then return "overridden:form={callFormCode(form)}"
+		end 'operand'
+	end 'spelled'
+
+	export function rebasedReferent() returns DebugAddress
+		match self 'operand'
+			none then panic("DecodedCallOperand.rebasedReferent: only an indirect call is asked for its operand, and every indirect call decodes the operand it calls through")
+
+			register or
+				memory then return NoFixupWord
+
+			programCounterRelative(address) then return address as DebugAddress
+			addressOverridden(_, referent) then return referent
+		end 'operand'
+	end 'rebasedReferent'
+end 'DecodedCallOperand'
+
+function spelledDisplacement(displacement DecodedDisplacement) returns String
+	if displacement >= 0 'forward'
+		return "+0x{displacement:x}"
+	end 'forward'
+
+	return "-0x{(0 - (displacement as DebuggeeWord)):x}"
+end 'spelledDisplacement'
+
+export union DecodedTarget
+	none
+	at(address DecodedAddress)
+
+	export function reached() returns DecodedAddress
+		match self 'target'
+			none then panic("DecodedTarget.reached: only a direct branch or a pc-relative operand is asked where it reaches, and every one decodes the address it reaches")
+			at(address) then return address
+		end 'target'
+	end 'reached'
+
+	export function spelled() returns String
+		return match self 'target'
+			none gives "0x{NoFixupWord:x}"
+			at(address) gives "0x{address:x}"
+		end 'target'
+	end 'spelled'
+end 'DecodedTarget'
+
+let NoRegisterSpelling = "none"
+
+export typealias DecodedOffsetArray = Array with DecodedOffset
+
+export type DecodedInstruction
+	export let length as DecodedLength
+	export let instructionClass as DecodedClass
+	export let target as DecodedTarget
+	export let callOperand as DecodedCallOperand
+
+	export static function create(length DecodedLength, instructionClass DecodedClass, target DecodedTarget, callOperand DecodedCallOperand) returns DecodedInstruction
+		return Self{length: length, instructionClass: instructionClass, target: target, callOperand: callOperand}
+	end 'create'
+end 'DecodedInstruction'
+
+export union DecodedLookup
+	unclassified
+	decoded(instruction DecodedInstruction)
+end 'DecodedLookup'

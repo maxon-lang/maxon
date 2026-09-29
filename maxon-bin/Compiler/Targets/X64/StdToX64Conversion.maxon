@@ -519,6 +519,11 @@ function hostProcessCallSlot(service HostProcessCall) returns IatSlot
 		protectRegion gives IatSlot.VirtualProtectEx
 		flushCode gives IatSlot.FlushInstructionCache
 		closeHandle gives IatSlot.CloseHandle
+		traceRequest or
+			traceeMemoryRead or
+			awaitTracee or
+			threadGroupSignal or
+			processSignal panic("hostProcessCallSlot: `{service.name}` is a ptrace-lane primitive with no Win32 import — `installDebugHostRuntime` builds its entry only where `hostDebugCall` spells it, which is the Linux arm alone, so reaching this map with one means a body survived a lane that cannot serve it")
 	end 'slot'
 end 'hostProcessCallSlot'
 
@@ -4047,16 +4052,20 @@ export type StdToX64Lowering
 	// the two stack slots unread, so the cost is a handful of dead moves and what it buys is one lowering
 	// instead of one per service.
 	//
-	// ⛔ **THE SYSCALL ROUTE REFUSES RATHER THAN STUBBING.** `HostFacility.processSampling` and
-	// `HostFacility.processDebug` are both `false` for x64-linux, so a program reaching here got past one of
-	// those gates and this panic is the backstop for a compiler bug — never the user-facing rejection. A stub
-	// would hand back a profile of nothing, or a debugger that reports every stop as a success.
 	function lowerOsHostProcess(resultId ValueId, service HostProcessCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, a5Id ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsHostProcessWin64(resultId, service: service, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, a4Id: a4Id, a5Id: a5Id, dstBlock: dstBlock)
-			syscall then panic("lowerOsHostProcess: `osHostProcess` has no syscall lowering — its services are gated by `HostFacility.processSampling` and `HostFacility.processDebug`, which only x64-windows provides, so a program reaching this arm got past one of those gates")
+			syscall then self.lowerOsHostProcessLinux(resultId, service: service, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, a4Id: a4Id, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsHostProcess'
+
+	function lowerOsHostProcessLinux(resultId ValueId, service HostProcessCall, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, a4Id ValueId, dstBlock IrBlock)
+		if service == HostProcessCall.traceeMemoryRead 'aFifthWord'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(HostTraceeReadOutIncomingSlot), src: TargetVReg.virtual(a4Id), width: X64AccessWidth.word64))
+		end 'aFifthWord'
+
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(posixTraceChunk(service)), args: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstBlock: dstBlock)
+	end 'lowerOsHostProcessLinux'
 
 	// The stack words go down first, while every argument register is still free — `lowerOsPipeCreateWin64`'s
 	// order and for its reason.

@@ -13,6 +13,11 @@ export enum HostDebugVerb
 	protectRegion
 	flushCode
 	closeHandle
+	traceRequest
+	traceeRead
+	awaitTracee
+	threadSignal
+	processSignal
 end 'HostDebugVerb'
 
 // ⛔ THE ONLY body in the compiler's own sources that names a `__Builtins.debug*` or `__Builtins.*Machine`
@@ -22,22 +27,77 @@ end 'HostDebugVerb'
 module function hostDebugCall(verb HostDebugVerb, a0 BackendWord, a1 BackendWord, a2 BackendWord, a3 BackendWord, a4 BackendWord) returns BackendWord
 	var answer = 0 as BackendWord
 
-	match verb 'verb'
-		pinMachine then answer = __Builtins.pinToMachine()
-		unpinMachine then __Builtins.unpinFromMachine()
-		readMemory then answer = __Builtins.debugReadMemory(a0, a1, a2, a3, a4)
-		writeMemory then answer = __Builtins.debugWriteMemory(a0, a1, a2, a3, a4)
-		readContext then answer = __Builtins.debugReadContext(a0, a1)
-		writeContext then answer = __Builtins.debugWriteContext(a0, a1)
-		waitEvent then answer = __Builtins.debugWaitEvent(a0, a1)
-		continueEvent then answer = __Builtins.debugContinueEvent(a0, a1, a2)
-		breakProcess then answer = __Builtins.debugBreakProcess(a0)
-		attachProcess then answer = __Builtins.debugAttachProcess(a0)
-		detachProcess then answer = __Builtins.debugDetachProcess(a0)
-		protectRegion then answer = __Builtins.debugProtectRegion(a0, a1, a2, a3, a4)
-		flushCode then answer = __Builtins.debugFlushCode(a0, a1, a2)
-		closeHandle then answer = __Builtins.debugCloseHandle(a0)
-	end 'verb'
+	#if os(Windows)
+		match verb 'verb'
+			pinMachine then answer = __Builtins.pinToMachine()
+			unpinMachine then __Builtins.unpinFromMachine()
+			readMemory then answer = __Builtins.debugReadMemory(a0, a1, a2, a3, a4)
+			writeMemory then answer = __Builtins.debugWriteMemory(a0, a1, a2, a3, a4)
+			readContext then answer = __Builtins.debugReadContext(a0, a1)
+			writeContext then answer = __Builtins.debugWriteContext(a0, a1)
+			waitEvent then answer = __Builtins.debugWaitEvent(a0, a1)
+			continueEvent then answer = __Builtins.debugContinueEvent(a0, a1, a2)
+			breakProcess then answer = __Builtins.debugBreakProcess(a0)
+			attachProcess then answer = __Builtins.debugAttachProcess(a0)
+			detachProcess then answer = __Builtins.debugDetachProcess(a0)
+			protectRegion then answer = __Builtins.debugProtectRegion(a0, a1, a2, a3, a4)
+			flushCode then answer = __Builtins.debugFlushCode(a0, a1, a2)
+			closeHandle then answer = __Builtins.debugCloseHandle(a0)
+			traceRequest or
+				traceeRead or
+				awaitTracee or
+				threadSignal or
+				processSignal then panic("hostDebugCall: `{verb.name}` is a ptrace verb and this build drives a debuggee through a debug port — `backendForHost` hands this host a backend that spells neither lane's verbs")
+		end 'verb'
+	#endif
+
+	#if os(Linux)
+		match verb 'verb'
+			pinMachine then answer = __Builtins.pinToMachine()
+			unpinMachine then __Builtins.unpinFromMachine()
+			traceRequest then answer = __Builtins.debugTraceRequest(a0, a1, a2, a3)
+			traceeRead then answer = __Builtins.debugTraceeRead(a0, a1, a2, a3, a4)
+			awaitTracee then answer = __Builtins.debugAwaitTracee(a0, a1, a2)
+			threadSignal then answer = __Builtins.debugThreadSignal(a0, a1, a2)
+			processSignal then answer = __Builtins.debugProcessSignal(a0, a1)
+			readMemory or
+				writeMemory or
+				readContext or
+				writeContext or
+				waitEvent or
+				continueEvent or
+				breakProcess or
+				attachProcess or
+				detachProcess or
+				protectRegion or
+				flushCode or
+				closeHandle then panic("hostDebugCall: `{verb.name}` is a debug-port verb and this build drives a debuggee through ptrace — `backendForHost` hands this host a backend that spells neither lane's verbs")
+		end 'verb'
+	#endif
+
+	#if not os(Windows) and not os(Linux)
+		match verb 'verb'
+			pinMachine then answer = __Builtins.pinToMachine()
+			unpinMachine then __Builtins.unpinFromMachine()
+			readMemory or
+				writeMemory or
+				readContext or
+				writeContext or
+				waitEvent or
+				continueEvent or
+				breakProcess or
+				attachProcess or
+				detachProcess or
+				protectRegion or
+				flushCode or
+				closeHandle or
+				traceRequest or
+				traceeRead or
+				awaitTracee or
+				threadSignal or
+				processSignal then panic("hostDebugCall: `{verb.name}`({a0}, {a1}, {a2}, {a3}, {a4}) asks this host for a debug channel it has none of — this build reaches an inferior through a stub it spawns and speaks to over a socket, so no verb of this band is lowered here and `backendForHost` refuses a session by name before one is asked for")
+		end 'verb'
+	#endif
 
 	return answer
 end 'hostDebugCall'

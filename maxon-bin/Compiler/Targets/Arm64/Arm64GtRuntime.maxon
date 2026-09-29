@@ -1288,15 +1288,36 @@ end 'emitArm64AsyncPreemptGprs'
 // the main thread and by `SchedRuntime.emitSchedWorkerBirth` for a worker.
 function buildArm64PreemptSelfRegisterChunk(os Os) returns FunctionCodeChunk
 	let SlotMachine = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(1)
+	let SlotUniqueId = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
 	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.pthreadSelf, syscallNumber: Arm64LinuxSyscallGettid)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotMachine)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: MOffOsThreadId)
 
+	match arm64OsCallKind(os) 'identity'
+		importCall then emitArm64DarwinUniqueThreadId(asm, machineSlot: SlotMachine, idSlot: SlotUniqueId)
+		syscall then break 'identity'
+	end 'identity'
+
 	return asm.finishFunction(PreemptSelfRegisterName)
 end 'buildArm64PreemptSelfRegisterChunk'
+
+// ⭐⭐ **THE SECOND IDENTITY THIS THREAD HAS, AND THE ONLY ONE ANYTHING OUTSIDE THE PROCESS NAMES IT BY.**
+// `pthread_kill` takes the `pthread_t` stored above and a debug stub names this thread by the 64-bit id
+// `pthread_threadid_np` answers; neither number can be derived from the other, so both are recorded here, on
+// the one thread that can ask about itself. ⚠ The id is written THROUGH A FRAME SLOT, because the call
+// answers it in memory rather than in a register.
+function emitArm64DarwinUniqueThreadId(asm Arm64RuntimeAsm, machineSlot StackSize, idSlot StackSize)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: idSlot)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: idSlot)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadThreadidNp)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: idSlot)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: machineSlot)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: MOffOsThreadUniqueId)
+end 'emitArm64DarwinUniqueThreadId'
 
 // `__gt_preempt_m(x0 = m)` — see `SchedRuntime.PreemptMachineName`. Go's `preemptM` (`signal_unix.go`).
 //

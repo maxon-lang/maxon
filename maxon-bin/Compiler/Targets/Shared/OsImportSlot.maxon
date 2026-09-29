@@ -354,6 +354,11 @@ export enum OsImportSlot
 	accept
 	getsockname
 	shutdown
+
+	// The 64-bit id a thread of this process is known by OUTSIDE it. A debug stub on this platform names
+	// every thread by this number, and `pthread_mach_thread_np`'s port is a different number about the same
+	// thread — so a machine records this one beside the `pthread_t` its own signals are addressed by.
+	pthreadThreadidNp
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor
@@ -450,6 +455,7 @@ export function osImportAnswerOf(slot OsImportSlot) returns ImportAnswer
 			listen or
 			accept or
 			getsockname or
-			shutdown gives ImportAnswer.signedDword
+			shutdown or
+			pthreadThreadidNp gives ImportAnswer.signedDword
 	end 'answer'
 end 'osImportAnswerOf'

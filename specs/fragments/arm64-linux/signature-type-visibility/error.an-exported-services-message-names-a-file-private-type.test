@@ -1,0 +1,37 @@
+// Test: error.an-exported-services-message-names-a-file-private-type
+// --- file: api/lib.maxon
+typealias Tally = int(0 to 100)
+
+type Report
+	export let n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Report'
+
+export type Worker
+	var seed as Tally
+
+	static function create(seed Tally) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	export function run() returns Report
+		return Report.create(self.seed)
+	end 'run'
+end 'Worker'
+
+export function tally() returns ExitCode
+	let h = spawn Worker.create(7)
+	let r = try await h.run() otherwise Report.create(0)
+	return r.n as ExitCode
+end 'tally'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return tally()
+end 'main'
+---
+CompilerError:
+error E3167: api/<fragment>:20:18: exported function 'api.Worker.run' names file-private type 'Report' in its return type

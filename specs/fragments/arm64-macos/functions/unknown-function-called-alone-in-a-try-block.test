@@ -1,0 +1,19 @@
+// Test: unknown-function-called-alone-in-a-try-block
+enum Failure implements Error
+	bad
+end 'Failure'
+
+function main() returns ExitCode
+	try 'work'
+		let v = frobnicate(2)
+		print("{v}")
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			Failure.bad then return 3
+		end 'kind'
+	end 'handler'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3004: <fragment>:8:11: call to undefined function 'frobnicate'

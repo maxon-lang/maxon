@@ -15,8 +15,8 @@ outline of its parts and is not yet a full account of them.
 | --- | --- | --- |
 | Debug-info emission | `maxon-bin/Compiler/Debug/` | `MxdbgEmit`, `MxdbgWriter`, `MxdbgTypeTable` and `MxdbgFormat` write the `.mxdbg` sidecar beside the executable; `MxdbgReader` reads it back. |
 | The runtime contract | `maxon-bin/Compiler/Debug/DebugContract.maxon` | The roster of `.data` words and record offsets the sidecar publishes, so a debugger outside the process can find the scheduler's own state. |
-| The host backend | `maxon-bin/Debug/Backend/` | The one funnel onto the host's debug interface, the register file, the stop events, and the Windows backend that drives them. |
-| The debugger | `maxon-bin/Debug/Debugger/` | The session, the command REPL and batch mode, breakpoint conditions, symbol lookup, value rendering, threads, and the x64 instruction decoder it steps with. |
+| The host backend | `maxon-bin/Debug/Backend/` | The one funnel onto the host's debug interface, the register file, the stop events, and the scratch pages a stopped thread's registers travel through. `BackendChoice` picks a backend off the host triple and `DebugBackendUnion` is the one face the debugger asks through: `WindowsBackend` over a debug port, `PtraceBackend` over `ptrace`, `GdbRemoteBackend` over the GDB remote serial protocol to Apple's `debugserver`. |
+| The debugger | `maxon-bin/Debug/Debugger/` | The session, the command REPL and batch mode, breakpoint conditions, symbol lookup, value rendering, threads, and the `X64Decode` and `Arm64Decode` instruction decoders it steps and unwinds with. |
 | The child process | `maxon-bin/Debug/TargetChild.maxon` | Launches and controls the program being debugged. |
 | The command | `maxon-bin/Debug/DebugCommand.maxon` | The `maxon debug` entry point, including `--dump-info` and `--symbolize`. |
 

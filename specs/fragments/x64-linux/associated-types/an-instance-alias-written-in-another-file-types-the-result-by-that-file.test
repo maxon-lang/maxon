@@ -1,0 +1,103 @@
+// Test: an-instance-alias-written-in-another-file-types-the-result-by-that-file
+// --- file: a.maxon
+export typealias Level = int(0 to 100)
+
+export interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+export type Tick implements Cursor with Level
+	var v as Level
+
+	export static function create() returns Self
+		return Self{v: 50}
+	end 'create'
+
+	export function current() returns Level
+		return self.v
+	end 'current'
+end 'Tick'
+
+export typealias LevelCursor = Cursor with Level
+
+// --- file: z.maxon
+typealias Level = int(0 to 3)
+
+function isHalf(c LevelCursor) returns bool
+	return c.current() == 50
+end 'isHalf'
+
+function main() returns ExitCode
+	let small = 2 as Level
+	if isHalf(Tick.create()) and small == 2 'half'
+		return 7
+	end 'half'
+	return 1
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @Tick.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+  __il_body#7:
+    x64.movRegImm32 rbx, 50
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#6:
+    x64.leaRegRdata rax, [rip + __witness_Tick.Cursor]
+  __il_body#8:
+    x64.movRegReg rcx, r12
+    x64.callMem [rax + 48]
+    x64.cmpRegImm32 r8, 50
+    x64.setccReg equal, rax
+  __il_cont#5:
+    x64.movRegImm32 rbx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, scmerge
+  andrhs:
+    x64.movRegImm32 rbx, 1
+  scmerge:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, ifcont
+  half:
+    x64.movRegImm32 r8, 7
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

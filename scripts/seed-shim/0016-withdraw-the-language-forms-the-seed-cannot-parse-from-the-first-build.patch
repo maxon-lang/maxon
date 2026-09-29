@@ -753,10 +753,10 @@ index 1e79db4..35eb44a 100644
  			end 'deadThisRound'
  
 diff --git a/maxon-bin/Compiler/IR/Std/StdDialect.maxon b/maxon-bin/Compiler/IR/Std/StdDialect.maxon
-index 65bb3b6..955703f 100644
+index cf8d5c0..8b79379 100644
 --- a/maxon-bin/Compiler/IR/Std/StdDialect.maxon
 +++ b/maxon-bin/Compiler/IR/Std/StdDialect.maxon
-@@ -4381,8 +4381,8 @@ export type StdValueDefs
+@@ -4387,8 +4387,8 @@ export type StdValueDefs
  	// compile calls, so it allocates only when a function outgrows every one before it.
  	export function rebuild(module StdModule, func IrFunction)
  		let bound = nextFreeValueId(module, func: func)
@@ -1134,7 +1134,7 @@ index b7c9fd2..4facc63 100644
  
  	// The function offset for the ValueOrigin fold: `IrModule.merge` appends the
 diff --git a/maxon-bin/Compiler/Parser.maxon b/maxon-bin/Compiler/Parser.maxon
-index 36353c2..8a63716 100644
+index ae576fb..62594a3 100644
 --- a/maxon-bin/Compiler/Parser.maxon
 +++ b/maxon-bin/Compiler/Parser.maxon
 @@ -73,7 +73,7 @@ module let GlobalSlotOffset = 0 as ByteOffset
@@ -1146,7 +1146,7 @@ index 36353c2..8a63716 100644
  
  // Where slot `slot` starts. The OFFSET half of the pair a capture's store (`buildClosureEnv`) and its
  // read (`emitCaptureRead`) must derive identically — `fieldStorageType` is the WIDTH half — written
-@@ -10005,7 +10005,7 @@ function availableDigitEscapeText(raw ByteArray, at ByteOffset, len ByteOffset,
+@@ -10011,7 +10011,7 @@ function availableDigitEscapeText(raw ByteArray, at ByteOffset, len ByteOffset,
  		available = len - at
  	end 'truncated'
  
@@ -1155,7 +1155,7 @@ index 36353c2..8a63716 100644
  end 'availableDigitEscapeText'
  
  // ⭐ **THE ONE MALFORMED-DIGIT-ESCAPE DIAGNOSTIC (E1004), built where its three variables meet.** `text`
-@@ -52706,7 +52706,7 @@ export type Parser
+@@ -52734,7 +52734,7 @@ export type Parser
  			self.boxedUnionAnswers = BoxedUnionAnswerArray.create()
  		end 'firstAnswer'
  
@@ -1164,7 +1164,7 @@ index 36353c2..8a63716 100644
  		try self.boxedUnionAnswers.set(nameId, value: BoxedUnionAnswer.boxed if boxed else BoxedUnionAnswer.notBoxed) otherwise panic("valueIsBoxedUnion: boxedUnionAnswers.set OOB at {nameId} after growing past it")
  		return boxed
  	end 'valueIsBoxedUnion'
-@@ -53183,7 +53183,7 @@ export type Parser
+@@ -53211,7 +53211,7 @@ export type Parser
  			scan = scan + 1
  		end 'countNames'
  
@@ -2350,7 +2350,7 @@ index 24182b9..7a7be1b 100644
  		return file
  	end 'fileOf'
 diff --git a/maxon-bin/Debug/Backend/DebugRegisterFile.maxon b/maxon-bin/Debug/Backend/DebugRegisterFile.maxon
-index e02fa41..6fd9c16 100644
+index ff51cda..24f36bd 100644
 --- a/maxon-bin/Debug/Backend/DebugRegisterFile.maxon
 +++ b/maxon-bin/Debug/Backend/DebugRegisterFile.maxon
 @@ -1,4 +1,4 @@
@@ -2358,7 +2358,7 @@ index e02fa41..6fd9c16 100644
 +export typealias BackendRegisterNumber = int(0 to 79)
  
  export let BackendRegisterSlots = 80
- export let BackendGprSlots = 16
+ 
 diff --git a/maxon-bin/Debug/CoverageReport.maxon b/maxon-bin/Debug/CoverageReport.maxon
 index ff97710..72385fc 100644
 --- a/maxon-bin/Debug/CoverageReport.maxon
@@ -2372,8 +2372,35 @@ index ff97710..72385fc 100644
  typealias CovTally = int(0 to u64.max)
  
  // ⭐ The status the measured program returned, or the absence of one. ABSENT — not zero — for a `report`,
+diff --git a/maxon-bin/Debug/Dap/DapServer.maxon b/maxon-bin/Debug/Dap/DapServer.maxon
+index 473b7da..69479f0 100644
+--- a/maxon-bin/Debug/Dap/DapServer.maxon
++++ b/maxon-bin/Debug/Dap/DapServer.maxon
+@@ -640,8 +640,8 @@ type DapAdapter
+ 		var nodes = JsonNodeIdArray.create()
+ 
+ 		for index in indices 'eachValue'
+-			let value = values.nodeAt(index)
+-			nodes.push(dapVariableNode(doc, value: value, reference: self.childReference(tree, node: index, value: value)))
++			let value = values.nodeAt((index as ElementIndex))
++			nodes.push(dapVariableNode(doc, value: value, reference: self.childReference(tree, node: (index as ElementIndex), value: value)))
+ 		end 'eachValue'
+ 
+ 		self.writer.respond(request, doc: doc, body: DapBody.object(dapVariablesBody(doc, nodes: nodes)))
+@@ -680,9 +680,9 @@ type DapAdapter
+ 		if let tree = try answers.trees.get(0) 'rendered'
+ 			let treeIndex = self.held(tree)
+ 			let root = try tree.roots.get(0) otherwise panic("DapAdapter.evaluate: a `value` reply carries exactly one root")
+-			let value = tree.nodeAt(root)
++			let value = tree.nodeAt((root as ElementIndex))
+ 			var doc = JsonDoc.create()
+-			self.writer.respond(request, doc: doc, body: DapBody.object(dapEvaluateBody(doc, result: dapValueText(value), reference: self.childReference(treeIndex, node: root, value: value))))
++			self.writer.respond(request, doc: doc, body: DapBody.object(dapEvaluateBody(doc, result: dapValueText(value), reference: self.childReference(treeIndex, node: (root as ElementIndex), value: value))))
+ 
+ 			return
+ 		end 'rendered'
 diff --git a/maxon-bin/Debug/DebugCommand.maxon b/maxon-bin/Debug/DebugCommand.maxon
-index ccb6716..b5cf955 100644
+index 85697ca..e7c4e47 100644
 --- a/maxon-bin/Debug/DebugCommand.maxon
 +++ b/maxon-bin/Debug/DebugCommand.maxon
 @@ -22,7 +22,7 @@ let LayoutSection = "layout"
@@ -2398,6 +2425,28 @@ index e2ac3f5..6f1c043 100644
  
  // An ABSOLUTE byte position in the ring's write sequence — not a position inside the 2 MB buffer, which
  // wraps. The producer's cursors are this, and the difference between two of them is what is pending.
+diff --git a/maxon-bin/Debug/Debugger/DebugEvents.maxon b/maxon-bin/Debug/Debugger/DebugEvents.maxon
+index 8a4a5da..83d2c6e 100644
+--- a/maxon-bin/Debug/Debugger/DebugEvents.maxon
++++ b/maxon-bin/Debug/Debugger/DebugEvents.maxon
+@@ -266,7 +266,7 @@ end 'addFunctionName'
+ function valueEventObject(doc JsonDoc, tree DebugValueTree) returns JsonNodeId
+ 	var object = JsonObjectBuilder.create()
+ 	object.addString(doc, key: DebugEventKey, value: ValueEventKind)
+-	object.addNode(ValueKey, node: valueObject(doc, tree: tree, index: try tree.roots.get(0) otherwise panic("valueEventObject: a `value` reply carries exactly one root")))
++	object.addNode(ValueKey, node: valueObject(doc, tree: tree, index: (try tree.roots.get(0) otherwise panic("valueEventObject: a `value` reply carries exactly one root") as ElementIndex)))
+ 
+ 	return object.build(doc)
+ end 'valueEventObject'
+@@ -388,7 +388,7 @@ function valueArray(doc JsonDoc, tree DebugValueTree, indices DebugValueIndexArr
+ 	var ids = JsonNodeIdArray.create()
+ 
+ 	for index in indices 'eachValue'
+-		ids.push(valueObject(doc, tree: tree, index: index))
++		ids.push(valueObject(doc, tree: tree, index: (index as ElementIndex)))
+ 	end 'eachValue'
+ 
+ 	return doc.add(JsonNode.arrayNode(ids))
 diff --git a/maxon-bin/Debug/Debugger/DebugFuzzy.maxon b/maxon-bin/Debug/Debugger/DebugFuzzy.maxon
 index 6bcb474..ab937ad 100644
 --- a/maxon-bin/Debug/Debugger/DebugFuzzy.maxon
@@ -2412,7 +2461,7 @@ index 6bcb474..ab937ad 100644
  
  function startsANewWord(name String, at ElementIndex) returns bool
 diff --git a/maxon-bin/Debug/Debugger/DebugReply.maxon b/maxon-bin/Debug/Debugger/DebugReply.maxon
-index 63bc1e1..db9ba27 100644
+index 10154d8..2290755 100644
 --- a/maxon-bin/Debug/Debugger/DebugReply.maxon
 +++ b/maxon-bin/Debug/Debugger/DebugReply.maxon
 @@ -3,7 +3,7 @@ export typealias DebugAddressArray = Array with DebugAddress
@@ -2424,24 +2473,70 @@ index 63bc1e1..db9ba27 100644
  export typealias DebugExitCode = int(i64.min to i64.max)
  
  // Signed, although a debuggee word is not: the range is what the debuggee's own `int(0 to u64.max)` is
-diff --git a/maxon-bin/Debug/Debugger/X64Decode.maxon b/maxon-bin/Debug/Debugger/X64Decode.maxon
-index 89ce09f..f495efc 100644
---- a/maxon-bin/Debug/Debugger/X64Decode.maxon
-+++ b/maxon-bin/Debug/Debugger/X64Decode.maxon
-@@ -23,7 +23,7 @@ function callFormCode(form X64CallForm) returns DebugAddress
+@@ -173,7 +173,7 @@ export type DebugStop
+ 	end 'create'
+ end 'DebugStop'
+ 
+-export typealias DebugValueIndex = int(0 to u32.max) implements ElementIndex
++export typealias DebugValueIndex = int(0 to u32.max)
+ export typealias DebugValueIndexArray = Array with DebugValueIndex
+ 
+ export type DebugValueNode
+diff --git a/maxon-bin/Debug/Debugger/DebugText.maxon b/maxon-bin/Debug/Debugger/DebugText.maxon
+index 7f35c3f..da7d6a3 100644
+--- a/maxon-bin/Debug/Debugger/DebugText.maxon
++++ b/maxon-bin/Debug/Debugger/DebugText.maxon
+@@ -162,7 +162,7 @@ end 'appendLocals'
+ 
+ function appendRoots(lines StringArray, tree DebugValueTree, indent String)
+ 	for root in tree.roots 'eachRoot'
+-		appendValue(lines, tree: tree, index: root, indent: indent)
++		appendValue(lines, tree: tree, index: (root as ElementIndex), indent: indent)
+ 	end 'eachRoot'
+ end 'appendRoots'
+ 
+@@ -171,7 +171,7 @@ function appendValue(lines StringArray, tree DebugValueTree, index ElementIndex,
+ 	lines.push("{indent}{value.name} : {value.typeName} = {valueText(value)}")
+ 
+ 	for child in value.children 'eachChild'
+-		appendValue(lines, tree: tree, index: child, indent: "{indent}{ValueIndent}")
++		appendValue(lines, tree: tree, index: (child as ElementIndex), indent: "{indent}{ValueIndent}")
+ 	end 'eachChild'
+ end 'appendValue'
+ 
+diff --git a/maxon-bin/Debug/Debugger/DebugValue.maxon b/maxon-bin/Debug/Debugger/DebugValue.maxon
+index 3793ebc..88ee843 100644
+--- a/maxon-bin/Debug/Debugger/DebugValue.maxon
++++ b/maxon-bin/Debug/Debugger/DebugValue.maxon
+@@ -109,8 +109,8 @@ end 'renderValuePath'
+ 
+ function childNamed(tree DebugValueTree, parent ElementIndex, name String) returns DebugChildLookup
+ 	for child in tree.nodeAt(parent).children 'eachChild'
+-		if tree.nodeAt(child).name == name 'thisOne'
+-			return DebugChildLookup.at(child)
++		if tree.nodeAt((child as ElementIndex)).name == name 'thisOne'
++			return DebugChildLookup.at((child as ElementIndex))
+ 		end 'thisOne'
+ 	end 'eachChild'
+ 
+diff --git a/maxon-bin/Debug/Debugger/DecodedInstruction.maxon b/maxon-bin/Debug/Debugger/DecodedInstruction.maxon
+index 1def9ec..1ff3a83 100644
+--- a/maxon-bin/Debug/Debugger/DecodedInstruction.maxon
++++ b/maxon-bin/Debug/Debugger/DecodedInstruction.maxon
+@@ -21,7 +21,7 @@ function callFormCode(form DecodedCallForm) returns DebugAddress
  	end 'form'
  end 'callFormCode'
  
--export typealias X64Offset = int(0 to u64.max) implements ElementIndex
-+export typealias X64Offset = int(0 to u64.max)
- export typealias X64Address = int(0 to 0x00007FFFFFFFFFFF)
- export typealias X64Displacement = int(i32.min to i32.max)
- export typealias X64Length = int(0 to 15)
+-export typealias DecodedOffset = int(0 to u64.max) implements ElementIndex
++export typealias DecodedOffset = int(0 to u64.max)
+ export typealias DecodedAddress = int(0 to 0x00007FFFFFFFFFFF)
+ export typealias DecodedDisplacement = int(i32.min to i32.max)
+ export typealias DecodedLength = int(0 to 15)
 diff --git a/maxon-bin/Main.maxon b/maxon-bin/Main.maxon
-index 6e2ace0..7d611f8 100644
+index cbbd2cf..acabe3d 100644
 --- a/maxon-bin/Main.maxon
 +++ b/maxon-bin/Main.maxon
-@@ -1468,7 +1468,7 @@ module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount,
+@@ -1469,7 +1469,7 @@ module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount,
  	return true
  end 'refusedPositionalBeyond'
  

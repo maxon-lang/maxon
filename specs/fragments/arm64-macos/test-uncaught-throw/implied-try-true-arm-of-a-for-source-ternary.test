@@ -1,0 +1,218 @@
+// Test: implied-try-true-arm-of-a-for-source-ternary
+// --- file: suite.maxtest
+typealias Tally = int(0 to 100)
+typealias TallyArray = Array with Tally
+
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function items(hit bool) returns TallyArray throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	var found = TallyArray.create()
+	found.push(1)
+	found.push(2)
+	return found
+end 'items'
+
+test 'walks the chosen items'
+	let useFirst = true
+	var total = 0
+
+	for x in items(true) if useFirst else items(true) 'each'
+		total = total + x
+	end 'each'
+
+	Expect.equal(total, expected: 3)
+end 'walks the chosen items'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_wireWrapper@0 = i64 0
+  __data_wireSeparator@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @items {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont
+  miss:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.movImm x9, 0
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @__test_walks_the_chosen_items {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+  ternarytrue:
+    arm64.movImm x0, 1
+    arm64.bl items
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq matchcont
+  tryerr#2:
+    arm64.sub x0, x9, 1
+    arm64.leaRdata x19, __str_rec_16  ; "ApiError"
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.leaRdata x1, __str_rec_17  ; "notFound"
+    arm64.mul x0, x0, x1
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.leaRdata x2, __str_rec_18  ; "suite.maxtest"
+    arm64.movImm x3, 23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl __TestReport.threw
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  matchcont:
+    arm64.movImm x21, 0
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
+    arm64.loadRegBaseDisp.word64 x23, [x20 + 24]
+    arm64.loadRegBaseDisp.word64 x24, [x20 + 0]
+    arm64.b forhdr
+  each:
+    arm64.cmp x23, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseIndexScale.word64 x0, [x24 + x21*8 + 0]
+    arm64.b __im_cont
+  __im_stride:
+    arm64.cmp x23, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.add x0, x24, x21
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __im_cont
+  __im_slow:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_get_unchecked
+  __im_cont:
+    arm64.add x19, x19, x0
+  forstep:
+    arm64.add x21, x21, 1
+  forhdr:
+    arm64.cmp x21, x22
+    arm64.b.lt each
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movImm x20, 3
+  __il_body:
+    arm64.leaRdata x0, __str_rec_31  ; ""
+    arm64.bl __str_retain
+    arm64.movRegReg x21, x0
+  __il_cont:
+    arm64.leaRdata x3, __str_rec_18  ; "suite.maxtest"
+    arm64.movImm x4, 27
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl Expect.equal#__with165_25#int
+    arm64.movRegReg x19, x9
+    arm64.cmp x19, 0
+    arm64.b.eq tryok
+  tryerr#13:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  tryok:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

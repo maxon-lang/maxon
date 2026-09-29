@@ -1,0 +1,22 @@
+// Test: range-check-panic.error.literal-float-field-out-of-range
+typealias Real = float(0.0 to 100.0)
+
+type Gauge
+  let level as Real
+
+  static function create() returns Self
+    return Self{level: 150.0}
+  end 'create'
+
+  function value() returns Real
+    return self.level
+  end 'value'
+end 'Gauge'
+
+function main() returns ExitCode
+  let gauge = Gauge.create()
+  return trunc(gauge.value())
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:8:17: Value 150 is outside the range of 'Real' (float(0 to 100))

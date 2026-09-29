@@ -70,7 +70,10 @@ type McpHttpSession
 	end 'credit'
 end 'McpHttpSession'
 
-typealias McpHttpSessionArray = Array with McpHttpSession
+// ⛔ **A LIST RATHER THAN AN ARRAY, BECAUSE A SESSION OWNS A DEBUGGED PROGRAM AND ONE OF THOSE MAY OWN A
+// SOCKET.** An `Array`'s copy deep-clones every element, which a compiler-owned OS handle cannot be, and that
+// is refused per instantiation whether or not anything copies this one (E2015).
+typealias McpHttpSessionList = List with McpHttpSession
 typealias SessionEnds = function(McpHttpSession) returns bool
 
 union SessionLookup
@@ -195,7 +198,7 @@ function servedSessions(server HttpServer, handler McpHttpHandler) returns McpHt
 end 'servedSessions'
 
 type McpHttpHandler implements HttpHandler
-	export var sessions as McpHttpSessionArray
+	export var sessions as McpHttpSessionList
 	let devMode as bool
 	let exePath as FilePath
 	let caps as McpHttpOptions
@@ -203,7 +206,7 @@ type McpHttpHandler implements HttpHandler
 	let server as HttpServer
 
 	static function create(devMode bool, exePath FilePath, caps McpHttpOptions, port NetworkPort, server HttpServer) returns McpHttpHandler
-		return Self{sessions: McpHttpSessionArray.create(), devMode: devMode, exePath: exePath, caps: caps, port: port, server: server}
+		return Self{sessions: McpHttpSessionList.create(), devMode: devMode, exePath: exePath, caps: caps, port: port, server: server}
 	end 'create'
 
 	function handle(exchange HttpExchange) throws HttpServerError
@@ -292,8 +295,8 @@ type McpHttpHandler implements HttpHandler
 	end 'idleMs'
 end 'McpHttpHandler'
 
-function acceptDeadlineFor(sessions McpHttpSessionArray, idleMs SessionMillis) returns SocketDeadlineMs
-	let first = try sessions.get(0) otherwise return NoAcceptDeadline
+function acceptDeadlineFor(sessions McpHttpSessionList, idleMs SessionMillis) returns SocketDeadlineMs
+	let first = try sessions.first() otherwise return NoAcceptDeadline
 	var longestIdle = first.lastSeenMs
 
 	for session in sessions 'eachSession'
@@ -306,8 +309,8 @@ function acceptDeadlineFor(sessions McpHttpSessionArray, idleMs SessionMillis) r
 	return (expiry - nowMs) as SocketDeadlineMs if expiry > nowMs else SoonestAcceptDeadline
 end 'acceptDeadlineFor'
 
-function reapSessions(sessions McpHttpSessionArray, ending SessionEnds) returns SessionTally
-	var kept = McpHttpSessionArray.create()
+function reapSessions(sessions McpHttpSessionList, ending SessionEnds) returns SessionTally
+	var kept = McpHttpSessionList.create()
 	var reaped = 0 as SessionTally
 
 	for session in sessions 'eachSession'
@@ -317,7 +320,7 @@ function reapSessions(sessions McpHttpSessionArray, ending SessionEnds) returns 
 			continue
 		end 'itEnds'
 
-		kept.push(session)
+		kept.append(session)
 	end 'eachSession'
 
 	if reaped == 0 'nothingReaped'
@@ -327,13 +330,13 @@ function reapSessions(sessions McpHttpSessionArray, ending SessionEnds) returns 
 	sessions.clear()
 
 	for session in kept 'eachKept'
-		sessions.push(session)
+		sessions.append(session)
 	end 'eachKept'
 
 	return reaped
 end 'reapSessions'
 
-function servePostedMessage(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionArray, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
+function servePostedMessage(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
 	match postedMessageOf(request.body()) 'posted'
 		notOneObject then try refuse(exchange, code: StatusCode.badRequest, reason: "the body is not one JSON-RPC object")
 		message(doc) then try serveMessage(exchange, doc: doc, offered: sessionOfferedBy(request), sessions: sessions, devMode: devMode, exePath: exePath, caps: caps)
@@ -350,7 +353,7 @@ function postedMessageOf(body String) returns PostedMessage
 	return PostedMessage.message(doc)
 end 'postedMessageOf'
 
-function serveMessage(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionArray, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
+function serveMessage(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
 	if rpcNamesMethod(doc, method: RpcInitializeMethod) 'initializing'
 		if rpcIsNotification(doc) 'asksForNothing'
 			try answerWith(exchange, code: StatusCode.accepted, body: McpAnswerBody.empty, minted: OfferedSession.absent)
@@ -371,7 +374,7 @@ end 'serveMessage'
 
 // An `initialize` carrying any session id is refused: honoured under a live id, it would replace
 // that session and orphan its debuggee.
-function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionArray, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
+function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
 	if namesASession(offered) 'alreadyInASession'
 		try refuse(exchange, code: StatusCode.badRequest, reason: "`initialize` opens a session and must carry no Mcp-Session-Id")
 
@@ -385,7 +388,7 @@ function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSess
 	end 'full'
 
 	let session = McpHttpSession.create(mintSessionId(), nowMs: Clock.nowMs() as SessionMillis)
-	sessions.push(session)
+	sessions.append(session)
 
 	try serveOnSession(exchange, doc: doc, session: session, devMode: devMode, exePath: exePath, minted: OfferedSession.named(session.id))
 end 'serveInitialize'
@@ -400,7 +403,7 @@ function serveOnSession(exchange HttpExchange, doc JsonDoc, session McpHttpSessi
 	end 'answer'
 end 'serveOnSession'
 
-function serveSessionDelete(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionArray) throws HttpServerError
+function serveSessionDelete(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionList) throws HttpServerError
 	let reaped = match sessionOfferedBy(request) 'offered'
 		absent gives 0 as SessionTally
 		named(id) gives reapSessions(sessions, ending: function(session) gives session.id.equals(id))
@@ -455,14 +458,14 @@ function sessionOfferedBy(request HttpRequest) returns OfferedSession
 	return OfferedSession.named(id)
 end 'sessionOfferedBy'
 
-function findSession(sessions McpHttpSessionArray, offered OfferedSession) returns SessionLookup
+function findSession(sessions McpHttpSessionList, offered OfferedSession) returns SessionLookup
 	match offered 'which'
 		absent then return SessionLookup.unknown
 		named(id) then return sessionNamed(sessions, id: id)
 	end 'which'
 end 'findSession'
 
-function sessionNamed(sessions McpHttpSessionArray, id String) returns SessionLookup
+function sessionNamed(sessions McpHttpSessionList, id String) returns SessionLookup
 	for session in sessions 'eachSession'
 		if session.id.equals(id) 'hit'
 			return SessionLookup.found(session)

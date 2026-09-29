@@ -1,0 +1,307 @@
+// Test: driftsort-compare-count-grows-as-n-log-n
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type CompareTally
+	export var calls as Integer
+
+	static function create() returns CompareTally
+		return Self{calls: 0}
+	end 'create'
+end 'CompareTally'
+
+function counted(x Integer, y Integer, tally CompareTally) returns Ordering
+	tally.calls = tally.calls + 1
+	return x.compare(y)
+end 'counted'
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	var r = 2463534242
+
+	for i in 0 upto 65536 'fill'
+		r = (r * 1103515245 + 12345) and 0x7FFFFFFF
+		a.push(r and 0xFFFFF)
+	end 'fill'
+
+	let tally = CompareTally.create()
+	a.sort(function(x Integer, y Integer) gives counted(x, y: y, tally: tally))
+
+	var ordered = true
+
+	for i in 1 upto a.count() 'walk'
+		let p = try a.get(i - 1) otherwise return 99
+		let v = try a.get(i) otherwise return 99
+
+		if p > v 'outOfOrder'
+			ordered = false
+		end 'outOfOrder'
+	end 'walk'
+
+	if ordered and tally.calls <= 32 * (a.count() as Integer) 'withinTheBound'
+		print("sorted within n log n\n")
+	end 'withinTheBound' else 'overTheBound'
+		print("ordered={ordered} compares={tally.calls}\n")
+	end 'overTheBound'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 144
+    arm64.storeSlotReg slot15, x28
+    arm64.storeSlotReg slot14, x27
+    arm64.storeSlotReg slot13, x26
+    arm64.storeSlotReg slot12, x25
+    arm64.storeSlotReg slot11, x24
+    arm64.storeSlotReg slot10, x23
+    arm64.storeSlotReg slot9, x22
+    arm64.storeSlotReg slot8, x21
+    arm64.storeSlotReg slot7, x20
+    arm64.storeSlotReg slot6, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 2463534242
+    arm64.movImm x20, 0
+    arm64.b forhdr#1
+  fill:
+    arm64.movImm x16, 1103515245
+    arm64.mul x0, x0, x16
+    arm64.add x0, x0, 12345
+    arm64.and x21, x0, 2147483647
+    arm64.and x1, x21, 1048575
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  forstep#3:
+    arm64.add x20, x20, 1
+    arm64.movRegReg x0, x21
+  forhdr#1:
+    arm64.cmp x20, 65536
+    arm64.b.lt fill
+  __il_body#30:
+    arm64.movImm x20, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot1, x21
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+  __il_cont#29:
+    arm64.leaFuncAddr x20, main$closure_0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x4, x0
+    arm64.storeSlotReg slot2, x4
+    arm64.storeBaseDispReg.word64 [x4 + 0], x21
+    arm64.leaRdata x5, __layout_Array_Integer
+  __il_body#31:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x3, x20
+    arm64.bl Array.driftsortRange
+  __il_cont#28:
+    arm64.movImm x20, 1
+    arm64.movImm x0, 1
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.b forhdr#5
+  walk:
+    arm64.sub x3, x0, 1
+  __im_load#27:
+    arm64.loadRegBaseIndexScale.word64 x3, [x2 + x3*8 + 0]
+  __im_load#24:
+    arm64.loadRegBaseIndexScale.word64 x4, [x2 + x0*8 + 0]
+  tryok:
+    arm64.cmp x3, x4
+    arm64.b.le critsplit
+  outOfOrder:
+    arm64.movImm x3, 0
+    arm64.b forstep#7
+  critsplit:
+    arm64.movRegReg x3, x20
+  forstep#7:
+    arm64.add x0, x0, 1
+    arm64.movRegReg x20, x3
+  forhdr#5:
+    arm64.cmp x0, x1
+    arm64.b.lt walk
+  forexit:
+    arm64.movImm x0, 0
+    arm64.cbz x20, scmerge
+  andrhs:
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.lsl x1, x1, 5
+    arm64.cmp x0, x1
+    arm64.cset x0, le
+  scmerge:
+    arm64.cbz x0, ifelse
+  withinTheBound:
+    arm64.leaRdata x0, __str_rec_4  ; "sorted within n log n\x0a"
+    arm64.bl print
+    arm64.b ifcont
+  ifelse:
+    arm64.leaRdata x0, __str_rec_5  ; "ordered="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.bl __bool_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_6  ; " compares="
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x21, [x21 + 0]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x26
+    arm64.bl __int_to_string
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x0, __str_rec_7  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot5, x0
+    arm64.add x1, x22, x20
+    arm64.add x1, x1, x25
+    arm64.add x1, x1, x21
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot3, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot4, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x19, x28, x22
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x19, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x19, x19, x25
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x19, x19, x21
+    arm64.loadRegSlot x2, slot5
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x27
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot5
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot4
+    arm64.storeBaseDispReg.word64 [x19 + 0], x28
+    arm64.loadRegSlot x0, slot3
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+  ifcont:
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot6
+    arm64.loadRegSlot x20, slot7
+    arm64.loadRegSlot x21, slot8
+    arm64.loadRegSlot x22, slot9
+    arm64.loadRegSlot x23, slot10
+    arm64.loadRegSlot x24, slot11
+    arm64.loadRegSlot x25, slot12
+    arm64.loadRegSlot x26, slot13
+    arm64.loadRegSlot x27, slot14
+    arm64.loadRegSlot x28, slot15
+    arm64.epilogue 144
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_77  ; "panic at Array.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot6
+    arm64.loadRegSlot x20, slot7
+    arm64.loadRegSlot x21, slot8
+    arm64.loadRegSlot x22, slot9
+    arm64.loadRegSlot x23, slot10
+    arm64.loadRegSlot x24, slot11
+    arm64.loadRegSlot x25, slot12
+    arm64.loadRegSlot x26, slot13
+    arm64.loadRegSlot x27, slot14
+    arm64.loadRegSlot x28, slot15
+    arm64.epilogue 144
+    arm64.ret
+}
+
+func @main$closure_0 {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
+  __il_body#2:
+    arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
+    arm64.add x3, x3, 1
+    arm64.storeBaseDispReg.word64 [x2 + 0], x3
+  __il_body#4:
+    arm64.cmp x0, x1
+    arm64.b.ge ifcont#6
+  lt:
+    arm64.movImm x0, 0
+    arm64.b __il_cont
+  ifcont#6:
+    arm64.cmp x0, x1
+    arm64.b.le ifcont#8
+  gt:
+    arm64.movImm x0, 2
+    arm64.b __il_cont
+  ifcont#8:
+    arm64.movImm x0, 1
+  __il_cont:
+    arm64.epilogue 16
+    arm64.ret
+}

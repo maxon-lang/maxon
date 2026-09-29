@@ -135,6 +135,7 @@ tests/
     sidecar-generic-and-clone-lines.maxtest      a per-type generic body and a synthesized clone carry line rows
     monitor-sched-events.maxtest            `monitor --filter=sched` shows a green thread's spawn and await
     x64-classifies-each-instruction-class.maxtest      `debug --classify=` gives a length and a class per class
+    arm64-classifies-each-instruction-class.maxtest      `debug --classify=arm64:` gives a length, a class, a target, a control register and a frame step per class
     classify-refuses-a-repeated-hex-prefix.maxtest      a second `0x` inside a sequence is refused, never stripped
     debug-refuses-wasm.maxtest              a wasm module is refused by the name of its target
     debug-refuses-foreign-sidecar.maxtest        a sidecar describing another build is refused, its own build the control
@@ -146,6 +147,7 @@ tests/
     a-fault-stops-before-it-is-passed-on.maxtest      a fault stops the debugger first and reaches the runtime at the resume
     a-breakpoint-past-any-fixed-table-size-is-armed.maxtest      the number of instructions armed at once is bounded by the program alone
     a-roster-past-any-fixed-window-lists-every-worker.maxtest      a listing answers for every live green thread, however many there are
+    a-program-with-no-green-threads-lists-an-empty-roster.maxtest      a program that carves none holds no roster word in its `.data`, and `threads` answers an empty list beside a layout section that does describe the contract
     batch-run-to-exit.maxtest               a completed session exits 0 and reports the program's code as data
     crash-exits-nonzero.maxtest             a fault is a `crash` event and a failed session
     timeout-before-run.maxtest              a program that never stops times out and is not left running
@@ -375,6 +377,8 @@ tests/
     fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
     fixtures/heap/main.maxon.fixture        stored name only - see rule 1
     fixtures/shared-segment/main.maxon.fixture   stored name only - see rule 1
+    fixtures/pinned-machine/main.maxon.fixture   stored name only - see rule 1
+    fixtures/pinned-machine-blocked/main.maxon.fixture   stored name only - see rule 1
   examples/
     ExamplesHarness.maxon                   the shared half: build one example, or one document's program, into temp/examples/<name>/, run it, check its answer
     basic.maxtest                           exits 42, the value its `main` returns
@@ -435,6 +439,7 @@ tests/
     debug-builds-are-swept.maxtest               a server sweeps exactly the debug builds whose owner has ended, whatever their age
     a-staged-snippet-is-removed-after-its-call.maxtest      a snippet staged for a tool call, and everything built from it, is gone once the call answers
     snippets-an-ended-server-left-are-swept.maxtest      a server sweeps the snippets and snippet builds an ended server left, and keeps a live server's
+    run-spec-test-filter-union.maxtest           `run_spec_test` given a filter array runs the union of the specs those filters name
   docs/
     stdlib-reference-documents-every-public-api.maxtest      docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`
 ```
@@ -705,6 +710,8 @@ given. A line-anchored breakpoint only ever
 lands on whatever instruction a statement happens to begin with, so `x64-classifies-each-instruction-class`
 asks the classifier directly, through `debug --classify=<hex>`, over a table with every class in it —
 including the two indirect classes and bytes this build cannot decode at all.
+`arm64-classifies-each-instruction-class` asks the arm64 classifier the same way, through
+`debug --classify=arm64:<hex>`, and over each frame step the stack unwinder reads besides.
 
 ⛔ **A FALSE CONDITION IS RESUMED WITHOUT A STOP THE READER SEES, AND THAT IS WHAT THE `cond-*` CASES
 MEASURE.** A driver that published every hit and swallowed the ones it did not want would show the same
@@ -779,8 +786,8 @@ because an unreleased adapter process is a leak and exits the run 101.
 
 The runner, the compiler that builds each fixture and the adapter are one binary, named by
 `TestedCompilerStem` in `DapClient.maxon`, so the `debug/` corpus's warning holds here too: read the pass
-count. The debugger it drives runs on x64-windows, so the corpus runs on that host, and like `debug/` each
-case spends a compile plus a debugged run: `maxon test tests/dap --timeout=60000`.
+count. The debugger it drives runs on every native host, so the corpus runs on all four of them, and
+like `debug/` each case spends a compile plus a debugged run: `maxon test tests/dap --timeout=60000`.
 
 ## `coverage/` — what a `--coverage` binary can be asked about after it has RUN
 
@@ -981,12 +988,12 @@ works in both directions: a name that IS imported is found, and one that is not 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (the child runs in a staging
 directory under `temp/console-write/`), and it keeps rule 5: one spawning `test`, one file, one compile.
 
-## `emitted-runtime/` — the ORDERING an emitted runtime body reads another thread's word with
+## `emitted-runtime/` — the ORDERING an emitted runtime body reads another thread's word with, and the machine a pinned green thread runs on
 
-Five cases, and each one's subject is a body no author wrote: one the back end synthesizes into every
+Seven cases. Five read the Target IR, and each one's subject there is a body no author wrote: one the back end synthesizes into every
 program that spawns, two into every program that allocates, fifteen scheduler, timer and poller
 bodies for the `.data` words published from under `__sched_lock`, the DebugStream producer's two ring
-bodies, and the two shared-segment word accessors. Each builds a fixture — `spawn` for the first three,
+bodies, and the two shared-segment word accessors. Each of the five builds a fixture — `spawn` for the first three,
 `heap` with `--debugstream` for the ring, `shared-segment` for the accessors — for `arm64-macos` and for
 `arm64-linux` with `--emit-ir-runtime=`, cut
 `func @<function>` out of the printed Target IR, and ask how that body reads a word another thread
@@ -1002,6 +1009,24 @@ register after a given line, skipping copies and throwing at an overwrite) are r
 The cases that locate a word's accesses by walking the body themselves — the scheduler words and the
 debug-stream ring — tally each access they find into a `WordAccesses`, which sorts it into plain loads,
 plain stores, acquires and releases and panics on any other shape.
+
+The other two cases build for this host and RUN the program, at one, two and four
+processors, because a failed hand-off takes a different form at each: at one the owner can never adopt a
+processor, and at several it loses the race for an idle one. Their subject is
+`__Builtins.pinToMachine`: a green thread pinned to its machine may not be resumed on another one, so the
+machine that finds it has to hand its processor to the owner rather than keep it.
+
+**`a-pinned-green-thread-stays-on-its-machine-across-a-park`** — 24 parks, and the program reports how many
+of them came back on a different machine. `moved 0 of 24` is the answer; a run killed at the deadline is
+the hand-off livelock, where a finder requeues the thread, signals the owner and keeps its own processor,
+which at one processor the owner can never adopt.
+
+**`a-pinned-green-thread-runs-while-another-sits-in-a-blocking-syscall`** — the owner machine may run
+nothing but its pinned thread, and this program feeds an unrelated green thread into
+`Console.stdin().readLine()`, held in the kernel for about a second. `rounds ok` says the pinned thread's
+20 parks still finished inside their budget; `rounds slow` is an owner captured by somebody else's
+syscall. The fed line arrives late on purpose, so the kernel call is in progress while the pinned thread
+becomes runnable.
 
 **`steal-reads-the-victim-ring-with-acquire-loads`** — `__sched_steal`, the green-thread scheduler's
 thief, and the victim's `runqHead`, `runqTail` and `runnext`.
@@ -1063,7 +1088,7 @@ has not written yet and runs whatever word was there, which on a wrapped ring is
 is already running — a corruption whose symptom is a crash somewhere else entirely, and only
 sometimes.
 
-⭐ **BOTH ARM64 LANES ARE BUILT, AND x64 IS NOT.** TSO never reorders load with load, so the same
+⭐ **EVERY ORDERING CASE BUILDS BOTH ARM64 LANES, AND x64 NEITHER.** TSO never reorders load with load, so the same
 Std op lowers to the plain `mov` there and an x64 build would assert nothing. The two arm64 targets
 share one lowering (`StdToArm64Conversion`), and building both is what keeps a cure that reaches only
 one of them from reading as a cure.
@@ -1086,8 +1111,9 @@ case, and an acquire ahead of the first slab call in the other.
 
 ⚠ **THIS CORPUS RUNS BY NAME ALONE**: `ci.yml` runs `spec-test`, `tests/lsp` (with
 `--timeout=60000`), `tests/fmt`, `tests/spec-harness`, `tests/ladders` and — once `vendor/` is staged —
-`tests/cli` on every lane, and `tests/debug`, `tests/dap` and `tests/mcp` on x64-windows. This gate is one
-a `/land` battery or a contributor runs by name — `maxon test tests/emitted-runtime`.
+`tests/cli` on every lane, and `tests/debug`, `tests/dap` and `tests/mcp` on every lane
+`BackendChoice.backendForHost` serves, which is all four of them. This gate is one a `/land` battery or a
+contributor runs by name — `maxon test tests/emitted-runtime`.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
 directory under `temp/emitted-runtime/`, named for the CASE, because `maxon test` runs files

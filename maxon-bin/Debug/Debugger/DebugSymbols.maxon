@@ -12,14 +12,18 @@ end 'DebugEntryCaller'
 // A return address the frame-pointer chain does not reach: from the function's entry, through its
 // green-thread stack guard and its prologue, up to `mov rbp, rsp`, or at a `ret`. `wordsAbove` counts the words pushed over it and `frame` the words the prologue
 // pushes before `mov rbp, rsp`, which places the frame pointer the function's body runs under.
+export typealias DebugFrameShift = int(-0x1000000 to 0x1000000)
+export typealias DebugFrameReach = int(0 to 0x1000000)
+
 export union DebugUnchainedReturn
 	none
-	onTheStack(wordsAbove DebugTally, frame DebugPrologueFrame)
+	inTheLinkRegister(frame DebugPrologueFrame)
+	onTheStack(bytesAbove DebugFrameReach, frame DebugPrologueFrame)
 end 'DebugUnchainedReturn'
 
 export union DebugPrologueFrame
 	unset
-	belowTheReturn(words DebugTally)
+	atStackDelta(bytes DebugFrameShift)
 end 'DebugPrologueFrame'
 
 export union DebugFunctionNameLookup
@@ -431,22 +435,22 @@ export type DebugSymbols
 	export function unchainedReturnAt(offset DebugAddress) returns DebugUnchainedReturn
 		match self.reader.functionContaining(codeOffsetIn(offset)) 'enclosing'
 			none then return DebugUnchainedReturn.none
-			found(fn) then return self.unchainedReturnIn(fn, offset: offset as X64Offset)
+			found(fn) then return self.unchainedReturnIn(fn, offset: offset as DecodedOffset)
 		end 'enclosing'
 	end 'unchainedReturnAt'
 
-	function unchainedReturnIn(fn MxdbgFunctionInfo, offset X64Offset) returns DebugUnchainedReturn
+	function unchainedReturnIn(fn MxdbgFunctionInfo, offset DecodedOffset) returns DebugUnchainedReturn
 		let prologue = self.prologueOf(fn)
 
-		if instructionIsAReturn(self.code, at: offset) or offset <= prologueStartOf(fn) 'nothingPushedAboveIt'
-			return DebugUnchainedReturn.onTheStack(0, frame: prologue.frame)
+		if hostInstructionIsAReturn(self.code, at: offset) or offset <= prologueStartOf(fn) 'nothingPushedAboveIt'
+			return prologue.atEntry
 		end 'nothingPushedAboveIt'
 
-		for (iter, pushed) in prologue.pushEnds.withIterator() 'eachPush'
-			if pushed == offset 'justPastThisPush'
-				return DebugUnchainedReturn.onTheStack((iter.index() + 1) as DebugTally, frame: prologue.frame)
-			end 'justPastThisPush'
-		end 'eachPush'
+		for step in prologue.steps 'eachStep'
+			if step.endOffset == offset 'justPastThisOne'
+				return step.unchained
+			end 'justPastThisOne'
+		end 'eachStep'
 
 		return DebugUnchainedReturn.none
 	end 'unchainedReturnIn'
@@ -886,16 +890,21 @@ export type DebugSymbols
 	end 'resolvedInsideFunction'
 
 	function instructionStartAt(fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns DebugInstructionStart
-		var at = fn.codeStart as X64Offset
+		match hostInstructionWidth() 'width'
+			fixed(bytes) then return alignedInstructionStart((offset - fn.codeStart) as MxdbgCodeOffset, stride: bytes)
+			variable then break 'width'
+		end 'width'
 
-		while at < (offset as X64Offset) 'eachInstruction'
-			match decodeX64Instruction(self.code, at: at, address: at as X64Address) 'decoded'
+		var at = fn.codeStart as DecodedOffset
+
+		while at < (offset as DecodedOffset) 'eachInstruction'
+			match hostDecodedAt(self.code, at: at, address: at as DecodedAddress) 'decoded'
 				unclassified then return DebugInstructionStart.undecodable
-				decoded(instruction) then at = at + (instruction.length as X64Offset)
+				decoded(instruction) then at = at + (instruction.length as DecodedOffset)
 			end 'decoded'
 		end 'eachInstruction'
 
-		return DebugInstructionStart.start if at == (offset as X64Offset) else DebugInstructionStart.inside
+		return DebugInstructionStart.start if at == (offset as DecodedOffset) else DebugInstructionStart.inside
 	end 'instructionStartAt'
 
 	function presentedNameAt(offset DebugAddress, hidden DebugTally) returns String
@@ -1317,11 +1326,17 @@ function spliceWaysOf(code ByteArray, ranges DebugCodeRangeArray) returns DebugS
 end 'spliceWaysOf'
 
 function noteWaysOutOf(ways DebugSpliceWays, code ByteArray, range DebugCodeRange, ranges DebugCodeRangeArray) returns bool
-	var at = range.start as X64Offset
+	var at = range.start as DecodedOffset
 	var fallsThrough = true
 
-	while at < (range.limit as X64Offset) 'eachInstruction'
-		let instruction = try x64InstructionAt(code, at: at, address: at as X64Address) otherwise return false
+	while at < (range.limit as DecodedOffset) 'eachInstruction'
+		var instruction = DecodedInstruction.create(0, instructionClass: DbgClassPlain as DecodedClass, target: DecodedTarget.none, callOperand: DecodedCallOperand.none)
+
+		match hostDecodedAt(code, at: at, address: at as DecodedAddress) 'decoded'
+			unclassified then return false
+			decoded(decoded) then instruction = decoded
+		end 'decoded'
+
 		let kind = instruction.instructionClass
 
 		if kind == DbgClassReturn or kind == DbgClassIndirectJump 'noTargetThisScanCanName'
@@ -1341,10 +1356,10 @@ function noteWaysOutOf(ways DebugSpliceWays, code ByteArray, range DebugCodeRang
 		end 'aJumpOutOfTheSplice'
 
 		fallsThrough = kind != DbgClassDirectJump
-		at = at + (instruction.length as X64Offset)
+		at = at + (instruction.length as DecodedOffset)
 	end 'eachInstruction'
 
-	if at != (range.limit as X64Offset) 'anInstructionStraddlesTheEnd'
+	if at != (range.limit as DecodedOffset) 'anInstructionStraddlesTheEnd'
 		return false
 	end 'anInstructionStraddlesTheEnd'
 
@@ -1366,44 +1381,187 @@ function codeRangesHold(ranges DebugCodeRangeArray, offset MxdbgCodeOffset) retu
 end 'codeRangesHold'
 
 typealias DebugPrologueMap = Map with (MxdbgCodeOffset, DebugPrologue)
-typealias X64OffsetArray = Array with X64Offset
+typealias DecodedOffsetArray = Array with DecodedOffset
+
+type DebugPrologueStep
+	export let endOffset as DecodedOffset
+	export let unchained as DebugUnchainedReturn
+
+	static function create(endOffset DecodedOffset, unchained DebugUnchainedReturn) returns DebugPrologueStep
+		return Self{endOffset: endOffset, unchained: unchained}
+	end 'create'
+end 'DebugPrologueStep'
+
+typealias DebugPrologueStepArray = Array with DebugPrologueStep
 
 type DebugPrologue
-	export let pushEnds as X64OffsetArray
-	export let frame as DebugPrologueFrame
+	export let steps as DebugPrologueStepArray
+	export let atEntry as DebugUnchainedReturn
 
-	static function create(pushEnds X64OffsetArray, frame DebugPrologueFrame) returns DebugPrologue
-		return Self{pushEnds: pushEnds, frame: frame}
+	static function create(steps DebugPrologueStepArray, atEntry DebugUnchainedReturn) returns DebugPrologue
+		return Self{steps: steps, atEntry: atEntry}
 	end 'create'
 end 'DebugPrologue'
 
 function scannedPrologue(code ByteArray, fn MxdbgFunctionInfo) returns DebugPrologue
-	var pushEnds = X64OffsetArray.create()
-	var at = prologueStartOf(fn)
+	#if arch(arm64)
+		return scannedArm64Prologue(code, fn: fn)
+	#endif
 
-	while at < (fn.codeEnd as X64Offset) 'eachPrologueInstruction'
+	#if not arch(arm64)
+		return scannedX64Prologue(code, fn: fn)
+	#endif
+end 'scannedPrologue'
+
+function scannedX64Prologue(code ByteArray, fn MxdbgFunctionInfo) returns DebugPrologue
+	var pushEnds = DecodedOffsetArray.create()
+	var at = prologueStartOf(fn)
+	var setsTheFrame = false
+
+	while at < (fn.codeEnd as DecodedOffset) 'eachPrologueInstruction'
 		match x64FrameStepAt(code, at: at) 'framing'
-			pushesAWord(length) then at = at + (length as X64Offset)
-			setsTheFramePointer then return DebugPrologue.create(pushEnds, frame: DebugPrologueFrame.belowTheReturn(pushEnds.count() as DebugTally))
-			neither then return DebugPrologue.create(pushEnds, frame: DebugPrologueFrame.unset)
+			pushesAWord(length) then at = at + (length as DecodedOffset)
+			setsTheFramePointer then setsTheFrame = true
+			neither then break 'eachPrologueInstruction'
 		end 'framing'
+
+		if setsTheFrame 'theFramePointerIsPlaced'
+			break
+		end 'theFramePointerIsPlaced'
 
 		pushEnds.push(at)
 	end 'eachPrologueInstruction'
 
-	return DebugPrologue.create(pushEnds, frame: DebugPrologueFrame.unset)
-end 'scannedPrologue'
+	let pushed = (pushEnds.count() as DebugFrameShift) * (DebuggeeWordBytes as DebugFrameShift)
+	var steps = DebugPrologueStepArray.create()
 
-function prologueStartOf(fn MxdbgFunctionInfo) returns X64Offset
-	return (fn.codeStart + fn.prologueOffset) as X64Offset
+	for (iter, pushEnd) in pushEnds.withIterator() 'eachPush'
+		let above = ((iter.index() + 1) as DebugFrameReach) * (DebuggeeWordBytes as DebugFrameReach)
+
+		steps.push(DebugPrologueStep.create(pushEnd, unchained: DebugUnchainedReturn.onTheStack(above, frame: x64FrameAt((above as DebugFrameShift) - pushed, setsTheFrame: setsTheFrame))))
+	end 'eachPush'
+
+	return DebugPrologue.create(steps, atEntry: DebugUnchainedReturn.onTheStack(0, frame: x64FrameAt(0 - pushed, setsTheFrame: setsTheFrame)))
+end 'scannedX64Prologue'
+
+function x64FrameAt(delta DebugFrameShift, setsTheFrame bool) returns DebugPrologueFrame
+	if not setsTheFrame 'noFramePointerIsEverPlaced'
+		return DebugPrologueFrame.unset
+	end 'noFramePointerIsEverPlaced'
+
+	return DebugPrologueFrame.atStackDelta(delta)
+end 'x64FrameAt'
+
+type Arm64PrologueBoundary
+	export let endOffset as DecodedOffset
+	export let droppedBytes as Arm64FrameBytes
+	export let recordIsStored as bool
+
+	static function create(endOffset DecodedOffset, droppedBytes Arm64FrameBytes, recordIsStored bool) returns Arm64PrologueBoundary
+		return Self{endOffset: endOffset, droppedBytes: droppedBytes, recordIsStored: recordIsStored}
+	end 'create'
+end 'Arm64PrologueBoundary'
+
+typealias Arm64PrologueBoundaryArray = Array with Arm64PrologueBoundary
+
+type Arm64PrologueScan
+	export var dropped = 0
+	export var recordAt = 0
+	export var recordIsStored = false
+	export var placesTheFramePointer = false
+	export var leftThePrologue = false
+
+	static function create() returns Arm64PrologueScan
+		return Self{}
+	end 'create'
+
+	export function took(step Arm64FrameStep)
+		match step 'framing'
+			opensTheFrameRecord(bytes) then self.openedTheRecord(bytes)
+			reservesTheFrame(bytes) then self.reservedMore(bytes)
+			storesTheFrameRecord(atBytes) then self.storedTheRecord(atBytes)
+			setsTheFramePointer(atBytes) then self.placedTheFramePointer(atBytes)
+			neither then self.leftThePrologue = true
+		end 'framing'
+	end 'took'
+
+	function openedTheRecord(bytes Arm64FrameBytes)
+		self.dropped = (self.dropped + bytes) as Arm64FrameBytes
+		self.recordIsStored = true
+	end 'openedTheRecord'
+
+	function reservedMore(bytes Arm64FrameBytes)
+		self.dropped = (self.dropped + bytes) as Arm64FrameBytes
+	end 'reservedMore'
+
+	function storedTheRecord(atBytes Arm64FrameBytes)
+		self.recordAt = atBytes
+		self.recordIsStored = true
+	end 'storedTheRecord'
+
+	function placedTheFramePointer(atBytes Arm64FrameBytes)
+		self.recordAt = atBytes
+		self.placesTheFramePointer = true
+	end 'placedTheFramePointer'
+end 'Arm64PrologueScan'
+
+function scannedArm64Prologue(code ByteArray, fn MxdbgFunctionInfo) returns DebugPrologue
+	var boundaries = Arm64PrologueBoundaryArray.create()
+	var scan = Arm64PrologueScan.create()
+	var at = prologueStartOf(fn)
+
+	while at < (fn.codeEnd as DecodedOffset) 'eachPrologueInstruction'
+		scan.took(arm64FrameStepAt(code, at: at))
+
+		if scan.leftThePrologue 'notAFrameStep'
+			break
+		end 'notAFrameStep'
+
+		at = at + (Arm64InstructionBytes as DecodedOffset)
+
+		if scan.placesTheFramePointer 'theFrameIsEstablished'
+			break
+		end 'theFrameIsEstablished'
+
+		boundaries.push(Arm64PrologueBoundary.create(at, droppedBytes: scan.dropped as Arm64FrameBytes, recordIsStored: scan.recordIsStored))
+	end 'eachPrologueInstruction'
+
+	var steps = DebugPrologueStepArray.create()
+
+	for boundary in boundaries 'eachBoundary'
+		steps.push(DebugPrologueStep.create(boundary.endOffset, unchained: arm64UnchainedAt(boundary.droppedBytes, recordIsStored: boundary.recordIsStored, scan: scan)))
+	end 'eachBoundary'
+
+	return DebugPrologue.create(steps, atEntry: arm64UnchainedAt(0, recordIsStored: false, scan: scan))
+end 'scannedArm64Prologue'
+
+function arm64UnchainedAt(droppedBytes Arm64FrameBytes, recordIsStored bool, scan Arm64PrologueScan) returns DebugUnchainedReturn
+	let frame = arm64FrameAt(droppedBytes, scan: scan)
+
+	if not recordIsStored 'theReturnIsStillInTheLinkRegister'
+		return DebugUnchainedReturn.inTheLinkRegister(frame)
+	end 'theReturnIsStillInTheLinkRegister'
+
+	return DebugUnchainedReturn.onTheStack(((scan.recordAt as DebugFrameReach) + (DebuggeeWordBytes as DebugFrameReach)) as DebugFrameReach, frame: frame)
+end 'arm64UnchainedAt'
+
+function arm64FrameAt(droppedBytes Arm64FrameBytes, scan Arm64PrologueScan) returns DebugPrologueFrame
+	if not scan.placesTheFramePointer 'noFramePointerIsEverPlaced'
+		return DebugPrologueFrame.unset
+	end 'noFramePointerIsEverPlaced'
+
+	return DebugPrologueFrame.atStackDelta(((scan.recordAt as DebugFrameShift) - ((scan.dropped as DebugFrameShift) - (droppedBytes as DebugFrameShift))) as DebugFrameShift)
+end 'arm64FrameAt'
+
+function alignedInstructionStart(into MxdbgCodeOffset, stride DecodedFixedWidth) returns DebugInstructionStart
+	let past = try (into mod (stride as MxdbgCodeOffset)) otherwise panic("alignedInstructionStart: a fixed instruction width is at least one byte")
+
+	return DebugInstructionStart.start if past == 0 else DebugInstructionStart.inside
+end 'alignedInstructionStart'
+
+function prologueStartOf(fn MxdbgFunctionInfo) returns DecodedOffset
+	return (fn.codeStart + fn.prologueOffset) as DecodedOffset
 end 'prologueStartOf'
-
-function instructionIsAReturn(code ByteArray, at X64Offset) returns bool
-	return match decodeX64Instruction(code, at: at, address: at as X64Address) 'decoded'
-		unclassified gives false
-		decoded(instruction) gives instruction.instructionClass == DbgClassReturn
-	end 'decoded'
-end 'instructionIsAReturn'
 
 function bodyIsTheProgramsOwn(fn MxdbgFunctionInfo, origin MxdbgOrigin) returns bool
 	return mxdbgOriginIsTheAuthors(origin) and fn.lineCount > 0

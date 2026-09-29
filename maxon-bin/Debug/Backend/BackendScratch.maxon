@@ -1,0 +1,91 @@
+let ScratchBytes = 0x1000
+
+module let WordBytes = 8
+
+module let ByteMask = 0xFF
+
+export let TransferWindowBytes = 512
+
+module typealias BackendPageOffset = int(0 to 0xFF8)
+
+module let MaxBackendPageOffset = 0xFF8
+
+export function requireBackendPageOffsetSpansItsScratch()
+	if MaxBackendPageOffset != ScratchBytes - WordBytes 'aBoundThatIsNotTheScratchs'
+		panic("BackendScratch: BackendPageOffset is bounded at {MaxBackendPageOffset} and the last whole word of a {ScratchBytes}-byte scratch page begins at {ScratchBytes - WordBytes}")
+	end 'aBoundThatIsNotTheScratchs'
+end 'requireBackendPageOffsetSpansItsScratch'
+
+export let BackendScratchRefusal = "could not reserve the pages the debugger reads a stopped thread's registers through"
+
+module type BackendScratchPage
+	var base as BackendHandle
+
+	module static function create() returns BackendScratchPage
+		return Self{base: __Builtins.profileScratchAlloc(ScratchBytes) as BackendHandle}
+	end 'create'
+
+	module function held() returns bool
+		return self.base != 0
+	end 'held'
+
+	module function close()
+		if self.base != 0 'holdsPages'
+			__Builtins.profileScratchFree(self.base, ScratchBytes)
+			self.base = 0
+		end 'holdsPages'
+	end 'close'
+
+	module function word(offset BackendPageOffset) returns BackendWord
+		return __Builtins.profileReadWord(self.base, offset)
+	end 'word'
+
+	module function setWord(offset BackendPageOffset, value BackendWord)
+		__Builtins.profileWriteWord(self.base, offset, value)
+	end 'setWord'
+
+	module function addressOf(offset BackendPageOffset) returns BackendWord
+		return (self.base as BackendWord) + (offset as BackendWord)
+	end 'addressOf'
+
+	module function bytesAt(offset BackendPageOffset, count BackendByteCount) returns ByteArray
+		var taken = ByteArray.create()
+		var word = 0 as BackendWord
+		var held = 0
+		let start = offset as BackendWord
+
+		for index in 0 upto count 'eachByte'
+			if held == 0 'aFreshWord'
+				word = self.word((start + index - (index mod WordBytes)) as BackendPageOffset)
+				held = WordBytes
+			end 'aFreshWord'
+
+			taken.push(((word shr ((index mod WordBytes) * BitsPerByte)) and ByteMask) as Byte)
+			held = held - 1
+		end 'eachByte'
+
+		return taken
+	end 'bytesAt'
+
+	module function fill(offset BackendPageOffset, bytes ByteArray)
+		var word = 0 as BackendWord
+		var filled = 0
+
+		let start = offset as BackendWord
+
+		for (iter, value) in bytes.withIterator() 'eachByte'
+			let index = iter.index() as BackendWord
+			word = word or ((value as BackendWord) shl ((index mod WordBytes) * BitsPerByte))
+			filled = index
+
+			if (index mod WordBytes) == WordBytes - 1 'aWholeWord'
+				self.setWord((start + index - WordBytes + 1) as BackendPageOffset, value: word)
+				word = 0
+			end 'aWholeWord'
+		end 'eachByte'
+
+		if (filled mod WordBytes) != WordBytes - 1 'aPartialTail'
+			self.setWord((start + filled - (filled mod WordBytes)) as BackendPageOffset, value: word)
+		end 'aPartialTail'
+	end 'fill'
+end 'BackendScratchPage'

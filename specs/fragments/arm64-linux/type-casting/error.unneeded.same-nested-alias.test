@@ -1,0 +1,32 @@
+// Test: error.unneeded.same-nested-alias
+typealias Integer = int(i64.min to i64.max)
+
+type Meter
+	let reading as Integer
+
+	static function create() returns Self
+		return Self{reading: 7}
+	end 'create'
+
+	function raw() returns Integer
+		return self.reading
+	end 'raw'
+end 'Meter'
+
+extension Meter
+	typealias Idx = int(0 to 9)
+
+	function index() returns Idx
+		let x = self.raw() as Idx
+		let y = x as Idx
+		return y
+	end 'index'
+end 'Meter'
+
+function main() returns ExitCode
+	let meter = Meter.create()
+	return meter.index()
+end 'main'
+---
+CompilerError:
+error E3010: <fragment>:21:13: unneeded cast: 'Idx' already fits in 'Idx'

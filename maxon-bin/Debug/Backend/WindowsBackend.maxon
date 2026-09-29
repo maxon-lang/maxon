@@ -1,21 +1,33 @@
-let ScratchBytes = 0x1000
-
-let WordBytes = 8
-
 let ContextOffset = 0x000
 let EventOffset = 0x600
 let TransferOffset = 0x700
-export let TransferWindowBytes = 512
 
-let TransferBytes = 1024
-let OutWordOffset = TransferOffset + TransferBytes
+let OutWordOffset = TransferOffset + TransferWindowBytes
 let SecondOutWordOffset = OutWordOffset + WordBytes
 
-let HighDwordShift = 32
-let DwordMask = 0xFFFFFFFF
-let TrapFlagBit = 0x100
+let Win64DebugEventBytes = 0xB0
 
-let ByteMask = 0xFF
+export function requireWindowsScratchLayoutIsDisjoint()
+	if ContextOffset + Win64ContextBytes > EventOffset 'theContextReachesTheEventRecord'
+		panic("WindowsBackend: a {Win64ContextBytes}-byte CONTEXT at {ContextOffset} runs into the debug event record at {EventOffset}")
+	end 'theContextReachesTheEventRecord'
+
+	if EventOffset + Win64DebugEventBytes > TransferOffset 'theEventRecordReachesTheTransferWindow'
+		panic("WindowsBackend: a {Win64DebugEventBytes}-byte DEBUG_EVENT at {EventOffset} runs into the transfer window at {TransferOffset}")
+	end 'theEventRecordReachesTheTransferWindow'
+
+	if TransferOffset + TransferWindowBytes > OutWordOffset 'theTransferWindowReachesTheOutWord'
+		panic("WindowsBackend: a {TransferWindowBytes}-byte transfer window at {TransferOffset} runs into the byte-count word at {OutWordOffset}")
+	end 'theTransferWindowReachesTheOutWord'
+
+	if SecondOutWordOffset + WordBytes > MaxBackendPageOffset + WordBytes 'theOutWordsLeaveThePage'
+		panic("WindowsBackend: the saved-protection word at {SecondOutWordOffset} runs off a scratch page whose last whole word begins at {MaxBackendPageOffset}")
+	end 'theOutWordsLeaveThePage'
+end 'requireWindowsScratchLayoutIsDisjoint'
+
+let HighDwordShift = 32
+
+let TrapFlagBit = 0x100
 
 let DebugEventCodeException = 1
 let DebugEventCodeCreateThread = 2
@@ -42,16 +54,6 @@ let PageExecuteReadWrite = 0x40
 
 let Win32True = 1
 
-typealias BackendPageOffset = int(0 to 0xFF8)
-
-let MaxBackendPageOffset = 0xFF8
-
-export function requireBackendPageOffsetSpansItsScratch()
-	if MaxBackendPageOffset != ScratchBytes - WordBytes 'aBoundThatIsNotTheScratchs'
-		panic("WindowsBackend: BackendPageOffset is bounded at {MaxBackendPageOffset} and the last whole word of a {ScratchBytes}-byte scratch page begins at {ScratchBytes - WordBytes}")
-	end 'aBoundThatIsNotTheScratchs'
-end 'requireBackendPageOffsetSpansItsScratch'
-
 type BackendThreadEntry
 	export let id as BackendThreadId
 	export let handle as BackendHandle
@@ -68,10 +70,8 @@ union BackendThreadHandleLookup
 	at(handle BackendHandle)
 end 'BackendThreadHandleLookup'
 
-export let BackendScratchRefusal = "could not reserve the pages the debugger reads a stopped thread's registers through"
-
 export type WindowsBackend
-	var scratch as BackendHandle
+	var scratch as BackendScratchPage
 	var process as BackendHandle
 	var processId as BackendWord
 	var threads as BackendThreadEntryArray
@@ -84,20 +84,15 @@ export type WindowsBackend
 	var status as BackendExitStatus
 
 	export static function create() returns WindowsBackend
-		let scratch = __Builtins.profileScratchAlloc(ScratchBytes)
-
-		return Self{scratch: scratch as BackendHandle, process: 0, processId: 0, threads: BackendThreadEntryArray.create(), pendingProcessId: 0, pendingThreadId: 0, pendingUnowned: false, stopOutstanding: false, sawFirstBreakpoint: false, stopRequested: false, status: BackendExitStatus.running}
+		return Self{scratch: BackendScratchPage.create(), process: 0, processId: 0, threads: BackendThreadEntryArray.create(), pendingProcessId: 0, pendingThreadId: 0, pendingUnowned: false, stopOutstanding: false, sawFirstBreakpoint: false, stopRequested: false, status: BackendExitStatus.running}
 	end 'create'
 
 	export function holdsItsScratch() returns bool
-		return self.scratch != 0
+		return self.scratch.held()
 	end 'holdsItsScratch'
 
 	export function close()
-		if self.scratch != 0 'holdsPages'
-			__Builtins.profileScratchFree(self.scratch, ScratchBytes)
-			self.scratch = 0
-		end 'holdsPages'
+		self.scratch.close()
 	end 'close'
 
 	export function exitStatus() returns BackendExitStatus
@@ -126,10 +121,10 @@ export type WindowsBackend
 				return DebugStopEvent.timedOut
 			end 'nothingArrived'
 
-			let header = self.scratchWord((EventOffset + EventCodeAndPidOffset) as BackendPageOffset)
+			let header = self.scratch.word((EventOffset + EventCodeAndPidOffset) as BackendPageOffset)
 			let code = header and DwordMask
 			self.pendingProcessId = (header shr HighDwordShift) and DwordMask
-			self.pendingThreadId = self.scratchWord((EventOffset + EventThreadIdOffset) as BackendPageOffset) and DwordMask
+			self.pendingThreadId = self.scratch.word((EventOffset + EventThreadIdOffset) as BackendPageOffset) and DwordMask
 
 			match self.classified(code) 'event'
 				bookkeeping then continue
@@ -143,9 +138,9 @@ export type WindowsBackend
 
 	function classified(code BackendWord) returns BackendEventClass
 		if code == DebugEventCodeCreateProcess 'theProcessArrived'
-			self.process = self.scratchWord((EventOffset + EventCreateProcessHandleOffset) as BackendPageOffset) as BackendHandle
+			self.process = self.scratch.word((EventOffset + EventCreateProcessHandleOffset) as BackendPageOffset) as BackendHandle
 			self.processId = self.pendingProcessId
-			self.rememberThread(self.pendingThreadId as BackendThreadId, handle: self.scratchWord((EventOffset + EventCreateProcessThreadOffset) as BackendPageOffset) as BackendHandle)
+			self.rememberThread(self.pendingThreadId as BackendThreadId, handle: self.scratch.word((EventOffset + EventCreateProcessThreadOffset) as BackendPageOffset) as BackendHandle)
 			self.closeEventImageFile()
 			_ = self.continueEvent(ContinueHandled)
 
@@ -160,7 +155,7 @@ export type WindowsBackend
 		end 'aLibraryArrived'
 
 		if code == DebugEventCodeCreateThread 'aThreadArrived'
-			self.rememberThread(self.pendingThreadId as BackendThreadId, handle: self.scratchWord((EventOffset + EventPayloadOffset) as BackendPageOffset) as BackendHandle)
+			self.rememberThread(self.pendingThreadId as BackendThreadId, handle: self.scratch.word((EventOffset + EventPayloadOffset) as BackendPageOffset) as BackendHandle)
 			_ = self.continueEvent(ContinueHandled)
 
 			return BackendEventClass.bookkeeping
@@ -174,7 +169,7 @@ export type WindowsBackend
 		end 'aThreadLeft'
 
 		if code == DebugEventCodeExitProcess 'theProcessLeft'
-			let ending = self.scratchWord((EventOffset + EventPayloadOffset) as BackendPageOffset) and DwordMask
+			let ending = self.scratch.word((EventOffset + EventPayloadOffset) as BackendPageOffset) and DwordMask
 			self.status = BackendExitStatus.ended(ending as BackendExitCode)
 			_ = self.continueEvent(ContinueHandled)
 
@@ -191,7 +186,7 @@ export type WindowsBackend
 	end 'classified'
 
 	function closeEventImageFile()
-		let file = self.scratchWord((EventOffset + EventImageFileOffset) as BackendPageOffset) as BackendHandle
+		let file = self.scratch.word((EventOffset + EventImageFileOffset) as BackendPageOffset) as BackendHandle
 
 		if file == 0 'noFileWasHandedOver'
 			return
@@ -203,8 +198,8 @@ export type WindowsBackend
 	// ⭐ The breakpoint address is `ExceptionRecord.ExceptionAddress` and never arithmetic on the reported
 	// program counter: the two conventions differ by one byte and this field is authoritative on both.
 	function exceptionStop() returns DebugStopEvent
-		let excCode = self.scratchWord((EventOffset + EventPayloadOffset) as BackendPageOffset) and DwordMask
-		let address = self.scratchWord((EventOffset + EventExceptionAddressOffset) as BackendPageOffset)
+		let excCode = self.scratch.word((EventOffset + EventPayloadOffset) as BackendPageOffset) and DwordMask
+		let address = self.scratch.word((EventOffset + EventExceptionAddressOffset) as BackendPageOffset)
 		self.stopOutstanding = true
 
 		if excCode == ExceptionCodeBreakpoint 'aPlantedByteOrTheLoadersOwn'
@@ -212,18 +207,18 @@ export type WindowsBackend
 			self.sawFirstBreakpoint = true
 			self.pendingUnowned = false
 
-			return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: self.breakpointExceptionReason(first), faultCode: 0, address: debugAddressOrZero(address as DebugWord))
+			return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: self.breakpointExceptionReason(first), faultCode: 0, address: debugAddressOrZero(address as DebuggeeWord))
 		end 'aPlantedByteOrTheLoadersOwn'
 
 		if excCode == ExceptionCodeSingleStep 'aStepLanded'
 			self.pendingUnowned = false
 
-			return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: BackendStopReason.singleStep, faultCode: 0, address: debugAddressOrZero(address as DebugWord))
+			return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: BackendStopReason.singleStep, faultCode: 0, address: debugAddressOrZero(address as DebuggeeWord))
 		end 'aStepLanded'
 
 		self.pendingUnowned = true
 
-		return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: BackendStopReason.fault, faultCode: excCode, address: debugAddressOrZero(address as DebugWord))
+		return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: BackendStopReason.fault, faultCode: excCode, address: debugAddressOrZero(address as DebuggeeWord))
 	end 'exceptionStop'
 
 	function breakpointExceptionReason(first bool) returns BackendStopReason
@@ -257,7 +252,13 @@ export type WindowsBackend
 			return false
 		end 'noRegisterFile'
 
-		return self.resumeAll()
+		if not self.resumeAll() 'theKernelRefused'
+			_ = self.trapFlagSet(thread, armed: false)
+
+			return false
+		end 'theKernelRefused'
+
+		return true
 	end 'stepThread'
 
 	export function requestStop() returns bool
@@ -266,8 +267,13 @@ export type WindowsBackend
 		return self.stopRequested
 	end 'requestStop'
 
+	export function abandonStopRequest()
+		self.stopRequested = false
+	end 'abandonStopRequest'
+
 	export function detach() returns bool
 		_ = self.resumeAll()
+		self.stopRequested = false
 
 		return hostDebugCall(HostDebugVerb.detachProcess, a0: self.processId, a1: 0, a2: 0, a3: 0, a4: 0) == Win32True
 	end 'detach'
@@ -287,17 +293,17 @@ export type WindowsBackend
 			return BackendMemoryRead.unreadable
 		end 'pastTheWindow'
 
-		self.setScratchWord(OutWordOffset as BackendPageOffset, value: 0)
+		self.scratch.setWord(OutWordOffset as BackendPageOffset, value: 0)
 
 		if hostDebugCall(HostDebugVerb.readMemory, a0: self.process as BackendWord, a1: address as BackendWord, a2: self.transferAddress(), a3: bytes as BackendWord, a4: self.outWordAddress()) != Win32True 'notMapped'
 			return BackendMemoryRead.unreadable
 		end 'notMapped'
 
-		if (self.scratchWord(OutWordOffset as BackendPageOffset) and DwordMask) < (bytes as BackendWord) 'aShortRead'
+		if (self.scratch.word(OutWordOffset as BackendPageOffset) and DwordMask) < (bytes as BackendWord) 'aShortRead'
 			return BackendMemoryRead.unreadable
 		end 'aShortRead'
 
-		return BackendMemoryRead.read(self.transferredBytes(bytes))
+		return BackendMemoryRead.read(self.scratch.bytesAt(TransferOffset as BackendPageOffset, count: bytes))
 	end 'readMemory'
 
 	// ⛔ `.text` is mapped read and execute, so the page's protection is lifted for the write and put back:
@@ -313,15 +319,15 @@ export type WindowsBackend
 			return false
 		end 'pastTheWindow'
 
-		self.fillTransfer(bytes)
-		self.setScratchWord(OutWordOffset as BackendPageOffset, value: 0)
-		self.setScratchWord(SecondOutWordOffset as BackendPageOffset, value: 0)
+		self.scratch.fill(TransferOffset as BackendPageOffset, bytes: bytes)
+		self.scratch.setWord(OutWordOffset as BackendPageOffset, value: 0)
+		self.scratch.setWord(SecondOutWordOffset as BackendPageOffset, value: 0)
 
 		let lifted = hostDebugCall(HostDebugVerb.protectRegion, a0: self.process as BackendWord, a1: address as BackendWord, a2: count as BackendWord, a3: PageExecuteReadWrite, a4: self.secondOutWordAddress()) == Win32True
 		let wrote = hostDebugCall(HostDebugVerb.writeMemory, a0: self.process as BackendWord, a1: address as BackendWord, a2: self.transferAddress(), a3: count as BackendWord, a4: self.outWordAddress()) == Win32True
 
 		if lifted 'protectionWasChanged'
-			_ = hostDebugCall(HostDebugVerb.protectRegion, a0: self.process as BackendWord, a1: address as BackendWord, a2: count as BackendWord, a3: self.scratchWord(SecondOutWordOffset as BackendPageOffset) and DwordMask, a4: self.outWordAddress())
+			_ = hostDebugCall(HostDebugVerb.protectRegion, a0: self.process as BackendWord, a1: address as BackendWord, a2: count as BackendWord, a3: self.scratch.word(SecondOutWordOffset as BackendPageOffset) and DwordMask, a4: self.outWordAddress())
 		end 'protectionWasChanged'
 
 		_ = hostDebugCall(HostDebugVerb.flushCode, a0: self.process as BackendWord, a1: address as BackendWord, a2: count as BackendWord, a3: 0, a4: 0)
@@ -345,15 +351,15 @@ export type WindowsBackend
 		var file = DebugRegisterFile.create()
 
 		for slot in 0 upto BackendGprSlots 'eachGeneralRegister'
-			file.setValue(slot as BackendRegisterNumber, value: self.scratchWord((ContextOffset + Win64ContextGprBase + slot * WordBytes) as BackendPageOffset))
+			file.setValue(slot as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextGprBase + slot * WordBytes) as BackendPageOffset))
 		end 'eachGeneralRegister'
 
 		for lane in 0 upto BackendVectorSlots 'eachVectorRegister'
-			file.setValue((BackendGprSlots + lane) as BackendRegisterNumber, value: self.scratchWord((ContextOffset + Win64ContextXmm0Offset + lane * Win64ContextXmmBytes) as BackendPageOffset))
+			file.setValue((BackendGprSlots + lane) as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextXmm0Offset + lane * Win64ContextXmmBytes) as BackendPageOffset))
 		end 'eachVectorRegister'
 
-		file.setValue(BackendRegSlotPc as BackendRegisterNumber, value: self.scratchWord((ContextOffset + Win64ContextRipOffset) as BackendPageOffset))
-		file.setValue(BackendRegSlotFlags as BackendRegisterNumber, value: (self.scratchWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset) shr HighDwordShift) and DwordMask)
+		file.setValue(BackendRegSlotPc as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextRipOffset) as BackendPageOffset))
+		file.setValue(BackendRegSlotFlags as BackendRegisterNumber, value: (self.scratch.word((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset) shr HighDwordShift) and DwordMask)
 
 		return BackendRegisterRead.read(file)
 	end 'readRegisters'
@@ -370,10 +376,10 @@ export type WindowsBackend
 		end 'unreadable'
 
 		for slot in 0 upto BackendGprSlots 'eachGeneralRegister'
-			self.setScratchWord((ContextOffset + Win64ContextGprBase + slot * WordBytes) as BackendPageOffset, value: file.valueOf(slot as BackendRegisterNumber))
+			self.scratch.setWord((ContextOffset + Win64ContextGprBase + slot * WordBytes) as BackendPageOffset, value: file.valueOf(slot as BackendRegisterNumber))
 		end 'eachGeneralRegister'
 
-		self.setScratchWord((ContextOffset + Win64ContextRipOffset) as BackendPageOffset, value: file.valueOf(BackendRegSlotPc as BackendRegisterNumber))
+		self.scratch.setWord((ContextOffset + Win64ContextRipOffset) as BackendPageOffset, value: file.valueOf(BackendRegSlotPc as BackendRegisterNumber))
 		self.storeFlags(file.valueOf(BackendRegSlotFlags as BackendRegisterNumber))
 
 		return self.contextWritten(handle)
@@ -394,7 +400,7 @@ export type WindowsBackend
 			return false
 		end 'unreadable'
 
-		self.setScratchWord(offset, value: value)
+		self.scratch.setWord(offset, value: value)
 
 		return self.contextWritten(handle)
 	end 'contextWordPatched'
@@ -411,17 +417,17 @@ export type WindowsBackend
 			return false
 		end 'unreadable'
 
-		let word = self.scratchWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset)
+		let word = self.scratch.word((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset)
 		let bit = (TrapFlagBit as BackendWord) shl HighDwordShift
-		self.setScratchWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset, value: word or bit if armed else word - (word and bit))
+		self.scratch.setWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset, value: word or bit if armed else word - (word and bit))
 
 		return self.contextWritten(handle)
 	end 'trapFlagSet'
 
 	function storeFlags(flags BackendWord)
-		let word = self.scratchWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset)
+		let word = self.scratch.word((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset)
 		let low = word and DwordMask
-		self.setScratchWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset, value: low or ((flags and DwordMask) shl HighDwordShift))
+		self.scratch.setWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset, value: low or ((flags and DwordMask) shl HighDwordShift))
 	end 'storeFlags'
 
 	// --- the thread table ---
@@ -447,10 +453,10 @@ export type WindowsBackend
 	// leaves the high half as the host left it: a whole-word store is sound only where the record is never
 	// written back, and `contextWritten` writes it back. `ProfileSampleContract.maxon` owns the rule.
 	function contextRead(handle BackendHandle) returns bool
-		self.setScratchWord(ContextOffset as BackendPageOffset, value: 0)
+		self.scratch.setWord(ContextOffset as BackendPageOffset, value: 0)
 
-		let held = self.scratchWord((ContextOffset + Win64ContextFlagsOffset) as BackendPageOffset)
-		self.setScratchWord((ContextOffset + Win64ContextFlagsOffset) as BackendPageOffset, value: (held - (held and DwordMask)) or ((Win64ContextControl or Win64ContextInteger or Win64ContextFloatingPoint) as BackendWord))
+		let held = self.scratch.word((ContextOffset + Win64ContextFlagsOffset) as BackendPageOffset)
+		self.scratch.setWord((ContextOffset + Win64ContextFlagsOffset) as BackendPageOffset, value: (held - (held and DwordMask)) or ((Win64ContextControl or Win64ContextInteger or Win64ContextFloatingPoint) as BackendWord))
 
 		return hostDebugCall(HostDebugVerb.readContext, a0: handle as BackendWord, a1: self.contextAddress(), a2: 0, a3: 0, a4: 0) == Win32True
 	end 'contextRead'
@@ -478,77 +484,23 @@ export type WindowsBackend
 
 	// --- the scratch region ---
 
-	function scratchWord(offset BackendPageOffset) returns BackendWord
-		return __Builtins.profileReadWord(self.scratch, offset)
-	end 'scratchWord'
-
-	function setScratchWord(offset BackendPageOffset, value BackendWord)
-		__Builtins.profileWriteWord(self.scratch, offset, value)
-	end 'setScratchWord'
-
 	function contextAddress() returns BackendWord
-		return (self.scratch as BackendWord) + ContextOffset
+		return self.scratch.addressOf(ContextOffset as BackendPageOffset)
 	end 'contextAddress'
 
 	function eventAddress() returns BackendWord
-		return (self.scratch as BackendWord) + EventOffset
+		return self.scratch.addressOf(EventOffset as BackendPageOffset)
 	end 'eventAddress'
 
 	function transferAddress() returns BackendWord
-		return (self.scratch as BackendWord) + TransferOffset
+		return self.scratch.addressOf(TransferOffset as BackendPageOffset)
 	end 'transferAddress'
 
 	function outWordAddress() returns BackendWord
-		return (self.scratch as BackendWord) + OutWordOffset
+		return self.scratch.addressOf(OutWordOffset as BackendPageOffset)
 	end 'outWordAddress'
 
 	function secondOutWordAddress() returns BackendWord
-		return (self.scratch as BackendWord) + SecondOutWordOffset
+		return self.scratch.addressOf(SecondOutWordOffset as BackendPageOffset)
 	end 'secondOutWordAddress'
-
-	function transferredBytes(bytes BackendByteCount) returns ByteArray
-		var taken = ByteArray.create()
-		var word = 0 as BackendWord
-		var held = 0
-
-		for index in 0 upto bytes 'eachByte'
-			if held == 0 'aFreshWord'
-				word = self.scratchWord((TransferOffset + index - (index mod WordBytes)) as BackendPageOffset)
-				held = WordBytes
-			end 'aFreshWord'
-
-			taken.push(((word shr ((index mod WordBytes) * BitsPerByte)) and ByteMask) as Byte)
-			held = held - 1
-		end 'eachByte'
-
-		return taken
-	end 'transferredBytes'
-
-	function fillTransfer(bytes ByteArray)
-		var word = 0 as BackendWord
-		var filled = 0
-
-		for (iter, value) in bytes.withIterator() 'eachByte'
-			let index = iter.index()
-			word = word or ((value as BackendWord) shl ((index mod WordBytes) * BitsPerByte))
-			filled = index
-
-			if (index mod WordBytes) == WordBytes - 1 'aWholeWord'
-				self.setScratchWord((TransferOffset + index - WordBytes + 1) as BackendPageOffset, value: word)
-				word = 0
-			end 'aWholeWord'
-		end 'eachByte'
-
-		if (filled mod WordBytes) != WordBytes - 1 'aPartialTail'
-			self.setScratchWord((TransferOffset + filled - (filled mod WordBytes)) as BackendPageOffset, value: word)
-		end 'aPartialTail'
-	end 'fillTransfer'
 end 'WindowsBackend'
-
-let BitsPerByte = 8
-
-union BackendEventClass
-	bookkeeping
-	ended(event DebugStopEvent)
-	stop(event DebugStopEvent)
-end 'BackendEventClass'

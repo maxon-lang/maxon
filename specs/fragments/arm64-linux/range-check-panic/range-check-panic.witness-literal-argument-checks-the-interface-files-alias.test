@@ -1,0 +1,136 @@
+// Test: range-check-panic.witness-literal-argument-checks-the-interface-files-alias
+// --- file: a.maxon
+typealias Item = int(0 to 100)
+
+interface Store
+  function put(item Item) returns Item
+end 'Store'
+
+type Shelf implements Store
+  let base as Item
+
+  static function create() returns Self
+    return Self{base: 0}
+  end 'create'
+
+  function put(item Item) returns Item
+    if item > self.base 'above'
+      return item
+    end 'above'
+    return self.base
+  end 'put'
+end 'Shelf'
+
+type Holder
+  let store as Store
+
+  static function create() returns Self
+    return Self{store: Shelf.create()}
+  end 'create'
+
+  function stock() returns Item
+    return self.store.put(50)
+  end 'stock'
+end 'Holder'
+
+function main() returns ExitCode
+  let holder = Holder.create()
+  if holder.stock() == 50 and tiny() 'stocked'
+    return 0
+  end 'stocked'
+  return 1
+end 'main'
+
+// --- file: z.maxon
+typealias Item = int(0 to 3)
+
+export function tiny() returns bool
+  let one = 1 as Item
+  return one == 1
+end 'tiny'
+---
+ExitCode: 0
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @Shelf.put {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x1, 100
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.and x0, x0, 255
+    arm64.cmp x1, x0
+    arm64.b.le ifcont
+  above:
+    arm64.movRegReg x0, x1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a.maxon:14: Range check failed: value outside typealias 'Item'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body#12:
+    arm64.movImm x19, 0
+  __il_cont#11:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __witness_Shelf.Store
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 8]
+    arm64.movImm x1, 50
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 48]
+    arm64.blr x16
+  __il_cont#5:
+    arm64.cmp x0, 50
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge
+  __il_body#8:
+    arm64.movImm x0, 1
+  scmerge:
+    arm64.cbz x0, ifcont
+  stocked:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

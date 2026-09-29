@@ -1,0 +1,61 @@
+function backendRosterHolds(roster BackendThreadIdArray, thread BackendThreadId) returns bool
+	for held in roster 'eachThread'
+		if held == thread 'thisOne'
+			return true
+		end 'thisOne'
+	end 'eachThread'
+
+	return false
+end 'backendRosterHolds'
+
+export type BackendStepRoster
+	var threads as BackendThreadIdArray
+
+	export static function create() returns BackendStepRoster
+		return Self{threads: BackendThreadIdArray.create()}
+	end 'create'
+
+	export function holds(thread BackendThreadId) returns bool
+		return backendRosterHolds(self.threads, thread: thread)
+	end 'holds'
+
+	export function outstanding() returns BackendThreadIdArray
+		return self.threads
+	end 'outstanding'
+
+	export function note(thread BackendThreadId)
+		if self.holds(thread) 'itIsAlreadyStepping'
+			return
+		end 'itIsAlreadyStepping'
+
+		self.threads.push(thread)
+	end 'note'
+
+	export function forget(thread BackendThreadId)
+		var kept = BackendThreadIdArray.create()
+
+		for stepper in self.threads 'eachStepper'
+			if stepper != thread 'anotherThread'
+				kept.push(stepper)
+			end 'anotherThread'
+		end 'eachStepper'
+
+		self.threads = kept
+	end 'forget'
+
+	export function clear()
+		self.threads = BackendThreadIdArray.create()
+	end 'clear'
+
+	export function keptAmong(reported BackendThreadIdArray)
+		var kept = BackendThreadIdArray.create()
+
+		for stepper in self.threads 'eachStepper'
+			if backendRosterHolds(reported, thread: stepper) 'itIsStillThere'
+				kept.push(stepper)
+			end 'itIsStillThere'
+		end 'eachStepper'
+
+		self.threads = kept
+	end 'keptAmong'
+end 'BackendStepRoster'

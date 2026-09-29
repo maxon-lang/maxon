@@ -1,0 +1,606 @@
+module typealias GdbWireIndex = int(0 to u64.max)
+typealias GdbChecksumByte = int(0 to 0xFF)
+module typealias GdbPayloadBytes = int(1 to 0x4000000)
+module typealias GdbRegisterNumber = int(0 to 0xFFFF)
+module typealias GdbRegisterBytes = int(0 to 64)
+module typealias GdbSignalNumber = int(0 to 0xFF)
+module typealias GdbWaitMs = int(0 to 0xFFFFFFFF)
+module typealias GdbWireWord = int(0 to u64.max)
+
+let GdbDollarByte = 0x24 as Byte
+let GdbHashByte = 0x23 as Byte
+let GdbEscapeByte = 0x7D as Byte
+let GdbRunLengthByte = 0x2A as Byte
+let GdbAckText = "+"
+let GdbInterruptByte = 0x03 as Byte
+
+let GdbEscapeXor = 0x20
+let GdbRunLengthBias = 29
+
+let GdbRecvCapacity = 65536
+
+let GdbChecksumDigits = 2
+
+let GdbDefaultPayloadBytes = 256 as GdbPayloadBytes
+
+let GdbPacketSizeFeature = "PacketSize="
+
+let GdbErrorPrefix = "E"
+
+module let GdbFieldSeparator = ";"
+module let GdbKeyValueSeparator = ":"
+
+let GdbRegisterInfoNameKey = "name"
+let GdbRegisterInfoBitsizeKey = "bitsize"
+let GdbRegisterInfoContainerKey = "container-regs"
+
+let GdbBitsPerRegisterByte = 8
+
+module union GdbAnswer
+	answered(payload String)
+	unsupported
+	failed(code String)
+	timedOut
+	broken(reason String)
+end 'GdbAnswer'
+
+union GdbPacketRead
+	packet(payload ByteArray)
+	timedOut
+	broken(reason String)
+end 'GdbPacketRead'
+
+union GdbFill
+	filled
+	timedOut
+	broken(reason String)
+end 'GdbFill'
+
+module type GdbRegisterInfo
+	export let name as String
+	export let number as GdbRegisterNumber
+	export let bytes as GdbRegisterBytes
+
+	static function create(name String, number GdbRegisterNumber, bytes GdbRegisterBytes) returns GdbRegisterInfo
+		return Self{name: name, number: number, bytes: bytes}
+	end 'create'
+end 'GdbRegisterInfo'
+
+module typealias GdbRegisterInfoArray = Array with GdbRegisterInfo
+
+module type GdbRemoteConnection
+	var socket as TcpClient
+	var pending as ByteArray
+	var searched as GdbWireIndex
+	var acking as bool
+	var payloadLimit as GdbPayloadBytes
+	var suffixed as bool
+	var open as bool
+
+	module static function over(socket TcpClient) returns GdbRemoteConnection
+		return Self{socket: socket, pending: ByteArray.create(), searched: 0, acking: true, payloadLimit: GdbDefaultPayloadBytes, suffixed: false, open: true}
+	end 'over'
+
+	module function stillOpen() returns bool
+		return self.open
+	end 'stillOpen'
+
+	module function threadSuffixSupported() returns bool
+		return self.suffixed
+	end 'threadSuffixSupported'
+
+	module function transferLimit() returns GdbPayloadBytes
+		return ((self.payloadLimit - GdbPacketOverheadBytes) / GdbHexDigitsPerByte) as GdbPayloadBytes
+	end 'transferLimit'
+
+	module function close()
+		self.open = false
+		self.socket.close()
+	end 'close'
+
+	module function ask(payload String) returns GdbAnswer
+		return self.askWithin(payload, budgetMs: GdbReplyBudgetMs)
+	end 'ask'
+
+	module function askWithin(payload String, budgetMs GdbWaitMs) returns GdbAnswer
+		if not self.writePacket(payload) 'theSocketRefused'
+			return GdbAnswer.broken("the debugger could not send '{payload}' to the debug stub")
+		end 'theSocketRefused'
+
+		return self.answerWithin(budgetMs)
+	end 'askWithin'
+
+	module function answerWithin(budgetMs GdbWaitMs) returns GdbAnswer
+		match self.readPacket(budgetMs) 'read'
+			timedOut then return GdbAnswer.timedOut
+			broken(reason) then return GdbAnswer.broken(reason)
+			packet(raw) then return classifiedAnswer(raw)
+		end 'read'
+	end 'answerWithin'
+
+	module function writePacket(payload String) returns bool
+		if not self.writeText("${payload}#{gdbChecksumOf(payload):02x}") 'theSocketRefused'
+			return false
+		end 'theSocketRefused'
+
+		if not self.acking 'noAckToRead'
+			return true
+		end 'noAckToRead'
+
+		return self.ackRead()
+	end 'writePacket'
+
+	module function interrupt() returns bool
+		var raw = ByteArray.create()
+		raw.push(GdbInterruptByte)
+
+		return self.writeText(String.from(raw))
+	end 'interrupt'
+
+	function writeText(text String) returns bool
+		if not self.open 'alreadyClosed'
+			return false
+		end 'alreadyClosed'
+
+		try self.socket.setWriteDeadline(GdbReplyBudgetMs as SocketDeadlineMs) otherwise 'noDeadline'
+			self.open = false
+
+			return false
+		end 'noDeadline'
+
+		_ = try self.socket.send(text) otherwise 'theSocketRefused'
+			self.open = false
+
+			return false
+		end 'theSocketRefused'
+
+		return true
+	end 'writeText'
+
+	function ackRead() returns bool
+		while self.pending.count() == 0 'untilOneArrives'
+			match self.fill(GdbReplyBudgetMs) 'filled'
+				filled then break 'untilOneArrives'
+				timedOut then return false
+				broken then return false
+			end 'filled'
+		end 'untilOneArrives'
+
+		self.consume(1)
+
+		return true
+	end 'ackRead'
+
+	function readPacket(budgetMs GdbWaitMs) returns GdbPacketRead
+		while true 'untilAWholePacket'
+			match self.framedPacket() 'framed'
+				broken(reason) then return GdbPacketRead.broken(reason)
+				timedOut then break 'framed'
+				packet(raw) then return GdbPacketRead.packet(raw)
+			end 'framed'
+
+			match self.fill(budgetMs) 'filled'
+				filled then continue
+				timedOut then return GdbPacketRead.timedOut
+				broken(reason) then return GdbPacketRead.broken(reason)
+			end 'filled'
+		end 'untilAWholePacket'
+
+		panic("GdbRemoteConnection.readPacket: the loop leaves only by answering, and every arm above answers")
+	end 'readPacket'
+
+	// ⚠ A packet's frame is found by scanning for `$` rather than by taking the first byte, because an
+	// acknowledgement byte the stub sent before this packet shares the stream with it.
+	function framedPacket() returns GdbPacketRead
+		let held = self.pending.count() as GdbWireIndex
+		var start = held
+
+		for (iter, value) in self.pending.withIterator() 'eachByte'
+			if value == GdbDollarByte 'thePacketBegins'
+				start = iter.index() as GdbWireIndex
+				break
+			end 'thePacketBegins'
+		end 'eachByte'
+
+		if start >= held 'noFrameYet'
+			self.searched = held
+
+			return GdbPacketRead.timedOut
+		end 'noFrameYet'
+
+		var index = start if start > self.searched else self.searched
+
+		while index < held 'eachCandidate'
+			if (try self.pending.get(index as ElementIndex) otherwise panic("GdbRemoteConnection.framedPacket: {index} is inside the {held} bytes held")) == GdbHashByte 'theFrameEnds'
+				if held < index + 1 + GdbChecksumDigits 'theChecksumIsStillComing'
+					self.searched = index
+
+					return GdbPacketRead.timedOut
+				end 'theChecksumIsStillComing'
+
+				let raw = gdbSlice(self.pending, from: start + 1, until: index)
+				self.consume(index + 1 + GdbChecksumDigits)
+
+				return GdbPacketRead.packet(raw)
+			end 'theFrameEnds'
+
+			index = index + 1
+		end 'eachCandidate'
+
+		self.searched = held
+
+		return GdbPacketRead.timedOut
+	end 'framedPacket'
+
+	function fill(budgetMs GdbWaitMs) returns GdbFill
+		if not self.open 'alreadyClosed'
+			return GdbFill.broken("the debugger's connection to the debug stub is closed")
+		end 'alreadyClosed'
+
+		try self.socket.setReadDeadline(budgetMs as SocketDeadlineMs) otherwise 'noDeadline'
+			self.open = false
+
+			return GdbFill.broken("the debugger could not put a deadline on its read of the debug stub")
+		end 'noDeadline'
+
+		let chunk = try self.socket.recv(GdbRecvCapacity) otherwise (e) 'nothingArrived'
+			if e == NetworkError.timedOut 'theBudgetRanOut'
+				return GdbFill.timedOut
+			end 'theBudgetRanOut'
+
+			self.open = false
+
+			return GdbFill.broken("the debug stub closed its connection ({e.name})")
+		end 'nothingArrived'
+
+		for value in chunk.bytes() 'eachByte'
+			self.pending.push(value)
+		end 'eachByte'
+
+		return GdbFill.filled
+	end 'fill'
+
+	function consume(count GdbWireIndex)
+		self.pending = gdbSlice(self.pending, from: count, until: self.pending.count() as GdbWireIndex)
+		self.searched = 0
+
+		if self.acking 'theStubExpectsOne'
+			_ = self.writeText(GdbAckText)
+		end 'theStubExpectsOne'
+	end 'consume'
+
+	// --- the handshake ---
+
+	module function shakeHands() returns GdbHandshake
+		_ = self.writeText(GdbAckText)
+
+		match self.ask("QStartNoAckMode") 'noAck'
+			answered then self.acking = false
+			unsupported or
+				failed then break 'noAck'
+			timedOut then return GdbHandshake.refused("the debug stub did not answer the debugger's request to stop acknowledging every packet")
+			broken(reason) then return GdbHandshake.refused(reason)
+		end 'noAck'
+
+		match self.ask("QThreadSuffixSupported") 'suffix'
+			answered then self.suffixed = true
+			unsupported then break 'suffix'
+			failed(code) then return GdbHandshake.refused("the debug stub refused the thread-suffix question with {code}")
+			timedOut then return GdbHandshake.refused("the debug stub did not answer the thread-suffix question")
+			broken(reason) then return GdbHandshake.refused(reason)
+		end 'suffix'
+
+		match self.ask("qSupported:swbreak+;hwbreak+;no-resumed+;xmlRegisters=i386") 'supported'
+			answered(features) then self.readPayloadLimit(features)
+			unsupported or
+				failed then break 'supported'
+			timedOut then return GdbHandshake.refused("the debug stub did not answer which packets it supports")
+			broken(reason) then return GdbHandshake.refused(reason)
+		end 'supported'
+
+		match self.registerRoster() 'roster'
+			refused(reason) then return GdbHandshake.refused(reason)
+			listed(registers) then return self.threadsInEveryStopReply(registers)
+		end 'roster'
+	end 'shakeHands'
+
+	function threadsInEveryStopReply(registers GdbRegisterInfoArray) returns GdbHandshake
+		match self.ask("QListThreadsInStopReply") 'listed'
+			answered or
+				unsupported then return GdbHandshake.shook(registers)
+			failed(code) then return GdbHandshake.refused("the debug stub refused to list every thread in a stop reply with {code}")
+			timedOut then return GdbHandshake.refused("the debug stub did not answer the debugger's request for every thread in a stop reply")
+			broken(reason) then return GdbHandshake.refused(reason)
+		end 'listed'
+	end 'threadsInEveryStopReply'
+
+	function readPayloadLimit(features String)
+		for feature in features.split(GdbFieldSeparator) 'eachFeature'
+			if not feature.startsWith(GdbPacketSizeFeature) 'anotherFeature'
+				continue
+			end 'anotherFeature'
+
+			match gdbHexValueOf(feature.replaceFirst(GdbPacketSizeFeature, with: "")) 'read'
+				notHex then continue
+				value(size) then self.payloadLimit = gdbPayloadLimitOf(size)
+			end 'read'
+		end 'eachFeature'
+	end 'readPayloadLimit'
+
+	// ⛔ **A SUB-REGISTER STILL COSTS AN INDEX.** The number a `p` names is the query index rather than
+	// anything the reply carries, so a reply that names a container is skipped while the count advances.
+	function registerRoster() returns GdbRegisterRoster
+		var registers = GdbRegisterInfoArray.create()
+		var number = 0 as GdbRegisterNumber
+
+		while number < GdbMaxRegisterRosterSize 'eachRegister'
+			match self.ask("qRegisterInfo{number:x}") 'described'
+				answered(description) then gdbPushRegister(registers, number: number, description: description)
+				unsupported or
+					failed then break 'eachRegister'
+				timedOut then return GdbRegisterRoster.refused("the debug stub did not answer what register {number} is")
+				broken(reason) then return GdbRegisterRoster.refused(reason)
+			end 'described'
+
+			number = number + 1
+		end 'eachRegister'
+
+		if registers.count() == 0 'noRegisterFile'
+			return GdbRegisterRoster.refused("the debug stub describes no registers, so the debugger cannot read a stopped thread")
+		end 'noRegisterFile'
+
+		return GdbRegisterRoster.listed(registers)
+	end 'registerRoster'
+end 'GdbRemoteConnection'
+
+module union GdbHandshake
+	shook(registers GdbRegisterInfoArray)
+	refused(reason String)
+end 'GdbHandshake'
+
+union GdbRegisterRoster
+	listed(registers GdbRegisterInfoArray)
+	refused(reason String)
+end 'GdbRegisterRoster'
+
+module union GdbHexRead
+	value(word GdbWireWord)
+	notHex
+end 'GdbHexRead'
+
+let GdbMaxRegisterRosterSize = 256 as GdbRegisterNumber
+
+let GdbReplyBudgetMs = 20000 as GdbWaitMs
+
+let GdbPacketOverheadBytes = 4
+
+let GdbHexDigitsPerByte = 2
+
+function gdbPayloadLimitOf(size GdbWireWord) returns GdbPayloadBytes
+	if size <= (GdbDefaultPayloadBytes as GdbWireWord) or size > 0x4000000 'notUsableAsALimit'
+		return GdbDefaultPayloadBytes
+	end 'notUsableAsALimit'
+
+	return size as GdbPayloadBytes
+end 'gdbPayloadLimitOf'
+
+function gdbPushRegister(registers GdbRegisterInfoArray, number GdbRegisterNumber, description String)
+	var name = ""
+	var width = 0 as GdbRegisterBytes
+
+	for field in description.split(GdbFieldSeparator) 'eachField'
+		let halves = field.split(GdbKeyValueSeparator)
+		let key = try halves.get(0) otherwise continue
+		let spelled = try halves.get(1) otherwise continue
+
+		if key == GdbRegisterInfoContainerKey 'aSubRegister'
+			return
+		end 'aSubRegister'
+
+		if key == GdbRegisterInfoNameKey 'itsName'
+			name = spelled
+		end 'itsName'
+
+		if key == GdbRegisterInfoBitsizeKey 'itsWidth'
+			width = gdbRegisterWidthOf(spelled)
+		end 'itsWidth'
+	end 'eachField'
+
+	if name.isEmpty() or width == 0 'notADescribedRegister'
+		return
+	end 'notADescribedRegister'
+
+	registers.push(GdbRegisterInfo.create(name, number: number, bytes: width))
+end 'gdbPushRegister'
+
+function gdbRegisterWidthOf(spelled String) returns GdbRegisterBytes
+	let bits = try int.fromString(spelled) otherwise return 0
+
+	if bits <= 0 or bits > (64 * GdbBitsPerRegisterByte) 'notARegisterThisFileHolds'
+		return 0
+	end 'notARegisterThisFileHolds'
+
+	return (bits / GdbBitsPerRegisterByte) as GdbRegisterBytes
+end 'gdbRegisterWidthOf'
+
+function classifiedAnswer(raw ByteArray) returns GdbAnswer
+	if raw.count() == 0 'theStubServesNoSuchPacket'
+		return GdbAnswer.unsupported
+	end 'theStubServesNoSuchPacket'
+
+	let payload = String.from(gdbDecoded(raw))
+
+	if payload.startsWith(GdbErrorPrefix) and gdbLooksLikeAnErrorCode(payload) 'theStubRefused'
+		return GdbAnswer.failed(payload)
+	end 'theStubRefused'
+
+	return GdbAnswer.answered(payload)
+end 'classifiedAnswer'
+
+// ⚠ `E` OPENS AN ERROR CODE AND ALSO EVERY REGISTER NAMED `Exxx`, so a refusal is told from a payload by
+// its SHAPE: the stub spells one as `E` and two hex digits and nothing else.
+function gdbLooksLikeAnErrorCode(payload String) returns bool
+	if payload.count() != 1 + GdbHexDigitsPerByte 'notThreeCharacters'
+		return false
+	end 'notThreeCharacters'
+
+	match gdbHexValueOf(payload.replaceFirst(GdbErrorPrefix, with: "")) 'read'
+		notHex then return false
+		value then return true
+	end 'read'
+end 'gdbLooksLikeAnErrorCode'
+
+// The two reply transformations the protocol defines: `}` escapes the next byte by flipping bit 5, and `*`
+// repeats the byte before it. Both are the stub's to use wherever it likes, so every reply is read through
+// this and a reply that uses neither passes through byte for byte.
+function gdbDecoded(raw ByteArray) returns ByteArray
+	var out = ByteArray.create()
+	var index = 0 as GdbWireIndex
+	let held = raw.count() as GdbWireIndex
+
+	while index < held 'eachByte'
+		let value = try raw.get(index as ElementIndex) otherwise panic("gdbDecoded: {index} is inside the {held} bytes read")
+
+		if value == GdbEscapeByte and index + 1 < held 'anEscapedByte'
+			out.push(((try raw.get((index + 1) as ElementIndex) otherwise panic("gdbDecoded: the byte after an escape was just proven to be there")) as GdbWireWord xor GdbEscapeXor) as Byte)
+			index = index + 2
+
+			continue
+		end 'anEscapedByte'
+
+		if value == GdbRunLengthByte and index > 0 and index + 1 < held and out.count() > 0 'aRepeatedByte'
+			gdbRepeatLast(out, count: (try raw.get((index + 1) as ElementIndex) otherwise panic("gdbDecoded: the byte after a run length was just proven to be there")) as GdbWireWord)
+			index = index + 2
+
+			continue
+		end 'aRepeatedByte'
+
+		out.push(value)
+		index = index + 1
+	end 'eachByte'
+
+	return out
+end 'gdbDecoded'
+
+function gdbRepeatLast(out ByteArray, count GdbWireWord)
+	if count <= GdbRunLengthBias 'notARunLength'
+		return
+	end 'notARunLength'
+
+	let repeated = try out.get((out.count() - 1) as ElementIndex) otherwise panic("gdbRepeatLast: a run length follows a byte, so there is one to repeat")
+
+	for _ in 0 upto (count - GdbRunLengthBias) 'eachRepeat'
+		out.push(repeated)
+	end 'eachRepeat'
+end 'gdbRepeatLast'
+
+function gdbSlice(bytes ByteArray, from GdbWireIndex, until GdbWireIndex) returns ByteArray
+	var taken = ByteArray.create()
+	var index = from
+
+	while index < until 'eachByte'
+		taken.push(try bytes.get(index as ElementIndex) otherwise panic("gdbSlice: {index} is inside the {bytes.count()} bytes held"))
+		index = index + 1
+	end 'eachByte'
+
+	return taken
+end 'gdbSlice'
+
+function gdbChecksumOf(payload String) returns GdbChecksumByte
+	var sum = 0 as GdbWireWord
+
+	for value in payload.bytes() 'eachByte'
+		sum = (sum + (value as GdbWireWord)) and 0xFF
+	end 'eachByte'
+
+	return sum as GdbChecksumByte
+end 'gdbChecksumOf'
+
+// --- the hex the protocol carries every number and every byte in ---
+
+module function gdbHexValueOf(text String) returns GdbHexRead
+	if text.isEmpty() 'nothingToRead'
+		return GdbHexRead.notHex
+	end 'nothingToRead'
+
+	var value = 0 as GdbWireWord
+
+	for character in text 'eachDigit'
+		match digitValue(character, base: HexBase) 'read'
+			invalid then return GdbHexRead.notHex
+			valid(digit) then value = value * (HexBase as GdbWireWord) + (digit as GdbWireWord)
+		end 'read'
+	end 'eachDigit'
+
+	return GdbHexRead.value(value)
+end 'gdbHexValueOf'
+
+module function gdbHexBytesOf(text String) returns GdbHexBytesRead
+	if (text.count() mod GdbHexDigitsPerByte) != 0 'notWholeBytes'
+		return GdbHexBytesRead.notHex
+	end 'notWholeBytes'
+
+	var bytes = ByteArray.create()
+	var pending = 0
+	var half = 0
+
+	for character in text 'eachDigit'
+		match digitValue(character, base: HexBase) 'read'
+			invalid then return GdbHexBytesRead.notHex
+			valid(digit) then pending = pending * HexBase + (digit as ParsedCodeOffset)
+		end 'read'
+
+		half = half + 1
+
+		if half == GdbHexDigitsPerByte 'aWholeByte'
+			bytes.push(pending as Byte)
+			pending = 0
+			half = 0
+		end 'aWholeByte'
+	end 'eachDigit'
+
+	return GdbHexBytesRead.bytes(bytes)
+end 'gdbHexBytesOf'
+
+module union GdbHexBytesRead
+	bytes(value ByteArray)
+	notHex
+end 'GdbHexBytesRead'
+
+module function gdbHexTextOf(bytes ByteArray) returns String
+	var out = ""
+
+	for value in bytes 'eachByte'
+		out.append("{value:02x}")
+	end 'eachByte'
+
+	return out
+end 'gdbHexTextOf'
+
+// ⛔ **A REGISTER ARRIVES AS ITS RAW BYTES, WHICH ON THIS CPU ARE LEAST SIGNIFICANT FIRST**, so the digits
+// a reply spells are not the digits of the number: the pairs are read as memory and reassembled.
+module function gdbRegisterValueOf(bytes ByteArray) returns GdbWireWord
+	var value = 0 as GdbWireWord
+	var shift = 0
+
+	for value8 in bytes 'eachByte'
+		if shift >= (WordBytes * BitsPerByte) 'pastAWord'
+			break
+		end 'pastAWord'
+
+		value = value or ((value8 as GdbWireWord) shl shift)
+		shift = shift + BitsPerByte
+	end 'eachByte'
+
+	return value
+end 'gdbRegisterValueOf'
+
+module function gdbRegisterBytesOf(value GdbWireWord, width GdbRegisterBytes) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for index in 0 upto width 'eachByte'
+		bytes.push(((value shr (index * BitsPerByte)) and 0xFF) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'gdbRegisterBytesOf'

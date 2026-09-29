@@ -1,0 +1,42 @@
+// Test: error.a-withheld-interface-message-spawned-first-is-refused
+typealias Count = int(0 to 1000)
+
+interface Pinger
+	function ping() returns Count
+end 'Pinger'
+
+type A implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	function ping() returns Count
+		return self.n
+	end 'ping'
+end 'A'
+
+type B implements Pinger
+	let n as Count
+
+	static function create() returns Self
+		return Self{n: 9}
+	end 'create'
+
+	export function ping() returns Count
+		return self.n
+	end 'ping'
+end 'B'
+
+function main() returns ExitCode
+	let b = spawn B.create()
+	let h = (spawn A.create()) as Pinger.handle
+	let v = try await h.ping() otherwise 0
+	let w = try await b.ping() otherwise 0
+	print("{v} {w}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3136: <fragment>:35:22: `interface Pinger` requires `ping`, and `type A` implements it, but not as an `export` instance method — so it is not a message of `A`, and `Pinger.handle` cannot send it to every service behind it. Declare `ping` on `A` as an `export` instance method

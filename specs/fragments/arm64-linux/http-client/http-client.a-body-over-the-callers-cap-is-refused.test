@@ -1,0 +1,1013 @@
+// Test: http-client.a-body-over-the-callers-cap-is-refused
+let RequestBytes = 4096
+let TenBytes = "0123456789"
+
+function answer(listener TcpListener, reply String) returns String
+	let conn = try listener.accept() otherwise return "accept-failed"
+	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
+	_ = try conn.send(reply) otherwise return "send-failed"
+	conn.close()
+
+	return "answered"
+end 'answer'
+
+function exchange(listener TcpListener, reply String, limits HttpClientLimits) returns String
+	let peer = async answer(listener, reply: reply)
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return "bad-url"
+
+	let response = try HttpClient.send(request, limits: limits) otherwise (e) 'failed'
+		return "{e.name} peer={await peer}"
+	end 'failed'
+
+	return "[{response.body()}] peer={await peer}"
+end 'exchange'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let declared = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n{TenBytes}"
+	let chunked = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n0123\r\n6\r\n456789\r\n0\r\n\r\n"
+	let closeDelimited = "HTTP/1.1 200 OK\r\n\r\n{TenBytes}"
+	let uncapped = HttpClientLimits.create()
+	var capped = HttpClientLimits.create()
+	capped.maxBodyBytes = HttpBodyCap.atMost(4)
+	var roomy = HttpClientLimits.create()
+	roomy.maxBodyBytes = HttpBodyCap.atMost(10)
+
+	print("declared-uncapped={exchange(listener, reply: declared, limits: uncapped)}\n")
+	print("declared-at-the-cap={exchange(listener, reply: declared, limits: roomy)}\n")
+	print("declared-over={exchange(listener, reply: declared, limits: capped)}\n")
+	print("chunked-over={exchange(listener, reply: chunked, limits: capped)}\n")
+	print("chunked-at-the-cap={exchange(listener, reply: chunked, limits: roomy)}\n")
+	print("close-delimited-over={exchange(listener, reply: closeDelimited, limits: capped)}\n")
+	print("close-delimited-at-the-cap={exchange(listener, reply: closeDelimited, limits: roomy)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_allg@8 = i64 0
+  __gt_allglen@16 = i64 0
+  __gt_allgcap@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_trace_counter@96 = i64 0
+  __gt_live_count@104 = i64 0
+  __gt_seed_bytes@112 = i64 2048
+  __gt_stack_bytes_sum@120 = i64 0
+  __gt_stack_bytes_count@128 = i64 0
+  __gt_seed_sum_seen@136 = i64 0
+  __gt_seed_count_seen@144 = i64 0
+  __gt_keeps_cpu_clock@152 = i64 0
+  __sched_active_workers@160 = i64 1
+  __sched_max_active_workers@168 = i64 1
+  __sched_tls_index@176 = i64 0
+  __sched_tls_teb_offset@184 = i64 0
+  __sched_procs@192 = i64 0
+  __sched_allm@200 = i64 0
+  __sched_async_preempt_off@208 = i64 0
+  __sched_midle@216 = i64 0
+  __sched_pidle@224 = i64 0
+  __gt_gfree_head@232 = i64 0
+  __sched_arena_cursor@240 = i64 0
+  __sched_arena_limit@248 = i64 0
+  __gt_records_carved@256 = i64 0
+  __sched_npidle@264 = i64 0
+  __sched_runq_size@272 = i64 0
+  __sched_global_pushes@280 = i64 0
+  __sched_timer_scan_steps@288 = i64 0
+  __sched_mcount@296 = i64 0
+  __sched_nmidle@304 = i64 0
+  __sched_main_m@312 = i64 0
+  __sched_phase@320 = i64 0
+  __sched_lastpoll@328 = i64 0
+  __sched_poll_until@336 = i64 0
+  __sched_regain_head@344 = i64 0
+  __np_poller@352 = i64 0
+  __np_break@360 = i64 0
+  __np_wake_sig@368 = i64 0
+  __np_pd_table@376 = i64 0
+  __np_pd_cap@384 = i64 0
+  __np_waiters@392 = i64 0
+  __sched_num_procs@400 = i64 0
+  __sched_shutdown_flag@408 = i64 0
+  __sched_lock@416 = i64 0
+  __sched_lock_depth_sink@424 = i64 0
+  __sched_nmspinning@432 = i64 0
+  __sched_needspinning@440 = i64 0
+  __sched_sysmon_event@448 = i64 0
+  __sched_sysmon_wait@456 = i64 0
+  __sched_timer_starts@464 = i64 0
+  __mrt_errno@472 = i64 0
+  __mrt_envp@480 = i64 0
+  __mrt_signal_stack_bytes@488 = i64 0
+  __mrt_tls_next_key@496 = i64 0
+  __slab_arena_list@504 = i64 0
+  __slab_arena_map_l1@512 = i64 0
+  __slab_state@520 = i64 0
+  __ms_wsa_started@528 = i64 0
+}
+
+func @answer {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.bl TcpListener.accept
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_rec_109  ; "accept-failed"
+    arm64.bl __str_retain
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#1:
+    arm64.movImm x1, 4096
+    arm64.movRegReg x0, x20
+    arm64.bl TcpClient.recv
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_rec_110  ; "recv-failed"
+    arm64.bl __str_retain
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#3:
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl TcpClient.send
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.leaRdata x0, __str_rec_112  ; "send-failed"
+    arm64.bl __str_retain
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#5:
+    arm64.movRegReg x0, x20
+    arm64.bl TcpClient.close
+    arm64.leaRdata x0, __str_rec_111  ; "answered"
+    arm64.bl __str_retain
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @exchange {
+  entry:
+    arm64.prologue 160
+    arm64.storeSlotReg slot16, x28
+    arm64.storeSlotReg slot15, x27
+    arm64.storeSlotReg slot14, x26
+    arm64.storeSlotReg slot13, x25
+    arm64.storeSlotReg slot12, x24
+    arm64.storeSlotReg slot11, x23
+    arm64.storeSlotReg slot10, x22
+    arm64.storeSlotReg slot9, x21
+    arm64.storeSlotReg slot8, x20
+    arm64.storeSlotReg slot7, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.storeSlotReg slot6, x2
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_own
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
+    arm64.add x0, x20, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x24, x20
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x20
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.leaFuncAddr x0, answer
+    arm64.bl __gt_spawn
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 200], x21
+    arm64.storeBaseDispReg.word64 [x20 + 208], x23
+    arm64.leaFuncAddr x0, __gt_release_answer
+    arm64.storeBaseDispReg.word64 [x20 + 176], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_ready
+    arm64.leaRdata x0, __str_rec_113  ; "http://127.0.0.1:"
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __ml_port
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#7
+  tryerr#8:
+    arm64.leaRdata x0, __str_blob_181  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot7
+    arm64.loadRegSlot x20, slot8
+    arm64.loadRegSlot x21, slot9
+    arm64.loadRegSlot x22, slot10
+    arm64.loadRegSlot x23, slot11
+    arm64.loadRegSlot x24, slot12
+    arm64.loadRegSlot x25, slot13
+    arm64.loadRegSlot x26, slot14
+    arm64.loadRegSlot x27, slot15
+    arm64.loadRegSlot x28, slot16
+    arm64.epilogue 160
+    arm64.ret
+  tryok#7:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x16, 65535
+    arm64.cmp x19, x16
+    arm64.b.gt __rc_panic
+  __il_cont#5:
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.bl __uint_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_114  ; "/"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x22, x19
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x28, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x21, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movImm x0, 0
+    arm64.movRegReg x1, x27
+    arm64.bl HttpRequest.create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.leaRdata x0, __str_rec_115  ; "bad-url"
+    arm64.bl __str_retain
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_promise_drop
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot7
+    arm64.loadRegSlot x20, slot8
+    arm64.loadRegSlot x21, slot9
+    arm64.loadRegSlot x22, slot10
+    arm64.loadRegSlot x23, slot11
+    arm64.loadRegSlot x24, slot12
+    arm64.loadRegSlot x25, slot13
+    arm64.loadRegSlot x26, slot14
+    arm64.loadRegSlot x27, slot15
+    arm64.loadRegSlot x28, slot16
+    arm64.epilogue 160
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.loadRegSlot x1, slot6
+    arm64.movRegReg x0, x19
+    arm64.bl HttpClient.send
+    arm64.storeSlotReg slot1, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.leaRdata x2, __str_rec_118  ; "invalidUrl"
+    arm64.mul x1, x1, x2
+    arm64.cmp x0, 1
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_119  ; "connectFailed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 2
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_120  ; "sendFailed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 3
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_121  ; "recvFailed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 4
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_122  ; "invalidResponse"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 5
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_123  ; "unsupportedScheme"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 6
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_124  ; "timedOut"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 7
+    arm64.cset x0, eq
+    arm64.leaRdata x2, __str_rec_125  ; "bodyTooLarge"
+    arm64.mul x0, x0, x2
+    arm64.add x0, x1, x0
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.leaRdata x0, __str_rec_126  ; " peer="
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.storeSlotReg slot5, x0
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x22, x24
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x28, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x21, x21, x24
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x21, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.loadRegSlot x0, slot5
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HttpRequest
+    arm64.movRegReg x0, x27
+    arm64.loadRegSlot x19, slot7
+    arm64.loadRegSlot x20, slot8
+    arm64.loadRegSlot x21, slot9
+    arm64.loadRegSlot x22, slot10
+    arm64.loadRegSlot x23, slot11
+    arm64.loadRegSlot x24, slot12
+    arm64.loadRegSlot x25, slot13
+    arm64.loadRegSlot x26, slot14
+    arm64.loadRegSlot x27, slot15
+    arm64.loadRegSlot x28, slot16
+    arm64.epilogue 160
+    arm64.ret
+  tryok#3:
+    arm64.leaRdata x1, __str_rec_116  ; "["
+    arm64.loadRegBaseDisp.word64 x19, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x1 + 8]
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 24]
+    arm64.bl __str_retain
+    arm64.storeSlotReg slot2, x0
+  __il_cont#12:
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.leaRdata x0, __str_rec_117  ; "] peer="
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.movRegReg x0, x20
+    arm64.bl __gt_await
+    arm64.storeSlotReg slot3, x0
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.add x0, x21, x23
+    arm64.add x0, x0, x25
+    arm64.add x0, x0, x26
+    arm64.storeSlotReg slot4, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x19, x28, x21
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x19, x19, x25
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x0, x19, x26
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.loadRegSlot x0, slot4
+    arm64.storeBaseDispReg.word64 [x27 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __destruct_HttpResponse
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_HttpRequest
+    arm64.movRegReg x0, x27
+    arm64.loadRegSlot x19, slot7
+    arm64.loadRegSlot x20, slot8
+    arm64.loadRegSlot x21, slot9
+    arm64.loadRegSlot x22, slot10
+    arm64.loadRegSlot x23, slot11
+    arm64.loadRegSlot x24, slot12
+    arm64.loadRegSlot x25, slot13
+    arm64.loadRegSlot x26, slot14
+    arm64.loadRegSlot x27, slot15
+    arm64.loadRegSlot x28, slot16
+    arm64.epilogue 160
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_335  ; "panic at TcpListener.maxon:34: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot7
+    arm64.loadRegSlot x20, slot8
+    arm64.loadRegSlot x21, slot9
+    arm64.loadRegSlot x22, slot10
+    arm64.loadRegSlot x23, slot11
+    arm64.loadRegSlot x24, slot12
+    arm64.loadRegSlot x25, slot13
+    arm64.loadRegSlot x26, slot14
+    arm64.loadRegSlot x27, slot15
+    arm64.loadRegSlot x28, slot16
+    arm64.epilogue 160
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 160
+    arm64.storeSlotReg slot16, x28
+    arm64.storeSlotReg slot15, x27
+    arm64.storeSlotReg slot14, x26
+    arm64.storeSlotReg slot13, x25
+    arm64.storeSlotReg slot12, x24
+    arm64.storeSlotReg slot11, x23
+    arm64.storeSlotReg slot10, x22
+    arm64.storeSlotReg slot9, x21
+    arm64.storeSlotReg slot8, x20
+    arm64.storeSlotReg slot7, x19
+    arm64.leaRdata x0, __str_rec_127  ; "127.0.0.1"
+    arm64.movImm x1, 0
+    arm64.bl TcpListener.bind
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot6, x19
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot7
+    arm64.loadRegSlot x20, slot8
+    arm64.loadRegSlot x21, slot9
+    arm64.loadRegSlot x22, slot10
+    arm64.loadRegSlot x23, slot11
+    arm64.loadRegSlot x24, slot12
+    arm64.loadRegSlot x25, slot13
+    arm64.loadRegSlot x26, slot14
+    arm64.loadRegSlot x27, slot15
+    arm64.loadRegSlot x28, slot16
+    arm64.epilogue 160
+    arm64.ret
+  tryok:
+    arm64.leaRdata x0, __str_rec_128  ; "HTTP/1.1 200 OK\x0d\x0aContent-Length: 10\x0d\x0a\x0d\x0a"
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.leaRdata x0, __str_rec_129  ; "0123456789"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x24, x21, x23
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.storeSlotReg slot5, x25
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x26, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x20, x23
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.leaRdata x0, __str_rec_130  ; "HTTP/1.1 200 OK\x0d\x0aTransfer-Encoding: chunked\x0d\x0a\x0d\x0a4\x0d\x0a0123\x0d\x0a6\x0d\x0a456789\x0d\x0a0\x0d\x0a\x0d\x0a"
+    arm64.storeSlotReg slot2, x0
+    arm64.leaRdata x0, __str_rec_131  ; "HTTP/1.1 200 OK\x0d\x0a\x0d\x0a"
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.leaRdata x0, __str_rec_129  ; "0123456789"
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x24, x21, x23
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.storeSlotReg slot1, x26
+    arm64.add x27, x26, 56
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x27, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x20, x23
+    arm64.storeBaseDispReg.word64 [x26 + 0], x27
+    arm64.storeBaseDispReg.word64 [x26 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+    arm64.bl HttpClientLimits.create
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot0, x20
+    arm64.bl HttpClientLimits.create
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot3, x21
+    arm64.movImm x22, 4
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 0], x0
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x21 + 8], x23
+    arm64.bl HttpClientLimits.create
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot4, x21
+    arm64.movImm x22, 10
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 0], x0
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.bl __mm_decref
+    arm64.storeBaseDispReg.word64 [x21 + 8], x23
+    arm64.leaRdata x0, __str_rec_132  ; "declared-uncapped="
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x20
+    arm64.bl exchange
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
+    arm64.leaRdata x0, __str_rec_133  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x22, x23
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x28, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x20, x21, x23
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x20, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.leaRdata x0, __str_rec_134  ; "declared-at-the-cap="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.loadRegSlot x2, slot4
+    arm64.loadRegSlot x1, slot5
+    arm64.loadRegSlot x0, slot6
+    arm64.bl exchange
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.leaRdata x0, __str_rec_133  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x20, x23
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x28, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.leaRdata x0, __str_rec_135  ; "declared-over="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.loadRegSlot x2, slot3
+    arm64.loadRegSlot x1, slot5
+    arm64.loadRegSlot x0, slot6
+    arm64.bl exchange
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.leaRdata x0, __str_rec_133  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x20, x23
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x28, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.leaRdata x0, __str_rec_136  ; "chunked-over="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot3
+    arm64.loadRegSlot x0, slot6
+    arm64.bl exchange
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.leaRdata x0, __str_rec_133  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x20, x23
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x28, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.leaRdata x0, __str_rec_137  ; "chunked-at-the-cap="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x2, slot4
+    arm64.loadRegSlot x0, slot6
+    arm64.bl exchange
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.leaRdata x0, __str_rec_133  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x20, x23
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x28, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.leaRdata x0, __str_rec_138  ; "close-delimited-over="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot3
+    arm64.loadRegSlot x0, slot6
+    arm64.bl exchange
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.leaRdata x0, __str_rec_133  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x20, x23
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x28, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.leaRdata x0, __str_rec_139  ; "close-delimited-at-the-cap="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot4
+    arm64.loadRegSlot x0, slot6
+    arm64.bl exchange
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x22, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
+    arm64.leaRdata x0, __str_rec_133  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x20, x23
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x28, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x27
+    arm64.bl print
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot4
+    arm64.bl __destruct_HttpClientLimits
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __destruct_HttpClientLimits
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_HttpClientLimits
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot5
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot6
+    arm64.bl __destruct_TcpListener
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot7
+    arm64.loadRegSlot x20, slot8
+    arm64.loadRegSlot x21, slot9
+    arm64.loadRegSlot x22, slot10
+    arm64.loadRegSlot x23, slot11
+    arm64.loadRegSlot x24, slot12
+    arm64.loadRegSlot x25, slot13
+    arm64.loadRegSlot x26, slot14
+    arm64.loadRegSlot x27, slot15
+    arm64.loadRegSlot x28, slot16
+    arm64.epilogue 160
+    arm64.ret
+}

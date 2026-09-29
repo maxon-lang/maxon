@@ -235,7 +235,8 @@ Every `debug_*` tool answers `{"state": "stopped" | "running" | "ended" | "none"
 the previous call. A tool other than `debug_start` called with no live session is an error naming
 `debug_start`.
 
-The debugger drives `x64-windows` programs only. `debug_stop` ends the debuggee.
+The debugger drives a program built for the host's own native target — `x64-windows`, `x64-linux`,
+`arm64-linux` or `arm64-macos`. `debug_stop` ends the debuggee.
 
 ### `debug_start`
 

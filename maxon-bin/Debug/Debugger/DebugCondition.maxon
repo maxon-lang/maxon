@@ -13,8 +13,8 @@ let GreaterOrEqualSpelling = ">="
 
 let TrueSpelling = "true"
 let FalseSpelling = "false"
-let TrueWord = 1 as DebugWord
-let FalseWord = 0 as DebugWord
+let TrueWord = 1 as DebuggeeWord
+let FalseWord = 0 as DebuggeeWord
 
 let BoolTypeSpelling = "i1"
 let DoubleTypeSpelling = "f64"
@@ -29,7 +29,7 @@ typealias LiteralQuotient = int(1 to i64.max)
 
 let HexLiteralBase = 16 as LiteralBase
 let DecimalLiteralBase = 10 as LiteralBase
-let MaxLiteralMagnitude = 9223372036854775807 as DebugWord
+let MaxLiteralMagnitude = 9223372036854775807 as DebuggeeWord
 
 let AsciiZero = 48
 let AsciiNine = 57
@@ -37,17 +37,17 @@ let AsciiLowerA = 97
 let AsciiLowerF = 102
 let AsciiUpperA = 65
 let AsciiUpperF = 70
-let LetterDigitBase = 10 as DebugWord
+let LetterDigitBase = 10 as DebuggeeWord
 
 export type DebugConditionRecord
 	export let kind as DebugAddress
-	export let operand as DebugWord
+	export let operand as DebuggeeWord
 	export let width as DebugConditionWidth
 	export let signedCompare as DebugAddress
 	export let op as DebugAddress
-	export let literal as DebugWord
+	export let literal as DebuggeeWord
 
-	static function create(kind DebugAddress, operand DebugWord, width DebugConditionWidth, signedCompare DebugAddress, op DebugAddress, literal DebugWord) returns DebugConditionRecord
+	static function create(kind DebugAddress, operand DebuggeeWord, width DebugConditionWidth, signedCompare DebugAddress, op DebugAddress, literal DebuggeeWord) returns DebugConditionRecord
 		return Self{kind: kind, operand: operand, width: width, signedCompare: signedCompare, op: op, literal: literal}
 	end 'create'
 
@@ -74,23 +74,21 @@ let DbgWidthHalf = 2
 let DbgWidthWord32 = 4
 let DbgWidthWord64 = 8
 
-let DbgGprCount = 16
+let ByteWidthMask = 0xFF as DebuggeeWord
+let ByteWidthSignBit = 0x80 as DebuggeeWord
+let ByteWidthSpan = 0x100 as DebuggeeWord
 
-let ByteWidthMask = 0xFF as DebugWord
-let ByteWidthSignBit = 0x80 as DebugWord
-let ByteWidthSpan = 0x100 as DebugWord
+let HalfWidthMask = 0xFFFF as DebuggeeWord
+let HalfWidthSignBit = 0x8000 as DebuggeeWord
+let HalfWidthSpan = 0x10000 as DebuggeeWord
 
-let HalfWidthMask = 0xFFFF as DebugWord
-let HalfWidthSignBit = 0x8000 as DebugWord
-let HalfWidthSpan = 0x10000 as DebugWord
-
-let Word32Mask = 0xFFFFFFFF as DebugWord
-let Word32SignBit = 0x80000000 as DebugWord
-let Word32Span = 0x100000000 as DebugWord
+let Word32Mask = 0xFFFFFFFF as DebuggeeWord
+let Word32SignBit = 0x80000000 as DebuggeeWord
+let Word32Span = 0x100000000 as DebuggeeWord
 
 union ConditionOperandRead
 	unreadable
-	word(value DebugWord)
+	word(value DebuggeeWord)
 end 'ConditionOperandRead'
 
 // ⚠ Every road this cannot decide answers TRUE — an unconditioned byte, an operand outside the general file,
@@ -119,7 +117,7 @@ end 'conditionIsEvaluable'
 
 function conditionOperandValue(record DebugConditionRecord, memory DebugMemory, framePointer DebugAddress) returns ConditionOperandRead
 	if record.kind == DbgCondKindRegister 'aRegister'
-		if record.operand < 0 or record.operand >= (DbgGprCount as DebugWord) 'outsideTheGeneralFile'
+		if record.operand < 0 or record.operand >= (BackendGprSlots as DebuggeeWord) 'outsideTheGeneralFile'
 			return ConditionOperandRead.unreadable
 		end 'outsideTheGeneralFile'
 
@@ -130,7 +128,7 @@ function conditionOperandValue(record DebugConditionRecord, memory DebugMemory, 
 		return ConditionOperandRead.unreadable
 	end 'anUnreadableKind'
 
-	let slot = (framePointer as DebugWord) + record.operand
+	let slot = (framePointer as DebuggeeWord) + record.operand
 
 	if slot <= 0 'notAnAddressAtAll'
 		return ConditionOperandRead.unreadable
@@ -139,7 +137,7 @@ function conditionOperandValue(record DebugConditionRecord, memory DebugMemory, 
 	return ConditionOperandRead.word(try memory.readDebuggeeWord(slot as DebugAddress, width: DbgWidthWord64 as DebugWidth) otherwise return ConditionOperandRead.unreadable)
 end 'conditionOperandValue'
 
-function narrowedToWidth(raw DebugWord, width DebugConditionWidth, signed bool) returns DebugWord
+function narrowedToWidth(raw DebuggeeWord, width DebugConditionWidth, signed bool) returns DebuggeeWord
 	if width == DbgWidthByte 'aByte'
 		return signExtended(raw and ByteWidthMask, signBit: ByteWidthSignBit, span: ByteWidthSpan, signed: signed)
 	end 'aByte'
@@ -155,7 +153,7 @@ function narrowedToWidth(raw DebugWord, width DebugConditionWidth, signed bool) 
 	return raw
 end 'narrowedToWidth'
 
-function signExtended(masked DebugWord, signBit DebugWord, span DebugWord, signed bool) returns DebugWord
+function signExtended(masked DebuggeeWord, signBit DebuggeeWord, span DebuggeeWord, signed bool) returns DebuggeeWord
 	if signed and (masked and signBit) != 0 'negative'
 		return masked - span
 	end 'negative'
@@ -163,7 +161,7 @@ function signExtended(masked DebugWord, signBit DebugWord, span DebugWord, signe
 	return masked
 end 'signExtended'
 
-function conditionCompare(value DebugWord, literal DebugWord, op DebugAddress, signed bool) returns bool
+function conditionCompare(value DebuggeeWord, literal DebuggeeWord, op DebugAddress, signed bool) returns bool
 	if op == DbgCondOpEqual 'equal'
 		return value == literal
 	end 'equal'
@@ -187,7 +185,7 @@ function conditionCompare(value DebugWord, literal DebugWord, op DebugAddress, s
 	return not conditionIsBelow(value, than: literal, signed: signed)
 end 'conditionCompare'
 
-function conditionIsBelow(a DebugWord, than DebugWord, signed bool) returns bool
+function conditionIsBelow(a DebuggeeWord, than DebuggeeWord, signed bool) returns bool
 	if signed 'aSignedCompare'
 		return a < than
 	end 'aSignedCompare'
@@ -301,20 +299,20 @@ function compiledWithWidth(local MxdbgLocalInfo, signedCompare DebugAddress, op 
 	end 'read'
 end 'compiledWithWidth'
 
-function compiledWithLiteral(local MxdbgLocalInfo, signedCompare DebugAddress, op DebugAddress, width DebugConditionWidth, literal DebugWord) returns DebugConditionCompile
+function compiledWithLiteral(local MxdbgLocalInfo, signedCompare DebugAddress, op DebugAddress, width DebugConditionWidth, literal DebuggeeWord) returns DebugConditionCompile
 	if local.locKind == MxdbgLocKindRegister 'aRegister'
-		if local.locValue < 0 or local.locValue >= DbgGprCount 'outsideTheGeneralFile'
+		if local.locValue < 0 or local.locValue >= BackendGprSlots 'outsideTheGeneralFile'
 			return DebugConditionCompile.unsupported
 		end 'outsideTheGeneralFile'
 
-		return DebugConditionCompile.compiled(DebugConditionRecord.create(DbgCondKindRegister, operand: local.locValue as DebugWord, width: width, signedCompare: signedCompare, op: op, literal: literal))
+		return DebugConditionCompile.compiled(DebugConditionRecord.create(DbgCondKindRegister, operand: local.locValue as DebuggeeWord, width: width, signedCompare: signedCompare, op: op, literal: literal))
 	end 'aRegister'
 
 	if local.locKind != MxdbgLocKindStackSlot 'notASlotEither'
 		return DebugConditionCompile.unsupported
 	end 'notASlotEither'
 
-	return DebugConditionCompile.compiled(DebugConditionRecord.create(DbgCondKindStackSlot, operand: local.locValue as DebugWord, width: width, signedCompare: signedCompare, op: op, literal: literal))
+	return DebugConditionCompile.compiled(DebugConditionRecord.create(DbgCondKindStackSlot, operand: local.locValue as DebuggeeWord, width: width, signedCompare: signedCompare, op: op, literal: literal))
 end 'compiledWithLiteral'
 
 function comparesAsAWholeNumber(record MxdbgTypeInfo, typeName String) returns bool
@@ -375,7 +373,7 @@ end 'conditionOperatorOf'
 
 union ConditionLiteralLookup
 	none
-	value(word DebugWord)
+	value(word DebuggeeWord)
 end 'ConditionLiteralLookup'
 
 function conditionLiteralOf(spelling String, isABool bool) returns ConditionLiteralLookup
@@ -407,7 +405,7 @@ function unsignedLiteralOf(spelling String) returns ConditionLiteralLookup
 		return ConditionLiteralLookup.none
 	end 'nothingToRead'
 
-	var value = 0 as DebugWord
+	var value = 0 as DebuggeeWord
 
 	for character in digits 'eachDigit'
 		match nextLiteralValue(value, character: character, base: base) 'read'
@@ -419,28 +417,28 @@ function unsignedLiteralOf(spelling String) returns ConditionLiteralLookup
 	return ConditionLiteralLookup.value(value)
 end 'unsignedLiteralOf'
 
-function nextLiteralValue(value DebugWord, character Character, base LiteralBase) returns ConditionLiteralLookup
+function nextLiteralValue(value DebuggeeWord, character Character, base LiteralBase) returns ConditionLiteralLookup
 	match literalDigitOf(character, base: base) 'read'
 		none then return ConditionLiteralLookup.none
-		digit(read) then return ConditionLiteralLookup.value(value * (base as DebugWord) + read) if value <= (((MaxLiteralMagnitude - read) as LiteralQuotient) / (base as LiteralQuotient)) as DebugWord else ConditionLiteralLookup.none
+		digit(read) then return ConditionLiteralLookup.value(value * (base as DebuggeeWord) + read) if value <= (((MaxLiteralMagnitude - read) as LiteralQuotient) / (base as LiteralQuotient)) as DebuggeeWord else ConditionLiteralLookup.none
 	end 'read'
 end 'nextLiteralValue'
 
 union ConditionDigitLookup
 	none
-	digit(read DebugWord)
+	digit(read DebuggeeWord)
 end 'ConditionDigitLookup'
 
 function literalDigitOf(character Character, base LiteralBase) returns ConditionDigitLookup
 	let code = try character.asciiValue() otherwise return ConditionDigitLookup.none
-	var read = 0 as DebugWord
+	var read = 0 as DebuggeeWord
 
 	if code >= AsciiZero and code <= AsciiNine 'aDecimalDigit'
-		read = (code - AsciiZero) as DebugWord
+		read = (code - AsciiZero) as DebuggeeWord
 	end 'aDecimalDigit' else if code >= AsciiLowerA and code <= AsciiLowerF 'aLowerCaseLetter'
-		read = ((code - AsciiLowerA) as DebugWord) + LetterDigitBase
+		read = ((code - AsciiLowerA) as DebuggeeWord) + LetterDigitBase
 	end 'aLowerCaseLetter' else if code >= AsciiUpperA and code <= AsciiUpperF 'anUpperCaseLetter'
-		read = ((code - AsciiUpperA) as DebugWord) + LetterDigitBase
+		read = ((code - AsciiUpperA) as DebuggeeWord) + LetterDigitBase
 	end 'anUpperCaseLetter' else 'notADigitAtAll'
 		return ConditionDigitLookup.none
 	end 'notADigitAtAll'

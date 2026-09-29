@@ -1,0 +1,119 @@
+// Test: an-inherited-requirement-result-is-not-a-same-named-file-alias
+typealias Integer = int(i64.min to i64.max)
+typealias Item = int(0 to 3)
+
+interface Source uses Item
+	function take(item Item) returns Item
+end 'Source'
+
+interface Sink extends Source uses Item
+	function extra() returns Integer
+end 'Sink'
+
+type Keeper implements Sink with Integer
+	let base as Integer
+
+	function take(item Integer) returns Integer
+		return self.base + item
+	end 'take'
+
+	function extra() returns Integer
+		return 1
+	end 'extra'
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+end 'Keeper'
+
+function useIt(t Sink) returns Integer
+	return t.take(50) + t.extra()
+end 'useIt'
+
+function small() returns bool
+	let one = 1 as Item
+	return one == 1
+end 'small'
+
+function main() returns ExitCode
+	if useIt(Keeper.create()) == 51 and small() 'taken'
+		return 0
+	end 'taken'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @Keeper.take {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Keeper.extra {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body#7:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#6:
+    arm64.leaRdata x19, __witness_Keeper.Sink
+  __il_body#8:
+    arm64.movImm x1, 50
+    arm64.movRegReg x0, x20
+    arm64.loadRegBaseDisp.word64 x16, [x19 + 56]
+    arm64.blr x16
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.loadRegBaseDisp.word64 x16, [x19 + 48]
+    arm64.blr x16
+    arm64.add x0, x21, x0
+  __il_cont#5:
+    arm64.cmp x0, 51
+    arm64.movImm x19, 0
+    arm64.b.ne scmerge
+  __il_body#10:
+    arm64.movImm x19, 1
+  scmerge:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.cbz x19, ifcont
+  taken:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

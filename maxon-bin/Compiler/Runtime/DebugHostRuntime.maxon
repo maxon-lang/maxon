@@ -13,9 +13,16 @@ export let DebugHostProtectName = b"__dbgh_protect"
 export let DebugHostFlushCodeName = b"__dbgh_flush_code"
 export let DebugHostCloseHandleName = b"__dbgh_close_handle"
 
+export let DebugHostTraceRequestName = b"__dbgh_trace_request"
+export let DebugHostTraceeReadName = b"__dbgh_tracee_read"
+export let DebugHostAwaitTraceeName = b"__dbgh_await_tracee"
+export let DebugHostThreadSignalName = b"__dbgh_thread_signal"
+export let DebugHostProcessSignalName = b"__dbgh_process_signal"
+
 let DebugHostOneWord = 1 as ParamCount
 let DebugHostTwoWords = 2 as ParamCount
 let DebugHostThreeWords = 3 as ParamCount
+let DebugHostFourWords = 4 as ParamCount
 let DebugHostFiveWords = 5 as ParamCount
 
 export function isDebugHostRuntimeCallee(callee ByteArray) returns bool
@@ -35,11 +42,15 @@ function debugHostParamTypes(count ParamCount) returns StdTypeArray
 		return threeI64Params()
 	end 'threeWords'
 
+	if count == DebugHostFourWords 'fourWords'
+		return fourI64Params()
+	end 'fourWords'
+
 	if count == DebugHostFiveWords 'fiveWords'
 		return fiveI64Params()
 	end 'fiveWords'
 
-	panic("debugHostParamTypes: no entry point of this family takes {count} words — the four shapes are {DebugHostOneWord}, {DebugHostTwoWords}, {DebugHostThreeWords} and {DebugHostFiveWords}")
+	panic("debugHostParamTypes: no entry point of this family takes {count} words — the five shapes are {DebugHostOneWord}, {DebugHostTwoWords}, {DebugHostThreeWords}, {DebugHostFourWords} and {DebugHostFiveWords}")
 end 'debugHostParamTypes'
 
 function debugHostOperand(index ParamCount, count ParamCount, zero ValueId) returns ValueId
@@ -62,11 +73,41 @@ function buildDebugHostEntry(module StdModule, name ByteArray, words ParamCount,
 	module.functions.push(func)
 end 'buildDebugHostEntry'
 
-export function installDebugHostRuntime(module StdModule, usage RuntimeUsage)
+export function installDebugHostRuntime(module StdModule, usage RuntimeUsage, target Target)
 	if not usage.usesProcessDebug 'noProcessDebug'
 		return
 	end 'noProcessDebug'
 
+	match debugHostShapeOf(target) 'shape'
+		debugPort then installDebugPortEntries(module)
+		processTrace then installProcessTraceEntries(module)
+	end 'shape'
+end 'installDebugHostRuntime'
+
+union DebugHostShape
+	debugPort
+	processTrace
+end 'DebugHostShape'
+
+function debugHostShapeOf(target Target) returns DebugHostShape
+	return match target.os 'os'
+		windows gives DebugHostShape.debugPort
+		linux gives DebugHostShape.processTrace
+
+		macos or
+			wasi panic("debugHostShapeOf: {targetToString(target)} provides neither a debug port nor ptrace, and `targetProvidesFacility` answers `processDebug` false for it — a program reaching here would be built asking for five trace-band entries this lane's runtime lays out no chunk for")
+	end 'os'
+end 'debugHostShapeOf'
+
+function installProcessTraceEntries(module StdModule)
+	buildDebugHostEntry(module, name: DebugHostTraceRequestName, words: DebugHostFourWords, service: HostProcessCall.traceRequest)
+	buildDebugHostEntry(module, name: DebugHostTraceeReadName, words: DebugHostFiveWords, service: HostProcessCall.traceeMemoryRead)
+	buildDebugHostEntry(module, name: DebugHostAwaitTraceeName, words: DebugHostThreeWords, service: HostProcessCall.awaitTracee)
+	buildDebugHostEntry(module, name: DebugHostThreadSignalName, words: DebugHostThreeWords, service: HostProcessCall.threadGroupSignal)
+	buildDebugHostEntry(module, name: DebugHostProcessSignalName, words: DebugHostTwoWords, service: HostProcessCall.processSignal)
+end 'installProcessTraceEntries'
+
+function installDebugPortEntries(module StdModule)
 	buildDebugHostEntry(module, name: DebugHostReadMemoryName, words: DebugHostFiveWords, service: HostProcessCall.readProcessMemory)
 	buildDebugHostEntry(module, name: DebugHostWriteMemoryName, words: DebugHostFiveWords, service: HostProcessCall.writeProcessMemory)
 	buildDebugHostEntry(module, name: DebugHostReadContextName, words: DebugHostTwoWords, service: HostProcessCall.threadContext)
@@ -79,4 +120,4 @@ export function installDebugHostRuntime(module StdModule, usage RuntimeUsage)
 	buildDebugHostEntry(module, name: DebugHostProtectName, words: DebugHostFiveWords, service: HostProcessCall.protectRegion)
 	buildDebugHostEntry(module, name: DebugHostFlushCodeName, words: DebugHostThreeWords, service: HostProcessCall.flushCode)
 	buildDebugHostEntry(module, name: DebugHostCloseHandleName, words: DebugHostOneWord, service: HostProcessCall.closeHandle)
-end 'installDebugHostRuntime'
+end 'installDebugPortEntries'

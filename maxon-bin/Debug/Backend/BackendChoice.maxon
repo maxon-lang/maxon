@@ -1,14 +1,145 @@
 let WindowsBackendTriple = "x64-windows"
 
+let X64PtraceTriple = "x64-linux"
+let Arm64PtraceTriple = "arm64-linux"
+
+let RemoteStubTriple = "arm64-macos"
+
+let DebugServerName = "debugserver"
+
+let DebugServerCommandLineToolsDirectory = "/Library/Developer/CommandLineTools/Library/PrivateFrameworks/LLDB.framework"
+let DebugServerFrameworkVersionedTail = "/Versions/A/Resources/debugserver"
+let DebugServerFrameworkTail = "/Resources/debugserver"
+
+let DeveloperDirectoryCommand = "xcode-select"
+let DeveloperDirectoryOption = "--print-path"
+let DeveloperDirectoryProbeMs = 10000
+
+let DebugServerXcodeRelativeDirectory = "/../SharedFrameworks/LLDB.framework"
+
+let PathVariableName = "PATH"
+let PathEntrySeparator = ":"
+
+let DebugServerRefusal = "the debugger drives an arm64-macos program through Apple's `debugserver`, and this host has none: install the Xcode command line tools with `xcode-select --install`"
+
+typealias CandidatePathArray = Array with String
+
+function hostIsTraced(host String) returns bool
+	return host == X64PtraceTriple or host == Arm64PtraceTriple
+end 'hostIsTraced'
+
 export union BackendChoice
 	served(triple String)
 	unserved(reason String)
 end 'BackendChoice'
+
+union DebugStubSearch
+	found(path FilePath)
+	absent
+end 'DebugStubSearch'
 
 export function backendForHost(host String) returns BackendChoice
 	if host == WindowsBackendTriple 'theNativeDebugApi'
 		return BackendChoice.served(WindowsBackendTriple)
 	end 'theNativeDebugApi'
 
+	if hostIsTraced(host) 'theProcessTrace'
+		return BackendChoice.served(host)
+	end 'theProcessTrace'
+
+	if host == RemoteStubTriple 'theRemoteStub'
+		return servedIfTheStubIsInstalled()
+	end 'theRemoteStub'
+
 	return BackendChoice.unserved("the debugger drives a program through its host's own debug interface, and {host} has no backend in this build")
 end 'backendForHost'
+
+// ⛔ **A HOST WITH NO STUB IS REFUSED BY NAME, BEFORE ANYTHING IS LAUNCHED.** There is no mach backend to
+// fall back to on this lane — the entitlement `task_for_pid` needs is a code-signing identity a release
+// archive cannot carry — so the stub's absence is the whole answer and the refusal names what installs it.
+function servedIfTheStubIsInstalled() returns BackendChoice
+	match locatedDebugStub() 'installed'
+		absent then return BackendChoice.unserved(DebugServerRefusal)
+		found then return BackendChoice.served(RemoteStubTriple)
+	end 'installed'
+end 'servedIfTheStubIsInstalled'
+
+// ⭐⭐ **THE ONE SITE THAT PICKS A BACKEND, AND IT PICKS OFF THE TRIPLE `backendForHost` VOUCHED.** A host
+// whose triple reaches neither arm was refused before the spawn, so this panic reports a vouch and a
+// construction that have drifted apart rather than an unsupported host.
+export function backendFor(triple String) returns DebugBackend
+	if triple == WindowsBackendTriple 'theNativeDebugApi'
+		return DebugBackend.debugPort(WindowsBackend.create())
+	end 'theNativeDebugApi'
+
+	if hostIsTraced(triple) 'theProcessTrace'
+		return DebugBackend.processTrace(PtraceBackend.create())
+	end 'theProcessTrace'
+
+	if triple == RemoteStubTriple 'theRemoteStub'
+		return DebugBackend.remoteStub(GdbRemoteBackend.create(vouchedDebugStub()))
+	end 'theRemoteStub'
+
+	panic("backendFor: `{triple}` reaches no backend, and `backendForHost` answered `served` for it — the vouch and the construction read the same three triples and must agree")
+end 'backendFor'
+
+function vouchedDebugStub() returns FilePath
+	match locatedDebugStub() 'installed'
+		absent then panic("vouchedDebugStub: `{DebugServerName}` was found when this session was vouched and is not there now")
+		found(path) then return path
+	end 'installed'
+end 'vouchedDebugStub'
+
+function locatedDebugStub() returns DebugStubSearch
+	for candidate in debugStubCandidates() 'eachCandidate'
+		let path = try FilePath.from(candidate) otherwise continue
+
+		if File.exists(path) 'thisOne'
+			return DebugStubSearch.found(path)
+		end 'thisOne'
+	end 'eachCandidate'
+
+	return DebugStubSearch.absent
+end 'locatedDebugStub'
+
+function debugStubCandidates() returns CandidatePathArray
+	var candidates = CandidatePathArray.create()
+
+	for entry in (try Process.environmentVariable(PathVariableName) otherwise "").split(PathEntrySeparator) 'eachPathEntry'
+		if entry.isEmpty() 'noDirectory'
+			continue
+		end 'noDirectory'
+
+		candidates.push("{entry}/{DebugServerName}")
+	end 'eachPathEntry'
+
+	pushFrameworkCandidates(candidates, framework: DebugServerCommandLineToolsDirectory)
+
+	let developer = developerDirectory()
+
+	if not developer.isEmpty() 'thereIsADeveloperDirectory'
+		pushFrameworkCandidates(candidates, framework: "{developer}{DebugServerXcodeRelativeDirectory}")
+	end 'thereIsADeveloperDirectory'
+
+	return candidates
+end 'debugStubCandidates'
+
+// ⚠ Both spellings, because the unversioned one is a link into the versioned one on some installations and
+// the only file on others.
+function pushFrameworkCandidates(candidates CandidatePathArray, framework String)
+	candidates.push("{framework}{DebugServerFrameworkVersionedTail}")
+	candidates.push("{framework}{DebugServerFrameworkTail}")
+end 'pushFrameworkCandidates'
+
+// ⚠ `xcrun -f debugserver` is NOT the road to it: `debugserver` is not an SDK tool, so `xcrun`
+// answers "unable to find utility" on a host whose framework holds one.
+function developerDirectory() returns String
+	var arguments = StringArray.create()
+	arguments.push(DeveloperDirectoryOption)
+
+	let asked = try Subprocess.run(Executable.name(DeveloperDirectoryCommand), arguments: arguments, workingDirectory: Directory.currentPath(), timeoutMs: DeveloperDirectoryProbeMs) otherwise 'noDeveloperDirectory'
+		return ""
+	end 'noDeveloperDirectory'
+
+	return asked.stdout.trim()
+end 'developerDirectory'

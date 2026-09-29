@@ -68,8 +68,10 @@ differences a program can meet are:
 - **x64-windows needs Windows 8 or later**: its executables read the wall clock through
   `GetSystemTimePreciseAsFileTime`.
 - **`maxon profile`** runs only on x64-windows. Elsewhere it is refused.
-- **The interactive debugger** — `maxon debug`, `maxon dap-server` and the MCP `debug_*` tools — debugs
-  x64-windows programs only, because that is the one host whose debug interface this build drives.
+- **The interactive debugger** — `maxon debug`, `maxon dap-server` and the MCP `debug_*` tools — debugs a
+  program built for the host's own native target, through that host's debug interface: a debug port on
+  x64-windows, `ptrace` on x64-linux and arm64-linux, and Apple's `debugserver` on arm64-macos, where a
+  host without the Xcode command line tools is refused.
 - On the Linux targets, host-name resolution for sockets is built in and simple: `A` records only, the
   first nameserver in `/etc/resolv.conf`, no search domains and no CNAME following.
 

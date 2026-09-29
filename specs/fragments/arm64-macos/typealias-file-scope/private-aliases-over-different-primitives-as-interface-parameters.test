@@ -1,0 +1,262 @@
+// Test: private-aliases-over-different-primitives-as-interface-parameters
+// --- file: a.maxon
+typealias Measure = int(0 to 100)
+
+interface IntScaled
+	function scale(k Measure) returns Measure
+end 'IntScaled'
+
+type IntCell implements IntScaled
+	module let n as Measure
+
+	static function of(n Measure) returns Self
+		return Self{n: n}
+	end 'of'
+
+	function scale(k Measure) returns Measure
+		return n + k
+	end 'scale'
+end 'IntCell'
+
+type IntRunner uses T where T is IntScaled
+	module let item as T
+
+	static function of(item T) returns Self
+		return Self{item: item}
+	end 'of'
+
+	function run() returns Measure
+		return self.item.scale(1)
+	end 'run'
+end 'IntRunner'
+
+typealias IntCellRunner = IntRunner with IntCell
+
+export function fromA() returns ExitCode
+	return IntCellRunner.of(IntCell.of(41)).run()
+end 'fromA'
+
+// --- file: b.maxon
+typealias Measure = float(0.0 to 1.0)
+
+interface FloatScaled
+	function scale(k Measure) returns Measure
+end 'FloatScaled'
+
+type FloatCell implements FloatScaled
+	module let n as Measure
+
+	static function of(n Measure) returns Self
+		return Self{n: n}
+	end 'of'
+
+	function scale(k Measure) returns Measure
+		return n * k
+	end 'scale'
+end 'FloatCell'
+
+type FloatRunner uses T where T is FloatScaled
+	module let item as T
+
+	static function of(item T) returns Self
+		return Self{item: item}
+	end 'of'
+
+	function run() returns Measure
+		return self.item.scale(0.5)
+	end 'run'
+end 'FloatRunner'
+
+typealias FloatCellRunner = FloatRunner with FloatCell
+
+export function fromB() returns ExitCode
+	return trunc(FloatCellRunner.of(FloatCell.of(1.0)).run() * 2.0)
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB()
+end 'main'
+---
+ExitCode: 43
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @IntCell.scale {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x1, 100
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.and x0, x0, 255
+    arm64.add x0, x0, x1
+  __rc_chk#6:
+    arm64.cmp x0, 100
+    arm64.b.gt __rc_panic#5
+  __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a.maxon:14: Range check failed: value outside typealias 'Measure'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a.maxon:15: Range check failed: value outside typealias 'Measure'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @FloatCell.scale {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d1, [rdata + __fconst_0]
+    arm64.fcmp d0, d1
+    arm64.b.mi __rc_panic#2
+  __rc_chk#3:
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fcmp d0, d1
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.loadRegBaseDisp.word64 d1, [x0 + 0]
+    arm64.fmul d0, d1, d0
+    arm64.fpLoadRdata d1, [rdata + __fconst_0]
+    arm64.fcmp d0, d1
+    arm64.b.mi __rc_panic#5
+  __rc_chk#6:
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fcmp d0, d1
+    arm64.b.gt __rc_panic#5
+  __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at b.maxon:14: Range check failed: value outside typealias 'Measure'\x0a"
+    arm64.bl mrt_panic
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at b.maxon:15: Range check failed: value outside typealias 'Measure'\x0a"
+    arm64.bl mrt_panic
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, d8
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __rc_ok#11:
+    arm64.movImm x19, 41
+  __il_cont#9:
+    arm64.leaRdata x0, __witness_IntCell.IntScaled
+  __il_body#14:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#8:
+    arm64.leaRdata x2, __witness_IntCell.IntScaled
+  __il_body#15:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movImm x1, 1
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 48]
+    arm64.blr x16
+    arm64.movRegReg x19, x0
+  __il_cont#7:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+  __il_body#16:
+    arm64.fpLoadRdata d8, [rdata + __fconst_1]
+  __rc_ok#27:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], d8
+  __il_cont#22:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_own
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x0, __witness_FloatCell.FloatScaled
+  __il_body#30:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x21
+  __il_cont#21:
+    arm64.leaRdata x1, __witness_FloatCell.FloatScaled
+  __il_body#31:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.fpLoadRdata d0, [rdata + __fconst_0.5]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 48]
+    arm64.blr x16
+  __il_cont#20:
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fmul d0, d0, d1
+    arm64.fcvtzs x21, d0
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_FloatRunner_FloatCell
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#18
+  __rc_chk#19:
+    arm64.cmp x21, 255
+    arm64.b.gt __rc_panic#18
+  __il_cont#4:
+    arm64.add x0, x19, x21
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot d8, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#18:
+    arm64.leaRdata x0, __str_blob_8  ; "panic at b.maxon:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot d8, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot d8, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

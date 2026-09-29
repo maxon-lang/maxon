@@ -1,0 +1,26 @@
+// Test: error.throws-method-can-never-throw
+enum Failure implements Error
+	broken
+end 'Failure'
+
+typealias Code = int(0 to 255)
+
+type Gauge
+	var level as Code
+
+	static function create() returns Self
+		return Self{level: 7}
+	end 'create'
+
+	function read() returns Code throws Failure
+		return self.level
+	end 'read'
+end 'Gauge'
+
+function main() returns ExitCode
+	let g = Gauge.create()
+	return try g.read() otherwise 1
+end 'main'
+---
+CompilerError:
+error E3168: <fragment>:15:11: 'throws Failure' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause

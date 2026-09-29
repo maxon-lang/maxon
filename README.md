@@ -76,7 +76,7 @@ statically-typed, compiled language:
   external runtime — see [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for the current list.
 - **Language Server (LSP)** — `maxon lsp-server`, for IDE integration.
 - **Model Context Protocol (MCP)** — `maxon mcp-server`, for AI coding agent tool integration.
-- **Debug Adapter (DAP)** — `maxon dap-server`, the debugger an editor drives (x64-windows).
+- **Debug Adapter (DAP)** — `maxon dap-server`, the debugger an editor drives (every native target).
 - **VS Code extension** — syntax highlighting, language features and debugging.
 
 ## Install

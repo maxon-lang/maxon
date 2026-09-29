@@ -14,8 +14,8 @@ export type DebugTarget
 	var faulted as bool
 	var settled as TargetOutcome
 
-	export static function launchTraced(program FilePath, arguments StringArray, workingDirectory FilePath, environment EnvMap, routing ChildOutputRouting) returns DebugTarget throws SubprocessError
-		var spawned = try StreamingSubprocess.spawnTraceable(Executable.path(program), arguments: arguments, workingDirectory: workingDirectory, environment: Environment.inheritUpdating(environment), traced: true)
+	export static function launchTraced(plan BackendLaunchPlan, workingDirectory FilePath, environment EnvMap, routing ChildOutputRouting) returns DebugTarget throws SubprocessError
+		var spawned = try StreamingSubprocess.spawnTraceable(Executable.path(plan.executable), arguments: plan.arguments, workingDirectory: workingDirectory, environment: Environment.inheritUpdating(environment), traced: plan.traced)
 		spawned.closeStdin()
 
 		return Self{child: spawned, routing: routing, faulted: false, settled: TargetOutcome.running}
@@ -37,6 +37,10 @@ export type DebugTarget
 	export function pump()
 		self.faulted = forwardChildOutput(self.child, routing: self.routing, budget: ChildLineBudget.unbounded) or self.faulted
 	end 'pump'
+
+	export function noteFaultSeen(seen bool)
+		self.faulted = seen or self.faulted
+	end 'noteFaultSeen'
 
 	export function poll() returns TargetOutcome
 		if not targetIsRunning(self.settled) 'alreadySettled'

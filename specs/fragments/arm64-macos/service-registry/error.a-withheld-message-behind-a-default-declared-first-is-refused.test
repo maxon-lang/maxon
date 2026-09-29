@@ -1,0 +1,43 @@
+// Test: error.a-withheld-message-behind-a-default-declared-first-is-refused
+typealias TonePitch = int(0 to 100)
+
+interface Tone
+	function pitch() returns TonePitch
+end 'Tone'
+
+type Loud implements Tone
+	var calls as TonePitch
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function pitch() returns TonePitch
+		self.calls = self.calls + 1
+		return 9
+	end 'pitch'
+end 'Loud'
+
+type Soft implements Tone
+	var calls as TonePitch
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	function pitch() returns TonePitch
+		self.calls = self.calls + 1
+		return 3
+	end 'pitch'
+end 'Soft'
+
+default Tone = spawn Soft.create()
+
+function main() returns ExitCode
+	let h = (spawn Loud.create()) as Tone.handle
+	let pitch = try await h.pitch() otherwise 0
+	return pitch
+end 'main'
+---
+CompilerError:
+error E3136: <fragment>:38:26: `interface Tone` requires `pitch`, and `type Soft` implements it, but not as an `export` instance method — so it is not a message of `Soft`, and `Tone.handle` cannot send it to every service behind it. Declare `pitch` on `Soft` as an `export` instance method

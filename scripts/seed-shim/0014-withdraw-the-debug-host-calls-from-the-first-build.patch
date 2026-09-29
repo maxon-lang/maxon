@@ -1,46 +1,101 @@
-# The published seed knows none of the fourteen `__Builtins.debug*`/`__Builtins.*Machine` names this tree
-# adds, so it refuses the tree at every call that spells one (E3004). All fourteen are called from this one
+# The published seed knows none of the nineteen `__Builtins.debug*`/`__Builtins.*Machine` names this tree
+# adds, so it refuses the tree at every call that spells one (E3004). All nineteen are called from this one
 # function, which is what lets one patch withdraw the whole band: the parser arms, the runtime installer and
 # the name constants are left standing, so `C1` knows them and compiles the unshimmed tree into `C2`.
 #
 # The shimmed funnel answers 0 to every verb. Zero is FALSE for each of the bool verbs and "the pin was
 # refused" for the pin, so the first build's debugger refuses to start a session rather than reading wrong
-# words out of a live process. It keeps one host call the seed does know, because the funnel's callers
-# discard its answer and a pure function's discarded result is E3064.
+# words out of a live process. It keeps ONE host call the seed does know, because `releaseDebugSessionPin`
+# discards the funnel's answer and a pure function's discarded result is E3064. The call is the uptime clock
+# rather than anything else the seed lowers: `HostFacility.uptimeClock` is `true` on all four native rows of
+# the published seed's `TargetFacilities.targetProvidesFacility`, and `__uptime_ms` is a runtime-tier entry on
+# no effect-free roster, so the discard is legal on every lane the first build runs on. A host call whose
+# facility a lane withholds would make this shim a second E3104 in place of the E3004 it cures.
 diff --git a/maxon-bin/Debug/Backend/DebugBackend.maxon b/maxon-bin/Debug/Backend/DebugBackend.maxon
 --- a/maxon-bin/Debug/Backend/DebugBackend.maxon
 +++ b/maxon-bin/Debug/Backend/DebugBackend.maxon
-@@ -16,30 +16,17 @@
- end 'HostDebugVerb'
-
- // ⛔ THE ONLY body in the compiler's own sources that names a `__Builtins.debug*` or `__Builtins.*Machine`
- // builtin, and it must stay the only one: the published seed knows none of those names, so the first build of
+@@ -25,81 +25,13 @@ end 'HostDebugVerb'
  // this tree is shimmable only while ONE body spells them (`scripts/seed-shim/README.md` owns that rule).
  // Spelling one at a second call site leaves every CI lane red until a release ships.
  module function hostDebugCall(verb HostDebugVerb, a0 BackendWord, a1 BackendWord, a2 BackendWord, a3 BackendWord, a4 BackendWord) returns BackendWord
 -	var answer = 0 as BackendWord
-+	_ = __Builtins.profileNowFileTime()
++	_ = __Builtins.tickCountMs()
  
--	match verb 'verb'
--		pinMachine then answer = __Builtins.pinToMachine()
--		unpinMachine then __Builtins.unpinFromMachine()
--		readMemory then answer = __Builtins.debugReadMemory(a0, a1, a2, a3, a4)
--		writeMemory then answer = __Builtins.debugWriteMemory(a0, a1, a2, a3, a4)
--		readContext then answer = __Builtins.debugReadContext(a0, a1)
--		writeContext then answer = __Builtins.debugWriteContext(a0, a1)
--		waitEvent then answer = __Builtins.debugWaitEvent(a0, a1)
--		continueEvent then answer = __Builtins.debugContinueEvent(a0, a1, a2)
--		breakProcess then answer = __Builtins.debugBreakProcess(a0)
--		attachProcess then answer = __Builtins.debugAttachProcess(a0)
--		detachProcess then answer = __Builtins.debugDetachProcess(a0)
--		protectRegion then answer = __Builtins.debugProtectRegion(a0, a1, a2, a3, a4)
--		flushCode then answer = __Builtins.debugFlushCode(a0, a1, a2)
--		closeHandle then answer = __Builtins.debugCloseHandle(a0)
--	end 'verb'
+-	#if os(Windows)
+-		match verb 'verb'
+-			pinMachine then answer = __Builtins.pinToMachine()
+-			unpinMachine then __Builtins.unpinFromMachine()
+-			readMemory then answer = __Builtins.debugReadMemory(a0, a1, a2, a3, a4)
+-			writeMemory then answer = __Builtins.debugWriteMemory(a0, a1, a2, a3, a4)
+-			readContext then answer = __Builtins.debugReadContext(a0, a1)
+-			writeContext then answer = __Builtins.debugWriteContext(a0, a1)
+-			waitEvent then answer = __Builtins.debugWaitEvent(a0, a1)
+-			continueEvent then answer = __Builtins.debugContinueEvent(a0, a1, a2)
+-			breakProcess then answer = __Builtins.debugBreakProcess(a0)
+-			attachProcess then answer = __Builtins.debugAttachProcess(a0)
+-			detachProcess then answer = __Builtins.debugDetachProcess(a0)
+-			protectRegion then answer = __Builtins.debugProtectRegion(a0, a1, a2, a3, a4)
+-			flushCode then answer = __Builtins.debugFlushCode(a0, a1, a2)
+-			closeHandle then answer = __Builtins.debugCloseHandle(a0)
+-			traceRequest or
+-				traceeRead or
+-				awaitTracee or
+-				threadSignal or
+-				processSignal then panic("hostDebugCall: `{verb.name}` is a ptrace verb and this build drives a debuggee through a debug port — `backendForHost` hands this host a backend that spells neither lane's verbs")
+-		end 'verb'
+-	#endif
 +	if verb.name.isEmpty() and a0 == 0 and a1 == 0 and a2 == 0 and a3 == 0 and a4 == 0 'noHostDebugApiInAShimmedBuild'
 +		return 0
 +	end 'noHostDebugApiInAShimmedBuild'
  
+-	#if os(Linux)
+-		match verb 'verb'
+-			pinMachine then answer = __Builtins.pinToMachine()
+-			unpinMachine then __Builtins.unpinFromMachine()
+-			traceRequest then answer = __Builtins.debugTraceRequest(a0, a1, a2, a3)
+-			traceeRead then answer = __Builtins.debugTraceeRead(a0, a1, a2, a3, a4)
+-			awaitTracee then answer = __Builtins.debugAwaitTracee(a0, a1, a2)
+-			threadSignal then answer = __Builtins.debugThreadSignal(a0, a1, a2)
+-			processSignal then answer = __Builtins.debugProcessSignal(a0, a1)
+-			readMemory or
+-				writeMemory or
+-				readContext or
+-				writeContext or
+-				waitEvent or
+-				continueEvent or
+-				breakProcess or
+-				attachProcess or
+-				detachProcess or
+-				protectRegion or
+-				flushCode or
+-				closeHandle then panic("hostDebugCall: `{verb.name}` is a debug-port verb and this build drives a debuggee through ptrace — `backendForHost` hands this host a backend that spells neither lane's verbs")
+-		end 'verb'
+-	#endif
+-
+-	#if not os(Windows) and not os(Linux)
+-		match verb 'verb'
+-			pinMachine then answer = __Builtins.pinToMachine()
+-			unpinMachine then __Builtins.unpinFromMachine()
+-			readMemory or
+-				writeMemory or
+-				readContext or
+-				writeContext or
+-				waitEvent or
+-				continueEvent or
+-				breakProcess or
+-				attachProcess or
+-				detachProcess or
+-				protectRegion or
+-				flushCode or
+-				closeHandle or
+-				traceRequest or
+-				traceeRead or
+-				awaitTracee or
+-				threadSignal or
+-				processSignal then panic("hostDebugCall: `{verb.name}`({a0}, {a1}, {a2}, {a3}, {a4}) asks this host for a debug channel it has none of — this build reaches an inferior through a stub it spawns and speaks to over a socket, so no verb of this band is lowered here and `backendForHost` refuses a session by name before one is asked for")
+-		end 'verb'
+-	#endif
+-
 -	return answer
 +	return 0
  end 'hostDebugCall'

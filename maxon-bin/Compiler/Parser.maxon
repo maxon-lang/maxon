@@ -7089,6 +7089,11 @@ let BuiltinsDebugDetachProcessName = b"__Builtins.debugDetachProcess"
 let BuiltinsDebugProtectRegionName = b"__Builtins.debugProtectRegion"
 let BuiltinsDebugFlushCodeName = b"__Builtins.debugFlushCode"
 let BuiltinsDebugCloseHandleName = b"__Builtins.debugCloseHandle"
+let BuiltinsDebugTraceRequestName = b"__Builtins.debugTraceRequest"
+let BuiltinsDebugTraceeReadName = b"__Builtins.debugTraceeRead"
+let BuiltinsDebugAwaitTraceeName = b"__Builtins.debugAwaitTracee"
+let BuiltinsDebugThreadSignalName = b"__Builtins.debugThreadSignal"
+let BuiltinsDebugProcessSignalName = b"__Builtins.debugProcessSignal"
 
 let BuiltinsPinToMachineName = b"__Builtins.pinToMachine"
 let BuiltinsUnpinFromMachineName = b"__Builtins.unpinFromMachine"
@@ -7321,6 +7326,7 @@ let DebugHostNoArgArity = 0 as ParamCount
 let DebugHostOneArgArity = 1 as ParamCount
 let DebugHostTwoArgArity = 2 as ParamCount
 let DebugHostThreeArgArity = 3 as ParamCount
+let DebugHostFourArgArity = 4 as ParamCount
 let DebugHostFiveArgArity = 5 as ParamCount
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
@@ -15132,6 +15138,7 @@ type FunctionBodyState
 	// and SWAPPED across a closure body, exactly like the sibling value marks.
 	export var unsignedMaxLiterals as ValueMarkColumn
 	export var unsignedPatternValues as ValueMarkColumn
+	export var mergedBindingValues as ValueMarkColumn
 
 	// ⭐⭐ **THE LITERALS THE SOURCE WROTE AS NEGATIVE NUMBERS — `unsignedMaxLiterals`' COMPANION, AND THE
 	// OTHER HALF OF WHAT 64 BITS CANNOT SAY.**
@@ -15464,6 +15471,7 @@ type FunctionBodyState
 			sizedContainerBufferValues: noValueMarks,
 			unsignedMaxLiterals: noValueMarks,
 			unsignedPatternValues: noValueMarks,
+			mergedBindingValues: noValueMarks,
 			writtenNegativeLiterals: noValueMarks,
 			rangeCheckSites: RangeCheckSiteArray.create(),
 			rangeCheckArgSites: RangeCheckArgSiteArray.create(),
@@ -37676,8 +37684,12 @@ export type Parser
 			return true
 		end 'aNonNegativeConstant'
 
-		return self.valueDeclaresUnsigned(value) and not self.aliasIsUnproven(value)
+		return self.valueDeclaresUnsigned(value) and self.declaredDomainStandsBehindADoor(value)
 	end 'valueIsNonNegativeSource'
+
+	function declaredDomainStandsBehindADoor(value ValueId) returns bool
+		return not self.aliasIsUnproven(value) or valueIsMarked(self.bodyState.mergedBindingValues, value: value)
+	end 'declaredDomainStandsBehindADoor'
 
 	function valueCarriesAnUnsignedPattern(value ValueId) returns bool
 		return valueIsMarked(self.bodyState.unsignedPatternValues, value: value) or valueIsMarked(self.bodyState.unsignedMaxLiterals, value: value)
@@ -37695,11 +37707,15 @@ export type Parser
 			return
 		end 'mayGoNegative'
 
-		self.bodyState.unsignedPatternValues = withValueMarked(self.bodyState.unsignedPatternValues, value: result)
+		self.markUnsignedPattern(result)
 	end 'markUnsignedArithmeticResult'
 
+	function markUnsignedPattern(value ValueId)
+		self.bodyState.unsignedPatternValues = withValueMarked(self.bodyState.unsignedPatternValues, value: value)
+	end 'markUnsignedPattern'
+
 	function arithmeticStaysUnsigned(lhs ValueId, rhs ValueId, op MaxonBinOp) returns bool
-		if not self.operandsAreInTheUnsignedDomain(lhs, rhs: rhs) 'signedArithmetic'
+		if not self.resultDomainOperandsAreUnsigned(lhs, rhs: rhs, op: op) 'signedArithmetic'
 			return false
 		end 'signedArithmetic'
 
@@ -37709,6 +37725,18 @@ export type Parser
 
 		return op == MaxonBinOp.sub and self.constIsKnown(lhs) and self.constIsKnown(rhs) and not unsignedSubtractionBorrows(self.constOf(lhs), rhs: self.constOf(rhs))
 	end 'arithmeticStaysUnsigned'
+
+	function resultDomainOperandsAreUnsigned(lhs ValueId, rhs ValueId, op MaxonBinOp) returns bool
+		if shiftOperator(op) 'theCountIsNotAValueOfTheResultsType'
+			return self.soleOperandIsInTheUnsignedDomain(lhs)
+		end 'theCountIsNotAValueOfTheResultsType'
+
+		return self.operandsAreInTheUnsignedDomain(lhs, rhs: rhs)
+	end 'resultDomainOperandsAreUnsigned'
+
+	function soleOperandIsInTheUnsignedDomain(value ValueId) returns bool
+		return self.valueIsNonNegativeSource(value) and self.valueIsInTheUnsignedDomain(value)
+	end 'soleOperandIsInTheUnsignedDomain'
 
 	function operandsAreInTheUnsignedDomain(lhs ValueId, rhs ValueId) returns bool
 		if not (self.valueIsNonNegativeSource(lhs) and self.valueIsNonNegativeSource(rhs)) 'aSignedOperand'
@@ -54467,6 +54495,8 @@ export type Parser
 		// The merge of a binding's values wears the binding's own brand, which every rebind was checked against.
 		try self.bodyState.valueBrandIds.set(phiId, value: binding.brandId) otherwise panic("mintPhiForBinding: v{phiId} has no brand slot — mintPhi mints through mintValue, which seeds the column")
 
+		self.bodyState.mergedBindingValues = withValueMarked(self.bodyState.mergedBindingValues, value: phiId)
+
 		if self.valueOwnsGreenThread(binding.boundValue) 'promisePhi'
 			self.markValuePromise(phiId)
 		end 'promisePhi'
@@ -55917,6 +55947,7 @@ export type Parser
 		// (a plain `int`, and therefore signed) and never about `lhs`, so the user's shift opcode has
 		// no say in it.
 		let mask = try self.emitBinOp(signCarrier, rhs: signBit, op: MaxonBinOp.shr, opTok: opTok)
+		self.markUnsignedPattern(mask)
 
 		if op == MaxonBinOp.shr 'signFilling'
 			// A count of -1 masks to 63 in the hardware, and `x shr 63` IS the sign — so saturating
@@ -55930,6 +55961,7 @@ export type Parser
 		// `op`, which is why one branch now serves the two of them.
 		let raw = try self.emitBinOp(lhs, rhs: count, op: op, opTok: opTok)
 		let keep = self.emitUnaryOp(mask, op: MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
+		self.markUnsignedPattern(keep)
 		return try self.emitBinOp(raw, rhs: keep, op: MaxonBinOp.bitAnd, opTok: opTok)
 	end 'emitGuardedShift'
 
@@ -86704,6 +86736,26 @@ export type Parser
 			if callee.equals(BuiltinsDebugCloseHandleName) 'debugCloseHandle'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostCloseHandleName, arity: DebugHostOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
 			end 'debugCloseHandle'
+
+			if callee.equals(BuiltinsDebugTraceRequestName) 'debugTraceRequest'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostTraceRequestName, arity: DebugHostFourArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugTraceRequest'
+
+			if callee.equals(BuiltinsDebugTraceeReadName) 'debugTraceeRead'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostTraceeReadName, arity: DebugHostFiveArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugTraceeRead'
+
+			if callee.equals(BuiltinsDebugAwaitTraceeName) 'debugAwaitTracee'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostAwaitTraceeName, arity: DebugHostThreeArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugAwaitTracee'
+
+			if callee.equals(BuiltinsDebugThreadSignalName) 'debugThreadSignal'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostThreadSignalName, arity: DebugHostThreeArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugThreadSignal'
+
+			if callee.equals(BuiltinsDebugProcessSignalName) 'debugProcessSignal'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: DebugHostProcessSignalName, arity: DebugHostTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'debugProcessSignal'
 
 			if callee.equals(BuiltinsPinToMachineName) 'pinToMachine'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: GtPinMachineName, arity: DebugHostNoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)

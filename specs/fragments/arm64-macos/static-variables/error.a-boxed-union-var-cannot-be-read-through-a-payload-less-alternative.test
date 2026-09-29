@@ -1,0 +1,23 @@
+// Test: error.a-boxed-union-var-cannot-be-read-through-a-payload-less-alternative
+typealias Integer = int(i64.min to i64.max)
+
+union Counter
+	none
+	some(n Integer)
+end 'Counter'
+
+var sentinel = Counter.none
+
+function valueOf(c Counter) returns Integer
+	return match c 'k'
+		none or
+			some(n) gives n
+	end 'k'
+end 'valueOf'
+
+function main() returns ExitCode
+	return valueOf(sentinel) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3129: <fragment>:14:9: the payload binding 'n' cannot be honoured: case 'none' of `union Counter` binds nothing at payload slot 0, so on that case's path the arm body would read a value no pattern bound. Give 'none' an arm of its own

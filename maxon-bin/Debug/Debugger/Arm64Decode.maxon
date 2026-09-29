@@ -1,0 +1,297 @@
+export typealias Arm64Condition = int(0 to 15)
+typealias Arm64BitWidth = int(1 to 32)
+typealias Arm64FieldShift = int(0 to 31)
+
+let Arm64InstructionWidth = 4 as DebugWidth
+let Arm64BranchUnit = 4 as DebuggeeWord
+
+let AbsentFieldSpelling = "none"
+
+export union Arm64ConditionLookup
+	none
+	code(value Arm64Condition)
+
+	export function spelled() returns String
+		return match self 'lookup'
+			none gives AbsentFieldSpelling
+			code(value) gives "{value}"
+		end 'lookup'
+	end 'spelled'
+end 'Arm64ConditionLookup'
+
+export type Arm64Instruction
+	export var length as DecodedLength
+	export var instructionClass as DecodedClass
+	export var condition as Arm64ConditionLookup
+	export var target as DecodedTarget
+	export var controlRegister as DecodedRegisterLookup
+
+	static function create(length DecodedLength, instructionClass DecodedClass, condition Arm64ConditionLookup, target DecodedTarget, controlRegister DecodedRegisterLookup) returns Arm64Instruction
+		return Self{length: length, instructionClass: instructionClass, condition: condition, target: target, controlRegister: controlRegister}
+	end 'create'
+end 'Arm64Instruction'
+
+export union Arm64Decode
+	unclassified
+	decoded(instruction Arm64Instruction)
+end 'Arm64Decode'
+
+let FrameStepOpensRecordSpelling = "opens-record"
+let FrameStepReservesSpelling = "reserves"
+let FrameStepStoresRecordSpelling = "stores-record"
+let FrameStepSetsPointerSpelling = "sets-pointer"
+
+export typealias Arm64FrameBytes = int(-0x1000000 to 0x1000000)
+
+export union Arm64FrameStep
+	opensTheFrameRecord(bytes Arm64FrameBytes)
+	reservesTheFrame(bytes Arm64FrameBytes)
+	storesTheFrameRecord(atBytes Arm64FrameBytes)
+	setsTheFramePointer(atBytes Arm64FrameBytes)
+	neither
+
+	export function spelled() returns String
+		return match self 'step'
+			opensTheFrameRecord gives FrameStepOpensRecordSpelling
+			reservesTheFrame gives FrameStepReservesSpelling
+			storesTheFrameRecord gives FrameStepStoresRecordSpelling
+			setsTheFramePointer gives FrameStepSetsPointerSpelling
+			neither gives AbsentFieldSpelling
+		end 'step'
+	end 'spelled'
+end 'Arm64FrameStep'
+
+enum Arm64DecodeError implements Error
+	pastTheCode
+	notAnInstructionThisBuildDecodes
+	targetOutsideTheAddressSpace
+end 'Arm64DecodeError'
+
+let Arm64GroupShift = 25 as Arm64FieldShift
+let Arm64GroupMask = 0xF as DebuggeeWord
+let Arm64GroupReserved = 0x0 as DebuggeeWord
+let Arm64GroupScalableMatrix = 0x1 as DebuggeeWord
+let Arm64GroupScalableVector = 0x2 as DebuggeeWord
+let Arm64GroupUnallocated = 0x3 as DebuggeeWord
+let Arm64GroupBranchLow = 0xA as DebuggeeWord
+let Arm64GroupBranchHigh = 0xB as DebuggeeWord
+
+let Arm64Top6Shift = 26 as Arm64FieldShift
+let Arm64Top8Shift = 24 as Arm64FieldShift
+let Arm64Top7Mask = 0x7F as DebuggeeWord
+
+let Arm64OpBranchImm = 0x05 as DebuggeeWord
+let Arm64OpBranchLinkImm = 0x25 as DebuggeeWord
+let Arm64OpConditionalBranch = 0x54 as DebuggeeWord
+let Arm64OpExceptionGeneration = 0xD4 as DebuggeeWord
+let Arm64OpSystem = 0xD5 as DebuggeeWord
+let Arm64OpBranchRegister = 0xD6 as DebuggeeWord
+
+let Arm64OpCompareBranchZero = 0x34 as DebuggeeWord
+let Arm64OpCompareBranchNonZero = 0x35 as DebuggeeWord
+let Arm64OpTestBranchZero = 0x36 as DebuggeeWord
+let Arm64OpTestBranchNonZero = 0x37 as DebuggeeWord
+
+let Arm64HintedConditionalBranchBit = 0x10 as DebuggeeWord
+let Arm64ConditionMask = 0xF as DebuggeeWord
+
+let Arm64Imm26Shift = 0 as Arm64FieldShift
+let Arm64Imm26Bits = 26 as Arm64BitWidth
+let Arm64Imm19Shift = 5 as Arm64FieldShift
+let Arm64Imm19Bits = 19 as Arm64BitWidth
+let Arm64Imm14Shift = 5 as Arm64FieldShift
+let Arm64Imm14Bits = 14 as Arm64BitWidth
+
+let Arm64RegisterFieldMask = 0x1F as DebuggeeWord
+let Arm64RtShift = 0 as Arm64FieldShift
+let Arm64RnShift = 5 as Arm64FieldShift
+
+let Arm64BranchRegisterOpcShift = 21 as Arm64FieldShift
+let Arm64BranchRegisterOpcMask = 0xF as DebuggeeWord
+let Arm64BranchRegisterOp2Shift = 16 as Arm64FieldShift
+let Arm64BranchRegisterOp2Mask = 0x1F as DebuggeeWord
+let Arm64BranchRegisterOp2Expected = 0x1F as DebuggeeWord
+let Arm64BranchRegisterOp3Shift = 10 as Arm64FieldShift
+let Arm64BranchRegisterOp3Mask = 0x3F as DebuggeeWord
+let Arm64BranchRegisterPlainAddress = 0x0 as DebuggeeWord
+let Arm64OpcBranchRegister = 0x0 as DebuggeeWord
+let Arm64OpcBranchLinkRegister = 0x1 as DebuggeeWord
+let Arm64OpcReturnRegister = 0x2 as DebuggeeWord
+
+let Arm64FramePairImm7Clear = 0xFFC07FFF as DebuggeeWord
+let Arm64FrameStpPreIndex = 0xA9807BFD as DebuggeeWord
+let Arm64FrameStpOffset = 0xA9007BFD as DebuggeeWord
+let Arm64FrameImm12Clear = 0xFFC003FF as DebuggeeWord
+let Arm64FrameAddFpFromSp = 0x910003FD as DebuggeeWord
+let Arm64FrameImm12AndShiftClear = 0xFF8003FF as DebuggeeWord
+
+let Arm64PairImm7Shift = 15 as Arm64FieldShift
+let Arm64PairImm7Mask = 0x7F as DebuggeeWord
+let Arm64PairImm7Sign = 0x40 as DebuggeeWord
+let Arm64PairImm7Span = 0x80 as DebuggeeWord
+
+let Arm64AddSubImm12Shift = 10 as Arm64FieldShift
+let Arm64AddSubImm12Mask = 0xFFF as DebuggeeWord
+let Arm64AddSubShiftedBit = (1 as DebuggeeWord) shl 22
+let Arm64AddSubShiftBits = 12 as DebugBitShift
+let Arm64FrameSubSpFromSp = 0xD10003FF as DebuggeeWord
+
+export function decodeArm64Instruction(code ByteArray, at DecodedOffset, address DecodedAddress) returns Arm64Decode
+	return Arm64Decode.decoded(try arm64InstructionAt(code, at: at, address: address) otherwise return Arm64Decode.unclassified)
+end 'decodeArm64Instruction'
+
+export function arm64FrameStepAt(code ByteArray, at DecodedOffset) returns Arm64FrameStep
+	let insn = try arm64WordAt(code, at: at) otherwise return Arm64FrameStep.neither
+
+	if (insn and Arm64FramePairImm7Clear) == Arm64FrameStpPreIndex 'opensTheRecord'
+		return Arm64FrameStep.opensTheFrameRecord((0 - arm64PairImm7Bytes(insn)) as Arm64FrameBytes)
+	end 'opensTheRecord'
+
+	if (insn and Arm64FramePairImm7Clear) == Arm64FrameStpOffset 'storesTheRecord'
+		return Arm64FrameStep.storesTheFrameRecord(arm64PairImm7Bytes(insn) as Arm64FrameBytes)
+	end 'storesTheRecord'
+
+	if (insn and Arm64FrameImm12Clear) == Arm64FrameAddFpFromSp 'setsThePointer'
+		return Arm64FrameStep.setsTheFramePointer(arm64AddSubImm12Bytes(insn) as Arm64FrameBytes)
+	end 'setsThePointer'
+
+	if (insn and Arm64FrameImm12AndShiftClear) == Arm64FrameSubSpFromSp 'reservesTheFrame'
+		return Arm64FrameStep.reservesTheFrame(arm64AddSubImm12Bytes(insn) as Arm64FrameBytes)
+	end 'reservesTheFrame'
+
+	return Arm64FrameStep.neither
+end 'arm64FrameStepAt'
+
+function arm64InstructionAt(code ByteArray, at DecodedOffset, address DecodedAddress) returns Arm64Instruction throws Arm64DecodeError
+	let insn = try arm64WordAt(code, at: at)
+	let group = (insn shr Arm64GroupShift) and Arm64GroupMask
+
+	if group == Arm64GroupReserved or group == Arm64GroupScalableMatrix or group == Arm64GroupScalableVector or group == Arm64GroupUnallocated 'noFallThroughToVouchFor'
+		throw Arm64DecodeError.notAnInstructionThisBuildDecodes
+	end 'noFallThroughToVouchFor'
+
+	if group == Arm64GroupBranchLow or group == Arm64GroupBranchHigh 'controlMayLeaveTheInstruction'
+		return try arm64ControlInstruction(insn, address: address)
+	end 'controlMayLeaveTheInstruction'
+
+	return arm64PlainInstruction()
+end 'arm64InstructionAt'
+
+function arm64ControlInstruction(insn DebuggeeWord, address DecodedAddress) returns Arm64Instruction throws Arm64DecodeError
+	let top6 = insn shr Arm64Top6Shift
+	let top7 = (insn shr Arm64Top8Shift) and Arm64Top7Mask
+	let top8 = insn shr Arm64Top8Shift
+
+	if top6 == Arm64OpBranchImm or top6 == Arm64OpBranchLinkImm 'aDirectBranch'
+		return try arm64BranchInstruction(insn, address: address, shift: Arm64Imm26Shift, bits: Arm64Imm26Bits, instructionClass: (DbgClassDirectCall if top6 == Arm64OpBranchLinkImm else DbgClassDirectJump) as DecodedClass, condition: Arm64ConditionLookup.none, controlRegister: DecodedRegisterLookup.none)
+	end 'aDirectBranch'
+
+	if top8 == Arm64OpConditionalBranch 'aFlagTestedBranch'
+		if (insn and Arm64HintedConditionalBranchBit) != 0 'aHintedFormThisBuildDoesNotDecode'
+			throw Arm64DecodeError.notAnInstructionThisBuildDecodes
+		end 'aHintedFormThisBuildDoesNotDecode'
+
+		return try arm64BranchInstruction(insn, address: address, shift: Arm64Imm19Shift, bits: Arm64Imm19Bits, instructionClass: DbgClassConditionalJump as DecodedClass, condition: Arm64ConditionLookup.code((insn and Arm64ConditionMask) as Arm64Condition), controlRegister: DecodedRegisterLookup.none)
+	end 'aFlagTestedBranch'
+
+	if top7 == Arm64OpCompareBranchZero or top7 == Arm64OpCompareBranchNonZero 'aRegisterComparedBranch'
+		return try arm64BranchInstruction(insn, address: address, shift: Arm64Imm19Shift, bits: Arm64Imm19Bits, instructionClass: DbgClassConditionalJump as DecodedClass, condition: Arm64ConditionLookup.none, controlRegister: arm64RegisterAt(insn, shift: Arm64RtShift))
+	end 'aRegisterComparedBranch'
+
+	if top7 == Arm64OpTestBranchZero or top7 == Arm64OpTestBranchNonZero 'aBitTestedBranch'
+		return try arm64BranchInstruction(insn, address: address, shift: Arm64Imm14Shift, bits: Arm64Imm14Bits, instructionClass: DbgClassConditionalJump as DecodedClass, condition: Arm64ConditionLookup.none, controlRegister: arm64RegisterAt(insn, shift: Arm64RtShift))
+	end 'aBitTestedBranch'
+
+	if top8 == Arm64OpExceptionGeneration or top8 == Arm64OpSystem 'controlResumesAtTheNextInstruction'
+		return arm64PlainInstruction()
+	end 'controlResumesAtTheNextInstruction'
+
+	if top8 == Arm64OpBranchRegister 'aBranchThroughARegister'
+		return try arm64RegisterBranchInstruction(insn)
+	end 'aBranchThroughARegister'
+
+	throw Arm64DecodeError.notAnInstructionThisBuildDecodes
+end 'arm64ControlInstruction'
+
+function arm64RegisterBranchInstruction(insn DebuggeeWord) returns Arm64Instruction throws Arm64DecodeError
+	let op2 = (insn shr Arm64BranchRegisterOp2Shift) and Arm64BranchRegisterOp2Mask
+	let op3 = (insn shr Arm64BranchRegisterOp3Shift) and Arm64BranchRegisterOp3Mask
+	let op4 = insn and Arm64RegisterFieldMask
+
+	if op2 != Arm64BranchRegisterOp2Expected or op3 != Arm64BranchRegisterPlainAddress or op4 != Arm64BranchRegisterPlainAddress 'notAPlainRegisterBranch'
+		throw Arm64DecodeError.notAnInstructionThisBuildDecodes
+	end 'notAPlainRegisterBranch'
+
+	let instructionClass = try arm64RegisterBranchClass((insn shr Arm64BranchRegisterOpcShift) and Arm64BranchRegisterOpcMask)
+
+	return Arm64Instruction.create(Arm64InstructionBytes as DecodedLength, instructionClass: instructionClass, condition: Arm64ConditionLookup.none, target: DecodedTarget.none, controlRegister: arm64RegisterAt(insn, shift: Arm64RnShift))
+end 'arm64RegisterBranchInstruction'
+
+function arm64RegisterBranchClass(opc DebuggeeWord) returns DecodedClass throws Arm64DecodeError
+	if opc == Arm64OpcBranchRegister 'anIndirectJump'
+		return DbgClassIndirectJump as DecodedClass
+	end 'anIndirectJump'
+
+	if opc == Arm64OpcBranchLinkRegister 'anIndirectCall'
+		return DbgClassIndirectCall as DecodedClass
+	end 'anIndirectCall'
+
+	if opc == Arm64OpcReturnRegister 'aReturn'
+		return DbgClassReturn as DecodedClass
+	end 'aReturn'
+
+	throw Arm64DecodeError.notAnInstructionThisBuildDecodes
+end 'arm64RegisterBranchClass'
+
+function arm64BranchInstruction(insn DebuggeeWord, address DecodedAddress, shift Arm64FieldShift, bits Arm64BitWidth, instructionClass DecodedClass, condition Arm64ConditionLookup, controlRegister DecodedRegisterLookup) returns Arm64Instruction throws Arm64DecodeError
+	let target = try arm64TargetOf(insn, address: address, shift: shift, bits: bits)
+
+	return Arm64Instruction.create(Arm64InstructionBytes as DecodedLength, instructionClass: instructionClass, condition: condition, target: target, controlRegister: controlRegister)
+end 'arm64BranchInstruction'
+
+function arm64TargetOf(insn DebuggeeWord, address DecodedAddress, shift Arm64FieldShift, bits Arm64BitWidth) returns DecodedTarget throws Arm64DecodeError
+	match debugUserSpaceAddress((address as DebuggeeWord) + (arm64BranchDisplacement(insn, shift: shift, bits: bits) as DebuggeeWord)) 'reached'
+		unresolved then throw Arm64DecodeError.targetOutsideTheAddressSpace
+		at(reached) then return DecodedTarget.at(reached as DecodedAddress)
+	end 'reached'
+end 'arm64TargetOf'
+
+function arm64BranchDisplacement(insn DebuggeeWord, shift Arm64FieldShift, bits Arm64BitWidth) returns DecodedDisplacement
+	let signBit = (1 as DebuggeeWord) shl ((bits - 1) as DebugBitShift)
+	let field = (insn shr (shift as DebugBitShift)) and (signBit * 2 - 1)
+	let signed = field - signBit * 2 if field >= signBit else field
+
+	return (signed * Arm64BranchUnit) as DecodedDisplacement
+end 'arm64BranchDisplacement'
+
+function arm64RegisterAt(insn DebuggeeWord, shift Arm64FieldShift) returns DecodedRegisterLookup
+	return DecodedRegisterLookup.register(((insn shr (shift as DebugBitShift)) and Arm64RegisterFieldMask) as DecodedRegisterNumber)
+end 'arm64RegisterAt'
+
+function arm64PlainInstruction() returns Arm64Instruction
+	return Arm64Instruction.create(Arm64InstructionBytes as DecodedLength, instructionClass: DbgClassPlain as DecodedClass, condition: Arm64ConditionLookup.none, target: DecodedTarget.none, controlRegister: DecodedRegisterLookup.none)
+end 'arm64PlainInstruction'
+
+function arm64WordAt(code ByteArray, at DecodedOffset) returns DebuggeeWord throws Arm64DecodeError
+	match debugLittleEndianAt(code, at: at as DebugAddress, width: Arm64InstructionWidth) 'read'
+		pastTheBytes then throw Arm64DecodeError.pastTheCode
+		read(value) then return value
+	end 'read'
+end 'arm64WordAt'
+
+function arm64PairImm7Bytes(insn DebuggeeWord) returns DebuggeeWord
+	let field = (insn shr Arm64PairImm7Shift) and Arm64PairImm7Mask
+	let signed = field - Arm64PairImm7Span if field >= Arm64PairImm7Sign else field
+
+	return signed * (DebuggeeWordBytes as DebuggeeWord)
+end 'arm64PairImm7Bytes'
+
+function arm64AddSubImm12Bytes(insn DebuggeeWord) returns DebuggeeWord
+	let field = (insn shr Arm64AddSubImm12Shift) and Arm64AddSubImm12Mask
+
+	if (insn and Arm64AddSubShiftedBit) != 0 'shiftedLeftTwelve'
+		return field shl Arm64AddSubShiftBits
+	end 'shiftedLeftTwelve'
+
+	return field
+end 'arm64AddSubImm12Bytes'

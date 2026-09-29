@@ -1,0 +1,22 @@
+// Test: async-promise-drop.error.an-alias-of-a-promise-parameter-is-returned
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function pass(q IntPromise) returns IntPromise
+	let r = q
+	return r
+end 'pass'
+
+function main() returns ExitCode
+	let p = pass(async work(1))
+	print("{await p}\n")
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3141: <fragment>:12:2: a promise cannot be borrowed through 'return': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join

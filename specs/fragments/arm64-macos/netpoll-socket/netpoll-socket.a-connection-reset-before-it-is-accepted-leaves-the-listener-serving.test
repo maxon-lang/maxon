@@ -1,0 +1,757 @@
+// Test: netpoll-socket.a-connection-reset-before-it-is-accepted-leaves-the-listener-serving
+typealias AcceptRound = int(0 to 8)
+
+let AcceptRounds = 8 as AcceptRound
+let Greeting = "hello"
+
+function resetBeforeAccept(port NetworkPort) returns bool
+	var argv = StringArray.create()
+
+	#if os(Windows)
+		argv.push("-NoProfile")
+		argv.push("-Command")
+		argv.push("$s = New-Object System.Net.Sockets.Socket([System.Net.Sockets.AddressFamily]::InterNetwork, [System.Net.Sockets.SocketType]::Stream, [System.Net.Sockets.ProtocolType]::Tcp); $s.LingerState = New-Object System.Net.Sockets.LingerOption($true, 0); $s.Connect('127.0.0.1', {port}); $s.Close()")
+		let helper = Executable.name("powershell")
+	#else
+		argv.push("-MSocket")
+		argv.push("-e")
+		argv.push("socket(my $s, PF_INET, SOCK_STREAM, 0) or die; setsockopt($s, SOL_SOCKET, SO_LINGER, pack(\"ii\", 1, 0)) or die; connect($s, pack_sockaddr_in({port}, inet_aton(\"127.0.0.1\"))) or die; close($s)")
+		let helper = Executable.name("perl")
+	#endif
+
+	let res = try Subprocess.run(helper, arguments: argv) otherwise return false
+
+	return res.succeeded()
+end 'resetBeforeAccept'
+
+function greet(port NetworkPort) returns ExitCode
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 1
+	_ = try client.send(Greeting) otherwise return 2
+	client.close()
+
+	return 0
+end 'greet'
+
+function greetingOf(conn TcpClient) returns String
+	return try conn.recv(1024) otherwise (e) 'unread'
+		return e.name
+	end 'unread'
+end 'greetingOf'
+
+function serveTheGreeting(listener TcpListener) returns String
+	for round in 0 upto AcceptRounds 'eachAccept'
+		let conn = try listener.accept() otherwise (e) 'refused'
+			if e == NetworkError.acceptInterrupted 'retriable'
+				continue
+			end 'retriable'
+
+			return "ended by {e.name} in round {round}"
+		end 'refused'
+
+		let heard = greetingOf(conn)
+		conn.close()
+
+		if heard == Greeting 'theGreeting'
+			return "served"
+		end 'theGreeting'
+	end 'eachAccept'
+
+	return "no greeting in {AcceptRounds} accepts"
+end 'serveTheGreeting'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let reset = resetBeforeAccept(listener.port())
+	let peer = async greet(listener.port())
+	let outcome = serveTheGreeting(listener)
+	let greeted = await peer
+
+	print("reset={reset} {outcome} greeted={greeted == 0}\n")
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_allg@8 = i64 0
+  __gt_allglen@16 = i64 0
+  __gt_allgcap@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_trace_counter@96 = i64 0
+  __gt_live_count@104 = i64 0
+  __gt_seed_bytes@112 = i64 2048
+  __gt_stack_bytes_sum@120 = i64 0
+  __gt_stack_bytes_count@128 = i64 0
+  __gt_seed_sum_seen@136 = i64 0
+  __gt_seed_count_seen@144 = i64 0
+  __gt_keeps_cpu_clock@152 = i64 0
+  __sched_active_workers@160 = i64 1
+  __sched_max_active_workers@168 = i64 1
+  __sched_tls_index@176 = i64 0
+  __sched_tls_teb_offset@184 = i64 0
+  __sched_procs@192 = i64 0
+  __sched_allm@200 = i64 0
+  __sched_async_preempt_off@208 = i64 0
+  __sched_midle@216 = i64 0
+  __sched_pidle@224 = i64 0
+  __gt_gfree_head@232 = i64 0
+  __sched_arena_cursor@240 = i64 0
+  __sched_arena_limit@248 = i64 0
+  __gt_records_carved@256 = i64 0
+  __sched_npidle@264 = i64 0
+  __sched_runq_size@272 = i64 0
+  __sched_global_pushes@280 = i64 0
+  __sched_timer_scan_steps@288 = i64 0
+  __sched_mcount@296 = i64 0
+  __sched_nmidle@304 = i64 0
+  __sched_main_m@312 = i64 0
+  __sched_phase@320 = i64 0
+  __sched_lastpoll@328 = i64 0
+  __sched_poll_until@336 = i64 0
+  __sched_regain_head@344 = i64 0
+  __np_poller@352 = i64 0
+  __np_break@360 = i64 0
+  __np_wake_sig@368 = i64 0
+  __np_pd_table@376 = i64 0
+  __np_pd_cap@384 = i64 0
+  __np_waiters@392 = i64 0
+  __sched_num_procs@400 = i64 0
+  __sched_shutdown_flag@408 = i64 0
+  __sched_lock@416 = i64 0
+  __sched_lock_depth_sink@424 = i64 0
+  __sched_nmspinning@432 = i64 0
+  __sched_needspinning@440 = i64 0
+  __sched_sysmon_event@448 = i64 0
+  __sched_sysmon_wait@456 = i64 0
+  __sched_timer_starts@464 = i64 0
+  __io_pipe_seq@472 = i64 0
+  __subp_table@480 = i64 0
+  __subp_last_error@488 = i64 0
+  __slab_arena_list@496 = i64 0
+  __slab_arena_map_l1@504 = i64 0
+  __slab_state@512 = i64 0
+  __ms_wsa_started@520 = i64 0
+}
+
+func @greet {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x1, x0
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x16, 65535
+    arm64.cmp x1, x16
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.leaRdata x0, __str_rec_81  ; "127.0.0.1"
+    arm64.bl TcpClient.connect
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#1:
+    arm64.leaRdata x1, __str_rec_82  ; "hello"
+    arm64.movRegReg x0, x19
+    arm64.bl TcpClient.send
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok#3:
+    arm64.movRegReg x0, x19
+    arm64.bl TcpClient.close
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_248  ; "panic at netpoll-socket.a-connection-reset-before-it-is-accepted-leaves-the-listener-serving.test:27: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 208
+    arm64.storeSlotReg slot22, x28
+    arm64.storeSlotReg slot21, x27
+    arm64.storeSlotReg slot20, x26
+    arm64.storeSlotReg slot19, x25
+    arm64.storeSlotReg slot18, x24
+    arm64.storeSlotReg slot17, x23
+    arm64.storeSlotReg slot16, x22
+    arm64.storeSlotReg slot15, x21
+    arm64.storeSlotReg slot14, x20
+    arm64.storeSlotReg slot13, x19
+    arm64.leaRdata x0, __str_rec_81  ; "127.0.0.1"
+    arm64.movImm x1, 0
+    arm64.bl TcpListener.bind
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot13
+    arm64.loadRegSlot x20, slot14
+    arm64.loadRegSlot x21, slot15
+    arm64.loadRegSlot x22, slot16
+    arm64.loadRegSlot x23, slot17
+    arm64.loadRegSlot x24, slot18
+    arm64.loadRegSlot x25, slot19
+    arm64.loadRegSlot x26, slot20
+    arm64.loadRegSlot x27, slot21
+    arm64.loadRegSlot x28, slot22
+    arm64.epilogue 208
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl TcpListener.port
+    arm64.movRegReg x20, x0
+  __il_body#22:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x16, 65535
+    arm64.cmp x20, x16
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot12, x21
+    arm64.leaRdata x0, __str_rec_76  ; "-MSocket"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.leaRdata x0, __str_rec_77  ; "-e"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+    arm64.leaRdata x0, __str_rec_78  ; "socket(my $s, PF_INET, SOCK_STREAM, 0) or die; setsockopt($s, SOL_SOCKET, SO_LINGER, pack(\"ii\", 1, 0)) or die; connect($s, pack_sockaddr_in("
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.bl __uint_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_79  ; ", inet_aton(\"127.0.0.1\"))) or die; close($s)"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x22, x20
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x28, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x20, x21, x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x20, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x0, slot12
+    arm64.movRegReg x1, x27
+    arm64.bl __managed_push
+    arm64.leaRdata x20, __str_rec_80  ; "perl"
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_retain
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.loadRegSlot x1, slot12
+    arm64.movRegReg x0, x21
+    arm64.bl Subprocess.run
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#29
+  tryerr#24:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Executable
+    arm64.loadRegSlot x0, slot12
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.b __il_cont#21
+  __il_body#29:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+  __il_body#31:
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.cmp x2, 0
+    arm64.b.ne matchnext
+  matcharm#32:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.cmp x1, 0
+    arm64.cset x20, eq
+    arm64.b __il_cont#28
+  matchnext:
+    arm64.cmp x2, 1
+    arm64.b.ne matchdead
+  matcharm#33:
+    arm64.movImm x20, 0
+  __il_cont#28:
+    arm64.bl __destruct_CollectedOutput
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Executable
+    arm64.loadRegSlot x0, slot12
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+  __il_cont#21:
+    arm64.storeSlotReg slot7, x0
+    arm64.movRegReg x0, x19
+    arm64.bl TcpListener.port
+    arm64.movRegReg x20, x0
+    arm64.leaFuncAddr x0, greet
+    arm64.bl __gt_spawn
+    arm64.storeSlotReg slot9, x0
+    arm64.storeBaseDispReg.word64 [x0 + 200], x20
+    arm64.bl __gt_ready
+  __il_body#6:
+    arm64.movImm x20, 0
+    arm64.b forhdr
+  eachAccept:
+    arm64.movRegReg x0, x19
+    arm64.bl TcpListener.accept
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#18
+  tryerr#12:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 8
+    arm64.cset x1, eq
+    arm64.b.eq forstep
+  ifcont#14:
+    arm64.leaRdata x2, __str_rec_94  ; "ended by "
+    arm64.loadRegBaseDisp.word64 x19, [x2 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x2 + 8]
+    arm64.cmp x0, 0
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_83  ; "resolveFailed"
+    arm64.mul x2, x2, x3
+    arm64.cmp x0, 1
+    arm64.cset x3, eq
+    arm64.leaRdata x4, __str_rec_84  ; "connectFailed"
+    arm64.mul x3, x3, x4
+    arm64.add x2, x2, x3
+    arm64.cmp x0, 2
+    arm64.cset x3, eq
+    arm64.leaRdata x4, __str_rec_85  ; "sendFailed"
+    arm64.mul x3, x3, x4
+    arm64.add x2, x2, x3
+    arm64.cmp x0, 3
+    arm64.cset x3, eq
+    arm64.leaRdata x4, __str_rec_86  ; "recvFailed"
+    arm64.mul x3, x3, x4
+    arm64.add x2, x2, x3
+    arm64.cmp x0, 4
+    arm64.cset x3, eq
+    arm64.leaRdata x4, __str_rec_87  ; "connectionClosed"
+    arm64.mul x3, x3, x4
+    arm64.add x2, x2, x3
+    arm64.cmp x0, 5
+    arm64.cset x3, eq
+    arm64.leaRdata x4, __str_rec_88  ; "timedOut"
+    arm64.mul x3, x3, x4
+    arm64.add x2, x2, x3
+    arm64.cmp x0, 6
+    arm64.cset x3, eq
+    arm64.leaRdata x4, __str_rec_89  ; "bindFailed"
+    arm64.mul x3, x3, x4
+    arm64.add x2, x2, x3
+    arm64.cmp x0, 7
+    arm64.cset x0, eq
+    arm64.leaRdata x3, __str_rec_90  ; "acceptFailed"
+    arm64.mul x0, x0, x3
+    arm64.add x0, x2, x0
+    arm64.leaRdata x2, __str_rec_91  ; "acceptInterrupted"
+    arm64.mul x1, x1, x2
+    arm64.add x0, x0, x1
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.leaRdata x0, __str_rec_95  ; " in round "
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x26
+    arm64.bl __int_to_string
+    arm64.movRegReg x20, x0
+    arm64.add x0, x21, x23
+    arm64.add x0, x0, x25
+    arm64.add x0, x0, x20
+    arm64.storeSlotReg slot11, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x19, x28, x21
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x19, x19, x25
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x19, x20
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.loadRegSlot x0, slot11
+    arm64.storeBaseDispReg.word64 [x27 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_decref
+    arm64.b __il_cont#5
+  __il_body#18:
+    arm64.movImm x1, 1024
+    arm64.movRegReg x0, x21
+    arm64.bl TcpClient.recv
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#19
+  tryerr#20:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.leaRdata x2, __str_rec_83  ; "resolveFailed"
+    arm64.mul x1, x1, x2
+    arm64.cmp x0, 1
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_84  ; "connectFailed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 2
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_85  ; "sendFailed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 3
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_86  ; "recvFailed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 4
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_87  ; "connectionClosed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 5
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_88  ; "timedOut"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 6
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_89  ; "bindFailed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 7
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_90  ; "acceptFailed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 8
+    arm64.cset x0, eq
+    arm64.leaRdata x2, __str_rec_91  ; "acceptInterrupted"
+    arm64.mul x0, x0, x2
+    arm64.add x0, x1, x0
+    arm64.bl __str_retain
+    arm64.movRegReg x22, x0
+    arm64.b __il_cont#17
+  tryok#19:
+    arm64.movRegReg x22, x0
+  __il_cont#17:
+    arm64.movRegReg x0, x21
+    arm64.bl TcpClient.close
+    arm64.leaRdata x1, __str_rec_82  ; "hello"
+    arm64.movRegReg x0, x22
+    arm64.bl __str_eq
+    arm64.cbz x0, ifcont#16
+  theGreeting:
+    arm64.leaRdata x0, __str_rec_96  ; "served"
+    arm64.bl __str_retain
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x27, x19
+    arm64.b __il_cont#5
+  ifcont#16:
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_TcpClient
+  forstep:
+    arm64.add x20, x20, 1
+  forhdr:
+    arm64.cmp x20, 8
+    arm64.b.lt eachAccept
+  forexit:
+    arm64.leaRdata x0, __str_rec_92  ; "no greeting in "
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.movImm x21, 8
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __int_to_string
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x0, __str_rec_93  ; " accepts"
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.add x0, x20, x21
+    arm64.add x25, x0, x24
+    arm64.add x0, x25, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.add x27, x26, 56
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x27, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x19, x19, x21
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x0, x19, x24
+    arm64.storeBaseDispReg.word64 [x26 + 0], x27
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x27, x26
+  __il_cont#5:
+    arm64.storeSlotReg slot1, x27
+    arm64.loadRegSlot x0, slot9
+    arm64.bl __gt_await
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_97  ; "reset="
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.loadRegSlot x0, slot7
+    arm64.movRegReg x1, x22
+    arm64.bl __bool_to_string
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x0, __str_rec_98  ; " "
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x27 + 0]
+    arm64.storeSlotReg slot10, x0
+    arm64.loadRegBaseDisp.word64 x26, [x27 + 8]
+    arm64.leaRdata x0, __str_rec_99  ; " greeted="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot8, x1
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
+    arm64.cmp x19, 0
+    arm64.cset x19, eq
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x28, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x28
+    arm64.bl __bool_to_string
+    arm64.storeSlotReg slot6, x0
+    arm64.leaRdata x1, __str_rec_100  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.storeSlotReg slot5, x2
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.storeSlotReg slot4, x1
+    arm64.add x2, x21, x23
+    arm64.add x2, x2, x25
+    arm64.add x2, x2, x26
+    arm64.add x2, x2, x27
+    arm64.add x0, x2, x0
+    arm64.add x0, x0, x1
+    arm64.storeSlotReg slot2, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot3, x0
+    arm64.add x19, x0, 56
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x19, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x20, x20, x23
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x20, x20, x25
+    arm64.loadRegSlot x1, slot10
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x20, x20, x26
+    arm64.loadRegSlot x1, slot8
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x27
+    arm64.bl __str_copy
+    arm64.add x20, x20, x27
+    arm64.loadRegSlot x2, slot6
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x28
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot6
+    arm64.add x20, x20, x0
+    arm64.loadRegSlot x2, slot4
+    arm64.loadRegSlot x1, slot5
+    arm64.movRegReg x0, x20
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot4
+    arm64.add x0, x20, x0
+    arm64.loadRegSlot x0, slot3
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x1, slot2
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x28
+    arm64.bl __mm_decref
+  __il_body#4:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __write_stdout
+  __il_cont#3:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_TcpListener
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot13
+    arm64.loadRegSlot x20, slot14
+    arm64.loadRegSlot x21, slot15
+    arm64.loadRegSlot x22, slot16
+    arm64.loadRegSlot x23, slot17
+    arm64.loadRegSlot x24, slot18
+    arm64.loadRegSlot x25, slot19
+    arm64.loadRegSlot x26, slot20
+    arm64.loadRegSlot x27, slot21
+    arm64.loadRegSlot x28, slot22
+    arm64.epilogue 208
+    arm64.ret
+  matchdead:
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_247  ; "panic at netpoll-socket.a-connection-reset-before-it-is-accepted-leaves-the-listener-serving.test:7: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot13
+    arm64.loadRegSlot x20, slot14
+    arm64.loadRegSlot x21, slot15
+    arm64.loadRegSlot x22, slot16
+    arm64.loadRegSlot x23, slot17
+    arm64.loadRegSlot x24, slot18
+    arm64.loadRegSlot x25, slot19
+    arm64.loadRegSlot x26, slot20
+    arm64.loadRegSlot x27, slot21
+    arm64.loadRegSlot x28, slot22
+    arm64.epilogue 208
+    arm64.ret
+}

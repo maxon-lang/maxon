@@ -1,0 +1,75 @@
+// Test: a-string-is-ordered-as-its-bytes
+function main() returns ExitCode
+	let a = "apple"
+	let b = "banana"
+	let c = "app"
+	if a < b and c < a and not (b <= a) 'ordered'
+		return 0
+	end 'ordered'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "apple"
+    x64.leaRegRdata r12, [rip + __str_rec_4]  ; "banana"
+    x64.leaRegRdata r13, [rip + __str_rec_5]  ; "app"
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __char_cmp
+    x64.cmpRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+    x64.jcc notEqual, scmerge#2
+  andrhs#1:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect __char_cmp
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg equal, rax
+  scmerge#2:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit
+  andrhs#3:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __char_cmp
+    x64.cmpRegImm32 r8, 2
+    x64.setccReg notEqual, rax
+    x64.xorRegImm32 rax, rax, 1
+    x64.jmp scmerge#4
+  critsplit:
+    x64.movRegReg rax, rcx
+  scmerge#4:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  ordered:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

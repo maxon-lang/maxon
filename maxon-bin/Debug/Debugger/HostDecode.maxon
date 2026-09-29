@@ -1,0 +1,46 @@
+export union HostInstructionWidth
+	fixed(bytes DecodedFixedWidth)
+	variable
+end 'HostInstructionWidth'
+
+module function hostInstructionWidth() returns HostInstructionWidth
+	#if arch(arm64)
+		return HostInstructionWidth.fixed(Arm64InstructionBytes as DecodedFixedWidth)
+	#endif
+
+	#if not arch(arm64)
+		return HostInstructionWidth.variable
+	#endif
+end 'hostInstructionWidth'
+
+module function hostDecodedAt(code ByteArray, at DecodedOffset, address DecodedAddress) returns DecodedLookup
+	#if arch(arm64)
+		return match decodeArm64Instruction(code, at: at, address: address) 'decoded'
+			unclassified gives DecodedLookup.unclassified
+			decoded(instruction) gives DecodedLookup.decoded(DecodedInstruction.create(instruction.length, instructionClass: instruction.instructionClass, target: instruction.target, callOperand: arm64CallOperandOf(instruction)))
+		end 'decoded'
+	#endif
+
+	#if not arch(arm64)
+		return match decodeX64Instruction(code, at: at, address: address) 'decoded'
+			unclassified gives DecodedLookup.unclassified
+			decoded(instruction) gives DecodedLookup.decoded(DecodedInstruction.create(instruction.length, instructionClass: instruction.instructionClass, target: instruction.target, callOperand: instruction.callOperand))
+		end 'decoded'
+	#endif
+end 'hostDecodedAt'
+
+#if arch(arm64)
+	function arm64CallOperandOf(instruction Arm64Instruction) returns DecodedCallOperand
+		return match instruction.controlRegister 'through'
+			none gives DecodedCallOperand.none
+			register(number) gives DecodedCallOperand.register(number)
+		end 'through'
+	end 'arm64CallOperandOf'
+#endif
+
+module function hostInstructionIsAReturn(code ByteArray, at DecodedOffset) returns bool
+	return match hostDecodedAt(code, at: at, address: at as DecodedAddress) 'decoded'
+		unclassified gives false
+		decoded(instruction) gives instruction.instructionClass == DbgClassReturn
+	end 'decoded'
+end 'hostInstructionIsAReturn'

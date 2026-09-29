@@ -10,7 +10,7 @@ export union DebugValueAnswer
 end 'DebugValueAnswer'
 
 union DebugValueSource
-	word(bits DebugWord)
+	word(bits DebuggeeWord)
 	address(at DebugAddress)
 	folded(first MxdbgIndex)
 	nowhere
@@ -24,16 +24,16 @@ end 'DebugChildLookup'
 typealias DebugElementTally = int(0 to u32.max)
 typealias DebugRealValue = float(f64.min to f64.max)
 
-let MaxCountableElements = 4294967295 as DebugWord
+let MaxCountableElements = 4294967295 as DebuggeeWord
 let UnionFoldedWords = 2
 
 let SingleMantissaBits = 23 as DebugBitShift
-let SingleMantissaMask = 8388607 as DebugWord
-let SingleExponentMask = 255 as DebugWord
-let SingleImplicitBit = 8388608 as DebugWord
-let SingleSignBit = 2147483648 as DebugWord
-let DoubleInfinityBits = 9218868437227405312 as DebugWord
-let DoubleQuietNaNBits = 9221120237041090560 as DebugWord
+let SingleMantissaMask = 8388607 as DebuggeeWord
+let SingleExponentMask = 255 as DebuggeeWord
+let SingleImplicitBit = 8388608 as DebuggeeWord
+let SingleSignBit = 2147483648 as DebuggeeWord
+let DoubleInfinityBits = 9218868437227405312 as DebuggeeWord
+let DoubleQuietNaNBits = 9221120237041090560 as DebuggeeWord
 let SingleSubnormalScale = -149.0 as DebugRealValue
 let SingleNormalScale = -150.0 as DebugRealValue
 
@@ -56,7 +56,7 @@ let ManagedElementSizeOffset = 24 as DebugAddress
 let UnionTagOffset = 0 as DebugAddress
 let UnionTagBytes = 8 as DebugWidth
 
-let MinimumPlausibleHeapAddress = 0x10000 as DebugWord
+let MinimumPlausibleHeapAddress = 0x10000 as DebuggeeWord
 
 export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, registers DebugRegisterAccess) returns DebugValueTree
 	var tree = DebugValueTree.create()
@@ -148,7 +148,7 @@ end 'renderLocalRecord'
 
 function sourceOf(memory DebugMemory, local MxdbgLocalInfo, framePointer DebugAddress) returns DebugValueSource throws DebugMemoryError
 	if local.isAConstant() 'foldedToAnImmediate'
-		return DebugValueSource.word(local.locValue as DebugWord)
+		return DebugValueSource.word(local.locValue as DebuggeeWord)
 	end 'foldedToAnImmediate'
 
 	if local.isAFoldedAggregate() 'foldedToWords'
@@ -171,7 +171,7 @@ function sourceOf(memory DebugMemory, local MxdbgLocalInfo, framePointer DebugAd
 		return DebugValueSource.address(slot)
 	end 'theValueItself'
 
-	return DebugValueSource.address(try addressOf(try readRaw(memory, source: DebugValueSource.address(slot), width: DebugWordBytes)))
+	return DebugValueSource.address(try addressOf(try readRaw(memory, source: DebugValueSource.address(slot), width: DebuggeeWordBytes)))
 end 'sourceOf'
 
 function renderTyped(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeId MxdbgIndex, source DebugValueSource) returns ElementIndex
@@ -234,7 +234,7 @@ end 'renderFlag'
 function renderReal(tree DebugValueTree, memory DebugMemory, name String, typeName String, kind String, source DebugValueSource, width DebugWidth) returns ElementIndex
 	let raw = try readRaw(memory, source: source, width: width) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
 
-	if width < DebugWordBytes 'aSingle'
+	if width < DebuggeeWordBytes 'aSingle'
 		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{singleFrom(raw)}"))
 	end 'aSingle'
 
@@ -244,7 +244,7 @@ end 'renderReal'
 // A 32-bit float widened by ARITHMETIC rather than by reassembling a 64-bit pattern: the significand and
 // the power of two are what the encoding means, and reading them off costs no second bit layout to get
 // wrong.
-function singleFrom(bits DebugWord) returns DebugRealValue
+function singleFrom(bits DebuggeeWord) returns DebugRealValue
 	let exponent = (bits shr SingleMantissaBits) and SingleExponentMask
 	let mantissa = bits and SingleMantissaMask
 	let magnitude = singleMagnitude(exponent, mantissa: mantissa)
@@ -252,7 +252,7 @@ function singleFrom(bits DebugWord) returns DebugRealValue
 	return 0.0 - magnitude if (bits and SingleSignBit) != 0 else magnitude
 end 'singleFrom'
 
-function singleMagnitude(exponent DebugWord, mantissa DebugWord) returns DebugRealValue
+function singleMagnitude(exponent DebuggeeWord, mantissa DebuggeeWord) returns DebugRealValue
 	if exponent == SingleExponentMask 'infiniteOrNotANumber'
 		return __Builtins.bitsToFloat(DoubleInfinityBits if mantissa == 0 else DoubleQuietNaNBits)
 	end 'infiniteOrNotANumber'
@@ -339,7 +339,7 @@ function renderFoldedStruct(tree DebugValueTree, memory DebugMemory, symbols Deb
 
 	for (iter, word) in words.withIterator() 'eachWord'
 		let field = symbols.fieldRecordOf(record.fieldFirst + (iter.index() as MxdbgIndex))
-		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: field.name, typeId: field.typeId, source: DebugValueSource.word(word as DebugWord)))
+		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: field.name, typeId: field.typeId, source: DebugValueSource.word(word as DebuggeeWord)))
 	end 'eachWord'
 
 	return tree.add(DebugValueNode.withChildren(name, typeName: typeName, kind: kind, display: StructDisplay, children: children))
@@ -371,17 +371,17 @@ function renderFoldedUnion(tree DebugValueTree, memory DebugMemory, symbols Debu
 		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
 	end 'theWindowIsNotATagAndAPayload'
 
-	let tag = (try words.get(0) otherwise panic("renderFoldedUnion: a window of two words holds a first")) as DebugWord
-	let payload = (try words.get(1) otherwise panic("renderFoldedUnion: a window of two words holds a second")) as DebugWord
+	let tag = (try words.get(0) otherwise panic("renderFoldedUnion: a window of two words holds a first")) as DebuggeeWord
+	let payload = (try words.get(1) otherwise panic("renderFoldedUnion: a window of two words holds a second")) as DebuggeeWord
 
 	return caseOf(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, tag: tag, payload: DebugValueSource.word(payload))
 end 'renderFoldedUnion'
 
-function caseOf(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, tag DebugWord, payload DebugValueSource) returns ElementIndex
+function caseOf(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, tag DebuggeeWord, payload DebugValueSource) returns DebugValueIndex
 	for k in record.fieldFirst upto record.fieldFirst + record.fieldCount 'eachCase'
 		let caseRecord = symbols.fieldRecordOf(k as MxdbgIndex)
 
-		if (caseRecord.offset as DebugWord) != tag 'anotherCase'
+		if (caseRecord.offset as DebuggeeWord) != tag 'anotherCase'
 			continue
 		end 'anotherCase'
 
@@ -422,14 +422,14 @@ end 'unreadable'
 function widthOf(record MxdbgTypeInfo) returns DebugWidth
 	let size = record.size as DebugAddress
 
-	return DebugWordBytes if size == 0 or size > (DebugWordBytes as DebugAddress) else size as DebugWidth
+	return DebuggeeWordBytes if size == 0 or size > (DebuggeeWordBytes as DebugAddress) else size as DebugWidth
 end 'widthOf'
 
-function caseNameOf(symbols DebugSymbols, record MxdbgTypeInfo, tag DebugWord) returns String
+function caseNameOf(symbols DebugSymbols, record MxdbgTypeInfo, tag DebuggeeWord) returns String
 	for k in record.fieldFirst upto record.fieldFirst + record.fieldCount 'eachCase'
 		let caseRecord = symbols.fieldRecordOf(k as MxdbgIndex)
 
-		if (caseRecord.offset as DebugWord) == tag 'thisCase'
+		if (caseRecord.offset as DebuggeeWord) == tag 'thisCase'
 			return caseRecord.name
 		end 'thisCase'
 	end 'eachCase'
@@ -437,7 +437,7 @@ function caseNameOf(symbols DebugSymbols, record MxdbgTypeInfo, tag DebugWord) r
 	return unresolvedCaseDisplay(tag)
 end 'caseNameOf'
 
-function unresolvedCaseDisplay(tag DebugWord) returns String
+function unresolvedCaseDisplay(tag DebuggeeWord) returns String
 	return "<tag {tag}>"
 end 'unresolvedCaseDisplay'
 
@@ -450,7 +450,7 @@ function baseOf(source DebugValueSource) returns DebugAddress throws DebugMemory
 	end 'which'
 end 'baseOf'
 
-function addressOf(word DebugWord) returns DebugAddress throws DebugMemoryError
+function addressOf(word DebuggeeWord) returns DebugAddress throws DebugMemoryError
 	if word < 0 'noAddressIsNegative'
 		throw DebugMemoryError.notReadable
 	end 'noAddressIsNegative'
@@ -459,11 +459,11 @@ function addressOf(word DebugWord) returns DebugAddress throws DebugMemoryError
 end 'addressOf'
 
 function pointerAt(memory DebugMemory, address DebugAddress) returns DebugAddress throws DebugMemoryError
-	return try addressOf(try readRaw(memory, source: DebugValueSource.address(address), width: DebugWordBytes))
+	return try addressOf(try readRaw(memory, source: DebugValueSource.address(address), width: DebuggeeWordBytes))
 end 'pointerAt'
 
 function countAt(memory DebugMemory, address DebugAddress) returns DebugElementTally throws DebugMemoryError
-	let word = try readRaw(memory, source: DebugValueSource.address(address), width: DebugWordBytes)
+	let word = try readRaw(memory, source: DebugValueSource.address(address), width: DebuggeeWordBytes)
 
 	if word < 0 or word > MaxCountableElements 'notACount'
 		throw DebugMemoryError.notReadable
@@ -472,7 +472,7 @@ function countAt(memory DebugMemory, address DebugAddress) returns DebugElementT
 	return word as DebugElementTally
 end 'countAt'
 
-function readRaw(memory DebugMemory, source DebugValueSource, width DebugWidth) returns DebugWord throws DebugMemoryError
+function readRaw(memory DebugMemory, source DebugValueSource, width DebugWidth) returns DebuggeeWord throws DebugMemoryError
 	match source 'which'
 		nowhere or
 			folded then throw DebugMemoryError.notReadable

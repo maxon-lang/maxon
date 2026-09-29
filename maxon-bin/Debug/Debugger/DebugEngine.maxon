@@ -22,19 +22,22 @@ export let DbgGtStatusHeld = 5
 let MaxBacktraceFrames = 64
 let MaxMachinesWalked = 4096
 let FrameRecordBytes = 16
-let TrapInstructionByte = 0xCC as Byte
 
 let AsyncPreemptionWithdrawn = 1
-let HoldEpochArmed = 1
+
+typealias HoldEpochStep = int(-1 to 1)
+
+let HoldEpochArmStep = 1 as HoldEpochStep
+let HoldEpochLiftStep = -1 as HoldEpochStep
 
 export enum DebugMemoryError implements Error
 	notReadable
 end 'DebugMemoryError'
 
 export interface DebugMemory
-	function readDebuggeeWord(address DebugAddress, width DebugWidth) returns DebugWord throws DebugMemoryError
+	function readDebuggeeWord(address DebugAddress, width DebugWidth) returns DebuggeeWord throws DebugMemoryError
 	function readDebuggeeText(address DebugAddress, length EngineReadLength) returns String throws DebugMemoryError
-	function registerValue(number EngineRegisterNumber) returns DebugWord
+	function registerValue(number EngineRegisterNumber) returns DebuggeeWord
 end 'DebugMemory'
 
 export type EngineStop
@@ -136,13 +139,13 @@ let FirstStopSeq = 1
 type EngineBreakpoint
 	export let offset as DebugAddress
 	export let address as DebugAddress
-	export let originalByte as Byte
+	export let originalBytes as ByteArray
 	export let usersOwn as bool
 	export let conditioned as bool
 	export let condition as DebugConditionRecord
 
-	static function create(offset DebugAddress, address DebugAddress, originalByte Byte, usersOwn bool, conditioned bool, condition DebugConditionRecord) returns EngineBreakpoint
-		return Self{offset: offset, address: address, originalByte: originalByte, usersOwn: usersOwn, conditioned: conditioned, condition: condition}
+	static function create(offset DebugAddress, address DebugAddress, originalBytes ByteArray, usersOwn bool, conditioned bool, condition DebugConditionRecord) returns EngineBreakpoint
+		return Self{offset: offset, address: address, originalBytes: originalBytes, usersOwn: usersOwn, conditioned: conditioned, condition: condition}
 	end 'create'
 end 'EngineBreakpoint'
 
@@ -282,12 +285,31 @@ union EngineStepPost
 	on(machine DebugAddress)
 end 'EngineStepPost'
 
+union EngineExecutedTrap
+	none
+	at(address DebugAddress)
+
+	function found() returns bool
+		return match self 'executed'
+			none gives false
+			at gives true
+		end 'executed'
+	end 'found'
+
+	function addressOr(landing DebugAddress) returns DebugAddress
+		return match self 'executed'
+			none gives landing
+			at(address) gives address
+		end 'executed'
+	end 'addressOr'
+end 'EngineExecutedTrap'
+
 union EngineWalk
 	walked(returnAddresses DebugAddressArray, callerFramePointers DebugAddressArray, truncated bool)
 end 'EngineWalk'
 
 export type DebugEngine implements DebugMemory
-	var backend as WindowsBackend
+	var backend as DebugBackend
 	var target as DebugTarget
 	var contract as DebugRuntimeContract
 	let stopTimeoutMs as StopTimeoutMs
@@ -322,7 +344,7 @@ export type DebugEngine implements DebugMemory
 			return EngineStart.refused("this driver could not pin its own green thread to the machine the debug interface answers on")
 		end 'noPin'
 
-		var backend = WindowsBackend.create()
+		var backend = backendFor(targetToString(detectHostTarget()))
 
 		if not backend.holdsItsScratch() 'noScratch'
 			return refusedBeforeLaunch(BackendScratchRefusal)
@@ -342,7 +364,7 @@ export type DebugEngine implements DebugMemory
 			ring(collector) then environment.upsert(DsActivationEnvVar, value: collector.segmentName())
 		end 'ring'
 
-		let target = try DebugTarget.launchTraced(program, arguments: arguments, workingDirectory: workingDirectory, environment: environment, routing: routing) otherwise (e) 'noChild'
+		let target = try DebugTarget.launchTraced(backend.launchPlan(program, arguments: arguments), workingDirectory: workingDirectory, environment: environment, routing: routing) otherwise (e) 'noChild'
 			backend.close()
 			closeTraceRing(trace)
 			releaseDebugSessionPin()
@@ -350,7 +372,14 @@ export type DebugEngine implements DebugMemory
 			return EngineStart.refused("could not launch the program ({e.displayReason()})")
 		end 'noChild'
 
-		let contract = DebugRuntimeContract.readFrom(reader, textBytes: textBytes)
+		var placement = BackendImagePlacement.asLinked
+
+		match backend.adoptLaunchedProgram() 'adopted'
+			refused(reason) then return refusedAfterLaunch(reason, backend: backend, target: target, trace: trace)
+			ready(placed) then placement = placed
+		end 'adopted'
+
+		let contract = DebugRuntimeContract.readFrom(reader, textBytes: textBytes, placement: placement)
 		var engine = Self{backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: EngineReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, stepPosted: EngineStepPost.none, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), detached: false, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false}
 
 		return engine.awaitEntryStop()
@@ -363,7 +392,7 @@ export type DebugEngine implements DebugMemory
 		let deadline = debugDeadlineAfter(self.stopTimeoutMs)
 
 		while not debugDeadlinePassed(deadline) 'poll'
-			self.target.pump()
+			self.pumpTheProgramsOutput()
 
 			match self.oneEntrySlice() 'slice'
 				keepWaiting then continue
@@ -386,17 +415,21 @@ export type DebugEngine implements DebugMemory
 			timedOut then return EngineEntrySlice.keepWaiting
 			threadStarted or
 				threadExited then return EngineEntrySlice.keepWaiting
-			signalled then return EngineEntrySlice.ended(self.close())
-			exited(code) then return EngineEntrySlice.ended(self.settledWith(code))
+			signalled then return self.entryEnded(self.close())
+			exited(code) then return self.entryEnded(self.settledWith(code))
 			stopped(thread, reason, faultCode, address) then return self.entryLanded(thread, reason: reason, faultCode: faultCode, address: address)
 		end 'seen'
 	end 'oneEntrySlice'
+
+	function entryEnded(outcome TargetOutcome) returns EngineEntrySlice
+		return EngineEntrySlice.ended(self.closedAfter(outcome))
+	end 'entryEnded'
 
 	function entryLanded(thread BackendThreadId, reason BackendStopReason, faultCode BackendWord, address DebugAddress) returns EngineEntrySlice
 		match self.landedAt(thread, reason: reason, faultCode: faultCode, address: address) 'landed'
 			stopped then return EngineEntrySlice.landed
 			timedOut then return EngineEntrySlice.keepWaiting
-			ended(outcome) then return EngineEntrySlice.ended(outcome)
+			ended(outcome) then return self.entryEnded(outcome)
 		end 'landed'
 	end 'entryLanded'
 
@@ -420,6 +453,12 @@ export type DebugEngine implements DebugMemory
 	// is outstanding and its debugger is still alive, so reaping before letting go wedges the pair — the
 	// child sits burning nothing and the reap never returns.
 	export function close() returns TargetOutcome
+		if self.backend.endsTheProgramItself() 'theBackendEndsTheProgramItself'
+			_ = self.backend.killTheProgram()
+
+			return self.closedAfter(self.target.reap())
+		end 'theBackendEndsTheProgramItself'
+
 		_ = self.detach()
 
 		return self.closedAfter(self.target.reap())
@@ -437,6 +476,7 @@ export type DebugEngine implements DebugMemory
 		end 'alreadyClosed'
 
 		self.closed = true
+		self.pumpTheProgramsOutput()
 		self.backend.close()
 		closeTraceRing(self.trace)
 		releaseDebugSessionPin()
@@ -471,10 +511,18 @@ export type DebugEngine implements DebugMemory
 	end 'hasDetached'
 
 	export function takeOutput() returns CollectedLines
-		self.target.pump()
+		self.pumpTheProgramsOutput()
 
 		return self.collectedOutput()
 	end 'takeOutput'
+
+	// ⭐ **THE PROGRAM's OUTPUT REACHES THE DRIVER BY ONE OF TWO ROADS AND BOTH ARE PUMPED HERE.** A debuggee
+	// this process launched writes down a pipe; one a stub launched writes to the stub, which forwards it over
+	// the debug connection — and the driver routes either the same way.
+	function pumpTheProgramsOutput()
+		self.target.pump()
+		self.target.noteFaultSeen(routeStubOutput(self.backend.takeStubOutput(), routing: self.routing))
+	end 'pumpTheProgramsOutput'
 
 	export function collectedOutput() returns CollectedLines
 		return match self.routing 'where'
@@ -502,7 +550,7 @@ export type DebugEngine implements DebugMemory
 
 	// --- the debuggee's memory ---
 
-	export function readDebuggeeWord(address DebugAddress, width DebugWidth) returns DebugWord throws DebugMemoryError
+	export function readDebuggeeWord(address DebugAddress, width DebugWidth) returns DebuggeeWord throws DebugMemoryError
 		let bytes = try self.readDebuggeeBytes(address, length: width as EngineReadLength)
 
 		match debugLittleEndianAt(bytes, at: 0, width: width) 'read'
@@ -573,9 +621,13 @@ export type DebugEngine implements DebugMemory
 		var held = bytes.clone()
 
 		for breakpoint in self.breakpoints 'eachBreakpoint'
-			if breakpoint.address >= address and breakpoint.address < address + (bytes.count() as DebugAddress) 'insideTheWindow'
-				try held.set((breakpoint.address - address) as ElementIndex, value: breakpoint.originalByte) otherwise panic("DebugEngine.holdInCache: the planted address was just proven to be inside the window")
-			end 'insideTheWindow'
+			for (iter, original) in breakpoint.originalBytes.withIterator() 'eachPlantedByte'
+				let at = breakpoint.address + (iter.index() as DebugAddress)
+
+				if at >= address and at < address + (bytes.count() as DebugAddress) 'insideTheWindow'
+					try held.set((at - address) as ElementIndex, value: original) otherwise panic("DebugEngine.holdInCache: the planted address was just proven to be inside the window")
+				end 'insideTheWindow'
+			end 'eachPlantedByte'
 		end 'eachBreakpoint'
 
 		self.cacheBase = address
@@ -583,7 +635,7 @@ export type DebugEngine implements DebugMemory
 		self.cacheFilled = true
 	end 'holdInCache'
 
-	export function registerValue(number EngineRegisterNumber) returns DebugWord
+	export function registerValue(number EngineRegisterNumber) returns DebuggeeWord
 		return self.registers.valueOf(number as BackendRegisterNumber)
 	end 'registerValue'
 
@@ -595,25 +647,21 @@ export type DebugEngine implements DebugMemory
 		end 'pastTheImage'
 
 		if self.armedAt(self.textBase + offset) 'armedAlready'
-			self.recordBreakpoint(offset, originalByte: self.originalByteAt(offset), usersOwn: forTheUser or self.userBreakpointAt(self.textBase + offset), conditioned: false, condition: DebugConditionRecord.unconditioned())
+			self.recordBreakpoint(offset, originalBytes: self.originalBytesAt(offset), usersOwn: forTheUser or self.userBreakpointAt(self.textBase + offset), conditioned: false, condition: DebugConditionRecord.unconditioned())
 			self.forgetTheHoldAt(offset)
 
 			return CommandOutcome.done
 		end 'armedAlready'
 
-		let address = self.textBase + offset
-		var original = 0 as Byte
+		var original = ByteArray.create()
 
-		match self.backend.readMemory(address, bytes: 1) 'read'
+		match self.backend.plantTrap(self.textBase + offset) 'planted'
 			unreadable then return CommandOutcome.refused(DebugOutOfTextReason)
-			read(bytes) then original = try bytes.get(0) otherwise return CommandOutcome.refused(DebugOutOfTextReason)
-		end 'read'
+			unwritable then return CommandOutcome.refused(DebugUnwritableReason)
+			planted(bytes) then original = bytes
+		end 'planted'
 
-		if not self.plantTrapAt(address) 'unwritable'
-			return CommandOutcome.refused(DebugUnwritableReason)
-		end 'unwritable'
-
-		self.recordBreakpoint(offset, originalByte: original, usersOwn: forTheUser, conditioned: false, condition: DebugConditionRecord.unconditioned())
+		self.recordBreakpoint(offset, originalBytes: original, usersOwn: forTheUser, conditioned: false, condition: DebugConditionRecord.unconditioned())
 		self.forgetTheHoldAt(offset)
 		self.cacheFilled = false
 
@@ -621,18 +669,19 @@ export type DebugEngine implements DebugMemory
 	end 'armBreakpoint'
 
 	function plantTrapAt(address DebugAddress) returns bool
-		var trap = ByteArray.create()
-		trap.push(TrapInstructionByte)
-
-		return self.backend.writeMemory(address, bytes: trap)
+		return match self.backend.plantTrap(address) 'planted'
+			planted gives true
+			unreadable or
+				unwritable gives false
+		end 'planted'
 	end 'plantTrapAt'
 
-	function originalByteAt(offset DebugAddress) returns Byte
+	function originalBytesAt(offset DebugAddress) returns ByteArray
 		return match self.breakpointAt(self.textBase + offset) 'known'
-			none gives TrapInstructionByte
-			at(breakpoint) gives breakpoint.originalByte
+			none gives ByteArray.create()
+			at(breakpoint) gives breakpoint.originalBytes
 		end 'known'
-	end 'originalByteAt'
+	end 'originalBytesAt'
 
 	export function clearBreakpoint(offset DebugAddress) returns CommandOutcome
 		if self.returnPointAt(self.textBase + offset) 'theWalkHoldsTheAddress'
@@ -646,24 +695,21 @@ export type DebugEngine implements DebugMemory
 			at then break 'known'
 		end 'known'
 
-		let restored = self.restoreByteAt(offset)
+		let restored = self.restoreBytesAt(offset)
 		self.forgetBreakpoint(offset)
 		self.cacheFilled = false
 
 		return CommandOutcome.done if restored else CommandOutcome.refused(DebugUnwritableReason)
 	end 'clearBreakpoint'
 
-	function restoreByteAt(offset DebugAddress) returns bool
+	function restoreBytesAt(offset DebugAddress) returns bool
 		match self.breakpointAt(self.textBase + offset) 'known'
 			none then return true
 			at then break 'known'
 		end 'known'
 
-		var original = ByteArray.create()
-		original.push(self.originalByteAt(offset))
-
-		return self.backend.writeMemory(self.textBase + offset, bytes: original)
-	end 'restoreByteAt'
+		return self.backend.liftTrap(self.textBase + offset, original: self.originalBytesAt(offset))
+	end 'restoreBytesAt'
 
 	export function clearEveryBreakpoint()
 		_ = self.liftReturnPoint()
@@ -690,7 +736,7 @@ export type DebugEngine implements DebugMemory
 			return held
 		end 'theWalkCouldNotHoldItsReturn'
 
-		self.recordBreakpoint(offset, originalByte: self.originalByteAt(offset), usersOwn: true, conditioned: true, condition: record)
+		self.recordBreakpoint(offset, originalBytes: self.originalBytesAt(offset), usersOwn: true, conditioned: true, condition: record)
 
 		return CommandOutcome.done
 	end 'attachCondition'
@@ -701,7 +747,7 @@ export type DebugEngine implements DebugMemory
 			at then break 'known'
 		end 'known'
 
-		self.recordBreakpoint(offset, originalByte: self.originalByteAt(offset), usersOwn: true, conditioned: false, condition: DebugConditionRecord.unconditioned())
+		self.recordBreakpoint(offset, originalBytes: self.originalBytesAt(offset), usersOwn: true, conditioned: false, condition: DebugConditionRecord.unconditioned())
 
 		return CommandOutcome.done
 	end 'clearCondition'
@@ -740,9 +786,9 @@ export type DebugEngine implements DebugMemory
 		return EngineBreakpointLookup.none
 	end 'breakpointAt'
 
-	function recordBreakpoint(offset DebugAddress, originalByte Byte, usersOwn bool, conditioned bool, condition DebugConditionRecord)
+	function recordBreakpoint(offset DebugAddress, originalBytes ByteArray, usersOwn bool, conditioned bool, condition DebugConditionRecord)
 		self.forgetBreakpoint(offset)
-		self.breakpoints.push(EngineBreakpoint.create(offset, address: self.textBase + offset, originalByte: originalByte, usersOwn: usersOwn, conditioned: conditioned, condition: condition))
+		self.breakpoints.push(EngineBreakpoint.create(offset, address: self.textBase + offset, originalBytes: originalBytes, usersOwn: usersOwn, conditioned: conditioned, condition: condition))
 	end 'recordBreakpoint'
 
 	function forgetBreakpoint(offset DebugAddress)
@@ -945,7 +991,7 @@ export type DebugEngine implements DebugMemory
 		self.forgetLiftedTrap(thread)
 
 		if self.armedAt(pc) 'sittingOnOurOwnTrap'
-			if not self.restoreByteAt(pc - self.textBase) 'unwritable'
+			if not self.restoreBytesAt(pc - self.textBase) 'unwritable'
 				return CommandOutcome.refused(DebugUnwritableReason)
 			end 'unwritable'
 
@@ -963,6 +1009,24 @@ export type DebugEngine implements DebugMemory
 
 		return CommandOutcome.done if self.backend.resumeAll() else CommandOutcome.refused(DebugUnwritableReason)
 	end 'resumedFromTheStop'
+
+	function byteIsReplanted(offset DebugAddress) returns bool
+		if self.someThreadStepsOver(offset) 'itIsStillLifted'
+			return true
+		end 'itIsStillLifted'
+
+		return self.plantTrapAt(self.textBase + offset)
+	end 'byteIsReplanted'
+
+	function someThreadStepsOver(offset DebugAddress) returns bool
+		for lifted in self.liftedTraps 'eachLifted'
+			if lifted.offset == offset 'thisByte'
+				return true
+			end 'thisByte'
+		end 'eachLifted'
+
+		return false
+	end 'someThreadStepsOver'
 
 	function liftedTrapOn(thread BackendThreadId) returns EngineLiftedTrapLookup
 		for lifted in self.liftedTraps 'eachLifted'
@@ -1007,6 +1071,8 @@ export type DebugEngine implements DebugMemory
 			end 'seen'
 		end 'wait'
 
+		self.backend.abandonStopRequest()
+
 		return CommandOutcome.refused(DebugNotPausableReason)
 	end 'requestPause'
 
@@ -1035,7 +1101,7 @@ export type DebugEngine implements DebugMemory
 	// The child's two streams are pumped on every look, because a full pipe blocks the debuggee and reads
 	// back as a timeout.
 	export function lastLookForAStop() returns StopWait
-		self.target.pump()
+		self.pumpTheProgramsOutput()
 		self.pumpTrace()
 
 		if self.detached 'letGo'
@@ -1070,8 +1136,12 @@ export type DebugEngine implements DebugMemory
 		return StopWait.ended(self.target.reap())
 	end 'lookAtADetachedProgram'
 
+	// ⚠ The last of the program's output is drained HERE, because the ending is the last thing the driver
+	// asks about: a stub forwards what the program wrote over the same connection the exit arrived on, and
+	// nothing polls it afterwards.
 	function settledWith(code BackendExitCode) returns TargetOutcome
 		self.stopped = false
+		self.pumpTheProgramsOutput()
 
 		return self.target.settleWith(code as DebugExitCode)
 	end 'settledWith'
@@ -1084,16 +1154,43 @@ export type DebugEngine implements DebugMemory
 		end 'theStoppedThreadsContextIsUnreadable'
 
 		self.cacheFilled = false
-		self.rewindOntoAPlantedTrap(thread, reason: reason, address: address)
-		self.standOnAProgramThread(thread, reason: reason)
+
+		let ranATrap = self.trapTheStepExecuted(reason, address: address)
+		let landedReason = BackendStopReason.breakpoint if ranATrap.found() else reason
+		let landedAddress = ranATrap.addressOr(address)
+
+		self.rewindOntoAPlantedTrap(thread, reason: landedReason, address: landedAddress)
+		self.standOnAProgramThread(thread, reason: landedReason)
 
 		match self.liftedTrapOn(self.stopThread) 'lifted'
 			none then break 'lifted'
-			at(lifted) then return self.replantedAfterTheStepOver(lifted, reason: reason, faultCode: faultCode, address: address)
+			at(lifted) then return self.replantedAfterTheStepOver(lifted, reason: landedReason, faultCode: faultCode, address: landedAddress)
 		end 'lifted'
 
-		return self.landedFresh(reason, faultCode: faultCode, address: address)
+		return self.landedFresh(landedReason, faultCode: faultCode, address: landedAddress)
 	end 'landedAt'
+
+	function trapTheStepExecuted(reason BackendStopReason, address DebugAddress) returns EngineExecutedTrap
+		if reason != BackendStopReason.singleStep 'notAStepLanding'
+			return EngineExecutedTrap.none
+		end 'notAStepLanding'
+
+		let trap = atTheTrap(address)
+
+		if trap == address or not self.armedAt(trap) 'theStepLandedOnAnInstructionOfItsOwn'
+			return EngineExecutedTrap.none
+		end 'theStepLandedOnAnInstructionOfItsOwn'
+
+		if self.someThreadStepsOver(trap - self.textBase) 'theStepWasOverThatVeryByte'
+			return EngineExecutedTrap.none
+		end 'theStepWasOverThatVeryByte'
+
+		if not self.trapInstructionStandsAt(trap) 'theByteIsNotTheDebuggersAnyMore'
+			return EngineExecutedTrap.none
+		end 'theByteIsNotTheDebuggersAnyMore'
+
+		return EngineExecutedTrap.at(trap)
+	end 'trapTheStepExecuted'
 
 	function landedFresh(reason BackendStopReason, faultCode BackendWord, address DebugAddress) returns StopWait
 		match reason 'why'
@@ -1101,7 +1198,7 @@ export type DebugEngine implements DebugMemory
 			singleStep then return self.steppedTo(address)
 			interrupt then return self.stoodAt(DbgStopReasonPause, fault: 0, pc: self.registers.programCounter(), conditionMissed: false)
 			trap then return self.stoodAt(DbgStopReasonTrap, fault: 0, pc: address, conditionMissed: false)
-			fault then return self.stoodAt(DbgStopReasonFault, fault: debugAddressOrZero(faultCode as DebugWord), pc: address, conditionMissed: false)
+			fault then return self.stoodAt(DbgStopReasonFault, fault: debugAddressOrZero(faultCode as DebuggeeWord), pc: address, conditionMissed: false)
 			breakpoint then return self.reachedABreakpoint(address)
 		end 'why'
 	end 'landedFresh'
@@ -1182,7 +1279,7 @@ export type DebugEngine implements DebugMemory
 	function replantedAfterTheStepOver(lifted EngineLiftedTrap, reason BackendStopReason, faultCode BackendWord, address DebugAddress) returns StopWait
 		self.forgetLiftedTrap(lifted.thread)
 
-		if not self.plantTrapAt(self.textBase + lifted.offset) 'unwritable'
+		if not self.byteIsReplanted(lifted.offset) 'unwritable'
 			return StopWait.timedOut
 		end 'unwritable'
 
@@ -1225,7 +1322,7 @@ export type DebugEngine implements DebugMemory
 	// reader never sees the hit, which is what makes a conditional breakpoint mean what it says.
 	function reachedABreakpoint(address DebugAddress) returns StopWait
 		match self.breakpointAt(address) 'known'
-			none then return self.stoodAt(DbgStopReasonTrap, fault: 0, pc: address, conditionMissed: false)
+			none then return self.reachedATrapNobodyPlanted(address)
 			at then break 'known'
 		end 'known'
 
@@ -1247,6 +1344,29 @@ export type DebugEngine implements DebugMemory
 
 		return StopWait.timedOut
 	end 'reachedABreakpoint'
+
+	function reachedATrapNobodyPlanted(address DebugAddress) returns StopWait
+		self.standAt(DbgStopReasonTrap, fault: 0, pc: address, conditionMissed: false)
+
+		if self.trapInstructionStandsAt(address) 'theProgramsOwnTrap'
+			return StopWait.stopped(self.currentStop())
+		end 'theProgramsOwnTrap'
+
+		if not self.resumedFromTheStop(false).accepted() 'couldNotResume'
+			return StopWait.stopped(self.currentStop())
+		end 'couldNotResume'
+
+		return StopWait.timedOut
+	end 'reachedATrapNobodyPlanted'
+
+	function trapInstructionStandsAt(address DebugAddress) returns bool
+		let trap = hostTrapShape()
+
+		return match self.backend.readMemory(address, bytes: trap.bytes()) 'read'
+			unreadable gives false
+			read(bytes) gives bytes.equals(trap.instruction)
+		end 'read'
+	end 'trapInstructionStandsAt'
 
 	function walkHoldsTheByteAt(address DebugAddress) returns bool
 		for standing in self.returnPoints 'eachPoint'
@@ -1344,10 +1464,10 @@ export type DebugEngine implements DebugMemory
 		self.writeContractWord(String.from(SchedAsyncPreemptOffLabel), value: 0)
 	end 'restoreAsyncPreemption'
 
-	function writeContractWord(name String, value DebugWord)
+	function writeContractWord(name String, value DebuggeeWord)
 		match self.contract.globalAt(name) 'known'
 			none then break 'known'
-			at(address) then _ = self.backend.writeMemory(address, bytes: debugWordBytes(value))
+			at(address) then _ = self.backend.writeMemory(address, bytes: debuggeeWordBytes(value))
 		end 'known'
 	end 'writeContractWord'
 
@@ -1355,7 +1475,7 @@ export type DebugEngine implements DebugMemory
 		return self.contract.offset(name)
 	end 'recordOffset'
 
-	function contractWord(name String) returns DebugWord
+	function contractWord(name String) returns DebuggeeWord
 		match self.contract.globalAt(name) 'known'
 			none then return 0
 			at(address) then return try self.readDebuggeeWord(address, width: WordBytes as DebugWidth) otherwise 0
@@ -1392,17 +1512,20 @@ export type DebugEngine implements DebugMemory
 		return 0 if stackBase == 0 else gt as DebugAddress
 	end 'runningGreenThread'
 
+	// ⭐⭐ **THE PAIRING IS AN EXACT EQUALITY, SO BOTH SIDES MUST NAME A THREAD THE SAME WAY.** Which field of a
+	// machine that is depends on the backend: the identity a debug interface reports is the identity the
+	// scheduler must have recorded, and on Darwin those are two different numbers about one thread.
 	function machineOfTheStoppedThread() returns DebugAddress
-		return self.machineWhoseFieldHolds(self.contract.offset(MOffOsThreadIdFigureName), value: self.stopThread as DebugWord)
+		return self.machineWhoseFieldHolds(self.contract.offset(self.backend.threadIdentityFigure()), identity: self.stopThread as DebugAddress)
 	end 'machineOfTheStoppedThread'
 
-	function machineWhoseFieldHolds(offset DebugAddress, value DebugWord) returns DebugAddress
+	function machineWhoseFieldHolds(offset DebugAddress, identity DebugAddress) returns DebugAddress
 		var machine = self.contractWord(String.from(SchedAllMLabel))
 		let linkOffset = self.contract.offset(MOffAllNextFigureName)
 		var walked = 0
 
 		while machine > 0 and walked < MaxMachinesWalked 'eachMachine'
-			if self.wordAt((machine as DebugAddress) + offset) == value 'thisOne'
+			if self.wordAt((machine as DebugAddress) + offset) == identity as DebuggeeWord 'thisOne'
 				return machine as DebugAddress
 			end 'thisOne'
 
@@ -1413,7 +1536,7 @@ export type DebugEngine implements DebugMemory
 		return 0
 	end 'machineWhoseFieldHolds'
 
-	function wordAt(address DebugAddress) returns DebugWord
+	function wordAt(address DebugAddress) returns DebuggeeWord
 		return try self.readDebuggeeWord(address, width: WordBytes as DebugWidth) otherwise 0
 	end 'wordAt'
 
@@ -1434,26 +1557,26 @@ export type DebugEngine implements DebugMemory
 		var records = DebugGreenThreadArray.create()
 
 		for index in 0 upto length 'eachSlot'
-			let gt = self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (WordBytes as DebugAddress))
+			let gt = debugAddressOrZero(self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (WordBytes as DebugAddress)))
 
 			if self.greenThreadIsLive(gt) 'aLiveRecord'
-				records.push(self.greenThreadRecordOf(gt as DebugAddress))
+				records.push(self.greenThreadRecordOf(gt))
 			end 'aLiveRecord'
 		end 'eachSlot'
 
 		return GreenThreadListing.listed(records, truncated: false)
 	end 'listGreenThreads'
 
-	function greenThreadIsLive(gt DebugWord) returns bool
-		if gt <= 0 'noRecord'
+	function greenThreadIsLive(gt DebugAddress) returns bool
+		if gt == 0 'noRecord'
 			return false
 		end 'noRecord'
 
-		if self.wordAt((gt as DebugAddress) + self.contract.offset(GtOffStackBaseFigureName)) == 0 'aSchedulerContext'
+		if self.wordAt(gt + self.contract.offset(GtOffStackBaseFigureName)) == 0 'aSchedulerContext'
 			return false
 		end 'aSchedulerContext'
 
-		return self.wordAt((gt as DebugAddress) + self.contract.offset(GtOffStatusFigureName)) != self.contract.figure(GtStatusCompletedFigureName)
+		return not self.fieldHoldsFigure(gt, offset: GtOffStatusFigureName, figure: GtStatusCompletedFigureName)
 	end 'greenThreadIsLive'
 
 	function greenThreadRecordOf(gt DebugAddress) returns DebugGreenThread
@@ -1476,11 +1599,11 @@ export type DebugEngine implements DebugMemory
 			return DbgGtStatusRunning as DebugAddress
 		end 'running'
 
-		if self.wordAt(gt + self.contract.offset(GtOffHoldFigureName)) == self.contract.figure(GtHoldRequestedFigureName) 'held'
+		if self.fieldHoldsFigure(gt, offset: GtOffHoldFigureName, figure: GtHoldRequestedFigureName) 'held'
 			return DbgGtStatusHeld as DebugAddress
 		end 'held'
 
-		if self.wordAt(gt + self.contract.offset(GtOffStatusFigureName)) == self.contract.figure(GtStatusWaitingFigureName) 'waiting'
+		if self.fieldHoldsFigure(gt, offset: GtOffStatusFigureName, figure: GtStatusWaitingFigureName) 'waiting'
 			return DbgGtStatusWaiting as DebugAddress
 		end 'waiting'
 
@@ -1492,11 +1615,11 @@ export type DebugEngine implements DebugMemory
 			return 0
 		end 'parked'
 
-		return debugAddressOrZero(self.wordAt(machine + self.contract.offset(MOffOsThreadIdFigureName)))
+		return debugAddressOrZero(self.wordAt(machine + self.contract.offset(self.backend.threadIdentityFigure())))
 	end 'osThreadIdOf'
 
 	function machineRunning(gt DebugAddress) returns DebugAddress
-		return self.machineWhoseFieldHolds(self.contract.offset(MOffCurrentGtFigureName), value: gt as DebugWord)
+		return self.machineWhoseFieldHolds(self.contract.offset(MOffCurrentGtFigureName), identity: gt)
 	end 'machineRunning'
 
 	export function walkGreenThread(handle DebugAddress) returns GreenThreadWalkOutcome
@@ -1504,7 +1627,7 @@ export type DebugEngine implements DebugMemory
 			return GreenThreadWalkOutcome.refused(DebugNotRunningReason)
 		end 'nothingIsParked'
 
-		if not self.greenThreadIsLive(handle as DebugWord) 'noSuchThread'
+		if not self.greenThreadIsLive(handle) 'noSuchThread'
 			return GreenThreadWalkOutcome.refused(DebugNoSuchThreadReason)
 		end 'noSuchThread'
 
@@ -1526,7 +1649,7 @@ export type DebugEngine implements DebugMemory
 	end 'parkedFramePointerOf'
 
 	export function holdGreenThread(handle DebugAddress) returns CommandOutcome
-		if not self.greenThreadIsLive(handle as DebugWord) 'noSuchThread'
+		if not self.greenThreadIsLive(handle) 'noSuchThread'
 			return CommandOutcome.refused(DebugNoSuchThreadReason)
 		end 'noSuchThread'
 
@@ -1534,29 +1657,37 @@ export type DebugEngine implements DebugMemory
 			return CommandOutcome.refused(DebugThreadIsRunningReason)
 		end 'stillOnAMachine'
 
-		if not self.backend.writeMemory(handle + self.contract.offset(GtOffHoldFigureName), bytes: debugWordBytes(self.contract.figure(GtHoldRequestedFigureName))) 'unwritable'
+		if not self.holdFieldSetTo(handle, hold: self.contract.figure(GtHoldRequestedFigureName)) 'unwritable'
 			return CommandOutcome.refused(DebugUnwritableReason)
 		end 'unwritable'
 
 		if not self.holdArmed 'theFirstHoldOfThisSession'
-			self.stepHoldEpoch(HoldEpochArmed as DebugWord)
+			self.stepHoldEpoch(HoldEpochArmStep)
 			self.holdArmed = true
 		end 'theFirstHoldOfThisSession'
 
 		return CommandOutcome.done
 	end 'holdGreenThread'
 
-	function stepHoldEpoch(delta DebugWord)
+	function stepHoldEpoch(step HoldEpochStep)
 		let name = String.from(GtHoldEpochLabel)
-		self.writeContractWord(name, value: self.contractWord(name) + delta)
+		self.writeContractWord(name, value: self.contractWord(name) + (step as DebuggeeWord))
 	end 'stepHoldEpoch'
 
+	function holdFieldSetTo(gt DebugAddress, hold ContractFigure) returns bool
+		return self.backend.writeMemory(gt + self.contract.offset(GtOffHoldFigureName), bytes: debuggeeWordBytes(hold as DebuggeeWord))
+	end 'holdFieldSetTo'
+
+	function fieldHoldsFigure(gt DebugAddress, offset String, figure String) returns bool
+		return self.wordAt(gt + self.contract.offset(offset)) == self.contract.figure(figure) as DebuggeeWord
+	end 'fieldHoldsFigure'
+
 	export function releaseGreenThread(handle DebugAddress) returns CommandOutcome
-		if not self.greenThreadIsLive(handle as DebugWord) 'noSuchThread'
+		if not self.greenThreadIsLive(handle) 'noSuchThread'
 			return CommandOutcome.refused(DebugNoSuchThreadReason)
 		end 'noSuchThread'
 
-		if not self.backend.writeMemory(handle + self.contract.offset(GtOffHoldFigureName), bytes: debugWordBytes(self.contract.figure(GtHoldReleasedFigureName))) 'unwritable'
+		if not self.holdFieldSetTo(handle, hold: self.contract.figure(GtHoldReleasedFigureName)) 'unwritable'
 			return CommandOutcome.refused(DebugUnwritableReason)
 		end 'unwritable'
 
@@ -1570,18 +1701,17 @@ export type DebugEngine implements DebugMemory
 
 		let roster = self.contractWord(String.from(GtAllGLabel))
 		let length = self.contractWord(String.from(GtAllGLenLabel))
-		let holdOffset = self.contract.offset(GtOffHoldFigureName)
 		let released = self.contract.figure(GtHoldReleasedFigureName)
 
 		for index in 0 upto length 'eachSlot'
-			let gt = self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (WordBytes as DebugAddress))
+			let gt = debugAddressOrZero(self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (WordBytes as DebugAddress)))
 
-			if gt > 0 'aRecord'
-				_ = self.backend.writeMemory((gt as DebugAddress) + holdOffset, bytes: debugWordBytes(released))
+			if gt != 0 'aRecord'
+				_ = self.holdFieldSetTo(gt, hold: released)
 			end 'aRecord'
 		end 'eachSlot'
 
-		self.stepHoldEpoch(0 - (HoldEpochArmed as DebugWord))
+		self.stepHoldEpoch(HoldEpochLiftStep)
 		self.holdArmed = false
 	end 'liftEveryHold'
 end 'DebugEngine'
@@ -1592,18 +1722,32 @@ function refusedBeforeLaunch(reason String) returns EngineStart
 	return EngineStart.refused(reason)
 end 'refusedBeforeLaunch'
 
+// The program is already running by the time a backend can be refused, so what it launched is ended before
+// the refusal is reported: on a lane whose debuggee is a stub's child the stub is that child.
+function refusedAfterLaunch(reason String, backend DebugBackend, target DebugTarget, trace DebugTraceState) returns EngineStart
+	if backend.endsTheProgramItself() 'theBackendEndsTheProgramItself'
+		_ = backend.killTheProgram()
+	end 'theBackendEndsTheProgramItself'
+
+	_ = target.reap()
+	backend.close()
+	closeTraceRing(trace)
+
+	return refusedBeforeLaunch(reason)
+end 'refusedAfterLaunch'
+
 function wordIn(record ByteArray, at ElementIndex) returns DebugAddress
-	var value = 0 as DebugWord
+	var value = 0 as DebuggeeWord
 
 	for index in 0 upto WordBytes 'eachByte'
 		let byte = try record.get(at + (index as ElementIndex)) otherwise 0
-		value = value or ((byte as DebugWord) shl (index * 8))
+		value = value or ((byte as DebuggeeWord) shl (index * 8))
 	end 'eachByte'
 
 	return debugAddressOrZero(value)
 end 'wordIn'
 
-function debugWordBytes(value DebugWord) returns ByteArray
+function debuggeeWordBytes(value DebuggeeWord) returns ByteArray
 	var bytes = ByteArray.create()
 
 	for index in 0 upto WordBytes 'eachByte'
@@ -1611,7 +1755,7 @@ function debugWordBytes(value DebugWord) returns ByteArray
 	end 'eachByte'
 
 	return bytes
-end 'debugWordBytes'
+end 'debuggeeWordBytes'
 
 // The walk records one (return address, frame pointer) pair per frame; a frame's CALLER frame pointer is
 // the next frame's own, and the outermost one is the link the walk did not take.
@@ -1704,4 +1848,7 @@ function requireEngineBoundsMatchTheBackend()
 	end 'aFileThatIsNotTheBackends'
 
 	requireBackendPageOffsetSpansItsScratch()
+	requireWindowsScratchLayoutIsDisjoint()
+	requirePtraceScratchLayoutIsDisjoint()
+	requireRegisterSlotsAreTheCompilersOwn()
 end 'requireEngineBoundsMatchTheBackend'

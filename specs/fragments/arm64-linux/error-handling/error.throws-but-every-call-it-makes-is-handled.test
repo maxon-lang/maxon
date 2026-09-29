@@ -1,0 +1,24 @@
+// Test: error.throws-but-every-call-it-makes-is-handled
+enum Failure implements Error
+	broken
+end 'Failure'
+
+typealias Code = int(0 to 255)
+
+function risky(n Code) returns Code throws Failure
+	if n > 10 'big'
+		throw Failure.broken
+	end 'big'
+	return n
+end 'risky'
+
+function careful(n Code) returns Code throws Failure
+	return try risky(n) otherwise 0
+end 'careful'
+
+function main() returns ExitCode
+	return try careful(3) otherwise 1
+end 'main'
+---
+CompilerError:
+error E3168: <fragment>:15:10: 'throws Failure' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause

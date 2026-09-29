@@ -1036,7 +1036,7 @@ abandoned: the next command breaks it with a warning and proceeds.
 
 ## Debugging and Profiling
 
-Maxon has an **interactive debugger on x64-windows** — `maxon debug <exe>`: breakpoints, stepping,
+Maxon has an **interactive debugger on every native target** — `maxon debug <exe>`: breakpoints, stepping,
 backtraces with inlined frames, and locals read out of the stopped thread. It launches the program
 rather than attaching to one already running, and it drives it from outside through the host's own debug
 interface, so the program itself carries nothing of the debugger. Everything else on this page works on
@@ -1109,7 +1109,7 @@ and accept either the executable or the sidecar itself; the debugger forms launc
 maxon debug <exe> [--trace] [--stop-timeout=<seconds>] [--target-env=NAME=VALUE]... [-- <program args>...]
 maxon debug --batch --commands=<cmd;cmd;...|@file> <exe> [same options]
 maxon debug --complete=<partial line> <exe>
-maxon debug --classify=<hex>[,<hex>...]
+maxon debug --classify=[arm64:]<hex>[,<hex>...]
 maxon debug --dump-info <exe|.mxdbg> [header|files|functions|types|lines|statements|inline|globals|layout]
 maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 ```
@@ -1119,7 +1119,7 @@ maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 | `--batch` | Run `--commands=` instead of prompting, and write one JSON object per line on stdout |
 | `--commands=` | The commands `--batch` runs, separated by `;`, or `@<path>` to read them from a file |
 | `--complete=` | Print the completions for a partially typed debugger line, one per line, and run nothing |
-| `--classify=` | Classify raw x64 instruction bytes the way arming a breakpoint does, and run nothing |
+| `--classify=` | Classify raw instruction bytes the way arming a breakpoint does, and run nothing. The bytes are x64's; a leading `arm64:` reads the whole list as arm64 |
 | `--trace` | Create the DebugStream ring the `trace` command reads, and name it to the debugged program |
 | `--stop-timeout=` | Seconds to wait for a stop, and the budget for one driver-walked step (default 10). A fraction is honoured to the millisecond; a value outside 0.001 to 922337203685 is refused, naming the option. |
 | `--target-env=` | Set a variable in the DEBUGGED program's environment; repeatable |
@@ -1130,14 +1130,20 @@ maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 
 **The session.** The driver launches the program under the host's own debug interface and takes the stop
 the loader gives it before any of the program's code runs, then arms whatever was asked for. A
-breakpoint is the driver saving the original byte and writing an `int3` over it through the debug
-interface; resuming off one restores the byte, single-steps the instruction and plants the trap again.
+breakpoint is the driver saving the original bytes and writing the host's own trap instruction over them
+through the debug interface — an `int3` on the x64 hosts and a `brk #0` on the arm64 ones; resuming off one
+restores the bytes, single-steps the instruction and plants the trap again.
 The host keeps the pair together: quitting the session ends the program with it, and `detach` is how you
 leave a program running.
 
-A program the debugger cannot drive is refused by name, with exit 1: every program on a host other than
-x64-windows (naming the host), a wasm module, a binary built for a target other than this host's
-(refused before launch, naming both targets), and a binary whose sidecar describes a different build.
+A program the debugger cannot drive is refused by name, with exit 1: every program on a host this build
+has no debug backend for (naming the host), a wasm module, a binary built for a target other than this host's
+(refused before launch, naming both targets), an arm64-macos program on a host with no `debugserver` (naming
+`xcode-select --install`), and a binary whose sidecar describes a different build.
+
+On arm64-macos the driver checks that the host's `debugserver` takes `--unmask-signals`, which is what lets a
+hardware fault reach the program's own handler; where an older one is found the driver says so on stderr, and
+`xcode-select --install` updates it.
 
 **Commands**, with their aliases: `break` (`b`) · `clear` · `run` (`r`) · `continue` (`c`) · `step` (`s`) ·
 `next` (`n`) · `finish` · `until` (`u`) · `backtrace` (`bt`, `where`) · `print` (`p`) · `locals` · `pause` ·
@@ -1180,12 +1186,17 @@ lives: every word that names one re-lists the roster first, and an id whose thre
   condition. One such instruction at a time may carry a condition.
 
 A `stop` carries a `reason`: `entry` before `main`, `breakpoint`, `step`, `pause`, `trap` and `fault`.
-`trap` is an `int3` the debugger did not plant — a stop like any other, with a register file and a stack to
-walk, which `continue` resumes past. `fault` is a hardware fault the program would otherwise panic on (an
-access violation, a stack overflow, an integer divide by zero or an integer overflow), stopped at the
-faulting instruction with a `fault` field naming it in the words its panic line uses; a fault inside
-library code is positioned at the program's own call into it. The faulting instruction would fault
-again, so a step from a fault stop is refused `fault-is-terminal`, and `continue` hands the fault to the
+`trap` is a trap instruction the debugger did not plant — a stop like any other, with a register file and a
+stack to walk, which `continue` resumes past. `fault` is a hardware fault the program would otherwise panic
+on (an access violation, a stack overflow, an integer divide by zero or an integer overflow), stopped at the
+faulting instruction with a `fault` field naming it in the words its panic line uses. On x64-linux,
+arm64-linux and arm64-macos the debugger also stops on a misaligned access, named `misaligned or invalid
+memory access`, and on an illegal instruction, named `illegal instruction`; a fault arrives on those three
+hosts as a signal number alone, so the field names `integer divide by zero` for both arithmetic faults and
+`nil pointer or invalid memory access` for both memory faults. Any other fault code a host reports is named
+`hardware fault` and that code. A fault inside library code is positioned at the program's own call into
+it. The faulting instruction would fault again, so a step from a fault stop is refused
+`fault-is-terminal`, and `continue` hands the fault to the
 runtime, which ends the program with the same panic line, backtrace and exit code it has undebugged,
 reported as a `crash`. A stop also carries the `machine` (the OS thread id that took it), its `thread`
 id when a green thread was running, and its `function` when its position lies in one.
@@ -1303,6 +1314,28 @@ name. Every address is computed against a fixed probe address, `0x1000`:
   word, with `none` for an absent base or index; and `overridden:form=<n>` an operand behind a segment
   or address-size prefix, whose word the classifier leaves unresolved (`form` 1 register, 2 memory,
   3 pc-relative).
+
+A leading **`arm64:`** reads the whole list as arm64 instructions, against the same probe address:
+
+```text
+$ maxon debug --classify=arm64:00008052,00000094,400000b4,00021fd6,fd7bbfa9,ea000054
+len=4 class=1 cond=none target=0x0 reg=none frame=none
+len=4 class=3 cond=none target=0x1000 reg=none frame=none
+len=4 class=5 cond=none target=0x1008 reg=0 frame=none
+len=4 class=8 cond=none target=0x0 reg=16 frame=none
+len=4 class=1 cond=none target=0x0 reg=none frame=opens-record
+len=4 class=5 cond=10 target=0x101c reg=none frame=none
+```
+
+Every instruction is four bytes, and the classes are the same numbers; arm64 control flow reaches 1, 3, 4,
+5, 6, 7 and 8.
+
+- `cond` is the condition code of a `b.<cond>`, and `none` on every other instruction.
+- `reg` is the register control leaves through on 7 and 8, and the register a compare-and-branch tests on
+  5; an instruction that names neither answers `none`.
+- `frame` is what the instruction does to the frame, which the stack unwinder reads: `opens-record` for an
+  `stp` that pre-indexes `sp`, `reserves` for a `sub sp, sp, #imm`, `stores-record` for an `stp` at an
+  offset from `sp`, `sets-pointer` for an `add x29, sp, #imm`, and `none` for anything else.
 
 **Sections** of `--dump-info` (with none named, all are printed):
 
@@ -1602,7 +1635,7 @@ Install **Maxon** from the
 or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client) (extension id
 `maxon-lang.maxon-lsp-client`). It activates in a workspace containing Maxon files and provides syntax
 highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting, the Compiler
-Explorer, a Test Explorer and, on x64-windows, debugging. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
+Explorer, a Test Explorer and, on every native target, debugging. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
 `.maxtest` test files are all Maxon documents, served by the language server.
 
 **Finding the compiler.** The extension runs `maxon lsp-server` from the first compiler it finds:
@@ -1655,7 +1688,7 @@ tests in `specs/*.md` and runs them with the checkout's own compiler
 (`maxon-bin/.maxon/maxon spec-test --filter=…`).
 
 **Debugging.** The extension contributes a `maxon` debugger whose adapter is
-[`maxon dap-server`](#maxon-dap-server), run from the compiler it found, on x64-windows. **F5** works
+[`maxon dap-server`](#maxon-dap-server), run from the compiler it found, on every native target. **F5** works
 without a `launch.json`: a configuration without `program` debugs the active editor's `.maxon` file, or
 else the workspace folder when it holds a `.maxproj` file. A source file or project is built with debug info
 into the host's Maxon cache first. The Test Explorer's **Debug Test** builds each touched project's tests
@@ -1880,7 +1913,7 @@ maxon dap-server
 
 Speaks the Debug Adapter Protocol over stdin and stdout, with the same `Content-Length` framing as
 `maxon lsp-server`. An option or an argument after the command word is refused with exit 1. It drives
-the same debugger as [`maxon debug`](#maxon-debug), so it debugs x64-windows programs only; the VS Code
+the same debugger as [`maxon debug`](#maxon-debug), so it serves the same hosts; the VS Code
 extension runs it as its debug adapter.
 
 **Requests:** `initialize`, `launch`, `setBreakpoints`, `setFunctionBreakpoints`, `configurationDone`,
@@ -1996,8 +2029,10 @@ differences a program can meet are:
 - **x64-windows needs Windows 8 or later**: its executables read the wall clock through
   `GetSystemTimePreciseAsFileTime`.
 - **`maxon profile`** runs only on x64-windows. Elsewhere it is refused.
-- **The interactive debugger** — `maxon debug`, `maxon dap-server` and the MCP `debug_*` tools — debugs
-  x64-windows programs only, because that is the one host whose debug interface this build drives.
+- **The interactive debugger** — `maxon debug`, `maxon dap-server` and the MCP `debug_*` tools — debugs a
+  program built for the host's own native target, through that host's debug interface: a debug port on
+  x64-windows, `ptrace` on x64-linux and arm64-linux, and Apple's `debugserver` on arm64-macos, where a
+  host without the Xcode command line tools is refused.
 - On the Linux targets, host-name resolution for sockets is built in and simple: `A` records only, the
   first nameserver in `/etc/resolv.conf`, no search domains and no CNAME following.
 
@@ -2264,7 +2299,8 @@ Every `debug_*` tool answers `{"state": "stopped" | "running" | "ended" | "none"
 the previous call. A tool other than `debug_start` called with no live session is an error naming
 `debug_start`.
 
-The debugger drives `x64-windows` programs only. `debug_stop` ends the debuggee.
+The debugger drives a program built for the host's own native target — `x64-windows`, `x64-linux`,
+`arm64-linux` or `arm64-macos`. `debug_stop` ends the debuggee.
 
 #### `debug_start`
 

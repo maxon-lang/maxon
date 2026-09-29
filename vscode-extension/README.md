@@ -27,7 +27,7 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 - **Code formatting**: the language server's formatter, applied on save by default
 - **Compiler Explorer**: View the Target IR the compiler lowers a program to
 - **Test Explorer**: Discover the `test` declarations in your `*.maxtest` files and run them with `maxon test`
-- **Debugging** (x64-windows): F5 on a `.maxon` file, breakpoints in the gutter, the Variables and Call
+- **Debugging** (x64-windows, x64-linux, arm64-linux, arm64-macos): F5 on a `.maxon` file, breakpoints in the gutter, the Variables and Call
   Stack panes, stepping and Pause, through the compiler's own `maxon dap-server`
 
 The language features come from the Maxon compiler itself, which serves the Language Server
@@ -238,8 +238,10 @@ The extension contributes a **Maxon** debugger. The debug adapter is the compile
 [Finding the compiler](#finding-the-compiler)), run as `maxon dap-server`, so the compiler is the whole
 debugger.
 
-⚠ **x64-windows programs.** The debugger debugs x64-windows programs, and `maxon dap-server` refuses a
-program built for any other target, naming the one it debugs.
+⚠ **Native programs.** The debugger debugs a program built for the host's own native target — x64-windows,
+x64-linux, arm64-linux or arm64-macos — and `maxon dap-server` refuses a program built for a target other
+than the host's, naming both. On arm64-macos it drives the program through Apple's `debugserver`, so a host
+without the Xcode command line tools is refused.
 
 ### Starting a session
 

@@ -1,0 +1,21 @@
+// Test: error.a-method-of-a-generic-type-declares-its-own-type-parameter
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function pair(other U) uses U returns String
+		return "{other}"
+	end 'pair'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	print("{b.pair(2)}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:9:11: Unsupported: a method of the generic type 'Box' declaring type parameters of its own — declare it as a `static function` or on a type with no `uses` list

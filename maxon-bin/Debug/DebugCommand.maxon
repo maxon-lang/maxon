@@ -48,7 +48,7 @@ let MachoTextSegmentName = "__TEXT"
 let MachoTextSectionName = "__text"
 
 module let HexOffsetPrefix = "0x"
-let HexBase = 16
+module let HexBase = 16
 module let DecimalBase = 10
 
 // Column widths of the dump. A name longer than its column widens its row rather than being truncated.
@@ -82,7 +82,7 @@ typealias OffsetAccumulator = int(0 to u64.max)
 let MaxCodeOffset = u32.max as OffsetAccumulator
 
 // One digit's value in the widest base read here.
-typealias DigitValue = int(0 to 15)
+module typealias DigitValue = int(0 to 15)
 
 // How many leading characters of a token are its base prefix rather than digits.
 module typealias PrefixLength = int(0 to u32.max)
@@ -96,7 +96,7 @@ end 'OffsetParse'
 
 // Whether one character was a digit in the base being read. Its own union rather than `OffsetParse`,
 // because a digit is not an offset and a union that carried both would let one be returned for the other.
-union DigitParse
+module union DigitParse
 	valid(digit DigitValue)
 	invalid
 end 'DigitParse'
@@ -129,7 +129,7 @@ function printDebugUsage()
 	printError("Usage: maxon debug <exe> [{DebugTraceOption}] [{StopTimeoutOptionPrefix}<seconds>] [{TargetEnvOptionPrefix}NAME=VALUE]... [{ProgramArgumentsSeparator} <program args>...]\n")
 	printError("       maxon debug {BatchOption} {CommandsOptionPrefix}<cmd;cmd;...|@file> <exe> [same options]\n")
 	printError("       maxon debug {CompleteOptionPrefix}<partial line> <exe>\n")
-	printError("       maxon debug {ClassifyOptionPrefix}<hex>[,<hex>...]\n")
+	printError("       maxon debug {ClassifyOptionPrefix}[{ClassifyArm64CpuPrefix}]<hex>[,<hex>...]\n")
 	printError("       maxon debug {DumpInfoOption} <exe|.mxdbg> [{dumpSectionNames()}]\n")
 	printError("       maxon debug {SymbolizeOption} <exe|.mxdbg> <codeOffset...>\n")
 end 'printDebugUsage'
@@ -179,10 +179,21 @@ module union DebugImageCheck
 end 'DebugImageCheck'
 
 let ClassifySequenceSeparator = ","
-let ClassifyProbeAddress = 0x1000 as X64Address
+let ClassifyProbeAddress = 0x1000 as DecodedAddress
+let ClassifyArm64ProbeAddress = 0x1000 as DecodedAddress
 let HexDigitsPerByte = 2
 
+typealias ClassificationPrinter = function(ByteArray)
+
 function runClassify(spelling String) returns ExitCode
+	if spelling.startsWith(ClassifyArm64CpuPrefix) 'theOtherCpu'
+		return runClassifySequences(spelling.replaceFirst(ClassifyArm64CpuPrefix, with: ""), classified: printArm64Classification)
+	end 'theOtherCpu'
+
+	return runClassifySequences(spelling, classified: printClassification)
+end 'runClassify'
+
+function runClassifySequences(spelling String, classified ClassificationPrinter) returns ExitCode
 	if spelling.isEmpty() 'nothingToClassify'
 		printError("maxon debug {ClassifyOptionPrefix} needs one or more comma-separated hex byte sequences.\n")
 
@@ -192,12 +203,12 @@ function runClassify(spelling String) returns ExitCode
 	for sequence in spelling.split(ClassifySequenceSeparator) 'eachSequence'
 		match hexByteSequence(sequence.trim()) 'read'
 			notHex(text) then return refuseDebugCommand("'{text}' is not a sequence of hex byte pairs")
-			bytes(code) then printClassification(code)
+			bytes(code) then classified(code)
 		end 'read'
 	end 'eachSequence'
 
 	return SucceededExit
-end 'runClassify'
+end 'runClassifySequences'
 
 union HexByteRead
 	bytes(code ByteArray)
@@ -251,6 +262,13 @@ function spelledClassOperand(instruction X64Instruction) returns String
 
 	return ""
 end 'spelledClassOperand'
+
+function printArm64Classification(code ByteArray)
+	match decodeArm64Instruction(code, at: 0, address: ClassifyArm64ProbeAddress) 'classified'
+		unclassified then print("{DebugUnclassifiedReason}\n")
+		decoded(instruction) then print("len={instruction.length} class={instruction.instructionClass} cond={instruction.condition.spelled()} target={instruction.target.spelled()} reg={instruction.controlRegister.spelled()} frame={arm64FrameStepAt(code, at: 0).spelled()}\n")
+	end 'classified'
+end 'printArm64Classification'
 
 function runDebugger(args MaxonArgs) returns ExitCode
 	match parsedDebuggerRequest(args) 'asked'
@@ -999,7 +1017,7 @@ module function parseDigits(text String, skipping PrefixLength, base ParsedCodeO
 	return OffsetParse.valid(value as ParsedCodeOffset)
 end 'parseDigits'
 
-function digitValue(c Character, base ParsedCodeOffset) returns DigitParse
+module function digitValue(c Character, base ParsedCodeOffset) returns DigitParse
 	let code = try c.asciiValue() otherwise return DigitParse.invalid
 
 	match decodedDigit(code) 'decoded'

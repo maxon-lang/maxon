@@ -1,0 +1,34 @@
+// Test: a-shift-past-a-narrower-unsigned-ceiling-is-still-refused
+typealias Mask = int(0 to 65535)
+
+function shifted(value Mask, by Mask) returns Mask
+	return value shl by
+end 'shifted'
+
+function main() returns ExitCode
+	print("{shifted(1, by: 20)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-shift-past-a-narrower-unsigned-ceiling-is-still-refused.test:5: Range check failed: value outside typealias 'Mask'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

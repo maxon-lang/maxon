@@ -1,13 +1,49 @@
 export typealias BackendRegisterNumber = int(0 to 79) implements ElementIndex
 
 export let BackendRegisterSlots = 80
-export let BackendGprSlots = 16
-export let BackendVectorSlots = 16
 
-let BackendRegSlotSp = 4
-let BackendRegSlotFp = 5
-export let BackendRegSlotFlags = 32
-export let BackendRegSlotPc = 72
+#if arch(arm64)
+	export let BackendGprSlots = 31
+	export let BackendVectorSlots = 32
+
+	module let BackendRegSlotSp = 63
+	module let BackendRegSlotFp = 29
+	export let BackendRegSlotFlags = 64
+	export let BackendRegSlotPc = 65
+	export let BackendRegSlotLink = 30
+#endif
+
+#if not arch(arm64)
+	export let BackendGprSlots = 16
+	export let BackendVectorSlots = 16
+
+	module let BackendRegSlotSp = 4
+	let BackendRegSlotFp = 5
+	export let BackendRegSlotFlags = 32
+	export let BackendRegSlotPc = 72
+#endif
+
+export function requireRegisterSlotsAreTheCompilersOwn()
+	#if arch(arm64)
+		let file = arm64RegisterFile()
+	#endif
+
+	#if not arch(arm64)
+		let file = x64RegisterFile()
+	#endif
+
+	if (file.firstVector as BackendRegisterNumber) != (BackendGprSlots as BackendRegisterNumber) 'aBoundaryThatIsNotTheCompilersOwn'
+		panic("DebugRegisterFile: this file numbers its vector slots from {BackendGprSlots} and the compiler numbers this CPU's from {file.firstVector} — a local the sidecar records by register number would be read out of the wrong slot")
+	end 'aBoundaryThatIsNotTheCompilersOwn'
+
+	if BackendGprSlots + BackendVectorSlots > BackendRegisterSlots 'moreRegistersThanSlots'
+		panic("DebugRegisterFile: {BackendGprSlots} general and {BackendVectorSlots} vector registers do not fit the {BackendRegisterSlots} slots this file holds")
+	end 'moreRegistersThanSlots'
+
+	if BackendRegSlotFlags < BackendGprSlots + BackendVectorSlots or BackendRegSlotPc < BackendGprSlots + BackendVectorSlots 'aNamedSlotInsideTheNumberedBand'
+		panic("DebugRegisterFile: the status word at {BackendRegSlotFlags} or the program counter at {BackendRegSlotPc} lies inside the {BackendGprSlots + BackendVectorSlots} slots the compiler's register numbers claim, neither of which the allocator ever colours")
+	end 'aNamedSlotInsideTheNumberedBand'
+end 'requireRegisterSlotsAreTheCompilersOwn'
 
 export union BackendRegisterRead
 	read(file DebugRegisterFile)
@@ -38,14 +74,14 @@ export type DebugRegisterFile
 	end 'setValue'
 
 	export function programCounter() returns DebugAddress
-		return debugAddressOrZero(self.valueOf(BackendRegSlotPc as BackendRegisterNumber) as DebugWord)
+		return debugAddressOrZero(self.valueOf(BackendRegSlotPc as BackendRegisterNumber) as DebuggeeWord)
 	end 'programCounter'
 
 	export function stackPointer() returns DebugAddress
-		return debugAddressOrZero(self.valueOf(BackendRegSlotSp as BackendRegisterNumber) as DebugWord)
+		return debugAddressOrZero(self.valueOf(BackendRegSlotSp as BackendRegisterNumber) as DebuggeeWord)
 	end 'stackPointer'
 
 	export function framePointer() returns DebugAddress
-		return debugAddressOrZero(self.valueOf(BackendRegSlotFp as BackendRegisterNumber) as DebugWord)
+		return debugAddressOrZero(self.valueOf(BackendRegSlotFp as BackendRegisterNumber) as DebuggeeWord)
 	end 'framePointer'
 end 'DebugRegisterFile'

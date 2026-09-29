@@ -1,0 +1,160 @@
+// Test: a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics
+typealias Count = int(0 to u64.max)
+
+interface Shower
+	function show(c Count) returns Count
+end 'Shower'
+
+type Plain
+	export var tag as Count
+
+	static function create() returns Plain
+		return Self{tag: 0}
+	end 'create'
+end 'Plain'
+
+extension Plain implements Shower
+	function show(c Count) returns Count
+		return c + self.tag
+	end 'show'
+end 'Plain'
+
+function drive(s Shower) returns ExitCode
+	for i in -2 upto 1 'each'
+		print("{s.show(i)}\n")
+	end 'each'
+	return 0
+end 'drive'
+
+function main() returns ExitCode
+	return drive(Plain.create())
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @Plain.show {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg r8, rdx, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics.test:17: Range check failed: value outside typealias 'Count'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+  __il_body#2:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#1:
+    x64.leaRegRdata rbx, [rip + __witness_Plain.Shower]
+  __il_body#4:
+    x64.movRegImm rdx, 18446744073709551614
+    x64.jmp forhdr
+  each:
+    x64.movRegReg rcx, r12
+    x64.callMem [rbx + 48]
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot1, r14
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __uint_to_string
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rax, [rip + __str_rec_1]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegReg rax, r13, rax
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r13, r15, r13
+    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rdx, slot5
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, r13, rax
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot2
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_decref
+  __il_body#10:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __write_stdout
+  __il_cont#9:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+  forstep:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rdx, rax, 1
+  forhdr:
+    x64.storeSlotReg slot0, rdx
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc less, each
+  forexit:
+    x64.movRegImm32 rbx, 0
+  __il_cont#3:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

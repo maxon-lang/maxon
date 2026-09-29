@@ -1,0 +1,39 @@
+// Test: error.a-bare-read-of-end-in-a-first-method-is-the-only-diagnostic
+// --- file: span.maxon
+module type Span
+	var start as BytePos
+
+	module static function create(start BytePos) returns Span
+		return Span{start: start}
+	end 'create'
+
+	module function endsBefore(position BytePos, end BytePos) returns bool
+		return position < end and start < end
+	end 'endsBefore'
+
+	module function shifted(by BytePos) returns Span
+		let moved = Span.create(start + by)
+		return moved
+	end 'shifted'
+
+	module function width(to BytePos) returns BytePos
+		return to - start
+	end 'width'
+end 'Span'
+
+// --- file: types.maxon
+module typealias BytePos = int(0 to 1000)
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let span = Span.create(1).shifted(2)
+
+	if span.endsBefore(span.width(4), end: 5) 'found'
+		return 0
+	end 'found'
+
+	return 1
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:11:21: Unsupported: reading 'end' as a value here — it is a legal DECLARED name, but the token scans that re-derive Maxon's block structure read a bare `end` in this position as block structure and have no scope to tell them otherwise. Pass it under a different name, or read a differently-named binding

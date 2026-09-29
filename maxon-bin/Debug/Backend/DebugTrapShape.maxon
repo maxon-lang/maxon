@@ -1,0 +1,82 @@
+typealias TrapRewindBytes = int(0 to 4)
+
+let X64Int3 = 0xCC as Byte
+
+let Arm64Brk0FirstByte = 0x00 as Byte
+let Arm64Brk0SecondByte = 0x00 as Byte
+let Arm64Brk0ThirdByte = 0x20 as Byte
+let Arm64Brk0FourthByte = 0xD4 as Byte
+
+export type DebugTrapShape
+	export let instruction as ByteArray
+	export let programCounterMovesPast as bool
+
+	static function create(instruction ByteArray, programCounterMovesPast bool) returns DebugTrapShape
+		return Self{instruction: instruction, programCounterMovesPast: programCounterMovesPast}
+	end 'create'
+
+	export function bytes() returns BackendByteCount
+		return self.instruction.count() as BackendByteCount
+	end 'bytes'
+
+	function rewind() returns TrapRewindBytes
+		if not self.programCounterMovesPast 'itStopsAtTheTrap'
+			return 0
+		end 'itStopsAtTheTrap'
+
+		return self.instruction.count() as TrapRewindBytes
+	end 'rewind'
+
+	static function x64() returns DebugTrapShape
+		var trap = ByteArray.create()
+		trap.push(X64Int3)
+
+		return DebugTrapShape.create(trap, programCounterMovesPast: not hostReportsTheTrapsOwnAddress())
+	end 'x64'
+
+	static function arm64() returns DebugTrapShape
+		var trap = ByteArray.create()
+		trap.push(Arm64Brk0FirstByte)
+		trap.push(Arm64Brk0SecondByte)
+		trap.push(Arm64Brk0ThirdByte)
+		trap.push(Arm64Brk0FourthByte)
+
+		return DebugTrapShape.create(trap, programCounterMovesPast: false)
+	end 'arm64'
+end 'DebugTrapShape'
+
+function hostReportsTheTrapsOwnAddress() returns bool
+	#if os(Windows)
+		let reported = true
+	#endif
+
+	#if not os(Windows)
+		let reported = false
+	#endif
+
+	return reported
+end 'hostReportsTheTrapsOwnAddress'
+
+export function hostTrapShape() returns DebugTrapShape
+	#if arch(x64)
+		return DebugTrapShape.x64()
+	#endif
+
+	#if arch(arm64)
+		return DebugTrapShape.arm64()
+	#endif
+
+	#if not arch(x64) and not arch(arm64)
+		panic("hostTrapShape: this build's architecture has no breakpoint instruction in this file, and `backendForHost` serves no debug session on it — a session that reached here was vouched by a triple `DebugTrapShape` does not name")
+	#endif
+end 'hostTrapShape'
+
+export function atTheTrap(pc DebugAddress) returns DebugAddress
+	let rewind = hostTrapShape().rewind() as DebugAddress
+
+	if pc < rewind 'theTrapIsAtTheReportedAddress'
+		return pc
+	end 'theTrapIsAtTheReportedAddress'
+
+	return pc - rewind
+end 'atTheTrap'

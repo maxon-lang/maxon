@@ -1,0 +1,42 @@
+// Test: range-check-panic.error.literal-argument-through-interface
+typealias ByteCount = int(1 to 8)
+typealias Address = int(0 to 4096)
+
+interface Backend
+  function readMemory(address Address, bytes ByteCount) returns ByteCount
+end 'Backend'
+
+type Ram implements Backend
+  let base as Address
+
+  static function create() returns Self
+    return Self{base: 0}
+  end 'create'
+
+  function readMemory(address Address, bytes ByteCount) returns ByteCount
+    if address == self.base 'start'
+      return bytes
+    end 'start'
+    return 1
+  end 'readMemory'
+end 'Ram'
+
+type Debugger
+  let backend as Backend
+
+  static function create() returns Self
+    return Self{backend: Ram.create()}
+  end 'create'
+
+  function readWide(address Address) returns ByteCount
+    return self.backend.readMemory(address, bytes: 9)
+  end 'readWide'
+end 'Debugger'
+
+function main() returns ExitCode
+  let debugger = Debugger.create()
+  return debugger.readWide(0)
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:32:25: Value 9 is outside the range of 'ByteCount' (int(1 to 8))

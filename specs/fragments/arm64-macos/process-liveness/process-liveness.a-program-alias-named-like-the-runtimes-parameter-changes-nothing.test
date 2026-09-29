@@ -1,0 +1,28 @@
+// Test: process-liveness.a-program-alias-named-like-the-runtimes-parameter-changes-nothing
+typealias ProbeWord = int(0 to 10)
+
+function main() returns ExitCode
+	let small = 7 as ProbeWord
+	if __Builtins.processIsAlive(__Builtins.currentProcessId()) 'alive'
+		return (small - 4) as ExitCode
+	end 'alive'
+	return 1
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl __proc_pid
+    arm64.bl __proc_alive
+    arm64.cbz x0, ifcont
+  __rc_ok:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -234,6 +234,9 @@ let Arm64LinuxSyscallExecve = 221
 let Arm64LinuxSyscallWait4 = 260
 let Arm64LinuxSyscallFchdir = 50
 
+let Arm64LinuxSyscallPtrace = 117
+let Arm64LinuxSyscallProcessVmReadv = 270
+
 // --- The SOCKET band's syscalls ---
 //
 // ⚠ **MEASURED ON THIS LANE, not transcribed, and END TO END**: a probe on an aarch64 Ubuntu guest called
@@ -2615,6 +2618,19 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(groupReady)
 
+	let untraced = asm.newLabel()
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotFlags)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: DebugOnlyThisProcess as MachineWord)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x4, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: untraced)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxPtraceTraceMe as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallPtrace)
+
+	asm.placeLabel(untraced)
+
 	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of an `fchdir`. One that fails —
 	// a directory the parent could open but may not enter — is reported down the status pipe as the working
 	// directory's step, like a failed `execve` otherwise.
@@ -2831,6 +2847,143 @@ end 'buildArm64LinuxShmUnlinkChunk'
 //
 // ⚠ **`usesChildPipes` APPEARS IN FIVE GATES HERE.** The facility is provided on this lane, the bit asks
 // *"does this module read a pipe?"*, and this lane opens one.
+// ==========================================================================
+// THE PROCESS-TRACE BAND
+// ==========================================================================
+
+function buildArm64LinuxTraceRequestChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallPtrace)
+	arm64LinuxEmitWin32BoolFromSyscall(asm)
+
+	return asm.finishFunction(HostTraceRequestName)
+end 'buildArm64LinuxTraceRequestChunk'
+
+function buildArm64LinuxTraceeReadChunk() returns FunctionCodeChunk
+	let SlotBytes = 0 as StackSize
+	let SlotOut = 1 as StackSize
+	let SlotLocalIov = 2 as StackSize
+	let SlotRemoteIov = SlotLocalIov + LinuxIovecSlots
+	var asm = Arm64RuntimeAsm.beginFunction(SlotRemoteIov + LinuxIovecSlots)
+
+	let shortRead = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotBytes)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotOut)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotLocalIov)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotLocalIov + 1)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotRemoteIov)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotRemoteIov + 1)
+
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotLocalIov)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxOneIovec as MachineWord)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: SlotRemoteIov)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxOneIovec as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: LinuxVmReadNoFlags as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallProcessVmReadv)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBytes)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: shortRead)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOut)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(shortRead)
+	arm64LinuxEmitStashErrno(asm)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOut)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostTraceeReadName)
+end 'buildArm64LinuxTraceeReadChunk'
+
+function buildArm64LinuxAwaitTraceeChunk() returns FunctionCodeChunk
+	let SlotStatusOut = 0 as StackSize
+	let SlotBudget = 1 as StackSize
+	let SlotPid = 2 as StackSize
+	let SlotTsSec = 3 as StackSize
+	let SlotTsNsec = 4 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(5)
+
+	let poll = asm.newLabel()
+	let anyChild = asm.newLabel()
+	let selected = asm.newLabel()
+	let waitFailed = asm.newLabel()
+	let answered = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatusOut)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBudget)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotPid)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxAwaitOneSliceMs as MachineWord)
+	arm64PosixToTimespec(asm, amount: Arm64Register.x0, unit: PosixTimeUnit.milliseconds, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
+
+	asm.placeLabel(poll)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPid)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: anyChild)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x1, rhs: Arm64Register.x0)
+	arm64EmitBranchTo(asm, label: selected)
+
+	asm.placeLabel(anyChild)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxWaitAnyChild as MachineWord)
+
+	asm.placeLabel(selected)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotStatusOut)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: (LinuxWaitAllClones + LinuxWaitNoHang) as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxWaitNoResourceUsage as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallWait4)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: waitFailed)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: answered)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBudget)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: answered)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxAwaitOneSliceMs as MachineWord)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBudget)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxClockMonotonic as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxSleepIsRelative as MachineWord)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: SlotTsSec)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxSleepDiscardsRemainder as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClockNanosleep)
+	arm64EmitBranchTo(asm, label: poll)
+
+	asm.placeLabel(waitFailed)
+	arm64LinuxEmitStashErrno(asm)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostAwaitTraceeName)
+end 'buildArm64LinuxAwaitTraceeChunk'
+
+function buildArm64LinuxThreadSignalChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallTgkill)
+	arm64LinuxEmitWin32BoolFromSyscall(asm)
+
+	return asm.finishFunction(HostThreadSignalName)
+end 'buildArm64LinuxThreadSignalChunk'
+
+function buildArm64LinuxProcessSignalChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallKill)
+	arm64LinuxEmitWin32BoolFromSyscall(asm)
+
+	return asm.finishFunction(HostProcessSignalName)
+end 'buildArm64LinuxProcessSignalChunk'
+
 export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
 	assertLinuxSearchGeometry()
 
@@ -2872,6 +3025,14 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	if usage.usesTerminalDetection 'terminalDetection'
 		chunks.push(buildArm64LinuxHandleFileTypeChunk())
 	end 'terminalDetection'
+
+	if usage.usesProcessDebug 'processTrace'
+		chunks.push(buildArm64LinuxTraceRequestChunk())
+		chunks.push(buildArm64LinuxTraceeReadChunk())
+		chunks.push(buildArm64LinuxAwaitTraceeChunk())
+		chunks.push(buildArm64LinuxThreadSignalChunk())
+		chunks.push(buildArm64LinuxProcessSignalChunk())
+	end 'processTrace'
 
 	if usage.usesProcessLiveness 'processLiveness'
 		chunks.push(buildArm64PosixProcProbeChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill)))

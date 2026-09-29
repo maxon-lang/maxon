@@ -1,0 +1,27 @@
+// Test: error.throws-service-message-can-never-throw
+enum Failure implements Error
+	broken
+end 'Failure'
+
+typealias Integer = int(i64.min to i64.max)
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function wipe() throws Failure
+		self.n = 0
+	end 'wipe'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	h.wipe()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3168: <fragment>:15:18: 'throws Failure' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause

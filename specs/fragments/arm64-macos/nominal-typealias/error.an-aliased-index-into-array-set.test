@@ -1,0 +1,16 @@
+// Test: error.an-aliased-index-into-array-set
+typealias Offset = int(0 to u64.max)
+typealias Row = int(0 to 1000)
+typealias RowArray = Array with Row
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	rows.push(4)
+	let o = 0 as Offset
+	try rows.set(o, value: 7) otherwise panic("the row exists")
+	print("{rows.count()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:10:11: argument type mismatch for 'index': expected 'ElementIndex', got 'Offset'

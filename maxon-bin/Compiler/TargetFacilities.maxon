@@ -201,9 +201,10 @@ export enum HostFacility
 	// wrong answer a profiler can give. The table is keyed on a whole `Target` precisely so this can be said.
 	processSampling
 
-	// ⭐⭐ **DRIVING ANOTHER PROCESS FROM OUTSIDE IT — the debug port its stops arrive on, its memory, and
-	// its threads' register files (`StdOp.osHostProcess`, `Compiler/Runtime/DebugHostRuntime.maxon`).** The
-	// row above's CPU argument binds here word for word: a stop's register file is the same x64 `CONTEXT`.
+	// ⭐⭐ **DRIVING ANOTHER PROCESS FROM OUTSIDE IT — the channel its stops arrive on, its memory, and its
+	// threads' register files (`StdOp.osHostProcess`, `Compiler/Runtime/DebugHostRuntime.maxon`).** The row
+	// above's CPU argument binds here too: a stop's register file is a fixed per-CPU record, so the row is
+	// about a CPU as well as an OS even where the mechanism is not a debug port.
 	processDebug
 end 'HostFacility'
 
@@ -446,6 +447,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.sharedMemory)
 	end 'sharedMemoryBand'
 
+	if isHostScratchRuntimeCallee(callee) 'theScratchRegion'
+		return CalleeFacility.needs(HostFacility.pageMemory)
+	end 'theScratchRegion'
+
 	if isProfileRuntimeCallee(callee) 'processSamplingBand'
 		return CalleeFacility.needs(HostFacility.processSampling)
 	end 'processSamplingBand'
@@ -559,12 +564,10 @@ end 'calleeHasHostFacility'
 // Read as *"target T provides facility F"*, and written by the backend that made it true. x64-windows is
 // the one FULL row — it provides every facility, so its block answers `true` without asking which.
 //
-// ⚠ The three POSIX lanes, arm64-macOS, arm64-linux and x64-linux, provide every facility but
-// `processSampling` and `processDebug`, each `true` a landed family with real lowerings behind it:
-// libSystem imports on macOS, raw syscalls on the two static Linux images. Both of the two `false`
-// rows are the same missing mechanism: reading another thread's or another process's register file
-// as an x64 `CONTEXT`, which none of them has (see each row). A premature `true` is worse than a
-// `false`; this file's header says why.
+// ⚠ The three POSIX lanes, arm64-macOS, arm64-linux and x64-linux, provide every facility their row
+// does not withhold, each `true` a landed family with real lowerings behind it: libSystem imports on
+// macOS, raw syscalls on the two static Linux images. A premature `true` is worse than a `false`;
+// this file's header says why.
 //
 // ⚠ **wasm32-wasi PROVIDES ONLY `pageMemory` AND `hostMutex`, AND SOME OF ITS `false`s ARE PERMANENT.** WASI
 // has no process-spawn primitive and no per-thread CPU clock at all, so `subprocess` and `threadCpuClock`
@@ -694,12 +697,9 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				sharedMemory or
 				uptimeClock gives true
 
-			// ⛔ `processSampling` and `processDebug`: the arm64-macOS row's reason, plus this lane's own:
-			// `ptrace` and `process_vm_readv` are a different mechanism from both a suspend-and-read loop and
-			// a debug port, and the register file they answer is AArch64's rather than the x64 `CONTEXT` both
-			// decoders read.
-			processSampling or
-				processDebug gives false
+			processDebug gives true
+
+			processSampling gives false
 		end 'f'
 	end 'linuxArm64'
 
@@ -753,12 +753,9 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				sharedMemory or
 				uptimeClock gives true
 
-			// ⛔ `processSampling` and `processDebug`: the CPU matches and the mechanism does not. The x64
-			// `CONTEXT` decoders would port, but neither primitive exists here: Linux has no
-			// suspend-and-read-context call to lower `osHostProcess` onto and no debug port to wait a
-			// debuggee's stops on. Both are `ptrace` with a stop protocol, which is a different shape.
-			processSampling or
-				processDebug gives false
+			processDebug gives true
+
+			processSampling gives false
 		end 'f'
 	end 'linuxX64'
 

@@ -1,0 +1,21 @@
+// Test: error.an-inferred-element-index-is-nominal
+typealias Row = int(0 to 100)
+typealias RowArray = Array with Row
+
+function same(a T, b T) uses T returns T where T is Equatable
+	return a
+end 'same'
+
+function takesRow(r Row) returns Row
+	return r
+end 'takesRow'
+
+function main() returns ExitCode
+	var rows = RowArray.create()
+	rows.push(1)
+	print("{takesRow(same(rows.count(), b: 3))}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:16:10: argument type mismatch for 'r': expected 'Row', got 'ElementIndex'

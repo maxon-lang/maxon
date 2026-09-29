@@ -1,0 +1,768 @@
+// Test: socket-inheritance.a-connected-socket-closes-while-a-spawned-child-lives
+typealias StringArray = Array with String
+
+let ChildLifetimeMs = 3000
+let PromptEndMs = 1500
+
+function sleepingChild() returns ExitCode
+	sleep(ChildLifetimeMs)
+	return 0
+end 'sleepingChild'
+
+function closesOnSignal(port NetworkPort) returns bool
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
+	let signal = try client.recv(1) otherwise return false
+	client.close()
+
+	return signal == "!"
+end 'closesOnSignal'
+
+function readsItsEndPromptly(conn TcpClient) returns bool
+	let started = Clock.nowMs()
+	let heard = try conn.recv(64) otherwise (e) 'ended'
+		return e == NetworkError.connectionClosed and Clock.elapsedMs(started) < PromptEndMs
+	end 'ended'
+
+	print("unexpected bytes '{heard}'\n")
+	return false
+end 'readsItsEndPromptly'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return sleepingChild()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 3
+	let closer = async closesOnSignal(listener.port())
+	let conn = try listener.accept() otherwise return 4
+
+	var argv = StringArray.create()
+	argv.push("child")
+	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise return 5
+	_ = try conn.send("!") otherwise return 6
+
+	let endedPromptly = readsItsEndPromptly(conn)
+	let signalled = await closer
+	let code = try child.wait() otherwise return 7
+	child.release()
+
+	print("signalled={signalled} ended-promptly={endedPromptly} child={code}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_allg@8 = i64 0
+  __gt_allglen@16 = i64 0
+  __gt_allgcap@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_trace_counter@96 = i64 0
+  __gt_live_count@104 = i64 0
+  __gt_seed_bytes@112 = i64 2048
+  __gt_stack_bytes_sum@120 = i64 0
+  __gt_stack_bytes_count@128 = i64 0
+  __gt_seed_sum_seen@136 = i64 0
+  __gt_seed_count_seen@144 = i64 0
+  __gt_keeps_cpu_clock@152 = i64 0
+  __sched_active_workers@160 = i64 1
+  __sched_max_active_workers@168 = i64 1
+  __sched_tls_index@176 = i64 0
+  __sched_tls_teb_offset@184 = i64 0
+  __sched_procs@192 = i64 0
+  __sched_allm@200 = i64 0
+  __sched_async_preempt_off@208 = i64 0
+  __sched_midle@216 = i64 0
+  __sched_pidle@224 = i64 0
+  __gt_gfree_head@232 = i64 0
+  __sched_arena_cursor@240 = i64 0
+  __sched_arena_limit@248 = i64 0
+  __gt_records_carved@256 = i64 0
+  __sched_npidle@264 = i64 0
+  __sched_runq_size@272 = i64 0
+  __sched_global_pushes@280 = i64 0
+  __sched_timer_scan_steps@288 = i64 0
+  __sched_mcount@296 = i64 0
+  __sched_nmidle@304 = i64 0
+  __sched_main_m@312 = i64 0
+  __sched_phase@320 = i64 0
+  __sched_lastpoll@328 = i64 0
+  __sched_poll_until@336 = i64 0
+  __sched_regain_head@344 = i64 0
+  __np_poller@352 = i64 0
+  __np_break@360 = i64 0
+  __np_wake_sig@368 = i64 0
+  __np_pd_table@376 = i64 0
+  __np_pd_cap@384 = i64 0
+  __np_waiters@392 = i64 0
+  __sched_num_procs@400 = i64 0
+  __sched_shutdown_flag@408 = i64 0
+  __sched_lock@416 = i64 0
+  __sched_lock_depth_sink@424 = i64 0
+  __sched_nmspinning@432 = i64 0
+  __sched_needspinning@440 = i64 0
+  __sched_sysmon_event@448 = i64 0
+  __sched_sysmon_wait@456 = i64 0
+  __sched_timer_starts@464 = i64 0
+  __cl_argc@472 = i64 0
+  __cl_argv@480 = i64 0
+  __cl_empty_arg@488 = i64 0
+  __mrt_errno@496 = i64 0
+  __mrt_envp@504 = i64 0
+  __mrt_signal_stack_bytes@512 = i64 0
+  __mrt_tls_next_key@520 = i64 0
+  __io_pipe_seq@528 = i64 0
+  __subp_table@536 = i64 0
+  __subp_last_error@544 = i64 0
+  __slab_arena_list@552 = i64 0
+  __slab_arena_map_l1@560 = i64 0
+  __slab_state@568 = i64 0
+  __ms_wsa_started@576 = i64 0
+}
+
+func @closesOnSignal {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x1, x0
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x16, 65535
+    arm64.cmp x1, x16
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.leaRdata x0, __str_rec_62  ; "127.0.0.1"
+    arm64.bl TcpClient.connect
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr#2:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl TcpClient.recv
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body
+  tryerr#4:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __ms_close
+  __il_cont:
+    arm64.leaRdata x1, __str_rec_63  ; "!"
+    arm64.movRegReg x0, x20
+    arm64.bl __str_eq
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_219  ; "panic at socket-inheritance.a-connected-socket-closes-while-a-spawned-child-lives.test:12: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 240
+    arm64.storeSlotReg slot27, x28
+    arm64.storeSlotReg slot26, x27
+    arm64.storeSlotReg slot25, x26
+    arm64.storeSlotReg slot24, x25
+    arm64.storeSlotReg slot23, x24
+    arm64.storeSlotReg slot22, x23
+    arm64.storeSlotReg slot21, x22
+    arm64.storeSlotReg slot20, x21
+    arm64.storeSlotReg slot19, x20
+    arm64.storeSlotReg slot18, x19
+  __il_body#16:
+    arm64.bl __cl_count
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  loop:
+    arm64.movRegReg x0, x21
+    arm64.bl __cl_arg
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_retain
+    arm64.bl String.init
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_decref
+  forstep:
+    arm64.add x21, x21, 1
+  forhdr:
+    arm64.cmp x21, x19
+    arm64.b.lt loop
+  __il_cont#15:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x0, 1
+    arm64.cset x19, hi
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.cbz x19, ifcont#2
+  __il_body#33:
+    arm64.movImm x0, 3000
+  __il_body#35:
+    arm64.bl __gt_sleep
+  __il_cont#34:
+    arm64.movImm x0, 0
+  __il_cont#32:
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  ifcont#2:
+    arm64.bl Process.executablePath
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  tryok#3:
+    arm64.leaRdata x0, __str_rec_62  ; "127.0.0.1"
+    arm64.movImm x1, 0
+    arm64.bl TcpListener.bind
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#22
+  tryerr#6:
+    arm64.movImm x20, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  __il_body#22:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.bl __ml_port
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#23
+  tryerr#24:
+    arm64.leaRdata x0, __str_blob_133  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  tryok#23:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#26
+  __rc_chk:
+    arm64.movImm x16, 65535
+    arm64.cmp x21, x16
+    arm64.b.gt __rc_panic#26
+  __il_cont#21:
+    arm64.leaFuncAddr x0, closesOnSignal
+    arm64.bl __gt_spawn
+    arm64.movRegReg x22, x0
+    arm64.storeSlotReg slot7, x22
+    arm64.storeBaseDispReg.word64 [x22 + 200], x21
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x20
+    arm64.bl TcpListener.accept
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot2, x21
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#7
+  tryerr#8:
+    arm64.movImm x21, 4
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_promise_drop
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_TcpListener
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  tryok#7:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x23, x0
+    arm64.storeSlotReg slot3, x23
+    arm64.leaRdata x0, __str_rec_66  ; "child"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_push
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_own
+    arm64.storeBaseDispReg.word64 [x24 + 8], x0
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x23
+    arm64.bl StreamingSubprocess.spawn
+    arm64.movRegReg x25, x0
+    arm64.storeSlotReg slot4, x25
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#9
+  tryerr#10:
+    arm64.movImm x25, 5
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x24
+    arm64.bl __destruct_Executable
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_promise_drop
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_TcpListener
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x25
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  tryok#9:
+    arm64.movRegReg x0, x24
+    arm64.bl __destruct_Executable
+    arm64.leaRdata x1, __str_rec_63  ; "!"
+    arm64.movRegReg x0, x21
+    arm64.bl TcpClient.send
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#37
+  tryerr#12:
+    arm64.movImm x24, 6
+    arm64.movRegReg x0, x25
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x22
+    arm64.bl __gt_promise_drop
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_TcpListener
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x24
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  __il_body#37:
+    arm64.bl Clock.nowMs
+    arm64.movRegReg x22, x0
+    arm64.movImm x1, 64
+    arm64.movRegReg x0, x21
+    arm64.bl TcpClient.recv
+    arm64.storeSlotReg slot9, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#38
+  tryerr#39:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 4
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge
+  __il_body#43:
+    arm64.bl Clock.nowMs
+    arm64.cmp x0, x22
+    arm64.b.hs ifcont#45
+  clockSkew:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#42
+  ifcont#45:
+    arm64.sub x1, x0, x22
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x2, x0, x16
+    arm64.and x2, x2, x22
+    arm64.eor x0, x0, x22
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x0, x0, x16
+    arm64.and x0, x0, x1
+    arm64.orr x0, x2, x0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#47
+  __rc_ok:
+    arm64.movRegReg x0, x1
+  __il_cont#42:
+    arm64.cmp x0, 1500
+    arm64.cset x0, lo
+  scmerge:
+    arm64.movRegReg x22, x0
+    arm64.b __il_cont#36
+  tryok#38:
+    arm64.leaRdata x1, __str_rec_64  ; "unexpected bytes '"
+    arm64.loadRegBaseDisp.word64 x22, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
+    arm64.leaRdata x0, __str_rec_65  ; "'\x0a"
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot17, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot15, x0
+    arm64.add x1, x24, x27
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot11, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot13, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x22, x28, x24
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x27
+    arm64.bl __str_copy
+    arm64.add x22, x22, x27
+    arm64.loadRegSlot x2, slot15
+    arm64.loadRegSlot x1, slot17
+    arm64.movRegReg x0, x22
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot15
+    arm64.add x0, x22, x0
+    arm64.loadRegSlot x22, slot13
+    arm64.storeBaseDispReg.word64 [x22 + 0], x28
+    arm64.loadRegSlot x0, slot11
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl print
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movImm x22, 0
+    arm64.loadRegSlot x0, slot9
+    arm64.bl __str_decref
+  __il_cont#36:
+    arm64.loadRegSlot x0, slot7
+    arm64.bl __gt_await
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x25
+    arm64.bl StreamingSubprocess.wait
+    arm64.movRegReg x26, x0
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#29
+  tryerr#14:
+    arm64.movImm x22, 7
+    arm64.movRegReg x0, x9
+    arm64.bl __destruct_SubprocessError
+    arm64.movRegReg x0, x25
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_TcpListener
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  __il_body#29:
+    arm64.loadRegBaseDisp.byte x0, [x25 + 8]
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, __il_cont#28
+  notYet:
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 0]
+    arm64.bl __gt_subp_release
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.byte [x25 + 8], x0
+  __il_cont#28:
+    arm64.leaRdata x0, __str_rec_67  ; "signalled="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x21
+    arm64.bl __bool_to_string
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x0, __str_rec_68  ; " ended-promptly="
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot16, x1
+    arm64.movRegReg x0, x22
+    arm64.bl __bool_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_69  ; " child="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot14, x1
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x28, x0
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x28
+    arm64.bl __uint_to_string
+    arm64.storeSlotReg slot12, x0
+    arm64.leaRdata x1, __str_rec_70  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.storeSlotReg slot10, x2
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.storeSlotReg slot8, x1
+    arm64.add x2, x20, x23
+    arm64.add x2, x2, x25
+    arm64.add x2, x2, x22
+    arm64.add x2, x2, x27
+    arm64.add x0, x2, x0
+    arm64.add x0, x0, x1
+    arm64.storeSlotReg slot5, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot6, x0
+    arm64.add x26, x0, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x26, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x19, x19, x25
+    arm64.loadRegSlot x1, slot16
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x19, x19, x22
+    arm64.loadRegSlot x1, slot14
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x2, x27
+    arm64.bl __str_copy
+    arm64.add x19, x19, x27
+    arm64.loadRegSlot x2, slot12
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x28
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot12
+    arm64.add x19, x19, x0
+    arm64.loadRegSlot x2, slot8
+    arm64.loadRegSlot x1, slot10
+    arm64.movRegReg x0, x19
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot8
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot6
+    arm64.storeBaseDispReg.word64 [x19 + 0], x26
+    arm64.loadRegSlot x0, slot5
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x0, slot16
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x28
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot4
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __destruct_TcpClient
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __destruct_TcpListener
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  __rc_panic#26:
+    arm64.leaRdata x0, __str_blob_263  ; "panic at TcpListener.maxon:34: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+  __rc_panic#47:
+    arm64.leaRdata x0, __str_blob_224  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot18
+    arm64.loadRegSlot x20, slot19
+    arm64.loadRegSlot x21, slot20
+    arm64.loadRegSlot x22, slot21
+    arm64.loadRegSlot x23, slot22
+    arm64.loadRegSlot x24, slot23
+    arm64.loadRegSlot x25, slot24
+    arm64.loadRegSlot x26, slot25
+    arm64.loadRegSlot x27, slot26
+    arm64.loadRegSlot x28, slot27
+    arm64.epilogue 240
+    arm64.ret
+}

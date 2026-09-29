@@ -1,0 +1,161 @@
+// Test: a-witness-argument-of-a-contested-nominal-name-reads-the-interfaces-file
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Msg
+	ping(n Integer)
+	quit
+end 'Msg'
+
+interface Sink
+	function take(m Msg) returns Integer
+end 'Sink'
+
+type Counter implements Sink
+	let base as Integer
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function take(m Msg) returns Integer
+		match m 'which'
+			ping(n) then return self.base + n
+			quit then return self.base
+		end 'which'
+	end 'take'
+end 'Counter'
+
+type Post
+	let sink as Sink
+
+	static function create() returns Self
+		return Self{sink: Counter.create()}
+	end 'create'
+
+	function send() returns Integer
+		return self.sink.take(Msg.ping(1))
+	end 'send'
+end 'Post'
+
+function main() returns ExitCode
+	let post = Post.create()
+	if post.send() == 1 and bothWays() 'sent'
+		return 1
+	end 'sent'
+	return 0
+end 'main'
+
+// --- file: z.maxon
+typealias Msg = int(0 to 3)
+
+export function bothWays() returns bool
+	let low = 1 as Msg
+	return low == 1
+end 'bothWays'
+---
+ExitCode: 1
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @Counter.take {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.cmp x2, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x2, 1
+    arm64.b.ne matchdead
+  matcharm#2:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+  matchcont:
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body#12:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#11:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __witness_Counter.Sink
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+  __il_body#6:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
+    arm64.movImm x22, 1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x23 + 0], x0
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.loadRegBaseDisp.word64 x16, [x21 + 48]
+    arm64.blr x16
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+  __il_cont#5:
+    arm64.cmp x20, 1
+    arm64.movImm x0, 0
+    arm64.b.ne scmerge
+  __il_body#8:
+    arm64.movImm x0, 1
+  scmerge:
+    arm64.cbz x0, ifcont
+  sent:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Post
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Post
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

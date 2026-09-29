@@ -1,0 +1,76 @@
+// Test: a-range-checked-division-under-a-try-keeps-its-otherwise
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Wide = int(-1000000000000 to 1000000000000)
+
+function pick() returns Wide
+	let d = IntArray.create().count()
+	return try ((8 / d) as Wide) otherwise 5
+end 'pick'
+
+function main() returns ExitCode
+	return pick() as ExitCode
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.bl __managed_decref
+    arm64.movImm x0, 8
+    arm64.cmp x19, 0
+    arm64.cset x1, eq
+    arm64.orr x2, x19, x1
+    arm64.udiv x0, x0, x2
+    arm64.movImm x2, 18446743073709551616
+    arm64.cmp x0, x2
+    arm64.b.lt __rc_panic#10
+  __rc_chk#11:
+    arm64.movImm x2, 1000000000000
+    arm64.cmp x0, x2
+    arm64.b.gt __rc_panic#10
+  __rc_ok#9:
+    arm64.cmp x1, 0
+    arm64.b.eq __il_cont
+  tryerr:
+    arm64.movImm x0, 5
+  __il_cont:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#10:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-range-checked-division-under-a-try-keeps-its-otherwise.test:8: Range check failed: value outside typealias 'Wide'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-range-checked-division-under-a-try-keeps-its-otherwise.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

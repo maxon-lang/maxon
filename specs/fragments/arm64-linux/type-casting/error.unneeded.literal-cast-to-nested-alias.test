@@ -1,0 +1,19 @@
+// Test: error.unneeded.literal-cast-to-nested-alias
+typealias Integer = int(i64.min to i64.max)
+typealias IntegerArray = Array with Integer
+
+extension Array
+	typealias Level = int(0 to 64)
+
+	function topLevel() returns Level
+		return 64 as Level
+	end 'topLevel'
+end 'Array'
+
+function main() returns ExitCode
+	let values = IntegerArray.create()
+	return values.topLevel()
+end 'main'
+---
+CompilerError:
+error E3010: <fragment>:9:13: unneeded cast: the literal 64 already fits in 'Level'

@@ -1,0 +1,26 @@
+// Test: error.the-common-ancestor-is-neither-argument
+typealias Distance = int(0 to 1000)
+typealias Meters = int(0 to 100) implements Distance
+typealias Feet = int(0 to 300) implements Distance
+
+function larger(a T, b T) uses T returns T
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+function takesMeters(m Meters) returns Meters
+	return m
+end 'takesMeters'
+
+function main() returns ExitCode
+	let m = 40 as Meters
+	let f = 12 as Feet
+	print("{takesMeters(larger(m, b: f))}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:21:10: argument type mismatch for 'm': expected 'Meters', got 'Distance'

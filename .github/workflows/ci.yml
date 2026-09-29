@@ -88,12 +88,16 @@ jobs:
         include:
           - target: x64-windows
             runner: windows-latest
+            debugger: yes
           - target: x64-linux
             runner: ubuntu-latest
+            debugger: yes
           - target: arm64-macos
             runner: macos-15
+            debugger: yes
           - target: arm64-linux
             runner: ubuntu-24.04-arm
+            debugger: yes
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -152,19 +156,32 @@ jobs:
 
       # ⭐ THE ONLY DEBUGGER CODE CI RUNS. `spec-test` covers the language; the debugger's driver, its
       # DAP server and its MCP tools are exercised by these three corpora and by nothing else, so a lane
-      # without them reports a green suite over a debugger that does not start. x64-windows only for now:
-      # the other three lanes refuse a debug session by name.
+      # without them reports a green suite over a debugger that does not start. `matrix.debugger` is the
+      # lane's own answer to `BackendChoice.backendForHost`, written once beside the runner rather than
+      # three times as a list of triples.
+      #
+      # ⛔ **THE macOS LANE DEBUGS THROUGH APPLE'S `debugserver`, WHICH IS AUTHORIZED PER MACHINE AND NOT PER
+      # PROCESS.** Without developer mode enabled every debug case on that lane is refused for want of
+      # authorization, and the Xcode command line tools are where the stub itself comes from.
+      - name: Authorize the debug stub
+        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes' && runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          xcode-select --print-path
+          sudo /usr/sbin/DevToolsSecurity -enable
+          /usr/sbin/DevToolsSecurity -status
+
       - name: Debugger corpus
-        if: steps.seed.outputs.seeded == 'yes' && matrix.target == 'x64-windows'
+        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/debug --timeout=60000
 
       - name: DAP corpus
-        if: steps.seed.outputs.seeded == 'yes' && matrix.target == 'x64-windows'
+        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/dap --timeout=60000
 
       - name: MCP corpus
-        if: steps.seed.outputs.seeded == 'yes' && matrix.target == 'x64-windows'
-        run: ./maxon-bin/.maxon/maxon test tests/mcp
+        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/mcp --timeout=60000
 
       # `tests/cli` builds wasm32-wasi from this checkout, and wrapping the core module into a
       # component needs `vendor/wasm-tools` (E6005 without it). `vendor/` is gitignored, so nothing

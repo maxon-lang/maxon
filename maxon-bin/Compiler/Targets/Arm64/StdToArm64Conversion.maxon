@@ -1020,11 +1020,7 @@ export type StdToArm64Lowering
 			// mapping until its NAME is removed, so the consumer's teardown ends here.
 			osUnpublishNamedSegment(namePtrId) then self.lowerOsUnpublishNamedSegment(namePtrId, dstRef: dstRef)
 
-			// ⛔ **REFUSED, NOT STUBBED.** Neither arm64 lane provides `HostFacility.processSampling`, and the
-			// reason is not that the calls are unwritten: a sampled register file is an x64 `CONTEXT`, whose
-			// RIP/RSP/RBP displacements name three unrelated words on AArch64. A stub here would symbolize
-			// garbage into a confident profile — see that facility's row for the whole argument.
-			osHostProcess then panic("StdToArm64Lowering: `osHostProcess` has no arm64 lowering — process sampling is `HostFacility.processSampling`, which no arm64 lane provides, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
+			osHostProcess(resultId, service, a0Id, a1Id, a2Id, a3Id, a4Id, _) then self.lowerOsHostProcess(resultId, service: service, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
 			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
 			osSocketOverlapped then panic("StdToArm64Lowering: `osSocketOverlapped` is an OVERLAPPED Winsock transfer and this lane has no Winsock — its sockets are driven by readiness, so `ManagedSocketRuntime.socketWaitShape` answers `polled` and emits none")
 			osPathQuery then panic("StdToArm64Lowering: `osPathQuery` asks Win32 for a system directory or a full path and this lane has none — `SubprocessRuntime.PathSearchShape.posix` searches `PATH` alone and emits none")
@@ -2127,6 +2123,13 @@ export type StdToArm64Lowering
 	// relocations, so an unpatched `adrp x16, #0; ldr x16, [x16]; blr x16` would ship as a jump
 	// through the first word of its own `.text` page — unlike a `bl` into a chunk a lane never built,
 	// which is a `CallFixup` that `arm64ResolveCallFixups` panics on.
+	function lowerOsHostProcess(resultId ValueId, service HostProcessCall, operands ValueIdArray, dstRef ElementIndex)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then panic("lowerOsHostProcess: `{service.name}` drives another process from outside it, and this lane reaches its inferior through Apple's `debugserver` over the GDB remote protocol rather than through a lowered host call — `TargetFacilities.targetProvidesFacility` withholds `HostFacility.processDebug` here, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
+			syscall then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(posixTraceChunk(service)), args: operands, dstRef: dstRef)
+		end 'route'
+	end 'lowerOsHostProcess'
+
 	function lowerOsCpuCount(resultId ValueId, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsCpuCountDarwin(resultId, dstRef: dstRef)

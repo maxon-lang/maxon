@@ -2,15 +2,15 @@ export typealias DebugWidth = int(1 to 8)
 module typealias DebugBitShift = int(0 to 63)
 
 let DebugByteBits = 8
-module let DebugWordBytes = 8 as DebugWidth
-module let DebugUserSpaceLimit = 0x0000800000000000 as DebugWord
+module let DebuggeeWordBytes = 8 as DebugWidth
+module let DebugUserSpaceLimit = 0x0000800000000000 as DebuggeeWord
 
 let DebugSignBearingByteValue = 128
 let DebugByteModulus = 256
 
 export union DebugBytesRead
 	pastTheBytes
-	read(value DebugWord)
+	read(value DebuggeeWord)
 end 'DebugBytesRead'
 
 export union DebugUserSpaceAddress
@@ -18,7 +18,7 @@ export union DebugUserSpaceAddress
 	at(address DebugAddress)
 end 'DebugUserSpaceAddress'
 
-// An eight-byte read is signed, the only reading a `DebugWord` can hold. A narrower one is unsigned,
+// An eight-byte read is signed, the only reading a `DebuggeeWord` can hold. A narrower one is unsigned,
 // for `debugSignExtended` to widen when its type is signed.
 module function debugLittleEndianAt(bytes ByteArray, at DebugAddress, width DebugWidth) returns DebugBytesRead
 	let available = bytes.count() as DebugAddress
@@ -27,13 +27,13 @@ module function debugLittleEndianAt(bytes ByteArray, at DebugAddress, width Debu
 		return DebugBytesRead.pastTheBytes
 	end 'pastTheEnd'
 
-	var value = 0 as DebugWord
+	var value = 0 as DebuggeeWord
 
 	for i in 0 upto width 'eachByte'
-		let byte = (try bytes.get((at + (i as DebugAddress)) as ElementIndex) otherwise panic("debugLittleEndianAt: byte {at} + {i} was bounds-checked against {bytes.count()} bytes")) as DebugWord
-		let weight = (1 as DebugWord) shl ((i * DebugByteBits) as DebugBitShift)
+		let byte = (try bytes.get((at + (i as DebugAddress)) as ElementIndex) otherwise panic("debugLittleEndianAt: byte {at} + {i} was bounds-checked against {bytes.count()} bytes")) as DebuggeeWord
+		let weight = (1 as DebuggeeWord) shl ((i * DebugByteBits) as DebugBitShift)
 
-		if i + 1 == DebugWordBytes and byte >= DebugSignBearingByteValue 'theWordsSignByte'
+		if i + 1 == DebuggeeWordBytes and byte >= DebugSignBearingByteValue 'theWordsSignByte'
 			value = value + (byte - DebugByteModulus) * weight
 			continue
 		end 'theWordsSignByte'
@@ -44,25 +44,25 @@ module function debugLittleEndianAt(bytes ByteArray, at DebugAddress, width Debu
 	return DebugBytesRead.read(value)
 end 'debugLittleEndianAt'
 
-module function debugSignExtended(value DebugWord, width DebugWidth) returns DebugWord
-	if width >= DebugWordBytes 'theWordCarriesItsSign'
+module function debugSignExtended(value DebuggeeWord, width DebugWidth) returns DebuggeeWord
+	if width >= DebuggeeWordBytes 'theWordCarriesItsSign'
 		return value
 	end 'theWordCarriesItsSign'
 
-	let signBit = (1 as DebugWord) shl ((width * DebugByteBits - 1) as DebugBitShift)
+	let signBit = (1 as DebuggeeWord) shl ((width * DebugByteBits - 1) as DebugBitShift)
 
 	return value - signBit * 2 if value >= signBit else value
 end 'debugSignExtended'
 
-module function debugMaskedToWidth(value DebugWord, width DebugWidth) returns DebugWord
-	if width >= DebugWordBytes 'theWholeWord'
+module function debugMaskedToWidth(value DebuggeeWord, width DebugWidth) returns DebuggeeWord
+	if width >= DebuggeeWordBytes 'theWholeWord'
 		return value
 	end 'theWholeWord'
 
-	return value and (((1 as DebugWord) shl ((width * DebugByteBits) as DebugBitShift)) - 1)
+	return value and (((1 as DebuggeeWord) shl ((width * DebugByteBits) as DebugBitShift)) - 1)
 end 'debugMaskedToWidth'
 
-module function debugUserSpaceAddress(value DebugWord) returns DebugUserSpaceAddress
+module function debugUserSpaceAddress(value DebuggeeWord) returns DebugUserSpaceAddress
 	if value < 0 or value >= DebugUserSpaceLimit 'notAUserSpaceAddress'
 		return DebugUserSpaceAddress.unresolved
 	end 'notAUserSpaceAddress'

@@ -1,0 +1,116 @@
+let Arm64ClassifierCaseLabel = "arm64-classifies-each-instruction-class"
+
+let ClassifyArm64Option = "--classify=arm64:"
+let Arm64ClassifySeparator = ","
+
+let PlainClass = 1
+let DirectCallClass = 3
+let DirectJumpClass = 4
+let ConditionalJumpClass = 5
+let ReturnClass = 6
+let IndirectCallClass = 7
+let IndirectJumpClass = 8
+
+let NoCondition = "none"
+let NoRegister = "none"
+let NoTarget = "0x0"
+
+let LessThanCondition = 11
+let GreaterThanCondition = 12
+
+let NoFrameStep = "none"
+let OpensRecordStep = "opens-record"
+let ReservesStep = "reserves"
+let StoresRecordStep = "stores-record"
+let SetsPointerStep = "sets-pointer"
+
+let Arm64UnclassifiedAnswer = "unclassified"
+
+test 'the arm64 classifier answers a length, a class, a target and a frame step for every instruction class the step planner and the stack unwinder read'
+	let staged = builtFixture(Arm64ClassifierCaseLabel, fixture: HeaplessFixtureName)
+
+	var probes = Arm64ProbeArray.create()
+	probes.push(Arm64Probe.create("c0035fd6", expected: "len=4 class={ReturnClass} cond={NoCondition} target={NoTarget} reg=30 frame={NoFrameStep}", what: "`ret` — the class that ends a function, and the register it returns through, which on every frame this compiler emits is x30"))
+	probes.push(Arm64Probe.create("60003fd6", expected: "len=4 class={IndirectCallClass} cond={NoCondition} target={NoTarget} reg=3 frame={NoFrameStep}", what: "`blr x3` — the indirect call this compiler emits for a call through a function value, whose register a step into the call has to read because the callee is only knowable at the stop"))
+	probes.push(Arm64Probe.create("20021fd6", expected: "len=4 class={IndirectJumpClass} cond={NoCondition} target={NoTarget} reg=17 frame={NoFrameStep}", what: "`br x17` — the indirect jump a dense `match` lowers to, answered rather than refused: its class is what tells a step that control does not fall out of the instruction"))
+	probes.push(Arm64Probe.create("5f010094", expected: "len=4 class={DirectCallClass} cond={NoCondition} target=0x157c reg={NoRegister} frame={NoFrameStep}", what: "`bl` — a direct call whose 26-bit displacement is in units of four bytes and is measured from the instruction's OWN address, not from the one after it as x64's is"))
+	probes.push(Arm64Probe.create("20000014", expected: "len=4 class={DirectJumpClass} cond={NoCondition} target=0x1080 reg={NoRegister} frame={NoFrameStep}", what: "`b` — a direct jump, whose target the splice scan reads as an exit when no range holds it"))
+	probes.push(Arm64Probe.create("00f8ff17", expected: Arm64UnclassifiedAnswer, what: "`b` back 0x2000 from the probe's 0x1000 — a target below address zero, which no image holds, so it must be refused rather than computed: an address cannot be negative, and a decoder that subtracted anyway would abort the driver on a range check"))
+	probes.push(Arm64Probe.create("8b010054", expected: "len=4 class={ConditionalJumpClass} cond={LessThanCondition} target=0x1030 reg={NoRegister} frame={NoFrameStep}", what: "`b.lt` — a flag-tested branch, whose answer carries the condition NIBBLE beside the class and the target the branch takes when it holds"))
+	probes.push(Arm64Probe.create("0c010054", expected: "len=4 class={ConditionalJumpClass} cond={GreaterThanCondition} target=0x1020 reg={NoRegister} frame={NoFrameStep}", what: "`b.gt` — a second condition through the same encoding, so the nibble is read rather than assumed"))
+	probes.push(Arm64Probe.create("cbfdff54", expected: "len=4 class={ConditionalJumpClass} cond={LessThanCondition} target=0xfb8 reg={NoRegister} frame={NoFrameStep}", what: "`b.lt` back 0x48 — the 19-bit displacement is SIGNED, and a loop's back edge is the only place that shows it"))
+	probes.push(Arm64Probe.create("9b010054", expected: Arm64UnclassifiedAnswer, what: "`bc.lt` — the same conditional branch with bit 4 set, which is a branch-consistent hint on a part that has the extension and unallocated on one that does not, so no build can vouch for what it does"))
+	probes.push(Arm64Probe.create("810300b5", expected: "len=4 class={ConditionalJumpClass} cond={NoCondition} target=0x1070 reg=1 frame={NoFrameStep}", what: "`cbnz x1` — a conditional branch that tests a REGISTER rather than the flags, so it carries no condition nibble at all and the answer names the register instead of inventing one"))
+	probes.push(Arm64Probe.create("820100b4", expected: "len=4 class={ConditionalJumpClass} cond={NoCondition} target=0x1030 reg=2 frame={NoFrameStep}", what: "`cbz x2` — the zero-tested form of the same encoding"))
+	probes.push(Arm64Probe.create("caffffb5", expected: "len=4 class={ConditionalJumpClass} cond={NoCondition} target=0xff8 reg=10 frame={NoFrameStep}", what: "`cbnz x10` back 8 — the compare-and-branch displacement is signed too"))
+	probes.push(Arm64Probe.create("07011836", expected: "len=4 class={ConditionalJumpClass} cond={NoCondition} target=0x1020 reg=7 frame={NoFrameStep}", what: "`tbz w7, #3` — a bit-tested branch, whose displacement is a NARROWER 14-bit field: a decoder that read 19 bits here would name an address a long way from the one control reaches"))
+	probes.push(Arm64Probe.create("89ff47b7", expected: "len=4 class={ConditionalJumpClass} cond={NoCondition} target=0xff0 reg=9 frame={NoFrameStep}", what: "`tbnz x9, #40` back 16 — the 14-bit field is signed as well"))
+	probes.push(Arm64Probe.create("010000d4", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={NoFrameStep}", what: "`svc #0` — the system call this compiler emits on both Linux lanes. It sits in the branch group and control RESUMES at the next instruction, so it falls through: refusing it would make every function that reaches the kernel undecodable and refuse a breakpoint anywhere in it"))
+	probes.push(Arm64Probe.create("000020d4", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={NoFrameStep}", what: "`brk #0` — the trap the entry stub plants after the exit call, classified the way x64's `int3` is"))
+	probes.push(Arm64Probe.create("1f2003d5", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={NoFrameStep}", what: "`nop` — the system group, which holds the barriers and the register moves and nothing that branches"))
+	probes.push(Arm64Probe.create("e0039fd6", expected: Arm64UnclassifiedAnswer, what: "`eret` — an unconditional-branch-register form whose `opc` is none of `br`, `blr` or `ret`: it returns from an exception, which is not a control transfer this decoder's model of a frame describes"))
+	probes.push(Arm64Probe.create("64083fd7", expected: Arm64UnclassifiedAnswer, what: "`blraa x3, x4` — an authenticated indirect call, one bit outside the plain register-branch shape this build decodes, so it is refused rather than read as a `blr` whose register it does not actually call through"))
+	probes.push(Arm64Probe.create("fd7bbfa9", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={OpensRecordStep}", what: "`stp x29, x30, [sp, #-0x10]!` — the compact prologue's first instruction, which allocates the frame and saves the caller's frame pointer and return address in one. The unwinder needs to know the record is there before it may follow the chain"))
+	probes.push(Arm64Probe.create("fd030091", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={SetsPointerStep}", what: "`mov x29, sp` — the `add x29, sp, #0` alias that completes the compact prologue and is the instruction after which a frame is established"))
+	probes.push(Arm64Probe.create("ff0301d1", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={ReservesStep}", what: "`sub sp, sp, #0x40` — the explicit prologue's reservation, taken whenever the frame outruns the pre-indexed STP's reach or carries outgoing stack arguments"))
+	probes.push(Arm64Probe.create("fdfb01a9", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={StoresRecordStep}", what: "`stp x29, x30, [sp, #0x18]` — the explicit prologue's record store, at the outgoing-argument region's own size above sp"))
+	probes.push(Arm64Probe.create("fd630091", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={SetsPointerStep}", what: "`add x29, sp, #0x18` — the same prologue's frame-pointer set, at a NONZERO offset, so a recogniser keyed on the `mov x29, sp` spelling alone would read a function with stack arguments as having no frame at all"))
+	probes.push(Arm64Probe.create("fd7b81a9", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={OpensRecordStep}", what: "`stp x29, x30, [sp, #0x10]!` — a pre-indexed record store whose imm7 is POSITIVE. No prologue this compiler emits opens a frame upwards, but the field is signed and every value of it reaches the decoder, so the answer must be a step rather than a range-check panic that takes the session down"))
+	probes.push(Arm64Probe.create("fd7b3fa9", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={StoresRecordStep}", what: "`stp x29, x30, [sp, #-0x10]` — the plain-offset record store with a NEGATIVE imm7, the other sign the field can carry, and the other half of a displacement that has to be read as signed at both call sites"))
+	probes.push(Arm64Probe.create("fd7bc1a8", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={NoFrameStep}", what: "`ldp x29, x30, [sp], #0x10` — the epilogue's reload. The prologue scan walks FORWARD from the function's first instruction, so a teardown must not read as a setup step"))
+	probes.push(Arm64Probe.create("030c00a9", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={NoFrameStep}", what: "`stp x3, x3, [x0]` — the pair store an array fill emits. It is the same opcode as the record store and names neither x29/x30 nor sp, so a recogniser that matched the opcode alone would find a frame record in the middle of a memory fill"))
+	probes.push(Arm64Probe.create("f1030091", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={NoFrameStep}", what: "`mov x17, sp` — the entry stub's first instruction, which is `add x17, sp, #0`: the same opcode and the same operand as the frame-pointer set with a different destination, so the answer must turn on x29"))
+	probes.push(Arm64Probe.create("00080091", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={NoFrameStep}", what: "`add x0, x0, #0x2` — an ordinary immediate add, which shares the frame-pointer set's opcode and neither of its registers"))
+	probes.push(Arm64Probe.create("100000b0", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={NoFrameStep}", what: "`adrp x16` — a pc-relative ADDRESS rather than a pc-relative branch. Control falls through it, so it is plain: this decoder answers no separate pc-relative class, because nothing in the out-of-process driver relocates an operand"))
+	probes.push(Arm64Probe.create("200240f9", expected: "len=4 class={PlainClass} cond={NoCondition} target={NoTarget} reg={NoRegister} frame={NoFrameStep}", what: "`ldr x0, [x17]` — a load, from the group that can never transfer control"))
+	probes.push(Arm64Probe.create("00000000", expected: Arm64UnclassifiedAnswer, what: "`udf #0` — the permanently undefined encoding. It does NOT fall through, so calling it plain would tell a step that control reaches the next instruction when it reaches a fault handler instead"))
+	probes.push(Arm64Probe.create("00000002", expected: Arm64UnclassifiedAnswer, what: "an encoding in the group reserved for the scalable matrix extension, which this compiler emits nothing from and whose fall-through nobody can vouch for"))
+	probes.push(Arm64Probe.create("00000004", expected: Arm64UnclassifiedAnswer, what: "an encoding in the scalable-vector group, refused for the same reason"))
+	probes.push(Arm64Probe.create("00000006", expected: Arm64UnclassifiedAnswer, what: "an encoding in the remaining unallocated group, refused for the same reason"))
+	probes.push(Arm64Probe.create("c0035f", expected: Arm64UnclassifiedAnswer, what: "three bytes of a `ret` — every arm64 instruction is four bytes wide, so a shorter sequence is not an instruction and must be refused rather than read past its end"))
+
+	var spelled = ""
+	var wanted = StringArray.create()
+
+	for probe in probes 'eachProbe'
+		spelled = probe.bytes if spelled.isEmpty() else "{spelled}{Arm64ClassifySeparator}{probe.bytes}"
+		wanted.push(probe.expected)
+	end 'eachProbe'
+
+	let run = spawnCompiler([DebugSubcommandName, "{ClassifyArm64Option}{spelled}"], staged: staged, what: "`{DebugSubcommandName} {ClassifyArm64Option}`")
+	let said = renderedEvents(run.stdout, stderr: run.stderr)
+	var answered = StringArray.create()
+
+	for rawLine in withoutCarriageReturns(run.stdout).split(LineFeed) 'eachLine'
+		if not rawLine.trim().isEmpty() 'anAnswer'
+			answered.push(rawLine.trim())
+		end 'anAnswer'
+	end 'eachLine'
+
+	Expect.equal(run.exitCode(), expected: 0, message: "`{ClassifyArm64Option}` reads no program and runs nothing, so it cannot fail. {said}")
+	Expect.equal(answered.count(), expected: probes.count(), message: "{probes.count()} byte sequences are {probes.count()} answers, one per line. It answered: {renderedRows(answered)}. {said}")
+
+	var wrong = StringArray.create()
+
+	for (iter, probe) in probes.withIterator() 'eachAnswer'
+		let got = try answered.get(iter.index()) otherwise AbsentEventText
+
+		if got != probe.expected 'notWhatTheDriverNeeds'
+			wrong.push("{probe.bytes} ({probe.what}) answered '{got}' and not '{probe.expected}'")
+		end 'notWhatTheDriverNeeds'
+	end 'eachAnswer'
+
+	Expect.isEmpty(renderedRows(wrong), message: "⛔ EVERY COLUMN HERE IS ONE THE DRIVER ACTS ON, AND A WRONG ONE IS NEVER A MISSING ANSWER A READER CAN SEE. A wrong CLASS has a step follow a branch as though it fell through, or the splice scan miss an exit and walk off the end of a body; a wrong TARGET plants a temporary breakpoint on whatever byte the wrong address holds; a wrong REGISTER sends a step into an indirect call to whatever that register happens to carry; a wrong FRAME STEP has the unwinder read a frame as established before the record exists, and follow a chain through a word the prologue has not written yet. Each of those is a program that runs differently under the debugger. {renderedRows(wrong)}")
+end 'the arm64 classifier answers a length, a class, a target and a frame step for every instruction class the step planner and the stack unwinder read'
+
+type Arm64Probe
+	export var bytes as String
+	export var expected as String
+	export var what as String
+
+	static function create(bytes String, expected String, what String) returns Arm64Probe
+		return Arm64Probe{bytes: bytes, expected: expected, what: what}
+	end 'create'
+end 'Arm64Probe'
+
+typealias Arm64ProbeArray = Array with Arm64Probe

@@ -629,6 +629,186 @@ end 'main'
 9223372036854775808
 ```
 
+<!-- test: a-dynamic-shift-count-carries-an-unsigned-quantity-into-bit-63 -->
+### A shift by a count the compiler cannot fold still lands an unsigned quantity in bit 63
+The count is a parameter, so the shift is emitted behind the saturating mask — and the result's domain
+is the LEFT operand's, which the count cannot change.
+```maxon
+typealias Word = int(0 to u64.max)
+
+function shifted(value Word, by Word) returns Word
+	return value shl by
+end 'shifted'
+
+function main() returns ExitCode
+	print("{shifted(0xAB, by: 56):x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ab00000000000000
+```
+
+<!-- test: a-product-and-an-or-reach-the-same-bit-63-unsigned-value -->
+### A product and an `or` reach the same bit-63 value with nothing to test
+The two controls for the shift above: the identical pattern, produced by two other operations closed
+over the unsigned domain.
+```maxon
+typealias Word = int(0 to u64.max)
+
+function multiplied(value Word, by Word) returns Word
+	return value * by
+end 'multiplied'
+
+function orred(low Word, high Word) returns Word
+	return low or high
+end 'orred'
+
+function main() returns ExitCode
+	print("{multiplied(0xAB, by: 0x100000000000000):x}\n")
+	print("{orred(1, high: 0x8000000000000000):x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ab00000000000000
+8000000000000001
+```
+
+<!-- test: an-accumulation-in-a-loop-carries-a-bit-63-unsigned-value -->
+### An accumulation inside a loop carries a bit-63 unsigned value out of it
+```maxon
+typealias Word = int(0 to u64.max)
+typealias Lap = int(0 to 8)
+
+function looped(seed Word, high Word, laps Lap) returns Word
+	var word = seed
+
+	for _ in 0 upto laps 'eachLap'
+		word = word or high
+	end 'eachLap'
+
+	return word
+end 'looped'
+
+function main() returns ExitCode
+	print("{looped(1, high: 0x8000000000000000, laps: 2):x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8000000000000001
+```
+
+<!-- test: bytes-assembled-in-a-loop-fill-an-unsigned-quantity-word -->
+### Bytes assembled in a loop fill an unsigned-quantity word, top byte included
+The shape any code building a machine word out of bytes has: a loop-carried accumulator, a shift by a
+computed count, and a last byte at or above 0x80.
+```maxon
+typealias Word = int(0 to u64.max)
+typealias Fill = int(1 to 7)
+
+function packed(bytes ByteArray) returns Word
+	var word = 0 as Word
+
+	for (iter, value) in bytes.withIterator() 'eachByte'
+		word = word or ((value as Word) shl ((iter.index() as Word) * 8))
+	end 'eachByte'
+
+	return word
+end 'packed'
+
+function main() returns ExitCode
+	var bytes = ByteArray.create()
+
+	for i in 1 upto 8 'eachLowByte'
+		bytes.push((i as Fill) as Byte)
+	end 'eachLowByte'
+
+	bytes.push(0xCC as Byte)
+
+	print("{packed(bytes):x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+cc07060504030201
+```
+
+<!-- test: a-shift-past-a-narrower-unsigned-ceiling-is-still-refused -->
+### A shift past a narrower unsigned ceiling is still refused
+The admission is the FULL-unsigned range's alone. An alias with a real upper bound keeps both of its
+checks, whichever operation produced the value.
+```maxon
+typealias Mask = int(0 to 65535)
+
+function shifted(value Mask, by Mask) returns Mask
+	return value shl by
+end 'shifted'
+
+function main() returns ExitCode
+	print("{shifted(1, by: 20)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-shift-past-a-narrower-unsigned-ceiling-is-still-refused.test:5: Range check failed: value outside typealias 'Mask'
+Stack trace:
+  in shifted
+  in main
+  in mrt_start
+```
+
+<!-- test: a-loop-carried-signed-accumulator-is-still-refused-at-an-unsigned-quantity-return -->
+### A loop-carried SIGNED accumulator is still refused at an unsigned-quantity return
+What the merge admits is decided by the domain it was DECLARED over, so a signed accumulator keeps its
+underflow check however many times the loop turns.
+```maxon
+typealias Word = int(0 to u64.max)
+typealias Counter = int(i64.min to i64.max)
+typealias Lap = int(0 to 4)
+
+function drained(seed Counter, laps Lap) returns Word
+	var total = seed
+
+	for _ in 0 upto laps 'eachLap'
+		total = total - 1
+	end 'eachLap'
+
+	return total
+end 'drained'
+
+function main() returns ExitCode
+	print("{drained(0, laps: 2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-loop-carried-signed-accumulator-is-still-refused-at-an-unsigned-quantity-return.test:13: Range check failed: value outside typealias 'Word'
+Stack trace:
+  in drained
+  in main
+  in mrt_start
+```
+
 <!-- test: a-signed-counter-argument-to-an-unsigned-quantity-parameter-panics -->
 ### A signed source still meets the underflow check, at the CALL
 A counter over a signed interval is a signed value with no alias, so it reaches a `Count` parameter

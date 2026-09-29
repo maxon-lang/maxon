@@ -1,0 +1,17 @@
+// Test: error.throws-but-can-never-throw
+enum Failure implements Error
+	broken
+end 'Failure'
+
+typealias Code = int(0 to 255)
+
+function answer() returns Code throws Failure
+	return 42
+end 'answer'
+
+function main() returns ExitCode
+	return try answer() otherwise 1
+end 'main'
+---
+CompilerError:
+error E3168: <fragment>:8:10: 'throws Failure' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause

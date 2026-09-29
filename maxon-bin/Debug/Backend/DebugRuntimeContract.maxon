@@ -1,4 +1,4 @@
-typealias ContractFigure = int(i64.min to i64.max)
+export typealias ContractFigure = int(i64.min to i64.max)
 typealias ContractFigureArray = Array with ContractFigure
 
 export union ContractGlobalLookup
@@ -15,8 +15,16 @@ export type DebugRuntimeContract
 	var globalNames as StringArray
 	var globalAddresses as DebugAddressArray
 
-	export static function readFrom(reader MxdbgReader, textBytes DebugAddress) returns DebugRuntimeContract
-		let imageBase = reader.imageBase as DebugAddress
+	// ⛔ **EVERY ADDRESS BELOW IS AN OFFSET FROM WHERE THE IMAGE ACTUALLY IS, NOT FROM WHERE IT WAS LINKED.**
+	// A PE and an `ET_EXEC` ELF are loaded at the base their header names, so the two are the same number
+	// there; a Mach-O main executable is position-independent and the kernel slides it, and the backend that
+	// drives such a program is the only party that can say where it landed.
+	export static function readFrom(reader MxdbgReader, textBytes DebugAddress, placement BackendImagePlacement) returns DebugRuntimeContract
+		let imageBase = match placement 'placed'
+			asLinked gives reader.imageBase as DebugAddress
+			loadedAt(address) gives address
+		end 'placed'
+
 		var figureNames = StringArray.create()
 		var figureValues = ContractFigureArray.create()
 
@@ -48,8 +56,8 @@ export type DebugRuntimeContract
 		return self.bytes
 	end 'textSize'
 
-	export function figure(name String) returns DebugWord
-		return figureIn(self.figureNames, values: self.figureValues, name: name) as DebugWord
+	export function figure(name String) returns ContractFigure
+		return figureIn(self.figureNames, values: self.figureValues, name: name)
 	end 'figure'
 
 	export function offset(name String) returns DebugAddress

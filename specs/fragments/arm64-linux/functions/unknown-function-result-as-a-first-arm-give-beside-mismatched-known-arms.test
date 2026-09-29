@@ -1,0 +1,21 @@
+// Test: unknown-function-result-as-a-first-arm-give-beside-mismatched-known-arms
+type Box
+	export var n = 0
+
+	static function create() returns Box
+		return Box{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let pick = 1
+	let b = match pick 'm'
+		1 gives frobnicate(2)
+		2 gives Box.create()
+		default gives "text"
+	end 'm'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:12:10: match arms give incompatible types: 'String' vs 'Box'

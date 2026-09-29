@@ -15,7 +15,7 @@ Install **Maxon** from the
 or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client) (extension id
 `maxon-lang.maxon-lsp-client`). It activates in a workspace containing Maxon files and provides syntax
 highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting, the Compiler
-Explorer, a Test Explorer and, on x64-windows, debugging. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
+Explorer, a Test Explorer and, on every native target, debugging. `.maxon` sources, `.maxproj` project files, `.maxtasks` task files and
 `.maxtest` test files are all Maxon documents, served by the language server.
 
 **Finding the compiler.** The extension runs `maxon lsp-server` from the first compiler it finds:
@@ -68,7 +68,7 @@ tests in `specs/*.md` and runs them with the checkout's own compiler
 (`maxon-bin/.maxon/maxon spec-test --filter=…`).
 
 **Debugging.** The extension contributes a `maxon` debugger whose adapter is
-[`maxon dap-server`](#maxon-dap-server), run from the compiler it found, on x64-windows. **F5** works
+[`maxon dap-server`](#maxon-dap-server), run from the compiler it found, on every native target. **F5** works
 without a `launch.json`: a configuration without `program` debugs the active editor's `.maxon` file, or
 else the workspace folder when it holds a `.maxproj` file. A source file or project is built with debug info
 into the host's Maxon cache first. The Test Explorer's **Debug Test** builds each touched project's tests
@@ -293,7 +293,7 @@ maxon dap-server
 
 Speaks the Debug Adapter Protocol over stdin and stdout, with the same `Content-Length` framing as
 `maxon lsp-server`. An option or an argument after the command word is refused with exit 1. It drives
-the same debugger as [`maxon debug`](/docs/cli/debugging/#maxon-debug), so it debugs x64-windows programs only; the VS Code
+the same debugger as [`maxon debug`](/docs/cli/debugging/#maxon-debug), so it serves the same hosts; the VS Code
 extension runs it as its debug adapter.
 
 **Requests:** `initialize`, `launch`, `setBreakpoints`, `setFunctionBreakpoints`, `configurationDone`,

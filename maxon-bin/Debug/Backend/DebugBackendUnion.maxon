@@ -1,0 +1,241 @@
+export union DebugBackend
+	debugPort(backend WindowsBackend)
+	processTrace(backend PtraceBackend)
+	remoteStub(backend GdbRemoteBackend)
+
+	export function holdsItsScratch() returns bool
+		return match self 'which'
+			debugPort(backend) gives backend.holdsItsScratch()
+			processTrace(backend) gives backend.holdsItsScratch()
+			remoteStub(backend) gives backend.holdsItsScratch()
+		end 'which'
+	end 'holdsItsScratch'
+
+	export function close()
+		match self 'which'
+			debugPort(backend) then backend.close()
+			processTrace(backend) then backend.close()
+			remoteStub(backend) then backend.close()
+		end 'which'
+	end 'close'
+
+	export function exitStatus() returns BackendExitStatus
+		return match self 'which'
+			debugPort(backend) gives backend.exitStatus()
+			processTrace(backend) gives backend.exitStatus()
+			remoteStub(backend) gives backend.exitStatus()
+		end 'which'
+	end 'exitStatus'
+
+	// ⭐ **THE PROGRAM IS THE DEBUGGER's OWN TRACED CHILD ON TWO OF THE THREE LANES**, and on the third it is a
+	// stub's child and the stub is the debugger's. Everything below this line that reads the same for the two
+	// native lanes is written once here rather than twice in their backends.
+	export function launchPlan(program FilePath, arguments StringArray) returns BackendLaunchPlan
+		return match self 'which'
+			debugPort or
+				processTrace gives BackendLaunchPlan.create(program, arguments: arguments, traced: true)
+
+			remoteStub(backend) gives backend.launchPlan(program, arguments: arguments)
+		end 'which'
+	end 'launchPlan'
+
+	export function adoptLaunchedProgram() returns BackendAdoption
+		return match self 'which'
+			debugPort or
+				processTrace gives BackendAdoption.ready(BackendImagePlacement.asLinked)
+
+			remoteStub(backend) gives backend.adoptLaunchedProgram()
+		end 'which'
+	end 'adoptLaunchedProgram'
+
+	// ⭐⭐ **WHICH FIELD OF A MACHINE NAMES THE THREAD THIS BACKEND REPORTS.** A Win32 thread id and a Linux
+	// kernel `tid` are what the scheduler records for its own preemption, so those two lanes pair on that
+	// field; a debug stub on Darwin names a thread by the unique id `pthread_threadid_np` answers, which the
+	// scheduler records beside the `pthread_t` its own signals need.
+	export function threadIdentityFigure() returns String
+		return match self 'which'
+			debugPort or
+				processTrace gives MOffOsThreadIdFigureName
+
+			remoteStub(backend) gives backend.threadIdentityFigure()
+		end 'which'
+	end 'threadIdentityFigure'
+
+	// A stub that launched the program owns its standard streams, so its output arrives here rather than on a
+	// pipe of the driver's; a lane whose debuggee is the driver's own child has none to hand over.
+	export function takeStubOutput() returns String
+		return match self 'which'
+			debugPort or
+				processTrace gives ""
+
+			remoteStub(backend) gives backend.takeStubOutput()
+		end 'which'
+	end 'takeStubOutput'
+
+	export function listThreads() returns BackendThreadIdArray
+		return match self 'which'
+			debugPort(backend) gives backend.listThreads()
+			processTrace(backend) gives backend.listThreads()
+			remoteStub(backend) gives backend.listThreads()
+		end 'which'
+	end 'listThreads'
+
+	export function stoppedThread() returns BackendThreadId
+		return match self 'which'
+			debugPort(backend) gives backend.stoppedThread()
+			processTrace(backend) gives backend.stoppedThread()
+			remoteStub(backend) gives backend.stoppedThread()
+		end 'which'
+	end 'stoppedThread'
+
+	export function waitForStop(budgetMs BackendWaitBudgetMs) returns DebugStopEvent
+		return match self 'which'
+			debugPort(backend) gives backend.waitForStop(budgetMs)
+			processTrace(backend) gives backend.waitForStop(budgetMs)
+			remoteStub(backend) gives backend.waitForStop(budgetMs)
+		end 'which'
+	end 'waitForStop'
+
+	export function resumeAll() returns bool
+		return match self 'which'
+			debugPort(backend) gives backend.resumeAll()
+			processTrace(backend) gives backend.resumeAll()
+			remoteStub(backend) gives backend.resumeAll()
+		end 'which'
+	end 'resumeAll'
+
+	export function stepThread(thread BackendThreadId) returns bool
+		return match self 'which'
+			debugPort(backend) gives backend.stepThread(thread)
+			processTrace(backend) gives backend.stepThread(thread)
+			remoteStub(backend) gives backend.stepThread(thread)
+		end 'which'
+	end 'stepThread'
+
+	export function requestStop() returns bool
+		return match self 'which'
+			debugPort(backend) gives backend.requestStop()
+			processTrace(backend) gives backend.requestStop()
+			remoteStub(backend) gives backend.requestStop()
+		end 'which'
+	end 'requestStop'
+
+	export function abandonStopRequest()
+		match self 'which'
+			debugPort(backend) then backend.abandonStopRequest()
+			processTrace(backend) then backend.abandonStopRequest()
+			remoteStub(backend) then backend.abandonStopRequest()
+		end 'which'
+	end 'abandonStopRequest'
+
+	export function detach() returns bool
+		return match self 'which'
+			debugPort(backend) gives backend.detach()
+			processTrace(backend) gives backend.detach()
+			remoteStub(backend) gives backend.detach()
+		end 'which'
+	end 'detach'
+
+	// On the two lanes whose debuggee is the driver's own child the kernel ends it — the debug port
+	// kills a debuggee whose debugger exits and `PTRACE_O_EXITKILL` says the same thing — so there
+	// the reap of that child is the ending and `killTheProgram` is never asked.
+	export function endsTheProgramItself() returns bool
+		return match self 'which'
+			debugPort or
+				processTrace gives false
+
+			remoteStub gives true
+		end 'which'
+	end 'endsTheProgramItself'
+
+	export function killTheProgram() returns bool
+		return match self 'which'
+			debugPort or
+				processTrace panic("DebugBackend.killTheProgram: this lane's debuggee is the driver's own traced child and the kernel ends it, so `endsTheProgramItself` answers false and nothing may ask this")
+
+			remoteStub(backend) gives backend.killTheProgram()
+		end 'which'
+	end 'killTheProgram'
+
+	export function readMemory(address DebugAddress, bytes BackendByteCount) returns BackendMemoryRead
+		return match self 'which'
+			debugPort(backend) gives backend.readMemory(address, bytes: bytes)
+			processTrace(backend) gives backend.readMemory(address, bytes: bytes)
+			remoteStub(backend) gives backend.readMemory(address, bytes: bytes)
+		end 'which'
+	end 'readMemory'
+
+	export function writeMemory(address DebugAddress, bytes ByteArray) returns bool
+		return match self 'which'
+			debugPort(backend) gives backend.writeMemory(address, bytes: bytes)
+			processTrace(backend) gives backend.writeMemory(address, bytes: bytes)
+			remoteStub(backend) gives backend.writeMemory(address, bytes: bytes)
+		end 'which'
+	end 'writeMemory'
+
+	// ⭐⭐ **WHO OWNS THE TRAP BYTE.** On the two native lanes the debugger writes it and keeps what stood
+	// there, which is what makes a resume off one the restore-step-replant dance; a debug stub writes its own
+	// and is the only thing that can take it out again, so it hands the engine no original and the engine's
+	// every byte-restoring road becomes a write of nothing.
+	export function plantTrap(address DebugAddress) returns BackendTrapPlant
+		return match self 'which'
+			debugPort or
+				processTrace gives self.plantedByWriting(address)
+
+			remoteStub(backend) gives backend.plantTrap(address)
+		end 'which'
+	end 'plantTrap'
+
+	function plantedByWriting(address DebugAddress) returns BackendTrapPlant
+		let trap = hostTrapShape()
+		var original = ByteArray.create()
+
+		match self.readMemory(address, bytes: trap.bytes()) 'read'
+			unreadable then return BackendTrapPlant.unreadable
+			read(bytes) then original = bytes
+		end 'read'
+
+		if original.count() != trap.instruction.count() 'aShortRead'
+			return BackendTrapPlant.unreadable
+		end 'aShortRead'
+
+		if not self.writeMemory(address, bytes: trap.instruction) 'theBytesAreNotTheDebuggersToWrite'
+			return BackendTrapPlant.unwritable
+		end 'theBytesAreNotTheDebuggersToWrite'
+
+		return BackendTrapPlant.planted(original)
+	end 'plantedByWriting'
+
+	export function liftTrap(address DebugAddress, original ByteArray) returns bool
+		return match self 'which'
+			debugPort or
+				processTrace gives self.writeMemory(address, bytes: original)
+
+			remoteStub(backend) gives backend.liftTrap(address, original: original)
+		end 'which'
+	end 'liftTrap'
+
+	export function readRegisters(thread BackendThreadId) returns BackendRegisterRead
+		return match self 'which'
+			debugPort(backend) gives backend.readRegisters(thread)
+			processTrace(backend) gives backend.readRegisters(thread)
+			remoteStub(backend) gives backend.readRegisters(thread)
+		end 'which'
+	end 'readRegisters'
+
+	export function writeRegisters(thread BackendThreadId, file DebugRegisterFile) returns bool
+		return match self 'which'
+			debugPort(backend) gives backend.writeRegisters(thread, file: file)
+			processTrace(backend) gives backend.writeRegisters(thread, file: file)
+			remoteStub(backend) gives backend.writeRegisters(thread, file: file)
+		end 'which'
+	end 'writeRegisters'
+
+	export function setProgramCounter(thread BackendThreadId, address DebugAddress) returns bool
+		return match self 'which'
+			debugPort(backend) gives backend.setProgramCounter(thread, address: address)
+			processTrace(backend) gives backend.setProgramCounter(thread, address: address)
+			remoteStub(backend) gives backend.setProgramCounter(thread, address: address)
+		end 'which'
+	end 'setProgramCounter'
+end 'DebugBackend'

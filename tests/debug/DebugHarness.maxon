@@ -128,7 +128,7 @@ export function spawnBuild(source FilePath, staged FilePath, label String, extra
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
 	arguments.push(source.toString())
-	arguments.push("{OutputOptionPrefix}{builtExecutable(staged).toString()}")
+	arguments.push("{OutputOptionPrefix}{requestedExecutable(staged).toString()}")
 
 	for extra in extraArguments 'eachExtra'
 		arguments.push(extra)
@@ -160,8 +160,26 @@ end 'spawnCompiler'
 // moves the `__LINKEDIT` sizes. The host suffix is spelled INTO the `--output=` argument rather than
 // left for the compiler to append, so the path handed to the child and the path read back are one
 // spelling.
+// ⛔ The name the build ASKS for and the name it WROTE are two questions: the compiler appends the
+// platform's executable suffix of its own accord, and which one it appends is not a function of either
+// triple alone — a cross build for the other OS has been seen to carry `.exe` from each side. So the
+// request is the bare stem and every reader asks the filesystem which spelling arrived.
+function requestedExecutable(staged FilePath) returns FilePath
+	return staged.join(OutputFileStem)
+end 'requestedExecutable'
+
 export function builtExecutable(staged FilePath) returns FilePath
-	return staged.join("{OutputFileStem}{executableSuffix()}")
+	let suffixed = staged.join("{OutputFileStem}{WindowsExecutableSuffix}")
+
+	if File.exists(suffixed) 'aPortableExecutable'
+		return suffixed
+	end 'aPortableExecutable'
+
+	if File.exists(staged.join(OutputFileStem)) 'anElfOrAMachO'
+		return staged.join(OutputFileStem)
+	end 'anElfOrAMachO'
+
+	return staged.join("{OutputFileStem}{hostExecutableSuffix()}")
 end 'builtExecutable'
 
 // `<compiler> debug --dump-info <exe> [section...]`. The sections ride as trailing arguments because that
@@ -182,21 +200,23 @@ end 'spawnDumpInfo'
 
 // The compiler under test, absolute and with the suffix this host can spawn.
 function testedCompilerPath() returns FilePath
-	let spelled = "{TestedCompilerStem}{executableSuffix()}"
+	let spelled = "{TestedCompilerStem}{hostExecutableSuffix()}"
 	let relative = try FilePath.from(spelled) otherwise panic("debug tests: the gate could not run — '{spelled}' is not a spellable path")
 
 	return relative.resolve(Directory.currentPath())
 end 'testedCompilerPath'
 
-function executableSuffix() returns String
+function hostExecutableSuffix() returns String
 	#if os(Windows)
-		let suffix = ".exe"
-	#else
+		let suffix = WindowsExecutableSuffix
+	#endif
+
+	#if not os(Windows)
 		let suffix = ""
 	#endif
 
 	return suffix
-end 'executableSuffix'
+end 'hostExecutableSuffix'
 
 // ============================================================================================
 // READING A CAPTURED STREAM — the folds every case in this directory shares
@@ -1151,9 +1171,17 @@ end 'dumpedFunctionRow'
 
 let PrologueColumn = "prologue=+"
 
-export let PushedFramePointerBytes = 1 as SidecarNumber
+#if arch(arm64)
+	export let PushedFramePointerBytes = 4 as SidecarNumber
+#endif
+
+#if not arch(arm64)
+	export let PushedFramePointerBytes = 1 as SidecarNumber
+#endif
 
 // What `--target` defaults to on this host, spelled `<arch>-<os>`.
+let WindowsExecutableSuffix = ".exe"
+
 export function hostTargetTriple() returns String
 	#if arch(x64)
 		let archName = "x64"

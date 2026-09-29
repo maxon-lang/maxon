@@ -169,15 +169,51 @@ function debugStopReasonName(code DebugAddress) returns String
 	panic("debugStopReasonName: the engine reported stop reason {code}, which is none of the reasons `Debug/Debugger/DebugEngine.maxon` declares")
 end 'debugStopReasonName'
 
+// Only an arrival that ran to the byte it stands on can be named by that byte. Entry, a pause and
+// a fault land wherever the thread happened to be, so a thread parked on a conditional breakpoint
+// would otherwise be reported as having hit it.
+function stopRanToWhereItStands(code DebugAddress) returns bool
+	return code == DbgStopReasonBreakpoint or code == DbgStopReasonStep or code == DbgStopReasonTrap
+end 'stopRanToWhereItStands'
+
+let UnnamedFaultWords = "hardware fault"
+
+// ⛔ **A FAULT ARRIVES AS THE HOST'S OWN CODE, AND THE TWO HOSTS DO NOT SPEAK ONE.** A debug port hands over
+// an NTSTATUS and a ptrace stop hands over a signal number, so the reading is the HOST's — which is sound
+// because `vouchedDebugImage` refuses an image built for any other.
 module function debugFaultDescription(code DebugAddress) returns String
+	let os = detectHostTarget().os
+
 	for kind in HardwareFaultKind.allCases 'eachStoppingFault'
-		if (windowsFaultExceptionCode(kind) as DebugAddress) == code 'thisFault'
+		if (hostFaultCode(kind, on: os) as DebugAddress) == code 'thisFault'
 			return String.from(faultWords(kind))
 		end 'thisFault'
 	end 'eachStoppingFault'
 
-	panic("debugFaultDescription: the debuggee stopped on exception code {hexWord(code)}, which is none of the faults the driver stops on")
+	return faultDescriptionPastTheRuntimesKinds(code, on: os)
 end 'debugFaultDescription'
+
+// ⚠ **THE HOST IS TESTED AT RUN TIME RATHER THAN WITH A `#if`**, because a `#if` leaves the branch it
+// excludes referencing nothing — and an `export` no surviving code names is E3092 on that lane.
+function hostFaultCode(kind HardwareFaultKind, on Os) returns MachineWord
+	if on == Os.windows 'aDebugPortsException'
+		return windowsFaultExceptionCode(kind) as MachineWord
+	end 'aDebugPortsException'
+
+	return posixFaultSignal(kind, on: on)
+end 'hostFaultCode'
+
+function faultDescriptionPastTheRuntimesKinds(code DebugAddress, on Os) returns String
+	if on != Os.windows 'aSignalRatherThanAnException'
+		for kind in PosixFaultSignal.allCases 'eachOwnedFault'
+			if (posixFaultSignalNumber(kind, on: on) as DebugAddress) == code 'thisFault'
+				return String.from(posixFaultWords(kind))
+			end 'thisFault'
+		end 'eachOwnedFault'
+	end 'aSignalRatherThanAnException'
+
+	return "{UnnamedFaultWords} {hexWord(code)}"
+end 'faultDescriptionPastTheRuntimesKinds'
 
 union DebugCommandLookup
 	none
@@ -874,9 +910,14 @@ export type DebugConversation
 	end 'rebasedWalk'
 
 	function stackTopOf(greenThread DebugAddress) returns DebugStackTopRead
-		let top = try self.engine.readDebuggeeWord(greenThread + self.engine.recordOffset(GtOffTibStackBaseFigureName), width: DebugWordBytes) otherwise return DebugStackTopRead.unreadable
+		let base = try self.engine.readDebuggeeWord(greenThread + self.engine.recordOffset(GtOffStackBaseFigureName), width: DebuggeeWordBytes) otherwise return DebugStackTopRead.unreadable
+		let size = try self.engine.readDebuggeeWord(greenThread + self.engine.recordOffset(GtOffStackSizeFigureName), width: DebuggeeWordBytes) otherwise return DebugStackTopRead.unreadable
 
-		return DebugStackTopRead.at(top as DebugAddress)
+		if base <= 0 or size <= 0 'notAGreenThreadsOwnStack'
+			return DebugStackTopRead.unreadable
+		end 'notAGreenThreadsOwnStack'
+
+		return DebugStackTopRead.at((base + size) as DebugAddress)
 	end 'stackTopOf'
 
 	function walkEnded(replies DebugReplyArray, ending TargetOutcome) returns bool
@@ -1345,21 +1386,36 @@ export type DebugConversation
 	function entryCallerOf(record EngineStop) returns DebugEntryCaller
 		match self.unchainedReturnOf(record) 'unchained'
 			none then return DebugEntryCaller.none
-			onTheStack(wordsAbove, _) then return self.returnAddressOnTheStack(record, wordsAbove: wordsAbove)
+			inTheLinkRegister then return self.returnAddressInTheLinkRegister()
+			onTheStack(bytesAbove, _) then return self.returnAddressOnTheStack(record, bytesAbove: bytesAbove)
 		end 'unchained'
 	end 'entryCallerOf'
+
+	function returnAddressInTheLinkRegister() returns DebugEntryCaller
+		#if arch(arm64)
+			return match debugUserSpaceAddress(self.engine.registerValue(BackendRegSlotLink as EngineRegisterNumber)) 'held'
+				unresolved gives DebugEntryCaller.none
+				at(address) gives DebugEntryCaller.at(address)
+			end 'held'
+		#endif
+
+		#if not arch(arm64)
+			panic("DebugConversation.returnAddressInTheLinkRegister: this architecture's call leaves the return address on the stack, so its prologue scan reports where — only a link-register architecture answers `inTheLinkRegister`")
+		#endif
+	end 'returnAddressInTheLinkRegister'
 
 	// Inside a prologue before `mov rbp, rsp`, or at a `ret`, rbp still holds the caller's frame, so
 	// the stopped frame's address is derived from the stack pointer instead.
 	function frameOf(record EngineStop) returns DebugAddress
 		match self.unchainedReturnOf(record) 'unchained'
 			none then return record.framePointer
-			onTheStack(wordsAbove, frame) then return prologueFrameAddress(record, wordsAbove: wordsAbove, frame: frame)
+			inTheLinkRegister(frame) then return prologueFrameAddress(record, frame: frame)
+			onTheStack(_, frame) then return prologueFrameAddress(record, frame: frame)
 		end 'unchained'
 	end 'frameOf'
 
-	function returnAddressOnTheStack(record EngineStop, wordsAbove DebugTally) returns DebugEntryCaller
-		let word = try self.engine.readDebuggeeWord(record.stackPointer + (wordsAbove as DebugAddress) * (DebugWordBytes as DebugAddress), width: DebugWordBytes) otherwise return DebugEntryCaller.none
+	function returnAddressOnTheStack(record EngineStop, bytesAbove DebugFrameReach) returns DebugEntryCaller
+		let word = try self.engine.readDebuggeeWord(record.stackPointer + (bytesAbove as DebugAddress), width: DebuggeeWordBytes) otherwise return DebugEntryCaller.none
 
 		return match debugUserSpaceAddress(word) 'held'
 			unresolved gives DebugEntryCaller.none
@@ -1368,12 +1424,20 @@ export type DebugConversation
 	end 'returnAddressOnTheStack'
 
 	function stopNameOf(record EngineStop) returns String
-		if record.reason != DbgStopReasonFault and not record.conditionMissed and self.engine.userBreakpointAt(record.pc) 'arrivedAtAnArmedByte'
+		if self.armedByteNamesTheStop(record) 'arrivedAtAnArmedByte'
 			return BreakpointStopReasonName
 		end 'arrivedAtAnArmedByte'
 
 		return debugStopReasonName(record.reason)
 	end 'stopNameOf'
+
+	function armedByteNamesTheStop(record EngineStop) returns bool
+		if record.conditionMissed or not stopRanToWhereItStands(record.reason) 'theByteSaysNothingAboutThisStop'
+			return false
+		end 'theByteSaysNothingAboutThisStop'
+
+		return self.engine.userBreakpointAt(record.pc)
+	end 'armedByteNamesTheStop'
 
 	function threadOfStop(record EngineStop) returns DebugThreadRef
 		if record.greenThread == 0 'noSchedulerContext'
@@ -1617,11 +1681,12 @@ export type DebugConversation
 		end 'theProgramsOwnCode'
 
 		if not self.insideTheImage(stop.pc) 'enteredCodeOutsideTheImage'
-			return self.plantedOnTheReturnAbove(stop, wordsAbove: 0)
+			return self.plantedOnTheReturnAbove(stop, bytesAbove: 0)
 		end 'enteredCodeOutsideTheImage'
 
 		match self.unchainedReturnOf(stop) 'unchained'
-			onTheStack(wordsAbove, _) then return self.plantedOnTheReturnAbove(stop, wordsAbove: wordsAbove)
+			onTheStack(bytesAbove, _) then return self.plantedOnTheReturnAbove(stop, bytesAbove: bytesAbove)
+			inTheLinkRegister then return self.plantedOnTheLinkRegister(stop)
 			none then break 'unchained'
 		end 'unchained'
 
@@ -1638,12 +1703,19 @@ export type DebugConversation
 		return ReturnPlanting.declined
 	end 'plantedPastForeignCode'
 
-	function plantedOnTheReturnAbove(stop EngineStop, wordsAbove DebugTally) returns ReturnPlanting
-		return match self.returnAddressOnTheStack(stop, wordsAbove: wordsAbove) 'caller'
+	function plantedOnTheReturnAbove(stop EngineStop, bytesAbove DebugFrameReach) returns ReturnPlanting
+		return match self.returnAddressOnTheStack(stop, bytesAbove: bytesAbove) 'caller'
 			none gives ReturnPlanting.declined
 			at(returnAddress) gives self.plantedAt(DebugReturnPoint.create(returnAddress, framePointer: stop.framePointer, greenThread: stop.greenThread, kind: DebugReturnKind.callReturn))
 		end 'caller'
 	end 'plantedOnTheReturnAbove'
+
+	function plantedOnTheLinkRegister(stop EngineStop) returns ReturnPlanting
+		return match self.returnAddressInTheLinkRegister() 'caller'
+			none gives ReturnPlanting.declined
+			at(returnAddress) gives self.plantedAt(DebugReturnPoint.create(returnAddress, framePointer: stop.framePointer, greenThread: stop.greenThread, kind: DebugReturnKind.callReturn))
+		end 'caller'
+	end 'plantedOnTheLinkRegister'
 
 	function plantedPastTheSplice(stop EngineStop, mode DebugWalkMode) returns ReturnPlanting
 		match self.symbols.spliceExitAt(stop.pc - self.engine.imageTextBase()) 'exit'
@@ -1900,7 +1972,7 @@ export type DebugConversation
 		end 'classified'
 	end 'indirectCallTargetAt'
 
-	function calledThrough(operand X64CallOperand) returns DebugUserSpaceAddress
+	function calledThrough(operand DecodedCallOperand) returns DebugUserSpaceAddress
 		match operand 'operand'
 			none then panic("DebugConversation.calledThrough: an indirect call decodes with the operand it calls through")
 			register(number) then return debugUserSpaceAddress(self.engine.registerValue(number as EngineRegisterNumber))
@@ -1910,7 +1982,7 @@ export type DebugConversation
 		end 'operand'
 	end 'calledThrough'
 
-	function effectiveAddress(base X64RegisterLookup, index X64RegisterLookup, scale X64Scale, displacement X64Displacement) returns DebugUserSpaceAddress
+	function effectiveAddress(base DecodedRegisterLookup, index DecodedRegisterLookup, scale DecodedScale, displacement DecodedDisplacement) returns DebugUserSpaceAddress
 		let baseValue = self.registerTerm(base)
 		let indexValue = self.registerTerm(index)
 
@@ -1918,10 +1990,10 @@ export type DebugConversation
 			return DebugUserSpaceAddress.unresolved
 		end 'notAUserSpaceTerm'
 
-		return debugUserSpaceAddress(baseValue + indexValue * (scale as DebugWord) + (displacement as DebugWord))
+		return debugUserSpaceAddress(baseValue + indexValue * (scale as DebuggeeWord) + (displacement as DebuggeeWord))
 	end 'effectiveAddress'
 
-	function registerTerm(register X64RegisterLookup) returns DebugWord
+	function registerTerm(register DecodedRegisterLookup) returns DebuggeeWord
 		return match register 'term'
 			none gives 0
 			register(number) gives self.engine.registerValue(number as EngineRegisterNumber)
@@ -1936,7 +2008,7 @@ export type DebugConversation
 	end 'wordAtTarget'
 
 	function wordHeldAt(slot DebugAddress) returns DebugUserSpaceAddress
-		let word = try self.engine.readDebuggeeWord(slot, width: DebugWordBytes) otherwise return DebugUserSpaceAddress.unresolved
+		let word = try self.engine.readDebuggeeWord(slot, width: DebuggeeWordBytes) otherwise return DebugUserSpaceAddress.unresolved
 
 		return debugUserSpaceAddress(word)
 	end 'wordHeldAt'
@@ -2257,15 +2329,19 @@ function hasACallerFrame(stop DebugStop) returns bool
 	return physical > 1 or (stop.frames.count() as DebugTally) > physical
 end 'hasACallerFrame'
 
-function prologueFrameAddress(record EngineStop, wordsAbove DebugTally, frame DebugPrologueFrame) returns DebugAddress
+function prologueFrameAddress(record EngineStop, frame DebugPrologueFrame) returns DebugAddress
 	return match frame 'set'
 		unset gives record.framePointer
-		belowTheReturn(words) gives record.stackPointer + (wordsAbove as DebugAddress) * (DebugWordBytes as DebugAddress) - (words as DebugAddress) * (DebugWordBytes as DebugAddress)
+		atStackDelta(bytes) gives shiftedStackAddress(record.stackPointer, shift: bytes)
 	end 'set'
 end 'prologueFrameAddress'
 
-function decodedAt(code ByteArray, offset DebugAddress, address DebugAddress) returns X64Decode
-	return decodeX64Instruction(code, at: offset as X64Offset, address: address as X64Address)
+function shiftedStackAddress(stackPointer DebugAddress, shift DebugFrameShift) returns DebugAddress
+	return debugAddressOrZero((stackPointer as DebuggeeWord) + (shift as DebuggeeWord))
+end 'shiftedStackAddress'
+
+function decodedAt(code ByteArray, offset DebugAddress, address DebugAddress) returns DecodedLookup
+	return hostDecodedAt(code, at: offset as DecodedOffset, address: address as DecodedAddress)
 end 'decodedAt'
 
 function presentedPositionArrives(mode DebugWalkMode, line DebugLineNumber, depth DebugTally, framePointer DebugAddress, startFrame DebugAddress, startLine DebugLineNumber, startDepth DebugTally) returns bool
@@ -2284,7 +2360,7 @@ function presentedPositionArrives(mode DebugWalkMode, line DebugLineNumber, dept
 	return framePointer > startFrame or line != startLine
 end 'presentedPositionArrives'
 
-function callOf(instruction X64Instruction, at DebugAddress) returns DebugCallLookup
+function callOf(instruction DecodedInstruction, at DebugAddress) returns DebugCallLookup
 	if instruction.instructionClass == DbgClassDirectCall or instruction.instructionClass == DbgClassIndirectCall 'aCall'
 		return DebugCallLookup.returnsTo(at + (instruction.length as DebugAddress))
 	end 'aCall'

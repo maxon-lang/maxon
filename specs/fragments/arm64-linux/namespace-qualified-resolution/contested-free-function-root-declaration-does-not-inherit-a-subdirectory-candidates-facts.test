@@ -1,0 +1,42 @@
+// Test: contested-free-function-root-declaration-does-not-inherit-a-subdirectory-candidates-facts
+// --- file: alpha/f.maxon
+function pick()
+	panic("alpha never returns")
+end 'pick'
+
+// --- file: beta/f.maxon
+function pick()
+	print("beta pick\n")
+end 'pick'
+
+// --- file: main.maxon
+function pick()
+	print("root pick\n")
+end 'pick'
+
+function main() returns ExitCode
+	pick()
+	print("after\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.leaRdata x0, __str_rec_5  ; "root pick\x0a"
+    arm64.bl print
+  __il_cont:
+    arm64.leaRdata x0, __str_rec_6  ; "after\x0a"
+    arm64.bl print
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

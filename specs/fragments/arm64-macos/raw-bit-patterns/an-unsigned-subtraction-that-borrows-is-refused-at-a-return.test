@@ -1,0 +1,28 @@
+// Test: an-unsigned-subtraction-that-borrows-is-refused-at-a-return
+typealias Count = int(0 to u64.max)
+
+function lessFive(c Count) returns Count
+	return c - 5
+end 'lessFive'
+
+function main() returns ExitCode
+	print("{lessFive(3)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __slab_state@0 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at an-unsigned-subtraction-that-borrows-is-refused-at-a-return.test:5: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

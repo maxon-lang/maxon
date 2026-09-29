@@ -1,0 +1,472 @@
+// Test: http-server.repeated-request-headers-are-combined-in-order
+let ReadBufferBytes = 4096
+
+function acceptedHeader(server HttpServer) returns String
+	let exchange = try server.accept() otherwise (e) 'refused'
+		return e.name
+	end 'refused'
+
+	let accepted = try exchange.request().headers().get("accept") otherwise "absent"
+	try exchange.respondWith(StatusCode.ok, body: accepted, contentType: "text/plain") otherwise return "respond-failed"
+
+	return accepted
+end 'acceptedHeader'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	let peer = async acceptedHeader(server)
+
+	let client = try TcpClient.connect("127.0.0.1", port: server.port()) otherwise return 2
+	_ = try client.send("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/html\r\nX-Other: 1\r\nACCEPT: text/plain\r\n\r\n") otherwise return 3
+	_ = try client.recv(ReadBufferBytes) otherwise return 4
+	client.close()
+
+	let seen = await peer
+	server.close()
+
+	print("accept={seen}\n")
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __gt_allg@0 = i64 0
+  __gt_allglen@8 = i64 0
+  __gt_allgcap@16 = i64 0
+  __gt_hold_epoch@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_timer_count@48 = i64 0
+  __gt_timer_heap_base@56 = i64 0
+  __gt_timer_capacity@64 = i64 0
+  __gt_timer_seq@72 = i64 0
+  __gt_timer_when@80 = i64 9223372036854775807
+  __gt_trace_counter@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __gt_seed_bytes@104 = i64 2048
+  __gt_stack_bytes_sum@112 = i64 0
+  __gt_stack_bytes_count@120 = i64 0
+  __gt_seed_sum_seen@128 = i64 0
+  __gt_seed_count_seen@136 = i64 0
+  __gt_keeps_cpu_clock@144 = i64 0
+  __sched_active_workers@152 = i64 1
+  __sched_max_active_workers@160 = i64 1
+  __sched_tls_index@168 = i64 0
+  __sched_tls_teb_offset@176 = i64 0
+  __sched_procs@184 = i64 0
+  __sched_allm@192 = i64 0
+  __sched_async_preempt_off@200 = i64 0
+  __sched_midle@208 = i64 0
+  __sched_pidle@216 = i64 0
+  __gt_gfree_head@224 = i64 0
+  __sched_arena_cursor@232 = i64 0
+  __sched_arena_limit@240 = i64 0
+  __gt_records_carved@248 = i64 0
+  __sched_npidle@256 = i64 0
+  __sched_runq_size@264 = i64 0
+  __sched_global_pushes@272 = i64 0
+  __sched_timer_scan_steps@280 = i64 0
+  __sched_mcount@288 = i64 0
+  __sched_nmidle@296 = i64 0
+  __sched_main_m@304 = i64 0
+  __sched_phase@312 = i64 0
+  __sched_lastpoll@320 = i64 0
+  __sched_poll_until@328 = i64 0
+  __sched_regain_head@336 = i64 0
+  __np_poller@344 = i64 0
+  __np_break@352 = i64 0
+  __np_wake_sig@360 = i64 0
+  __np_pd_table@368 = i64 0
+  __np_pd_cap@376 = i64 0
+  __np_waiters@384 = i64 0
+  __sched_num_procs@392 = i64 0
+  __sched_shutdown_flag@400 = i64 0
+  __sched_lock@408 = i64 0
+  __sched_lock_depth_sink@416 = i64 0
+  __sched_nmspinning@424 = i64 0
+  __sched_needspinning@432 = i64 0
+  __sched_sysmon_event@440 = i64 0
+  __sched_sysmon_wait@448 = i64 0
+  __sched_timer_starts@456 = i64 0
+  __slab_arena_list@464 = i64 0
+  __slab_arena_map_l1@472 = i64 0
+  __slab_state@480 = i64 0
+  __ms_wsa_started@488 = i64 0
+}
+
+func @acceptedHeader {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl HttpServer.accept
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#10
+  tryerr#2:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.leaRdata x2, __str_rec_134  ; "acceptFailed"
+    arm64.mul x1, x1, x2
+    arm64.cmp x0, 1
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_135  ; "malformedRequest"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 2
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_136  ; "headersTooLarge"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 3
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_137  ; "bodyTooLarge"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 4
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_138  ; "unsupportedTransferEncoding"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 5
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_139  ; "readTimedOut"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 6
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_140  ; "connectionClosed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 7
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_141  ; "sendFailed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 8
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_142  ; "listenerClosed"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 9
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_143  ; "acceptTimedOut"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 10
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_144  ; "alreadyResponded"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 11
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_145  ; "unsupportedMethod"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 12
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_146  ; "unsupportedVersion"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 13
+    arm64.cset x2, eq
+    arm64.leaRdata x3, __str_rec_147  ; "acceptInterrupted"
+    arm64.mul x2, x2, x3
+    arm64.add x1, x1, x2
+    arm64.cmp x0, 14
+    arm64.cset x0, eq
+    arm64.leaRdata x2, __str_rec_148  ; "invalidResponse"
+    arm64.mul x0, x0, x2
+    arm64.add x0, x1, x0
+    arm64.bl __str_retain
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.bl __mm_retain
+    arm64.movRegReg x20, x0
+  __il_body#11:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.leaFuncAddr x1, __clone_HttpHeaders
+    arm64.bl __mm_own_deep
+    arm64.movRegReg x21, x0
+  __il_cont:
+    arm64.leaRdata x1, __str_rec_133  ; "accept"
+    arm64.movRegReg x0, x21
+    arm64.bl HttpHeaders.get
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.leaRdata x0, __str_rec_149  ; "absent"
+    arm64.bl __str_retain
+    arm64.movRegReg x22, x0
+    arm64.b trycont
+  tryok#3:
+    arm64.movRegReg x22, x0
+  trycont:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_HttpHeaders
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_HttpRequest
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.leaRdata x3, __str_rec_150  ; "text/plain"
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x22
+    arm64.bl HttpExchange.respondWith
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#6
+  tryerr#7:
+    arm64.leaRdata x0, __str_rec_151  ; "respond-failed"
+    arm64.bl __str_retain
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HttpExchange
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok#6:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HttpExchange
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot11, x28
+    arm64.storeSlotReg slot10, x27
+    arm64.storeSlotReg slot9, x26
+    arm64.storeSlotReg slot8, x25
+    arm64.storeSlotReg slot7, x24
+    arm64.storeSlotReg slot6, x23
+    arm64.storeSlotReg slot5, x22
+    arm64.storeSlotReg slot4, x21
+    arm64.storeSlotReg slot3, x20
+    arm64.storeSlotReg slot2, x19
+    arm64.leaRdata x0, __str_rec_152  ; "127.0.0.1"
+    arm64.movImm x1, 0
+    arm64.bl HttpServer.bind
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_own
+    arm64.movRegReg x20, x0
+    arm64.leaFuncAddr x0, acceptedHeader
+    arm64.bl __gt_spawn
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.leaFuncAddr x0, __gt_release_acceptedHeader
+    arm64.storeBaseDispReg.word64 [x21 + 176], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.leaRdata x0, __str_rec_152  ; "127.0.0.1"
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+  __il_cont#9:
+    arm64.bl TcpClient.connect
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_promise_drop
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HttpServer
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryok#3:
+    arm64.leaRdata x1, __str_rec_153  ; "GET / HTTP/1.1\x0d\x0aHost: 127.0.0.1\x0d\x0aAccept: text/html\x0d\x0aX-Other: 1\x0d\x0aACCEPT: text/plain\x0d\x0a\x0d\x0a"
+    arm64.movRegReg x0, x20
+    arm64.bl TcpClient.send
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.movImm x22, 3
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_promise_drop
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HttpServer
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryok#5:
+    arm64.movImm x1, 4096
+    arm64.movRegReg x0, x20
+    arm64.bl TcpClient.recv
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#7
+  tryerr#8:
+    arm64.movImm x22, 4
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_TcpClient
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_promise_drop
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_HttpServer
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  tryok#7:
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x20
+    arm64.bl TcpClient.close
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_await
+    arm64.movRegReg x20, x0
+  __il_body#14:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.byte [x0 + 0], x1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+  __il_body#16:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __ms_close
+  __il_cont#13:
+    arm64.leaRdata x0, __str_rec_154  ; "accept="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x20 + 8]
+    arm64.leaRdata x0, __str_rec_155  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x21, x23
+    arm64.add x26, x0, x25
+    arm64.add x0, x26, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x19, x28, x21
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x19, x25
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.storeBaseDispReg.word64 [x27 + 8], x26
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+  __il_body#12:
+    arm64.movRegReg x0, x27
+    arm64.bl __write_stdout
+  __il_cont#11:
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __destruct_TcpClient
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_HttpServer
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+}
