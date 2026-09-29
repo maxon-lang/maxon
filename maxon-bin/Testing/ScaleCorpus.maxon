@@ -5581,7 +5581,7 @@ function bufferValueDoorsBlock(index KnobIndex) returns String
 	body.append("\t\tlet bm{index} = ba{index}.managed\n")
 	body.append("\t\tacc = acc + bm{index}.length() + {BufferSurfaceReadName}(ba{index}.managed){neutralizeText(2 * published)}\n")
 	body.append(accProbe("\t\t"))
-	body.append("\t\tacc = acc + {BufferSurfaceReturnPrefix}{index}(ba{index}).length() + ba{index}.count(){neutralizeText(2 * published)}\n")
+	body.append("\t\tacc = acc + {BufferSurfaceReturnPrefix}{index}(ba{index}).length() + {asScaleInt("ba{index}.count()")}{neutralizeText(2 * published)}\n")
 	body.append(accProbe("\t\t"))
 	body.append("\t\tlet bh{index} = {BufferSurfaceHoldName}.create(ba{index}.managed, value: a)\n")
 	body.append("\t\tacc = acc + bh{index}.{BufferSurfaceHoldFieldName}.length(){neutralizeText(published)}\n")
@@ -5660,7 +5660,7 @@ function bufferElementReadBlock(index KnobIndex) returns String
 	body.append("\t\tvar bf{index} = {BufferSurfaceOfBuffersAlias}.create()\n")
 	body.append("\t\tbf{index}.push(\"{element}\".toByteArray())\n")
 	body.append("\t\tlet bg{index} = try bf{index}.get(0) otherwise panic(\"scale corpus: index 0 of an array pushed to one line above\")\n")
-	body.append("\t\tacc = acc + bg{index}.length() + bf{index}.count(){neutralizeText(((element.byteLength() + BufferElementPushCount) as TrackedValue))}\n")
+	body.append("\t\tacc = acc + bg{index}.length() + {asScaleInt("bf{index}.count()")}{neutralizeText(((element.byteLength() + BufferElementPushCount) as TrackedValue))}\n")
 	body.append(accProbe("\t\t"))
 	return ownedSiteBlock("bf{index}", body: body.build())
 end 'bufferElementReadBlock'
