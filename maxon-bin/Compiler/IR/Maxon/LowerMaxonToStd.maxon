@@ -918,6 +918,83 @@ function requireRuntimeCallPositional(callee ByteArray, argLabels ByteArrayArray
 	end 'eachLabel'
 end 'requireRuntimeCallPositional'
 
+union LayoutSource
+	ofInstance(instanceValue ValueId)
+	forwardedFromTheCaller
+end 'LayoutSource'
+
+typealias DescriptorTableMap = Map with (ByteArray, GenericInstanceIdArray)
+
+let noDescriptorTableEntries = GenericInstanceIdArray.create()
+
+let ContainerElementPosition = 0 as ElementIndex
+
+let ManagedCreateArity = 2 as ParamCount
+let ListCreateArity = 1 as ParamCount
+
+function stampedContainerCreateArity(callee ByteArray) returns ParamCount
+	if callee.equals(ManagedCreateName) 'anArrayCreate'
+		return ManagedCreateArity
+	end 'anArrayCreate'
+
+	if callee.equals(ListCreateName) 'aChainCreate'
+		return ListCreateArity
+	end 'aChainCreate'
+
+	panic("stampedContainerCreateArity: '{String.from(callee)}' is not a container create whose element stamp a descriptor supplies")
+end 'stampedContainerCreateArity'
+
+typealias DescriptorTableOwnerSet = Set with ByteArray
+
+type DescriptorSubjectSite
+	export let instance as GenericInstanceId
+	export let callee as ByteArray
+	export let funcIndex as ElementIndex
+
+	static function create(instance GenericInstanceId, callee ByteArray, funcIndex ElementIndex) returns DescriptorSubjectSite
+		return Self{instance: instance, callee: callee, funcIndex: funcIndex}
+	end 'create'
+end 'DescriptorSubjectSite'
+
+typealias DescriptorSubjectSiteArray = Array with DescriptorSubjectSite
+
+type DescriptorSubjects
+	export var candidates as DescriptorSubjectSiteArray
+	export var withoutADescriptor as DescriptorSubjectSiteArray
+	var candidateInstances as GenericInstanceIdSet
+	var currentFuncIndex as ElementIndex
+	var funcCarriesADescriptor as bool
+
+	static function create() returns DescriptorSubjects
+		return Self{candidates: DescriptorSubjectSiteArray.create(), withoutADescriptor: DescriptorSubjectSiteArray.create(), candidateInstances: GenericInstanceIdSet.create(), currentFuncIndex: 0, funcCarriesADescriptor: false}
+	end 'create'
+
+	function enterFunction(funcIndex ElementIndex, carriesADescriptor bool)
+		self.currentFuncIndex = funcIndex
+		self.funcCarriesADescriptor = carriesADescriptor
+	end 'enterFunction'
+
+	function note(gid GenericInstanceId, callee ByteArray)
+		if not self.funcCarriesADescriptor 'aFrameWithNoDescriptor'
+			self.withoutADescriptor.push(DescriptorSubjectSite.create(gid, callee: callee, funcIndex: self.currentFuncIndex))
+			return
+		end 'aFrameWithNoDescriptor'
+
+		if self.candidateInstances.contains(gid) 'alreadyACandidate'
+			return
+		end 'alreadyACandidate'
+
+		self.candidateInstances.insert(gid)
+		self.candidates.push(DescriptorSubjectSite.create(gid, callee: callee, funcIndex: self.currentFuncIndex))
+	end 'note'
+
+	function noteWhereCarried(gid GenericInstanceId, callee ByteArray)
+		if self.funcCarriesADescriptor 'aFrameWithADescriptor'
+			self.note(gid, callee: callee)
+		end 'aFrameWithADescriptor'
+	end 'noteWhereCarried'
+end 'DescriptorSubjects'
+
 // ⭐⭐ **WHICH DIVISION IS BEING EXPANDED, AND — WHERE THERE IS ONE — THE ERROR-FLAG REGISTER IT WRITES.**
 // The flag is the ONE thing that differs between the fallible divisions and the total remainder
 // which is why `lowerDivisionExpansion` is one function and not two near-copies of a four-op guard.
@@ -1083,7 +1160,7 @@ type MaxonToStdLowering
 
 	// The per-value NAME column of the function CURRENTLY being lowered — re-pointed per function like
 	// `valueTags`, from `IrFunction.valueNameIds`. For a `genericInstance`-tagged receiver at a `sizeof(T)`
-	// call site it carries the `GenericInstanceId`, which `materializeLayoutArg` resolves to a descriptor.
+	// call site it carries the `GenericInstanceId`, which `instanceIdOfValue` reads for the descriptor.
 	var valueNameIds as TypeNameIdArray
 
 	// ⭐ Whether this build carries the DebugStream producer (`--debugstream`). Read at exactly ONE seam
@@ -1156,14 +1233,17 @@ type MaxonToStdLowering
 	// give the whole-program counter slot. Re-stamped per function beside `currentFuncName`.
 	var currentCovPointBase as CovPointId
 
-	// The ValueId of the CURRENT function's hidden layout-descriptor parameter, or an unused 0
+	// The ValueId of the CURRENT function's hidden layout-descriptor parameter — or, in a closure, of the
+	// entry load of the word it inherits (`bindClosureCaptures`) — or an unused 0
 	// when it carries none — `hasImplicitLayout` is the authoritative "does it carry one?" bit, because a
 	// zero-user-parameter generic method's descriptor slot is legitimately ValueId 0 (no sentinel).
 	var implicitLayoutValueId as ValueId
 
-	// Does the CURRENT function carry a layout-descriptor parameter? The non-sentinel gate on
+	// Does the CURRENT function carry a layout descriptor? The non-sentinel gate on
 	// `implicitLayoutValueId` — read by `sizeof(T)` lowering and `forwardCallerLayout`.
 	var hasImplicitLayout as bool
+	var descriptorTables as DescriptorTableMap
+	var instanceParameterUses as InstanceParameterUses
 
 	// The ValueId of the CURRENT function's hidden fixed-element-count parameter — the slot between
 	// the layout descriptor and the constraint witnesses. Read only to FORWARD it, by
@@ -1253,7 +1333,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1329,6 +1409,7 @@ type MaxonToStdLowering
 		// so both directions of the ABI (a callee binding its slot, a caller appending the argument) read
 		// one whole-program answer. An op-scan over the Maxon module; O(total ops), linear.
 		self.buildLayoutNeedingFuncs()
+		try self.planDescriptorTables(project)
 
 		// Relocate blocks 1:1 first so blockRef indices stay aligned between the
 		// source MaxonModule and the dest StdModule; each dest block starts empty
@@ -1441,7 +1522,7 @@ type MaxonToStdLowering
 			// resolved from the RECEIVER's own `with` arguments, which live only here.
 			self.currentExistentialInstances = srcFunc.valueExistentialInstances
 
-			// The name column travels with it too: `materializeLayoutArg` reads a `genericInstance`
+			// The name column travels with it too: `instanceIdOfValue` reads a `genericInstance`
 			// receiver's `GenericInstanceId` out of it.
 			self.valueNameIds = srcFunc.valueNameIds
 			self.currentFuncName = srcFunc.name
@@ -1473,6 +1554,11 @@ type MaxonToStdLowering
 			// sidecar rather than silently attributing a runtime body to a user statement.
 			let spanFile = self.spanFileIdOf(srcFunc, project: project)
 
+			let entryRef = try srcFunc.blockRefs.get(0) otherwise panic("lowerMaxonToStd: function '{String.from(srcFunc.name)}' has no entry block")
+			let closureLayout = srcFunc.closureLayout
+			let closureFixedElementCount = srcFunc.closureFixedElementCount
+			let closureParamCount = srcFunc.paramCount
+
 			for blockRef in srcFunc.blockRefs 'eachBlock'
 				// ⚠ **THE SOURCE BLOCK IS READ FOR ITS THREE FACTS AND NOT HELD ACROSS THE OP LOOP.** A block
 				// read out of `maxonModule.blocks` is a BORROW of that module, and `lowerOp`/`lowerTerminator`
@@ -1487,6 +1573,10 @@ type MaxonToStdLowering
 				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: stdModule.blocks 1:1 with maxonModule.blocks but get({blockRef}) failed")
 
 				self.retypeBlockArgs(dstBlock)
+
+				if blockRef == entryRef 'theEntryBlock'
+					self.bindClosureCaptures(closureLayout, fixedElementCount: closureFixedElementCount, paramCount: closureParamCount, entryBlock: dstBlock)
+				end 'theEntryBlock'
 
 				for maxonOpPos in 0 upto srcOpCount 'eachOp'
 					// BEFORE the op is lowered: a site recorded at this ordinal names the op that SPENDS its
@@ -2155,8 +2245,8 @@ type MaxonToStdLowering
 	//
 	// ⚠ **A COUNT MISSING FROM THIS SUM READS AS A LAYOUT SLOT THAT IS NOT THERE.** MEASURED with the
 	// existential block absent from it: `function callGreet(g Greeter)` makes `layoutNeedingFuncs` claim a
-	// free function needs a descriptor, and the caller then panics in `materializeStaticConstructorLayout`
-	// looking for a generic instance to source one from.
+	// free function needs a descriptor, and the caller then panics looking for a generic instance to source
+	// one from.
 	function functionHasDescriptorParam(func IrFunction) returns bool
 		return func.paramCount > func.maxonParamTypes.count() as ParamCount + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.function) + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.interfaceRef) + self.fixedElementCountParamCountFor(func.name) + self.witnessParamCountForFunc(func)
 	end 'functionHasDescriptorParam'
@@ -2403,12 +2493,12 @@ type MaxonToStdLowering
 	// receiver → the RIP-relative address of `__witness_<ConcreteArg>.<Iface>` (`rdataAddr`), emitting the
 	// table on first reference; a receiver that is the enclosing generic body's OWN `self` (`structRef`) or a
 	// value of its type parameter → FORWARD the caller's own witness slot for the same constraint index (a
-	// generic→generic call, both of the same type, so the slots align). Mirrors `materializeLayoutArg`.
+	// generic→generic call, both of the same type, so the slots align). Mirrors `receiverLayoutSource`.
 	function materializeWitnessArg(receiver ValueId, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
 		let tag = self.valueTagOf(receiver)
 
 		if tag == ValueTypeTag.genericInstance 'concrete'
-			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeWitnessArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId)")
+			let gid = self.instanceIdOfValue(receiver)
 
 			// ⭐⭐ **AN INSTANCE OVER THE ENCLOSING BODY'S OWN TYPE PARAMETER FORWARDS, IT DOES NOT MATERIALIZE
 			// The receiver IS a concrete `genericInstance` — but the argument at the constrained
@@ -2424,7 +2514,7 @@ type MaxonToStdLowering
 			// must not be assumed — a wrong forwarding index here is a witness read out of the wrong slot.
 			// `opaqueParamDischarge` is the same answer `checkWhereConstraints` accepted the program on, so the
 			// slot placed here is the slot the check verified.
-			let typeArg = self.signatures.substitutedInstanceArg(gid as GenericInstanceId, position: constraint.typeParamIndex)
+			let typeArg = self.signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
 
 			if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
 				return self.forwardOpaqueParamWitness(typeParamIdOf(typeArg), constraint: constraint, callee: callee)
@@ -2438,8 +2528,8 @@ type MaxonToStdLowering
 			// conformance, and where that conformance's impls carry a dictionary the table has to be keyed by the
 			// instantiation as well. `witnessTableInstanceFor` decides; a `Box with Integer` still names
 			// `__witness_int.Hashable` because `int` is no instance at all.
-			let concreteType = self.signatures.conformerTypeArgName(gid as GenericInstanceId, position: constraint.typeParamIndex).toByteArray()
-			let argInstance = self.constraintArgumentInstance(gid as GenericInstanceId, position: constraint.typeParamIndex)
+			let concreteType = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
+			let argInstance = self.constraintArgumentInstance(gid, position: constraint.typeParamIndex)
 
 			// ⭐⭐ **AND AN INSTANCE THAT IS STILL PARAMETRIC HAS NO TABLE AT ALL, SO THE CALL PASSES A ZERO AND
 			// OWES A PROOF** — see `NullWitnessArgRequest` for why no `.rdata` blob can serve it and
@@ -2780,7 +2870,7 @@ type MaxonToStdLowering
 			return WitnessTableInstance.shared
 		end 'namesNoInstance'
 
-		return WitnessTableInstance.perInstance((try self.valueNameIds.get(value) otherwise panic("witnessInstanceOfValue: generic-instance value v{value} has no recorded name-id (its GenericInstanceId) — the two type columns are minted in lockstep")) as GenericInstanceId)
+		return WitnessTableInstance.perInstance(self.instanceIdOfValue(value))
 	end 'witnessInstanceOfValue'
 
 	// ⭐ **THE TABLE REQUEST FOR ONE `where` CONSTRAINT'S SUBSTITUTED ARGUMENT** — the door
@@ -3335,6 +3425,13 @@ type MaxonToStdLowering
 		end 'resolved'
 	end 'resolveWitnessInterface'
 
+	function materializeLayoutArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		match self.layoutSourceOf(argIds, sig: sig, result: result, callee: callee) 'source'
+			ofInstance(instanceValue) then return self.emitInstanceDescriptorAddr(instanceValue, dstBlock: dstBlock)
+			forwardedFromTheCaller then return self.forwardCallerLayout(callee)
+		end 'source'
+	end 'materializeLayoutArgFor'
+
 	// The layout-descriptor argument a layout-needing call must pass, from the RIGHT source. An INSTANCE
 	// method reads it from its RECEIVER (`self` at slotted position 0 — the value of
 	// the concrete generic instance). A receiverless STATIC constructor (`IntContainer.create(…)`) has no
@@ -3342,11 +3439,12 @@ type MaxonToStdLowering
 	// builds, and the parser has already retyped that result to `genericInstance(gid)`, so the concrete gid is
 	// read off the result. The discriminator is the callee's own parameter list (`__self` at position 0), not
 	// the shape of `argIds`, so a static whose first argument happens to be a generic instance is unambiguous.
-	function materializeLayoutArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+	// `planDescriptorTables` asks it too, so the table plan and the call lowering read one source.
+	function layoutSourceOf(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray) returns LayoutSource
 		if sig.takesReceiver() 'instanceMethod'
 			// Read from `argIds` (the ORIGINAL receiver), never from the widened/env-derived `baseArgs`.
-			let receiver = try argIds.get(0) otherwise panic("materializeLayoutArgFor: layout-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
-			return self.materializeLayoutArg(receiver, callee: callee, dstBlock: dstBlock)
+			let receiver = try argIds.get(0) otherwise panic("layoutSourceOf: layout-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
+			return self.receiverLayoutSource(receiver, callee: callee)
 		end 'instanceMethod'
 
 		// ⭐ **A FIELD-DEFAULT HELPER IS THE ONE RECEIVERLESS LAYOUT-NEEDING CALLEE WHOSE DESCRIPTOR COMES
@@ -3355,20 +3453,7 @@ type MaxonToStdLowering
 		// inside the declaring type's own body (`requireConstructible`'s E3076), which is a method of that
 		// type and therefore holds the descriptor to forward. `Parser.scanDescriptorNeedsInto` gives that
 		// method the slot for exactly this reason, so `forwardCallerLayout` always finds one.
-		if isFieldDefaultHelperName(callee) 'fieldDefault'
-			return self.forwardCallerLayout(callee)
-		end 'fieldDefault'
-
-		return self.materializeStaticConstructorLayout(result, callee: callee, dstBlock: dstBlock)
-	end 'materializeLayoutArgFor'
-
-	// The descriptor address for a layout-needing STATIC generic constructor — the RIP-relative
-	// address of its RESULT instance's descriptor blob. The result was retyped to `genericInstance(gid)` by the
-	// parser (`retypeGenericAliasConstructorResult`), so the concrete gid — `Container with SmallInt` — is read
-	// off the result's name column, exactly as an instance-method receiver's is. A receiverless layout-needing
-	// callee is always such a constructor (a static that returns its own instance), so a non-instance result is
-	// an internal invariant break.
-	function materializeStaticConstructorLayout(result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		//
 		// ⭐⭐ **`Self.create()` INSIDE THE GENERIC'S OWN BODY IS THE SECOND RECEIVERLESS SHAPE, AND ITS
 		// DESCRIPTOR IS THE CALLER'S — a forward, exactly as the field-default helper's is.** A `Self` call
 		// names the type over its own parameters, not a concrete instantiation, so there is no gid to read a
@@ -3377,19 +3462,18 @@ type MaxonToStdLowering
 		// instance over its own parameters made `Box.make(x)` return a `Box_T…` that stopped satisfying
 		// `returns Self`), so the result keeps the base's `structRef` and there is nothing concrete here by
 		// construction. The enclosing body is a member of that very generic, so the descriptor it was handed
-		// IS this call's — the same reasoning `emitInstanceDescriptorAddr` uses for an instance over the
-		// enclosing body's own parameters, one tag over.
+		// IS this call's.
 		//
 		// ⛔⛔ **A RECEIVERLESS SHAPE NEED NOT BE A CONCRETE INSTANCE, SO THIS FORWARDS RATHER THAN PANICS.**
 		// `BlockKeyedTable.forBlockCount` opens with `var table = Self.create()` — the ordinary way a generic's
 		// sized constructor reuses its empty one — and that result is a `structRef`, not a generic instance. A
 		// panic asserting otherwise aborts the compile on the compiler's own source.
-		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notAConcreteInstance'
-			return self.forwardCallerLayout(callee)
-		end 'notAConcreteInstance'
+		if isFieldDefaultHelperName(callee) or self.valueTagOf(result) != ValueTypeTag.genericInstance 'forwarded'
+			return LayoutSource.forwardedFromTheCaller
+		end 'forwarded'
 
-		return self.emitInstanceDescriptorAddr(result, dstBlock: dstBlock)
-	end 'materializeStaticConstructorLayout'
+		return LayoutSource.ofInstance(result)
+	end 'layoutSourceOf'
 
 	// The descriptor address for a generic-instance VALUE — the shared core of the two ways a layout-needing
 	// call finds its descriptor source, an instance-method RECEIVER and a static-constructor RESULT
@@ -3409,16 +3493,17 @@ type MaxonToStdLowering
 	// reasoning is receiver-specific: both callers hold a value typed at the instance, and both need the
 	// caller's own blocks. Split the decision by the DOOR the value came through and `EChain.create()`
 	// inside `type Bag uses Element` — a `typealias EChain = Inner with Element`, a DECLARED generic over
-	// the enclosing type's own parameter — reaches the mint through
-	// `materializeStaticConstructorLayout` and ABORTS THE COMPILER.
+	// the enclosing type's own parameter — reaches the mint through `layoutSourceOf`'s result arm and ABORTS
+	// THE COMPILER.
 	//
 	// ⚠ **IT FORWARDS A BLOCK ADDRESS, NOT ALWAYS THE DESCRIPTOR'S HEAD.** The callee reads ITS parameter `i`
 	// out of block `i` of whatever pointer it is handed, so the forward is sound exactly when the instance's
 	// arguments are a CONTIGUOUS, IN-ORDER RUN of the caller's own parameters — `Cell with T` inside
 	// `Holder uses T` is the run `[0,1)`, and `Cell with U` inside `Holder uses T, U` is the run `[1,2)`, whose
-	// base is block 1. A permutation or a mixed concrete/parameter list has no single base and is not a run:
-	// `genericInstanceArgsAreACallerParameterRun` answers no, and such a value keeps today's behaviour of
-	// minting, which is right whenever it is genuinely concrete. The blob's own `size@0` describes the CALLER's
+	// base is block 1. A permutation or a mixed concrete/parameter list has no single base and is not a run
+	// (`genericInstanceArgsAreACallerParameterRun` answers no): its descriptor is composed at the concrete
+	// root and read out of the caller's own descriptor table (`emitDescriptorTableRead`), and a genuinely
+	// concrete instance is minted. The blob's own `size@0` describes the CALLER's
 	// box rather than the callee's, and that is sound because nothing reads it: the four words a shared body
 	// ever loads are `copyFunc@32`, `destroyFunc@40`, `elementLogicalSize@56` and `retainFunc@64`, and every
 	// one of them is a fact about the type ARGUMENT, which the run makes identical on both sides.
@@ -3433,20 +3518,281 @@ type MaxonToStdLowering
 	// sides, because the retain and the drop read the same zero words. Forwarding a real descriptor into half
 	// of such a chain would make the retains fire while the drops still read the mint, which trades an inert
 	// pair for an unbalanced one. The forwarding edge is drawn only from a call whose receiver RESOLVES to such an
-	// instance (`Parser.nestedInstanceCalleeAt`), and the emitted cursor calls `Map.map` makes resolve to
+	// instance (`Parser.nestedInstanceReceiverAt`), and the emitted cursor calls `Map.map` makes resolve to
 	// nothing — so that chain keeps both of its inert ends.
 	function emitInstanceDescriptorAddr(instanceValue ValueId, dstBlock IrBlock) returns ValueId
-		let gid = try self.valueNameIds.get(instanceValue) otherwise panic("emitInstanceDescriptorAddr: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
+		let gid = self.instanceIdOfValue(instanceValue)
 
-		if self.hasImplicitLayout and self.signatures.genericInstanceArgsAreACallerParameterRun(gid as GenericInstanceId) 'forwardsTheCallersOwnRun'
+		if self.hasImplicitLayout and self.descriptorTableHolds(gid) 'resolvedAtTheConcreteRoot'
+			return self.emitDescriptorTableRead(gid, dstBlock: dstBlock)
+		end 'resolvedAtTheConcreteRoot'
+
+		if self.hasImplicitLayout and self.signatures.instanceDescriptorIsComposedFromTheCaller(gid) 'aComposedInstanceTheTableMissed'
+			panic("emitInstanceDescriptorAddr: '{String.from(self.currentFuncName)}' reaches a call on '{String.from(self.signatures.instanceDisplayName(gid))}', whose descriptor is read out of the caller's table, but `planDescriptorTables` filed no entry for it — the plan and the call lowering read the descriptor source through one `layoutSourceOf`, so they must agree")
+		end 'aComposedInstanceTheTableMissed'
+
+		if self.hasImplicitLayout and self.signatures.genericInstanceArgsAreACallerParameterRun(gid) 'forwardsTheCallersOwnRun'
 			// The run's base is argument 0's own `uses`-list position; the predicate above proved the rest follow it.
-			return self.descriptorBlockAddr(layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.substitutedInstanceArg(gid as GenericInstanceId, position: 0))), dstBlock: dstBlock)
+			return self.descriptorBlockAddr(layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.instanceArgType(gid, position: 0))), dstBlock: dstBlock)
 		end 'forwardsTheCallersOwnRun'
 
 		let descId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.globalData.labelBytesOf(self.ensureLayoutDescriptor(gid as GenericInstanceId))))
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.globalData.labelBytesOf(self.ensureLayoutDescriptor(gid))))
 		return descId
 	end 'emitInstanceDescriptorAddr'
+
+	function instanceIdOfValue(value ValueId) returns GenericInstanceId
+		return (try self.valueNameIds.get(value) otherwise panic("instanceIdOfValue: generic-instance value v{value} in '{String.from(self.currentFuncName)}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")) as GenericInstanceId
+	end 'instanceIdOfValue'
+
+	function emitDescriptorTableRead(gid GenericInstanceId, dstBlock IrBlock) returns ValueId
+		let owner = self.descriptorTableOwnerOf(gid)
+		let descId = self.mintStdValueId()
+		let offset = layoutTableSlotOffset(self.signatures.structTypeParamsOf(owner).count(), entry: self.descriptorTableEntryOf(gid, owner: owner))
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(descId, addrId: self.implicitLayoutValueId, offset: offset, valueType: StdType.i64))
+		return descId
+	end 'emitDescriptorTableRead'
+
+	function descriptorTableHolds(gid GenericInstanceId) returns bool
+		let owner = try self.signatures.instanceParameterOwnerName(gid) otherwise return false
+		let entries = try self.descriptorTables.get(owner) otherwise return false
+		return entries.contains(gid)
+	end 'descriptorTableHolds'
+
+	function descriptorTableEntryOf(gid GenericInstanceId, owner ByteArray) returns ElementIndex
+		let entries = try self.descriptorTables.get(owner) otherwise panic("descriptorTableEntryOf: '{String.from(owner)}' has no descriptor table and yet one of its instances was read out of it")
+
+		for i in 0 upto entries.count() 'eachEntry'
+			if (try entries.get(i) otherwise panic("descriptorTableEntryOf: entries.get({i}) below count")) == gid 'found'
+				return i
+			end 'found'
+		end 'eachEntry'
+
+		panic("descriptorTableEntryOf: '{String.from(owner)}''s descriptor table holds no entry for instance {gid}")
+	end 'descriptorTableEntryOf'
+
+	function descriptorTableOwnerOf(gid GenericInstanceId) returns ByteArray
+		return try self.signatures.instanceParameterOwnerName(gid) otherwise panic("descriptorTableOwnerOf: instance {gid} is built on no type parameter, so no declaration's table can hold it")
+	end 'descriptorTableOwnerOf'
+
+	function createTakesItsElementStampFromADescriptor(callee ByteArray, result ValueId) returns bool
+		if not (callee.equals(ManagedCreateName) or callee.equals(ListCreateName)) or self.valueTagOf(result) != ValueTypeTag.genericInstance 'notAnInstanceCreate'
+			return false
+		end 'notAnInstanceCreate'
+
+		return self.signatures.instanceDescriptorIsComposedFromTheCaller(self.instanceIdOfValue(result))
+	end 'createTakesItsElementStampFromADescriptor'
+
+	function appendComposedElementStampCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		if args.count() + 1 != stampedContainerCreateArity(callee) 'notShortTheStamp'
+			panic("appendComposedElementStampCreate: `{String.from(callee)}` in '{String.from(self.currentFuncName)}' arrived with {args.count()} arguments — the parser leaves the element stamp off a composed create in every body that carries a layout descriptor, and this lowering reads it off the same reservation")
+		end 'notShortTheStamp'
+
+		let destroyId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(destroyId, addrId: self.emitDescriptorTableRead(self.instanceIdOfValue(result), dstBlock: dstBlock), offset: layoutBlockOffsetFor(ContainerElementPosition) + LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
+		var fullArgs = ValueIdArray.create()
+		fullArgs.append(args)
+		fullArgs.push(destroyId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
+	end 'appendComposedElementStampCreate'
+
+	function bindClosureCaptures(layout ClosureCaptureSource, fixedElementCount ClosureCaptureSource, paramCount ParamCount, entryBlock IrBlock)
+		if let descId = try self.loadClosureCapture(layout, paramCount: paramCount, entryBlock: entryBlock) 'carriesTheDescriptor'
+			self.hasImplicitLayout = true
+			self.implicitLayoutValueId = descId
+		end 'carriesTheDescriptor'
+
+		if let countId = try self.loadClosureCapture(fixedElementCount, paramCount: paramCount, entryBlock: entryBlock) 'carriesTheCount'
+			self.hasImplicitFixedElementCount = true
+			self.implicitCountValueId = countId
+		end 'carriesTheCount'
+	end 'bindClosureCaptures'
+
+	function loadClosureCapture(source ClosureCaptureSource, paramCount ParamCount, entryBlock IrBlock) returns ValueId throws MapError
+		match source 'source'
+			none then throw MapError.keyNotFound
+			envSlot(offset) then return self.loadEnvWord(offset, envParam: valueIdAtParamPosition(paramCount - 1), entryBlock: entryBlock)
+		end 'source'
+	end 'loadClosureCapture'
+
+	function loadEnvWord(offset ByteOffset, envParam ValueId, entryBlock IrBlock) returns ValueId
+		let wordId = self.mintStdValueId()
+		self.stdModule.appendOp(entryBlock, op: StdOp.loadIndirect(wordId, addrId: envParam, offset: offset, valueType: StdType.i64))
+		return wordId
+	end 'loadEnvWord'
+
+	function functionCarriesADescriptor(func IrFunction) returns bool
+		return match func.closureLayout 'source'
+			none gives self.functionHasDescriptorParam(func)
+			envSlot gives true
+		end 'source'
+	end 'functionCarriesADescriptor'
+
+	// Planned whole before any body lowers: `ensureLayoutDescriptor` fixes a blob's table length when it first
+	// mints it, so an entry filed after that would index past the blob.
+	function planDescriptorTables(project Project) throws CompileError
+		var subjects = DescriptorSubjects.create()
+
+		for fnIndex in 0 upto self.maxonModule.functions.count() 'eachFunc'
+			let func = try self.maxonModule.functions.get(fnIndex) otherwise panic("planDescriptorTables: functions.get({fnIndex}) below count")
+
+			if self.libraryFacts.bodyIsSwept(func.name) 'noBodyToLower'
+				continue
+			end 'noBodyToLower'
+
+			self.valueTags = func.valueTags
+			self.valueNameIds = func.valueNameIds
+			self.currentFuncName = func.name
+			subjects.enterFunction(fnIndex, carriesADescriptor: self.functionCarriesADescriptor(func))
+			self.noteTableCandidatesOf(func.blockRefs, into: subjects)
+		end 'eachFunc'
+
+		while self.fileTableEntries(subjects.candidates) 'aRoundFiledAnEntry'
+			continue
+		end 'aRoundFiledAnEntry'
+
+		try self.requireEveryComposedDescriptorHasASource(subjects.withoutADescriptor, project: project)
+		try self.requireDescriptorTablesAreFinite(subjects.candidates, project: project)
+	end 'planDescriptorTables'
+
+	function requireEveryComposedDescriptorHasASource(sites DescriptorSubjectSiteArray, project Project) throws CompileError
+		for site in sites 'eachSite'
+			if self.instanceIsResolvedAtTheConcreteRoot(site.instance) 'noDescriptorToComposeFrom'
+				try self.refuseDescriptorSubject(site, project: project, reason: "is called on '{String.from(self.signatures.instanceDisplayName(site.instance))}', whose layout descriptor is read out of the calling method's own descriptor, and this body carries none — a method reserves one only when its body reaches the instance through a field, an inner typealias, a parameter or a local bound from one of those, a closure carries the descriptor of the method it is written in, and a `static function` that does not return its own type, or a closure written inside one, has none to carry. Make the call from an instance method of the enclosing type, through one of those spellings (e.g. 'self.<field>.<method>(…)')")
+			end 'noDescriptorToComposeFrom'
+		end 'eachSite'
+	end 'requireEveryComposedDescriptorHasASource'
+
+	function requireDescriptorTablesAreFinite(candidates DescriptorSubjectSiteArray, project Project) throws CompileError
+		for site in candidates 'eachCandidate'
+			if not self.descriptorTableHolds(site.instance) or not self.signatures.genericInstanceArgsBuildOnATypeParameter(site.instance) 'cannotGrow'
+				continue
+			end 'cannotGrow'
+
+			let owner = self.descriptorTableOwnerOf(site.instance)
+			var visited = DescriptorTableOwnerSet.create()
+
+			if self.descriptorTableReaches(owner, from: self.signatures.genericInstanceBaseName(site.instance), visited: visited) 'aChainThatGrows'
+				try self.refuseDescriptorSubject(site, project: project, reason: "is called on '{String.from(self.signatures.instanceDisplayName(site.instance))}', whose type arguments build on the type parameters of '{String.from(owner)}', and whose methods reach '{String.from(owner)}' again — so composing its layout descriptor at a concrete instantiation would build an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own")
+			end 'aChainThatGrows'
+		end 'eachCandidate'
+	end 'requireDescriptorTablesAreFinite'
+
+	function descriptorTableReaches(owner ByteArray, from ByteArray, visited DescriptorTableOwnerSet) returns bool
+		if from.equals(owner) 'reached'
+			return true
+		end 'reached'
+
+		if visited.contains(from) 'alreadyWalked'
+			return false
+		end 'alreadyWalked'
+
+		visited.insert(from)
+		let entries = try self.descriptorTables.get(from) otherwise return false
+
+		for entry in entries 'eachEntry'
+			if self.descriptorTableReaches(owner, from: self.signatures.genericInstanceBaseName(entry), visited: visited) 'reachedThroughAnEntry'
+				return true
+			end 'reachedThroughAnEntry'
+		end 'eachEntry'
+
+		return false
+	end 'descriptorTableReaches'
+
+	function refuseDescriptorSubject(site DescriptorSubjectSite, project Project, reason String) throws CompileError
+		let func = try self.maxonModule.functions.get(site.funcIndex) otherwise panic("refuseDescriptorSubject: functions.get({site.funcIndex}) — the plan recorded the index while walking this array")
+		reportAtFunctionName(project, func: func, code: ErrorCode.parserUnsupportedFeature, message: "'{String.from(overloadRegistrationBaseName(site.callee))}' {reason}")
+		throw CompileError.compileError
+	end 'refuseDescriptorSubject'
+
+	function fileTableEntries(candidates DescriptorSubjectSiteArray) returns bool
+		var filed = false
+
+		for site in candidates 'eachCandidate'
+			let gid = site.instance
+
+			if self.descriptorTableHolds(gid) or not self.instanceIsResolvedAtTheConcreteRoot(gid) 'nothingToFile'
+				continue
+			end 'nothingToFile'
+
+			let owner = self.descriptorTableOwnerOf(gid)
+
+			if not self.descriptorTables.contains(owner) 'firstEntryOfThisOwner'
+				self.descriptorTables.upsert(owner, value: GenericInstanceIdArray.create())
+			end 'firstEntryOfThisOwner'
+
+			var entries = try self.descriptorTables.get(owner) otherwise panic("planDescriptorTables: '{String.from(owner)}' was just seeded and is not there")
+			entries.push(gid)
+			filed = true
+		end 'eachCandidate'
+
+		return filed
+	end 'fileTableEntries'
+
+	function instanceIsResolvedAtTheConcreteRoot(gid GenericInstanceId) returns bool
+		if self.signatures.genericInstanceArgsAreACallerParameterRun(gid) 'aRunOfTheCallersParameters'
+			return self.descriptorTables.contains(self.signatures.genericInstanceBaseName(gid))
+		end 'aRunOfTheCallersParameters'
+
+		return self.signatures.instanceIsBuiltOnATypeParameter(gid)
+	end 'instanceIsResolvedAtTheConcreteRoot'
+
+	function noteTableCandidatesOf(blockRefs BlockRefArray, into DescriptorSubjects)
+		for blockRef in blockRefs 'eachBlock'
+			let opCount = (try self.maxonModule.blocks.get(blockRef) otherwise panic("noteTableCandidatesOf: blockRef not in maxonModule.blocks")).opRefs.count()
+
+			for pos in 0 upto opCount 'eachOp'
+				self.noteTableCandidateOfOp(self.maxonOpAt(self.maxonBlockOpRefAt(blockRef, pos: pos)), into: into)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'noteTableCandidatesOf'
+
+	function noteTableCandidateOfOp(op MaxonOp, into DescriptorSubjects)
+		if maxonOpCalleeKind(op) != MaxonCalleeKind.direct 'notADirectCall'
+			return
+		end 'notADirectCall'
+
+		match op 'callShape'
+			call(result, callee, args, argLabels, _, _, argDefaultSlots, _) then self.noteTableCandidateOfCall(result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, into: into)
+			tryCall(result, _, callee, args, argLabels, _, _, argDefaultSlots, _) then self.noteTableCandidateOfCall(result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, into: into)
+			asyncCall or
+				serviceSend then return
+			default panic("noteTableCandidateOfOp: maxonOpCalleeKind answers direct for an op that is not call, tryCall, asyncCall or serviceSend")
+		end 'callShape'
+	end 'noteTableCandidateOfOp'
+
+	function noteTableCandidateOfCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, into DescriptorSubjects)
+		if self.createTakesItsElementStampFromADescriptor(callee, result: result) 'aComposedElementStamp'
+			into.noteWhereCarried(self.instanceIdOfValue(result), callee: callee)
+			return
+		end 'aComposedElementStamp'
+
+		if not self.layoutNeedingFuncs.contains(callee) or isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'noDescriptorPassed'
+			return
+		end 'noDescriptorPassed'
+
+		let sig = try self.funcSignatures.get(callee) otherwise panic("noteTableCandidateOfCall: layout-needing callee '{String.from(callee)}' has no signature")
+
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
+			ordered(argIds) then self.noteTableCandidateOfSource(self.layoutSourceOf(argIds, sig: sig, result: result, callee: callee), callee: callee, into: into)
+			arityMismatch or
+				unknownLabel or
+				duplicateArg then panic("noteTableCandidateOfCall: '{String.from(callee)}' reached lowering with arguments SemanticCheck must have refused")
+		end 'slot'
+	end 'noteTableCandidateOfCall'
+
+	function noteTableCandidateOfSource(source LayoutSource, callee ByteArray, into DescriptorSubjects)
+		match source 'source'
+			forwardedFromTheCaller then return
+			ofInstance(instanceValue) then self.noteTableCandidate(self.instanceIdOfValue(instanceValue), callee: callee, into: into)
+		end 'source'
+	end 'noteTableCandidateOfSource'
+
+	function noteTableCandidate(gid GenericInstanceId, callee ByteArray, into DescriptorSubjects)
+		if self.signatures.instanceIsBuiltOnATypeParameter(gid) 'builtOnAParameter'
+			into.note(gid, callee: callee)
+		end 'builtOnAParameter'
+	end 'noteTableCandidate'
 
 	// The layout-descriptor address to pass for a call whose receiver is `receiver`. A generic instance
 	// receiver → its descriptor blob's address, or the caller's own block forwarded when the instance is
@@ -3454,11 +3800,11 @@ type MaxonToStdLowering
 	// the caller's OWN type parameter (a generic body calling another generic method on a `T` value) →
 	// FORWARD the caller's own layout slot. B1's acceptance calls come from a non-generic `main` on a
 	// concrete instance, so the forward arm is reached only by a generic-to-generic call.
-	function materializeLayoutArg(receiver ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+	function receiverLayoutSource(receiver ValueId, callee ByteArray) returns LayoutSource
 		let tag = self.valueTagOf(receiver)
 
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.emitInstanceDescriptorAddr(receiver, dstBlock: dstBlock)
+			return LayoutSource.ofInstance(receiver)
 		end 'instance'
 
 		// ⭐ A `structRef`(base) receiver is the enclosing generic body's OWN instance — `self` — so the
@@ -3467,11 +3813,11 @@ type MaxonToStdLowering
 		// drive another. The parser rejects the residual shape (a descriptor call on a non-`self` same-base
 		// value) before lowering, so the caller here always carries a layout param.
 		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.typeParameter 'forward'
-			return self.forwardCallerLayout(callee)
+			return LayoutSource.forwardedFromTheCaller
 		end 'forward'
 
-		panic("materializeLayoutArg: call to layout-needing '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
-	end 'materializeLayoutArg'
+		panic("receiverLayoutSource: call to layout-needing '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
+	end 'receiverLayoutSource'
 
 	// ⭐⭐ **THE ELEMENT COUNT A COUNT-NEEDING CALL PASSES — A COMPILE-TIME CONSTANT AT EVERY CALL SITE,
 	// WHICH IS THE WHOLE REASON THE COUNT IS A PARAMETER AND NOT A DESCRIPTOR WORD.**
@@ -3566,7 +3912,9 @@ type MaxonToStdLowering
 	// argument's destructor `.text` VA — the value the shared opaque `__managed_create` reads back into its
 	// record's `element_destroy@40`. An argument owning NO record (a scalar, a ranged alias, a payload-free
 	// enum) records nothing and the slot stays 0, so its walk is skipped. Idempotent: a gid referenced at
-	// several call sites registers one blob and one reloc and shares the label.
+	// several call sites registers one blob and one reloc and shares the label. After the per-parameter blocks
+	// comes the base's descriptor table (`descriptorTableOfBase`): one word per entry, pointing at that entry's
+	// descriptor resolved through `gid` (`layoutTableSlotOffset`).
 	//
 	// ⚠ **THE GATE IS THE ARGUMENT'S OWNERSHIP PROTOCOL, NOT ITS CONSUME CLASS.** An all-scalar STRUCT
 	// argument is trivial to CONSUME and is still a refcounted box: it stamps both `destroyFunc@40` and
@@ -3604,7 +3952,10 @@ type MaxonToStdLowering
 		// `destroyFunc@40` caused on a two-parameter generic. A one-parameter instance emits one block and is
 		// byte-identical to what it always emitted.
 		let paramCount = self.signatures.genericInstanceArgCount(gid)
-		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: encodeLayoutDescriptor(descriptor, typeParamCount: paramCount), kind: RdataPayloadKind.layoutDescriptor)
+		let table = self.descriptorTableOfBase(gid)
+		var image = encodeLayoutDescriptor(descriptor, typeParamCount: paramCount)
+		appendLayoutTableSlots(image, entryCount: table.count())
+		let label = self.globalData.registerRdataConstantLabeled("__layout_{String.from(self.signatures.mangleGenericInstance(gid))}", bytes: image, kind: RdataPayloadKind.layoutDescriptor)
 		self.layoutDescriptors.record(gid, label: label)
 
 		// A MANAGED opaque-`T` `Array` field's `destroyFunc@40` is the ONLY compile-time reference to the
@@ -3638,8 +3989,8 @@ type MaxonToStdLowering
 			// FIELD-shaped drop gate beside this ARGUMENT-shaped retain gate produces.
 			self.stampOwnershipWord(self.signatures.typeParamDropCallee(gid, position: position), label: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_DESTROY_FUNC) as ByteOffset)
 
-			if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid, position: position) 'copyableOpaqueElement'
-				self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid, position: position), rdataLabel: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_COPY_FUNC) as ByteOffset)
+			if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid, position: position, uses: self.instanceParameterUses) 'copyableOpaqueElement'
+				self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid, position: position, uses: self.instanceParameterUses), rdataLabel: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_COPY_FUNC) as ByteOffset)
 			end 'copyableOpaqueElement'
 
 			// ⭐⭐ **THE `retainFunc@64` STAMP — how a shared body takes the reference a record it BUILDS owes on
@@ -3651,8 +4002,18 @@ type MaxonToStdLowering
 			self.stampOwnershipWord(self.signatures.typeParamRetainCallee(gid, position: position), label: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_RETAIN_FUNC) as ByteOffset)
 		end 'eachTypeParam'
 
+		for entry in 0 upto table.count() 'eachTableEntry'
+			let nested = try table.get(entry) otherwise panic("ensureLayoutDescriptor: table.get({entry}) below count")
+			let resolved = genericInstanceIdOf(self.signatures.substituteThroughInstance(MaxonType.genericInstance(nested), id: gid))
+			self.globalData.recordRdataAbs64InRdata(self.ensureLayoutDescriptor(resolved), rdataLabel: label, offsetInLabel: layoutTableSlotOffset(paramCount, entry: entry))
+		end 'eachTableEntry'
+
 		return label
 	end 'ensureLayoutDescriptor'
+
+	function descriptorTableOfBase(gid GenericInstanceId) returns GenericInstanceIdArray
+		return try self.descriptorTables.get(self.signatures.genericInstanceBaseName(gid)) otherwise noDescriptorTableEntries
+	end 'descriptorTableOfBase'
 
 	// Lower `sizeof(T)` to a runtime read of `elementLogicalSize@56` from the CURRENT function's
 	// layout descriptor. The parser folds every CONCRETE sizeof to a literal, so this op only ever carries
@@ -3958,6 +4319,11 @@ type MaxonToStdLowering
 			return
 		end 'opaqueContainerCreate'
 
+		if self.hasImplicitLayout and self.createTakesItsElementStampFromADescriptor(callee, result: result) 'aComposedElementStamp'
+			self.appendComposedElementStampCreate(result, callee: callee, args: args, dstBlock: dstBlock)
+			return
+		end 'aComposedElementStamp'
+
 		// A `__drop_type_param` arrives with ONE argument (the opaque owned value); its
 		// element destructor is not known statically, so the enclosing instance's layout descriptor is
 		// PREPENDED as the first argument (`__drop_type_param(descriptor, value)`) — the drop twin of
@@ -4146,7 +4512,7 @@ type MaxonToStdLowering
 		let source = try args.get(0) otherwise panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' has no receiver argument — its first parameter is the array record")
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
-		fullArgs.push(self.descriptorBlockAddr(self.opaqueContainerBlockOffset(source, callee: callee), dstBlock: dstBlock))
+		fullArgs.push(self.descriptorBlockAddr(self.opaqueContainerBlockOffset(source), dstBlock: dstBlock))
 		return fullArgs
 	end 'opaqueCopyArgsWithDescriptor'
 
@@ -4220,7 +4586,7 @@ type MaxonToStdLowering
 			return false
 		end 'notInstance'
 
-		return self.signatures.containerElementIsOpaque((try self.valueNameIds.get(result) otherwise panic("isOpaqueContainerCreateCall: genericInstance '{String.from(callee)}' result v{result} has no name-id (its GenericInstanceId)") as GenericInstanceId))
+		return self.signatures.containerElementIsOpaque(self.instanceIdOfValue(result))
 	end 'isOpaqueContainerCreateCall'
 
 	// Emit an opaque-`T` container create: load the element destructor from the enclosing instance's layout
@@ -4240,7 +4606,7 @@ type MaxonToStdLowering
 		// `destroyFunc@40` gave both columns the FIRST column's destructor: measured, an `Array with Value`
 		// over `Integer` was stamped `__str_decref` and freed its ints as Strings at teardown.
 		let destroyId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(destroyId, addrId: self.implicitLayoutValueId, offset: self.opaqueContainerBlockOffset(result, callee: callee) + LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(destroyId, addrId: self.implicitLayoutValueId, offset: self.opaqueContainerBlockOffset(result) + LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
 		fullArgs.push(destroyId)
@@ -4252,9 +4618,8 @@ type MaxonToStdLowering
 	// `typeParameter` token `managedOpaqueArrayElementOf` matched positions against when it stamped the slot,
 	// so the write side and this read side name one block by construction. A concrete-element container never
 	// reaches here (its callers gate on `containerElementIsOpaque` / `isOpaqueElementCopyCallee`).
-	function opaqueContainerBlockOffset(containerInstance ValueId, callee ByteArray) returns ByteOffset
-		let gid = try self.valueNameIds.get(containerInstance) otherwise panic("opaqueContainerBlockOffset: opaque container value v{containerInstance} of '{String.from(callee)}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
-		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.containerElementType(gid as GenericInstanceId)))
+	function opaqueContainerBlockOffset(containerInstance ValueId) returns ByteOffset
+		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.containerElementType(self.instanceIdOfValue(containerInstance))))
 	end 'opaqueContainerBlockOffset'
 
 	// ⭐ **THE ADDRESS OF ONE TYPE PARAMETER'S DICTIONARY BLOCK inside the current function's descriptor** —

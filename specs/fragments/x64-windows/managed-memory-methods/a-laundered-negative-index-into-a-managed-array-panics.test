@@ -9,7 +9,7 @@ end 'launder'
 function main() returns ExitCode
 	var xs = StrArray.create()
 	xs.push("a published string, long enough to require an allocation")
-	try xs.set(launder(-1), value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
+	try xs.set(launder(-1) as ElementIndex, value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
 		return 42
 	end 'negativeIndex'
 	return 5
@@ -18,19 +18,12 @@ end 'main'
 ExitCode: 1
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @main {
@@ -48,9 +41,6 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-  __il_cont:
-    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "a string refused for a negative index, long enough to allocate"
-    x64.callDirect __str_retain
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-laundered-negative-index-into-a-managed-array-panics.test:12: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic

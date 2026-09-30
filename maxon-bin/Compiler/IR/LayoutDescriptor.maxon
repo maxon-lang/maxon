@@ -734,6 +734,16 @@ export function layoutBlockOffsetFor(position ElementIndex) returns ByteOffset
 	return LAYOUT_DESCRIPTOR_BYTE_SIZE * (position as ByteOffset)
 end 'layoutBlockOffsetFor'
 
+module function appendLayoutTableSlots(buf ByteArray, entryCount ElementIndex)
+	for _ in 0 upto entryCount 'eachEntry'
+		writeLayoutWord(buf, value: 0)
+	end 'eachEntry'
+end 'appendLayoutTableSlots'
+
+module function layoutTableSlotOffset(typeParamCount ElementIndex, entry ElementIndex) returns ByteOffset
+	return layoutDescriptorBytesFor(typeParamCount) + LAYOUT_FIELD_BYTES * (entry as ByteOffset)
+end 'layoutTableSlotOffset'
+
 // Append one machine word as `LAYOUT_FIELD_BYTES` little-endian bytes — the same shift-and-mask the
 // `.data`/`.rdata` scalar serializer uses, restated here because that one lives in the Targets layer
 // (`GlobalDataTable.appendScalar`) and a descriptor is encoded a tier up, in the IR layer, before the

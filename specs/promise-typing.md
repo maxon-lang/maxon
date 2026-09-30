@@ -69,7 +69,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:3: Cannot return 'struct' from function declared to return 'int'
+error E3005: <fragment>:10:3: Cannot return 'struct' from function declared to return 'Integer'
 ```
 
 <!-- test: promise-typing.error.arithmetic-on-a-promise -->

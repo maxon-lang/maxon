@@ -20,9 +20,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -37,17 +39,17 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 100
-  __rc_ok:
+  __il_body#7:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_capacity
     x64.cmpRegImm32 r8, 100
-    x64.jcc greaterEqual, __il_body
+    x64.jcc greaterEqual, __il_body#12
   grow:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_mem_grow
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body
+    x64.jcc equal, __il_body#12
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
     x64.callDirect mrt_panic
@@ -57,7 +59,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __il_body:
+  __il_body#12:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_capacity
   __il_cont:

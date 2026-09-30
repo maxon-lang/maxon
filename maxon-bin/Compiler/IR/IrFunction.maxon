@@ -1260,6 +1260,11 @@ export function maskWithoutParam(mask ParamPositionMask, param ParamCount) retur
 	return mask xor (mask and maskWithParam(NoParamPositions, param: param))
 end 'maskWithoutParam'
 
+export union ClosureCaptureSource
+	none
+	envSlot(offset ByteOffset)
+end 'ClosureCaptureSource'
+
 export type IrFunction
 	// --- Common fields (all phases) ---
 	// A zero-copy slice of the source, straight off the declaring token. It stays bytes all
@@ -1345,6 +1350,8 @@ export type IrFunction
 	// ⚠ A FIELD rather than a name test, for `keepsItsOwnFrame`'s reason: the body says so, by calling
 	// `__Raw.splicedAtEverySite()`, and nothing infers it from a naming band.
 	export var mustBeSplicedAtEverySite as bool
+	export var closureLayout as ClosureCaptureSource
+	export var closureFixedElementCount as ClosureCaptureSource
 
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType as MaxonReturnType
@@ -1852,6 +1859,8 @@ export type IrFunction
 			name: name.clone(),
 			visibility: Visibility.file,
 			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
+			closureLayout: ClosureCaptureSource.none,
+			closureFixedElementCount: ClosureCaptureSource.none,
 			keepsItsOwnFrame: false,
 			mustBeSplicedAtEverySite: false,
 			sourceFilePath: declaredAt.filePath,
@@ -1928,6 +1937,8 @@ export type IrFunction
 			name: name,
 			visibility: Visibility.global,
 			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
+			closureLayout: ClosureCaptureSource.none,
+			closureFixedElementCount: ClosureCaptureSource.none,
 			keepsItsOwnFrame: false,
 			mustBeSplicedAtEverySite: false,
 			sourceFilePath: declaredAt.filePath,
@@ -1992,6 +2003,8 @@ export type IrFunction
 			// A copy is the same code with the same stack behaviour, so the claim TRAVELS rather than being
 			// re-decided here — exactly as `sourceFilePath` does one line down, and for the same reason.
 			needsGreenThreadStackGuard: src.needsGreenThreadStackGuard,
+			closureLayout: src.closureLayout,
+			closureFixedElementCount: src.closureFixedElementCount,
 			keepsItsOwnFrame: src.keepsItsOwnFrame,
 			mustBeSplicedAtEverySite: src.mustBeSplicedAtEverySite,
 			sourceFilePath: src.sourceFilePath,

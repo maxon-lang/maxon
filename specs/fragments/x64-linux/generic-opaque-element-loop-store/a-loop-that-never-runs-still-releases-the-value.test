@@ -1,5 +1,5 @@
 // Test: a-loop-that-never-runs-still-releases-the-value
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element
@@ -39,9 +39,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -88,7 +90,7 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.leaRegRdata rbx, [rip + __layout_Bag_String]
-  __rc_ok#15:
+  __il_body#9:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_resize
@@ -128,13 +130,13 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 16], rcx
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.word64 [rax + 24], rcx
-  __il_body#34:
+  __il_body#30:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __write_stdout
   __il_cont#5:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
-  __il_body#35:
+  __il_body#31:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
@@ -144,7 +146,7 @@ func @main {
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
-  __rc_ok#1:
+  __rc_ok:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_Bag_String
     x64.movRegReg r8, rbx
@@ -157,7 +159,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at a-loop-that-never-runs-still-releases-the-value.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at a-loop-that-never-runs-still-releases-the-value.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72

@@ -40,19 +40,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @main {
@@ -80,14 +73,22 @@ func @main {
   forexit:
     x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
     x64.leaRegRegImm32 rax, rdx, -1
-    x64.cmpRegImm32 rax, 0
+    x64.movRegReg rcx, rdx
+    x64.xorRegImm32 rcx, rdx, -1
+    x64.andRegImm32 rcx, rcx, 1
+    x64.movRegReg rsi, rdx
+    x64.xorRegImm32 rsi, rdx, 1
+    x64.xorRegImm32 rsi, rsi, -1
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.cmpRegImm32 rcx, 0
     x64.setccReg less, rcx
     x64.jcc less, __rc_panic#32
   __rc_ok#31:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
     x64.cmpRegReg rax, rsi
-    x64.jcc aboveEqual, __im_slow#49
-  __im_load#50:
+    x64.jcc aboveEqual, __im_slow#50
+  __im_load#51:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rsi, [rsi + rax*8 + 0]
     x64.movRegReg r8, rsi
@@ -107,8 +108,8 @@ func @main {
   ifcont#9:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 8]
     x64.cmpRegReg rdx, rsi
-    x64.jcc aboveEqual, __im_slow#40
-  __im_load#41:
+    x64.jcc aboveEqual, __im_slow#38
+  __im_load#39:
     x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rsi, [rsi + rdx*8 + 0]
     x64.movRegReg r8, rsi
@@ -127,13 +128,10 @@ func @main {
     x64.ret
   ifcont#14:
     x64.leaRegRegImm32 rsi, rdx, 1
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc less, __rc_panic#34
-  __rc_ok#33:
     x64.loadRegBaseDisp.word64 rdi, [rbx + 8]
     x64.cmpRegReg rsi, rdi
-    x64.jcc aboveEqual, __im_slow#52
-  __im_load#53:
+    x64.jcc aboveEqual, __im_slow#41
+  __im_load#42:
     x64.loadRegBaseDisp.word64 rdi, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rsi, [rdi + rsi*8 + 0]
     x64.movRegReg r8, rsi
@@ -153,25 +151,25 @@ func @main {
   ifcont#19:
     x64.movRegImm32 rsi, 44
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __rc_panic#36
-  __rc_ok#35:
+    x64.jcc notEqual, __rc_panic#34
+  __rc_ok#33:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __im_slow#55
-  __im_bounds#56:
+    x64.jcc less, __im_slow#53
+  __im_bounds#54:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg rax, rcx
-    x64.jcc aboveEqual, __im_slow#55
-  __im_buffer#57:
+    x64.jcc aboveEqual, __im_slow#53
+  __im_buffer#55:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_slow#55
+    x64.jcc equal, __im_slow#53
   __im_viewed:
     x64.leaRegRegImm32 rdi, rcx, -24
     x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc notEqual, __im_slow#55
-    x64.jmp __im_store#59
+    x64.jcc notEqual, __im_slow#53
+    x64.jmp __im_store#57
   tryerr#21:
     x64.movRegImm32 r12, 4
     x64.movRegReg rcx, rbx
@@ -182,26 +180,33 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_store#59:
+  __im_store#57:
     x64.storeBaseIndexScaleReg.word64 [rcx + rax*8 + 0], rsi
   tryok#20:
     x64.movRegImm32 rax, 55
-  __im_bounds#44:
+  __im_bounds#45:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#43
-    x64.jmp __im_buffer#45
+    x64.jcc aboveEqual, __im_slow#44
+    x64.jmp __im_buffer#46
   tryerr#23:
-    x64.leaRegRegImm32 rdx, rdx, -1
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#38
-  __rc_ok#37:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#61
-  __im_load#62:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.leaRegRegImm32 rax, rdx, -1
+    x64.movRegReg rcx, rdx
+    x64.xorRegImm32 rcx, rdx, -1
+    x64.andRegImm32 rcx, rcx, 1
+    x64.xorRegImm32 rdx, rdx, 1
+    x64.xorRegImm32 rdx, rdx, -1
+    x64.andRegReg rdx, rdx, rax
+    x64.orRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#36
+  __rc_ok#35:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc aboveEqual, __im_slow#59
+  __im_load#60:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rcx + rax*8 + 0]
     x64.movRegReg r8, rax
   tryok#24:
     x64.cmpRegImm32 r8, 44
@@ -240,9 +245,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_buffer#45:
+  __im_buffer#46:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-  __im_store#47:
+  __im_store#48:
     x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
   tryok#22:
     x64.movRegImm32 r12, 7
@@ -263,7 +268,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#49:
+  __im_slow#50:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
@@ -276,7 +281,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, lastIn
     x64.jmp tryok#5
-  __im_slow#40:
+  __im_slow#38:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
@@ -288,16 +293,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, ifcont#14
     x64.jmp tryok#10
-  __rc_panic#34:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at the-last-element-is-in-and-the-length-is-not.test:18: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_slow#52:
+  __im_slow#41:
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
@@ -310,8 +306,8 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, ifcont#19
     x64.jmp tryok#15
-  __rc_panic#36:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at the-last-element-is-in-and-the-length-is-not.test:23: Range check failed: value outside typealias 'ElementIndex'\x0a"
+  __rc_panic#34:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at the-last-element-is-in-and-the-length-is-not.test:23: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 64
@@ -319,7 +315,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#55:
+  __im_slow#53:
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, rax
@@ -329,7 +325,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#21
     x64.jmp tryok#20
-  __im_slow#43:
+  __im_slow#44:
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_set
@@ -337,8 +333,8 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#23
     x64.jmp tryok#22
-  __rc_panic#38:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at the-last-element-is-in-and-the-length-is-not.test:27: Range check failed: value outside typealias 'ElementIndex'\x0a"
+  __rc_panic#36:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at the-last-element-is-in-and-the-length-is-not.test:27: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 64
@@ -346,8 +342,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#61:
+  __im_slow#59:
     x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, rax
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, writeLanded

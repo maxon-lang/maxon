@@ -1,6 +1,6 @@
 // Test: string-argument-outlives-its-source
 typealias Integer = int(i64.min to i64.max)
-typealias Index = int(0 to u64.max)
+typealias Index = int(0 to u64.max) implements ElementIndex
 
 type Holder uses Element
 	typealias EArray = Array with Element
@@ -41,9 +41,11 @@ end 'main'
 ExitCode: 42
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -56,20 +58,20 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
-  __il_body#26:
+  __il_body#24:
     x64.leaRegRdata rax, [rip + __layout_Holder_String]
-  __il_body#47:
+  __il_body#43:
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rdx, [rax + 40]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-  __il_cont#46:
+  __il_cont#42:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
-  __il_cont#44:
+  __il_cont#40:
     x64.leaRegRdata rax, [rip + __str_rec_2]  ; "the source is gone"
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -90,14 +92,14 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.leaRegRdata rax, [rip + __layout_Holder_String]
-  __il_body#29:
+  __il_body#27:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r14
     x64.callDirect __managed_push
-  __il_cont#28:
+  __il_cont#26:
     x64.movRegImm32 rdx, 0
     x64.leaRegRdata rbx, [rip + __layout_Holder_String]
-  __rc_ok#33:
+  __il_body#28:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
@@ -106,7 +108,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, __im_slow
-  __im_load#41:
+  __im_load#37:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp __im_loaded
@@ -117,21 +119,21 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, __im_slow
-  __im_load#42:
+  __im_load#38:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded:
     x64.movRegImm32 rsi, 0
     x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, critsplit#52
+    x64.jcc equal, critsplit#48
   __im_empty:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
-  critsplit#53:
+  critsplit#49:
     x64.movRegReg r13, rax
     x64.jmp __im_cont
-  critsplit#52:
+  critsplit#48:
     x64.movRegReg r13, rax
     x64.jmp __im_cont
   __im_slow:
@@ -140,8 +142,8 @@ func @main {
     x64.movRegReg rsi, r10
   __im_cont:
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, tryerr#32
-  tryok#31:
+    x64.jcc notEqual, tryerr#30
+  tryok#29:
     x64.movRegImm32 r14, 1
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -153,36 +155,33 @@ func @main {
     x64.callDirect __retain_type_param
     x64.storeBaseDispReg.word64 [r15 + 0], r8
     x64.storeBaseDispReg.word64 [r15 + 8], r14
-  __il_cont#27:
+  __il_cont#25:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Holder_String
-  __il_cont#25:
+  __il_cont#23:
     x64.loadRegBaseDisp.word64 rbx, [r15 + 0]
     x64.leaRegRdata r12, [rip + __str_rec_2]  ; "the source is gone"
-  __il_body#50:
+  __il_body#46:
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
-  __il_body#51:
+  __il_body#47:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-  __il_cont#48:
+  __il_cont#44:
     x64.cmpRegReg r13, rax
-    x64.jcc equal, __rc_ok#21
+    x64.jcc equal, __il_body#8
   lenMismatch:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont#3
-  __rc_ok#21:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic
-  __rc_ok#23:
+  __il_body#8:
     x64.movRegImm32 r14, 0
     x64.jmp forhdr
-  compare_loop:
+  __rc_ok#19:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect String.byteAt
     x64.movRegReg r15, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#14
-  tryok#13:
+  __rc_ok#21:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
     x64.callDirect String.byteAt
@@ -198,7 +197,7 @@ func @main {
     x64.leaRegRegImm32 r14, r14, 1
   forhdr:
     x64.cmpRegReg r14, r13
-    x64.jcc less, compare_loop
+    x64.jcc less, __rc_ok#19
   forexit:
     x64.movRegImm32 rax, 1
   __il_cont#3:
@@ -230,7 +229,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#32:
+  tryerr#30:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at string-argument-outlives-its-source.test:20: Holder.entryAt: out of range\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -242,20 +241,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at String.maxon:1008: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   tryerr#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at String.maxon:1010: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at String.maxon:1018: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -267,7 +254,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#16:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:1011: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at String.maxon:1019: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

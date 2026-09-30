@@ -1308,7 +1308,7 @@ module type HoverDocument
 
 	function declaredFieldType(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns HoverMemberType
 		match lspVisibleFieldOf(signatures, owner: owner, member: member, readerPath: readerPath) 'aField'
-			declared(layout, index) then return brandedMemberType(signatures, brand: layout.fieldDeclaredBrand(index), owner: owner, declFilePath: layout.declFilePath)
+			declared(layout, index) then return brandedMemberType(signatures, spelling: layout.fieldSpelledName(index), owner: owner, declFilePath: layout.declFilePath)
 			hidden or
 				none then return HoverMemberType.none
 		end 'aField'
@@ -1316,17 +1316,20 @@ module type HoverDocument
 
 	// The brand is read in the scope that WROTE it. A plain `typealias` is file-local, so two files may
 	// mean different containers by one word.
-	function brandedMemberType(signatures ProgramSignatures, brand ByteArray, owner ByteArray, declFilePath FilePath) returns HoverMemberType
-		if brand.isEmpty() 'noDeclaredSpelling'
-			return HoverMemberType.none
-		end 'noDeclaredSpelling'
+	function brandedMemberType(signatures ProgramSignatures, spelling SpelledFieldName, owner ByteArray, declFilePath FilePath) returns HoverMemberType
+		match spelling 'spelling'
+			bareName(brand) then return brandedNameMemberType(signatures, brand: brand, owner: owner, declFilePath: declFilePath)
+			notABareName then return HoverMemberType.none
+		end 'spelling'
+	end 'brandedMemberType'
 
+	function brandedNameMemberType(signatures ProgramSignatures, brand ByteArray, owner ByteArray, declFilePath FilePath) returns HoverMemberType
 		if let owning = try signatures.typeParamOwnerOf(typeParamTokenFor(owner, paramName: brand)) 'aParameterOfTheOwner'
 			return HoverMemberType.ownersTypeParameter(owning.position)
 		end 'aParameterOfTheOwner'
 
 		return HoverMemberType.bound(nominalType(signatures.denotedGenericBaseName(brand, readerFilePath: declFilePath)))
-	end 'brandedMemberType'
+	end 'brandedNameMemberType'
 
 	function resolvedReceiver(receiver HoverReceiver) returns HoverReceiver
 		match receiver 'resolved'

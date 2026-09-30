@@ -1320,7 +1320,7 @@ module function buildServiceHandleStruct(signatures ProgramSignatures, typeName 
 	// produces and no declared slot could hold one. It changes nothing about the LAYOUT: the one field is
 	// the mailbox pointer at every instantiation, which is why the geometry audit below still holds.
 	handle.recordTypeParams(owner.typeParamNames)
-	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
+	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.notABareName)
 
 	// ⭐⭐ **THE AUDIT THAT KEEPS THE RUNTIME'S TWO NUMBERS HONEST.** `__mbox_handle_clone_box` allocates
 	// `ServiceHandleBoxSize` bytes and both handle entries load the mailbox from `ServiceHandleMailboxOffset`,
@@ -1660,8 +1660,8 @@ module let InterfaceHandleBoxSize = 16 as ParsedInt
 
 function buildInterfaceHandleStruct(interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
 	var handle = StructLayout.create(serviceHandleCompanionName(interfaceName), visibility: visibility, declFilePath: declFilePath)
-	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
-	handle.addField(InterfaceHandleTableFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText)
+	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.notABareName)
+	handle.addField(InterfaceHandleTableFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.notABareName)
 
 	if handle.sizeBytes() != InterfaceHandleBoxSize or handle.offsetOfField(0) != ServiceHandleMailboxOffset or handle.offsetOfField(1) != InterfaceHandleTableOffset 'geometryDrifted'
 		panic("buildInterfaceHandleStruct: `{String.from(handle.name)}` lays out {handle.sizeBytes()} byte(s) with its mailbox at {handle.offsetOfField(0)} and its send table at {handle.offsetOfField(1)}, against the {InterfaceHandleBoxSize}/{ServiceHandleMailboxOffset}/{InterfaceHandleTableOffset} the registry runtime spells")

@@ -39,9 +39,11 @@ end 'main'
 ExitCode: 20
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @Box.create {
@@ -190,15 +192,15 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [r13 + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#46
+    x64.jcc equal, critsplit#44
   __im_empty:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
-  critsplit#47:
+  critsplit#45:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
     x64.jmp __im_cont
-  critsplit#46:
+  critsplit#44:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
   __im_cont:
@@ -221,30 +223,27 @@ func @main {
   tryok#3:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
     x64.leaRegRdata r12, [rip + __str_rec_3]  ; "second boxed string, long enough to live on the heap"
-  __il_body#44:
+  __il_body#42:
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
-  __il_body#45:
+  __il_body#43:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-  __il_cont#42:
+  __il_cont#40:
     x64.cmpRegReg r13, rax
-    x64.jcc equal, __rc_ok#38
+    x64.jcc equal, __il_body#25
   lenMismatch:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont#20
-  __rc_ok#38:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic#41
-  __rc_ok#40:
+  __il_body#25:
     x64.movRegImm32 r14, 0
     x64.jmp forhdr
-  compare_loop:
+  __rc_ok#36:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect String.byteAt
     x64.movRegReg r15, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#31
-  tryok#30:
+  __rc_ok#38:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
     x64.callDirect String.byteAt
@@ -260,7 +259,7 @@ func @main {
     x64.leaRegRegImm32 r14, r14, 1
   forhdr:
     x64.cmpRegReg r14, r13
-    x64.jcc less, compare_loop
+    x64.jcc less, __rc_ok#36
   forexit:
     x64.movRegImm32 rax, 1
   __il_cont#20:
@@ -284,10 +283,10 @@ func @main {
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
     x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic#8
+    x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic#8
+    x64.jcc greater, __rc_panic
   __rc_ok#7:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __managed_decref
@@ -304,20 +303,8 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __managed_get
     x64.jmp __im_cont
-  __rc_panic#41:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at String.maxon:1008: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   tryerr#31:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at String.maxon:1010: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at String.maxon:1018: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -329,7 +316,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#33:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at String.maxon:1011: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at String.maxon:1019: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -340,7 +327,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#8:
+  __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at clone-array-of-generic-instances.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0

@@ -15,7 +15,7 @@ function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.reserve(2)
 	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
-	try arr.get(launder(-1)) otherwise (e) 'handler'
+	try arr.get(launder(-1) as ElementIndex) otherwise (e) 'handler'
 		match e 'check'
 			emptySlot then return 42
 			indexOutOfBounds then return 99
@@ -27,19 +27,12 @@ end 'main'
 ExitCode: 1
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @main {
@@ -54,7 +47,7 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 2
-  __rc_ok:
+  __il_body:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_capacity
     x64.cmpRegImm32 r8, 2

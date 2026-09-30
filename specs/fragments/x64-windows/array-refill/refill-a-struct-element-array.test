@@ -25,19 +25,12 @@ end 'main'
 ExitCode: 12
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @Slot.create {
@@ -84,12 +77,12 @@ func @main {
     x64.callDirect __mm_own
     x64.movRegReg r14, r8
     x64.leaRegRdata r15, [rip + __layout_Array_Slot]
-  __rc_ok#11:
+  __il_body#10:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_resize
     x64.movRegImm32 r12, 0
-  __rc_ok#26:
+  __il_body#12:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.movRegImm32 rax, 3
@@ -97,7 +90,7 @@ func @main {
     x64.callDirect __managed_fill
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
-  tryerr#16:
+  tryerr#14:
     x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at Array.maxon:444: Array.fillPublished: fill OOB \xe2\x80\x94 the window is inside the length the caller just published\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -112,7 +105,7 @@ func @main {
   tryok:
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, forhdr#18
+    x64.jcc notEqual, forhdr#16
     x64.jmp ifcont
   fill:
     x64.movRegReg rcx, r15
@@ -125,26 +118,26 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow
-  __im_owned#32:
+  __im_owned#28:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow
-  __im_bounds#33:
+  __im_bounds#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegReg r12, rax
     x64.jcc aboveEqual, __im_slow
-  __im_buffer#34:
+  __im_buffer#30:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
-  __im_viewed#35:
+  __im_viewed#31:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow
-  __im_store#36:
+  __im_store#32:
     x64.storeBaseIndexScaleReg.word64 [rax + r12*8 + 0], r8
-    x64.jmp forstep#20
+    x64.jmp forstep#18
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
@@ -152,35 +145,35 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow
-  __im_owned#37:
+  __im_owned#33:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow
-  __im_bounds#38:
+  __im_bounds#34:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegReg r12, rax
     x64.jcc aboveEqual, __im_slow
-  __im_buffer#39:
+  __im_buffer#35:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
-  __im_viewed#40:
+  __im_viewed#36:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow
-  __im_store#41:
+  __im_store#37:
     x64.leaRegRegReg rax, rax, r12
     x64.storeBaseDispReg.byte [rax + 0], r8
-    x64.jmp forstep#20
+    x64.jmp forstep#18
   __im_slow:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r8
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, forstep#20
-  tryerr#23:
+    x64.jcc equal, forstep#18
+  tryerr#21:
     x64.leaRegRdata rax, [rip + __str_rec_5]  ; "panic at Array.maxon:450: "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -265,9 +258,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  forstep#20:
+  forstep#18:
     x64.leaRegRegImm32 r12, r12, 1
-  forhdr#18:
+  forhdr#16:
     x64.cmpRegImm32 r12, 3
     x64.jcc below, fill
   ifcont:
@@ -301,7 +294,7 @@ func @main {
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
-  __rc_ok#5:
+  __rc_ok:
     x64.movRegReg r8, r12
     x64.epilogue 104
     x64.popReg r15

@@ -1,6 +1,6 @@
 // Test: an-integer-element-read-asks-no-destructor-question
 typealias Word = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias WordArray = Array with Word
 
 function pick(a WordArray, i Idx) returns Word
@@ -28,9 +28,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @pick {
@@ -38,9 +40,6 @@ func @pick {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-  __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
     x64.jcc aboveEqual, __im_slow
@@ -48,13 +47,6 @@ func @pick {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 r8, [rax + rdx*8 + 0]
   tryok:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at an-integer-element-read-asks-no-destructor-question.test:6: Range check failed: value outside typealias 'Idx'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -99,7 +91,7 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
     x64.jmp forhdr#5
-  sum:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect pick
@@ -108,7 +100,7 @@ func @main {
     x64.leaRegRegImm32 r13, r13, 1
   forhdr#5:
     x64.cmpRegImm32 r13, 6
-    x64.jcc less, sum
+    x64.jcc less, __rc_ok
   forexit#8:
     x64.cmpRegImm32 r12, 55
     x64.jcc equal, ifcont#10

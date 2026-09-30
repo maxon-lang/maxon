@@ -24,9 +24,11 @@ end 'main'
 ExitCode: 42
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -56,7 +58,7 @@ func @main {
     x64.callDirect __mm_own
     x64.movRegReg r13, r8
     x64.leaRegRdata r14, [rip + __layout_Array_Slot]
-  __rc_ok#15:
+  __il_body#12:
     x64.loadRegBaseDisp.word64 r15, [rbx + 8]
     x64.cmpRegImm32 r15, 3
     x64.jcc less, ifcont#14
@@ -70,10 +72,12 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect __managed_resize
     x64.subRegReg r12, r12, r15
-  __il_body#28:
+    x64.cmpRegImm32 r15, 0
+    x64.jcc less, __rc_panic#16
+  __rc_ok#15:
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#30
-  __rc_ok#29:
+    x64.jcc less, __rc_panic#18
+  __il_body#20:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.movRegReg rax, r12
@@ -81,7 +85,7 @@ func @main {
     x64.callDirect __managed_fill
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
-  tryerr#19:
+  tryerr#22:
     x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at Array.maxon:444: Array.fillPublished: fill OOB \xe2\x80\x94 the window is inside the length the caller just published\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -96,10 +100,10 @@ func @main {
   tryok:
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, ifcont#27
+    x64.jcc equal, ifcont#30
   aManagedElement:
     x64.leaRegRegReg r12, r15, r12
-    x64.jmp forhdr#21
+    x64.jmp forhdr#24
   fill:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r13
@@ -130,7 +134,7 @@ func @main {
     x64.jcc notEqual, __im_slow
   __im_store#40:
     x64.storeBaseIndexScaleReg.word64 [rax + r15*8 + 0], r8
-    x64.jmp forstep#23
+    x64.jmp forstep#26
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
@@ -158,15 +162,15 @@ func @main {
   __im_store#45:
     x64.leaRegRegReg rax, rax, r15
     x64.storeBaseDispReg.byte [rax + 0], r8
-    x64.jmp forstep#23
+    x64.jmp forstep#26
   __im_slow:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.movRegReg rax, r8
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, forstep#23
-  tryerr#26:
+    x64.jcc equal, forstep#26
+  tryerr#29:
     x64.leaRegRdata rax, [rip + __str_rec_5]  ; "panic at Array.maxon:450: "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
@@ -251,12 +255,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  forstep#23:
+  forstep#26:
     x64.leaRegRegImm32 r15, r15, 1
-  forhdr#21:
+  forhdr#24:
     x64.cmpRegReg r15, r12
     x64.jcc below, fill
-  ifcont#27:
+  ifcont#30:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r13
     x64.callDirect __drop_type_param
@@ -296,8 +300,20 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at Array.maxon:442: Range check failed: value outside typealias 'ElementIndex'\x0a"
+  __rc_panic#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at Array.maxon:412: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#18:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at Array.maxon:412: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104

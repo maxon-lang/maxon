@@ -1712,9 +1712,11 @@ function collectInterfaceMethods(project Project, signatures ProgramSignatures, 
 	for i in 0 upto slots.count() 'eachSlot'
 		let slot = try slots.get(i) otherwise panic("collectInterfaceMethods: slots.get OOB at {i} below count {slots.count()}")
 		let ownerNames = associatedTypeNamesDeclaredBy(project, iface: iface, interfaceName: slot.sourceInterfaceName)
-		let declaredArgs = boundArgumentsFor(conformance, entry: entry, interfaceName: slot.sourceInterfaceName)
-		let under = RequirementSubstitution.create(signatures, clauseNames: clauseNames, clauseArgs: entry.withArgs, declaredNames: pairableAssociatedTypeNames(ownerNames, boundTypeNames: declaredArgs), declaredArgs: declaredArgs, ownerNames: ownerNames, ownerInterfaceName: slot.sourceInterfaceName, conformerName: conformance.typeName, conformerTypeParams: typeParamNames)
-		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, under: under), sourceInterfaceName: slot.sourceInterfaceName, sourceDeclFilePath: slot.sourceDeclFilePath))
+		let declaring = boundConformanceFor(conformance, entry: entry, interfaceName: slot.sourceInterfaceName)
+		let declaredNames = pairableAssociatedTypeNames(ownerNames, boundTypeNames: declaring.withArgs)
+		let under = RequirementSubstitution.create(signatures, clauseNames: clauseNames, clauseArgs: entry.withArgs, declaredNames: declaredNames, declaredArgs: declaring.withArgs, ownerNames: ownerNames, ownerInterfaceName: slot.sourceInterfaceName, conformerName: conformance.typeName, conformerTypeParams: typeParamNames)
+		let spelled = RequirementSubstitution.create(signatures, clauseNames: clauseNames, clauseArgs: entry.withArgSpellings, declaredNames: declaredNames, declaredArgs: declaring.withArgSpellings, ownerNames: ownerNames, ownerInterfaceName: slot.sourceInterfaceName, conformerName: conformance.typeName, conformerTypeParams: typeParamNames)
+		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, under: under), displayMethod: substituteAssociatedTypes(slot.method, under: spelled), sourceInterfaceName: slot.sourceInterfaceName, sourceDeclFilePath: slot.sourceDeclFilePath))
 	end 'eachSlot'
 
 	return substituted
@@ -1805,19 +1807,19 @@ end 'associatedTypeNamesDeclaredBy'
 // settles it, the order `checkTypeSymbolNamespace` and
 // `AssociatedAbiBinding.disagreed` already report a contested claim in; a clause that names one interface
 // twice with different arguments is rejected either way, and where the two selections MEET it is E3111.
-function boundArgumentsFor(conformance ConformanceDecl, entry InterfaceConformance, interfaceName ByteArray) returns ByteArrayArray
+function boundConformanceFor(conformance ConformanceDecl, entry InterfaceConformance, interfaceName ByteArray) returns InterfaceConformance
 	if interfaceName.equals(entry.interfaceName) 'theEntryBeingChecked'
-		return entry.withArgs
+		return entry
 	end 'theEntryBeingChecked'
 
 	for candidate in conformance.interfaces 'eachEntry'
 		if candidate.interfaceName.equals(interfaceName) 'conformsToTheDeclaringInterface'
-			return candidate.withArgs
+			return candidate
 		end 'conformsToTheDeclaringInterface'
 	end 'eachEntry'
 
-	return sharedEmptyDeclaredConformances
-end 'boundArgumentsFor'
+	return InterfaceConformance.withoutBindings(interfaceName)
+end 'boundConformanceFor'
 
 // ⛔ **A NAME LIST WITH NO ARGUMENT LIST TO PAIR AGAINST BINDS NOTHING — AND IT IS THE *NAMES* THAT MUST BE
 // EMPTIED, NOT THE ARGUMENTS.** `boundTypeName` is driven by the NAME list, so a short argument list left
@@ -1947,7 +1949,7 @@ function checkOneMethod(project Project, functionsByName FunctionNameIndex, conf
 		let implSig = conformanceImplSignature(project, name: qualifiedName)
 
 		if not signatureMatches(project, method: method, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures) 'mismatch'
-			wrongSignature.push("{formatActualSignature(project, methodName: method.name, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures)} (expected {formatInterfaceMethodSignature(method)})")
+			wrongSignature.push("{formatActualSignature(project, methodName: method.name, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures)} (expected {formatInterfaceMethodSignature(collectedMethod.displayMethod)})")
 		end 'mismatch' else 'signatureOk'
 			acceptConformingMember(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, selected: qualifiedName, implFunc: implFunc, typeParamNames: typeParamNames, signatures: signatures)
 		end 'signatureOk'
@@ -2013,7 +2015,7 @@ function checkOverloadedMembers(project Project, functionsByName FunctionNameInd
 	end 'eachCandidate'
 
 	if matched.count() != 1 'notExactlyOne'
-		wrongSignature.push(overloadMismatchLine(project, conformance: conformance, method: collectedMethod.method, functionsByName: functionsByName, candidates: candidates, matched: matched, typeParamNames: typeParamNames, signatures: signatures))
+		wrongSignature.push(overloadMismatchLine(project, conformance: conformance, collectedMethod: collectedMethod, functionsByName: functionsByName, candidates: candidates, matched: matched, typeParamNames: typeParamNames, signatures: signatures))
 		return
 	end 'notExactlyOne'
 
@@ -2088,7 +2090,7 @@ end 'reportConflictingConformance'
 // two arms reach it — a name in no registry at all, and an overload set none of whose members this project
 // still registers.
 function pushMissingRequirement(missing StringArray, collectedMethod CollectedInterfaceMethod, rootInterfaceName ByteArray)
-	let expected = formatInterfaceMethodSignature(collectedMethod.method)
+	let expected = formatInterfaceMethodSignature(collectedMethod.displayMethod)
 
 	if collectedMethod.sourceInterfaceName.equals(rootInterfaceName) 'ownMethod'
 		missing.push(expected)
@@ -2125,8 +2127,9 @@ end 'conformanceImplSignature'
 // change a method that may be perfectly correct. Both arms therefore say HOW MANY members carry the name and
 // render all of the ones that matter: every candidate when none matches, and only the tied ones when several
 // do (the others are irrelevant to an ambiguity).
-function overloadMismatchLine(project Project, conformance ConformanceDecl, method InterfaceMethodSig, functionsByName FunctionNameIndex, candidates ByteArrayArray, matched ByteArrayArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns String
-	let expected = formatInterfaceMethodSignature(method)
+function overloadMismatchLine(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, functionsByName FunctionNameIndex, candidates ByteArrayArray, matched ByteArrayArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns String
+	let method = collectedMethod.method
+	let expected = formatInterfaceMethodSignature(collectedMethod.displayMethod)
 
 	if matched.count() == 0 'noneMatches'
 		return "no member named '{String.from(method.name)}' matches: {renderMemberSignatures(project, conformance: conformance, method: method, functionsByName: functionsByName, members: candidates, typeParamNames: typeParamNames, signatures: signatures)} (expected {expected})"

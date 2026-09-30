@@ -18,9 +18,11 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -40,12 +42,12 @@ func @main {
     x64.movRegImm32 r12, 3
     x64.movRegImm32 r13, 16909060
     x64.leaRegRdata r14, [rip + __layout_Array_Integer]
-  __rc_ok#10:
+  __il_body#9:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_resize
     x64.movRegImm32 r15, 0
-  __rc_ok#25:
+  __il_body#11:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.movRegReg rax, r12
@@ -53,7 +55,7 @@ func @main {
     x64.callDirect __managed_fill
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
-  tryerr#15:
+  tryerr#13:
     x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at Array.maxon:444: Array.fillPublished: fill OOB \xe2\x80\x94 the window is inside the length the caller just published\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -68,8 +70,8 @@ func @main {
   tryok:
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, forhdr#17
-    x64.jmp ifcont#23
+    x64.jcc notEqual, forhdr#15
+    x64.jmp ifcont#21
   fill:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r13
@@ -81,26 +83,26 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow
-  __im_owned#31:
+  __im_owned#27:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow
-  __im_bounds#32:
+  __im_bounds#28:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegReg r15, rax
     x64.jcc aboveEqual, __im_slow
-  __im_buffer#33:
+  __im_buffer#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
-  __im_viewed#34:
+  __im_viewed#30:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow
-  __im_store#35:
+  __im_store#31:
     x64.storeBaseIndexScaleReg.word64 [rax + r15*8 + 0], r8
-    x64.jmp forstep#19
+    x64.jmp forstep#17
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow
@@ -108,35 +110,35 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, __im_slow
-  __im_owned#36:
+  __im_owned#32:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __im_slow
-  __im_bounds#37:
+  __im_bounds#33:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegReg r15, rax
     x64.jcc aboveEqual, __im_slow
-  __im_buffer#38:
+  __im_buffer#34:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
-  __im_viewed#39:
+  __im_viewed#35:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, __im_slow
-  __im_store#40:
+  __im_store#36:
     x64.leaRegRegReg rax, rax, r15
     x64.storeBaseDispReg.byte [rax + 0], r8
-    x64.jmp forstep#19
+    x64.jmp forstep#17
   __im_slow:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.movRegReg rax, r8
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, forstep#19
-  tryerr#22:
+    x64.jcc equal, forstep#17
+  tryerr#20:
     x64.leaRegRdata rax, [rip + __str_rec_5]  ; "panic at Array.maxon:450: "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
@@ -221,12 +223,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  forstep#19:
+  forstep#17:
     x64.leaRegRegImm32 r15, r15, 1
-  forhdr#17:
+  forhdr#15:
     x64.cmpRegImm32 r15, 3
     x64.jcc below, fill
-  ifcont#23:
+  ifcont#21:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r13
     x64.callDirect __drop_type_param

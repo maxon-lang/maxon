@@ -45,9 +45,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -72,7 +74,7 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg r13, r8
     x64.movRegImm32 r14, 96
-  __rc_ok#53:
+  __il_body:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_capacity
     x64.cmpRegImm32 r8, 96
@@ -143,7 +145,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, forhdr#5
-    x64.jmp critsplit#92
+    x64.jmp critsplit#90
   check#6:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg r12, rcx
@@ -154,14 +156,14 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, critsplit#85
+    x64.jcc equal, critsplit#83
   __im_empty:
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, __im_slow#24
-  critsplit#86:
+  critsplit#84:
     x64.movRegReg r10, rcx
     x64.jmp __im_cont#23
-  critsplit#85:
+  critsplit#83:
     x64.movRegReg r10, rcx
   __im_cont#23:
     x64.cmpRegImm32 r10, 0
@@ -208,7 +210,7 @@ func @main {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#18
-  critsplit#87:
+  critsplit#85:
     x64.movRegReg rcx, r8
   tryok#17:
     x64.leaRegRegReg rsi, r12, r14
@@ -221,11 +223,11 @@ func @main {
     x64.imulRegRegImm32 rax, rax, 251
     x64.subRegReg rsi, rsi, rax
     x64.cmpRegReg rcx, rsi
-    x64.jcc equal, critsplit#84
+    x64.jcc equal, critsplit#82
   value#19:
     x64.leaRegRegImm32 rax, r15, 1
     x64.jmp forstep#15
-  critsplit#84:
+  critsplit#82:
     x64.movRegReg rax, r15
   forstep#15:
     x64.leaRegRegImm32 r14, r14, 1
@@ -240,19 +242,19 @@ func @main {
     x64.cmpRegImm32 r12, 16000
     x64.jcc less, check#6
     x64.jmp forexit#8
-  critsplit#92:
+  critsplit#90:
     x64.movRegReg rdx, r12
-    x64.jmp forhdr#55
-  check#79:
+    x64.jmp forhdr#53
+  check#77:
     x64.cmpRegReg rdx, r13
-    x64.jcc aboveEqual, __im_slow#76
-  __im_load#77:
+    x64.jcc aboveEqual, __im_slow#74
+  __im_load#75:
     x64.loadRegBaseIndexScale.word64 r12, [r14 + rdx*8 + 0]
     x64.movRegImm32 rcx, 0
     x64.movRegReg r10, rcx
-  __im_cont#75:
+  __im_cont#73:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#73
+    x64.jcc equal, tryok#71
   tryerr#10:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -266,47 +268,47 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#73:
+  tryok#71:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
     x64.cmpRegImm32 rcx, 96
-    x64.jcc equal, ifcont#59
-  length#74:
+    x64.jcc equal, ifcont#57
+  length#72:
     x64.leaRegRegImm32 rax, rax, 1
-  ifcont#59:
+  ifcont#57:
     x64.movRegImm32 r15, 0
-    x64.jmp forhdr#58
-  bytes#71:
+    x64.jmp forhdr#56
+  bytes#69:
     x64.loadRegBaseDisp.word64 rax, [r12 + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#70
-  __im_word#72:
+    x64.jcc notEqual, __im_stride#68
+  __im_word#70:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg r15, rax
-    x64.jcc aboveEqual, __im_slow#65
-  __im_load#67:
+    x64.jcc aboveEqual, __im_slow#63
+  __im_load#65:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r15*8 + 0]
-    x64.jmp __im_loaded#66
-  __im_stride#70:
+    x64.jmp __im_loaded#64
+  __im_stride#68:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#65
-  __im_byte#69:
+    x64.jcc notEqual, __im_slow#63
+  __im_byte#67:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg r15, rax
-    x64.jcc aboveEqual, __im_slow#65
-  __im_load#68:
+    x64.jcc aboveEqual, __im_slow#63
+  __im_load#66:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.leaRegRegReg rax, rax, r15
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-  __im_loaded#66:
+  __im_loaded#64:
     x64.movRegReg rcx, rax
-    x64.jmp tryok#62
-  __im_slow#65:
+    x64.jmp tryok#60
+  __im_slow#63:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r15
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#90
+    x64.jcc equal, critsplit#88
   tryerr#18:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
@@ -320,9 +322,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit#90:
+  critsplit#88:
     x64.movRegReg rcx, r8
-  tryok#62:
+  tryok#60:
     x64.loadRegSlot rax, slot2
     x64.leaRegRegReg rsi, rax, r15
     x64.movRegImm rax, 2351776136887273513
@@ -334,30 +336,30 @@ func @main {
     x64.imulRegRegImm32 rax, rax, 251
     x64.subRegReg rsi, rsi, rax
     x64.cmpRegReg rcx, rsi
-    x64.jcc equal, critsplit#89
-  value#63:
+    x64.jcc equal, critsplit#87
+  value#61:
     x64.loadRegSlot rax, slot1
     x64.leaRegRegImm32 rax, rax, 1
-    x64.jmp forstep#60
-  critsplit#89:
+    x64.jmp forstep#58
+  critsplit#87:
     x64.loadRegSlot rax, slot1
-  forstep#60:
+  forstep#58:
     x64.loadRegSlot rcx, slot0
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.movRegReg r15, rcx
-  forhdr#58:
+  forhdr#56:
     x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot0, r15
     x64.cmpRegImm32 r15, 96
-    x64.jcc less, bytes#71
-  forstep#56:
+    x64.jcc less, bytes#69
+  forstep#54:
     x64.loadRegSlot rax, slot2
     x64.leaRegRegImm32 rdx, rax, 1
     x64.loadRegSlot rax, slot1
-  forhdr#55:
+  forhdr#53:
     x64.storeSlotReg slot2, rdx
     x64.cmpRegImm32 rdx, 16000
-    x64.jcc less, check#79
+    x64.jcc less, check#77
   forexit#8:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#22
@@ -407,11 +409,11 @@ func @main {
     x64.loadRegSlot rax, slot3
     x64.movRegReg r13, r8
     x64.jmp __im_cont#23
-  __im_slow#76:
+  __im_slow#74:
     x64.storeSlotReg slot3, rax
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.loadRegSlot rax, slot3
     x64.movRegReg r12, r8
-    x64.jmp __im_cont#75
+    x64.jmp __im_cont#73
 }

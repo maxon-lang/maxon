@@ -241,7 +241,7 @@ A call names a function that does not exist -- a typo, or a callee not visible f
 
 ### E3005 — `typeMismatch`
 
-A value's type does not match the type required at this position.
+A value's type does not match the type required at this position. The required type is named as its declaration wrote it, except that a ranged alias met by a primitive value is named by its class (`expected 'int', got 'bool'`).
 
 ### E3006 — `duplicateDefinition`
 
@@ -285,7 +285,7 @@ An 'implements' clause names an interface that does not exist.
 
 ### E3016 — `semanticPartialInterfaceImpl`
 
-A type, enum or union claims to implement an interface but does not define all of its members.
+A type, enum or union claims to implement an interface but does not define all of its members. The expected signature names each associated type by the `with` argument the conformance spelled.
 
 ### E3017 — `semanticWhereConstraintViolation`
 

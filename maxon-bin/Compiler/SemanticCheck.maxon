@@ -4079,7 +4079,7 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 
 	// Resolved ONCE, at the top, so every message below quotes one string — and so the decode runs once per
 	// call rather than once per message. For all but the primitive-static mint it IS `callee`, at no cost.
-	let noun = callDiagnosticNoun(signatures.genericTemplateKeyOf(callee), mint: mint)
+	let noun = callDiagnosticNoun(signatures.declaredNameOf(callee), mint: mint)
 
 	// ⭐ THE TARGET GATE IS ASKED OF EVERY CALLEE, compiler-owned or not: a `__gt_now_ns` the parser
 	// emitted and a `Clock.nowMs` stdlib declared are the same refusal, and asking it here — once,
@@ -6933,7 +6933,8 @@ end 'reportIrreparableSuppliedDefault'
 //   • an inner-alias / nested-instance parameter (`other Items`, i.e. `Array with T`) becomes the instance's
 //     own (`Array with Num`), through `ProgramSignatures.substituteThroughInstance` — the SAME substitution
 //     the field read and the drop cascade use, so what `b.items` IS and what `adopt` ACCEPTS are one answer;
-//   • a `Self` parameter (`merge(source Self)`, tagged with the base's `structRef`) becomes the instance.
+//   • a `Self` parameter (`merge(source Self)`, tagged with the base's `structRef`) becomes the instance;
+//   • a tuple parameter over the instance's parameters (`pair (T, T)`) has each element substituted.
 //
 // ⛔ **BOTH WERE REFUSALS OF LEGAL PROGRAMS.** `a.adopt(b.items)` on two `HoldA with Num` was
 // `E3005: expected 'HoldANum.Items', got 'HoldA.Items'` and `b.merge(a)` on two `Container with Integer` was
@@ -6979,6 +6980,11 @@ function paramTypeThroughCallInstance(project Project, func IrFunction, subject 
 
 	if paramTag == ValueTypeTag.structRef 'maybeSelf'
 		let name = try project.typeNames.nameOf(typeNameIdOf(paramType)) otherwise panic("paramTypeThroughCallInstance: structRef id {typeNameIdOf(paramType)} is not in the project interner — a signature's param types are remapped project-global at merge (mergeArtifact)")
+
+		if isTupleTypeName(name) 'aTupleOverTheInstancesParameters'
+			return slotThroughCallInstance(project, signatures: signatures, slotType: paramType, gid: gid)
+		end 'aTupleOverTheInstancesParameters'
+
 		return MaxonType.genericInstance(gid) if name.equals(signatures.genericInstanceBaseName(gid)) else paramType
 	end 'maybeSelf'
 
@@ -8274,8 +8280,8 @@ end 'aggregateNameFor'
 // ⚠ The parser tier's twin is `Parser.displayTypeNameOf`; the two exist for the reason `aggregateNameOf` and
 // `aggregateNameFor` do (different tier, different interner), and both quote the instance name out of the one
 // whole-program index, so they cannot spell a type two ways. **The twinning stops at the LOOKUP and the
-// instance arm — the tail is `displayNameOfAggregate`, shared, because a tag and an already-resolved name
-// belong to no tier.**
+// instance arm — the tail is `ProgramSignatures.displayNameOfAggregate`, shared, because a tag and an
+// already-resolved name belong to no tier.**
 function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns String
 	if tag == ValueTypeTag.genericInstance 'genericInstance'
 		return String.from(programSignaturesIn(project, asker: "typeDisplayName").instanceDisplayName(nameId as GenericInstanceId))
@@ -8283,7 +8289,7 @@ function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, r
 
 	// Its aggregate NAME when it has one (`BoxB`), else the scalar TYPE it actually is (`int` for a bare
 	// integer meeting a union parameter).
-	return displayNameOfAggregate(tag, aggregate: aggregateNameFor(project, tag: tag, nameId: nameId, readerFilePath: readerFilePath))
+	return programSignaturesIn(project, asker: "typeDisplayName").displayNameOfAggregate(tag, aggregate: aggregateNameFor(project, tag: tag, nameId: nameId, readerFilePath: readerFilePath))
 end 'typeDisplayName'
 
 // ⭐⭐ **HOW THE *PARAMETER* SIDE OF AN ARGUMENT REFUSAL IS SPELLED — the display door's other half.** It
@@ -8295,7 +8301,7 @@ end 'typeDisplayName'
 //   • `aggregate`  — the pre-erasure union/enum IDENTITY (`FuncSignature.paramAggregateNames`), which is also
 //                    what the mismatch was DECIDED on, so the sentence names the thing that was compared;
 //   • `declaredName` — the pre-erasure SPELLING (`FuncSignature.paramDeclaredNames`), which is all that is
-//                    left of `n Integer` once the alias has resolved away.
+//                    left of `n Integer` once the alias has resolved away, and of a written tuple type.
 //
 // ⚠ The instance arm comes FIRST and reads the type rather than `aggregate`, because for a generic instance
 // `aggregate` holds the canonical identity (`Array_Integer`) and the author wrote `IntegerArray`.
@@ -8314,7 +8320,7 @@ end 'typeDisplayName'
 // `Integer` claims a nominal disagreement where the mismatch is purely one of class.** `tagAdmitsNoAggregate`
 // is exactly that question and is already the compiler's one answer to it.
 //
-// ⚠ The gate is on THIS arm alone. The two arms above keep answering unconditionally because their
+// ⚠ The gate is on THIS arm alone. The arms above it keep answering unconditionally because their
 // fallback is useless: `typeTagName(genericInstance)` is the bare word `struct`, so `expected 'IntegerArray',
 // got 'int'` (`specs/type-checking.md`, an `int` argument — a tag that admits no aggregate) would degrade to
 // `expected 'struct'`. The ranged arm's fallback is `int`, which is the type.
@@ -8323,11 +8329,15 @@ function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTy
 		return brandedTypeDisplayName(project, tag: paramTag, nameId: typeNameIdOf(paramType), brand: declaredName, readerFilePath: readerFilePath)
 	end 'genericInstance'
 
+	if paramTag == ValueTypeTag.structRef and not declaredName.isEmpty() 'aWrittenTupleType'
+		return String.from(declaredName)
+	end 'aWrittenTupleType'
+
 	// A ranged alias's identity is a NAME, not an aggregate, and is printed only where the declaration spelled
 	// it (`declaredName`): a function TYPE's parameter is a class word (`fn(int) returns int`), and an
 	// argument refused there reads `expected 'int'`.
 	if not aggregate.isEmpty() and not programSignaturesIn(project, asker: "paramDisplayName").isRangedAliasIdentity(aggregate) 'nominal'
-		return String.from(aggregate)
+		return programSignaturesIn(project, asker: "paramDisplayName").displayNameOfAggregate(paramTag, aggregate: aggregate)
 	end 'nominal'
 
 	if not declaredName.isEmpty() and not tagAdmitsNoAggregate(argTag) 'declaredAliasAgainstANamedArgument'

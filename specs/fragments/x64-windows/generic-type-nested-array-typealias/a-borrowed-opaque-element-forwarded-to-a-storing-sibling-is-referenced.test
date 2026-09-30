@@ -1,6 +1,6 @@
 // Test: a-borrowed-opaque-element-forwarded-to-a-storing-sibling-is-referenced
 typealias ExitCode = int(0 to 125)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type GHolder uses T
 	typealias TArray = Array with T
@@ -46,19 +46,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @main {
@@ -119,7 +112,7 @@ func @main {
   relayMany:
     x64.movRegImm32 rdx, 0
     x64.leaRegRdata r12, [rip + __layout_GHolder_String]
-  __rc_ok:
+  __il_body#13:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
@@ -128,7 +121,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, __im_slow
-  __im_load#24:
+  __im_load#22:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.jmp __im_loaded
@@ -139,21 +132,21 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, __im_slow
-  __im_load#25:
+  __im_load#23:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.byte rax, [rax + 0]
   __im_loaded:
     x64.movRegImm32 rsi, 0
     x64.loadRegBaseDisp.word64 rdi, [rcx + 40]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, critsplit#29
+    x64.jcc equal, critsplit#27
   __im_empty:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow
-  critsplit#30:
+  critsplit#28:
     x64.movRegReg rdx, rax
     x64.jmp __im_cont
-  critsplit#29:
+  critsplit#27:
     x64.movRegReg rdx, rax
     x64.jmp __im_cont
   __im_slow:
@@ -166,7 +159,7 @@ func @main {
   tryok:
     x64.movRegReg rcx, r12
     x64.callDirect __retain_type_param
-  __il_body#28:
+  __il_body#26:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push

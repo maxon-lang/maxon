@@ -18,12 +18,10 @@ other side of the same conformance.
 
 Inside a shared generic body the receiver of a witness dispatch is a value of a TYPE PARAMETER, and a
 type parameter says nothing about what the conformance behind it bound. So `source.current()` — whose
-requirement returns the associated type `Element` — had no type to give the result: the compiler read
-the interface's own PLACEHOLDER NAME as though it were a type the program declares, and a tuple built
-from it was a different tuple type from the declared one. It also left the position UNCLAIMED for
-E3119, which then refused every program whose conformers bind that position differently — the
-overwhelmingly common case, since the whole point of an associated type is that each conformer picks
-its own.
+requirement returns the associated type `Element` — has no type to give the result from the receiver
+alone, and the position stays UNCLAIMED for E3119, which refuses every program whose conformers bind that
+position differently — the overwhelmingly common case, since the whole point of an associated type is that
+each conformer picks its own.
 
 `with` on the constraint supplies both answers from one place: the dispatch's result (and its
 associated formals) are typed through the binding, and the position counts as CLAIMED at that site.
@@ -40,14 +38,14 @@ A generic conforming type shares ONE compiled body across every instantiation, a
 is keyed by the conformer's BASE name for the same reason (`generic-instance-conformance.md`). That
 reduction rests on the impls being independent of the type argument. An impl that reads its hidden
 dictionary — its type parameter's layout descriptor, or the witness table of one of its own `where`
-constraints — is not, and it used to be refused with **E3128** because a dispatch through the shared
-table had no instantiation to take the dictionary from.
+constraints — is not: a dispatch through one shared table has no instantiation to take the dictionary
+from.
 
-It does now. Where a witness table is minted for a CONCRETE instance of a generic conformer whose
+Where a witness table is minted for a CONCRETE instance of a generic conformer whose
 impls carry a dictionary, the table is minted PER INSTANCE — `__witness_Wrap_IntCur_Integer.Cursor`
 rather than `__witness_Wrap.Cursor` — and each of its slots points at a thunk that calls the shared
 impl with that instance's own descriptor and witnesses. A conformer whose impls need no dictionary
-keeps the one shared table it always had, so nothing else in the program moves.
+keeps one shared table.
 
 E3128 remains for the case it is still true of: a witness table minted for a conformer with NO
 instance in hand.
@@ -57,9 +55,7 @@ instance in hand.
 <!-- test: associated-binding.constrained-parameter-typed-through-the-binding -->
 ⭐ **THE RESULT OF A DISPATCH THROUGH A CONSTRAINED TYPE PARAMETER.** `s.current()` returns `Cursor`'s
 associated `Element`; the constraint says this `Cursor` binds it to `E`; so the tuple `(s, s.current())`
-is the declared `(S, E)`. MEASURED before the constraint could carry a binding:
-`error E3005: Cannot return '__Tuple2.T….Element' from function declared to return '__Tuple2.T….T…'`
-— the interface's own placeholder name read as though it were a declared type.
+is the declared `(S, E)`, and the function returns it as that type.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -110,9 +106,8 @@ end 'main'
 <!-- test: associated-binding.the-constraint-settles-a-disagreement -->
 ⭐⭐ **TWO CONFORMERS BIND THE POSITION DIFFERENTLY AND THE DISPATCH IS STILL WELL TYPED.** `IntCur`
 binds `Cursor`'s `Element` to `Integer` and `TextCur` binds it to `String`; the dispatch inside `Wrap`
-names neither, and before the constraint could carry a binding this was E3119 — *"DISPATCHES THROUGH A
-RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS"*, whose own message prescribed a spelling the
-grammar had no way to write. Both instantiations run, through one compiled body.
+names neither, and the constraint's binding types the dispatch. Both instantiations run, through one
+compiled body.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -176,9 +171,8 @@ end 'main'
 <!-- test: associated-binding.a-generic-conformer-reaches-its-own-witness -->
 ⭐⭐ **THE PER-INSTANCE TABLE.** `Box` is a GENERIC conformer of `Sized` whose `size()` dispatches
 through its own `where T is Sized` constraint — so the impl reads the hidden witness its declaration
-reserves, and a dispatch through a table shared by every instantiation had no instantiation to take
-that witness from (**E3128**). Widening `LeafBox` into a `Sized` existential now mints a table for
-THAT instance, whose slot calls the one shared `Box.size` with `Leaf`'s own witness.
+reserves, and a table shared by every instantiation has no instantiation to take that witness from.
+Widening `LeafBox` into a `Sized` existential mints a table for THAT instance, whose slot calls the one shared `Box.size` with `Leaf`'s own witness.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -376,9 +370,8 @@ error E2066: <fragment>:8:39: interface 'Sized' declares 0 associated type(s), b
 <!-- test: associated-binding.a-constraint-argument-written-as-a-typealias-gets-its-own-table -->
 ⭐⭐ **AN INSTANCE IS AN INSTANCE HOWEVER IT IS SPELLED.** `Holder with LeafBox` names the same argument as
 `Holder with (Box with Leaf)` — one through a `typealias`, one inline — and both need the per-instance table
-`Box.size`'s hidden witness comes from. The lowering used to read only the TYPE TAG, which a declared name
-does not carry: the alias spelling reduced to the SHARED `Box` table, whose adapter hands `Box.size` a null
-witness, and the program was refused with **E3128**. The inline spelling compiled and answered 16 all along.
+`Box.size`'s hidden witness comes from. The lowering resolves the alias to the instance it names, so both
+spellings get the per-instance table and answer 16.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

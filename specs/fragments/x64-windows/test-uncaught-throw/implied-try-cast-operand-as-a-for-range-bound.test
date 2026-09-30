@@ -22,7 +22,7 @@ test 'counts up from a cast bound'
 		total = total + i
 	end 'each'
 
-	Expect.equal(total as AssertedInt, expected: 9)
+	Expect.equal(total, expected: 9)
 end 'counts up from a cast bound'
 
 // --- file: main.maxon
@@ -35,19 +35,12 @@ ExitCode: 0
 data {
   __data_wireWrapper@0 = i64 0
   __data_wireSeparator@8 = i64 0
-  __sched_tls_teb_offset@16 = i64 0
-  __sched_allm@24 = i64 0
-  __sched_lock@32 = i64 0
-  __sched_preempt_ext_lock@40 = i64 0
-  __sched_preempt_context@48 = i64 0
-  __slab_arena_list@56 = i64 0
-  __slab_arena_map_l1@64 = i64 0
-  __slab_state@72 = i64 0
-  __ds_base@80 = i64 0
-  __dbg_ctl@88 = i64 0
-  __mrt_console_probe_stdin@96 = i8 0
-  __mrt_console_probe_stdout@97 = i8 0
-  __mrt_console_probe_stderr@98 = i8 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_console_probe_stdin@40 = i8 0
+  __mrt_console_probe_stdout@41 = i8 0
+  __mrt_console_probe_stderr@42 = i8 0
 }
 
 func @first {
@@ -82,14 +75,20 @@ func @__test_counts_up_from_a_cast_bound {
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 rcx, 1
     x64.callDirect first
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc greater, __rc_panic
+  __rc_ok#9:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc equal, forhdr
   tryerr#2:
     x64.leaRegRegImm32 rax, r10, -1
-    x64.leaRegRdata rbx, [rip + __str_rec_17]  ; "ApiError"
+    x64.leaRegRdata rbx, [rip + __str_rec_16]  ; "ApiError"
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rax
-    x64.leaRegRdata rcx, [rip + __str_rec_18]  ; "notFound"
+    x64.leaRegRdata rcx, [rip + __str_rec_17]  ; "notFound"
     x64.imulRegReg rax, rax, rcx
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -110,8 +109,8 @@ func @__test_counts_up_from_a_cast_bound {
     x64.storeBaseDispReg.word64 [r14 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
-    x64.leaRegRdata rax, [rip + __str_rec_19]  ; "suite.maxtest"
-  __rc_ok:
+    x64.leaRegRdata rax, [rip + __str_rec_18]  ; "suite.maxtest"
+  __rc_ok#14:
     x64.leaRegGlobal rcx, __data_wireWrapper
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
@@ -161,7 +160,7 @@ func @__test_counts_up_from_a_cast_bound {
     x64.storeSlotReg slot7, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot16, rax
-    x64.leaRegRdata rax, [rip + __str_rec_31]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_30]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot9, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -270,13 +269,6 @@ func @__test_counts_up_from_a_cast_bound {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#1:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 100
-    x64.jcc greater, __rc_panic
-    x64.jmp forhdr
   each:
     x64.leaRegRegReg rbx, rbx, r8
   forstep:
@@ -287,19 +279,19 @@ func @__test_counts_up_from_a_cast_bound {
   forexit:
     x64.movRegImm32 r12, 9
   __il_body:
-    x64.leaRegRdata rcx, [rip + __str_rec_44]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_42]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
   __il_cont#17:
-    x64.leaRegRdata r9, [rip + __str_rec_19]  ; "suite.maxtest"
+    x64.leaRegRdata r9, [rip + __str_rec_18]  ; "suite.maxtest"
     x64.movRegImm32 rsi, 23
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
-    x64.callDirect Expect.equal
+    x64.callDirect Expect.equal#__with165_25#int
     x64.movRegReg rbx, r10
     x64.cmpRegImm32 rbx, 0
-    x64.jcc equal, tryok#7
+    x64.jcc equal, tryok
   tryerr#8:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
@@ -313,7 +305,7 @@ func @__test_counts_up_from_a_cast_bound {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#7:
+  tryok:
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
@@ -327,7 +319,7 @@ func @__test_counts_up_from_a_cast_bound {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_46]  ; "panic at suite.maxtest:19: Range check failed: value outside typealias 'Small'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at suite.maxtest:19: Range check failed: value outside typealias 'Small'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0

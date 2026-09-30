@@ -88,6 +88,2633 @@ end 'main'
 
 ### A `String` argument outlives the container the shared body read it from
 
+<!-- test: a-parameter-held-in-a-map-field-is-shared -->
+A record stored under the type parameter in a `Map with (String, Value)` field is shared: writes through the record read back out show in the map.
+```maxon
+typealias Count = int(0 to 1000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+		self.names.push("x{self.n}")
+	end 'bump'
+end 'Box'
+
+type Held uses Value
+	typealias ValueMap = Map with (String, Value)
+	var values as ValueMap
+
+	static function create() returns Self
+		return Self{values: ValueMap.create()}
+	end 'create'
+
+	function hold(key String, value Value)
+		self.values.upsert(key, value: value)
+	end 'hold'
+
+	function get(key String) returns Value throws MapError
+		return try self.values.get(key)
+	end 'get'
+end 'Held'
+
+typealias HeldBoxes = Held with Box
+
+function main() returns ExitCode
+	var held = HeldBoxes.create()
+	held.hold("a", value: Box.create(1))
+	for _ in 0 upto 3 'eachRound'
+		var b = try held.get("a") otherwise panic("absent")
+		b.bump()
+	end 'eachRound'
+	let c = try held.get("a") otherwise panic("absent")
+	print("{c.n} {c.names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 3
+```
+
+<!-- test: a-parameter-held-in-a-map-field-behind-a-sibling-call-is-shared -->
+The same store beside a sibling method that reads the same map.
+```maxon
+typealias Count = int(0 to 1000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+		self.names.push("x{self.n}")
+	end 'bump'
+end 'Box'
+
+type Held uses Value
+	typealias ValueMap = Map with (String, Value)
+	var values as ValueMap
+
+	static function create() returns Self
+		return Self{values: ValueMap.create()}
+	end 'create'
+
+	function hold(key String, value Value)
+		self.values.upsert(key, value: value)
+		self.touch(key)
+	end 'hold'
+
+	function touch(key String)
+		if not self.values.contains(key) 'absent'
+			panic("touch: the key was just stored")
+		end 'absent'
+	end 'touch'
+
+	function get(key String) returns Value throws MapError
+		return try self.values.get(key)
+	end 'get'
+end 'Held'
+
+typealias HeldBoxes = Held with Box
+
+function main() returns ExitCode
+	var held = HeldBoxes.create()
+	held.hold("a", value: Box.create(1))
+	for _ in 0 upto 3 'eachRound'
+		var b = try held.get("a") otherwise panic("absent")
+		b.bump()
+	end 'eachRound'
+	let c = try held.get("a") otherwise panic("absent")
+	print("{c.n} {c.names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 3
+```
+
+<!-- test: a-parameter-replaced-in-a-map-field-releases-the-old-record -->
+Replacing the stored record releases the old one exactly once, and the new one is the record read back out.
+```maxon
+typealias Count = int(0 to 1000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+		self.names.push("x{self.n}")
+	end 'bump'
+end 'Box'
+
+type Held uses Value
+	typealias ValueMap = Map with (String, Value)
+	var values as ValueMap
+
+	static function create() returns Self
+		return Self{values: ValueMap.create()}
+	end 'create'
+
+	function hold(key String, value Value)
+		self.values.upsert(key, value: value)
+	end 'hold'
+
+	function get(key String) returns Value throws MapError
+		return try self.values.get(key)
+	end 'get'
+end 'Held'
+
+typealias HeldBoxes = Held with Box
+
+function main() returns ExitCode
+	var held = HeldBoxes.create()
+	let first = Box.create(1)
+	held.hold("a", value: first)
+	held.hold("a", value: Box.create(7))
+	var b = try held.get("a") otherwise panic("absent")
+	b.bump()
+	let c = try held.get("a") otherwise panic("absent")
+	print("{c.n} {c.names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 1
+```
+
+<!-- test: a-parameter-read-out-of-a-map-field-by-a-generic-accessor-is-shared -->
+The same sharing through a second generic layer that holds the first and forwards to it.
+```maxon
+typealias Count = int(0 to 1000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+		self.names.push("x{self.n}")
+	end 'bump'
+end 'Box'
+
+type Held uses Value
+	typealias ValueMap = Map with (String, Value)
+	var values as ValueMap
+
+	static function create() returns Self
+		return Self{values: ValueMap.create()}
+	end 'create'
+
+	function hold(key String, value Value)
+		self.values.upsert(key, value: value)
+	end 'hold'
+
+	function get(key String) returns Value throws MapError
+		return try self.values.get(key)
+	end 'get'
+end 'Held'
+
+type Registry uses Item
+	typealias ItemHeld = Held with Item
+	var held as ItemHeld
+
+	static function create() returns Self
+		return Self{held: ItemHeld.create()}
+	end 'create'
+
+	function put(key String, item Item)
+		self.held.hold(key, value: item)
+	end 'put'
+
+	function get(key String) returns Item throws MapError
+		return try self.held.get(key)
+	end 'get'
+end 'Registry'
+
+typealias BoxRegistry = Registry with Box
+
+function main() returns ExitCode
+	var registry = BoxRegistry.create()
+	registry.put("a", item: Box.create(1))
+	for _ in 0 upto 3 'eachRound'
+		var b = try registry.get("a") otherwise panic("absent")
+		b.bump()
+	end 'eachRound'
+	let c = try registry.get("a") otherwise panic("absent")
+	print("{c.n} {c.names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 3
+```
+
+<!-- test: a-mixed-instance-snapshot-inside-a-generic-copies-like-the-concrete-one -->
+A snapshot cloned inside a generic body copies its records exactly as the same snapshot of a concrete instance does.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Index = int(0 to u64.max) implements ElementIndex
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+		self.names.push("x{self.n}")
+	end 'bump'
+end 'Box'
+
+type Columns uses X, Y
+	typealias XArray = Array with X
+	typealias YArray = Array with Y
+	var xs as XArray
+	var ys as YArray
+
+	static function create() returns Self
+		return Self{xs: XArray.create(), ys: YArray.create()}
+	end 'create'
+
+	function add(x X, y Y)
+		self.xs.push(x)
+		self.ys.push(y)
+	end 'add'
+
+	function snapshot() returns Self
+		return Self{xs: self.xs.clone(), ys: self.ys.clone()}
+	end 'snapshot'
+
+	function yAt(i Index) returns Y
+		return try self.ys.get(i) otherwise panic("yAt")
+	end 'yAt'
+end 'Columns'
+
+type Holder uses T
+	typealias Mixed = Columns with (String, T)
+	var mixed as Mixed
+
+	static function create() returns Self
+		return Self{mixed: Mixed.create()}
+	end 'create'
+
+	function put(t T)
+		self.mixed.add("k", y: t)
+	end 'put'
+
+	function original() returns T
+		return self.mixed.yAt(0)
+	end 'original'
+
+	function copied() returns T
+		return self.mixed.snapshot().yAt(0)
+	end 'copied'
+end 'Holder'
+
+typealias BoxHolder = Holder with Box
+typealias BoxColumns = Columns with (String, Box)
+
+function main() returns ExitCode
+	var concrete = BoxColumns.create()
+	concrete.add("k", y: Box.create(1))
+	var concreteCopy = concrete.snapshot().yAt(0)
+	concreteCopy.bump()
+	print("concrete {concrete.yAt(0).n}\n")
+
+	var h = BoxHolder.create()
+	h.put(Box.create(1))
+	var c = h.copied()
+	c.bump()
+	print("generic {h.original().n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+concrete 1
+generic 1
+```
+
+<!-- test: error.an-aliased-array-argument-of-a-mixed-instance-snapshot-is-refused -->
+An array type argument spelled through an alias is refused at a snapshot exactly as the inline spelling is.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Index = int(0 to u64.max) implements ElementIndex
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+		self.names.push("x{self.n}")
+	end 'bump'
+end 'Box'
+
+type Columns uses X, Y
+	typealias XArray = Array with X
+	typealias YArray = Array with Y
+	var xs as XArray
+	var ys as YArray
+
+	static function create() returns Self
+		return Self{xs: XArray.create(), ys: YArray.create()}
+	end 'create'
+
+	function add(x X, y Y)
+		self.xs.push(x)
+		self.ys.push(y)
+	end 'add'
+
+	function snapshot() returns Self
+		return Self{xs: self.xs.clone(), ys: self.ys.clone()}
+	end 'snapshot'
+
+	function yAt(i Index) returns Y
+		return try self.ys.get(i) otherwise panic("yAt")
+	end 'yAt'
+end 'Columns'
+
+type Holder uses T
+	typealias TArray = Array with T
+	typealias Mixed = Columns with (String, TArray)
+	var mixed as Mixed
+
+	static function create() returns Self
+		return Self{mixed: Mixed.create()}
+	end 'create'
+
+	function put(t T)
+		var column = TArray.create()
+		column.push(t)
+		self.mixed.add("k", y: column)
+	end 'put'
+
+	function original() returns T
+		return try self.mixed.yAt(0).get(0) otherwise panic("original")
+	end 'original'
+
+	function copied() returns T
+		return try self.mixed.snapshot().yAt(0).get(0) otherwise panic("copied")
+	end 'copied'
+end 'Holder'
+
+typealias BoxHolder = Holder with Box
+typealias BoxColumns = Columns with (String, Box)
+
+function main() returns ExitCode
+	var concrete = BoxColumns.create()
+	concrete.add("k", y: Box.create(1))
+	var concreteCopy = concrete.snapshot().yAt(0)
+	concreteCopy.bump()
+	print("concrete {concrete.yAt(0).n}\n")
+
+	var h = BoxHolder.create()
+	h.put(Box.create(1))
+	var c = h.copied()
+	c.bump()
+	print("generic {h.original().n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:46:12: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
+note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above
+```
+
+<!-- test: a-closure-in-a-generic-method-stores-the-parameter-through-its-descriptor -->
+A closure inside a generic method stores a type-parameter value through the enclosing method's descriptor, so the stored record is the shared one.
+```maxon
+typealias Count = int(0 to 1000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+		self.names.push("x{self.n}")
+	end 'bump'
+end 'Box'
+
+type Held uses Value
+	typealias ValueMap = Map with (String, Value)
+	var values as ValueMap
+
+	static function create() returns Self
+		return Self{values: ValueMap.create()}
+	end 'create'
+
+	function hold(key String, value Value) returns bool
+		self.values.upsert(key, value: value)
+		return true
+	end 'hold'
+
+	function get(key String) returns Value throws MapError
+		return try self.values.get(key)
+	end 'get'
+end 'Held'
+
+typealias Action = function() returns bool
+
+function perform(action Action) returns bool
+	return action()
+end 'perform'
+
+type Registry uses Item
+	typealias ItemHeld = Held with Item
+	var held as ItemHeld
+
+	static function create() returns Self
+		return Self{held: ItemHeld.create()}
+	end 'create'
+
+	function put(key String, item Item)
+		if not self.held.hold(key, value: item) 'unstored'
+			panic("put: hold always stores")
+		end 'unstored'
+	end 'put'
+
+	function copyLater(source String, target String)
+		if not perform(function() gives held.hold(target, value: try held.get(source) otherwise panic("absent"))) 'uncopied'
+			panic("copyLater: hold always stores")
+		end 'uncopied'
+	end 'copyLater'
+
+	function get(key String) returns Item throws MapError
+		return try self.held.get(key)
+	end 'get'
+end 'Registry'
+
+typealias BoxRegistry = Registry with Box
+
+function main() returns ExitCode
+	var registry = BoxRegistry.create()
+	registry.put("a", item: Box.create(1))
+	registry.copyLater("a", target: "b")
+	for _ in 0 upto 3 'eachRound'
+		var b = try registry.get("b") otherwise panic("absent")
+		b.bump()
+	end 'eachRound'
+	let c = try registry.get("a") otherwise panic("absent")
+	print("{c.n} {c.names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 3
+```
+
+<!-- test: a-closure-reading-a-parameter-out-of-a-generic-cell-keeps-it-alive -->
+A closure inside a generic method that reads a type-parameter field hands back the shared record, which stays alive and balanced across every call.
+```maxon
+typealias Count = int(0 to 1000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+		self.names.push("x{self.n}")
+	end 'bump'
+end 'Box'
+
+type Cell uses T
+	typealias Source = function() returns T
+	var value as T
+
+	static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+
+	function get() returns T
+		return self.value
+	end 'get'
+
+	function run(source Source) returns T
+		return source()
+	end 'run'
+
+	function later() returns T
+		return self.run(function() gives value)
+	end 'later'
+end 'Cell'
+
+typealias BoxCell = Cell with Box
+
+function main() returns ExitCode
+	var cell = BoxCell.create(Box.create(5))
+	for _ in 0 upto 3 'eachRound'
+		var b = cell.later()
+		b.bump()
+	end 'eachRound'
+	let c = cell.get()
+	print("{c.n} {c.names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 3
+```
+
+<!-- test: error.a-generic-type-reaching-itself-through-a-growing-argument-is-refused -->
+A generic type whose methods reach an instance of itself with a strictly growing type argument has no finite set of instances, and is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair uses A, B
+	typealias AArray = Array with A
+	typealias BArray = Array with B
+	typealias Deeper = Pair with (A, BArray)
+	var firsts as AArray
+	var seconds as BArray
+
+	static function create() returns Self
+		return Self{firsts: AArray.create(), seconds: BArray.create()}
+	end 'create'
+
+	function depth() returns Integer
+		let d = Deeper.create()
+		return d.depth() + 1
+	end 'depth'
+end 'Pair'
+
+typealias IntStrPair = Pair with (Integer, String)
+
+function main() returns ExitCode
+	let p = IntStrPair.create()
+	return p.depth() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:11: 'Pair.create' is called on 'Pair.Deeper', whose type arguments build on the type parameters of 'Pair', and whose methods reach 'Pair' again — so composing its layout descriptor at a concrete instantiation would build an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own
+```
+
+<!-- test: mapping-a-map-of-records-releases-the-entry-tuples-it-built -->
+Each `map` over a `Map with (String, Box)` builds entry tuples that share the records, keeps them alive after the map replaces its values, and releases them when the mapped array goes.
+```maxon
+typealias Count = int(0 to 1000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+end 'Box'
+
+typealias BoxMap = Map with (String, Box)
+
+function main() returns ExitCode
+	var m = BoxMap.create()
+	m.upsert("a", value: Box.create(1))
+	m.upsert("bb", value: Box.create(2))
+	var total = 0 as Count
+	for _ in 0 upto 3 'eachRound'
+		let mapped = m.map(function(p) gives p)
+		m.upsert("a", value: Box.create(50))
+		m.upsert("bb", value: Box.create(60))
+		for pair in mapped 'sum'
+			total = total + pair.1.n + (pair.1.names.count() as Count)
+		end 'sum'
+	end 'eachRound'
+	let a = try m.get("a") otherwise panic("absent")
+	let bb = try m.get("bb") otherwise panic("absent")
+	print("{total} {a.n} {a.names.count()} {bb.n} {bb.names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+223 50 0 60 0
+```
+
+<!-- test: a-record-over-the-enclosing-parameter-in-a-container-is-created-and-cloned -->
+A record built over the enclosing type's own parameter is pushed into a container, and a clone of that container keeps its own copy.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	export typealias EBox = Box with Element
+	export typealias EBoxArray = Array with EBox
+
+	var items as EBoxArray
+
+	static function create() returns Self
+		return Self{items: EBoxArray.create()}
+	end 'create'
+
+	function add(x Element, tag Integer)
+		self.items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	function copy() returns EBoxArray
+		return self.items.clone()
+	end 'copy'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function heap(n Integer) returns String
+	var sb = StringBuilder.create()
+	sb.append("a heap string long enough to allocate {n}")
+	return sb.build()
+end 'heap'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	b.add(heap(1), tag: 4)
+	let c = b.copy()
+	b.add(heap(2), tag: 5)
+	let e = try c.get(0) otherwise return 92
+	print("{e.v} {c.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a heap string long enough to allocate 1 1
+```
+
+<!-- test: a-record-over-the-enclosing-parameter-in-a-list-is-created-and-read -->
+The same record kept in a `List` node reads back the value it was built with.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export let x as T
+	export let tag as Integer
+
+	function value() returns T
+		return x
+	end 'value'
+
+	static function create(x T, tag Integer) returns Self
+		return Self{x: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias Store = List with EBox
+	var items as Store
+
+	function add(x Element, tag Integer)
+		items.append(EBox.create(x, tag: tag))
+	end 'add'
+
+	function first() returns Element
+		let slot = try items.first() otherwise panic("empty")
+		return slot.value()
+	end 'first'
+
+	static function create() returns Self
+		return Self{items: Store.create()}
+	end 'create'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function heap(n Integer) returns String
+	var sb = StringBuilder.create()
+	sb.append("a heap string long enough to allocate {n}")
+	return sb.build()
+end 'heap'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	b.add(heap(1), tag: 7)
+	b.add(heap(2), tag: 8)
+	let f = b.first()
+	print("{f}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a heap string long enough to allocate 1
+```
+
+<!-- test: a-record-over-the-enclosing-parameter-pushed-into-its-container-is-shared -->
+A record read out of one container and pushed into another is shared by both, and the first container is unchanged.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	export typealias EBox = Box with Element
+	export typealias EBoxArray = Array with EBox
+
+	var items as EBoxArray
+
+	static function create() returns Self
+		return Self{items: EBoxArray.create()}
+	end 'create'
+
+	function add(x Element, tag Integer)
+		self.items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	function copy() returns EBoxArray
+		return self.items.clone()
+	end 'copy'
+
+	function addBox(b EBox)
+		self.items.push(b)
+	end 'addBox'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function heap(n Integer) returns String
+	var sb = StringBuilder.create()
+	sb.append("a heap string long enough to allocate {n}")
+	return sb.build()
+end 'heap'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	b.add(heap(1), tag: 4)
+	let c = b.copy()
+	let one = try c.get(0) otherwise return 90
+	b.addBox(one)
+	b.add(heap(2), tag: 5)
+	let e = try c.get(0) otherwise return 92
+	print("{e.v} {c.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a heap string long enough to allocate 1 1
+```
+
+<!-- test: a-record-over-the-enclosing-parameter-stashed-by-a-static-reached-from-an-instance-method-is-shared -->
+A static reached from an instance method pushes the record into the instance's container, which grows to two.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	export typealias EBox = Box with Element
+	export typealias EBoxArray = Array with EBox
+
+	var items as EBoxArray
+
+	static function create() returns Self
+		return Self{items: EBoxArray.create()}
+	end 'create'
+
+	function add(x Element, tag Integer)
+		self.items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	function copy() returns EBoxArray
+		return self.items.clone()
+	end 'copy'
+
+	function viaStash(b EBox) returns Integer
+		return Self.stash(b, into: self.items)
+	end 'viaStash'
+
+	static function stash(b EBox, into EBoxArray) returns Integer
+		var target = into
+		target.push(b)
+		return target.count()
+	end 'stash'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function heap(n Integer) returns String
+	var sb = StringBuilder.create()
+	sb.append("a heap string long enough to allocate {n}")
+	return sb.build()
+end 'heap'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	b.add(heap(1), tag: 4)
+	let c = b.copy()
+	let one = try c.get(0) otherwise return 90
+	let n = b.viaStash(one)
+	print("{n}\n")
+	b.add(heap(2), tag: 5)
+	let e = try c.get(0) otherwise return 92
+	print("{e.v} {c.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+a heap string long enough to allocate 1 1
+```
+
+<!-- test: a-record-over-the-enclosing-parameter-wrapped-in-a-fresh-container-is-shared -->
+A record wrapped in a fresh container built inside the generic body is the same record the original container holds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	export typealias EBox = Box with Element
+	export typealias EBoxArray = Array with EBox
+
+	var items as EBoxArray
+
+	static function create() returns Self
+		return Self{items: EBoxArray.create()}
+	end 'create'
+
+	function add(x Element, tag Integer)
+		self.items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	function copy() returns EBoxArray
+		return self.items.clone()
+	end 'copy'
+
+	function wrap(b EBox) returns EBoxArray
+		var xs = EBoxArray.create()
+		xs.push(b)
+		return xs
+	end 'wrap'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function heap(n Integer) returns String
+	var sb = StringBuilder.create()
+	sb.append("a heap string long enough to allocate {n}")
+	return sb.build()
+end 'heap'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	b.add(heap(1), tag: 4)
+	let c = b.copy()
+	let one = try c.get(0) otherwise return 90
+	let w = b.wrap(one)
+	let w0 = try w.get(0) otherwise return 91
+	print("{w0.v} {w.count()}\n")
+	b.add(heap(2), tag: 5)
+	let e = try c.get(0) otherwise return 92
+	print("{e.v} {c.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a heap string long enough to allocate 1 1
+a heap string long enough to allocate 1 1
+```
+
+<!-- test: a-container-of-tuples-over-the-parameter-clones-its-records -->
+A clone of an array of `(String, Value)` tuples is its own array: an entry added after the clone is not in it, and every record it holds is released.
+```maxon
+typealias Count = int(0 to 100000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+end 'Box'
+
+type Holder uses Value
+	typealias Pair = (String, Value)
+	typealias Pairs = Array with Pair
+	typealias Copier = function() returns Pairs
+	var pairs as Pairs
+
+	static function create() returns Self
+		return Self{pairs: Pairs.create()}
+	end 'create'
+
+	function put(key String, value Value)
+		self.pairs.push((key, value))
+	end 'put'
+
+	function snapshot() returns Pairs
+		return self.pairs.clone()
+	end 'snapshot'
+
+	function apply(copier Copier) returns Pairs
+		return copier()
+	end 'apply'
+end 'Holder'
+
+typealias BoxHolder = Holder with Box
+
+function main() returns ExitCode
+	var h = BoxHolder.create()
+	h.put("x", value: Box.create(5))
+	h.put("y", value: Box.create(6))
+	let snap = h.snapshot()
+	h.put("z", value: Box.create(7))
+	var total = 0 as Count
+
+	for pair in snap 'eachPair'
+		total = total + pair.1.n
+	end 'eachPair'
+
+	print("{total} {snap.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11 2
+```
+
+<!-- test: a-container-of-tuples-over-the-parameter-cloned-inside-a-closure-clones-its-records -->
+The same clone written inside a closure in the method.
+```maxon
+typealias Count = int(0 to 100000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+end 'Box'
+
+type Holder uses Value
+	typealias Pair = (String, Value)
+	typealias Pairs = Array with Pair
+	typealias Copier = function() returns Pairs
+	var pairs as Pairs
+
+	static function create() returns Self
+		return Self{pairs: Pairs.create()}
+	end 'create'
+
+	function put(key String, value Value)
+		self.pairs.push((key, value))
+	end 'put'
+
+	function snapshot() returns Pairs
+		return self.apply(function() gives self.pairs.clone())
+	end 'snapshot'
+
+	function apply(copier Copier) returns Pairs
+		return copier()
+	end 'apply'
+end 'Holder'
+
+typealias BoxHolder = Holder with Box
+
+function main() returns ExitCode
+	var h = BoxHolder.create()
+	h.put("x", value: Box.create(5))
+	h.put("y", value: Box.create(6))
+	let snap = h.snapshot()
+	h.put("z", value: Box.create(7))
+	var total = 0 as Count
+
+	for pair in snap 'eachPair'
+		total = total + pair.1.n
+	end 'eachPair'
+
+	print("{total} {snap.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11 2
+```
+
+<!-- test: a-container-of-tuples-over-the-parameter-returned-releases-its-records -->
+Returning the array field hands back the array itself, so an entry added afterwards is in it, and every record it holds is released.
+```maxon
+typealias Count = int(0 to 100000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+end 'Box'
+
+type Holder uses Value
+	typealias Pair = (String, Value)
+	typealias Pairs = Array with Pair
+	typealias Copier = function() returns Pairs
+	var pairs as Pairs
+
+	static function create() returns Self
+		return Self{pairs: Pairs.create()}
+	end 'create'
+
+	function put(key String, value Value)
+		self.pairs.push((key, value))
+	end 'put'
+
+	function snapshot() returns Pairs
+		return self.pairs
+	end 'snapshot'
+
+	function apply(copier Copier) returns Pairs
+		return copier()
+	end 'apply'
+end 'Holder'
+
+typealias BoxHolder = Holder with Box
+
+function main() returns ExitCode
+	var h = BoxHolder.create()
+	h.put("x", value: Box.create(5))
+	h.put("y", value: Box.create(6))
+	let snap = h.snapshot()
+	h.put("z", value: Box.create(7))
+	var total = 0 as Count
+
+	for pair in snap 'eachPair'
+		total = total + pair.1.n
+	end 'eachPair'
+
+	print("{total} {snap.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18 3
+```
+
+<!-- test: error.a-container-literal-over-the-parameter-in-a-body-without-a-descriptor-is-refused -->
+A container literal of records over the enclosing parameter needs a descriptor this body does not carry.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	export typealias EBox = Box with Element
+	export typealias EBoxArray = Array with EBox
+
+	var items as EBoxArray
+
+	static function create() returns Self
+		return Self{items: EBoxArray.create()}
+	end 'create'
+
+	function add(x Element, tag Integer)
+		self.items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	function copy() returns EBoxArray
+		return self.items.clone()
+	end 'copy'
+
+	function wrap(b EBox) returns EBoxArray
+		return [b]
+	end 'wrap'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function heap(n Integer) returns String
+	var sb = StringBuilder.create()
+	sb.append("a heap string long enough to allocate {n}")
+	return sb.build()
+end 'heap'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	b.add(heap(1), tag: 4)
+	let c = b.copy()
+	let one = try c.get(0) otherwise return 90
+	let w = b.wrap(one)
+	b.add(heap(2), tag: 5)
+	let e = try c.get(0) otherwise return 92
+	print("{e.v} {c.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:32:10: Unsupported: a container whose element is 'Bag.EBox' — a generic instance or tuple written over this type's OWN parameter, resting (itself, or through an instance it holds) a slot declared AT that parameter — cannot be created in a body that carries no layout descriptor: a container stamps ONE machine word as its element destructor, and the only word that releases such a slot at every instantiation is read out of the enclosing instance's layout descriptor, which this body does not carry. Construct the container through an inner typealias (`<Alias>.create()` or `<Alias>{}`), which reserves the descriptor for the method or the `Self`-returning `static function` that writes it; or hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`); or build the container in a method of a concrete instantiation
+```
+
+<!-- test: error.a-closure-in-a-static-storing-a-borrowed-parameter-is-refused -->
+A closure written in a static stores a borrowed type-parameter value, and the static carries no descriptor for the closure to take its reference through.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Cell uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function firstOf(cells CellArray) returns Int
+		let f = function() gives cells.count()
+		return f()
+	end 'firstOf'
+
+	static function keep(v T) returns Int
+		let f = function(x T) gives Self{v: x}
+		let c = f(v)
+		return 1
+	end 'keep'
+end 'Cell'
+
+typealias StrCell = Cell with String
+typealias CellArray = Array with StrCell
+
+function main() returns ExitCode
+	let c = StrCell.create("a")
+	return StrCell.keep("b") as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:17:11: Unsupported: the closure written in 'Cell.keep' takes a reference to a borrowed type-parameter value, but the body reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and a `static function` that does not return `Self` has no instance to read it from (build the record in an instance method, or in a `static function` that returns `Self`). A closure carries the descriptor of the body it is written in, so a closure written inside such a static has none either (take the reference in an instance method and hand the closure the result)
+```
+
+<!-- test: error.a-static-reassigning-its-parameter-from-a-borrow-is-refused -->
+A static that does not return `Self` reassigns its type-parameter parameter from a field of another instance, and it carries no descriptor to take that reference through.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function adopt(v T, other Self) returns bool
+		v = other.v
+		return true
+	end 'adopt'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function main() returns ExitCode
+	let src = StrCell.make("source")
+	let adopted = StrCell.adopt("dropped", other: src)
+	return 0 if adopted else 1
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:9:18: Unsupported: 'adopt' takes a reference to a borrowed type-parameter value, but the body reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and a `static function` that does not return `Self` has no instance to read it from (build the record in an instance method, or in a `static function` that returns `Self`). A closure carries the descriptor of the body it is written in, so a closure written inside such a static has none either (take the reference in an instance method and hand the closure the result)
+```
+
+<!-- test: error.a-static-handing-a-local-to-a-by-reference-parameter-is-refused -->
+A static that does not return `Self` hands a local holding a type-parameter value to a by-reference parameter, and it has no instance to source the descriptor the parameter's cell takes its reference through.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function setOnce(dest T)
+		dest = self.v
+	end 'setOnce'
+
+	static function viaLocal(other Self) returns T
+		var x = other.v
+		other.setOnce(x)
+		return x
+	end 'viaLocal'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function main() returns ExitCode
+	let c = StrCell.make("payload")
+	print(StrCell.viaLocal(c))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:18: Unsupported: a `static function` that hands a type-parameter value to a by-reference parameter needs the enclosing instance's dictionary — the parameter's cell takes and releases its own reference to the value, and how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the instance's descriptor at run time — so it must return `Self` for the caller to source that dictionary from the instance the static builds; a static returning any other type has no source (make the hand-off in an instance method, or return `Self`)
+```
+
+<!-- test: error.a-static-handing-a-field-to-a-by-reference-parameter-is-refused -->
+A static that does not return `Self` hands a field of another instance to a by-reference parameter, and it has no instance to source the descriptor the parameter's cell takes its reference through.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function setOnce(dest T)
+		dest = self.v
+	end 'setOnce'
+
+	static function poke(other Self)
+		other.setOnce(other.v)
+	end 'poke'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function main() returns ExitCode
+	let c = StrCell.make("payload")
+	StrCell.poke(c)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:18: Unsupported: a `static function` that hands a type-parameter value to a by-reference parameter needs the enclosing instance's dictionary — the parameter's cell takes and releases its own reference to the value, and how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the instance's descriptor at run time — so it must return `Self` for the caller to source that dictionary from the instance the static builds; a static returning any other type has no source (make the hand-off in an instance method, or return `Self`)
+```
+
+<!-- test: error.a-static-needing-sizeof-that-also-passes-an-int-by-reference-names-sizeof -->
+A static that does not return `Self` reads `sizeof` of the type parameter and also hands an integer local to an unrelated by-reference parameter, and the refusal names the dictionary need rather than the hand-off.
+```maxon
+typealias Count = int(0 to 1000)
+
+function bump(n Count)
+	n = n + 1
+end 'bump'
+
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function width(seed Count) returns Count
+		var k = seed
+		bump(k)
+		return (sizeof(T) as Count) + k
+	end 'width'
+end 'Cell'
+
+typealias CountCell = Cell with Count
+
+function main() returns ExitCode
+	print("{CountCell.width(1)} {CountCell.make(2).v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:18: Unsupported: a `static function` that needs the enclosing instance's dictionary — it constructs an opaque type-parameter `Array` (`ElementArray.create()`), reads `sizeof` of the type parameter, or reads `countof` of the sized container's own `Self` — must return `Self` so the caller can source it from the instance the static builds; a static returning any other type has no source (build the array, read the size or read the count through an instance method on `self`, or return `Self`). Threading a dictionary from a static call site's alias is a later slice
+```
+
+<!-- test: error.a-call-reaching-a-generic-and-a-concrete-declaration-where-one-takes-a-parameter-by-reference-is-refused -->
+A call whose name reaches both a generic function that reassigns its parameter and a concrete function of the same name is refused, because which one it binds is decided only after its arguments have been read.
+```maxon
+typealias Count = int(0 to 1000)
+
+function settle(dest T, src T) uses T
+	dest = src
+end 'settle'
+
+function settle(dest Count, src Count) returns Count
+	return dest + src
+end 'settle'
+
+function main() returns ExitCode
+	var target = "target"
+	let source = "source"
+	settle(target, src: source)
+	var left = 1 as Count
+	let right = 2 as Count
+	print("{target} {settle(left, src: right)}\n")
+	left = 3
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:2: Unsupported: a call to 'settle' can reach 2 declarations, and one of them takes a parameter by reference — which declaration a call binds is chosen from the arguments' types, after the arguments are read, while a by-reference parameter changes how an argument is read (as the caller's storage rather than its value); give the declaration that reassigns its parameter a name of its own
+```
+
+<!-- test: error.a-static-dropping-an-opaque-value-it-reads-is-refused -->
+A closure in a static reads an opaque value and drops it, and the static carries no descriptor to release it through.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Cell uses T
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function get() returns T
+		return v
+	end 'get'
+end 'Cell'
+
+type Holder uses T
+	typealias Inner = Cell with T
+	typealias Pair = (Inner, Int)
+	var one as Inner
+
+	static function create(v T) returns Self
+		return Self{one: Inner.create(v)}
+	end 'create'
+
+	static function peek(h Self) returns Int
+		let f = function() gives h.one.get()
+		_ = f()
+		return 1
+	end 'peek'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let h = StrHolder.create("a")
+	return StrHolder.peek(h) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:25:18: Unsupported: 'peek' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove`/`removeFirst` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); a `for … in` over a value held at a PARAMETERIZED interface, whose element is the enclosing type's own parameter and is owned per trip (store it into an `Array with <type parameter>`, which reserves the descriptor, or iterate in a method of a concrete instantiation). A closure carries the descriptor of the body it is written in, so a closure written inside such a body has none either (do the owning work in an instance method and hand the closure a value it need not release)
+```
+
+<!-- test: error.a-composed-container-cloned-in-a-closure-in-a-static-is-refused -->
+A container of tuples over the parameter cloned in a closure written in a static has no descriptor to copy its records through.
+```maxon
+typealias Count = int(0 to 100000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+end 'Box'
+
+type Holder uses Value
+	typealias Pair = (String, Value)
+	typealias Pairs = Array with Pair
+	typealias Copier = function() returns Pairs
+	var pairs as Pairs
+
+	static function create() returns Self
+		return Self{pairs: Pairs.create()}
+	end 'create'
+
+	function put(key String, value Value)
+		self.pairs.push((key, value))
+	end 'put'
+
+	function snapshot() returns Pairs
+		return self.apply(function() gives self.pairs.clone())
+	end 'snapshot'
+
+	function apply(copier Copier) returns Pairs
+		return copier()
+	end 'apply'
+
+	static function countOf(ps Pairs) returns Count
+		let f = function() gives ps.clone().count()
+		return f()
+	end 'countOf'
+end 'Holder'
+
+typealias BoxHolder = Holder with Box
+
+function main() returns ExitCode
+	var h = BoxHolder.create()
+	h.put("x", value: Box.create(5))
+	h.put("y", value: Box.create(6))
+	let snap = h.snapshot()
+	let k = BoxHolder.countOf(snap)
+	h.put("z", value: Box.create(7))
+	var total = 0 as Count
+
+	for pair in snap 'eachPair'
+		total = total + pair.1.n
+	end 'eachPair'
+
+	print("{total} {snap.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:37:31: Unsupported: 'Array.clone' is called on 'Holder.Pairs', whose type arguments mix this type's own parameters with other types, so the layout descriptor it is handed is composed at run time from the calling method's own descriptor — and this method reserves none. A method reserves one when its body reaches that instance through a field, an inner typealias, a parameter or a local bound from one of those; call it through one of them (e.g. 'self.<field>.<method>(…)')
+```
+
+<!-- test: a-generic-types-own-name-literal-in-a-static-builds-like-self -->
+A generic type's own name, written as a literal in its `Self`-returning static, builds the record exactly as `Self{}` does, field defaults included.
+```maxon
+type Bag uses T
+	typealias TArray = Array with T
+	export var items as TArray = TArray.create()
+
+	static function make() returns Self
+		return Bag{}
+	end 'make'
+
+	function add(x T)
+		self.items.push(x)
+	end 'add'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var b = StrBag.make()
+	b.add(heapString("first payload ", b: "long enough to allocate"))
+	print("{b.items.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-self-returning-static-copying-a-borrowed-parameter-field-is-served -->
+A `Self`-returning static that copies a type-parameter field out of a borrowed `Self` takes its reference through the descriptor its result sources.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function copyOf(other Self) returns Self
+		return Self{v: other.v}
+	end 'copyOf'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let s = heapString("first payload ", b: "long enough to allocate")
+	let a = StrCell.create(s)
+	let b = StrCell.copyOf(a)
+	print("{b.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first payload long enough to allocate
+```
+
+<!-- test: a-generic-types-own-name-static-call-in-its-body-is-served -->
+A static called by the generic type's own name inside its body is the same call as `Self.make()`.
+```maxon
+type Bag uses T
+	typealias TArray = Array with T
+	export var items as TArray
+
+	static function make() returns Self
+		return Self{items: TArray.create()}
+	end 'make'
+
+	function add(x T)
+		self.items.push(x)
+	end 'add'
+
+	function fresh() returns Self
+		return Bag.make()
+	end 'fresh'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var b = StrBag.make()
+	b.add(heapString("first payload ", b: "long enough to allocate"))
+	var c = b.fresh()
+	c.add(heapString("second payload ", b: "long enough to allocate"))
+	c.add(heapString("third payload ", b: "long enough to allocate"))
+	print("{b.items.count()} {c.items.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: a-generic-types-own-name-local-literal-is-served -->
+A local bound to a literal spelled with the generic type's own name builds the record as `Self{…}` does.
+```maxon
+type Bag uses T
+	typealias TArray = Array with T
+	export var items as TArray
+
+	static function make() returns Self
+		return Self{items: TArray.create()}
+	end 'make'
+
+	function add(x T)
+		self.items.push(x)
+	end 'add'
+
+	function withOne(y T) returns Self
+		var x = Bag{items: TArray.create()}
+		x.items.push(y)
+		return x
+	end 'withOne'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var b = StrBag.make()
+	let c = b.withOne(heapString("second payload ", b: "long enough to allocate"))
+	print("{c.items.count()} {b.items.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 0
+```
+
+<!-- test: a-parameter-typed-by-the-generic-types-own-name-is-served -->
+A parameter typed by the generic type's own name is the same instance as `Self`, so its type-parameter elements can be read and stored.
+```maxon
+type Bag uses T
+	typealias TArray = Array with T
+	export var items as TArray
+
+	static function make() returns Self
+		return Self{items: TArray.create()}
+	end 'make'
+
+	function add(x T)
+		self.items.push(x)
+	end 'add'
+
+	function merge(other Bag)
+		for x in other.items 'each'
+			self.items.push(x)
+		end 'each'
+	end 'merge'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var a = StrBag.make()
+	a.add(heapString("first payload ", b: "long enough to allocate"))
+	var b = StrBag.make()
+	b.add(heapString("second payload ", b: "long enough to allocate"))
+	a.merge(b)
+	print("{a.items.count()} {b.items.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 1
+```
+
+<!-- test: an-opaque-field-assigned-from-another-instances-field-is-shared -->
+A type-parameter field assigned from another instance's field holds that instance's value: a record would be shared, and a `String` holds the same text.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function takeFrom(other Self)
+		self.v = other.v
+	end 'takeFrom'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	let b = StrCell.create(heapString("second payload ", b: "long enough to allocate"))
+	a.takeFrom(b)
+	print("{a.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate
+```
+
+<!-- test: error.an-opaque-field-assigned-a-borrowed-value-by-its-bare-name-is-refused -->
+The same assignment spelled by the bare field name, in a body that reserves no layout descriptor.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function takeFrom(other Self)
+		v = other.v
+	end 'takeFrom'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	let b = StrCell.create(heapString("second payload ", b: "long enough to allocate"))
+	a.takeFrom(b)
+	print("{a.v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:3: Unsupported: reassigning the opaque type-parameter field 'v' of 'Cell' from a borrowed value in a body that carries no layout descriptor — the reference the field takes is read from the enclosing instance's descriptor at run time, and this body has none to read it through; write the reassignment as `self.<field> = …`, which reserves one for the method, or assign the field from a parameter the method consumes
+```
+
+<!-- test: a-self-returning-static-built-from-an-array-element-is-served -->
+A `Self`-returning static builds its own record from an element read out of an array of the type parameter.
+```maxon
+type Cell uses T
+	typealias TArray = Array with T
+	export var v as T
+
+	static function firstOf(xs TArray) returns Self
+		return Self{v: try xs.get(0) otherwise panic("empty")}
+	end 'firstOf'
+end 'Cell'
+
+typealias StrCell = Cell with String
+typealias Strings = Array with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var xs = Strings.create()
+	xs.push(heapString("first payload ", b: "long enough to allocate"))
+	xs.push(heapString("second payload ", b: "long enough to allocate"))
+	let c = StrCell.firstOf(xs)
+	print("{c.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first payload long enough to allocate
+```
+
+<!-- test: a-self-returning-static-built-from-a-for-element-is-served -->
+The same record built from a `for` element.
+```maxon
+type Cell uses T
+	typealias TArray = Array with T
+	export var v as T
+
+	static function firstOf(xs TArray) returns Self
+		for e in xs 'each'
+			return Self{v: e}
+		end 'each'
+		panic("empty")
+	end 'firstOf'
+end 'Cell'
+
+typealias StrCell = Cell with String
+typealias Strings = Array with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var xs = Strings.create()
+	xs.push(heapString("first payload ", b: "long enough to allocate"))
+	xs.push(heapString("second payload ", b: "long enough to allocate"))
+	let c = StrCell.firstOf(xs)
+	print("{c.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first payload long enough to allocate
+```
+
+<!-- test: a-self-returning-static-built-from-a-local-bound-to-a-read-is-served -->
+The same record built from a local bound to the element read.
+```maxon
+type Cell uses T
+	typealias TArray = Array with T
+	export var v as T
+
+	static function firstOf(xs TArray) returns Self
+		let e = try xs.get(0) otherwise panic("empty")
+		return Self{v: e}
+	end 'firstOf'
+end 'Cell'
+
+typealias StrCell = Cell with String
+typealias Strings = Array with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var xs = Strings.create()
+	xs.push(heapString("first payload ", b: "long enough to allocate"))
+	xs.push(heapString("second payload ", b: "long enough to allocate"))
+	let c = StrCell.firstOf(xs)
+	print("{c.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first payload long enough to allocate
+```
+
+<!-- test: a-self-returning-static-built-from-a-call-results-field-is-served -->
+The same record built from a field of another `Self`-returning static's result.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function copyVia(v T) returns Self
+		return Self{v: Self.make(v).v}
+	end 'copyVia'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let c = StrCell.copyVia(heapString("first payload ", b: "long enough to allocate"))
+	print("{c.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first payload long enough to allocate
+```
+
+<!-- test: a-self-returning-static-built-from-a-local-bound-to-its-parameter-is-served -->
+The same record built from a local that holds the parameter.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function wrap(v T) returns Self
+		let x = v
+		return Self{v: x}
+	end 'wrap'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let c = StrCell.wrap(heapString("first payload ", b: "long enough to allocate"))
+	print("{c.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first payload long enough to allocate
+```
+
+<!-- test: a-self-returning-static-built-from-a-reassigned-parameter-is-served -->
+The same record built from a parameter that the body reassigns from a field of another instance.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function adopt(v T, other Self) returns Self
+		v = other.v
+		return Self{v: v}
+	end 'adopt'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function build() returns StrCell
+	let src = StrCell.make(heapString("source payload ", b: "long enough to allocate"))
+	return StrCell.adopt(heapString("dropped payload ", b: "long enough to allocate"), other: src)
+end 'build'
+
+function main() returns ExitCode
+	let c = build()
+	let noise = heapString("overwrite payload ", b: "long enough to allocate xxxxxxxx")
+	print("{c.v}\n")
+	print("{noise}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+source payload long enough to allocate
+overwrite payload long enough to allocate xxxxxxxx
+```
+
+<!-- test: a-self-returning-static-built-from-a-try-with-an-owned-local-handler-is-served -->
+A `Self`-returning static fills a field from a `try` whose handler value is a local holding an owned value, on both the path where the call succeeds and the path where the handler is used.
+```maxon
+enum PickError implements Error
+	empty
+end 'PickError'
+
+type Cell uses T
+	export var v as T
+	export var label as String
+	export var labelled as bool
+
+	static function make(v T, label String, labelled bool) returns Self
+		return Self{v: v, label: label, labelled: labelled}
+	end 'make'
+
+	function pickLabel() returns String throws PickError
+		if not labelled 'unlabelled'
+			throw PickError.empty
+		end 'unlabelled'
+
+		return label
+	end 'pickLabel'
+
+	static function relabel(v T, other Self, fallback String) returns Self
+		let d = fallback.clone()
+		return Self{v: v, label: try other.pickLabel() otherwise d, labelled: true}
+	end 'relabel'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let labelled = StrCell.make(heapString("first value ", b: "long enough to allocate"), label: heapString("picked label ", b: "long enough to allocate"), labelled: true)
+	let unlabelled = StrCell.make(heapString("second value ", b: "long enough to allocate"), label: heapString("unused label ", b: "long enough to allocate"), labelled: false)
+	let fallback = heapString("fallback label ", b: "long enough to allocate")
+	let picked = StrCell.relabel(heapString("third value ", b: "long enough to allocate"), other: labelled, fallback: fallback)
+	let fellBack = StrCell.relabel(heapString("fourth value ", b: "long enough to allocate"), other: unlabelled, fallback: fallback)
+	let noise = heapString("overwrite payload ", b: "long enough to allocate xxxxxxxx")
+	print("{picked.v} / {picked.label}\n")
+	print("{fellBack.v} / {fellBack.label}\n")
+	print("{noise}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+third value long enough to allocate / picked label long enough to allocate
+fourth value long enough to allocate / fallback label long enough to allocate
+overwrite payload long enough to allocate xxxxxxxx
+```
+
+<!-- test: a-generic-functions-by-reference-parameter-takes-the-callers-cell -->
+A generic function that reassigns its type-parameter parameter is handed the caller's storage, whether the argument is a local, a value computed at the call, or a ranged integer.
+```maxon
+typealias Count = int(0 to 1000)
+
+function overwrite(dest T, with T) uses T
+	dest = with
+end 'overwrite'
+
+function swapIn(x T, y T) uses T returns T
+	var held = x
+	overwrite(held, with: y)
+	return held
+end 'swapIn'
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let first = heapString("first payload ", b: "long enough to allocate")
+	let second = heapString("second payload ", b: "long enough to allocate")
+	print("{swapIn(first, y: second)}\n")
+	print("{swapIn(3 as Count, y: 7 as Count)}\n")
+	var s = heapString("literal target ", b: "long enough to allocate")
+	overwrite(s, with: heapString("rvalue payload ", b: "long enough to allocate"))
+	print("{s}\n")
+	print("{first} {second}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate
+7
+rvalue payload long enough to allocate
+first payload long enough to allocate second payload long enough to allocate
+```
+
+<!-- test: two-files-private-generic-functions-of-one-name-each-keep-their-own-by-reference-parameter -->
+Two files each declare a private generic function of the same name, and each reassigns a different parameter; each call hands over the parameter its own file's function reassigns.
+```maxon
+// --- file: a.maxon
+function settle(dest T, src T) uses T
+	dest = src
+end 'settle'
+
+export function fromA() returns String
+	var s = "a before"
+	var w = "a after"
+	settle(s, src: w)
+	return s
+end 'fromA'
+
+// --- file: main.maxon
+function settle(dest T, src T) uses T
+	src = dest
+end 'settle'
+
+function main() returns ExitCode
+	var s = "b dest"
+	var w = "b src"
+	settle(s, src: w)
+	print("{w} / {fromA()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+b dest / a after
+```
+
+<!-- test: a-private-generic-function-and-another-files-private-concrete-one-of-one-name-each-bind-their-own-calls -->
+One file declares a private generic function that reassigns a parameter, and another file declares a private non-generic function of the same name; each call reaches only the declaration its own file can see.
+```maxon
+// --- file: b.maxon
+function swap(a T, b T) uses T
+	a = b
+end 'swap'
+
+export function fromB() returns String
+	var s = "b1"
+	swap(s, b: "b2")
+	return s
+end 'fromB'
+
+// --- file: main.maxon
+typealias Integer = int(0 to 100)
+
+function swap(a Integer) returns Integer
+	return a + 1
+end 'swap'
+
+function main() returns ExitCode
+	var x = 5 as Integer
+	print("{swap(x)} {fromB()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 b2
+```
+
+<!-- test: a-reassigned-parameter-stored-by-a-static-that-also-stores-a-field-is-released -->
+A static that reassigns its parameter from a field of another instance, on a path that does not return the other field, releases what it dropped.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function adopt(v T, other Self, flag bool) returns Self
+		v = other.v
+
+		if flag 'direct'
+			return Self{v: other.v}
+		end 'direct'
+
+		return Self{v: v}
+	end 'adopt'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function build() returns StrCell
+	let src = StrCell.make(heapString("source payload ", b: "long enough to allocate"))
+	return StrCell.adopt(heapString("dropped payload ", b: "long enough to allocate"), other: src, flag: false)
+end 'build'
+
+function main() returns ExitCode
+	let c = build()
+	let noise = heapString("overwrite payload ", b: "long enough to allocate xxxxxxxx")
+	print("{c.v}\n")
+	print("{noise}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+source payload long enough to allocate
+overwrite payload long enough to allocate xxxxxxxx
+```
+
+<!-- test: a-closure-parameter-named-like-the-methods-parameter-is-its-own-value -->
+A closure inside a static that names its own parameter like the method's parameter builds the record from the closure's argument.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function rewrap(v T, other Self) returns Self
+		let f = function(v T) gives Self{v: v}
+		_ = Self{v: v}
+		return f(other.v)
+	end 'rewrap'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function build() returns StrCell
+	let src = StrCell.make(heapString("source payload ", b: "long enough to allocate"))
+	return StrCell.rewrap(heapString("unused payload ", b: "long enough to allocate"), other: src)
+end 'build'
+
+function main() returns ExitCode
+	let c = build()
+	let noise = heapString("overwrite payload ", b: "long enough to allocate xxxxxxxx")
+	print("{c.v}\n")
+	print("{noise}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+source payload long enough to allocate
+overwrite payload long enough to allocate xxxxxxxx
+```
+
+<!-- test: a-closure-parameter-named-like-a-local-is-its-own-value -->
+A closure parameter named like a local of the static is the closure's argument, not the local.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function rewrap(v T, other Self, keepLocal bool) returns Self
+		let chosen = v
+		let f = function(chosen T) gives Self{v: chosen}
+
+		if keepLocal 'local'
+			return Self{v: chosen}
+		end 'local'
+
+		return f(other.v)
+	end 'rewrap'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function build(keepLocal bool) returns StrCell
+	let src = StrCell.make(heapString("source payload ", b: "long enough to allocate"))
+	return StrCell.rewrap(heapString("chosen payload ", b: "long enough to allocate"), other: src, keepLocal: keepLocal)
+end 'build'
+
+function main() returns ExitCode
+	let local = build(true)
+	let c = build(false)
+	let noise = heapString("overwrite payload ", b: "long enough to allocate xxxxxxxx")
+	print("{local.v}\n")
+	print("{c.v}\n")
+	print("{noise}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+chosen payload long enough to allocate
+source payload long enough to allocate
+overwrite payload long enough to allocate xxxxxxxx
+```
+
+<!-- test: a-local-rebound-through-a-by-reference-argument-is-stored-as-rebound -->
+A local passed to a method whose parameter is reassigned holds the reassigned value when the static stores it.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function overwrite(dest T)
+		dest = self.v
+	end 'overwrite'
+
+	static function adopt(v T, other Self) returns Self
+		var x = v
+		other.overwrite(x)
+		return Self{v: x}
+	end 'adopt'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function build() returns StrCell
+	let src = StrCell.make(heapString("source payload ", b: "long enough to allocate"))
+	return StrCell.adopt(heapString("dropped payload ", b: "long enough to allocate"), other: src)
+end 'build'
+
+function main() returns ExitCode
+	let c = build()
+	let noise = heapString("overwrite payload ", b: "long enough to allocate xxxxxxxx")
+	print("{c.v}\n")
+	print("{noise}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+source payload long enough to allocate
+overwrite payload long enough to allocate xxxxxxxx
+```
+
+<!-- test: a-long-chain-of-reassigned-locals-compiles-in-linear-time -->
+Deciding what a record literal's field holds costs one visit per local, however each local is rebound.
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function chain(v T) returns Self
+		var a0 = v
+		a0 = v
+		var a1 = a0
+		a1 = a0
+		var a2 = a1
+		a2 = a1
+		var a3 = a2
+		a3 = a2
+		var a4 = a3
+		a4 = a3
+		var a5 = a4
+		a5 = a4
+		var a6 = a5
+		a6 = a5
+		var a7 = a6
+		a7 = a6
+		var a8 = a7
+		a8 = a7
+		var a9 = a8
+		a9 = a8
+		var a10 = a9
+		a10 = a9
+		var a11 = a10
+		a11 = a10
+		var a12 = a11
+		a12 = a11
+		var a13 = a12
+		a13 = a12
+		var a14 = a13
+		a14 = a13
+		var a15 = a14
+		a15 = a14
+		var a16 = a15
+		a16 = a15
+		var a17 = a16
+		a17 = a16
+		var a18 = a17
+		a18 = a17
+		var a19 = a18
+		a19 = a18
+		var a20 = a19
+		a20 = a19
+		var a21 = a20
+		a21 = a20
+		var a22 = a21
+		a22 = a21
+		var a23 = a22
+		a23 = a22
+		var a24 = a23
+		a24 = a23
+		return Self{v: a24}
+	end 'chain'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function main() returns ExitCode
+	let c = StrCell.chain("payload")
+	print("{c.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+payload
+```
+
+<!-- test: a-by-reference-parameter-at-a-ranged-int-instantiation-takes-a-local-and-a-literal -->
+A method that reassigns its type-parameter parameter, instantiated at a ranged `int`, is handed a local and a literal: the local receives the reassigned value and the literal's temporary is range-checked as a value.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function setOnce(dest T)
+		dest = self.v
+	end 'setOnce'
+end 'Box'
+
+typealias CountBox = Box with Count
+
+function main() returns ExitCode
+	let b = CountBox.make(10)
+	var s = 20
+	b.setOnce(s)
+	b.setOnce(160)
+	print("once {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+once 10
+```
+
+<!-- test: a-generic-type-that-is-never-instantiated-may-reassign-its-parameter -->
+A generic type the program never instantiates declares a method that reassigns its type-parameter parameter; the program still compiles and runs.
+```maxon
+type Lonely uses T
+	export var v as T
+
+	function setOnce(dest T)
+		dest = self.v
+	end 'setOnce'
+end 'Lonely'
+
+function main() returns ExitCode
+	print("ok\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok
+```
+
+<!-- test: a-local-named-like-the-generic-type-is-not-the-type -->
+A parameter named like the generic type is a value, so `Bag.make()` inside the body is that value's method, not the type's static.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Other
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 5}
+	end 'create'
+
+	function make() returns Count
+		return self.n
+	end 'make'
+end 'Other'
+
+type Bag uses T
+	typealias TArray = Array with T
+	export var items as TArray
+
+	static function make() returns Self
+		return Self{items: TArray.create()}
+	end 'make'
+
+	function viaOther(Bag Other) returns Count
+		return Bag.make()
+	end 'viaOther'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function main() returns ExitCode
+	let b = StrBag.make()
+	let o = Other.create()
+	print("{b.viaOther(o)} {b.items.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 0
+```
+
 <!-- test: string-argument-outlives-its-source -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -265,37 +2892,15 @@ end 'main'
 error E2015: <fragment>:32:31: Unsupported: a container's element type declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and an element slot is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
 ```
 
-### A container of records written over the enclosing parameter is REFUSED
+### A container of records written over the enclosing parameter
 
-Every case above stores the borrow into a record the SAME body builds and then lets that record die where it
-was built. This one hands the borrow to a SIBLING GENERIC's constructor — `EBox.create(x, tag: tag)`, where
-`EBox = Box with Element` is an inner alias over the enclosing type's own parameter — and then **puts the
-record into a container**, so it outlives the borrow.
+A record built by a sibling generic's constructor over the enclosing type's own parameter —
+`EBox.create(x, tag: tag)`, where `EBox = Box with Element` — can be put into a container and read back.
+The container releases each element through the enclosing instance's layout descriptor, which knows the
+element's per-instantiation destructor, so the stored `String` stays alive while the container holds it and
+is released with it.
 
-⛔⛔ **THAT PROGRAM WAS A USE-AFTER-FREE, MEASURED `0xC0000005`**, and it is refused rather than compiled.
-`Box.create`'s `Self{x: x}` deliberately takes no reference: a constructor feed is settled by the CALL SITE
-(`opaqueSlotTakesItsOwnReference`), which is what the concrete spelling below does through `argIsConsumedAt`.
-A SHARED body has no such transfer to make — and it may not simply take one either. **MEASURED at the same
-time: with the reference taken through `retainFunc@64` the fault goes away and the identical program exits
-101**, because `Bag.create` stamps its element array `__managed_create(8, __mm_decref)` and nothing releases
-what was taken. The destructor that WOULD release it (`__destruct_Box_String`) exists — `Box with String` is
-interned by the substitution — but a shared body can name only the DECLARATION VIEW's, and that one reads its
-own bare `T` field through `typeIsManaged` and is told the field owns nothing.
-
-⇒ **The refusal stands in for a release facility that does not exist: a layout-descriptor slot carrying a
-NESTED INSTANCE's per-instantiation destructor.** The compiler already names that slot where it has a
-diagnostic to hang it on — reassigning such a field is refused in exactly those words
-(`Parser.emitOpaqueFieldReassign`) — and this is the same sentence at the CONSTRUCTION form, which is the
-only other way such a column is born. When the slot exists, this case becomes the runtime program its
-`maxoncstderr` currently pins the absence of, and `generic-instance-clone`'s
-`clone-of-an-instance-over-the-enclosing-type-parameter` recovers its managed spelling with it.
-
-⚠ **THE REFUSAL IS AT THE CONTAINER, NOT AT THE FORWARD**, which is what keeps the shapes that genuinely
-work working: a record built from a borrowed opaque `T` and RETURNED (`generic-opaque-cursor-element`'s
-`createIterator`, `inner-alias-construction`'s `boxed()`) or DROPPED where it was built is untouched, and so
-is every trivial instantiation of this very shape (below).
-
-<!-- test: error.a-container-of-records-over-the-enclosing-parameter-is-refused -->
+<!-- test: a-container-of-records-over-the-enclosing-parameter-is-created -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -347,14 +2952,17 @@ function main() returns ExitCode
 	var b = StrBag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
-		return 9 as ExitCode
+		return 9
 	end 'e'
 	print(got)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:34:22: Unsupported: a container whose element is 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — cannot be a CONTAINER ELEMENT: the shared generic body compiles once for every instantiation, so releasing such a record means releasing a field whose destructor is a fact about the enclosing instantiation, and the only entry that knows it takes the instantiation's layout descriptor as a second argument (`__destruct_dict_<instance>(descriptor, box)`). A container stamps ONE machine word as its element destructor and calls it with the element alone, so there is nowhere to carry that descriptor. It is refused at the two arrivals that stamp one: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, and a `Map` or `Set` column. Holding ONE such record in a FIELD of the enclosing type (`Self{one: Inner.create(x, …)}`) is admitted — the enclosing instantiation is concrete wherever it is freed, so its own destructor releases the field. Otherwise: hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation
+```exitcode
+0
+```
+```stdout
+hello heap world
 ```
 
 ### …and the CONCRETE instantiation of the same constructor, which always worked
@@ -362,8 +2970,7 @@ error E2015: <fragment>:34:22: Unsupported: a container whose element is 'Bag.EB
 The byte-identical program with `Box with String` written at top level and a NON-generic `Bag` holding
 `Array with StrBox`. Same `Box uses T`, same `Box.create` body; only the INSTANTIATION differs. Here
 `argIsConsumedAt` sees a concrete `String` argument, consumes it and hands `Box.create` a `+1` outright.
-It is the control the case above is measured against, and it belongs beside it so a future reader sees
-which half of the pair moved.
+It answers what the generic spelling above answers.
 
 <!-- test: the-concrete-spelling-of-the-same-constructor-feed -->
 ```maxon
@@ -429,24 +3036,13 @@ end 'main'
 hello heap world
 ```
 
-### …and the slot it cannot release need not be the element's OWN field
+### …and a record two levels over the parameter, stored in a field
 
-**THE PREDICATE READ THE RAW DECLARED FIELD LIST AND THIS SHAPE WALKED PAST IT — MEASURED `0xC0000005`,
-FOUND BY THE BATCH41 REVIEW.** Everything above puts the bare `Element` in `Box`'s own field list, where a
-`slotTypeIsOpaque` test of the declared column sees it. Here `Box` holds an `Inner with T` instead, and
-`Inner` is the one holding the bare parameter — so `Box`'s own columns are a `genericInstance` and an `int`,
-neither of them a `typeParameter`, and the first cut of the refusal answered *"owns nothing"* and compiled
-the program. The array was then stamped with `Box`'s DECLARATION-VIEW destructor
-(`__destruct_Box_T<hash>` — MEASURED off `--emit-ir`), which frees the inner record and leaves the `String`
-it holds, the store kept a raw borrow, and **the read faulted** exactly as the case above does.
+Here `Box` holds an `Inner with T`, and `Inner` holds the bare parameter, while `Bag` spells `Box` over its own
+`Element`. `Box`'s record is freed by a shared body, and the descriptor that body is handed carries the nested
+view's per-instantiation destructor, so the stored `inner` field is released at every instantiation.
 
-⇒ The walk resolves and SUBSTITUTES each column through `substituteInstanceFieldType` — the one derivation
-`genericInstanceFieldIsManaged`, `genericInstanceFieldDropCallee` and `genericInstanceFieldCloneStrategy`
-already share, whose own header carries the exit-101 leak a second, hand-rolled reading of that column
-produced — and recurses into a column that is itself an instance. A refusal deriving the column its own way
-is free to disagree with the destructor it refuses on behalf of.
-
-<!-- test: error.a-nested-instance-two-levels-over-the-enclosing-parameter-is-refused -->
+<!-- test: a-nested-instance-two-levels-over-the-enclosing-parameter-is-stored-and-read -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -511,21 +3107,22 @@ function main() returns ExitCode
 	var b = StrBag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
-		return 9 as ExitCode
+		return 9
 	end 'e'
 	print(got)
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:47:22: Unsupported: a container whose element is 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — cannot be a CONTAINER ELEMENT: the shared generic body compiles once for every instantiation, so releasing such a record means releasing a field whose destructor is a fact about the enclosing instantiation, and the only entry that knows it takes the instantiation's layout descriptor as a second argument (`__destruct_dict_<instance>(descriptor, box)`). A container stamps ONE machine word as its element destructor and calls it with the element alone, so there is nowhere to carry that descriptor. It is refused at the two arrivals that stamp one: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, and a `Map` or `Set` column. Holding ONE such record in a FIELD of the enclosing type (`Self{one: Inner.create(x, …)}`) is admitted — the enclosing instantiation is concrete wherever it is freed, so its own destructor releases the field. Otherwise: hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation
+```exitcode
+0
+```
+```stdout
+hello heap world
 ```
 
 ### …and the TRIVIAL instantiation of that two-level shape still runs
 
-The false-reject control for the widening above, and it is the reason the walk asks the INSTANTIATION at the
-bottom of the recursion rather than refusing every nested instance it meets. Byte-identical to the program
-above with `String` replaced by a ranged `int`: `Inner`'s bare `U` owns nothing at run time under every `with`
+Byte-identical to the program above with `String` replaced by a ranged `int`: `Inner`'s bare `U` owns nothing at run time under every `with`
 the program writes, so the column's `__mm_decref` IS the correct element destructor and the program is whole.
 
 <!-- test: a-trivial-instantiation-of-the-two-level-shape-still-runs -->
@@ -727,23 +3324,15 @@ end 'main'
 42
 ```
 
-### The same record reaching a `List` node — the arrival the container guard could not see
+### The same record kept in a `List` node
 
-`List` has been a DECLARED corpus generic since W153, so a `List with EBox` never passes the container
-`create` guard at all: its chain is built inside `List`'s OWN shared body over `List`'s own opaque `Element`,
-which routes to `emitOpaqueChainCreateOp`. And `Bag`'s `items.append(EBox.create(…))` is an ordinary CALL, so
-it reaches no move-in door in `Bag` either. **MEASURED at the BATCH41 review's merge and again after it:
-compiled, and segfaulted at the read.**
+`List` is a declared generic, so its chain is built inside `List`'s own shared body, and `Bag` feeds each record
+to it through an ordinary `append` call. The record built over the enclosing parameter is kept by the list and
+read back with the value it was built with.
 
-⇒ It is refused at the third arrival — a FEED, which is the position whose whole meaning is *"the callee will
-keep this"*. Both feed sinks are durable (a constructor feed fills a record the callee returns, a
-callee-storage feed fills a container the callee keeps), so the fact is asked of the FEED and not of the
-sink, and it is asked before the consume/borrow split because both halves store.
-
-<!-- test: error.a-record-over-the-enclosing-parameter-fed-to-a-list-is-refused -->
+<!-- test: a-record-over-the-enclosing-parameter-fed-to-a-list-is-kept -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
 
 type Box uses T
 	export let x as T
@@ -790,16 +3379,19 @@ function main() returns ExitCode
 	var b = StrBag.create()
 	fill(b)
 	print("{b.first()}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:24:9: Unsupported: a container element fed as a value of type 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — cannot be a CONTAINER ELEMENT: the shared generic body compiles once for every instantiation, so releasing such a record means releasing a field whose destructor is a fact about the enclosing instantiation, and the only entry that knows it takes the instantiation's layout descriptor as a second argument (`__destruct_dict_<instance>(descriptor, box)`). A container stamps ONE machine word as its element destructor and calls it with the element alone, so there is nowhere to carry that descriptor. It is refused at the two arrivals that stamp one: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, and a `Map` or `Set` column. Holding ONE such record in a FIELD of the enclosing type (`Self{one: Inner.create(x, …)}`) is admitted — the enclosing instantiation is concrete wherever it is freed, so its own destructor releases the field. Otherwise: hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation
+```exitcode
+0
+```
+```stdout
+hello heap world
 ```
 
 ### …and the same `List` shape at a TRIVIAL instantiation still runs
 
-The false-reject control for the arrival above. Byte-identical but for `String` → a ranged `int`: the box's
+Byte-identical to the `List` program above but for `String` → a ranged `int`: the box's
 bare `T` slot owns nothing at run time, so the chain's `element_drop@24` is right as it stands and the
 program is whole.
 
@@ -1135,10 +3727,8 @@ pushed into an `Array with StrBox` whose element destructor is the concrete `__d
 the whole column is destroyed at scope exit. One retain per trip against one release per trip: a missing
 release is **exit 101** and a surplus one frees a `String` a live box still holds.
 
-⚠ The column's element is the CONCRETE `Box with String`, not the declaration view — which is the whole
-distinction `error.a-container-of-records-over-the-enclosing-parameter-is-refused` draws one section up. A
-concrete element's destructor is a symbol and fits the record's one-word stamp; a declaration view's is
-`__destruct_dict_<instance>(descriptor, box)` and does not.
+⚠ The column's element is the CONCRETE `Box with String`, not the declaration view, so its destructor is the
+symbol `__destruct_Box_String`, stamped directly as the element destructor.
 
 <!-- test: a-hundred-returned-records-balance -->
 ```maxon
@@ -1197,22 +3787,15 @@ end 'main'
 100
 ```
 
-<!-- test: a-nested-view-whose-parameter-owes-no-reference-round-trips -->
-### A nested declaration view whose OWN parameter is never made managed rests nothing, and RUNS
-`Mid` holds an `Inner2 with (Y, Z)` and is itself spelled by `Outer` as `Mid with (T, U)`. `Mid`'s own
-parameters are instantiated ONLY at `Outer`'s parameters, which are bare type parameters — so
-`typeParamFeedCanOwnAReference` declines, the constructor feed inside `Mid.create` takes no reference, and
-there is nothing for any destructor to release. The dictionary destructor must therefore NOT release the
-slot either: it once did, reaching it by walking THROUGH the nested view to `Outer`'s parameter, where
-`Outer with (String, String)` made it managed. Release without retain is an over-release, and this program
-was **exit 139** with that walk in place while the merge base ran it at exit 0.
+<!-- test: a-nested-view-over-the-outer-parameters-takes-and-releases-its-reference -->
+### A nested declaration view over the outer type's parameters takes and releases its reference
+`Mid` holds an `Inner2 with (Y, Z)` and is itself spelled by `Outer` as `Mid with (T, U)`. `Outer with (String,
+String)` makes those parameters managed, so the constructor feed inside `Mid.create` takes a reference through
+the descriptor, and the dictionary destructor that frees the record releases it: the program balances.
 
-⚠ **`m` is read for its scalar `tag` ONLY to satisfy `E3012`, which widened to unused `let` bindings
-after this case was written.** The read is a plain field load: it neither retains nor releases the opaque
-slot, and what the case needs is unchanged — the record is BUILT in a shared body that carries a
-descriptor and DROPPED in that frame, which is what routes the drop through `instanceBoxDropCallee`.
-RE-MEASURED in this spelling against the pre-fix compiler: **exit 139**. (The faithful spelling — a bare
-`M.create(t, z: u)` statement with no binding at all — is not legal Maxon: `E2015: identifier statement`.)
+⚠ `m` is read for its scalar `tag` so the binding is used (`E3012`). The read is a plain field load: it
+neither retains nor releases the opaque slot, so the record is still BUILT in a shared body that carries a
+descriptor and DROPPED in that frame, which routes the drop through `instanceBoxDropCallee`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1279,21 +3862,16 @@ first payload long enough to allocate
 second payload long enough to allocate
 ```
 
-<!-- test: error.a-nested-view-fed-a-referenced-borrow-into-a-field-is-refused -->
-### …and the same shape WITH a managed instantiation of the middle type is REFUSED
-Adding `Mid with (String, String)` makes `Mid`'s own parameter managed, so the constructor feed inside
-`Mid.create` DOES take a descriptor-mediated reference — and the record that holds it comes to rest in a
-field of `Mid`, whose own instantiation is a DECLARATION VIEW. The frame that frees it is a shared body, so
-the release would have to be a dictionary destructor handed the descriptor of the NEARER instantiation, and
-the slot's own release is a fact about one two levels out. Admitted, this program was **exit 139**; the
-merge base refused it, and so does this.
+<!-- test: a-nested-view-fed-a-referenced-borrow-into-a-field-releases-it -->
+### …and the same shape WITH a managed instantiation of the middle type
+Adding `Mid with (String, String)` makes `Mid`'s own parameter managed as well, so the constructor feed inside
+`Mid.create` takes a descriptor-mediated reference and the record that holds it rests in a field of `Mid`, a
+declaration view. The shared body that frees it is handed a descriptor that carries the nested view's
+per-instantiation destructor, so the field is released at each instantiation.
 
-⚠ **`m` is read for its scalar `tag` ONLY to satisfy `E3012`, which widened to unused `let` bindings
-after this case was written.** The read is a plain field load: it neither retains nor releases the opaque
-slot, and what the case needs is unchanged — the record is BUILT in a shared body that carries a
-descriptor and DROPPED in that frame, which is what routes the drop through `instanceBoxDropCallee`.
-RE-MEASURED in this spelling against the pre-fix compiler: **exit 139**. (The faithful spelling — a bare
-`M.create(t, z: u)` statement with no binding at all — is not legal Maxon: `E2015: identifier statement`.)
+⚠ `m` is read for its scalar `tag` so the binding is used (`E3012`). The read is a plain field load: it
+neither retains nor releases the opaque slot, so the record is still BUILT in a shared body that carries a
+descriptor and DROPPED in that frame, which routes the drop through `instanceBoxDropCallee`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1347,18 +3925,21 @@ function main() returns ExitCode
 	print("{o.build(s1, u: s2)}\n")
 	let extra = MS.create(heapString("x ", b: "yyyyyyyyyyyyyyyyyyyyyy"), z: heapString("z ", b: "wwwwwwwwwwwwwwwwwwwwww"))
 	print("extra {extra.tag}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:19:10: Unsupported: storing into a field a value of type 'Mid.In' — a generic instance written over this type's OWN parameter, resting a field declared AT that parameter, where THIS type is itself spelled over another generic's parameter — has no destructor this body can name: the enclosing record is freed by a SHARED body, so releasing the stored field means releasing a slot whose destructor is a fact about an instantiation two levels out, and the entry that knows it (`__destruct_dict_<instance>(descriptor, box)`) is handed the descriptor of the nearer one. Hold the record in a type that is instantiated concretely rather than over another generic's parameter. A descriptor carrying a NESTED declaration view's per-instantiation destructor is a later slice
+```exitcode
+0
+```
+```stdout
+13
+extra 2
 ```
 
-<!-- test: error.a-closure-between-the-feed-and-the-store-does-not-hide-the-refusal -->
-The same refusal when a closure literal sits between the constructor feed and the store. The closure is
-parsed as a function of its own, and the marks that say which of the enclosing body's records hold a
-referenced opaque slot belong to the enclosing body: they come back when the closure ends, so the store after
-it is judged on the record's real provenance. Admitted, this program was **exit 101**.
+<!-- test: a-closure-between-the-feed-and-the-store-still-stores-correctly -->
+The same store when a closure literal sits between the constructor feed and the store. The closure is parsed
+as a function of its own; the store after it is judged on the record's real provenance, and the program
+balances.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1414,34 +3995,38 @@ function main() returns ExitCode
 	print("{o.build(s1, u: s2)}\n")
 	let extra = MS.create(heapString("x ", b: "yyyyyyyyyyyyyyyyyyyyyy"), z: heapString("z ", b: "wwwwwwwwwwwwwwwwwwwwww"))
 	print("extra {extra.tag}\n")
-	return 0 as ExitCode
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:21:10: Unsupported: storing into a field a value of type 'Mid.In' — a generic instance written over this type's OWN parameter, resting a field declared AT that parameter, where THIS type is itself spelled over another generic's parameter — has no destructor this body can name: the enclosing record is freed by a SHARED body, so releasing the stored field means releasing a slot whose destructor is a fact about an instantiation two levels out, and the entry that knows it (`__destruct_dict_<instance>(descriptor, box)`) is handed the descriptor of the nearer one. Hold the record in a type that is instantiated concretely rather than over another generic's parameter. A descriptor carrying a NESTED declaration view's per-instantiation destructor is a later slice
+```exitcode
+0
+```
+```stdout
+13
+extra 2
 ```
 
-<!-- test: error.a-nested-view-another-file-reaches-refuses-the-store-holder-first -->
-The same refusal when the nested declaration view is reached through ANOTHER file: Holder stores a `Cell`
-over its own parameter, and `Outer` holds a `Holder` over `Outer`'s. Whether the store is refused is a fact about
-the program, so it is the same whichever file is parsed first.
+<!-- test: a-nested-view-another-file-reaches-stores-holder-first -->
+The same store when the nested declaration view is reached through ANOTHER file: `Holder` stores a `Cell`
+over its own parameter, and `Outer` holds a `Holder` over `Outer`'s. The program is the same whichever file is
+parsed first.
 ```maxon
 // --- file: a_holder.maxon
 export typealias Int = int(0 to 1000)
 
-export type Cell uses T
+type Cell uses T
 	export var value as T
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{value: value}
 	end 'create'
 end 'Cell'
 
-export type Holder uses T
+type Holder uses T
 	var cell as Cell
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{cell: Cell.create(value)}
 	end 'create'
-	export function replace(next Cell)
+	function replace(next Cell)
 		self.cell = next
 	end 'replace'
 end 'Holder'
@@ -1455,6 +4040,7 @@ export type Outer uses T
 		return 3
 	end 'tag'
 end 'Outer'
+
 
 // --- file: b_use.maxon
 typealias TextOuter = Outer with String
@@ -1464,11 +4050,11 @@ function main() returns ExitCode
 	return o.tag()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:10: Unsupported: storing into a field a value of type 'Cell with T' — a generic instance written over this type's OWN parameter, resting a field declared AT that parameter, where THIS type is itself spelled over another generic's parameter — has no destructor this body can name: the enclosing record is freed by a SHARED body, so releasing the stored field means releasing a slot whose destructor is a fact about an instantiation two levels out, and the entry that knows it (`__destruct_dict_<instance>(descriptor, box)`) is handed the descriptor of the nearer one. Hold the record in a type that is instantiated concretely rather than over another generic's parameter. A descriptor carrying a NESTED declaration view's per-instantiation destructor is a later slice
+```exitcode
+3
 ```
 
-<!-- test: error.a-nested-view-another-file-reaches-refuses-the-store-use-first -->
+<!-- test: a-nested-view-another-file-reaches-stores-use-first -->
 ```maxon
 // --- file: a_use.maxon
 typealias TextOuter = Outer with String
@@ -1478,22 +4064,23 @@ function main() returns ExitCode
 	return o.tag()
 end 'main'
 
+
 // --- file: b_holder.maxon
 export typealias Int = int(0 to 1000)
 
-export type Cell uses T
+type Cell uses T
 	export var value as T
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{value: value}
 	end 'create'
 end 'Cell'
 
-export type Holder uses T
+type Holder uses T
 	var cell as Cell
-	export static function create(value T) returns Self
+	static function create(value T) returns Self
 		return Self{cell: Cell.create(value)}
 	end 'create'
-	export function replace(next Cell)
+	function replace(next Cell)
 		self.cell = next
 	end 'replace'
 end 'Holder'
@@ -1508,8 +4095,185 @@ export type Outer uses T
 	end 'tag'
 end 'Outer'
 ```
-```maxoncstderr
-error E2015: <fragment>:23:10: Unsupported: storing into a field a value of type 'Cell with T' — a generic instance written over this type's OWN parameter, resting a field declared AT that parameter, where THIS type is itself spelled over another generic's parameter — has no destructor this body can name: the enclosing record is freed by a SHARED body, so releasing the stored field means releasing a slot whose destructor is a fact about an instantiation two levels out, and the entry that knows it (`__destruct_dict_<instance>(descriptor, box)`) is handed the descriptor of the nearer one. Hold the record in a type that is instantiated concretely rather than over another generic's parameter. A descriptor carrying a NESTED declaration view's per-instantiation destructor is a later slice
+```exitcode
+3
+```
+
+<!-- test: a-tuple-field-resting-a-nested-view-is-released-on-reassignment -->
+A tuple field that rests a nested declaration view is released when the record holding it is replaced.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export let x as T
+
+	static function create(x T) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Box'
+
+type Bag uses E
+	typealias EBox = Box with E
+	typealias EPair = (EBox, Integer)
+	export let pair as EPair
+
+	static function create(x E) returns Self
+		return Self{pair: (EBox.create(x), 1)}
+	end 'create'
+end 'Bag'
+
+type Outer uses T
+	typealias TBag = Bag with T
+	var bag as TBag
+
+	static function create(x T) returns Self
+		return Self{bag: TBag.create(x)}
+	end 'create'
+
+	function reset(x T)
+		self.bag = TBag.create(x)
+	end 'reset'
+
+	function first() returns T
+		return self.bag.pair.0.x
+	end 'first'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let s1 = heapString("first payload ", b: "long enough to allocate")
+	let s2 = heapString("second payload ", b: "long enough to allocate")
+	var o = StrOuter.create(s1)
+	o.reset(s2)
+	print("{o.first()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate
+```
+
+<!-- test: a-tuple-field-over-the-parameter-in-a-nested-view-is-released-on-reassignment -->
+A tuple field over the type parameter itself, in a nested declaration view, is released when the record holding it is replaced.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Bag uses E
+	export let pair as (E, Integer)
+
+	static function create(x E) returns Self
+		return Self{pair: (x, 1)}
+	end 'create'
+end 'Bag'
+
+type Outer uses T
+	typealias TBag = Bag with T
+	var bag as TBag
+
+	static function create(x T) returns Self
+		return Self{bag: TBag.create(x)}
+	end 'create'
+
+	function reset(x T)
+		self.bag = TBag.create(x)
+	end 'reset'
+
+	function first() returns T
+		return self.bag.pair.0
+	end 'first'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let s1 = heapString("first payload ", b: "long enough to allocate")
+	let s2 = heapString("second payload ", b: "long enough to allocate")
+	var o = StrOuter.create(s1)
+	o.reset(s2)
+	print("{o.first()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate
+```
+
+<!-- test: a-tuple-field-resting-a-nested-view-reassigned-in-its-own-type-is-released -->
+The same tuple field reassigned inside its own type releases the tuple it displaces.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export let x as T
+
+	static function create(x T) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Box'
+
+type Bag uses E
+	typealias EBox = Box with E
+	typealias EPair = (EBox, Integer)
+	export var pair as EPair
+
+	static function create(x E) returns Self
+		return Self{pair: (EBox.create(x), 1)}
+	end 'create'
+
+	function swap(p EPair)
+		self.pair = p
+	end 'swap'
+
+	function first() returns E
+		return self.pair.0.x
+	end 'first'
+end 'Bag'
+
+typealias StrBag = Bag with String
+typealias StrBox = Box with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let s1 = heapString("first payload ", b: "long enough to allocate")
+	let s2 = heapString("second payload ", b: "long enough to allocate")
+	var b = StrBag.create(s1)
+	b.swap((StrBox.create(s2), 2))
+	print("{b.first()} {b.pair.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second payload long enough to allocate 2
 ```
 
 ### The record's RELEASE, in a body that is itself shared — a tuple of parameters

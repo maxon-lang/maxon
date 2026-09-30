@@ -16,9 +16,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -36,6 +38,9 @@ func @main {
     x64.movRegImm32 r13, 0
     x64.jmp forhdr#1
   each:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#12
+  __rc_ok#11:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect findGraphemeEnd
@@ -48,6 +53,9 @@ func @main {
     x64.movRegImm32 r14, 0
     x64.jmp forhdr#5
   inner:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic#14
+  __rc_ok#13:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect findGraphemeEnd
@@ -129,6 +137,30 @@ func @main {
   __il_cont:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at character-ordering-of-two-owned-temporaries.test:5: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at character-ordering-of-two-owned-temporaries.test:6: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15

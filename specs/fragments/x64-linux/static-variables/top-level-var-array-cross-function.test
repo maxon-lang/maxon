@@ -12,7 +12,7 @@ function getTotal() returns Integer
 end 'getTotal'
 
 function setScore(index Integer, value Integer)
-	try scores.set(index, value: value) otherwise panic("test invariant: set OOB")
+	try scores.set(index as ElementIndex, value: value) otherwise panic("test invariant: set OOB")
 end 'setScore'
 
 function main() returns ExitCode
@@ -24,9 +24,11 @@ ExitCode: 52
 ---
 data {
   __data_scores@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
 }
 
 func @main {
@@ -34,12 +36,12 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 48
-    x64.movRegImm32 rdx, 1
     x64.movRegImm32 rax, 12
   __il_body#6:
     x64.leaRegGlobal rcx, __data_scores
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
   __rc_ok#9:
+    x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rsi, [rcx + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc less, __im_slow#12

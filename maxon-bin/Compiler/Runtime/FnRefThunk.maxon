@@ -35,40 +35,11 @@ export typealias FnRefThunkSet = Set with ByteArray
 // such label is not a closure. `$closure_` is what `parseClosureExpression` mints, it survives nesting
 // (`f$closure_0$closure_1` still contains it), and no label disambiguator can produce it.
 function isLiftedClosureName(name ByteArray) returns bool
-	return bytesContainSubsequence(name, needle: LiftedClosureMarker)
+	return bytesContainRun(name, run: LiftedClosureMarker)
 end 'isLiftedClosureName'
 
 // The join + tag `Parser.parseClosureExpression` mints between an enclosing function and its lifted closure.
 let LiftedClosureMarker = b"$closure_"
-
-// Does `haystack` contain `needle` anywhere? `bytesStartWith`'s unanchored twin, written here because this
-// is its only caller and the shapes it is asked of are function names — a handful of bytes, once per
-// referenced callee.
-function bytesContainSubsequence(haystack ByteArray, needle ByteArray) returns bool
-	if needle.count() > haystack.count() 'cannotFit'
-		return false
-	end 'cannotFit'
-
-	for start in 0 upto haystack.count() - needle.count() + 1 'eachStart'
-		var matched = true
-
-		for i in 0 upto needle.count() 'eachByte'
-			let h = try haystack.get(start + i) otherwise panic("bytesContainSubsequence: haystack.get OOB at {start + i} below count {haystack.count()}")
-			let n = try needle.get(i) otherwise panic("bytesContainSubsequence: needle.get OOB at {i} below count {needle.count()}")
-
-			if h != n 'differs'
-				matched = false
-				break
-			end 'differs'
-		end 'eachByte'
-
-		if matched 'found'
-			return true
-		end 'found'
-	end 'eachStart'
-
-	return false
-end 'bytesContainSubsequence'
 
 // The name of the env-thunk for plain function `funcName`. ONE builder, shared by the reference lowering
 // (`LowerMaxonToStd.lowerFunctionRef`, which emits `funcAddr(__fnref_<name>)`) and the synthesis below, so

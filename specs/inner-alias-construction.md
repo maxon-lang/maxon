@@ -812,16 +812,14 @@ end 'main'
 error E2015: <fragment>:9:16: Unsupported: a field written inside `Nums{…}` — the literal builds the EMPTY container `Nums.create()` builds, and a builtin container has no user-writable fields; fill it after creating it
 ```
 
-### An opaque inner array alias inside a CLOSURE is refused, not a panic
+### An opaque inner array alias inside a CLOSURE is constructed
 
 An `Array with <type parameter>` reads its element destructor from the enclosing instance's layout
-descriptor at run time, and only a generic type's own METHOD reserves the parameter that carries it — a
-closure literal is lifted to a top-level function whose uniform `(userargs, env)` ABI has no slot for one.
-Both spellings used to abort the compiler here (`appendOpaqueArrayCreate`'s panic, naming
-`Holder.sized$closure_0`, with no source position at all); the literal is pinned first and its `create()`
-twin next, because the refusal lives in the ONE producer they share.
+descriptor at run time. A closure written inside a generic type's method carries that method's
+descriptor, so the array it builds is an ordinary empty array of the instance's element. The literal and
+its `create()` twin share one producer, and each is pinned.
 
-<!-- test: opaque-inner-alias-in-a-closure-is-refused -->
+<!-- test: opaque-inner-alias-in-a-closure-is-constructed -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -852,13 +850,13 @@ function main() returns ExitCode
 	return 1
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:31: Unsupported: constructing an opaque type-parameter `Array` inside a CLOSURE literal — the create reads its element destructor from the enclosing instance's layout descriptor at run time, and only a generic type's own METHOD reserves the parameter that carries it: a closure is lifted to a top-level function whose uniform `(userargs, env)` ABI has no slot for one. Build the array in the method and capture it, or move the construction out of the closure. Threading a layout descriptor into a lifted closure is a later slice
+```exitcode
+0
 ```
 
-### The `create()` spelling in a closure is refused identically
+### The `create()` spelling in a closure is constructed identically
 
-<!-- test: opaque-inner-alias-create-in-a-closure-is-refused -->
+<!-- test: opaque-inner-alias-create-in-a-closure-is-constructed -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -889,8 +887,8 @@ function main() returns ExitCode
 	return 1
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:31: Unsupported: constructing an opaque type-parameter `Array` inside a CLOSURE literal — the create reads its element destructor from the enclosing instance's layout descriptor at run time, and only a generic type's own METHOD reserves the parameter that carries it: a closure is lifted to a top-level function whose uniform `(userargs, env)` ABI has no slot for one. Build the array in the method and capture it, or move the construction out of the closure. Threading a layout descriptor into a lifted closure is a later slice
+```exitcode
+0
 ```
 
 ### An `extension` body's inner alias builds its container, keyed under the CONFORMER

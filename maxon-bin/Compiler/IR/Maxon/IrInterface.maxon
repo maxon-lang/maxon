@@ -889,14 +889,15 @@ let sharedEmptyWithArgs = ByteArrayArray.create()
 export type InterfaceConformance
 	export let interfaceName as ByteArray
 	export let withArgs as ByteArrayArray
+	export let withArgSpellings as ByteArrayArray
 
-	export static function create(interfaceName ByteArray, withArgs ByteArrayArray) returns InterfaceConformance
-		return Self{interfaceName: interfaceName, withArgs: withArgs}
+	export static function create(interfaceName ByteArray, withArgs ByteArrayArray, withArgSpellings ByteArrayArray) returns InterfaceConformance
+		return Self{interfaceName: interfaceName, withArgs: withArgs, withArgSpellings: withArgSpellings}
 	end 'create'
 
 	// A conformance that wrote no `with` clause at all — it binds nothing, and shares the one empty list.
 	export static function withoutBindings(interfaceName ByteArray) returns InterfaceConformance
-		return Self{interfaceName: interfaceName, withArgs: sharedEmptyWithArgs}
+		return Self{interfaceName: interfaceName, withArgs: sharedEmptyWithArgs, withArgSpellings: sharedEmptyWithArgs}
 	end 'withoutBindings'
 end 'InterfaceConformance'
 
@@ -1161,11 +1162,12 @@ end 'interfaceFormalsMatch'
 // (`witnessSlotImplKey`, which is keyed by the declaring interface and not by the table's).
 export type CollectedInterfaceMethod
 	export let method as InterfaceMethodSig
+	export let displayMethod as InterfaceMethodSig
 	export let sourceInterfaceName as ByteArray
 	export let sourceDeclFilePath as FilePath
 
-	export static function create(method InterfaceMethodSig, sourceInterfaceName ByteArray, sourceDeclFilePath FilePath) returns CollectedInterfaceMethod
-		return Self{method: method, sourceInterfaceName: sourceInterfaceName, sourceDeclFilePath: sourceDeclFilePath}
+	export static function create(method InterfaceMethodSig, displayMethod InterfaceMethodSig, sourceInterfaceName ByteArray, sourceDeclFilePath FilePath) returns CollectedInterfaceMethod
+		return Self{method: method, displayMethod: displayMethod, sourceInterfaceName: sourceInterfaceName, sourceDeclFilePath: sourceDeclFilePath}
 	end 'create'
 end 'CollectedInterfaceMethod'
 
@@ -1242,7 +1244,8 @@ function appendInterfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterfac
 	visited.insert(iface.name)
 
 	for i in 0 upto iface.methods.count() 'eachOwn'
-		slots.push(CollectedInterfaceMethod.create(try iface.methods.get(i) otherwise panic("appendInterfaceWitnessSlots: methods.get OOB at {i} below count {iface.methods.count()}"), sourceInterfaceName: iface.name, sourceDeclFilePath: iface.declFilePath))
+		let method = try iface.methods.get(i) otherwise panic("appendInterfaceWitnessSlots: methods.get OOB at {i} below count {iface.methods.count()}")
+		slots.push(CollectedInterfaceMethod.create(method, displayMethod: method, sourceInterfaceName: iface.name, sourceDeclFilePath: iface.declFilePath))
 	end 'eachOwn'
 
 	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'

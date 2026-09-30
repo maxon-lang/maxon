@@ -13,9 +13,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -37,7 +39,7 @@ func @main {
     x64.storeSlotReg slot0, r8
   __il_body:
     x64.loadRegBaseDisp.word64 r13, [r12 + 8]
-  __il_cont#25:
+  __il_cont#29:
     x64.cmpRegImm32 r13, 0
     x64.jcc notEqual, ifcont
   empty:
@@ -54,7 +56,7 @@ func @main {
     x64.movRegReg r14, r8
     x64.movRegImm32 r15, 0
     x64.jmp forhdr
-  convert:
+  __rc_ok#25:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r15
     x64.callDirect String.byteAt
@@ -73,6 +75,7 @@ func @main {
   inRange:
     x64.movRegReg rax, r8
     x64.xorRegImm32 rax, r8, 32
+  __rc_ok#27:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r15
     x64.callDirect String.setByte
@@ -82,7 +85,7 @@ func @main {
     x64.leaRegRegImm32 r15, r15, 1
   forhdr:
     x64.cmpRegReg r15, r13
-    x64.jcc less, convert
+    x64.jcc less, __rc_ok#25
   forexit:
     x64.movRegReg r13, r14
   __il_cont#3:
@@ -210,7 +213,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#12:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at String.maxon:697: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at String.maxon:705: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -222,7 +225,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at String.maxon:700: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at String.maxon:708: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104

@@ -12,9 +12,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -32,6 +34,9 @@ func @main {
     x64.movRegImm32 r13, 0
     x64.jmp forhdr
   each:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#6
+  __rc_ok#5:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect findGraphemeEnd
@@ -49,18 +54,21 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
     x64.jcc less, each
-  __il_body#29:
+  __il_body#33:
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
-  __il_body#25:
+  __il_body#29:
     x64.loadRegBaseDisp.byte rax, [rbx + 48]
-  __il_cont#24:
+  __il_cont#28:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __il_cont#13
+    x64.jcc notEqual, __il_cont#15
   ifcont:
     x64.movRegImm32 r14, 0
     x64.movRegImm32 rdx, 0
     x64.jmp whilehdr
   countLoop:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#25
+  __rc_ok#24:
     x64.movRegReg rcx, rbx
     x64.callDirect findGraphemeEnd
     x64.leaRegRegImm32 r14, r14, 1
@@ -70,10 +78,10 @@ func @main {
     x64.jcc less, countLoop
   whileexit:
     x64.cmpRegImm32 r14, 0
-    x64.jcc less, __rc_panic
-  __rc_ok:
+    x64.jcc less, __rc_panic#27
+  __rc_ok#26:
     x64.movRegReg r13, r14
-  __il_cont#13:
+  __il_cont#15:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -101,7 +109,7 @@ func @main {
     x64.storeSlotReg slot6, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot9, rax
-  __il_body#10:
+  __il_body#12:
     x64.loadRegBaseDisp.word64 r12, [rbx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
     x64.leaRegRegImm32 rcx, rbx, 57
@@ -120,7 +128,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
-  __il_body#12:
+  __il_body#14:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -131,11 +139,11 @@ func @main {
     x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
-  __il_body#7:
+  __il_body#9:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#27:
+  __il_body#31:
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
-  __il_cont#6:
+  __il_cont#8:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -211,10 +219,10 @@ func @main {
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot12
     x64.callDirect __mm_decref
-  __il_body#8:
+  __il_body#10:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __write_stdout
-  __il_cont#5:
+  __il_cont#7:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot0
@@ -228,8 +236,32 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at grapheme.maxon:404: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_20]  ; "panic at empty-string-iterates-zero-times.test:5: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#25:
+    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at grapheme.maxon:398: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#27:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at grapheme.maxon:402: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 152

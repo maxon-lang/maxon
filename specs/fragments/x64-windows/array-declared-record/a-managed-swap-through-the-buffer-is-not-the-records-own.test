@@ -145,12 +145,6 @@ func @main {
     x64.leaRegRegImm32 r14, rax, -1
     x64.jmp whilehdr
   loop:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic#45
-  __rc_ok#44:
-    x64.cmpRegImm32 r14, 0
-    x64.jcc less, __rc_panic#47
-  __rc_ok#46:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.movRegReg rax, r14
@@ -170,8 +164,8 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.leaRegRegImm32 rax, rax, -1
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#32
-  __rc_ok#31:
+    x64.jcc less, __rc_panic
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect Array.swap
   __il_cont#29:
@@ -185,15 +179,15 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#48
+    x64.jcc equal, critsplit#44
   __im_empty#16:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#14
-  critsplit#49:
+  critsplit#45:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
     x64.jmp __im_cont#13
-  critsplit#48:
+  critsplit#44:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
   __im_cont#13:
@@ -211,14 +205,14 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#50
+    x64.jcc equal, critsplit#46
   __im_empty#20:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, __im_slow#18
-  critsplit#51:
+  critsplit#47:
     x64.movRegReg r10, rcx
     x64.jmp __im_cont#17
-  critsplit#50:
+  critsplit#46:
     x64.movRegReg r10, rcx
   __im_cont#17:
     x64.cmpRegImm32 r10, 0
@@ -235,14 +229,14 @@ func @main {
     x64.movRegImm32 rsi, 0
     x64.loadRegBaseDisp.word64 rdi, [rbx + 40]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, critsplit#52
+    x64.jcc equal, critsplit#48
   __im_empty#24:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, __im_slow#22
-  critsplit#53:
+  critsplit#49:
     x64.movRegReg r10, rsi
     x64.jmp __im_cont#21
-  critsplit#52:
+  critsplit#48:
     x64.movRegReg r10, rsi
   __im_cont#21:
     x64.cmpRegImm32 r10, 0
@@ -259,15 +253,15 @@ func @main {
     x64.movRegImm32 rdi, 0
     x64.loadRegBaseDisp.word64 r9, [rbx + 40]
     x64.cmpRegImm32 r9, 0
-    x64.jcc equal, critsplit#54
+    x64.jcc equal, critsplit#50
   __im_empty#28:
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, __im_slow#26
-  critsplit#55:
+  critsplit#51:
     x64.movRegReg rdx, rsi
     x64.movRegReg r10, rdi
     x64.jmp __im_cont#25
-  critsplit#54:
+  critsplit#50:
     x64.movRegReg rdx, rsi
     x64.movRegReg r10, rdi
   __im_cont#25:
@@ -414,32 +408,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#45:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:31: Range check failed: value outside typealias 'Slot'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 216
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#47:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:31: Range check failed: value outside typealias 'Slot'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 216
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#32:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:39: Range check failed: value outside typealias 'Slot'\x0a"
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at a-managed-swap-through-the-buffer-is-not-the-records-own.test:39: Range check failed: value outside typealias 'Slot'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 216

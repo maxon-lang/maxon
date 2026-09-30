@@ -13,7 +13,7 @@ type Adversary
 	export var gas as Integer
 	export var calls as Integer
 
-	export static function create(items Integer) returns Adversary
+	static function create(items Integer) returns Adversary
 		var values = IntArray.create()
 		var solid = 0
 
@@ -29,16 +29,16 @@ type Adversary
 		return Self{values: values, solid: solid, candidate: 0, gas: items, calls: 0}
 	end 'create'
 
-	export function valueOf(item Integer) returns Integer
-		return try self.values.get(item) otherwise panic("Adversary.valueOf: every item the sort holds is one this adversary numbered")
+	function valueOf(item Integer) returns Integer
+		return try self.values.get(item as ElementIndex) otherwise panic("Adversary.valueOf: every item the sort holds is one this adversary numbered")
 	end 'valueOf'
 
 	function freeze(item Integer)
-		try self.values.set(item, value: self.solid) otherwise panic("Adversary.freeze: every item the sort holds is one this adversary numbered")
+		try self.values.set(item as ElementIndex, value: self.solid) otherwise panic("Adversary.freeze: every item the sort holds is one this adversary numbered")
 		self.solid = self.solid + 1
 	end 'freeze'
 
-	export function compare(x Integer, y Integer) returns Ordering
+	function compare(x Integer, y Integer) returns Ordering
 		self.calls = self.calls + 1
 
 		if self.valueOf(x) == self.gas and self.valueOf(y) == self.gas 'bothUndecided'
@@ -96,9 +96,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @Adversary.valueOf {
@@ -121,7 +123,7 @@ func @Adversary.valueOf {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_80]  ; "panic at driftsort-survives-a-quicksort-adversary.test:33: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_79]  ; "panic at driftsort-survives-a-quicksort-adversary.test:33: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -146,10 +148,10 @@ func @Adversary.freeze {
     x64.movRegReg rbp, rsp
     x64.prologue 48
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
   __rc_ok:
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
     x64.loadRegBaseDisp.word64 rdi, [rax + 16]
     x64.cmpRegImm32 rdi, 0
     x64.jcc less, __im_slow
@@ -174,7 +176,7 @@ func @Adversary.freeze {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_81]  ; "panic at driftsort-survives-a-quicksort-adversary.test:37: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_80]  ; "panic at driftsort-survives-a-quicksort-adversary.test:37: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 48
     x64.popReg rbp
@@ -289,6 +291,9 @@ func @main {
   __il_body#38:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __rc_ok#39:
     x64.movRegReg rcx, rbx
     x64.movRegReg r9, r12
     x64.movRegReg rsi, r13
@@ -300,7 +305,7 @@ func @main {
     x64.jmp forhdr#5
   walk:
     x64.leaRegRegImm32 rax, rdx, -1
-  __rc_ok:
+  __rc_ok#20:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg rax, rcx
     x64.jcc aboveEqual, __im_slow#26
@@ -519,6 +524,18 @@ func @main {
     x64.loadRegSlot rcx, slot6
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
+    x64.epilogue 200
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_83]  ; "panic at Array.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 200
     x64.popReg r15
     x64.popReg r14

@@ -30,9 +30,11 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -65,32 +67,38 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg r13, r8
     x64.storeSlotReg slot2, r13
-  __il_body#24:
+  __il_body#34:
     x64.loadRegBaseDisp.word64 r14, [r12 + 8]
-  __il_cont#23:
+  __il_cont#33:
     x64.cmpRegImm32 r14, 0
-    x64.jcc notEqual, __il_body#26
-  __il_body#20:
+    x64.jcc notEqual, __il_body#36
+  __il_body#30:
     x64.movRegImm32 rdx, 0
-  __il_body#28:
+  __il_body#38:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-  __il_cont#27:
+  __il_cont#37:
     x64.loadRegBaseDisp.byte r9, [rbx + 48]
     x64.movRegReg rcx, rbx
     x64.callDirect String.sliceBytes
-  __il_cont#19:
+  __il_cont#29:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.jmp __il_cont#9
-  __il_body#26:
+  __il_body#36:
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
-  __il_cont#25:
+  __il_cont#35:
     x64.movRegImm32 r15, 0
     x64.jmp whilehdr
   search:
     x64.movRegReg rax, r13
     x64.subRegReg rax, r13, r15
+    x64.cmpRegImm32 r15, 0
+    x64.jcc less, __rc_panic#20
+  __rc_ok#19:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#22
+  __rc_ok#21:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.movRegReg r9, r12
@@ -101,6 +109,10 @@ func @main {
     x64.leaRegRegReg rax, r15, r8
     x64.storeSlotReg slot3, rax
     x64.loadRegBaseDisp.byte r9, [rbx + 48]
+  __rc_ok#23:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#26
+  __rc_ok#25:
     x64.loadRegSlot rax, slot3
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
@@ -119,6 +131,9 @@ func @main {
     x64.jcc lessEqual, search
   whileexit:
     x64.loadRegBaseDisp.byte r9, [rbx + 48]
+    x64.cmpRegImm32 r15, 0
+    x64.jcc less, __rc_panic#28
+  __rc_ok#27:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.movRegReg rax, r13
@@ -135,9 +150,9 @@ func @main {
     x64.jmp forhdr
   librarysLoop:
     x64.loadRegBaseIndexScale.word64 rsi, [rcx + rax*8 + 0]
-  __il_body#22:
+  __il_body#32:
     x64.loadRegBaseDisp.word64 rsi, [rsi + 8]
-  __il_cont#21:
+  __il_cont#31:
     x64.leaRegRegReg rbx, rbx, rsi
   forstep:
     x64.leaRegRegImm32 rax, rax, 1
@@ -148,11 +163,11 @@ func @main {
     x64.loadRegSlot rcx, slot2
     x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#6
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.jcc greater, __rc_panic#6
+  __rc_ok#5:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
@@ -164,7 +179,55 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
+  __rc_panic#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at String.maxon:668: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#22:
+    x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at String.maxon:668: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#26:
+    x64.leaRegRdata rcx, [rip + __str_blob_15]  ; "panic at String.maxon:670: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#28:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at String.maxon:678: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#6:
     x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at a-conformer-of-another-name-and-the-library-array-are-two-records-in-one-program.test:27: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0

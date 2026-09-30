@@ -213,6 +213,31 @@ end 'main'
 error E3005: <fragment>:10:15: cannot assign a value of type 'Ys' to field 'xs' of 'Holder', which holds 'Xs'
 ```
 
+<!-- test: error.a-trailing-doc-comment-keeps-a-fields-brand -->
+A trailing doc comment on a field's line does not change the field's declared type.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+typealias Ys = Array with Integer
+
+type Holder
+	export var xs as Xs /// note
+
+	static function create(ys Ys) returns Self
+		return Self{xs: ys}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create([1])
+	print("{h.xs.count()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:15: cannot assign a value of type 'Ys' to field 'xs' of 'Holder', which holds 'Xs'
+```
+
 <!-- test: error.union-payload-across-brands -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

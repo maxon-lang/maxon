@@ -9,19 +9,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @main {
@@ -40,25 +33,31 @@ func @main {
     x64.storeSlotReg slot2, r12
     x64.leaRegRdata r13, [rip + __str_rec_5]  ; "x"
     x64.storeSlotReg slot1, r13
-  __il_body#52:
+  __il_body#58:
     x64.loadRegBaseDisp.word64 r14, [r12 + 8]
-  __il_cont#51:
+  __il_cont#57:
     x64.cmpRegImm32 r14, 0
-    x64.jcc notEqual, __il_body#54
+    x64.jcc notEqual, __il_body#60
   empty_old:
     x64.movRegReg rcx, rbx
     x64.callDirect String.clone
     x64.movRegReg rbx, r8
     x64.jmp __il_body#2
-  __il_body#54:
+  __il_body#60:
     x64.loadRegBaseDisp.word64 r15, [rbx + 8]
-  __il_cont#53:
+  __il_cont#59:
     x64.movRegImm32 rax, 0
     x64.movRegImm32 rdx, 0
     x64.jmp whilehdr#7
   count_loop:
     x64.movRegReg rax, r15
     x64.subRegReg rax, r15, rdx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#30
+  __rc_ok#29:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#32
+  __rc_ok#31:
     x64.movRegReg rcx, rbx
     x64.movRegReg r9, r12
     x64.callDirect findIn
@@ -80,15 +79,15 @@ func @main {
   whileexit#9:
     x64.loadRegSlot rax, slot5
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __il_body#56
+    x64.jcc notEqual, __il_body#62
   no_matches:
     x64.movRegReg rcx, rbx
     x64.callDirect String.clone
     x64.movRegReg rbx, r8
     x64.jmp __il_body#2
-  __il_body#56:
+  __il_body#62:
     x64.loadRegBaseDisp.word64 rbx, [r13 + 8]
-  __il_body#30:
+  __il_body#40:
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -100,30 +99,29 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 0], r12
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.byte [r13 + 8], rax
-  __il_cont#29:
+  __il_cont#39:
     x64.loadRegSlot rax, slot5
     x64.movRegReg rcx, rax
     x64.imulRegReg rcx, rax, rbx
     x64.leaRegRegReg rbx, r15, rcx
     x64.imulRegReg rax, rax, r14
     x64.subRegReg rbx, rbx, rax
-  __il_body#40:
     x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_ok#41:
+    x64.jcc less, __rc_panic#34
+  __il_body#50:
     x64.loadRegBaseDisp.word64 r12, [r13 + 0]
-  __rc_ok#49:
+  __il_body#52:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_capacity
     x64.cmpRegReg rbx, r8
-    x64.jcc lessEqual, __il_cont#39
+    x64.jcc lessEqual, __il_cont#49
   grow:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect __managed_mem_grow
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_cont#39
-  tryerr#47:
+    x64.jcc equal, __il_cont#49
+  tryerr#55:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -135,7 +133,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __il_cont#39:
+  __il_cont#49:
     x64.loadRegSlot rcx, slot4
     x64.callDirect String.addressableBytes
     x64.movRegReg rbx, r8
@@ -144,6 +142,12 @@ func @main {
   search:
     x64.movRegReg rax, r15
     x64.subRegReg rax, r15, r12
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#36
+  __rc_ok#35:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#38
+  __rc_ok#37:
     x64.loadRegSlot r9, slot2
     x64.loadRegSlot rcx, slot4
     x64.movRegReg rdx, r12
@@ -154,7 +158,7 @@ func @main {
     x64.leaRegRegReg rax, r12, r8
     x64.storeSlotReg slot0, rax
     x64.cmpRegReg rax, r12
-    x64.jcc lessEqual, __il_body#32
+    x64.jcc lessEqual, __il_body#42
   has_prefix:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
@@ -163,7 +167,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#20
   tryerr#21:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at String.maxon:578: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at String.maxon:586: String.replace: prefix slice \xe2\x80\x94 pos and matchPos within bounds from findIn\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -182,20 +186,20 @@ func @main {
     x64.callDirect StringBuilder.appendBytes
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-  __il_body#32:
+  __il_body#42:
     x64.loadRegSlot rcx, slot1
     x64.callDirect String.addressableBytes
     x64.movRegReg r12, r8
-  __il_body#34:
+  __il_body#44:
     x64.loadRegSlot rax, slot1
     x64.loadRegBaseDisp.byte rax, [rax + 48]
-  __il_cont#33:
+  __il_cont#43:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r12
     x64.callDirect StringBuilder.appendBytes
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-  __il_cont#31:
+  __il_cont#41:
     x64.loadRegSlot rax, slot0
     x64.leaRegRegReg rax, rax, r14
   ifcont:
@@ -207,7 +211,7 @@ func @main {
     x64.jcc lessEqual, search
   whileexit#17:
     x64.cmpRegReg r12, r15
-    x64.jcc greaterEqual, __il_body#36
+    x64.jcc greaterEqual, __il_body#46
   has_suffix:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
@@ -217,7 +221,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#26
   tryerr#27:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at String.maxon:594: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at String.maxon:602: String.replace: suffix slice \xe2\x80\x94 pos < selfLen guaranteed\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -236,10 +240,10 @@ func @main {
     x64.callDirect StringBuilder.appendBytes
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-  __il_body#36:
+  __il_body#46:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.loadRegBaseDisp.byte r12, [r13 + 8]
-  __il_body#38:
+  __il_body#48:
     x64.callDirect __managed_retain
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r14
@@ -248,7 +252,7 @@ func @main {
     x64.movRegReg r12, r8
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
-  __il_cont#37:
+  __il_cont#47:
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -258,7 +262,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 0], r14
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.byte [r13 + 8], rax
-  __il_cont#35:
+  __il_cont#45:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r13
@@ -280,8 +284,56 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_19]  ; "panic at String.maxon:861: Range check failed: value outside typealias 'BytePos'\x0a"
+  __rc_panic#30:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at String.maxon:547: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#32:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at String.maxon:547: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#34:
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at String.maxon:566: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#36:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at String.maxon:581: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#38:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at String.maxon:581: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88

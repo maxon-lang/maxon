@@ -45,9 +45,11 @@ end 'main'
 ExitCode: 2
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @Item.create {
@@ -270,16 +272,16 @@ func @main {
   __il_cont:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.movRegReg rcx, r13
-    x64.callDirect __destruct_Container
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Container
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15

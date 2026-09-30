@@ -205,6 +205,8 @@ end 'main'
 - Passing a collection to a parameter the callee **reassigns** while a reference into that collection is
   still live is **E3070**: the reassignment frees what the reference points into.
 - Passing a literal or another expression gives the callee a temporary; its writes have no visible effect.
+- A parameter declared at a type parameter — in a method of a generic type or in a generic function — is
+  passed by reference on the same terms.
 
 ## Function Types and Function Values
 

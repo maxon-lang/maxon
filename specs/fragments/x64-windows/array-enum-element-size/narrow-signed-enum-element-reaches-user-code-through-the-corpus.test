@@ -47,19 +47,12 @@ end 'main'
 ExitCode: 131
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @bySignal {
@@ -137,6 +130,9 @@ func @main {
   __il_body#20:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#22
+  __rc_ok#21:
     x64.movRegReg rcx, rbx
     x64.callDirect Array.driftsortRange
   __il_cont#19:
@@ -172,47 +168,47 @@ func @main {
     x64.leaRegFunc r12, [rip + __fnref_markNegative]
     x64.movRegImm32 r13, 0
     x64.leaRegRdata rax, [rip + __layout_Array_Signal]
-  __il_body#22:
+  __il_body#24:
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rdx, [rax + 40]
     x64.callDirect __managed_create
     x64.movRegReg r14, r8
     x64.movRegImm32 r15, 0
-    x64.jmp forhdr#23
+    x64.jmp forhdr#25
   loop:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#31
-  __im_word#29:
+    x64.jcc notEqual, __im_stride#33
+  __im_word#31:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rcx, [rax + r15*8 + 0]
-    x64.jmp __im_cont#27
-  __im_stride#31:
+    x64.jmp __im_cont#29
+  __im_stride#33:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#28
-  __im_byte#30:
+    x64.jcc notEqual, __im_slow#30
+  __im_byte#32:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.leaRegRegReg rax, rax, r15
     x64.loadRegBaseDisp.byte rcx, [rax + 0]
-    x64.jmp __im_cont#27
-  __im_slow#28:
+    x64.jmp __im_cont#29
+  __im_slow#30:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.callDirect __managed_get_unchecked
     x64.movRegReg rcx, r8
-  __im_cont#27:
+  __im_cont#29:
     x64.movRegReg rdx, r13
     x64.callReg r12
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-  forstep#25:
+  forstep#27:
     x64.leaRegRegImm32 r15, r15, 1
-  forhdr#23:
+  forhdr#25:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r15, rax
     x64.jcc less, loop
-  __il_cont#21:
+  __il_cont#23:
     x64.movRegImm32 rdx, 0
   __us_test:
     x64.loadRegBaseDisp.word64 rbx, [r14 + 8]
@@ -260,12 +256,12 @@ func @main {
     x64.leaRegRegReg rax, rax, rcx
     x64.leaRegRegReg rbx, rax, r15
     x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#12
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.jcc greater, __rc_panic#12
+  __rc_ok#11:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
@@ -277,8 +273,20 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_68]  ; "panic at narrow-signed-enum-element-reaches-user-code-through-the-corpus.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#22:
+    x64.leaRegRdata rcx, [rip + __str_blob_70]  ; "panic at Array.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_67]  ; "panic at narrow-signed-enum-element-reaches-user-code-through-the-corpus.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72

@@ -22,19 +22,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @main {
@@ -112,24 +105,21 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
   __il_cont#45:
     x64.cmpRegReg rbx, rax
-    x64.jcc equal, __rc_ok#28
+    x64.jcc equal, __il_body#15
   lenMismatch:
     x64.movRegImm32 rbx, 0
     x64.jmp __il_cont#10
-  __rc_ok#28:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_ok#30:
+  __il_body#15:
     x64.movRegImm32 r12, 0
     x64.jmp forhdr#16
-  compare_loop:
+  __rc_ok#26:
     x64.loadRegSlot rcx, slot3
     x64.movRegReg rdx, r12
     x64.callDirect String.byteAt
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#21
-  tryok#20:
+  __rc_ok#28:
     x64.loadRegSlot rcx, slot7
     x64.movRegReg rdx, r12
     x64.callDirect String.byteAt
@@ -145,7 +135,7 @@ func @main {
     x64.leaRegRegImm32 r12, r12, 1
   forhdr#16:
     x64.cmpRegReg r12, rbx
-    x64.jcc less, compare_loop
+    x64.jcc less, __rc_ok#26
   forexit#19:
     x64.movRegImm32 rax, 1
   __il_cont#14:
@@ -214,33 +204,33 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-  __il_body#35:
+  __il_body#33:
     x64.movRegImm32 rbx, 5381
   __il_body#50:
     x64.loadRegSlot rax, slot6
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
   __il_cont#49:
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr#36
-  hash_loop:
+    x64.jmp forhdr#34
+  __rc_ok#40:
     x64.loadRegSlot rcx, slot6
     x64.movRegReg rdx, r13
     x64.callDirect String.byteAt
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#41
-  tryok#40:
+    x64.jcc notEqual, tryerr#39
+  tryok#38:
     x64.imulRegRegImm32 rax, rbx, 33
     x64.leaRegRegReg rax, rax, r8
-  forstep#38:
+  forstep#36:
     x64.leaRegRegImm32 r13, r13, 1
     x64.movRegReg rbx, rax
-  forhdr#36:
+  forhdr#34:
     x64.cmpRegReg r13, r12
-    x64.jcc less, hash_loop
-  forexit#39:
+    x64.jcc less, __rc_ok#40
+  forexit#37:
     x64.movRegImm32 rax, 4294967295
     x64.andRegReg rbx, rbx, rax
-  __il_cont#32:
+  __il_cont#30:
     x64.cmpRegImm32 rbx, 5863446
     x64.setccReg equal, rbx
     x64.loadRegSlot rcx, slot6
@@ -290,20 +280,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at String.maxon:1008: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 136
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   tryerr#21:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at String.maxon:1010: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at String.maxon:1018: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -315,7 +293,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#23:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at String.maxon:1011: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at String.maxon:1019: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 136
@@ -326,7 +304,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#41:
+  tryerr#39:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at hash.maxon:24: hashString: byteAt OOB \xe2\x80\x94 i < s.byteLength() invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0

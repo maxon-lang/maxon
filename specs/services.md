@@ -8823,7 +8823,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3005: <fragment>:15:2: Cannot return 'struct' from function declared to return 'int'
+error E3005: <fragment>:15:2: Cannot return 'struct' from function declared to return 'Integer'
 ```
 
 <!-- test: error.arithmetic-on-a-reply -->

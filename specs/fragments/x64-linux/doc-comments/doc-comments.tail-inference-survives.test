@@ -14,7 +14,7 @@ function main() returns ExitCode
 	// Runtime-valued, so neither the call nor the branch folds away and the panic path
 	// survives into the emitted code where the golden can record it. A spec case runs with
 	// no arguments, so this is 1.
-	return tail(CommandLine.args().count())
+	return tail(CommandLine.args().count() as Count)
 end 'main'
 ---
 ExitCode: 1
@@ -23,9 +23,11 @@ data {
   __cl_argc@0 = i64 0
   __cl_argv@8 = i64 0
   __cl_empty_arg@16 = i64 0
-  __slab_arena_list@24 = i64 0
-  __slab_arena_map_l1@32 = i64 0
-  __slab_state@40 = i64 0
+  __mrt_envp@24 = i64 0
+  __mrt_signal_stack_bytes@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
 }
 
 func @main {
@@ -104,7 +106,7 @@ func @main {
     x64.jcc less, loop
   __il_cont#5:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-  __il_body#4:
+  __il_body#2:
     x64.cmpRegImm32 rax, 0
     x64.jcc belowEqual, ifcont
   positive:
@@ -134,7 +136,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at String.maxon:1125: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at String.maxon:1133: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56

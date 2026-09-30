@@ -276,17 +276,10 @@ end 'main'
 ```
 
 <!-- test: value-tuple-forwarded-through-an-address-taken-wrapper -->
-⛔⛔ **THE CASE THE SET DID NOT HAVE, AND IT WAS A SILENT WRONG ANSWER — found at review, 2026-09-05.**
-`forward`'s address is taken, so it is off the convention; `pair` is not, so it was on it. The call-site gate
-admitted `forward`'s `return pair(…)` as a FORWARD without asking whether the enclosing function could be on
-the convention at all — and the refusal fixpoint's `caller → callee` edge only carries between CANDIDATES, so
-a caller the declaration test had already excluded is a node the refusal can never be seeded at. `pair` kept
-the convention and `forward`'s `ret` was rewritten to a two-register `errorReturn` while its own
-`usesValueTupleReturn` stayed FALSE: it returned the low half in the register its TYPE says holds a record
-pointer.
-
-**MEASURED: `panic: nil pointer or invalid memory access … in apply`, against the oracle's 33.** On wasm the
-same disagreement is a `call_indirect` validation failure rather than a dropped word.
+⛔⛔ **A FORWARDING WRAPPER THAT IS ITSELF OFF THE CONVENTION.** `forward`'s address is taken, so it is off
+the convention; `pair` is not. A wrapper the declaration test excludes and the callee it forwards to must
+agree on how the tuple comes back, so `forward` returns the record its TYPE says it returns and `apply` reads
+33 on every target.
 
 ⚠ **NEITHER NEIGHBOUR CATCHES IT.** `value-tuple-return-through-function-value` takes `pair`'s address
 DIRECTLY, so `pair` is excluded and nothing is rewritten; `value-tuple-return-forwarded` forwards through a
@@ -669,12 +662,9 @@ tuple produced by a match-expression arm, then COMPARES each binding. The
 match-result merge slot refines to `genericInstance(__Tuple2, [Slot, bool])`
 only on a later type-resolution converge pass; before that, the destructure's
 `tmp._0` / `tmp._1` field reads off the still-unspecialised `named(__Tuple2)`
-receiver yield the bare `_T0` / `_T1` tuple type-parameters. Recording those
-froze the bindings (and the cmps on them — the operand-type stamp is kept once
-non-unresolved) at the placeholders, so `slot != 5` demanded `_T0 is Equatable`
-and `flag != true` reported a category mismatch. The tuple field-load now stays
-unresolved until the receiver refines, so both bindings resolve to their
-concrete element types. Returns `2`.
+receiver would yield the bare `_T0` / `_T1` tuple type-parameters. The tuple
+field-load stays unresolved until the receiver refines, so both bindings (and
+the compares on them) resolve to their concrete element types. Returns `2`.
 ```maxon
 typealias Slot = int(0 to 100)
 
@@ -706,9 +696,9 @@ end 'main'
 ```
 
 <!-- test: nested-tuple-chained-access -->
-`t.0.1` reaches the second element of a NESTED tuple. It is the case the lexer had to be taught: a
-number greedily takes a following `.` as a fraction, so `t.0.1` lexed as `identifier(t)`, `dot`,
-`floatLiteral(0.1)` — two indices silently fused into one token. A number can follow a `.` for exactly
+`t.0.1` reaches the second element of a NESTED tuple. A number greedily takes a following `.` as a
+fraction, which would lex `t.0.1` as `identifier(t)`, `dot`, `floatLiteral(0.1)` — two indices fused into one
+token. A number can follow a `.` for exactly
 one reason (there is no `.5` float form and every other dotted form has an identifier on its right), so
 the lexer refuses the fraction there and both hops survive. Neither reference compiler lexes this:
 v1's positional rewrite handles only an `intLiteral`, so `t.0.1` is a parse error there.
@@ -723,12 +713,9 @@ end 'main'
 ```
 
 <!-- test: an-eight-deep-nesting-is-one-type-however-it-is-spelled -->
-⭐ **NESTING DEPTH, WHICH NO OTHER CASE TAKES PAST THREE — and W9 is why it is now worth taking.** A
-tuple's identity used to INLINE every element, so an eight-level nest spelled its whole history at every
-level: `A3j` measured that as quadratic in depth for a chain and as DOUBLING PER LEVEL for a branching one
-(a 23-line program cost 2.47 s and 184 MB at depth 18, and depth 24 extrapolated to ~11 GB). A nested
-element is now cited by an interned token, so depth is linear — and this is the case that says the
-CITATION is still an identity rather than merely cheap.
+⭐ **NESTING DEPTH, WHICH NO OTHER CASE TAKES PAST THREE.** A nested element is cited by an interned
+token, so a tuple's identity costs time linear in its depth — and this is the case that says the CITATION is
+still an identity rather than merely cheap.
 
 The two spellings must converge: `readDeep` declares its parameter through an eight-link ALIAS CHAIN and
 `main` hands it a bare LITERAL nested eight deep. If the citation split those into two types the call is
@@ -759,9 +746,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: tuple-element-from-method-call -->
-An element built from a METHOD-CALL RESULT. v1 leaked exactly this shape: the tuple reached lowering
-with no parse-time-pinned type for the element, so its `__mm_alloc` got a NULL destructor and the
-element's box was never released. Here the layout is minted from the element VALUES' own types at the
+An element built from a METHOD-CALL RESULT. A tuple reaching lowering with no parse-time-pinned type for
+the element would give its `__mm_alloc` a NULL destructor and never release the element's box. The layout is minted from the element VALUES' own types at the
 literal, so the struct element is an ordinary managed field and the tuple's synthesized drop cascade
 frees it. A leak exits 101 rather than 42.
 ```maxon
@@ -843,9 +829,9 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: ranged-alias-elements-are-one-tuple-type -->
 `(Num, Num)` and `(Integer, Integer)` are ONE tuple type: a tuple's identity is its elements' UNDERLYING
-types, so two ranged aliases over the same primitive collapse alike. (The bare `(int, int)` this case used
-to write is no longer a legal parameter type — a numeric domain must be declared — so the widest DECLARED
-range stands in for it, which tests the same collapse.) That is what lets a caller hand a bare
+types, so two ranged aliases over the same primitive collapse alike. (A bare `(int, int)` is not a legal
+parameter type — a numeric domain must be declared — so the widest DECLARED range stands in for it, which
+tests the same collapse.) That is what lets a caller hand a bare
 `(10, 32)` to a `(Num, Num)` parameter. Both functions therefore read the same record and return the
 same sum, so their difference is 0.
 ```maxon
@@ -1008,14 +994,13 @@ end 'main'
 error E2015: <fragment>:3:2: Unsupported: a destructuring binding of a 'int' initializer (only a TUPLE can be destructured — `let (x, y) = …` needs a right-hand side that is a tuple)
 ```
 
-### ⭐ A TUPLE OVER A GENERIC TYPE PARAMETER (W43)
+### ⭐ A TUPLE OVER A GENERIC TYPE PARAMETER
 
-This case was `error.tuple-of-a-type-parameter` and is now a POSITIVE one. The refusal carried three
-reasons and each was answered by a different rung, which is why it survived so long: IDENTITY by `W14`
-(a type-parameter token is a digest of `(declaring type, parameter)`, so two parameters mangle and intern
-apart, where a POSITION made them one), LAYOUT by `W6` (a type parameter lowers to an opaque machine word
-and every non-existential field is one slot, so `(T, Int)` is statically 16 bytes), and the DROP CASCADE by
-the layout descriptor the instance already carries. Refusing the TYPE to avoid a question about a VALUE was
+A tuple may hold a type parameter, and three facts make it a type: its IDENTITY (a type-parameter token is a
+digest of `(declaring type, parameter)`, so two parameters mangle and intern apart), its LAYOUT (a type
+parameter lowers to an opaque machine word and every non-existential field is one slot, so `(T, Int)` is
+statically 16 bytes), and its DROP CASCADE, through the layout descriptor the instance carries. The
+value-side rule keeps its own refusal at the construction site.
 the category error; the value-side rule keeps its own refusal at the construction site.
 
 ⚠ It is pinned in BOTH element classes deliberately. A scalar `T` proves only that the shape parses; the
@@ -1112,7 +1097,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: tuple-of-a-managed-type-parameter -->
 The same body instantiated over `String`, so the tuple's element 0 is an opaque word that really does own
-heap. Measured: exit 7, and no leak.
+heap. It exits 7, with no leak.
 ```maxon
 type Box uses T
 	export let v as T
@@ -1142,8 +1127,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: duplicate-owned-element-co-owns -->
 One owned value CAN fill two slots of one record: each slot is a durable sink and takes its own reference
 (⚖ 2026-08-12), so the tuple's drop cascade releases exactly the two it took and `s` releases the one it
-always held. It used to be E3102, on the premise that the compiler is move-only and the cascade would drop one
-`+1` twice.
+holds.
 ```maxon
 function main() returns ExitCode
 	var s = "hello"
@@ -1160,14 +1144,13 @@ hellohellohello
 ```
 
 <!-- test: returned-tuple-copies-only-when-trivial -->
-⭐ **THE TWO HALVES OF `return t` ON A TUPLE PARAMETER, PINNED SIDE BY SIDE, BECAUSE THEY DIFFER (S5).** A
+⭐ **THE TWO HALVES OF `return t` ON A TUPLE PARAMETER, PINNED SIDE BY SIDE, BECAUSE THEY DIFFER.** A
 TRIVIAL tuple gets its own record — the caller's `a` keeps its `2` after the returned `b` is written — and
 that is what a tuple is for. A MANAGED-element tuple gets an `__mm_retain` instead, because a shallow copy
 would leave two records pointing at one `String` and free it twice, so writing through the returned `n` shows
 on `m`. The split is a soundness one, not a taste one, and **the value oracle answers exactly the same on
-both halves** (measured: `a.1=2 b.1=99 m.1=99 n.1=99`). The managed half was REFUSED before S5, which is why
-this case exists: opening the borrowed-aggregate return opened it for a tuple too, and an unpinned share is
-the kind of thing that becomes a wrong answer without a test noticing.
+both halves** (measured: `a.1=2 b.1=99 m.1=99 n.1=99`). Both halves are pinned because a share nobody pins can
+become a wrong answer without a test noticing.
 
 ⚠ The exit code deliberately adds 7. `a.1 + m.1` alone is `2 + 99` = **101**, which is the runtime's
 LEAK-DETECTED exit code — a spec whose correct answer collides with the failure marker cannot tell the two
@@ -1205,18 +1188,16 @@ trivial a.1=2 b.1=99 managed m.1=99 n.1=99
 ```
 
 <!-- test: merged-tuple-copies-at-every-hand-off -->
-⭐⭐ **THE VALUE-SEMANTICS ANSWER BELONGS TO THE HAND-OFF, NOT TO THE `return` KEYWORD (S5 review).** The case
+⭐⭐ **THE VALUE-SEMANTICS ANSWER BELONGS TO THE HAND-OFF, NOT TO THE `return` KEYWORD.** The case
 above pins `return t`; this one pins the two doors that reach the caller through a MERGE first — a ternary arm
 and a `try … otherwise` fallback — and a BINDING as the negative control. A borrowed trivial tuple is copied at
 a hand-off and INCREF'd at a binding, so `a.1` and `m.1` keep their `2` while `g.1` reads the `55` the callee
 wrote through its alias. **The value oracle answers all three identically** (measured: `merged a.1=2 fallback
 m.1=2 binding g.1=55`).
 
-⚠ It is the merge that made this worth pinning. The tuple copy first shipped inside `emitOwnedValueReturn`,
-where it was the `returned` door's private rule; when S5 opened the `merged` door onto the same shared
-promotion, a borrowed tuple was increfed by the merge and then walked past the return's own copy — which asks
-`not valueIsOwnedHeap`, and an incref answers that question wrongly by design. The compiler printed `a.1=99` here
-against the oracle's `a.1=2`. The gate lives in `promoteBorrowedToOwned` now, where all three doors ask it.
+⚠ The merge is why this is pinned. A merged value reaches the same shared promotion as a returned one, and an
+incref'd tuple would answer the return copy's `not valueIsOwnedHeap` question wrongly by design, so the copy
+gate lives in `promoteBorrowedToOwned`, where all three doors ask it.
 ```maxon
 
 typealias Num = int(i64.min to i64.max)
@@ -1269,7 +1250,7 @@ merged a.1=2 fallback m.1=2 binding g.1=55 z=0
 68
 ```
 
-### A tuple typealias across a FILE BOUNDARY, in BOTH orders (A3e)
+### A tuple typealias across a FILE BOUNDARY, in BOTH orders
 
 ⭐⭐ **A TUPLE ALIAS MINTS NO IDENTITY OF ITS OWN, SO EVERY DECLARED POSITION SPELLED WITH ONE HAS TO BE
 RESOLVED THROUGH THE ALIAS REGISTRY — AND THAT REGISTRY HAS A FILLING ORDER.** The tolerant declaration
@@ -1278,40 +1259,25 @@ stores. Asked there, "is `Pair` a tuple alias?" answers *how far the sweep had g
 registered the moment its own file is walked, so a sibling file walked BEFORE it records the position as a
 bare `named("Pair")` and one walked AFTER records the tuple's `structRef`.
 
-⚠ **MEASURED, A3e** — five doors answered differently in the two walk orders, each accepting the program
-when the alias file was walked first and refusing it when it was walked last:
+⚠ Every declared position spelled with the alias resolves it the same way in both walk orders: a field
+`var p as Pair` and its drop, `returns Pair` on a function and on a method, a nested tuple `(Pair, Int)`,
+`Array with Pair`, and a `some(v Pair)` union payload.
 
-| door | alias file walked FIRST | alias file walked LAST (before A3e) |
-|---|---|---|
-| `var p as Pair` | ran | `E3005 cannot assign 'struct' to variable 'p' of type 'int'` |
-| `returns Pair` | ran | `E3011 Unknown type 'Pair'` |
-| `returns Pair` on a METHOD | ran | `E3011 Unknown type 'Pair'` |
-| `(Pair, Int)` | ran | `E2015 … '__Tuple2.Pair.int._0' … declared 'int' and not a struct` |
-| `Array with Pair` | ran | `E3005 cannot assign 'struct' to variable 'push' of type 'int'` |
-| `some(v Pair)` union payload | ran | `E3011 Unknown type 'Pair'` |
-| `var p as Pair`'s DROP | ran | leaked — the field was dropped by nobody, exit 101 |
-
-⚠ **THE PAIR BELOW DECLARES ITS TWO FILES IN THE TWO ORDERS, AND SINCE A3m THAT IS WHAT IT GETS.** It was
-not always: the loader walked whatever `Directory.list` handed back and deliberately does not sort
-(`StdlibLoader`'s header, user ruling 2026-07-24), and that answer was a property of the staging
-directory's on-disk state, not of the file names — MEASURED, the first case here was the REFUSED one while
-the same two files copied into a fresh directory refused the second. So the pair was a two-ticket lottery
-on a program that must not care. `build` now takes an ORDERED list of paths and the runner names each
-case's files in the order the case declares them, so each half below really does compile in its own order
-— and the loader still sorts nothing, because a sort would hide the dependence rather than surface it.
+⚠ **THE PAIR BELOW DECLARES ITS TWO FILES IN THE TWO ORDERS, AND THAT IS WHAT IT GETS.** `build` takes an
+ORDERED list of paths and the runner names each case's files in the order the case declares them, so each
+half below compiles in its own order. The loader sorts nothing (`StdlibLoader`'s header, user ruling
+2026-07-24), because a sort would hide the dependence rather than surface it.
 
 A `named` that the sweep left under an alias spelling is repaired at the READ door — a declared slot's type
 (`ProgramSignatures.declaredSlotType`), a call result (`Parser.resolveNamedAlias`), and the four classifiers
 that read a RAW layout field type, through the one resolution `ProgramSignatures.denotedAggregateName`
-names. That is exactly the arrangement a function alias and a generic-instance alias already had; the tuple
-alias was the one kind no classifier resolved, which is why its `named` spelling was a wrong answer rather
-than merely a less resolved one.
+names. That is the same arrangement a function alias and a generic-instance alias have.
 
 ⚠ **`parseTypeReference`'s tuple-alias arm is NOT gated on `allFilesFolded` — the three sibling arms are.**
 `recordTupleAlias` writes DURING the walk rather than at `foldFile`, so for a tuple alias the SWEEP's
 resolved answer is the common case; gating it moves every `Array with <a tuple alias>` onto the bare `named`
-spelling, which seven index doors read RAW off the stored generic-instance ARGUMENT. Measured, it changed
-this file's `value-tuple-escaping-into-array-stays-heap` element size and the answer of
+spelling, which seven index doors read RAW off the stored generic-instance ARGUMENT — and that changes this
+file's `value-tuple-escaping-into-array-stays-heap` element size and the answer of
 `array-of-managed-element-tuples-drops-each`.
 
 <!-- test: sibling-files-tuple-alias-in-every-declared-position -->
@@ -1372,10 +1338,8 @@ end 'main'
 
 <!-- test: sibling-files-tuple-alias-in-every-declared-position-either-order -->
 
-⭐ **THE IDENTICAL PROGRAM, ITS TWO FILES DECLARED THE OTHER WAY ROUND.** Before A3e one of this pair was
-five separate refusals of the program the other compiled and ran — which one depended on the staging
-directory. Both halves are kept because half a pair is just the ticket that happened to win; since A3m
-neither half is a ticket at all.
+⭐ **THE IDENTICAL PROGRAM, ITS TWO FILES DECLARED THE OTHER WAY ROUND.** Both halves are kept because the
+program's meaning must not depend on which file the walk reaches first.
 ```maxon
 // --- file: main.maxon
 type Holder
@@ -1428,7 +1392,7 @@ export typealias PairArray = Array with Pair
 
 <!-- test: error.nested-tuple-name-does-not-depend-on-which-file-declares-it -->
 
-⭐⭐ **A NESTED TUPLE'S NAME IS A STATEMENT ABOUT THE PROGRAM, NOT ABOUT THE FILESYSTEM (W14b).** This case
+⭐⭐ **A NESTED TUPLE'S NAME IS A STATEMENT ABOUT THE PROGRAM, NOT ABOUT THE FILESYSTEM.** This case
 and its twin below are the SAME program with the SAME file NAMES; the only difference is which of the two
 sibling files declares which alias. Nothing a compiler may observe about the program has changed — `PX` is
 `((int, int), int)` in both — so the two cases pin **one byte-identical sentence**, and a citation decided by
@@ -1470,16 +1434,16 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:18:2: Cannot return '__Tuple2.__Tuple2#2ce2fdda76cda7c9.int' from function declared to return '__Tuple2.__Tuple2#90fac2b26f6571d1.int'
+error E3005: <fragment>:18:2: Cannot return '((String, String), int)' from function declared to return 'PX'
 ```
 
 <!-- test: error.nested-tuple-name-does-not-depend-on-which-file-declares-it-swapped -->
 
-⭐ **THE IDENTICAL PROGRAM, THE TWO ALIASES DECLARED THE OTHER WAY ROUND.** `aaa.maxon` now holds `PY` and
+⭐ **THE IDENTICAL PROGRAM, THE TWO ALIASES DECLARED THE OTHER WAY ROUND.** `aaa.maxon` holds `PY` and
 `zzz.maxon` holds `PX`. **The pinned sentence below must stay byte-identical to its twin's** — that equality
-IS the assertion, and it is the whole reason this case is not a duplicate. If a future change makes these two
-diverge, do NOT re-derive two different pins: a divergence here means the tuple citation has gone back to
-being a function of the walk, which is the defect `W14b` removed.
+IS the assertion, and it is the whole reason this case is not a duplicate. If a change makes these two
+diverge, do NOT re-derive two different pins: a divergence here means the tuple citation depends on the
+walk.
 ```maxon
 // --- file: aaa.maxon
 export typealias PY = ((String, String), int)
@@ -1505,7 +1469,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:18:2: Cannot return '__Tuple2.__Tuple2#2ce2fdda76cda7c9.int' from function declared to return '__Tuple2.__Tuple2#90fac2b26f6571d1.int'
+error E3005: <fragment>:18:2: Cannot return '((String, String), int)' from function declared to return 'PX'
 ```
 
 <!-- test: error.self-referential-tuple-alias -->
@@ -1516,54 +1480,17 @@ level off at every step — can name the very tuple being canonicalized. `typeal
 `__Tuple2.P.int` whose element 0 is `named("P")` whose target is `__Tuple2.P.int`. It is refused, and the
 point of the case is that it is refused rather than recursing until the stack ends.
 
-⚠ The declared type is a nest deeper than the source wrote, and that predates A3e: each real-parse read of
+⚠ The declared type is a nest deeper than the source wrote: each real-parse read of
 a self-naming alias re-registers it one level further out, so the type grows with the number of reads. It
 is DETERMINISTIC and the program is illegal either way; the case pins it so that a change in the
 termination rule cannot pass unnoticed.
 
-⚠⚠ **THE MESSAGE NO LONGER SHOWS THAT DEPTH, AND W9 IS WHY — READ THE NEW SPELLING BEFORE TRUSTING YOUR
-EYES.** Until W9 a tuple's name INLINED every element, so the two types read
-`__Tuple2.__Tuple2.int.int.int` against a six-deep `__Tuple2.__Tuple2.…P.Int.int.int.int.int.int` and the
-re-registration was legible in the string itself. That inlining is what `A3j` measured as quadratic in
-nesting depth and exponential for a branching chain, and a nested element is now cited by a bounded TOKEN
-instead. **The depth is still there and still grows; what the tokens carry is only that the two inner types
-are DISTINCT.** So the case still discriminates a change in the termination rule — a different number of
-re-entries builds a different inner type and moves its token — but it can no longer say WHICH way the depth
-went.
-
-⭐ **AND SINCE W14b THE TOKEN IS A DIGEST OF THE CITED TUPLE'S OWN NAME, so it says something the mint
-ordinal it replaced could not.** `#90fac2b26f6571d1` is the SHALLOW type here — the one-level
-`((int, int), int)` the function returns — and it is **the identical token this suite's
-`error.nested-tuple-name-does-not-depend-on-which-file-declares-it` shows for `((int, int), int)` in an
-unrelated three-file program**, because it is the same type and the citation is now a pure function of the
-structure. `#41e3ea25fc813804` is the FIVE-level inner of the declared type. Neither number ranks by depth
-and neither ever did; what changed is that they no longer rank by anything else either.
-
-⭐ **THE TOKENS ARE THEREFORE NO LONGER MINT-ORDERED, AND THIS PARAGRAPH USED TO SAY THE OPPOSITE (W14b).**
-It read that anything interning a tuple ahead of these — a stdlib module a future edit pulls in, a
-differently-ordered directory walk — moved them, which made the pin depend on a count the sentence does not
-name. It does not any more: the token is `fnv1a64` of the cited tuple's registered name, so **an unrelated
-tuple interned first moves nothing** — which the case below this one pins rather than asserts.
-
-⚠ **BUT THIS CASE'S DECLARED-TYPE TOKEN IS SENSITIVE TO THE ALIAS SPELLINGS, AND THAT IS NOT OBVIOUS FROM
-THE RULE ABOVE (W14b review).** `P` is self-referential, so `canonicalTupleName`'s A3e re-entry resolves its
-own element back to the SWEEP spelling `__Tuple2.P.Int` — a name whose elements are still the bare
-identifiers this fragment wrote, because the sweep runs before the registries that say what they mean. The
-Merkle chain therefore bottoms out there, and every digest above it inherits those two identifiers. ⛔
-MEASURED: renaming `Int` to `Signed` and `P` to `Q`, which changes no type's SHAPE, moves
-`#41e3ea25fc813804` to `#303df4d4860b223c`, while the returned type's `#90fac2b26f6571d1` — whose chain
-bottoms out at the fully resolved `__Tuple2.int.int` — does not move at all. ⇒ **a move in the SECOND number
-is a prompt to ask what the termination rule built OR what these two aliases are called; a move in the
-FIRST is only ever the former.** The `-with-an-unrelated-tuple-interned-alongside` case below pins the axis
-that a citation must never depend on: another file.
-
-⭐ **W14b REMOVED THE THING THAT NEEDED ACCEPTING.** A dense instance id is NOT stable across build
-scenarios — the same instance interns at one ordinal cold and another warm — so it must be kept OUT of every
-emitted artifact, and emission orders **by the mangled label, "a pure function of the instance's structural
-shape"**. That is the rule `SignatureIndex.mangleTypeArg` states, and the compiler now satisfies it rather
-than excusing itself from it: see
-`ProgramSignatures.tupleElementTokenFor` for the digest, the walk-order measurement it removed, and the
-standing 2026-07-24 file-order ruling it settles.
+⚠⚠ **THE MESSAGE DOES NOT SHOW THAT DEPTH.** A diagnostic prints the returned value's type in its source
+form, `((int, int), int)`, and the declared type as the alias spells it, `P` — so the pinned text names the
+alias rather than the nest the termination rule built. Internally a nested element is cited by a token that is
+`fnv1a64` of the cited tuple's registered name (`ProgramSignatures.tupleElementTokenFor`), a pure function of
+the structure, so an unrelated tuple interned first moves no citation, and emission orders by the mangled
+label (`SignatureIndex.mangleTypeArg`) rather than by any dense instance id.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias P = (P, Int)
@@ -1578,23 +1505,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:2: Cannot return '__Tuple2.__Tuple2#90fac2b26f6571d1.int' from function declared to return '__Tuple2.__Tuple2#41e3ea25fc813804.int'
+error E3005: <fragment>:6:2: Cannot return '((int, int), int)' from function declared to return 'P'
 ```
 
 <!-- test: error.self-referential-tuple-alias-with-an-unrelated-tuple-interned-alongside -->
 
-⭐⭐ **THE CASE ABOVE, WITH AN UNRELATED SIBLING FILE THAT INTERNS TWO TUPLES OF ITS OWN — AND BOTH TOKENS
-COME OUT UNCHANGED (W14b).** The program `main.maxon` holds is byte-identical to the one above; `aaa.maxon`
-adds `((String, String), int)`, which is a different type in every respect and is walked FIRST. Both cited
-tokens are the same two the case above pins, and only the fragment line moves (a file marker now sits in
-front of the program).
-
-⚠ **THIS EXISTS BECAUSE THE CASE ABOVE MADE A CLAIM IN PROSE THAT NOTHING TESTED.** Until W14b the tokens
-were mint-ordered over the whole compile, and that case's own text warned that *anything* interning a tuple
-ahead of them moved the numbers. ⛔ MEASURED against the pre-W14b compiler, this exact program: the shallow
-type read `__Tuple2#6` alone and `__Tuple2#8` with `aaa.maxon` present, the declared type `__Tuple2#4` and
-`__Tuple2#6` — a diagnostic about one file, moved two ordinals by a file that shares nothing with it. A
-digest of the cited tuple's own name cannot do that, and this is where that stops being an argument.
+⭐⭐ **THE CASE ABOVE, WITH AN UNRELATED SIBLING FILE THAT INTERNS TWO TUPLES OF ITS OWN.** The program
+`main.maxon` holds is byte-identical to the one above; `aaa.maxon` adds `((String, String), int)`, which is a
+different type in every respect and is walked FIRST. The diagnostic is the same sentence the case above pins,
+and only the fragment line moves (a file marker sits in front of the program).
 
 ⚠ It does NOT vary the walk order, and deliberately: `error.nested-tuple-name-does-not-depend-on-which-file-declares-it{,-swapped}`
 already pins that axis by swapping two files' CONTENTS. What this pins is the other one — that an
@@ -1621,10 +1540,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:14:2: Cannot return '__Tuple2.__Tuple2#90fac2b26f6571d1.int' from function declared to return '__Tuple2.__Tuple2#41e3ea25fc813804.int'
+error E3005: <fragment>:14:2: Cannot return '((int, int), int)' from function declared to return 'P'
 ```
 
-### A tuple typealias as a GENERIC TYPE ARGUMENT — the RAW instance-argument doors (A3e review)
+### A tuple typealias as a GENERIC TYPE ARGUMENT — the RAW instance-argument doors
 
 ⭐⭐ **A GENERIC INSTANCE'S TYPE ARGUMENT IS A *STORED* TYPE, NOT A DECLARED SLOT — so no read door re-tags
 it, and the alias-spelling repair has to happen at each door that reads it.** `Box with Pair` interns ONE
@@ -1633,14 +1552,12 @@ argument, minted by whichever pass first met the spelling; the declaration SWEEP
 declaration has been walked. **Within one file that is simply "the alias is declared BELOW its use", which is
 deterministic** — the cross-file lottery above is the same fact with the filesystem holding the ticket.
 
-⚠ **MEASURED, A3e review — two doors read that argument raw and both gave a WRONG ANSWER, not a diagnostic:**
+⚠ Two doors read that argument raw: `ProgramSignatures.typeLogicalByteSize` (`sizeof(T)`,
+`elementLogicalSize@56`) and `ProgramSignatures.typeArgIsOwned` (the CONSUME boundary). A bare `named` there
+would give a WRONG ANSWER rather than a diagnostic — the machine-word size `8` for a two-slot tuple, and a
+tuple that owns a `String` read as co-owned trivial.
 
-| door | alias declared ABOVE its use | alias declared BELOW its use (before the fix) |
-|---|---|---|
-| `ProgramSignatures.typeLogicalByteSize` (`sizeof(T)`, `elementLogicalSize@56`) | `16` | **`8`** — `structOf("Pair")` missed, so it fell to `primitiveTypeByteSize(named)`, the machine-word fallback that exists for an enum/union. Compiled, ran, baked into `.rdata`. |
-| `ProgramSignatures.typeArgIsOwned` (the CONSUME boundary) | ran | **E2015**, "a trivial-struct instantiation co-owns the field" — said of a tuple that owns a `String`, because `typeIsManaged` called it managed and this called it not-owned, and `typeArgIsCoOwnedTrivial` is exactly `typeIsManaged and not typeArgIsOwned`. |
-
-Both now resolve through `ProgramSignatures.denotedAggregateName`, the one door that says what a `named`
+Both resolve through `ProgramSignatures.denotedAggregateName`, the one door that says what a `named`
 denotes. The consume boundary and the drop boundary must read ONE name: they are read together, so a name
 they answer differently about does not give a coarse answer, it manufactures a kind the type does not have.
 
@@ -1679,17 +1596,13 @@ typealias TPair = (Integer, Integer)
 
 <!-- test: a-tuple-alias-type-argument-declared-below-its-instantiation-is-constructible -->
 
-⛔ The sibling above reads `sizeof(T)` through the shared body and never constructs one. CONSTRUCTING the
-instance was refused outright: the sweep recorded the argument of `Box with Pair` as a bare `named("Pair")`,
-that spelling is not a type identity, and the parameter it produced denoted no tuple at all — so the file's
-own `(6, 3)` could not be passed to the factory its own alias names.
-
-  error E3005: argument type mismatch for 'item': expected 'Pair', got '__Tuple2.int.int'
+The sibling above reads `sizeof(T)` through the shared body and never constructs one. This case constructs
+the instance: the file's own `(6, 3)` is passed to the factory its own alias names.
 
 One file, one declaration, nothing contested: the only condition is that `Pair` is declared BELOW the
 instantiation that names it, which is the same condition the sibling above pins for `sizeof`. A type
-argument is interned once and no later pass re-tags it, so the bare spelling had to be resolved where the
-instance is scoped rather than repaired at a read.
+argument is interned once and no later pass re-tags it, so the bare spelling is resolved where the instance
+is scoped.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1788,14 +1701,12 @@ typealias TPair = (Integer, String)
 ```
 
 <!-- test: array-of-managed-element-tuples-clones-each -->
-⭐ The CLONE half of `array-of-managed-element-tuples-drops-each`, and the half nobody reran (W180). The
+⭐ The CLONE half of `array-of-managed-element-tuples-drops-each`. The
 DECLARATION SWEEP spells a tuple's elements the way the source did (`__Tuple2.String.Integer`) because the
 alias registry that says what `Integer` means is still being built, so `Array with Pair` stores that spelling
 as its type ARGUMENT; every VALUE the array holds carries the canonical `__Tuple2.String.int`, and only THAT
-layout is committed to `project.structTypes`, which is the registry `installStructCloners` walks. Read raw,
-the descriptor's `copyFunc@32` named `__clone___Tuple2.String.Integer` — a cloner in nobody's key space — and
-the PE writer died at `bakeFuncAbs64Relocs: … which is in no debug symbol — it was never installed`. The
-descriptor's ownership words and its copy word now read ONE derivation of the argument, canonical at the door
+layout is committed to `project.structTypes`, which is the registry `installStructCloners` walks. The
+descriptor's ownership words and its copy word read ONE derivation of the argument, canonical at the door
 rather than at one of its readers. Returns 6 (the cloned tuple's 5, plus the clone's count).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1883,14 +1794,12 @@ shared record|shared record
 ```
 
 <!-- test: array-of-substituted-entry-tuples-clones-each -->
-⭐ The SUBSTITUTED half of the case above, and the SECOND installer that could not see a tuple layout (W180).
-A tuple minted by SUBSTITUTION is in no file's artifact — `MapIterator.current()`'s declared
-`Entry = (Key, Value)` becomes `__Tuple2.String.String` at the call site, straight into the whole-program index
-— so it never reaches `project.structTypes`, and this program spells no tuple type anywhere for it to reach
-through. `installStructDestructors` has walked the index's own tuple layouts since W41 for exactly that reason;
-`installStructCloners` did not, so an `Array` of such entries stamped `__clone___Tuple2.String.String` and the
-PE writer died with `it was never installed` — the drop side's W41 bug, on the clone side, with no ranged alias
-and no `typealias` in the program at all. Returns 2 (one element in each of the two arrays), or 9 if the
+⭐ The SUBSTITUTED half of the case above. A tuple minted by SUBSTITUTION is in no file's artifact —
+`MapIterator.current()`'s declared `Entry = (Key, Value)` becomes `(String, String)` at the call site,
+straight into the whole-program index — so it never reaches `project.structTypes`, and this program spells no
+tuple type anywhere for it to reach through. `installStructDestructors` and `installStructCloners` both walk
+the index's own tuple layouts for that reason, so an `Array` of such entries gets an installed cloner, with no
+ranged alias and no `typealias` in the program at all. Returns 2 (one element in each of the two arrays), or 9 if the
 entry loop never ran.
 ```maxon
 function main() returns ExitCode
@@ -1958,22 +1867,15 @@ spelling it (`returns (A, B)`) before any body is parsed, with elements still ba
 parse re-tags at every read. The cases below cover both, and every one returns 42 with the exit code as the
 pin, because the wrong answer here is a range panic (exit 1) or a leak (exit 101), never a quiet number.
 
-⛔⛔ **THE DEFECT THEY PIN: a sweep-minted tuple's record element was classified SCALAR, stored raw, and
-released at scope exit.** `parseTupleLiteral` handed `emitStructLiteral` the per-FILE copy of the layout
-(`adoptTupleLayout`, ids in the file's interner) while `fieldTypeOf` resolves a layout's ids against the
-INDEX's interner. The two interners number the same names differently, so a `named` element denoted
-whichever name the index held under that number; when that was not a record, `classifyUnionPayload`
-answered scalar and the element skipped `__mm_own` while the binding's scope-exit drop still ran —
-`mm_decref B #2 rc=0 / mm_free B #2` before `main` retained it out of the record, and `y.m` then read
-`0x3F3F3F3F3F3F3F3F`, the `__mm_free` poison. Found while a reviewer returned `(LoweredUnit, PhaseDelta)`
-from a compiler function. MEASURED with `fc9d4a33` and `c55aa798` identically, so it predated fannkuch
-round 11, and the shape was the same whether `pair` was spliced by the called-once inliner or stayed a
-call, and whether the elements were `let`-bound locals or fresh `create` results.
+⛔⛔ **A SWEEP-MINTED TUPLE'S RECORD ELEMENT IS A RECORD.** `parseTupleLiteral` and `fieldTypeOf` must agree
+on what each element of the layout denotes; a record element is then moved in through `__mm_own`, so the
+binding's scope-exit drop never releases what the tuple holds. The answer must not depend on whether `pair`
+is spliced by the called-once inliner or stays a call, nor on whether the elements are `let`-bound locals or
+fresh `create` results.
 
-⚠ **WHICH element was released followed the order the interners met the record TYPES in, not the tuple
-position and not the evaluation order** — `(b, a)` still released `b`; declaring `type B` above `type A`
-released `a` instead; `(A, A)` released BOTH. Every one of those shapes is kept below because a fix that
-looked only at the second slot left two of them red.
+⚠ **WHICH element a disagreement would reach follows the order the interners meet the record TYPES in, not
+the tuple position and not the evaluation order** — so the cases below vary all three: `(b, a)`, `type B`
+declared above `type A`, and `(A, A)`.
 
 The `(A, Integer)` case, the echoed-parameter case and the bound-literal-in-`main` case are the CONTROLS:
 a scalar element has nothing to release, a parameter is moved into the tuple with no release of its own,

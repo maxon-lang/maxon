@@ -126,24 +126,10 @@ than allocating a fresh box per element — would hand two owners one box, and t
 free what the first already freed. That box IDENTITY is what this case pins, and it pins it whatever the
 payload is.
 
-⛔⛔ **IT IS INSTANTIATED AT A SCALAR, AND THAT IS A PROPERTY OF THE LANGUAGE RATHER THAN OF THIS CASE'S
-AUTHOR (BATCH41).** The managed spelling of this program — `Bag with String` — is now REFUSED, and its
-refusal is `generic-opaque-value-store`'s
-`error.a-container-of-records-over-the-enclosing-parameter-is-refused`, which carries the two measurements:
-with a heap payload the identical program was a **use-after-free** (`0xC0000005`), and with the store side
-taking a reference through `retainFunc@64` it exited **101** instead. The cause is one fact this case can
-now state instead of apologising for: **`Bag.create` stamps its element array
-`__managed_create(8, __mm_decref)`**, because the element `Box with Element` reads its own bare `T` field
-through `typeIsManaged` and is told the field owns nothing — so the box is freed and the field it holds is
-not. `__destruct_Box_String` exists, but a shared body can name only the DECLARATION VIEW's destructor.
-
-⇒ **When a layout-descriptor slot carries a nested instance's per-instantiation destructor, this case gets
-its managed spelling back and the refusal becomes a runtime program.** Until then a MANAGED payload here
-would pin nothing that an exit code can see — an earlier draft of this paragraph believed a `.rdata` literal
-would do, and it did not: MEASURED with `--emit-ir-runtime`, `Box.create` allocates each box with a ZERO
-destructor and the cloner it reaches is `__clone_Box_T<hash>` — `__mm_alloc` + blit, no incref — so no exit
-code could distinguish an owned payload from a borrowed one. See
-`MmRuntime.synthesizeGenericInstanceCloner`'s header for that measurement.
+This case instantiates `Bag` at a scalar. Its managed spelling — `Bag with String` — is
+`generic-opaque-value-store`'s `a-container-of-records-over-the-enclosing-parameter-is-created`: the
+container is created, and it releases each element through the enclosing instance's layout descriptor, which
+carries the element's per-instantiation destructor.
 
 ⚠ The element's payload is read only through the box's own `tag`, not through `e.v`. A shared body's
 method returning an inner alias over a NESTED instance (`Array with (Box with Element)`) hands the caller

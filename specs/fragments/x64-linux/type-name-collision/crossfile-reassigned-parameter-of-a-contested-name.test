@@ -35,9 +35,11 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @useA {
@@ -118,36 +120,33 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r12 + 8], rax
     x64.leaRegRdata r12, [rip + __str_rec_1]  ; "hi"
-  __il_body#43:
+  __il_body#41:
     x64.loadRegBaseDisp.word64 r13, [rbx + 8]
-  __il_body#44:
+  __il_body#42:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-  __il_cont#41:
+  __il_cont#39:
     x64.cmpRegReg r13, rax
-    x64.jcc equal, __rc_ok#37
+    x64.jcc equal, __il_body#24
   lenMismatch:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont#19
-  __rc_ok#37:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic#40
-  __rc_ok#39:
+  __il_body#24:
     x64.movRegImm32 r14, 0
     x64.jmp forhdr
-  compare_loop:
+  __rc_ok#35:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect String.byteAt
     x64.movRegReg r15, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#30
-  tryok#29:
+  __rc_ok#37:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
     x64.callDirect String.byteAt
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#32
-  tryok#31:
+  tryok:
     x64.cmpRegReg r15, r8
     x64.jcc equal, forstep
   byte_check:
@@ -157,7 +156,7 @@ func @main {
     x64.leaRegRegImm32 r14, r14, 1
   forhdr:
     x64.cmpRegReg r14, r13
-    x64.jcc less, compare_loop
+    x64.jcc less, __rc_ok#35
   forexit:
     x64.movRegImm32 rax, 1
   __il_cont#19:
@@ -179,10 +178,10 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.leaRegRegReg r8, rcx, rax
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#2
+    x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic#2
+    x64.jcc greater, __rc_panic
   __rc_ok#1:
     x64.epilogue 56
     x64.popReg r15
@@ -193,20 +192,8 @@ func @main {
     x64.popReg rbp
     x64.ret
   matchdead:
-  __rc_panic#40:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at String.maxon:1008: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   tryerr#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at String.maxon:1010: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at String.maxon:1018: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -218,7 +205,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#32:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at String.maxon:1011: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at String.maxon:1019: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -229,7 +216,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#2:
+  __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0

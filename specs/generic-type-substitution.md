@@ -314,8 +314,7 @@ end 'main'
 ### Reassigning the field through a CONCRETE receiver releases the OLD instance exactly once
 The receiver fixes the argument, so the write drops the displaced value through the concrete
 `__destruct_Cell_String`: a missing release leaks the first string and a doubled one drives the allocation
-count negative, and both are exit 101. This is the shape that stays legal — see the refusal below for the
-one that cannot.
+count negative, and both are exit 101.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -350,14 +349,11 @@ end 'main'
 52
 ```
 
-<!-- test: error.bare-generic-name-field-reassigned-in-the-shared-body -->
-### The SHARED body cannot reassign such a field, because it cannot name the drop
-`__drop_type_param` releases an opaque `T` field by reading `T`'s destructor out of the enclosing instance's
-layout descriptor — but a descriptor describes the PARAMETERS, not the instances built over them, so it
-holds `String`'s `__str_decref` and nothing that names `__destruct_Cell_String`. The one callee the shared
-body can pick is the non-concrete instance's own `__mm_decref`, which frees the cell's box and strands the
-string: measured at exit **101** before this refusal existed. The refusal is on DIVERGENCE, so an
-all-trivial program — where `__mm_decref` really is every instantiation's drop — is untouched.
+<!-- test: bare-generic-name-field-reassigned-in-the-shared-body -->
+### The SHARED body reassigns such a field, releasing the displaced value
+`self.cell = next` inside `Holder`'s shared body reserves the method's layout descriptor, and that descriptor
+carries the per-instantiation destructor of `Cell with T`, so the displaced cell and the string it holds are
+released at every instantiation.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -385,8 +381,106 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```exitcode
+0
+```
+
+<!-- test: error.a-bare-field-reassignment-in-a-body-without-a-descriptor-is-refused -->
+### …but the bare spelling of the reassignment, in a method that reserves no descriptor, is refused
+`one = b` names the field without `self.`, and the method it is written in reserves no layout descriptor, so
+there is no destructor to release the displaced record through.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner uses U
+	let x as U
+
+	function value() returns U
+		return x
+	end 'value'
+
+	static function create(x U) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Box uses T
+	typealias TInner = Inner with T
+	let inner as TInner
+	export let tag as Integer
+
+	function value() returns T
+		return inner.value()
+	end 'value'
+
+	static function create(x T, tag Integer) returns Self
+		return Self{inner: TInner.create(x), tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias BoxArray = Array with EBox
+	var items as BoxArray
+	export var one as EBox
+
+	function add(x Element, tag Integer)
+		items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	function first() returns Element throws ArrayError
+		let slot = try self.items.first() otherwise 'e'
+			throw ArrayError.indexOutOfBounds
+		end 'e'
+		return slot.value()
+	end 'first'
+
+	static function create(x Element) returns Self
+		return Self{items: BoxArray{}, one: EBox.create(x, tag: 0)}
+	end 'create'
+
+	function replaceWith(b EBox)
+		one = b
+	end 'replaceWith'
+
+	function probe(x Element) returns Integer
+		let b = EBox.create(x, tag: 3)
+		self.one = EBox.create(x, tag: 4)
+		return b.tag + self.one.tag
+	end 'probe'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function fill(b StrBag)
+	var sb = StringBuilder.create()
+	sb.append("hello ")
+	sb.append("heap world")
+	let s = sb.build()
+	b.add(s, tag: 7)
+end 'fill'
+
+function main() returns ExitCode
+	var b = StrBag.create("seed")
+	fill(b)
+	let got = try b.first() otherwise 'e'
+		return 9
+	end 'e'
+	var total = 0 as Integer
+
+	for i in 0 upto 50 'eachRound'
+		var sb = StringBuilder.create()
+		sb.append("a heap string of some length {i}")
+		total = total + b.probe(sb.build())
+	end 'eachRound'
+
+	b.replaceWith(b.one)
+	print("{got} {total} {b.one.value()}\n")
+	return 0
+end 'main'
+```
 ```maxoncstderr
-error E2015: <fragment>:15:8: Unsupported: reassigning 'cell' of 'Holder', whose type is a generic instance over this type's OWN parameters — the shared generic body compiles once for every instantiation, so the drop for the value being displaced is not one callee: it is `__mm_decref` here and something else at some instantiation. The box's own destructor releases the field correctly, so reassign it through a CONCRETE receiver instead; a descriptor slot carrying a nested instance's per-instantiation destructor is a later slice
+error E2015: <fragment>:52:3: Unsupported: reassigning 'one' of 'Bag', whose type 'EBox' is built over this type's OWN parameters — the shared generic body compiles once for every instantiation, and the destructor that releases the displaced value is not the same at every one of them. This body carries no layout descriptor to release it through, so write the reassignment as `self.<field> = …`, which reserves one for the method, or reassign it through a CONCRETE receiver
 ```
 
 <!-- test: bare-generic-name-managed-field-as-array-element -->

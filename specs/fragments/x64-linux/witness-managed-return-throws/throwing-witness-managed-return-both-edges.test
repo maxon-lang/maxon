@@ -55,9 +55,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @Backend.makeChunk {
@@ -102,7 +104,7 @@ func @Backend.makeChunk {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at throwing-witness-managed-return-both-edges.test:29: Range check failed: value outside typealias 'Payload'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at throwing-witness-managed-return-both-edges.test:29: Range check failed: value outside typealias 'Payload'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -117,21 +119,9 @@ func @obtainMaker {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
   __il_cont:
     x64.leaRegRdata r10, [rip + __witness_Backend.ChunkMaker]
     x64.movRegReg r8, rcx
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at throwing-witness-managed-return-both-edges.test:39: Range check failed: value outside typealias 'Payload'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -143,12 +133,6 @@ func @attempt {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegReg rbx, rax
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#4
-  __rc_ok#3:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic#6
-  __rc_ok#5:
     x64.callMem [r9 + 48]
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
@@ -165,22 +149,6 @@ func @attempt {
     x64.movRegReg rcx, r8
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at throwing-witness-managed-return-both-edges.test:43: Range check failed: value outside typealias 'Payload'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#6:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at throwing-witness-managed-return-both-edges.test:43: Range check failed: value outside typealias 'Payload'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp

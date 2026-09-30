@@ -7,9 +7,11 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -23,15 +25,15 @@ func @main {
     x64.prologue 32
     x64.leaRegRdata rbx, [rip + __str_rec_2]  ; "hello"
     x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "ab"
-  __il_body#33:
+  __il_body#37:
     x64.loadRegBaseDisp.word64 r12, [rcx + 8]
-  __il_cont#32:
+  __il_cont#36:
     x64.cmpRegImm32 r12, 0
     x64.jcc notEqual, ifcont
   empty:
     x64.callDirect String.clone
     x64.movRegReg r12, r8
-    x64.jmp __il_body#30
+    x64.jmp __il_body#34
   ifcont:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.byte r9, [rcx + 48]
@@ -40,7 +42,7 @@ func @main {
     x64.movRegReg r13, r8
     x64.movRegImm32 r14, 0
     x64.jmp forhdr
-  convert:
+  __rc_ok#28:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
     x64.callDirect String.byteAt
@@ -59,6 +61,7 @@ func @main {
   inRange:
     x64.movRegReg rax, r8
     x64.xorRegImm32 rax, r8, 32
+  __rc_ok#30:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
     x64.callDirect String.setByte
@@ -68,24 +71,24 @@ func @main {
     x64.leaRegRegImm32 r14, r14, 1
   forhdr:
     x64.cmpRegReg r14, r12
-    x64.jcc less, convert
+    x64.jcc less, __rc_ok#28
   forexit:
     x64.movRegReg r12, r13
-  __il_body#30:
+  __il_body#34:
     x64.loadRegBaseDisp.word64 r13, [r12 + 8]
-  __il_cont#29:
+  __il_cont#33:
     x64.movRegReg rcx, rbx
     x64.callDirect String.clone
-  __il_body#31:
+  __il_body#35:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-  __il_cont#28:
+  __il_cont#32:
     x64.leaRegRegReg rbx, r13, rax
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
-  __rc_ok:
+  __rc_ok#1:
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
     x64.movRegReg rcx, r12
@@ -99,7 +102,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#15:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at String.maxon:697: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at String.maxon:705: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -110,7 +113,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#20:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at String.maxon:700: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at String.maxon:708: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

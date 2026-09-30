@@ -218,7 +218,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:6: Unsupported: sizeof of a type parameter with no instance receiver in scope — a `static function` and a closure are both receiverless, and B1 threads the layout descriptor from the instance a method is called on; read the size through an instance method on `self`, or a concrete instance, instead
+error E2015: <fragment>:7:6: Unsupported: sizeof of a type parameter with no instance receiver in scope — a `static function`, and a closure written inside one, are receiverless, and B1 threads the layout descriptor from the instance a method is called on; read the size through an instance method on `self`, or a concrete instance, instead
 ```
 
 <!-- test: a-sized-field-of-another-generic-answers-its-own-count -->
@@ -421,14 +421,9 @@ end 'main'
 3
 ```
 
-<!-- test: error.countof-inside-a-closure -->
-⭐ **A CLOSURE IS A DIFFERENT FUNCTION, AND THE REFUSAL SAYS SO WITH A LINE.** A closure body is
-written inside a method and emitted as its own top-level function, carrying none of that
-method's hidden parameters — so the count is simply not in scope there. `sizeof` reaches the
-same conclusion through its own gate (a closure is receiverless, so `__self` is not in scope);
-a count has no `__self` to test, so the closure is named directly. Without this the parse
-handed the lifted function a ValueId it never defines and the compiler ABORTED
-(`Parser.tagOf: value v1 has no recorded type`).
+<!-- test: countof-inside-a-closure-reads-the-methods-count -->
+A closure carries the fixed-element count of the function it is written in, so `countof(Self)` in a
+closure inside a sized container's method reads that method's count.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -449,8 +444,8 @@ function main() returns ExitCode
 	return v.viaClosure()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:11:28: Unsupported: countof of the sized container's own `Self` inside a closure — a closure is lifted to its own function, which carries none of the enclosing method's hidden parameters, so the count is not in scope there. Read `countof(Self)` into a binding outside the closure and capture that
+```exitcode
+3
 ```
 
 <!-- test: the-count-reaches-a-chained-call -->
@@ -565,17 +560,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:15: Unsupported: calling 'capacity' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it through `self`, through a local bound to a `Self{…}` or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance; a lifted closure carries no hidden parameters at all, so read the count outside it and capture the integer
+error E2015: <fragment>:12:15: Unsupported: calling 'capacity' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it through `self`, through a local bound to a `Self{…}` or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance
 ```
 
-<!-- test: error.a-count-reading-call-from-inside-a-closure-is-refused -->
-⛔⛔ **THE CLOSURE REFUSAL ABOVE COVERS `countof(Self)` WRITTEN IN A CLOSURE; IT DOES NOT COVER
-CALLING SOMETHING THAT READS ONE**, and that second spelling ABORTED the compiler (found at
-review): *`caller 'Vector.viaClosure$closure_0' has no fixed-element-count parameter to
-forward`*. No edge could have prevented it — a lifted closure is emitted as its own function and
-carries NONE of the enclosing method's hidden parameters, however completely the fixpoint
-reserved them. So the question the door asks is what the function being EMITTED carries, which
-is `requireWitnessSourceForForwarding`'s W58 distinction under a second column.
+<!-- test: a-count-reading-call-from-inside-a-closure-is-served -->
+A call inside a closure to a method that reads `countof(Self)` forwards the count the closure carries
+from the method it is written in.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -597,6 +587,6 @@ function main() returns ExitCode
 	return a.viaClosure(b)
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:11:36: Unsupported: calling 'capacity' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it through `self`, through a local bound to a `Self{…}` or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance; a lifted closure carries no hidden parameters at all, so read the count outside it and capture the integer
+```exitcode
+3
 ```

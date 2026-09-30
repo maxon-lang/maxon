@@ -58,10 +58,6 @@ func @main {
     x64.callDirect __managed_push
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.leaRegRegImm32 r13, rax, -1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -69,6 +65,10 @@ func @main {
     x64.cmpRegReg r13, rax
     x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
     x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r13

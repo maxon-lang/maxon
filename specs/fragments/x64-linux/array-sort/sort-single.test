@@ -14,9 +14,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -48,6 +50,9 @@ func @main {
     x64.callDirect __mm_alloc
     x64.movRegReg r15, r8
     x64.storeBaseDispReg.word64 [r15 + 0], r12
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rdi, slot4
@@ -119,16 +124,28 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
-  __il_body#9:
+  __il_body#11:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __write_stdout
-  __il_cont#8:
+  __il_cont#10:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_69]  ; "panic at Array.maxon:587: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14

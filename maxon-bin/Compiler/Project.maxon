@@ -90,6 +90,13 @@ export function visibilityModifierSpelling(word VisibilityModifierWord) returns 
 	end 'word'
 end 'visibilityModifierSpelling'
 
+export union SpelledFieldName
+	bareName(name ByteArray)
+	notABareName
+end 'SpelledFieldName'
+
+export typealias SpelledFieldNameArray = Array with SpelledFieldName
+
 // ⭐⭐ **WHAT JOINS A MODULE DIRECTORY'S SEGMENTS — AND IT IS `/`, NOT `.`, BECAUSE THE JOIN HAS TO BE
 // INVERTIBLE.** `moduleDirectoryContains` is a SEGMENT test, and a segment test on a joined string is
 // only sound if no segment can contain the joiner.
@@ -731,6 +738,7 @@ export type VarInfo
 	// ⚠ A PARAMETER that is by-reference is cell-resident too, and its cell is the CALLER's — `boundValue` is
 	// the incoming parameter value itself. That is the one cell this frame does not own and must not drop.
 	export var isCellBinding as bool
+	export var cellCrossesByReference as bool
 
 	// ⭐ **AN OWNED ENTRY THAT OWNS NOTHING: THE PROMISE TO MATCH A COMBINED ERROR EXACTLY ONCE.** A handler whose
 	// caught error may be a boxed member's box leaves the release to the arm of the one `match e` that runs, so
@@ -785,8 +793,8 @@ export type VarInfo
 	//
 	// The type is the binding's own copy: a binding rides its body's artifact, and its type is often a record the
 	// signature index holds (`ParseStaging.artifactOwnedOp`).
-	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false, isCellBinding bool = false, brandId TypeNameId = UnnamedTypeId, isErrorMatchObligation bool = false) returns VarInfo
-		return Self{name: name, varType: varType.clone(), mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
+	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false, isCellBinding bool = false, cellCrossesByReference bool = false, brandId TypeNameId = UnnamedTypeId, isErrorMatchObligation bool = false) returns VarInfo
+		return Self{name: name, varType: varType.clone(), mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, cellCrossesByReference: cellCrossesByReference, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
 	end 'make'
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
@@ -894,8 +902,8 @@ export type VarInfo
 	// its rebind is permitted by the cell rank in `requireMutableBinding`, not by this flag. `isParameter`
 	// rides for the same reason it does on `createParameterBinding`: it answers "may the container this name
 	// denotes be written?", which a by-reference parameter still needs.
-	export static function createCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, isParameter bool, brandId TypeNameId = UnnamedTypeId) returns VarInfo
-		return Self.make(name, varType: varType, mutable: mutable, boundValue: cell, isParameter: isParameter, isCellBinding: true, brandId: brandId)
+	export static function createCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, isParameter bool, crossesByReference bool, brandId TypeNameId = UnnamedTypeId) returns VarInfo
+		return Self.make(name, varType: varType, mutable: mutable, boundValue: cell, isParameter: isParameter, isCellBinding: true, cellCrossesByReference: crossesByReference, brandId: brandId)
 	end 'createCellBinding'
 
 	// ⭐ **IS THIS BINDING A LIVE NAME OF `value`?** — the predicate every symbol-table scan over "who else
@@ -4663,11 +4671,13 @@ export type StructLayout
 	// and so cannot be asked whether `BufArray` holds buffers.
 	export var fieldDeclaredSurfaces as DeclaredSurfaceArray
 
-	// The bare name each field's type was WRITTEN as (`export var xs as Xs` gives `Xs`), or empty. A field
-	// declared through a generic-instance alias brands what it holds and what is read out of it; the reader
-	// (`Parser.declaredBrand`) decides whether the spelling is such an alias, because this column is written
-	// by the declaration sweep, before the alias registry can say.
+	// The type each field was WRITTEN as, as the source spelled it (`export var xs as Xs` gives `Xs`,
+	// `var p as (T, T)` gives `(T, T)`) — what a diagnostic quotes. `fieldSpelledNames` records, from the
+	// tokens at the declaration, whether that spelling is a single bare name. A field declared through a generic-instance alias brands what it holds and what
+	// is read out of it; the reader (`Parser.declaredBrand`) decides whether the spelling is such an alias,
+	// because this column is written by the declaration sweep, before the alias registry can say.
 	export var fieldDeclaredBrands as ByteArrayArray
+	export var fieldSpelledNames as SpelledFieldNameArray
 
 	// ⭐ **THE DERIVED SLOT GEOMETRY — the PREFIX SUM over `fieldSlotCount` (P1.7a-existentials slice 2), and
 	// the box size that same sum ends at.** Two DERIVED columns, read by `offsetOfField`/`sizeBytes` in O(1).
@@ -4800,7 +4810,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldDeclaredBrands: ByteArrayArray.create(), fieldOffsets: ByteOffsetArray.create(), fieldBitWidths: sharedEmptyInlineBitWidths, fieldBitOffsets: sharedEmptyInlineBitWidths, slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyConformanceBindings, messageMethodNames: sharedEmptyMessageMethods, visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldDeclaredBrands: ByteArrayArray.create(), fieldSpelledNames: SpelledFieldNameArray.create(), fieldOffsets: ByteOffsetArray.create(), fieldBitWidths: sharedEmptyInlineBitWidths, fieldBitOffsets: sharedEmptyInlineBitWidths, slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyConformanceBindings, messageMethodNames: sharedEmptyMessageMethods, visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -4898,7 +4908,7 @@ export type StructLayout
 
 	// Append one declared field. THE one writer of the columns — every column, one push, so they
 	// cannot drift.
-	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, tier Visibility, defaultValue FieldDefault, declaredSurface DeclaredSurface, declaredBrand ByteArray)
+	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, tier Visibility, defaultValue FieldDefault, declaredSurface DeclaredSurface, declaredBrand ByteArray, spelledName SpelledFieldName)
 		self.fieldNames.push(fieldName)
 		self.fieldTypes.push(declaredType)
 		self.fieldMutable.push(mutable)
@@ -4906,6 +4916,7 @@ export type StructLayout
 		self.fieldDefaults.push(defaultValue)
 		self.fieldDeclaredSurfaces.push(declaredSurface)
 		self.fieldDeclaredBrands.push(declaredBrand)
+		self.fieldSpelledNames.push(spelledName)
 
 		// The prefix sum extends by one term: this field starts where the running total stands, and the total
 		// advances by this field's own slot count. Same push, so the derived columns cannot fall out of the
@@ -5165,6 +5176,10 @@ export type StructLayout
 		return try self.fieldDeclaredBrands.get(index) otherwise panic("StructLayout.fieldDeclaredBrand: fieldDeclaredBrands.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
 	end 'fieldDeclaredBrand'
 
+	export function fieldSpelledName(index FieldIndex) returns SpelledFieldName
+		return try self.fieldSpelledNames.get(index) otherwise panic("StructLayout.fieldSpelledName: fieldSpelledNames.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
+	end 'fieldSpelledName'
+
 	export function fieldCount() returns FieldIndex
 		return self.fieldNames.count()
 	end 'fieldCount'
@@ -5229,7 +5244,7 @@ export type PayloadField
 	export let name as ByteArray
 	export let declaredType as MaxonType
 
-	// The bare name the payload's type was written as — `StructLayout.fieldDeclaredBrands`' twin.
+	// The payload's type as the source spelled it — `StructLayout.fieldDeclaredBrands`' twin.
 	export let declaredBrand as ByteArray
 
 	// ⭐ **THE PRE-ERASURE `__ManagedMemory` SPELLING OF THIS PAYLOAD (BATCH22)** — `StructLayout`'s

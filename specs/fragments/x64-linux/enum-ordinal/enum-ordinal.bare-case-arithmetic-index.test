@@ -1,5 +1,5 @@
 // Test: enum-ordinal.bare-case-arithmetic-index
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias IdxArray = Array with Idx
 
 enum Col
@@ -34,9 +34,11 @@ end 'main'
 ExitCode: 4
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -62,7 +64,7 @@ func @main {
     x64.jcc less, __rc_ok#4
   whileexit:
     x64.movRegImm32 rdx, 4
-  __rc_ok#14:
+  __il_body:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 4
     x64.jcc belowEqual, __im_slow
@@ -99,7 +101,7 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at enum-ordinal.bare-case-arithmetic-index.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at enum-ordinal.bare-case-arithmetic-index.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

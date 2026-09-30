@@ -5,7 +5,7 @@ typealias IntArray = Array with Integer
 type CompareTally
 	export var calls as Integer
 
-	export static function create() returns CompareTally
+	static function create() returns CompareTally
 		return Self{calls: 0}
 	end 'create'
 end 'CompareTally'
@@ -38,7 +38,7 @@ function main() returns ExitCode
 		end 'outOfOrder'
 	end 'walk'
 
-	if ordered and tally.calls <= 32 * a.count() 'withinTheBound'
+	if ordered and tally.calls <= 32 * (a.count() as Integer) 'withinTheBound'
 		print("sorted within n log n\n")
 	end 'withinTheBound' else 'overTheBound'
 		print("ordered={ordered} compares={tally.calls}\n")
@@ -50,9 +50,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -106,6 +108,9 @@ func @main {
   __il_body#31:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.movRegReg r9, r12
     x64.movRegReg rsi, r8
@@ -247,6 +252,18 @@ func @main {
     x64.loadRegSlot rcx, slot2
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_77]  ; "panic at Array.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 120
     x64.popReg r15
     x64.popReg r14

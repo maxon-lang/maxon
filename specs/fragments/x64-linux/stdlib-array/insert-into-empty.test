@@ -22,9 +22,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -43,7 +45,7 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 42
     x64.leaRegRdata rax, [rip + __layout_Array_Int]
-  __rc_ok#21:
+  __il_body:
     x64.loadRegBaseDisp.word64 r14, [rbx + 8]
     x64.cmpRegImm32 r14, 0
     x64.jcc greaterEqual, ifcont#14
@@ -53,7 +55,7 @@ func @main {
     x64.leaRegRegImm32 rdx, r14, 1
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
-  __rc_ok#23:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_resize
     x64.cmpRegReg r12, r14
@@ -84,56 +86,56 @@ func @main {
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_slow#26
-  __im_owned#30:
+    x64.jcc notEqual, __im_slow#24
+  __im_owned#28:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#26
-  __im_bounds#31:
+    x64.jcc less, __im_slow#24
+  __im_bounds#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#26
-  __im_buffer#32:
+    x64.jcc aboveEqual, __im_slow#24
+  __im_buffer#30:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#26
-  __im_viewed#33:
+    x64.jcc equal, __im_slow#24
+  __im_viewed#31:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#26
-  __im_store#34:
+    x64.jcc notEqual, __im_slow#24
+  __im_store#32:
     x64.storeBaseIndexScaleReg.word64 [rax + r12*8 + 0], r13
     x64.jmp __il_cont
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#26
+    x64.jcc notEqual, __im_slow#24
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_slow#26
-  __im_owned#35:
+    x64.jcc notEqual, __im_slow#24
+  __im_owned#33:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#26
-  __im_bounds#36:
+    x64.jcc less, __im_slow#24
+  __im_bounds#34:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#26
-  __im_buffer#37:
+    x64.jcc aboveEqual, __im_slow#24
+  __im_buffer#35:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#26
-  __im_viewed#38:
+    x64.jcc equal, __im_slow#24
+  __im_viewed#36:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#26
-  __im_store#39:
+    x64.jcc notEqual, __im_slow#24
+  __im_store#37:
     x64.leaRegRegReg rax, rax, r12
     x64.storeBaseDispReg.byte [rax + 0], r13
     x64.jmp __il_cont
-  __im_slow#26:
+  __im_slow#24:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
@@ -204,7 +206,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at Array.maxon:271: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at Array.maxon:271: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

@@ -10,19 +10,12 @@ ExitCode: 0
 ---
 data {
   __data_CharacterSet.cachedDecimalDigits@0 = i64 0
-  __sched_tls_teb_offset@8 = i64 0
-  __sched_allm@16 = i64 0
-  __sched_lock@24 = i64 0
-  __sched_preempt_ext_lock@32 = i64 0
-  __sched_preempt_context@40 = i64 0
-  __slab_arena_list@48 = i64 0
-  __slab_arena_map_l1@56 = i64 0
-  __slab_state@64 = i64 0
-  __ds_base@72 = i64 0
-  __dbg_ctl@80 = i64 0
-  __mrt_console_probe_stdin@88 = i8 0
-  __mrt_console_probe_stdout@89 = i8 0
-  __mrt_console_probe_stderr@90 = i8 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
 }
 
 func @main {
@@ -70,41 +63,38 @@ func @main {
     x64.jmp whilehdr#17
   probe:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
-    x64.cmpRegImm32 r15, 0
-    x64.jcc less, __rc_panic#52
-  __rc_ok#51:
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#61
-  __im_word#59:
+    x64.jcc notEqual, __im_stride#55
+  __im_word#53:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg r15, rax
-    x64.jcc aboveEqual, __im_slow#58
-  __im_load#63:
+    x64.jcc aboveEqual, __im_slow#52
+  __im_load#57:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r15*8 + 0]
     x64.jmp trycont#22
-  __im_stride#61:
+  __im_stride#55:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#58
-  __im_byte#60:
+    x64.jcc notEqual, __im_slow#52
+  __im_byte#54:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg r15, rax
-    x64.jcc aboveEqual, __im_slow#58
-  __im_load#64:
+    x64.jcc aboveEqual, __im_slow#52
+  __im_load#58:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, r15
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.jmp trycont#22
-  __im_slow#58:
+  __im_slow#52:
     x64.movRegReg rdx, r15
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#124
+    x64.jcc equal, critsplit#118
   tryerr#21:
     x64.movRegImm32 rax, 0
     x64.jmp trycont#22
-  critsplit#124:
+  critsplit#118:
     x64.movRegReg rax, r8
   trycont#22:
     x64.cmpRegImm32 rax, 0
@@ -152,7 +142,6 @@ func @main {
     x64.jcc equal, ifcont#50
   check_found:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 16]
-  __rc_ok#53:
     x64.movRegReg rdx, r15
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
@@ -167,26 +156,25 @@ func @main {
     x64.jcc notEqual, ifcont#50
   hash_match:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-  __rc_ok#55:
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#69
-  __im_word#67:
+    x64.jcc notEqual, __im_stride#63
+  __im_word#61:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg r15, rax
-    x64.jcc aboveEqual, __im_slow#66
-  __im_load#71:
+    x64.jcc aboveEqual, __im_slow#60
+  __im_load#65:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r15*8 + 0]
     x64.jmp __im_loaded
-  __im_stride#69:
+  __im_stride#63:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#66
-  __im_byte#68:
+    x64.jcc notEqual, __im_slow#60
+  __im_byte#62:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg r15, rax
-    x64.jcc aboveEqual, __im_slow#66
-  __im_load#72:
+    x64.jcc aboveEqual, __im_slow#60
+  __im_load#66:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, r15
     x64.loadRegBaseDisp.byte rax, [rax + 0]
@@ -194,17 +182,17 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rsi, [rcx + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#125
+    x64.jcc equal, critsplit#119
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#66
-  critsplit#126:
+    x64.jcc equal, __im_slow#60
+  critsplit#120:
     x64.movRegReg rcx, rax
     x64.jmp __im_cont
-  critsplit#125:
+  critsplit#119:
     x64.movRegReg rcx, rax
     x64.jmp __im_cont
-  __im_slow#66:
+  __im_slow#60:
     x64.movRegReg rdx, r15
     x64.callDirect __managed_get
     x64.movRegReg rcx, r8
@@ -249,15 +237,15 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#12
-  __il_body#76:
+  __il_body#70:
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_byte_at
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#77
-  tryerr#78:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at Character.maxon:149: Character.codepoint: empty character \xe2\x80\x94 invariant violation\x0a"
+    x64.jcc equal, tryok#71
+  tryerr#72:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at Character.maxon:144: Character.codepoint: empty character \xe2\x80\x94 invariant violation\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -268,22 +256,22 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#77:
+  tryok#71:
     x64.cmpRegImm32 r12, 128
-    x64.jcc greaterEqual, ifcont#80
+    x64.jcc greaterEqual, ifcont#74
   ascii:
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#92
-    x64.jmp __il_body#103
-  ifcont#80:
+    x64.jcc less, __rc_panic#86
+    x64.jmp __il_body#97
+  ifcont#74:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_byte_at
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#81
-  tryerr#82:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at Character.maxon:157: Character.codepoint: 2+ byte char missing continuation byte\x0a"
+    x64.jcc equal, tryok#75
+  tryerr#76:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at Character.maxon:152: Character.codepoint: 2+ byte char missing continuation byte\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -294,29 +282,29 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#81:
+  tryok#75:
     x64.cmpRegImm32 r12, 224
-    x64.jcc greaterEqual, ifcont#84
+    x64.jcc greaterEqual, ifcont#78
   two_byte:
     x64.andRegImm32 r12, r12, 31
     x64.shlRegImm8 r12, r12, 6
     x64.andRegImm32 r13, r13, 63
     x64.orRegReg r12, r12, r13
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#95
-  __rc_chk#96:
+    x64.jcc less, __rc_panic#89
+  __rc_chk#90:
     x64.cmpRegImm32 r12, 1114111
-    x64.jcc greater, __rc_panic#95
-    x64.jmp __il_body#103
-  ifcont#84:
+    x64.jcc greater, __rc_panic#89
+    x64.jmp __il_body#97
+  ifcont#78:
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_byte_at
     x64.movRegReg r14, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#85
-  tryerr#86:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at Character.maxon:165: Character.codepoint: 3+ byte char missing byte 2\x0a"
+    x64.jcc equal, tryok#79
+  tryerr#80:
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at Character.maxon:160: Character.codepoint: 3+ byte char missing byte 2\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -327,9 +315,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#85:
+  tryok#79:
     x64.cmpRegImm32 r12, 240
-    x64.jcc greaterEqual, ifcont#88
+    x64.jcc greaterEqual, ifcont#82
   three_byte:
     x64.andRegImm32 r12, r12, 15
     x64.shlRegImm8 r12, r12, 12
@@ -339,19 +327,19 @@ func @main {
     x64.andRegImm32 r14, r14, 63
     x64.orRegReg r12, r12, r14
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#98
-  __rc_chk#99:
+    x64.jcc less, __rc_panic#92
+  __rc_chk#93:
     x64.cmpRegImm32 r12, 1114111
-    x64.jcc greater, __rc_panic#98
-    x64.jmp __il_body#103
-  ifcont#88:
+    x64.jcc greater, __rc_panic#92
+    x64.jmp __il_body#97
+  ifcont#82:
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_byte_at
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#89
-  tryerr#90:
-    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at Character.maxon:173: Character.codepoint: 4-byte char missing byte 3\x0a"
+    x64.jcc equal, tryok#83
+  tryerr#84:
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at Character.maxon:168: Character.codepoint: 4-byte char missing byte 3\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -362,7 +350,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#89:
+  tryok#83:
     x64.andRegImm32 r12, r12, 7
     x64.shlRegImm8 r12, r12, 18
     x64.andRegImm32 r13, r13, 63
@@ -374,34 +362,34 @@ func @main {
     x64.andRegImm32 r8, r8, 63
     x64.orRegReg r12, r12, r8
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#101
-  __rc_chk#102:
+    x64.jcc less, __rc_panic#95
+  __rc_chk#96:
     x64.cmpRegImm32 r12, 1114111
-    x64.jcc greater, __rc_panic#101
-  __il_body#103:
+    x64.jcc greater, __rc_panic#95
+  __il_body#97:
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#116
-  __rc_chk#117:
+    x64.jcc less, __rc_panic#110
+  __rc_chk#111:
     x64.cmpRegImm32 r12, 1114111
-    x64.jcc greater, __rc_panic#116
-  __rc_ok#115:
+    x64.jcc greater, __rc_panic#110
+  __rc_ok#109:
     x64.cmpRegImm32 r12, 65536
-    x64.jcc greaterEqual, ifcont#105
+    x64.jcc greaterEqual, ifcont#99
   bmp:
     x64.movRegReg rcx, r12
     x64.callDirect __ucd_bmp_at
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#119
-  __rc_chk#120:
+    x64.jcc less, __rc_panic#113
+  __rc_chk#114:
     x64.cmpRegImm32 r8, 29
-    x64.jcc greater, __rc_panic#119
-  __rc_ok#118:
+    x64.jcc greater, __rc_panic#113
+  __rc_ok#112:
     x64.movRegReg rcx, r8
-    x64.jmp __il_cont#74
-  ifcont#105:
+    x64.jmp __il_cont#68
+  ifcont#99:
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r13, 805
-    x64.jmp whilehdr#106
+    x64.jmp whilehdr#100
   bsearch:
     x64.leaRegRegReg r14, rbx, r13
     x64.sarRegImm8 r14, r14, 1
@@ -413,38 +401,38 @@ func @main {
     x64.sarRegImm8 rcx, r8, 21
     x64.andRegImm32 rcx, rcx, 2097151
     x64.cmpRegReg r12, rax
-    x64.jcc greaterEqual, ifelse#110
+    x64.jcc greaterEqual, ifelse#104
   left:
     x64.leaRegRegImm32 rax, r14, -1
     x64.movRegReg rcx, rax
     x64.movRegReg rax, rbx
-    x64.jmp ifcont#114
-  ifelse#110:
+    x64.jmp ifcont#108
+  ifelse#104:
     x64.cmpRegReg r12, rcx
-    x64.jcc lessEqual, ifelse#112
+    x64.jcc lessEqual, ifelse#106
   right:
     x64.leaRegRegImm32 rax, r14, 1
-  ifcont#113:
+  ifcont#107:
     x64.movRegReg rcx, r13
-  ifcont#114:
+  ifcont#108:
     x64.movRegReg rbx, rax
     x64.movRegReg r13, rcx
-  whilehdr#106:
+  whilehdr#100:
     x64.cmpRegReg rbx, r13
     x64.jcc lessEqual, bsearch
-    x64.jmp whileexit#108
-  ifelse#112:
+    x64.jmp whileexit#102
+  ifelse#106:
     x64.sarRegImm8 r8, r8, 42
     x64.andRegImm32 r8, r8, 31
-  __rc_chk#123:
+  __rc_chk#117:
     x64.cmpRegImm32 r8, 29
-    x64.jcc greater, __rc_panic#122
-  __rc_ok#121:
+    x64.jcc greater, __rc_panic#116
+  __rc_ok#115:
     x64.movRegReg rcx, r8
-    x64.jmp __il_cont#74
-  whileexit#108:
+    x64.jmp __il_cont#68
+  whileexit#102:
     x64.movRegImm32 rcx, 0
-  __il_cont#74:
+  __il_cont#68:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.shrRegCl rax, rax
@@ -501,8 +489,20 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#52:
-    x64.leaRegRdata rcx, [rip + __str_blob_52]  ; "panic at Set.maxon:223: Range check failed: value outside typealias 'ElementIndex'\x0a"
+  __rc_panic#86:
+    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at Character.maxon:148: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#89:
+    x64.leaRegRdata rcx, [rip + __str_blob_29]  ; "panic at Character.maxon:156: Range check failed: value outside typealias 'Codepoint'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -514,7 +514,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#92:
-    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at Character.maxon:153: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_30]  ; "panic at Character.maxon:164: Range check failed: value outside typealias 'Codepoint'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -526,7 +526,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#95:
-    x64.leaRegRdata rcx, [rip + __str_blob_29]  ; "panic at Character.maxon:161: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at Character.maxon:171: Range check failed: value outside typealias 'Codepoint'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -537,31 +537,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#98:
-    x64.leaRegRdata rcx, [rip + __str_blob_30]  ; "panic at Character.maxon:169: Range check failed: value outside typealias 'Codepoint'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#101:
-    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at Character.maxon:176: Range check failed: value outside typealias 'Codepoint'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#116:
+  __rc_panic#110:
     x64.leaRegRdata rcx, [rip + __str_blob_37]  ; "panic at unicodeCategory.maxon:53: Range check failed: value outside typealias 'Codepoint'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -573,7 +549,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#119:
+  __rc_panic#113:
     x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at unicodeCategory.maxon:55: Range check failed: value outside typealias 'GeneralCategory'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -585,7 +561,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#122:
+  __rc_panic#116:
     x64.leaRegRdata rcx, [rip + __str_blob_39]  ; "panic at unicodeCategory.maxon:73: Range check failed: value outside typealias 'GeneralCategory'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0

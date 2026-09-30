@@ -1,0 +1,501 @@
+// Test: a-self-returning-static-built-from-a-try-with-an-owned-local-handler-is-served
+enum PickError implements Error
+	empty
+end 'PickError'
+
+type Cell uses T
+	export var v as T
+	export var label as String
+	export var labelled as bool
+
+	static function make(v T, label String, labelled bool) returns Self
+		return Self{v: v, label: label, labelled: labelled}
+	end 'make'
+
+	function pickLabel() returns String throws PickError
+		if not labelled 'unlabelled'
+			throw PickError.empty
+		end 'unlabelled'
+
+		return label
+	end 'pickLabel'
+
+	static function relabel(v T, other Self, fallback String) returns Self
+		let d = fallback.clone()
+		return Self{v: v, label: try other.pickLabel() otherwise d, labelled: true}
+	end 'relabel'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let labelled = StrCell.make(heapString("first value ", b: "long enough to allocate"), label: heapString("picked label ", b: "long enough to allocate"), labelled: true)
+	let unlabelled = StrCell.make(heapString("second value ", b: "long enough to allocate"), label: heapString("unused label ", b: "long enough to allocate"), labelled: false)
+	let fallback = heapString("fallback label ", b: "long enough to allocate")
+	let picked = StrCell.relabel(heapString("third value ", b: "long enough to allocate"), other: labelled, fallback: fallback)
+	let fellBack = StrCell.relabel(heapString("fourth value ", b: "long enough to allocate"), other: unlabelled, fallback: fallback)
+	let noise = heapString("overwrite payload ", b: "long enough to allocate xxxxxxxx")
+	print("{picked.v} / {picked.label}\n")
+	print("{fellBack.v} / {fellBack.label}\n")
+	print("{noise}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+}
+
+func @Cell.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 0], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 8], r8
+    x64.storeBaseDispReg.byte [r14 + 16], r13
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Cell.pickLabel {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.byte rax, [rcx + 16]
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  unlabelled:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.callDirect __str_retain
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Cell.relabel {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+  __il_body#5:
+    x64.movRegImm32 rdx, 0
+  __il_body#8:
+    x64.loadRegBaseDisp.word64 rsi, [rax + 8]
+  __il_cont#7:
+    x64.loadRegBaseDisp.byte r13, [rax + 48]
+  __il_body#9:
+    x64.movRegReg rcx, rax
+    x64.movRegReg rax, rsi
+    x64.callDirect __managed_slice
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#11
+  tryok#10:
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_of_buffer
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+  __il_cont#4:
+    x64.movRegReg rcx, r12
+    x64.callDirect Cell.pickLabel
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.movRegReg r12, r13
+    x64.jmp trycont
+  tryok#1:
+    x64.movRegReg r12, r8
+  trycont:
+    x64.movRegImm32 r14, 1
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], rbx
+    x64.storeBaseDispReg.word64 [r15 + 8], r12
+    x64.storeBaseDispReg.byte [r15 + 16], r14
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r15
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at String.maxon:364: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @heapString {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+  __il_body#2:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 r14, 1
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], r13
+    x64.storeBaseDispReg.byte [r15 + 8], r14
+  __il_cont#1:
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.callDirect StringBuilder.append
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.callDirect StringBuilder.append
+  __il_body#4:
+    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
+    x64.loadRegBaseDisp.byte rbx, [r15 + 8]
+  __il_body#6:
+    x64.callDirect __managed_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __str_of_buffer
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_cont#5:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
+    x64.callDirect __managed_decref
+    x64.storeBaseDispReg.word64 [r15 + 0], r12
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.byte [r15 + 8], rax
+  __il_cont#3:
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_StringBuilder
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 200
+    x64.leaRegRdata rcx, [rip + __str_rec_12]  ; "first value "
+    x64.leaRegRdata rdx, [rip + __str_rec_13]  ; "long enough to allocate"
+    x64.callDirect heapString
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_14]  ; "picked label "
+    x64.leaRegRdata rdx, [rip + __str_rec_13]  ; "long enough to allocate"
+    x64.callDirect heapString
+    x64.movRegImm32 rax, 1
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Cell.make
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.leaRegRdata rcx, [rip + __str_rec_15]  ; "second value "
+    x64.leaRegRdata rdx, [rip + __str_rec_13]  ; "long enough to allocate"
+    x64.callDirect heapString
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_16]  ; "unused label "
+    x64.leaRegRdata rdx, [rip + __str_rec_13]  ; "long enough to allocate"
+    x64.callDirect heapString
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect Cell.make
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.leaRegRdata rcx, [rip + __str_rec_17]  ; "fallback label "
+    x64.leaRegRdata rdx, [rip + __str_rec_13]  ; "long enough to allocate"
+    x64.callDirect heapString
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot2, r13
+    x64.leaRegRdata rcx, [rip + __str_rec_18]  ; "third value "
+    x64.leaRegRdata rdx, [rip + __str_rec_13]  ; "long enough to allocate"
+    x64.callDirect heapString
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect Cell.relabel
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot3, rbx
+    x64.leaRegRdata rcx, [rip + __str_rec_19]  ; "fourth value "
+    x64.leaRegRdata rdx, [rip + __str_rec_13]  ; "long enough to allocate"
+    x64.callDirect heapString
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Cell.relabel
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_20]  ; "overwrite payload "
+    x64.leaRegRdata rdx, [rip + __str_rec_21]  ; "long enough to allocate xxxxxxxx"
+    x64.callDirect heapString
+    x64.storeSlotReg slot4, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_22]  ; " / "
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot17, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot14, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_23]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot12, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot10, rcx
+    x64.leaRegRegReg rdx, r13, r15
+    x64.leaRegRegReg rax, rdx, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot6, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot8, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, rbx, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r15
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r15
+    x64.loadRegSlot rax, slot14
+    x64.loadRegSlot rdx, slot17
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot14
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot10
+    x64.loadRegSlot rdx, slot12
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot10
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.loadRegSlot rax, slot6
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect print
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.loadRegSlot rax, slot5
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
+    x64.leaRegRdata rcx, [rip + __str_rec_22]  ; " / "
+    x64.loadRegBaseDisp.word64 r13, [rcx + 0]
+    x64.loadRegBaseDisp.word64 r14, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot18, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot15, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_23]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot13, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot11, rcx
+    x64.leaRegRegReg rdx, r12, r14
+    x64.leaRegRegReg rax, rdx, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot7, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot9, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot15
+    x64.loadRegSlot rdx, slot18
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot15
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot11
+    x64.loadRegSlot rdx, slot13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot11
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot9
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot7
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.loadRegSlot rax, slot4
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_23]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, r12, r14
+    x64.storeSlotReg slot16, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot19, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot19
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot16
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __destruct_Cell_String
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __destruct_Cell_String
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_Cell_String
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_Cell_String
+    x64.movRegReg r8, rbx
+    x64.epilogue 200
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

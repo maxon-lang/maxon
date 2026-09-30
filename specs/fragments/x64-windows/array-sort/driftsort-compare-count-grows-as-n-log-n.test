@@ -5,7 +5,7 @@ typealias IntArray = Array with Integer
 type CompareTally
 	export var calls as Integer
 
-	export static function create() returns CompareTally
+	static function create() returns CompareTally
 		return Self{calls: 0}
 	end 'create'
 end 'CompareTally'
@@ -38,7 +38,7 @@ function main() returns ExitCode
 		end 'outOfOrder'
 	end 'walk'
 
-	if ordered and tally.calls <= 32 * a.count() 'withinTheBound'
+	if ordered and tally.calls <= 32 * (a.count() as Integer) 'withinTheBound'
 		print("sorted within n log n\n")
 	end 'withinTheBound' else 'overTheBound'
 		print("ordered={ordered} compares={tally.calls}\n")
@@ -50,19 +50,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @main {
@@ -116,6 +109,9 @@ func @main {
   __il_body#31:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.movRegReg r9, r12
     x64.movRegReg rsi, r8
@@ -257,6 +253,18 @@ func @main {
     x64.loadRegSlot rcx, slot2
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_77]  ; "panic at Array.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 120
     x64.popReg r15
     x64.popReg r14

@@ -15,10 +15,10 @@ declare `Limit` with a different range and neither disturbs the other. Resolutio
 (`ProgramSignatures.declFor`) — and it is what makes a file's own declaration authoritative for the
 casts written in that file.
 
-Before this rule existed, the alias registry was one whole-program map keyed by the bare name, so the
-**last file merged won** and its range silently replaced everyone else's. That is a wrong ANSWER, not
-a missing feature: a cast the declaring file's own range forbids compiled clean, and a cast that range
-permits was rejected against a stranger's.
+A single whole-program map keyed by the bare name would let the **last file merged win** and its range
+silently replace everyone else's. That would be a wrong ANSWER, not a missing feature: a cast the declaring
+file's own range forbids would compile clean, and a cast that range permits would be rejected against a
+stranger's.
 
 Two directions have to hold, and each catches the opposite failure:
 
@@ -46,9 +46,9 @@ stays legal and is the case above.
 ## A THIRD file resolves to a declaration it MAY NAME
 
 The rule above answers for the two files that declare the name. A **third** file — one that names
-`Limit` and declares no `Limit` of its own — is the case neither of them covers, and the bare door
-answered it *last-wins*: whichever declaration was merged last decided what the third file's parameter,
-return type and cast meant.
+`Limit` and declares no `Limit` of its own — is the case neither of them covers. A bare
+last-wins answer would let whichever declaration was merged last decide what the third file's parameter,
+return type and cast mean.
 
 That is not a tie between equals, because **a plain `typealias` is file-local and a third file may not
 name it at all.** A declaration the reader is forbidden to write down cannot be the one the reader
@@ -57,18 +57,15 @@ compiler supplies on the stdlib's behalf — and only falls back to the bare las
 declaration of the name is nameable from anywhere, which is the state the "declared, but hidden from
 you" diagnostics (E2003 / E3011) are built on and which must keep its answer.
 
-**MEASURED, and it was a wrong answer in the worst direction — a user's private alias decided what a
-STDLIB function accepts.** A user file declaring `typealias Codepoint = int(0 to 100)` made
-`stdlib/helpers/string/utf16.maxon`'s `utf16LeadSurrogate(codepoint Codepoint)` — whose `Codepoint` is
-`stdlib/Character.maxon`'s exported `int(0 to 1114111)` — reject a perfectly legal `70000` with
-`E3005 … outside the range of 'Codepoint' (int(0 to 100))`. `utf16.maxon` declares no `Codepoint`, so it
-fell through to the bare door, and the user's file merged last. The range quoted at the user belonged to
-the user's own alias; the function refusing it belonged to a file that had never heard of it.
+**This is what keeps a user's private alias from deciding what a STDLIB function accepts.** A user file may
+declare `typealias Codepoint = int(0 to 100)`; `stdlib/helpers/string/utf16.maxon`'s
+`utf16LeadSurrogate(codepoint Codepoint)` declares no `Codepoint` of its own, so it resolves to
+`stdlib/Character.maxon`'s exported `int(0 to 1114111)` and accepts `70000`.
 
 **Out of scope**, and deliberately: `export` visibility as a *key* (an exported alias is still filed
 under its bare name) and **E3063** ambiguity between two *nameable* aliases of one name in different
 files — which is still last-wins, on the strictly smaller set of declarations the reader may name.
-Both need cross-file name resolution; this rung is the file-scoped half only.
+Both need cross-file name resolution, which this file-scoped rule does not provide.
 
 ## A GENERIC-INSTANCE typealias is file-local too — `typealias Slots = Array with Big`
 
@@ -76,29 +73,26 @@ Everything above is about the RANGED form. A **generic-instance** typealias (`ty
 with Big`) is a `typealias` like any other: not exported, it is file-local, and two files may each
 declare `Slots` over a different instance without disturbing each other.
 
-It was resolved through a second whole-program map keyed by the bare name, so it had the *original*
-defect the ranged form was cured of — **the last file folded won, and every other file silently got
-its instance.** The two forms this takes are both wrong answers and neither mentions the file that
-caused it:
+A whole-program map keyed by the bare name would let **the last file folded win, and every other file
+silently get its instance.** That takes two forms, both wrong answers, and neither mentions the file that
+causes it:
 
 - a **compile-time refusal quoting a type the blamed file cannot name.** `main.maxon` declares
   `Slots = Array with Small` (`int(0 to 100)`) and `wide.maxon` declares `Slots = Array with Big`
-  (`int(0 to 60000)`); `wide.maxon`'s own `push(50000)` was rejected as
-  `E3005 wide.maxon:6:4: Value 50000 is outside the range of 'Small' (int(0 to 100))` — a range from a
-  declaration `wide.maxon` does not contain and may not write down;
+  (`int(0 to 60000)`); `wide.maxon`'s own `push(50000)` would be refused against `'Small' (int(0 to 100))`
+  — a range from a declaration `wide.maxon` does not contain and may not write down;
 - a **runtime wrong answer**, which is the more dangerous shape and reaches a program that compiled
   clean. Where the two `Slots` differ only through a `Byte` the two files declare differently, the
   element identity is already correct (`bytearray-element-size.md`) and only the alias is shared, so
-  the wide file's `push` of its own in-range `900` reaches the narrow file's element and panics
+  the wide file's `push` of its own in-range `900` would reach the narrow file's element and panic
   `Range check failed: value outside typealias 'Byte'` — quoting the name of a declaration whose
   bounds permit the value.
 
 ⚠ **RESOLVING THE NAME IS NOT ENOUGH ON ITS OWN, AND THE MISSING HALF IS THE DROP ROUTER.** A struct
 FIELD declared with a generic alias is recorded by the declaration sweep as a bare `named("Slots")` —
 the alias is not interned yet — and the drop/clone cascade resolves that name with **no reader file to
-ask from** (`managedFieldDropCallee`, `managedFieldCloneStrategy`, `fieldTypeIsArray`). While the
-parser was last-wins too, those agreed with it and the program was merely refused. Scoping only the
-parser makes them **disagree**: a field whose element is an `int` would be routed to the destructor of
+ask from** (`managedFieldDropCallee`, `managedFieldCloneStrategy`, `fieldTypeIsArray`). Scoping only the
+parser would make them **disagree** with it: a field whose element is an `int` would be routed to the destructor of
 an `Array with String` and its integers freed as pointers. So the field's recorded type is resolved
 ONCE, against the file that declared it, at the moment the contest is known — and the file-less door
 **refuses a contested name outright** rather than answering it arbitrarily, so a recorded spelling
@@ -113,10 +107,8 @@ line, and no interned instance, mangled symbol or committed golden moves.
 
 <!-- test: user-alias-wins-over-stdlib -->
 A user file declares `Milliseconds`, the name `stdlib/Sleep.maxon` also declares. The user's own
-range governs the cast written in the user's file, so `500` is out of range and rejected. Before
-file-scoped resolution the stdlib module merged last and ITS range silently won: this program
-compiled and returned 9. (`stdlib/Sleep.maxon` declared `int(0 to u64.max)` when that was measured
-and declares `int(0 to i64.max)` now; either admits `500`, so the observation is unchanged.)
+range governs the cast written in the user's file, so `500` is out of range and rejected, although
+`stdlib/Sleep.maxon`'s own `int(0 to i64.max)` would admit it.
 ```maxon
 typealias Milliseconds = int(0 to 100)
 
@@ -136,18 +128,16 @@ error E3005: <fragment>:5:14: Value 500 is outside the range of 'Milliseconds' (
 <!-- test: narrow-file-cast-still-rejected -->
 `a.maxon`'s `Limit` is `int(0 to 200)` and `b.maxon`'s is `int(0 to 2000)`. The cast in `a.maxon` is
 checked against `a.maxon`'s range and rejected. This is the direction where the WIDER alias would
-erase a guard the author wrote — the failure that returned 9 from this program.
+erase a guard the author wrote.
 
 The diagnostic is anchored in **`a.maxon`**, the file that wrote the cast — never in `b.maxon`, which
 declares the same name over a different, wider range.
 
-⚠ **`a.maxon`'s BOUND IS INSIDE `ExitCode`'S NARROWEST PLATFORM RANGE, AND THAT IS DELIBERATE.** It was
-`int(0 to 500)` until BATCH27 made `ExitCode` `int(0 to 255)` on Linux, macOS and WASI — at which point
-`return v` stopped fitting and the program grew a SECOND E3005, naming `ExitCode`, on three of four
-targets. That second error is not this case's subject: the subject is *which file's `Limit` the cast in
-`a.maxon` is checked against*, and an incidental diagnostic about an unrelated builtin would sit in the
-expectation masking it. Pinning it per-target would have written the noise down in two places instead of
-removing it. `200` is under `255`, so `checkA`'s `return` is quiet on every target and the only
+⚠ **`a.maxon`'s BOUND IS INSIDE `ExitCode`'S NARROWEST PLATFORM RANGE, AND THAT IS DELIBERATE.**
+`ExitCode` is `int(0 to 255)` on Linux, macOS and WASI, and a wider bound would make `return v` a SECOND
+E3005, naming `ExitCode`, on three of four targets — a diagnostic that is not this case's subject (*which
+file's `Limit` the cast in `a.maxon` is checked against*) and would sit in the expectation masking it.
+`200` is under `255`, so `checkA`'s `return` is quiet on every target and the only
 diagnostic left is the one the case exists for.
 ```maxon
 // --- file: a.maxon
@@ -212,12 +202,10 @@ end 'main'
 <!-- test: error.crossfile-alias-underlying-conflict -->
 Two files declare `Measure`, one over `int` and one over `float`. Unlike two ranges, this pair has no
 answer the file-less readers can be given, so it is refused at `b.maxon`'s declaration — the second
-one, the newcomer — and never at `a.maxon`, which is the line that was fine.
+one, the newcomer — and never at `a.maxon`, which declared it first.
 
-Before the rule this program reached the x64 emitter, which panicked with
-`xmm0 is in the xmm register file where the gpr file is required`: the parser had resolved `Measure`
-to `int` inside `a.maxon` (file-scoped) while type resolution resolved it to `float` (bare,
-last-wins). Two deciders, and nothing made them agree.
+Admitting it would give two deciders nothing makes agree: the parser resolving `Measure` to `int` inside
+`a.maxon` (file-scoped) while type resolution resolves it to `float` (bare, last-wins).
 ```maxon
 // --- file: a.maxon
 export typealias Measure = int(0 to 100)
@@ -274,10 +262,9 @@ end 'main'
 
 <!-- test: third-file-resolves-to-the-nameable-declaration -->
 A **third** file is what the two-file rule does not answer. `lib.maxon` names `Codepoint` and declares
-none, so its parameter's range is neither of its own files' business — and the bare door used to hand it
-whichever declaration merged last, which is `main.maxon`'s private `int(0 to 100)`. A legal `70000` was
-then refused at the caller with a range that belongs to a file `lib.maxon` has never seen. The
-declaration `lib.maxon` may actually NAME is the exported one, and that is the one it gets.
+none, so its parameter's range is neither of its own files' business — and `main.maxon`'s private
+`int(0 to 100)` is not a declaration it may name. The declaration `lib.maxon` may actually NAME is the
+exported one, and that is the one it gets, so a legal `70000` is accepted.
 ```maxon
 // --- file: alias.maxon
 export typealias Codepoint = int(0 to 1114111)
@@ -307,11 +294,10 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: third-file-runtime-guard-uses-the-nameable-declaration -->
 The same collision through the door that emits CODE rather than a diagnostic: `big` is opaque, so
-`widen`'s parameter is enforced by its ENTRY GUARD (A1f), and that guard reads its bounds through the
+`widen`'s parameter is enforced by its ENTRY GUARD, and that guard reads its bounds through the
 very lookup this rule fixes. Read from `main.maxon`'s `int(0 to 100)` instead, the program would die
 `Range check failed: value outside typealias 'Codepoint'` on a value the alias `lib.maxon` can name
-admits. A false panic is the runtime form of the false rejection above, and it is the form the stdlib
-actually met. `main.maxon` cannot spell the wide alias at all — its own `Codepoint` is the narrow one —
+admits. A false panic would be the runtime form of the false rejection above. `main.maxon` cannot spell the wide alias at all — its own `Codepoint` is the narrow one —
 so the conversion is `lib.maxon`'s, where the name means the exported declaration.
 ```maxon
 // --- file: alias.maxon
@@ -351,7 +337,7 @@ end 'main'
 
 
 <!-- test: error.file-private-alias-still-binds-in-its-own-file -->
-The direction the fix must not overreach into, and the reason the scoped probe stays FIRST. `main.maxon`
+The direction the rule must not overreach into, and the reason the scoped probe stays FIRST. `main.maxon`
 declares `Codepoint` privately, so `narrow`'s parameter means `int(0 to 100)` **in `main.maxon`** — the
 exported declaration elsewhere does not widen it. Only a file that declares none of them resolves to the
 nameable one.
@@ -386,30 +372,24 @@ error E3005: <fragment>:19:25: Value 150 is outside the range of 'Codepoint' (in
 Every door above resolves the alias where it was WRITTEN, so the site's file and the alias's file are
 one. `Array.get`/`set`/`resize` are the exception: The compiler serves them from an ARM rather than a call, so
 there is no callee entry to guard and the bound is fetched from `stdlib/Array.maxon`'s declaration and
-applied at the CALL (`Parser.recordArmServedIndexRangeCheck`). That resolution was correct from the
-day it was written — and the emitted check still came out of a different declaration, because the site
-recorded only the alias's NAME and `InsertRangeChecks` re-resolved it against the CALLING file.
+applied at the CALL (`Parser.recordArmServedIndexRangeCheck`). The site carries the declaration it
+resolved (`RangeCheckSite.aliasFilePath`), so the emitted check reads the callee file's alias rather than
+one the CALLING file declares under the same name.
 
-⛔ **MEASURED 2026-08-30, and it is the defect the `third-file-*` cases above exist to close, arriving
-through a door that never asked `lookup` which reader it meant: a user program's own FILE-PRIVATE
-`typealias ElementIndex = int(0 to 3)` decided what `stdlib/Array.maxon`'s `set` accepts.** On a
-20-element array, `a.set(9, value: 42)` was refused *"Value 9 is outside the range of 'ElementIndex'
-(int(0 to 3))"*. `RangeCheckSite.aliasFilePath` carries the declaration now.
+⛔ **A user program's own FILE-PRIVATE `typealias ElementIndex = int(0 to 3)` does not decide what
+`stdlib/Array.maxon`'s `set` accepts**: on a 20-element array, `a.set(9, value: 42)` is legal.
 
-⚠ **THE STDLIB-INTERNAL HALF CANNOT BE WRITTEN AS A PROGRAM, so it is recorded here instead.**
-`ElementIndex` is declared in BOTH `stdlib/Array.maxon` and `stdlib/Vector.maxon`,
-and no source file can change either — the only probe is a sabotage of the library. Sabotage-verified
-both ways: narrowing **`stdlib/Vector.maxon`**'s `ElementIndex` to `int(0 to 5)` refused an **`Array`**
-index of 9, and narrowing **`stdlib/Array.maxon`**'s own had **no effect at all**. Both directions
-reverse with the fix. Nothing was visibly wrong before it only because both declarations carry the
-same `int(0 to i64.max)`.
+⚠ **THE STDLIB-INTERNAL HALF CANNOT BE WRITTEN AS A PROGRAM.** `ElementIndex` is declared in BOTH
+`stdlib/Array.maxon` and `stdlib/Vector.maxon`, and no source file can change either; `Array`'s door reads
+`stdlib/Array.maxon`'s own declaration. Both carry the same `int(0 to i64.max)`, so no program can observe
+which one a door reads.
 
 <!-- test: a-contested-element-index-does-not-govern-the-array-door -->
 `main.maxon` and `lib.maxon` each declare `ElementIndex` over a range of their own, and neither may
 reach `Array`'s. Index 9 is legal for `stdlib/Array.maxon`'s `int(0 to i64.max)` and illegal for both
 user declarations, so a door reading either one refuses a legal program. Each file's own alias is
-exercised beside it — `ownClamp(3)` and `libClamp(2)` — so the case cannot pass by the fix having
-disabled file-scoped resolution instead of correcting it.
+exercised beside it — `ownClamp(3)` and `libClamp(2)` — so the case cannot pass with file-scoped
+resolution disabled.
 ```maxon
 // --- file: lib.maxon
 export typealias ElementIndex = int(0 to 2)
@@ -443,10 +423,10 @@ end 'main'
 ```
 
 <!-- test: error.a-contested-element-index-still-governs-its-own-file -->
-The direction the fix must not overreach into — `error.file-private-alias-still-binds-in-its-own-file`
-one door over. `main.maxon`'s `ElementIndex` still means `int(0 to 3)` for `main.maxon`'s OWN cast,
-even though the same name no longer reaches `Array.get`. If this case stops being an error, the cure
-has stopped resolving by file rather than started resolving by the right one.
+The direction the rule must not overreach into — `error.file-private-alias-still-binds-in-its-own-file`
+one door over. `main.maxon`'s `ElementIndex` means `int(0 to 3)` for `main.maxon`'s OWN cast, even though the
+same name does not reach `Array.get`. If this case stops being an error, resolution has stopped being by
+file.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -467,10 +447,8 @@ error E3005: <fragment>:10:15: Value 9 is outside the range of 'ElementIndex' (i
 
 
 <!-- test: generic-alias-resolves-in-its-own-file -->
-Each file declares `Slots` over its own element and pushes a value its own element permits. Under one
-whole-program map the file folded second lost its declaration outright and its `push` was checked
-against the other file's range: `E3005 … Value 50000 is outside the range of 'Small' (int(0 to 100))`,
-reported inside `wide.maxon`, against a name that file never writes. The answer is 55.
+Each file declares `Slots` over its own element and pushes a value its own element permits, and each
+`push` is checked against its own file's range. The answer is 55.
 
 ⚠ **THE TWO RANGES ARE DISJOINT, AND THAT IS WHAT MAKES THIS A TEST.** Written with a NARROW and a
 WIDE range it passed against the broken compiler for half the possible fold orders — whichever file
@@ -504,12 +482,10 @@ end 'main'
 
 
 <!-- test: generic-alias-runtime-guard-uses-its-own-files-element -->
-The RUNTIME half, and the dangerous one: this program COMPILED and then gave a wrong answer. The two
-`Bytes` differ only through `Byte`, whose two declarations are already two element types
-(`bytearray-element-size.md`), so the instances were distinct all along — only the alias name was
-shared, and `wide.maxon` got `main.maxon`'s. Its own in-range `900` then met a guard for
-`int(0 to u8.max)` and panicked `Range check failed: value outside typealias 'Byte'`, naming a
-declaration whose bounds allow it. The answer is 209.
+The RUNTIME half, and the dangerous one, because a wrong answer here compiles. The two `Bytes` differ only
+through `Byte`, whose two declarations are two element types (`bytearray-element-size.md`), so the
+instances are distinct and only the alias name is shared. `wide.maxon`'s own in-range `900` meets the guard
+for its own `Byte`, not `main.maxon`'s `int(0 to u8.max)`. The answer is 209.
 
 The two ranges are disjoint for the reason the case above states. The value reaching `push` here is a
 PARAMETER and not a literal, so the guard it meets is the runtime one — which is what makes this the
@@ -592,11 +568,9 @@ end 'main'
 
 
 <!-- test: agreeing-generic-alias-is-not-contested -->
-The load-bearing negative, and it passes both before and after: two files declare `Counts` over one
-`Count`, so both fold to ONE interned instance and the name is not contested at all. Nothing is
-scoped, nothing is re-keyed, and the answer is the same answer the whole-program map already gave —
-which is why the entire existing corpus, whose generic aliases are of exactly this shape, keeps every
-instance and every emitted symbol it had.
+The load-bearing negative: two files declare `Counts` over one `Count`, so both fold to ONE interned
+instance and the name is not contested at all. Nothing is scoped and nothing is re-keyed, so every program
+whose generic aliases have exactly this shape keeps one instance and one set of emitted symbols.
 ```maxon
 // --- file: a.maxon
 export typealias Count = int(0 to 1000)
@@ -625,10 +599,8 @@ end 'main'
 
 <!-- test: generic-alias-nested-inside-another-generic-alias -->
 An alias whose ARGUMENT is a contested alias. `Grid` is spelled identically in both files, so both
-declarations interned to the one instance `Array with <the bare name "Slots">` and `Grid` looked like a
-name they AGREE about — while its element denoted two different arrays. ⛔ MEASURED: the compiler
-PANICKED, out of the element's drop-callee router (`arrayElementDropCallee` → the file-less door's
-refusal), on a program both files' own declarations describe perfectly. Resolving a declaration's
+declarations would intern to the one instance `Array with <the bare name "Slots">` and `Grid` would look like a
+name they AGREE about — while its element denotes two different arrays. Resolving a declaration's
 arguments against its own file splits `Grid` in two, which is what makes `Grid` contested in turn — so
 the contest is a fixpoint and not a single walk.
 ```maxon
@@ -667,10 +639,8 @@ end 'main'
 
 <!-- test: error.a-contested-alias-is-quoted-as-source-spells-it -->
 A diagnostic names a declaration back at the author, and the compiler's contest mint (`Byte$300_1000`)
-is a name NO SOURCE LINE HOLDS. ⛔ MEASURED while landing the generic form above: the narrowing E3005
-stripped the mint and the `otherwise` E3005 did not, so one alias printed two ways depending only on
-which of the two an out-of-range value happened to meet — with the real bounds spelled beside the
-suffix that was supposed to carry them. Both sentences are now worded in one place and share the strip.
+is a name NO SOURCE LINE HOLDS. The narrowing E3005 and the `otherwise` E3005 are worded in one place
+and share the strip, so one alias prints one way whichever of the two an out-of-range value meets.
 ```maxon
 // --- file: narrow.maxon
 export typealias Byte = int(0 to 255)
@@ -702,19 +672,11 @@ recorded by the same sweep, read by the same drop and deep-clone walks
 (`unionPayloadsSupportDeepClone`), and so needs the same one-time resolution against its declaring
 file. The payload is not BOUND here, and what this case is about is the DROP.
 
-⭐ **THE `E3011 Unknown type 'Bag'` THIS PARAGRAPH USED TO CALL "an unrelated, pre-existing reason" WAS
-NOT UNRELATED — IT WAS THE SAME FACT, ONE DOOR OVER, AND A4k CLOSED IT.** A generic-alias payload was
-refused at a binding because `classifyUnionPayload` resolved a bare `named` through a cascade of its own
-that had no generic-alias arm, while `declaredSlotType` — the door this case's own drop walk goes
-through — did. `specs/generic-types.md` binds one now. What is deliberate here is only the SCOPE:
-this case is the two-file one, and the reader-free walks are what it pins.
-
-⚠ **AND THE EMITTED CODE FOR THIS CASE MOVED WHEN THAT LANDED, CORRECTLY.** Classified
-`undeclaredName`, the payload was not managed: `WordBox.filled(b)` stored the array pointer WITHOUT
-consuming `b`, so `b`'s own scope exit freed the buffer and the box held a stale pointer nothing read —
-right answer, wrong owner. Classified as the instance it is, the construct MOVES the array into the box
-and the union's `__destruct_<U>` cascade frees it. Both spellings exit 8 and neither leaks, which is
-exactly why the split survived here.
+⭐ A generic-alias payload binds: `classifyUnionPayload` resolves a bare `named` through the same
+generic-alias arm `declaredSlotType` has, and `specs/generic-types.md` binds one. What is deliberate here is
+only the SCOPE: this case is the two-file one, and the reader-free walks are what it pins. Classified as the
+instance it is, the payload is managed, the construct MOVES the array into the box, and the union's
+`__destruct_<U>` cascade frees it. Both spellings exit 8 and neither leaks.
 ```maxon
 // --- file: words.maxon
 typealias Bag = Array with String
@@ -764,8 +726,8 @@ The generic twin of `third-file-resolves-to-the-nameable-declaration`, and the c
 visibility tier: `main.maxon` declares no `Slots`, so it may not mean `priv.maxon`'s file-private one and
 must resolve to the `export`ed declaration — which is the only one it is allowed to write down. Under the
 bare last-wins fallback alone, `main.maxon`'s `push(1500)` would meet `priv.maxon`'s `int(0 to 100)`,
-which is the same "a declaration the reader is forbidden to name decided what the reader meant" wrong
-answer the ranged form was cured of.
+which is the same "a declaration the reader is forbidden to name decides what the reader means" wrong
+answer the ranged form's rule rules out.
 ```maxon
 // --- file: shared.maxon
 export typealias Elem = int(1000 to 2000)
@@ -794,16 +756,15 @@ end 'main'
 
 
 <!-- test: error.cross-file-generic-alias-cycle-is-a-type-cycle -->
-⛔ **A COMPILER PANIC, MEASURED WHILE LANDING THIS RUNG.** The mint a contested argument gets is derived
+⛔ **A CYCLE THROUGH A CONTESTED ARGUMENT IS A TYPE CYCLE.** The mint a contested argument gets is derived
 from that argument's instance, so each pass of the contest adds one nesting level — bounded on an acyclic
 declaration graph by its depth, and unbounded on a cyclic one. `a.maxon` closes a cycle between its own
-`P` and `Q`; the compiler aborted with `7 rounds over 6 declaration(s)`.
+`P` and `Q`, and the contest does not converge.
 
-⚠ **AND THE CYCLE WALK COULD NOT HAVE CAUGHT IT EITHER.** `buildInstanceArgGraph` resolves a `named`
+⚠ **THE CYCLE WALK CANNOT CATCH IT.** `buildInstanceArgGraph` resolves a `named`
 argument through the bare LAST-WINS map, where `Q` means `main.maxon`'s `Array with P` and `P` means its
 `Array with High` — an ACYCLIC view of a program that cycles as soon as each file's declarations are read
-as that file's own. So E3091 was owed and unreachable, by a walk that predates this rung. The
-non-convergence IS the detection.
+as that file's own. The non-convergence IS the detection.
 ```maxon
 // --- file: a.maxon
 typealias P = Array with Q
@@ -830,9 +791,7 @@ error E3091: <fragment>:3:11: typealias 'P' forms a type cycle: its type argumen
 
 <!-- test: per-instance-alias-on-a-contested-generic-alias -->
 `W.Idx` is a PER-INSTANCE alias, whose identity is keyed on the instance-alias NAME — so on a `W` two
-files declare differently it asks the very question the file-less door refuses. ⛔ MEASURED: the compiler
-PANICKED out of `Parser.aggregateNameOf`, on a program each file's own declarations describe completely.
-The prefix is a source spelling and every caller resolving one has a reading file, so it is resolved as
+files declare differently it asks the very question the file-less door refuses. The prefix is a source spelling and every caller resolving one has a reading file, so it is resolved as
 that file means it; the two callers that structurally cannot (the coercion authority, which is handed two
 names, and the file-less type erasure) resolve as a stranger would.
 ```maxon
@@ -883,10 +842,8 @@ end 'main'
 slots.** `Box with Bag` is interned once, by whichever pass first met it — the declaration SWEEP, which
 runs before any contest can be known — so its argument stays a bare `named("Bag")`. The settle then
 re-interns each declaration SCOPED, and the registry is append-only, so the pre-settle instance survives
-beside its two scoped replacements and every whole-program walk over `instancesOfBase` still meets it.
-⛔ MEASURED (A3k): once the consume boundary learned to resolve a generic alias, that spelling took
-`isManagedOpaqueTypeParamField` AND `noteDestructorUsage`'s opaque-element drop rooting straight into the
-file-less door's refusal — two unrelated walks — on a program whose single-file spelling compiles. A
+beside its two scoped replacements and every whole-program walk over `instancesOfBase` still meets it,
+including `isManagedOpaqueTypeParamField` and `noteDestructorUsage`'s opaque-element drop rooting. A
 superseded spelling classifies NOTHING (`genericAliasSpellingIsSuperseded`), so the verdict is the one
 each file's own declarations earn: the co-owned-trivial reassign refusal, identical to the single-file
 program's.
@@ -933,26 +890,23 @@ error E2015: <fragment>:9:8: Unsupported: reassigning the type-parameter field '
 ```
 
 <!-- test: error.contested-generic-alias-at-the-opaque-copy-gate -->
-The twin of the case above at the OTHER reader-free classifier, and this one was reachable BEFORE the
-consume boundary learned anything: `typeSupportsDeepClone` carries the identical
+The twin of the case above at the OTHER reader-free classifier: `typeSupportsDeepClone` carries the identical
 `isGenericAlias → genericAliasInstance` arm, and `requireOpaqueArrayCopyable` drives it over the same
-`instancesOfBase` walk. ⛔ MEASURED: the compiler PANICKED out of the file-less door. A superseded
-spelling refuses nothing, so the refusal that stands is the one the live instantiations earn — the
+`instancesOfBase` walk. A superseded spelling refuses nothing, so the refusal that stands is the one the live instantiations earn — the
 `Bag` whose element is an OS handle genuinely has no `copyFunc`, while the `int(0 to 100)` spelling in
 `cmain.maxon` is a byte blit and earns nothing.
 
-⛔ **THAT UNCOPYABLE ELEMENT WAS A `String` UNTIL G18, AND THE SUBJECT IS UNAFFECTED BY THE SWAP.** What this
-case pins is the CONTESTED-ALIAS arm not panicking out of a file-less door; the refusal is only the
-observable that proves the arm was walked. A managed-element array is deep-cloneable now (it has a
-per-instance one-argument cloner thunk), so the observable had to move to the residue the gate will always
-refuse — an OS handle, which cannot be deep-copied by anything.
+⛔ **THE UNCOPYABLE ELEMENT IS AN OS HANDLE.** What this case pins is the CONTESTED-ALIAS arm not panicking
+out of a file-less door; the refusal is only the observable that proves the arm was walked. A
+managed-element array is deep-cloneable (it has a per-instance one-argument cloner thunk), so the observable
+is the residue the gate always refuses — an OS handle, which cannot be deep-copied by anything.
 
-⚠ **THE REFUSAL IS THE LIBRARY'S SINCE ARRH STRUCK `clone` FROM THE `Array` ROSTER, AND BLAME GIVES IT
-THE USER'S SPAN BACK** — `arr.clone()` is the library's own declaration now, so this program is refused by the
+⚠ **THE REFUSAL IS THE LIBRARY'S, AND BLAME GIVES IT THE USER'S SPAN** — `arr.clone()` is the library's own
+declaration, so this program is refused by the
 OPAQUE copy gate inside that body rather than by the concrete gate at the call, and the sentence printed is
 the opaque one. What the refusal is POSITIONED at is the user's own instantiation, with `stdlib/Array.maxon`'s
 line kept as a `note:`; `specs/array-conditional-conformance-withheld.md` explains that relocation and
-the blame edge once, for all four cases ARRH touched.
+the blame edge once, for every case it touches.
 ```maxon
 // --- file: acontainer.maxon
 export type Container uses Element
@@ -1015,16 +969,13 @@ note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the cons
 
 <!-- test: contested-generic-alias-argument-that-owns-heap-is-not-co-owned-trivial -->
 ⛔⛔ **A SUPERSEDED SPELLING MUST CLASSIFY NOTHING AT *EVERY* ARGUMENT DOOR, AND THE THIRD DOOR'S
-"NOTHING" IS NOT ITS OWN (A3k review).** `typeArgIsCoOwnedTrivial` is `typeIsManaged and not
-typeArgIsOwned`; guarding only the OWNED half left the pre-settle `Box with named("N0")` orphan voting
-MANAGED-AND-NOT-OWNED, i.e. CO-OWNED TRIVIAL — the manufactured kind this rung exists to abolish,
-re-made one spelling over. Every LIVE instantiation of `Box` here OWNS a String, so every scoped
-sibling in the by-base bucket votes not-co-owned; the orphan alone carried the refusal, and
-`anyInstanceTypeArgHasKind` is an OR. ⛔ MEASURED: `v1.swap(…)` was refused **E2015** "a
-trivial-struct instantiation co-owns the field", said of a box that owns a String, while the
-byte-identical program whose second file spells its aliases `M0`/`M1` — nothing contested — runs to
-exit 0, and so does the INLINE `Box with (Box with S0)` spelling of this very program. Two spellings
-disagreeing again, in the direction this rung's thesis forbids.
+"NOTHING" IS NOT ITS OWN.** `typeArgIsCoOwnedTrivial` is `typeIsManaged and not
+typeArgIsOwned`, so both halves must ignore the pre-settle `Box with named("N0")` orphan: a vote of
+MANAGED-AND-NOT-OWNED from it would be CO-OWNED TRIVIAL, a kind no live instantiation has, and
+`anyInstanceTypeArgHasKind` is an OR. Every LIVE instantiation of `Box` here OWNS a String, so every
+scoped sibling in the by-base bucket votes not-co-owned, and `v1.swap(…)` runs to exit 0 — as does the
+byte-identical program whose second file spells its aliases `M0`/`M1`, and the INLINE
+`Box with (Box with S0)` spelling of this very program.
 ```maxon
 // --- file: adef.maxon
 export type S0
@@ -1080,8 +1031,8 @@ end 'main'
 <!-- test: contested-generic-alias-argument-that-owns-heap-agrees-with-the-inline-spelling -->
 The control that makes the case above a statement about AGREEMENT rather than about one spelling: the
 same three files with the outer box spelled INLINE, so no `Box with named("N0")` is ever interned and
-no orphan exists. It has always compiled — which is exactly why the alias spelling refusing was a
-disagreement and not a policy.
+no orphan exists. It compiles, so the alias spelling must too — a refusal of only one spelling would be a
+disagreement, not a policy.
 ```maxon
 // --- file: adef.maxon
 export type S0
@@ -1134,20 +1085,15 @@ end 'main'
 ```
 
 <!-- test: tuple-alias-over-a-contested-generic-alias -->
-⛔⛔ **A USER-DECLARED TUPLE `typealias` HAS AN HONEST DECLARING FILE, AND IT USED TO THROW IT AWAY
-(A3v).** A tuple's canonical name is keyed on its ELEMENT types, and `canonicalTupleElement` resolved
-each of them through `declaredSlotType` under `CompilerOwnedDeclFilePath` — the STRANGER convention
-(N2), which is right for a compiler-SYNTHESIZED tuple (it is declared in no file) and wrong for one
-the source wrote a `typealias` for. So `adef.maxon`'s `Pair = (Bag, Num)` was interned over
-`bother.maxon`'s `Bag`, and the declaring file could not construct its OWN field.
+⛔⛔ **A USER-DECLARED TUPLE `typealias` HAS AN HONEST DECLARING FILE, AND ITS ELEMENTS RESOLVE THERE.** A
+tuple's canonical name is keyed on its ELEMENT types. The STRANGER convention (`CompilerOwnedDeclFilePath`)
+is right for a compiler-SYNTHESIZED tuple, which is declared in no file, and wrong for one the source wrote a
+`typealias` for, so `adef.maxon`'s `Pair = (Bag, Num)` is interned over `adef.maxon`'s own `Bag`.
 
-⛔ MEASURED before the fix: `error E3005: cannot assign '__Tuple2.Array_Num.int' to variable
-'Keeper.p' of type '__Tuple2.Array_String.int'` — reported at line 10 of `adef.maxon`, the file that
-declares every name in the sentence. Same shape as a contested generic alias in a RETURN type: the
-LOSER's own legal program is the one refused.
+`adef.maxon` constructs its own `Keeper.p` from its own `Pair`: each file's tuple alias is keyed on the
+element types that file's own names denote.
 
-⚠ The two files' `(Bag, Num)` are now two DIFFERENT tuple types, which is what the language already
-says: `Bag` denotes different things in them. A tuple stays STRUCTURAL where the spellings agree —
+⚠ The two files' `(Bag, Num)` are two DIFFERENT tuple types, which is what the language says: `Bag` denotes different things in them. A tuple stays STRUCTURAL where the spellings agree —
 per-file resolution then lands on identical element types and therefore on one canonical name.
 ```maxon
 // --- file: adef.maxon
@@ -1195,7 +1141,7 @@ THIS CASE EXISTS TO KEEP IT THAT WAY.** `makeBag` returns `Bag`, and the CALLER 
 contestant that means something else by that name — the shape that would bite hardest if the return
 type were resolved against the reader's file. `ProgramSignatures.funcReturnDeclFiles` is the
 per-callee declaring-file index that decides it, and `copyFreeFunctionSweepEntries` carries it across
-a contest refile; nothing else pins either, so a regression in them would have been silent.
+a contest refile; nothing else pins either, so a regression in them would be silent.
 
 The element type is what discriminates: `theirs.get(1)` is an `int` only if `Bag` meant adef's
 `Array with Num`. Had it resolved against `cmain.maxon`, the value would be a `String` and the `as
@@ -1227,8 +1173,8 @@ end 'main'
 ```
 
 <!-- test: tuple-alias-over-a-contested-generic-alias-either-order -->
-⭐⭐ **THE CURE ABOVE IS A STATEMENT ABOUT THE PROGRAM, NOT ABOUT THE FILESYSTEM, AND THIS IS THE CASE
-THAT SAYS SO (A3v review).** The tuple fix keys a SWEEP-minted spelling per (spelling, file), and the
+⭐⭐ **THE RULE ABOVE IS A STATEMENT ABOUT THE PROGRAM, NOT ABOUT THE FILESYSTEM, AND THIS IS THE CASE
+THAT SAYS SO.** The tuple rule keys a SWEEP-minted spelling per (spelling, file), and the
 first file to mint one keeps the unsuffixed key — so *which* file that is comes off the fold order,
 which is `Directory.list` order, which is NTFS index order on Windows and APFS hash order on macOS
 (defect-board row `A5a`). A cure whose answer moved with that would be the same wrong answer wearing
@@ -1239,10 +1185,7 @@ field — so whichever folds first, the other is the one that would fail. `zdef`
 opposite way to `adef`/`bother` above, which is what makes the pair a two-order test rather than one
 program written twice.
 
-⛔ MEASURED against the merge-base compiler, BOTH orders red and each blaming the file that folded
-SECOND: `E3005: cannot assign '__Tuple2.Array_Num.int' to variable 'Holder.q' of type
-'__Tuple2.Array_String.int'` one way, and the same sentence with the two type names swapped the
-other. On this tree both orders answer 72, and the emitted symbol sets are identical between them —
+Both orders answer 72, and the emitted symbol sets are identical between them —
 the ordinal never reaches a name anything renders or emits, because `sweepScopedTupleName` returns
 early once `allFilesFolded` and every name crossing out of the index is canonicalized past it.
 ```maxon
@@ -1312,11 +1255,7 @@ This one drives the SWEEP-REPAIR door: each `Pair` is declared BELOW its own use
 sweep records a bare `named` and `resolveNamedAlias` is what resolves it afterwards. `useGamma()` is
 called first, so the right answer prints `gamma x y` before `alpha 7`.
 
-⛔ MEASURED on this tree (Windows, where `z-gamma.maxon` folds last): `error E3005:
-a-main.maxon:5:20: operator '-' is not defined for type 'String'` together with `error E3005:
-m-alpha.maxon:2:2: Cannot return '__Tuple2.int.int' from function declared to return
-'__Tuple2.String.String'` — `a` is typed with the other file's tuple. WHICH file is blamed comes off
-the fold order, which is why nothing here asserts that text.
+Each use resolves `Pair` in its own file, whichever file folds last, so `a` is `m-alpha.maxon`'s tuple.
 ```maxon
 // --- file: a-main.maxon
 function main() returns ExitCode
@@ -1365,8 +1304,7 @@ and only passes one across — it is the innocent third file, and it cannot be t
 The literal `(4, 1)` is what discriminates: `p.0 - p.1` is arithmetic only if `Pair` meant
 `m-alpha.maxon`'s `(int, int)`, and the difference reaches the exit code.
 
-⛔ MEASURED on this tree: `error E3005: m-alpha.maxon:2:14: operator '-' is not defined for type
-'String'` — the declaring file cannot do arithmetic on its own tuple.
+`m-alpha.maxon` does arithmetic on its own tuple.
 ```maxon
 // --- file: a-main.maxon
 function main() returns ExitCode
@@ -1407,15 +1345,12 @@ IS THE CASE THAT SAYS SO.** The fold walks `Directory.list` order — NTFS index
 hash order on macOS (defect-board row `A5a`) — so a one-row last-wins registry hands a different file
 the name on a different host, and a cure that only happened to pick the right row would be the same
 wrong answer wearing a different hat. This is the program above with the two ALIAS-DECLARING files'
-sort prefixes swapped, so the `(int, int)` file is now the one sorting last; the answer must not move.
+sort prefixes swapped, so the `(int, int)` file is the one sorting last; the answer must not move.
 
 ⚠ The `a-`/`m-`/`z-` prefixes are load-bearing in all three of these programs. Renaming a file
 changes which declaration currently wins and is what this pair exists to hold fixed.
 
-⛔ MEASURED on this tree: red in BOTH orders, and NOT symmetrically — this order reports only `error
-E3005: a-main.maxon:5:20: operator '-' is not defined for type 'String'`, one error where the other
-order reports two, because `z-alpha.maxon`'s own return type survives while the caller's `let` does
-not. One bare row cannot be wrong in the same way twice.
+Both orders give the same answer: each file's `Pair` means its own tuple, whichever file sorts last.
 ```maxon
 // --- file: a-main.maxon
 function main() returns ExitCode
@@ -1487,12 +1422,8 @@ and never over the alias spelling. The door where a type ARGUMENT arrives as an 
 declarations the other way round for exactly that reason. Read the pair together: this case owns the
 field, the payload and the element VALUES; that one owns the interned type ARGUMENT.
 
-⚠ **MEASURED on this tree:** the pre-change compiler REFUSES this program outright — `error E3005:
-m-alpha.maxon:5:15: cannot assign a value of type '__Tuple2.int.int' to field 'p' of 'HolderA', which
-holds '__Tuple2.String.String'`, and its mirror at `z-gamma.maxon:5:15` — so there is no earlier answer
-here to preserve, right or wrong. Compiled against the whole-program tuple-alias row, the field assignment
-is refused before ownership is ever asked; resolved per file, the program compiles and the contested
-program's binary is **byte-identical** to the control with one alias renamed. That identity is the
+⚠ Resolved per file, the program compiles, and the contested program's binary is **byte-identical** to
+the control with one alias renamed. That identity is the
 property, and it is the reason a wrong answer cannot hide: the type check and the drop cascade read the
 SAME resolution (`declaredSlotType`), so a tuple wrong enough to leak is refused instead.
 
@@ -1729,12 +1660,7 @@ interned and this door is never reached — which is exactly what
 `sibling-files-tuple-alias-of-one-name-owns-heap-in-every-declared-position` above does, and why that case
 covers the field and the payload and not this.
 
-⚠ **BOTH FILES ARE REFUSED, NOT ONE.** This is not the last-wins shape the other cases in this file
-measure: the shared row carries a name that denotes neither file's tuple, so neither file can construct
-its own value. ⛔ MEASURED on this tree — `error E3005: m-alpha.maxon:2:15: argument type mismatch for
-'item': expected 'Pair', got '__Tuple3.int.int.int'` together with `error E3005: z-gamma.maxon:2:15:
-argument type mismatch for 'item': expected 'Pair', got '__Tuple2.String.String'`. An unresolved alias
-spelling reaching a type comparison refuses both sides of the program that spells it.
+⚠ Each file's type argument resolves to that file's own tuple, so each file constructs its own value.
 
 ⭐ **`sizeof(T)` IS THE SECOND CHANNEL AND IT DISCRIMINATES.** The two tuples are deliberately different
 widths — three words against two pointers — so the shared body's `sizeof(T)` is **24** for one file and
@@ -1850,23 +1776,19 @@ ef 16
 ```
 
 <!-- test: sibling-files-tuple-alias-of-one-name-beside-a-nominal-declaration -->
-⭐⭐ **THE CROSS-KIND CONTEST RANKS A SET OF CLAIMS, AND THE TUPLE FORM WAS CONTRIBUTING ONE CLAIM WHERE IT
-NOW HAS TWO.** `ProgramSignatures.typeNameClaimsOf` assembles every declaration a type name holds so
-`contestedTypeNameKindFor` can answer what a given file means by it. Its RANGED arm walks
-`contestedDeclarations` and pushes a claim per declaring file; its TUPLE arm read the bare last-wins row
-and pushed exactly one. That was complete while one row was all a tuple alias could have. Two files may
-now legally declare one tuple alias, so the arm dropped a real declaration — and a dropped claim is not a
-missing diagnostic, it is a file being told it means somebody else's KIND.
+⭐⭐ **THE CROSS-KIND CONTEST RANKS A SET OF CLAIMS, AND THE TUPLE FORM CONTRIBUTES ONE CLAIM PER DECLARING
+FILE.** `ProgramSignatures.typeNameClaimsOf` assembles every declaration a type name holds so
+`contestedTypeNameKindFor` can answer what a given file means by it. Two files may legally declare one tuple
+alias, so its arm pushes a claim per declaring file, as the RANGED arm does — a dropped claim would not be a
+missing diagnostic but a file being told it means somebody else's KIND.
 
 ⚠ **IT TAKES A THIRD FILE DECLARING THE NAME NOMINALLY TO OBSERVE IT.** With only the two aliases the
 name is not cross-kind contested at all and the ranking never runs; `type Pair` is what makes the name
-contested across kinds and sends every reader through the claim set. The file whose tuple claim was
-dropped then ranks as meaning the STRUCT, and cannot return its own tuple from its own function.
+contested across kinds and sends every reader through the claim set. A file whose tuple claim were
+dropped would rank as meaning the STRUCT.
 
-⛔ MEASURED on this tree: `error E3005: m-alpha.maxon:8:2: Cannot return '__Tuple2.int.int' from
-function declared to return 'Pair'` — the declaring file refused its own declaration, while the file whose
-claim happened to be the surviving row compiled fine. **WHICH file is refused comes off the fold order,
-which is why the twin below exists and why nothing here asserts that text.**
+Each declaring file keeps its own tuple claim and returns its own tuple from its own function; the twin
+below swaps the files' sort order, and the answer does not move.
 
 ```maxon
 // --- file: a-main.maxon
@@ -1921,11 +1843,8 @@ xy
 ```
 
 <!-- test: sibling-files-tuple-alias-of-one-name-beside-a-nominal-declaration-either-order -->
-⭐ **THE SAME PROGRAM WITH THE TWO ALIAS-DECLARING FILES' SORT PREFIXES SWAPPED, AND THE REFUSAL MOVES
-WITH THEM.** The surviving claim is the bare row's, so the file that loses its claim is whichever the fold
-reached first — `error E3005: m-gamma.maxon:8:2: Cannot return '__Tuple2.String.String' from function
-declared to return 'Pair'` in this order against `m-alpha.maxon:8:2` in the other. One row short, and the
-program's meaning is a property of the directory walk.
+⭐ **THE SAME PROGRAM WITH THE TWO ALIAS-DECLARING FILES' SORT PREFIXES SWAPPED.** Each file keeps its own
+claim whichever the fold reaches first, so the program's meaning does not depend on the directory walk.
 
 ```maxon
 // --- file: a-main.maxon
@@ -1984,14 +1903,12 @@ xy
 ⭐ **A `Vector`'s SIZE is part of its type, and the per-file rescoping a contest causes must carry it.**
 When two files disagree about a ranged alias, every generic instance over that element is re-interned
 once per reading file (`SignatureIndex.fileScopedInstance`) so each file gets its own. That re-intern is
-keyed on `(base, args, fixedSize)` — and it was called WITHOUT the third, so a `Vector with 8 W` came back
-as a SIZELESS `Vector`: `create()` produced a zero-length vector and every index was out of bounds.
-MEASURED on exactly this program before the fix — `panic at lib.maxon:11: a Vector with 8 has an index 7`
-where the answer is `42 8 1779033703`.
+keyed on `(base, args, fixedSize)`, so a `Vector with 8 W` stays a `Vector with 8`: `create()` produces
+eight slots, and the answer is `42 8 1779033703`.
 
 ⚠ **NO `Array` CASE CAN CATCH IT**, which is why this one is a `Vector`: every base but `Vector` is
 unsized, so `fixedSize` is already `NoFixedSize` there and dropping it is a no-op. The contest cases in
-`bytearray-element-size.md` are all `Array with Byte` and stayed green throughout.
+`bytearray-element-size.md` are all `Array with Byte`.
 ```maxon
 // --- file: lib.maxon
 export typealias W = int(i64.min to i64.max)

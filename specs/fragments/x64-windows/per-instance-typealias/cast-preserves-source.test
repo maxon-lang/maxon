@@ -41,42 +41,37 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_state@40 = i64 0
-  __ds_base@48 = i64 0
-  __dbg_ctl@56 = i64 0
-  __mrt_console_probe_stdin@64 = i8 0
-  __mrt_console_probe_stdout@65 = i8 0
-  __mrt_console_probe_stderr@66 = i8 0
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
 }
 
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.prologue 64
     x64.movRegImm32 rax, 1
     x64.movRegImm32 rcx, 5
     x64.leaRegSlot rdx, slot0
     x64.storeBaseDispReg.word64 [rdx + 0], rax
     x64.storeBaseDispReg.word64 [rdx + 8], rcx
-  __il_body#8:
+  __il_body#10:
     x64.loadRegBaseDisp.word64 rax, [rdx + 8]
-  __il_cont#7:
+  __il_cont#9:
     x64.movRegImm32 rcx, 9
     x64.movRegImm32 rdx, 0
     x64.leaRegSlot rsi, slot2
     x64.storeBaseDispReg.word64 [rsi + 0], rcx
     x64.storeBaseDispReg.word64 [rsi + 8], rdx
-  __il_body#6:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __il_body#8:
     x64.storeBaseDispReg.word64 [rsi + 8], rax
-  __il_body#10:
+  __il_body#12:
     x64.loadRegBaseDisp.word64 rcx, [rsi + 8]
-  __il_cont#9:
+  __il_cont#11:
     x64.cmpRegImm32 rax, 5
     x64.jcc notEqual, ifcont
   converted:
@@ -84,12 +79,19 @@ func @main {
     x64.jcc notEqual, ifcont
   preserved:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 64
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 1
-    x64.epilogue 32
+    x64.epilogue 64
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at cast-preserves-source.test:31: Range check failed: value outside typealias 'Idx'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
     x64.popReg rbp
     x64.ret
 }

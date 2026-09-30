@@ -9,9 +9,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -25,7 +27,7 @@ func @main {
     x64.pushReg r15
     x64.prologue 72
     x64.leaRegRdata rax, [rip + __str_rec_2]  ; "A\xf0\x9f\x98\x80B"
-  __il_body#14:
+  __il_body#18:
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.leaRegRegImm32 rcx, r12, 57
@@ -44,7 +46,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r13 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
-  __il_body#16:
+  __il_body#20:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -59,15 +61,19 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#18:
+  __il_body#22:
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.jmp whilehdr
   count_loop:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#11
+  __rc_ok#10:
     x64.movRegReg rdx, r13
     x64.callDirect utf8DecodeAt
     x64.movRegReg r15, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+  __rc_ok#12:
     x64.movRegReg rdx, r13
     x64.callDirect utf8ByteLengthAt
     x64.leaRegRegReg r13, r13, r8
@@ -85,7 +91,7 @@ func @main {
     x64.jcc less, count_loop
   whileexit:
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#15
   __il_cont#2:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
@@ -126,7 +132,7 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
-  __il_body#12:
+  __il_body#16:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __write_stdout
   __il_cont#1:
@@ -144,8 +150,20 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at views.maxon:187: Range check failed: value outside typealias 'Utf16UnitCount'\x0a"
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at views.maxon:175: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#15:
+    x64.leaRegRdata rcx, [rip + __str_blob_23]  ; "panic at views.maxon:186: Range check failed: value outside typealias 'Utf16UnitCount'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72

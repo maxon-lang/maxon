@@ -75,9 +75,11 @@ end 'main'
 ExitCode: 5
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @exprType {
@@ -148,24 +150,12 @@ func @tyLen {
   matcharm#2:
     x64.movRegImm32 r8, 0
   matchcont:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_ok:
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   matchdead:
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at inlined-accessor-field-return-order.test:32: Range check failed: value outside typealias 'TokenId'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
 }
 
 func @main {
@@ -178,7 +168,7 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
-  __rc_ok#12:
+  __il_body#5:
     x64.movRegImm32 rcx, 24
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -195,11 +185,11 @@ func @main {
     x64.jmp forhdr
   ifcont#19:
     x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "hello"
-  __il_body#23:
+  __il_body#21:
     x64.movRegImm32 rdx, 0
-  __il_body#27:
+  __il_body#25:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-  __il_cont#26:
+  __il_cont#24:
     x64.callDirect __managed_slice
     x64.movRegReg r14, r8
     x64.cmpRegImm32 r10, 0
@@ -222,7 +212,7 @@ func @main {
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
-  __il_cont#22:
+  __il_cont#20:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -295,7 +285,7 @@ func @main {
   __rc_chk:
     x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
-  __rc_ok#1:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Ty
     x64.movRegReg rcx, r15
@@ -310,7 +300,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at inlined-accessor-field-return-order.test:72: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at inlined-accessor-field-return-order.test:72: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

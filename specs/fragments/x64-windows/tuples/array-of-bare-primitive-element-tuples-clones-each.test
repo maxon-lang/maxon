@@ -187,13 +187,8 @@ func @main {
     x64.loadRegSlot rax, slot3
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.loadRegSlot rcx, slot2
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
-    x64.leaRegRegReg rbx, rax, rdx
-    x64.callDirect __managed_decref
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __destruct_StringBuilder
-    x64.loadRegSlot rcx, slot0
-    x64.callDirect __managed_decref
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg rbx, rax, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -201,6 +196,12 @@ func @main {
     x64.cmpRegReg rbx, rax
     x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_StringBuilder
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 88
     x64.popReg r15

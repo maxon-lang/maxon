@@ -1189,7 +1189,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/associated-types/error.surplus-parenthesized-conformance-argument.test:10:6: Partial interface implementation: type 'Holder' has 1 method(s) with wrong signature:
-  - get() returns Integer (expected get() returns __Tuple2.int.float)
+  - get() returns Integer (expected get() returns (Integer, Float))
 ```
 
 
@@ -1198,6 +1198,33 @@ error E3016: specs/fragments/associated-types/error.surplus-parenthesized-confor
 The sharpest statement of the asymmetry: an interface with NO `uses` clause at all. `with Integer` is
 ignored (the case above, unchanged); `with (Integer)` is refused. Nothing but the parentheses differs,
 and the parentheses are exactly what makes the count an assertion.
+
+<!-- test: error.a-where-clause-after-a-conformance-argument-is-not-part-of-its-spelling -->
+A `where` clause after a conformance's `with` argument constrains the type's parameter; it is not part of the argument, so the requirement's `A` is the conformer's `T`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface One uses A
+	function get() returns A
+end 'One'
+
+type Box uses T implements One with T where T is Equatable
+	let n as Integer
+	let v as T
+
+	function get() returns Integer
+		return n
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:8:6: Partial interface implementation: type 'Box' has 1 method(s) with wrong signature:
+  - get() returns Integer (expected get() returns T)
+```
 
 <!-- test: error.surplus-parenthesized-argument-against-no-uses -->
 ```maxon

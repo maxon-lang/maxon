@@ -1,6 +1,6 @@
 // Test: generic-module-merge
 typealias ExitCode = int(0 to 125)
-typealias Count = int(0 to u64.max)
+typealias Count = int(0 to u64.max) implements ElementIndex
 typealias Integer = int(i64.min to i64.max)
 
 type Item
@@ -99,7 +99,7 @@ type GenModule uses Op implements Mergeable with Item
 	end 'cloneFunc'
 
 	function appendOp(block Block, op Op)
-		let idx = self.ops.count()
+		let idx = self.ops.count() as Integer
 		self.ops.push(op)
 		block.opRefs.append(idx)
 	end 'appendOp'
@@ -153,19 +153,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @Item.create {
@@ -414,17 +407,17 @@ func @main {
     x64.storeSlotReg slot13, rax
   __il_cont#37:
     x64.leaRegRdata rax, [rip + __layout_GenModule_String]
-  __il_body#20:
+  __il_body#22:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.loadRegBaseDisp.word64 rdx, [r13 + 16]
     x64.callDirect __managed_append_opaque
-  __il_cont#19:
+  __il_cont#21:
     x64.movRegImm32 rdx, 0
   __il_body#46:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.jmp forhdr#15
-  __rc_ok:
+  __il_body#25:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
@@ -478,7 +471,7 @@ func @main {
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-  __il_cont#21:
+  __il_cont#23:
     x64.loadRegSlot rcx, slot32
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot25
@@ -489,7 +482,7 @@ func @main {
   forhdr#15:
     x64.storeSlotReg slot20, rdx
     x64.cmpRegReg rdx, r14
-    x64.jcc less, __rc_ok
+    x64.jcc less, __il_body#25
   __il_body#43:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]

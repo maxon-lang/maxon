@@ -32,19 +32,12 @@ typealias Integer = int(i64.min to i64.max)
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @Label.upTo {
@@ -141,51 +134,46 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect String.startIndex
     x64.movRegReg r13, r8
-  __rc_ok#11:
+  __il_body#10:
     x64.loadRegBaseDisp.word64 rdx, [r13 + 8]
-  __il_body#14:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#26
-  __il_body#34:
+  __il_body#26:
     x64.loadRegBaseDisp.word64 r14, [r12 + 8]
-  __il_body#35:
+  __il_body#27:
     x64.loadRegBaseDisp.byte rax, [r12 + 48]
-  __il_cont#32:
+  __il_cont#24:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, critsplit
-  andrhs#15:
+  andrhs#13:
     x64.cmpRegReg rdx, r14
     x64.setccReg below, rax
-    x64.jmp scmerge#16
+    x64.jmp scmerge#14
   critsplit:
     x64.movRegReg rax, rcx
-  scmerge#16:
+  scmerge#14:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#20
+    x64.jcc equal, ifcont#18
   oneByteEach:
     x64.movRegReg rax, r14
     x64.subRegReg rax, r14, rdx
     x64.cmpRegImm32 rax, 2
-    x64.jcc belowEqual, ifcont#19
+    x64.jcc belowEqual, ifcont#17
   inRange:
     x64.leaRegRegImm32 rax, rdx, 2
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#29
-    x64.jmp __il_cont#13
-  ifcont#19:
+    x64.jmp __il_cont#11
+  ifcont#17:
     x64.movRegReg rax, r14
-    x64.jmp __il_cont#13
-  ifcont#20:
+    x64.jmp __il_cont#11
+  ifcont#18:
     x64.movRegImm32 r15, 0
   whilehdr:
     x64.cmpRegImm32 r15, 2
     x64.movRegImm32 rax, 0
-    x64.jcc greaterEqual, scmerge#23
-  andrhs#22:
+    x64.jcc greaterEqual, scmerge#21
+  andrhs#20:
     x64.cmpRegReg rdx, r14
     x64.setccReg below, rax
-  scmerge#23:
+  scmerge#21:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, whileexit
   advance:
@@ -195,11 +183,8 @@ func @main {
     x64.movRegReg rdx, r8
     x64.jmp whilehdr
   whileexit:
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#31
-  __rc_ok#30:
     x64.movRegReg rax, rdx
-  __il_cont#13:
+  __il_cont#11:
     x64.loadRegBaseDisp.word64 rdx, [r13 + 8]
     x64.loadRegBaseDisp.byte r9, [r12 + 48]
     x64.movRegReg rcx, r12
@@ -316,42 +301,6 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_Label
     x64.movRegReg r8, rbx
-    x64.epilogue 152
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#26:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "panic at grapheme.maxon:436: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 152
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#29:
-    x64.leaRegRdata rcx, [rip + __str_blob_37]  ; "panic at grapheme.maxon:449: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 152
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#31:
-    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at grapheme.maxon:463: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 152
     x64.popReg r15
     x64.popReg r14

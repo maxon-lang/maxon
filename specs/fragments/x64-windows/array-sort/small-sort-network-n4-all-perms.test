@@ -39,7 +39,7 @@ function nthPerm4(k Integer) returns IntArray
 		// unreachable (matching the `panic` used for this function's other impossible failures).
 		let idx = trunc(try (remaining / d) otherwise panic("nthPerm4: divs entry was 0"))
 		remaining = try (remaining mod d) otherwise panic("nthPerm4: divs entry was 0")
-		let v = try pool.get(idx) otherwise panic("pool OOB")
+		let v = try pool.get(idx as ElementIndex) otherwise panic("pool OOB")
 		result.push(v)
 		try pool.remove(idx as ElementIndex) otherwise panic("pool.remove OOB")
 	end 'pick'
@@ -64,19 +64,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @ascending {
@@ -192,7 +185,7 @@ func @main {
     x64.jcc notEqual, tryerr#21
   tryok#20:
     x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
+    x64.jcc less, __rc_panic#27
   __rc_ok#26:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.cmpRegReg rbx, rax
@@ -228,64 +221,67 @@ func @main {
   __il_body#36:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#38
+  __rc_ok#37:
     x64.movRegReg rcx, r13
     x64.callDirect Array.driftsortRange
-  __il_body#37:
+  __il_body#39:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc greater, ifcont#39
+    x64.jcc above, ifcont#41
   trivial:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#6
-  ifcont#39:
+  ifcont#41:
     x64.movRegImm32 rdx, 1
   __us_test:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
     x64.loadRegBaseDisp.word64 rsi, [r13 + 0]
-    x64.jmp whilehdr#40
+    x64.jmp whilehdr#42
   scan:
     x64.leaRegRegImm32 rdi, rdx, -1
-  __rc_ok#49:
-    x64.cmpRegReg rdi, rcx
-    x64.jcc aboveEqual, __im_slow#54
-    x64.jmp __im_load#55
-  tryerr#44:
-    x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#6
-  __im_load#55:
-    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rdi*8 + 0]
-    x64.movRegReg r8, rdi
   __rc_ok#51:
-    x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#57
-    x64.jmp __im_load#58
+    x64.cmpRegReg rdi, rcx
+    x64.jcc aboveEqual, __im_slow#56
+    x64.jmp __im_load#57
   tryerr#46:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont#6
-  __im_load#58:
+  __im_load#57:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rdi*8 + 0]
+    x64.movRegReg r8, rdi
+  __rc_ok#53:
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#59
+    x64.jmp __im_load#60
+  tryerr#48:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#6
+  __im_load#60:
     x64.loadRegBaseIndexScale.word64 rdi, [rsi + rdx*8 + 0]
-  tryok#45:
+  tryok#47:
     x64.cmpRegReg r8, rdi
-    x64.jcc lessEqual, ifcont#48
+    x64.jcc lessEqual, ifcont#50
   oop:
     x64.movRegImm32 rax, 0
     x64.jmp __il_cont#6
-  ifcont#48:
+  ifcont#50:
     x64.leaRegRegImm32 rdx, rdx, 1
-  whilehdr#40:
+  whilehdr#42:
     x64.cmpRegReg rdx, rax
     x64.jcc less, scan
-  whileexit#42:
+  whileexit#44:
     x64.movRegImm32 rax, 1
   __il_cont#6:
     x64.xorRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#62
+    x64.jcc equal, critsplit#64
   bad:
     x64.loadRegSlot rax, slot4
     x64.leaRegRegImm32 rbx, rax, 1
     x64.jmp ifcont#5
-  critsplit#62:
+  critsplit#64:
     x64.loadRegSlot rbx, slot4
   ifcont#5:
     x64.loadRegSlot rax, slot2
@@ -339,10 +335,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
-  __il_body#60:
+  __il_body#62:
     x64.loadRegSlot rcx, slot5
     x64.callDirect __write_stdout
-  __il_cont#59:
+  __il_cont#61:
     x64.loadRegSlot rcx, slot5
     x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
@@ -410,7 +406,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
+  __rc_panic#27:
     x64.leaRegRdata rcx, [rip + __str_blob_78]  ; "panic at small-sort-network-n4-all-perms.test:42: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -427,7 +423,7 @@ func @main {
     x64.movRegReg rdx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#64
+    x64.jcc equal, critsplit#66
   tryerr#23:
     x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at small-sort-network-n4-all-perms.test:42: pool OOB\x0a"
     x64.callDirect mrt_panic
@@ -440,7 +436,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit#64:
+  critsplit#66:
     x64.movRegReg rdx, r8
     x64.jmp tryok#22
   tryerr#25:
@@ -455,7 +451,19 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#54:
+  __rc_panic#38:
+    x64.leaRegRdata rcx, [rip + __str_blob_81]  ; "panic at Array.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#56:
     x64.storeSlotReg slot7, rax
     x64.storeSlotReg slot6, rcx
     x64.storeSlotReg slot8, rdx
@@ -468,9 +476,9 @@ func @main {
     x64.loadRegSlot rdx, slot8
     x64.loadRegSlot rsi, slot9
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#44
-    x64.jmp __rc_ok#51
-  __im_slow#57:
+    x64.jcc notEqual, tryerr#46
+    x64.jmp __rc_ok#53
+  __im_slow#59:
     x64.storeSlotReg slot7, rax
     x64.storeSlotReg slot6, rcx
     x64.storeSlotReg slot8, rdx
@@ -485,6 +493,6 @@ func @main {
     x64.loadRegSlot rsi, slot9
     x64.loadRegSlot r8, slot10
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#46
-    x64.jmp tryok#45
+    x64.jcc notEqual, tryerr#48
+    x64.jmp tryok#47
 }

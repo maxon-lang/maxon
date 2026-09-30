@@ -2519,7 +2519,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:15:8: cannot assign a value of type 'Label' to field 'value' of 'Box', which holds 'type parameter'
+error E3005: <fragment>:15:8: cannot assign a value of type 'Label' to field 'value' of 'Box', which holds 'T'
 ```
 
 <!-- test: generic-alias-union-payload-round-trips -->

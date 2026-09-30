@@ -15,16 +15,9 @@ end 'main'
 ExitCode: 2
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __ds_base@40 = i64 0
-  __dbg_ctl@48 = i64 0
-  __mrt_console_probe_stdin@56 = i8 0
-  __mrt_console_probe_stdout@57 = i8 0
-  __mrt_console_probe_stderr@58 = i8 0
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
 }
 
 func @main {
@@ -64,20 +57,27 @@ func @__clock_now_unix_s {
   __il_body:
     x64.callDirect __clock_now_filetime
     x64.movRegImm rax, 116444736000000000
-    x64.subRegReg r8, r8, rax
-    x64.cmpRegImm32 r8, 0
+    x64.movRegReg rcx, r8
+    x64.subRegReg rcx, r8, rax
+    x64.movRegReg rdx, r8
+    x64.xorRegImm32 rdx, r8, -1
+    x64.andRegReg rdx, rdx, rax
+    x64.xorRegReg r8, r8, rax
+    x64.xorRegImm32 r8, r8, -1
+    x64.andRegReg r8, r8, rcx
+    x64.orRegReg rdx, rdx, r8
+    x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
   __il_cont:
     x64.movRegImm rax, 15474250491067253437
-    x64.mulHighReg r8
+    x64.mulHighReg rcx
     x64.movRegReg r8, rdx
     x64.shrRegImm8 r8, rdx, 23
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at Clock.maxon:73: Range check failed: value outside typealias 'FileTimeTicks'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Clock.maxon:73: Range check failed: value outside typealias 'FileTimeTicks'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

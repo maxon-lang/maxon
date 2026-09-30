@@ -1,6 +1,6 @@
 // Test: a-rethrowing-try-propagates-the-error
 typealias Word = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias WordArray = Array with Word
 
 function twice(a WordArray, i Idx) returns Word throws ArrayError
@@ -25,9 +25,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @twice {
@@ -35,9 +37,6 @@ func @twice {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-  __rc_ok:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
     x64.jcc aboveEqual, __im_slow
@@ -56,14 +55,6 @@ func @twice {
     x64.ret
   tryok:
     x64.imulRegRegImm32 r8, r8, 2
-    x64.movRegImm32 r10, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-rethrowing-try-propagates-the-error.test:6: Range check failed: value outside typealias 'Idx'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
     x64.epilogue 32
     x64.popReg rbp

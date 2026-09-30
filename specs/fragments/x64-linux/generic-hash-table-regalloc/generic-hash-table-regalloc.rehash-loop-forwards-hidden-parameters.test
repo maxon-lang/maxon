@@ -1,6 +1,6 @@
 // Test: generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters
 typealias Integer = int(i64.min to i64.max)
-typealias Cap = int(0 to u64.max)
+typealias Cap = int(0 to u64.max) implements ElementIndex
 
 enum SlotState
 	Empty
@@ -90,7 +90,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 				end 'skip_hash'
 
 				var index = spreadHash(hash) and mask
-				var currentState = try states.get(index) otherwise SlotState.Empty
+				var currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
 				var isNotEmpty = match currentState 'ns1'
 					Empty gives false
 					Occupied gives true
@@ -98,7 +98,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 				end 'ns1'
 				while isNotEmpty 'find_slot'
 					index = (index + 1) and mask
-					currentState = try states.get(index) otherwise SlotState.Empty
+					currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
 					isNotEmpty = match currentState 'ns2'
 						Empty gives false
 						Occupied gives true
@@ -129,9 +129,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @Tbl.insertAtSlot {
@@ -149,73 +151,70 @@ func @Tbl.insertAtSlot {
     x64.movRegReg r14, rsi
     x64.loadRegBaseDisp.word64 rcx, [rbp + 48]
     x64.loadRegBaseDisp.word64 rcx, [rbp + 56]
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#10
-  __rc_ok#9:
     x64.cmpRegImm32 r14, 0
-    x64.jcc less, __rc_panic#12
+    x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rcx, 4294967295
     x64.cmpRegReg r14, rcx
-    x64.jcc greater, __rc_panic#12
-  __rc_ok#11:
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 24]
     x64.cmpRegImm32 rdx, 8
-    x64.jcc notEqual, __im_stride#37
-  __im_word#35:
+    x64.jcc notEqual, __im_stride#35
+  __im_word#33:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_slow#34
-  __im_owned#38:
+    x64.jcc notEqual, __im_slow#32
+  __im_owned#36:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __im_slow#34
-  __im_bounds#39:
+    x64.jcc less, __im_slow#32
+  __im_bounds#37:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.cmpRegReg r12, rdx
-    x64.jcc aboveEqual, __im_slow#34
-  __im_buffer#40:
+    x64.jcc aboveEqual, __im_slow#32
+  __im_buffer#38:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __im_slow#34
-  __im_viewed#41:
+    x64.jcc equal, __im_slow#32
+  __im_viewed#39:
     x64.leaRegRegImm32 rsi, rdx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow#34
-  __im_store#42:
+    x64.jcc notEqual, __im_slow#32
+  __im_store#40:
     x64.storeBaseIndexScaleReg.word64 [rdx + r12*8 + 0], rax
     x64.jmp tryok#1
-  __im_stride#37:
+  __im_stride#35:
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __im_slow#34
-  __im_byte#36:
+    x64.jcc notEqual, __im_slow#32
+  __im_byte#34:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_slow#34
-  __im_owned#43:
+    x64.jcc notEqual, __im_slow#32
+  __im_owned#41:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __im_slow#34
-  __im_bounds#44:
+    x64.jcc less, __im_slow#32
+  __im_bounds#42:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.cmpRegReg r12, rdx
-    x64.jcc aboveEqual, __im_slow#34
-  __im_buffer#45:
+    x64.jcc aboveEqual, __im_slow#32
+  __im_buffer#43:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __im_slow#34
-  __im_viewed#46:
+    x64.jcc equal, __im_slow#32
+  __im_viewed#44:
     x64.leaRegRegImm32 rsi, rdx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow#34
-  __im_store#47:
+    x64.jcc notEqual, __im_slow#32
+  __im_store#45:
     x64.leaRegRegReg rcx, rdx, r12
     x64.storeBaseDispReg.byte [rcx + 0], rax
     x64.jmp tryok#1
-  __im_slow#34:
+  __im_slow#32:
     x64.movRegReg rdx, r12
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
@@ -224,73 +223,73 @@ func @Tbl.insertAtSlot {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#15
-  __im_bounds#16:
+    x64.jcc less, __im_slow#13
+  __im_bounds#14:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#15
-  __im_buffer#17:
+    x64.jcc aboveEqual, __im_slow#13
+  __im_buffer#15:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#15
-  __im_viewed#18:
+    x64.jcc equal, __im_slow#13
+  __im_viewed#16:
     x64.leaRegRegImm32 rdx, rax, -24
     x64.loadRegBaseDisp.word64 rdx, [rdx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __im_slow#15
-  __im_store#19:
+    x64.jcc notEqual, __im_slow#13
+  __im_store#17:
     x64.storeBaseIndexScaleReg.word64 [rax + r12*8 + 0], r13
   tryok#3:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.movRegImm32 rax, 1
     x64.loadRegBaseDisp.word64 rdx, [rcx + 24]
     x64.cmpRegImm32 rdx, 8
-    x64.jcc notEqual, __im_stride#24
-  __im_word#22:
+    x64.jcc notEqual, __im_stride#22
+  __im_word#20:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __im_slow#21
-  __im_bounds#25:
+    x64.jcc less, __im_slow#19
+  __im_bounds#23:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.cmpRegReg r12, rdx
-    x64.jcc aboveEqual, __im_slow#21
-  __im_buffer#26:
+    x64.jcc aboveEqual, __im_slow#19
+  __im_buffer#24:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __im_slow#21
-  __im_viewed#27:
+    x64.jcc equal, __im_slow#19
+  __im_viewed#25:
     x64.leaRegRegImm32 rsi, rdx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow#21
-  __im_store#28:
+    x64.jcc notEqual, __im_slow#19
+  __im_store#26:
     x64.storeBaseIndexScaleReg.word64 [rdx + r12*8 + 0], rax
     x64.jmp tryok#5
-  __im_stride#24:
+  __im_stride#22:
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __im_slow#21
-  __im_byte#23:
+    x64.jcc notEqual, __im_slow#19
+  __im_byte#21:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __im_slow#21
-  __im_bounds#29:
+    x64.jcc less, __im_slow#19
+  __im_bounds#27:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.cmpRegReg r12, rdx
-    x64.jcc aboveEqual, __im_slow#21
-  __im_buffer#30:
+    x64.jcc aboveEqual, __im_slow#19
+  __im_buffer#28:
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, __im_slow#21
-  __im_viewed#31:
+    x64.jcc equal, __im_slow#19
+  __im_viewed#29:
     x64.leaRegRegImm32 rsi, rdx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow#21
-  __im_store#32:
+    x64.jcc notEqual, __im_slow#19
+  __im_store#30:
     x64.leaRegRegReg rcx, rdx, r12
     x64.storeBaseDispReg.byte [rcx + 0], rax
     x64.jmp tryok#5
-  __im_slow#21:
+  __im_slow#19:
     x64.movRegReg rdx, r12
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
@@ -311,18 +310,8 @@ func @Tbl.insertAtSlot {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#10:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:36: Range check failed: value outside typealias 'Cap'\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#12:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:36: Range check failed: value outside typealias 'HashValue'\x0a"
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:36: Range check failed: value outside typealias 'HashValue'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -341,7 +330,7 @@ func @Tbl.insertAtSlot {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#15:
+  __im_slow#13:
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
     x64.callDirect __managed_set
@@ -493,41 +482,41 @@ func @Tbl.grow {
     x64.loadRegSlot rax, slot15
     x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#80
-  __im_word#78:
+    x64.jcc notEqual, __im_stride#78
+  __im_word#76:
     x64.loadRegSlot rax, slot15
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#77
-  __im_load#82:
+    x64.jcc aboveEqual, __im_slow#75
+  __im_load#80:
     x64.loadRegSlot rax, slot15
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
     x64.jmp trycont#9
-  __im_stride#80:
+  __im_stride#78:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#77
-  __im_byte#79:
+    x64.jcc notEqual, __im_slow#75
+  __im_byte#77:
     x64.loadRegSlot rax, slot15
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#77
-  __im_load#83:
+    x64.jcc aboveEqual, __im_slow#75
+  __im_load#81:
     x64.loadRegSlot rax, slot15
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegRegReg rax, rax, r12
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.jmp trycont#9
-  __im_slow#77:
+  __im_slow#75:
     x64.loadRegSlot rcx, slot15
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#106
+    x64.jcc equal, critsplit#104
   tryerr#8:
     x64.movRegImm32 rax, 0
     x64.jmp trycont#9
-  critsplit#106:
+  critsplit#104:
     x64.movRegReg rax, r8
   trycont#9:
     x64.cmpRegImm32 rax, 0
@@ -553,26 +542,26 @@ func @Tbl.grow {
     x64.loadRegSlot rax, slot14
     x64.loadRegBaseDisp.word64 rax, [rax + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#88
-  __im_word#86:
+    x64.jcc notEqual, __im_stride#86
+  __im_word#84:
     x64.loadRegSlot rax, slot14
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#85
-  __im_load#90:
+    x64.jcc aboveEqual, __im_slow#83
+  __im_load#88:
     x64.loadRegSlot rax, slot14
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
     x64.jmp __im_loaded
-  __im_stride#88:
+  __im_stride#86:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#85
-  __im_byte#87:
+    x64.jcc notEqual, __im_slow#83
+  __im_byte#85:
     x64.loadRegSlot rax, slot14
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#85
-  __im_load#91:
+    x64.jcc aboveEqual, __im_slow#83
+  __im_load#89:
     x64.loadRegSlot rax, slot14
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegRegReg rax, rax, r12
@@ -582,36 +571,36 @@ func @Tbl.grow {
     x64.loadRegSlot rdx, slot14
     x64.loadRegBaseDisp.word64 rdx, [rdx + 40]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, critsplit#107
+    x64.jcc equal, critsplit#105
   __im_empty:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#85
-  critsplit#108:
+    x64.jcc equal, __im_slow#83
+  critsplit#106:
     x64.movRegReg r13, rax
-    x64.jmp __im_cont#84
-  critsplit#107:
+    x64.jmp __im_cont#82
+  critsplit#105:
     x64.movRegReg r13, rax
-    x64.jmp __im_cont#84
-  __im_slow#85:
+    x64.jmp __im_cont#82
+  __im_slow#83:
     x64.loadRegSlot rcx, slot14
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r10
-  __im_cont#84:
+  __im_cont#82:
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, forstep
   __rc_ok#60:
     x64.loadRegSlot rax, slot13
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#94
-  __im_load#95:
+    x64.jcc aboveEqual, __im_slow#92
+  __im_load#93:
     x64.loadRegSlot rax, slot13
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
     x64.movRegReg r8, rax
-  __im_cont#93:
+  __im_cont#91:
     x64.storeSlotReg slot7, r8
   __rc_ok#62:
     x64.loadRegSlot rcx, slot12
@@ -629,36 +618,36 @@ func @Tbl.grow {
     x64.loadRegBaseDisp.word64 rcx, [rax + 16]
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#72
-  __im_word#70:
+    x64.jcc notEqual, __im_stride#70
+  __im_word#68:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#69
-  __im_load#74:
+    x64.jcc aboveEqual, __im_slow#67
+  __im_load#72:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
     x64.jmp trycont#26
-  __im_stride#72:
+  __im_stride#70:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#69
-  __im_byte#71:
+    x64.jcc notEqual, __im_slow#67
+  __im_byte#69:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#69
-  __im_load#75:
+    x64.jcc aboveEqual, __im_slow#67
+  __im_load#73:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, r12
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.jmp trycont#26
-  __im_slow#69:
+  __im_slow#67:
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#105
+    x64.jcc equal, critsplit#103
   tryerr#25:
     x64.movRegImm32 rax, 0
     x64.jmp trycont#26
-  critsplit#105:
+  critsplit#103:
     x64.movRegReg rax, r8
   trycont#26:
     x64.cmpRegImm32 rax, 0
@@ -689,35 +678,35 @@ func @Tbl.grow {
   __rc_ok#64:
     x64.loadRegBaseDisp.word64 rax, [rcx + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#100
-  __im_word#98:
+    x64.jcc notEqual, __im_stride#98
+  __im_word#96:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#97
-  __im_load#102:
+    x64.jcc aboveEqual, __im_slow#95
+  __im_load#100:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.jmp trycont#39
-  __im_stride#100:
+  __im_stride#98:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#97
-  __im_byte#99:
+    x64.jcc notEqual, __im_slow#95
+  __im_byte#97:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#97
-  __im_load#103:
+    x64.jcc aboveEqual, __im_slow#95
+  __im_load#101:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.jmp trycont#39
-  __im_slow#97:
+  __im_slow#95:
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#110
+    x64.jcc equal, critsplit#108
   tryerr#38:
     x64.movRegImm32 rax, 0
     x64.jmp trycont#39
-  critsplit#110:
+  critsplit#108:
     x64.movRegReg rax, r8
   trycont#39:
     x64.cmpRegImm32 rax, 0
@@ -745,9 +734,6 @@ func @Tbl.grow {
     x64.jmp whileexit
   matchdead#43:
   whileexit:
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#67
-  __rc_ok#66:
     x64.loadRegSlot rcx, slot11
     x64.movRegReg rdx, r13
     x64.callDirect __retain_type_param
@@ -803,7 +789,7 @@ func @Tbl.grow {
     x64.popReg rbp
     x64.ret
   __rc_panic#49:
-    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:52: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:52: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 200
     x64.popReg r15
@@ -813,26 +799,15 @@ func @Tbl.grow {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#94:
+  __im_slow#92:
     x64.loadRegSlot rcx, slot13
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, forstep
-    x64.jmp __im_cont#93
+    x64.jmp __im_cont#91
   __rc_panic#65:
-    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:101: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 200
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#67:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:109: Range check failed: value outside typealias 'Cap'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:101: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 200
     x64.popReg r15

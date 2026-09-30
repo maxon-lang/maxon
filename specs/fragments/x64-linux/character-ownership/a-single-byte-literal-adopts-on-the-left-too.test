@@ -19,9 +19,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -39,6 +41,9 @@ func @main {
     x64.movRegImm32 r13, 0
     x64.jmp forhdr#1
   scan:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#14
+  __rc_ok#13:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
     x64.callDirect findGraphemeEnd
@@ -70,6 +75,9 @@ func @main {
     x64.movRegImm32 r14, 0
     x64.jmp forhdr#7
   scan2:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc less, __rc_panic#16
+  __rc_ok#15:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
     x64.callDirect findGraphemeEnd
@@ -172,6 +180,30 @@ func @main {
   __il_cont:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_20]  ; "panic at a-single-byte-literal-adopts-on-the-left-too.test:4: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at a-single-byte-literal-adopts-on-the-left-too.test:10: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
     x64.popReg r15

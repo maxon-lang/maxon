@@ -11,9 +11,11 @@ ExitCode: 0
 ---
 data {
   __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
 }
 
 func @main {
@@ -26,11 +28,11 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 152
-    x64.leaRegRdata rcx, [rip + __str_rec_18]  ; "C:\\Users"
+    x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "C:\\Users"
     x64.callDirect FilePath.init
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
-    x64.leaRegRdata rcx, [rip + __str_rec_19]  ; "docs"
+    x64.leaRegRdata rcx, [rip + __str_rec_32]  ; "docs"
     x64.callDirect FilePath.init
     x64.storeSlotReg slot1, r8
   __il_body#6:
@@ -56,10 +58,20 @@ func @main {
     x64.storeSlotReg slot2, r12
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#14:
+  __il_body#16:
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-  __il_cont#13:
+  __il_cont#15:
     x64.leaRegRegImm32 rdx, rax, -1
+    x64.movRegReg rsi, rax
+    x64.xorRegImm32 rsi, rax, -1
+    x64.andRegImm32 rsi, rsi, 1
+    x64.xorRegImm32 rax, rax, 1
+    x64.xorRegImm32 rax, rax, -1
+    x64.andRegReg rax, rax, rdx
+    x64.orRegReg rsi, rsi, rax
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc less, __rc_panic
+  __rc_ok:
     x64.callDirect String.byteAtOrPanic
     x64.cmpRegImm32 r8, 47
     x64.jcc notEqual, ifcont#12
@@ -109,7 +121,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.leaRegRdata rax, [rip + __str_rec_34]  ; "/"
+    x64.leaRegRdata rax, [rip + __str_rec_47]  ; "/"
     x64.loadRegBaseDisp.word64 r14, [rax + 0]
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
@@ -165,7 +177,7 @@ func @main {
   __il_cont#2:
     x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
     x64.loadRegBaseDisp.word64 r12, [r8 + 8]
-    x64.leaRegRdata rax, [rip + __str_rec_20]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_33]  ; "\x0a"
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, r12, r14
@@ -209,6 +221,18 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_FilePath
     x64.movRegReg r8, rbx
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_128]  ; "panic at FilePath.maxon:442: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 152
     x64.popReg r15
     x64.popReg r14

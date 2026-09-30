@@ -38,19 +38,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @tagCode {
@@ -63,9 +56,6 @@ func @tagCode {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic#9
-  __rc_ok#8:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -76,7 +66,7 @@ func @tagCode {
     x64.storeBaseDispReg.word64 [r13 + 8], rax
   __il_body:
     x64.cmpRegImm32 rbx, 999999
-    x64.jcc belowEqual, ifcont#14
+    x64.jcc belowEqual, ifcont#13
   never:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -87,9 +77,9 @@ func @tagCode {
     x64.storeBaseDispReg.word64 [r8 + 8], rax
     x64.movRegReg rbx, r8
     x64.jmp __il_cont
-  ifcont#14:
+  ifcont#13:
     x64.cmpRegImm32 r12, 0
-    x64.jcc equal, ifcont#16
+    x64.jcc equal, ifcont#15
   named:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -99,7 +89,7 @@ func @tagCode {
     x64.storeBaseDispReg.word64 [r8 + 8], rbx
     x64.movRegReg rbx, r8
     x64.jmp __il_cont
-  ifcont#16:
+  ifcont#15:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_retain
     x64.movRegReg rbx, r8
@@ -127,8 +117,8 @@ func @tagCode {
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#11
-  __rc_ok#10:
+    x64.jcc less, __rc_panic
+  __rc_ok:
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
@@ -137,18 +127,8 @@ func @tagCode {
     x64.popReg rbp
     x64.ret
   matchdead:
-  __rc_panic#9:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at may-return-arg-owned-result-no-over-release.test:20: Range check failed: value outside typealias 'N'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at may-return-arg-owned-result-no-over-release.test:22: Range check failed: value outside typealias 'N'\x0a"
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at may-return-arg-owned-result-no-over-release.test:22: Range check failed: value outside typealias 'N'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

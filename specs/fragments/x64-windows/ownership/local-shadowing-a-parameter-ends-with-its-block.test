@@ -23,19 +23,12 @@ end 'main'
 ExitCode: 6
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @main {
@@ -98,11 +91,11 @@ func @main {
     x64.callDirect __str_decref
   __il_cont#7:
     x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
-  __il_body#154:
+  __il_body#142:
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
-  __il_body#28:
+  __il_body#30:
     x64.loadRegBaseDisp.byte rax, [rbx + 48]
-  __il_cont#27:
+  __il_cont#29:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#21
   oneByteEach:
@@ -112,25 +105,25 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.movRegImm32 r13, 0
     x64.jmp whilehdr#22
-  __il_body#30:
+  countLoop:
     x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic#65
-  __il_body#156:
+    x64.jcc less, __rc_panic#26
+  __il_body#144:
     x64.loadRegBaseDisp.word64 r14, [rbx + 8]
-  __il_cont#155:
+  __il_cont#143:
     x64.cmpRegReg r13, r14
-    x64.jcc below, ifcont#32
+    x64.jcc below, ifcont#34
   atEnd:
     x64.movRegReg rax, r13
-    x64.jmp __il_cont#29
-  ifcont#32:
+    x64.jmp __il_cont#31
+  ifcont#34:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect String.byteAt
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#33
-  tryerr#34:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at grapheme.maxon:58: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    x64.jcc equal, tryok#35
+  tryerr#36:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -141,23 +134,23 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#33:
+  tryok#35:
     x64.cmpRegImm32 r8, 128
-    x64.jcc greaterEqual, ifcont#58
+    x64.jcc greaterEqual, ifcont#60
   isAscii:
     x64.cmpRegImm32 r8, 13
-    x64.jcc notEqual, ifcont#43
+    x64.jcc notEqual, ifcont#45
   isCR:
     x64.leaRegRegImm32 rdx, r13, 1
     x64.cmpRegReg rdx, r14
-    x64.jcc aboveEqual, ifcont#43
+    x64.jcc aboveEqual, ifcont#45
   hasNext:
     x64.movRegReg rcx, rbx
     x64.callDirect String.byteAt
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#38
-  tryerr#39:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at grapheme.maxon:65: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.jcc equal, tryok#40
+  tryerr#41:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -168,25 +161,23 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#38:
+  tryok#40:
     x64.cmpRegImm32 r8, 10
-    x64.jcc notEqual, ifcont#43
+    x64.jcc notEqual, ifcont#45
   isCRLF:
     x64.leaRegRegImm32 rax, r13, 2
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#67
-    x64.jmp __il_cont#29
-  ifcont#43:
+    x64.jmp __il_cont#31
+  ifcont#45:
     x64.leaRegRegImm32 rdx, r13, 1
     x64.cmpRegReg rdx, r14
-    x64.jcc aboveEqual, __rc_ok#72
+    x64.jcc aboveEqual, ifelse#58
   hasNextByte:
     x64.movRegReg rcx, rbx
     x64.callDirect String.byteAt
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#45
-  tryerr#46:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at grapheme.maxon:77: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.jcc equal, tryok#47
+  tryerr#48:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -197,9 +188,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#45:
+  tryok#47:
     x64.cmpRegImm32 r8, 128
-    x64.jcc less, ifelse
+    x64.jcc less, ifelse#56
   nextIsMultibyte:
     x64.leaRegRegImm32 rdx, r13, 1
     x64.movRegReg rcx, rbx
@@ -208,33 +199,33 @@ func @main {
     x64.callDirect graphemeBreakProperty
     x64.cmpRegImm32 r8, 4
     x64.movRegImm32 rax, 0
-    x64.jcc equal, scmerge#49
-  andrhs#48:
+    x64.jcc equal, scmerge#51
+  andrhs#50:
     x64.cmpRegImm32 r8, 5
     x64.setccReg notEqual, rax
-  scmerge#49:
+  scmerge#51:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#160
-  andrhs#50:
+    x64.jcc equal, critsplit#148
+  andrhs#52:
     x64.cmpRegImm32 r8, 8
     x64.setccReg notEqual, rax
-    x64.jmp scmerge#51
-  critsplit#160:
+    x64.jmp scmerge#53
+  critsplit#148:
     x64.movRegReg rax, rcx
-  scmerge#51:
+  scmerge#53:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#58
+    x64.jcc equal, ifcont#60
   notCombining:
     x64.leaRegRegImm32 rax, r13, 1
-    x64.jmp __il_cont#29
-  ifelse:
+    x64.jmp __il_cont#31
+  ifelse#56:
     x64.leaRegRegImm32 rax, r13, 1
-    x64.jmp __il_cont#29
-  __rc_ok#72:
+    x64.jmp __il_cont#31
+  ifelse#58:
     x64.movRegReg rax, rdx
-    x64.jmp __il_cont#29
-  ifcont#58:
+    x64.jmp __il_cont#31
+  ifcont#60:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect utf8DecodeAt
@@ -247,274 +238,266 @@ func @main {
     x64.movRegReg rcx, r15
     x64.callDirect graphemeBreakProperty
     x64.movRegReg r13, r8
-  __il_body#79:
+  __il_body#67:
     x64.movRegImm32 rcx, 0
-  __il_cont#78:
+  __il_cont#66:
     x64.movRegReg rdx, r13
     x64.movRegReg rax, r15
     x64.callDirect graphemeStateUpdate
     x64.loadRegSlot rdx, slot6
-    x64.jmp whilehdr#59
+    x64.jmp whilehdr#61
   scan:
     x64.movRegReg rcx, rbx
     x64.callDirect utf8DecodeAt
     x64.movRegReg r15, r8
-    x64.storeSlotReg slot2, r15
+    x64.storeSlotReg slot3, r15
     x64.movRegReg rcx, r15
     x64.callDirect graphemeBreakProperty
     x64.storeSlotReg slot4, r8
-  __il_body#81:
+  __il_body#69:
     x64.cmpRegImm32 r13, 0
-    x64.jcc less, __rc_panic#143
-  __rc_chk#144:
+    x64.jcc less, __rc_panic#131
+  __rc_chk#132:
     x64.cmpRegImm32 r13, 13
-    x64.jcc greater, __rc_panic#143
-  __rc_ok#142:
+    x64.jcc greater, __rc_panic#131
+  __rc_ok#130:
     x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#146
-  __rc_chk#147:
+    x64.jcc less, __rc_panic#134
+  __rc_chk#135:
     x64.cmpRegImm32 r8, 13
-    x64.jcc greater, __rc_panic#146
-  __rc_ok#145:
+    x64.jcc greater, __rc_panic#134
+  __rc_ok#133:
     x64.cmpRegImm32 r15, 0
-    x64.jcc less, __rc_panic#149
-  __rc_chk#150:
+    x64.jcc less, __rc_panic#137
+  __rc_chk#138:
     x64.cmpRegImm32 r15, 1114111
-    x64.jcc greater, __rc_panic#149
-  __rc_ok#148:
+    x64.jcc greater, __rc_panic#137
+  __rc_ok#136:
     x64.cmpRegImm32 r13, 1
     x64.setccReg equal, rax
     x64.movRegImm32 rcx, 0
-    x64.jcc notEqual, scmerge#83
-  andrhs#82:
+    x64.jcc notEqual, scmerge#71
+  andrhs#70:
     x64.cmpRegImm32 r8, 2
     x64.setccReg equal, rcx
+  scmerge#71:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont#73
+  gb3:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#68
+  ifcont#73:
+    x64.cmpRegImm32 r13, 3
+    x64.movRegImm32 rcx, 1
+    x64.jcc equal, scmerge#75
+  orrhs#74:
+    x64.movRegReg rcx, rax
+  scmerge#75:
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, scmerge#77
+  orrhs#76:
+    x64.cmpRegImm32 r13, 2
+    x64.setccReg equal, rax
+  scmerge#77:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#79
+  gb4:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#68
+  ifcont#79:
+    x64.cmpRegImm32 r8, 3
+    x64.movRegImm32 rax, 1
+    x64.jcc equal, scmerge#81
+  orrhs#80:
+    x64.cmpRegImm32 r8, 1
+    x64.setccReg equal, rax
+  scmerge#81:
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, scmerge#83
+  orrhs#82:
+    x64.cmpRegImm32 r8, 2
+    x64.setccReg equal, rax
+    x64.movRegReg rcx, rax
   scmerge#83:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, ifcont#85
-  gb3:
-    x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#80
-  ifcont#85:
-    x64.cmpRegImm32 r13, 3
-    x64.movRegImm32 rcx, 1
-    x64.jcc equal, scmerge#87
-  orrhs#86:
-    x64.movRegReg rcx, rax
-  scmerge#87:
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, scmerge#89
-  orrhs#88:
-    x64.cmpRegImm32 r13, 2
-    x64.setccReg equal, rax
-  scmerge#89:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#91
-  gb4:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#80
-  ifcont#91:
-    x64.cmpRegImm32 r8, 3
-    x64.movRegImm32 rax, 1
-    x64.jcc equal, scmerge#93
-  orrhs#92:
-    x64.cmpRegImm32 r8, 1
-    x64.setccReg equal, rax
-  scmerge#93:
-    x64.movRegImm32 rcx, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#95
-  orrhs#94:
-    x64.cmpRegImm32 r8, 2
-    x64.setccReg equal, rax
-    x64.movRegReg rcx, rax
-  scmerge#95:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, ifcont#97
   gb5:
     x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#80
-  ifcont#97:
+    x64.jmp __il_cont#68
+  ifcont#85:
     x64.cmpRegImm32 r13, 9
-    x64.jcc notEqual, ifcont#107
+    x64.jcc notEqual, ifcont#95
   gb6:
     x64.cmpRegImm32 r8, 9
     x64.movRegImm32 rax, 1
-    x64.jcc equal, scmerge#100
-  orrhs#99:
+    x64.jcc equal, scmerge#88
+  orrhs#87:
     x64.cmpRegImm32 r8, 10
     x64.setccReg equal, rax
-  scmerge#100:
+  scmerge#88:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#102
-  orrhs#101:
+    x64.jcc notEqual, scmerge#90
+  orrhs#89:
     x64.cmpRegImm32 r8, 12
     x64.setccReg equal, rax
     x64.movRegReg rcx, rax
-  scmerge#102:
+  scmerge#90:
     x64.movRegImm32 rax, 1
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, scmerge#104
-  orrhs#103:
+    x64.jcc notEqual, scmerge#92
+  orrhs#91:
     x64.cmpRegImm32 r8, 13
     x64.setccReg equal, rax
-  scmerge#104:
+  scmerge#92:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#107
+    x64.jcc equal, ifcont#95
   gb6_inner:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#80
-  ifcont#107:
+    x64.jmp __il_cont#68
+  ifcont#95:
     x64.cmpRegImm32 r13, 12
     x64.movRegImm32 rax, 1
-    x64.jcc equal, scmerge#109
-  orrhs#108:
+    x64.jcc equal, scmerge#97
+  orrhs#96:
     x64.cmpRegImm32 r13, 10
     x64.setccReg equal, rax
-  scmerge#109:
+  scmerge#97:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#115
+    x64.jcc equal, ifcont#103
   gb7:
     x64.cmpRegImm32 r8, 10
     x64.movRegImm32 rax, 1
-    x64.jcc equal, scmerge#112
-  orrhs#111:
+    x64.jcc equal, scmerge#100
+  orrhs#99:
     x64.cmpRegImm32 r8, 11
     x64.setccReg equal, rax
-  scmerge#112:
+  scmerge#100:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#115
+    x64.jcc equal, ifcont#103
   gb7_inner:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#80
-  ifcont#115:
+    x64.jmp __il_cont#68
+  ifcont#103:
     x64.cmpRegImm32 r13, 13
     x64.movRegImm32 rax, 1
-    x64.jcc equal, scmerge#117
-  orrhs#116:
+    x64.jcc equal, scmerge#105
+  orrhs#104:
     x64.cmpRegImm32 r13, 11
     x64.setccReg equal, rax
-  scmerge#117:
+  scmerge#105:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#121
+    x64.jcc equal, ifcont#109
   gb8:
     x64.cmpRegImm32 r8, 11
-    x64.jcc notEqual, ifcont#121
+    x64.jcc notEqual, ifcont#109
   gb8_inner:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#80
-  ifcont#121:
+    x64.jmp __il_cont#68
+  ifcont#109:
     x64.cmpRegImm32 r8, 4
     x64.movRegImm32 rax, 1
-    x64.jcc equal, scmerge#123
-  orrhs#122:
+    x64.jcc equal, scmerge#111
+  orrhs#110:
     x64.cmpRegImm32 r8, 5
     x64.setccReg equal, rax
-  scmerge#123:
+  scmerge#111:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#125
+    x64.jcc equal, ifcont#113
   gb9:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#80
-  ifcont#125:
+    x64.jmp __il_cont#68
+  ifcont#113:
     x64.cmpRegImm32 r8, 8
-    x64.jcc notEqual, ifcont#127
+    x64.jcc notEqual, ifcont#115
   gb9a:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#80
-  ifcont#127:
+    x64.jmp __il_cont#68
+  ifcont#115:
     x64.cmpRegImm32 r13, 7
-    x64.jcc notEqual, ifcont#129
+    x64.jcc notEqual, ifcont#117
   gb9b:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#80
-  ifcont#129:
+    x64.jmp __il_cont#68
+  ifcont#117:
     x64.cmpRegImm32 r13, 5
     x64.movRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#172
-  andrhs#130:
+    x64.jcc notEqual, critsplit#160
+  andrhs#118:
     x64.movRegReg rcx, r15
     x64.callDirect isExtendedPictographic
-    x64.jmp scmerge#131
-  critsplit#172:
+    x64.jmp scmerge#119
+  critsplit#160:
     x64.movRegReg r8, rax
-  scmerge#131:
+  scmerge#119:
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, ifcont#135
-  __il_body#158:
+    x64.jcc equal, ifcont#123
+  __il_body#146:
     x64.loadRegSlot rax, slot5
     x64.andRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
     x64.setccReg notEqual, rax
-  __il_cont#157:
+  __il_cont#145:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#135
+    x64.jcc equal, ifcont#123
   gb11_check:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#80
-  ifcont#135:
+    x64.jmp __il_cont#68
+  ifcont#123:
     x64.cmpRegImm32 r13, 6
     x64.movRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#137
-  andrhs#136:
+    x64.jcc notEqual, scmerge#125
+  andrhs#124:
     x64.loadRegSlot rax, slot4
     x64.cmpRegImm32 rax, 6
     x64.setccReg equal, rax
-  scmerge#137:
+  scmerge#125:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#141
-  __il_body#152:
+    x64.jcc equal, ifcont#129
+  __il_body#140:
     x64.loadRegSlot rax, slot5
     x64.shrRegImm8 rax, rax, 1
     x64.andRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
     x64.setccReg notEqual, rax
-  __il_cont#151:
+  __il_cont#139:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#141
+    x64.jcc equal, ifcont#129
   gb12_odd:
     x64.movRegImm32 rax, 0
-    x64.jmp __il_cont#80
-  ifcont#141:
+    x64.jmp __il_cont#68
+  ifcont#129:
     x64.movRegImm32 rax, 1
-  __il_cont#80:
+  __il_cont#68:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#63
+    x64.jcc equal, ifcont#65
   breakFound:
-    x64.loadRegSlot rax, slot3
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#75
-  __rc_ok#74:
-    x64.loadRegSlot rax, slot3
-    x64.jmp __il_cont#29
-  ifcont#63:
     x64.loadRegSlot rax, slot2
+    x64.jmp __il_cont#31
+  ifcont#65:
+    x64.loadRegSlot rax, slot3
     x64.loadRegSlot rdx, slot4
     x64.loadRegSlot rcx, slot5
     x64.callDirect graphemeStateUpdate
     x64.movRegReg r13, r8
-    x64.loadRegSlot rdx, slot3
+    x64.loadRegSlot rdx, slot2
     x64.movRegReg rcx, rbx
     x64.callDirect utf8ByteLengthAt
-    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rax, slot2
     x64.leaRegRegReg rdx, rax, r8
     x64.loadRegSlot rax, slot4
     x64.movRegReg r8, r13
     x64.movRegReg r13, rax
-  whilehdr#59:
+  whilehdr#61:
     x64.storeSlotReg slot5, r8
-    x64.storeSlotReg slot3, rdx
+    x64.storeSlotReg slot2, rdx
     x64.cmpRegReg rdx, r14
     x64.jcc below, scan
-  whileexit#61:
-    x64.loadRegSlot rax, slot3
-    x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#77
-  __rc_ok#76:
-    x64.loadRegSlot rax, slot3
-  __il_cont#29:
+  whileexit#63:
+    x64.loadRegSlot rax, slot2
+  __il_cont#31:
     x64.loadRegSlot rcx, slot1
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.movRegReg r13, rax
@@ -522,12 +505,12 @@ func @main {
   whilehdr#22:
     x64.storeSlotReg slot1, rax
     x64.cmpRegReg r13, r12
-    x64.jcc less, __il_body#30
+    x64.jcc less, countLoop
   whileexit#24:
     x64.loadRegSlot rax, slot1
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __rc_panic#26
-  __rc_ok#25:
+    x64.jcc less, __rc_panic#28
+  __rc_ok#27:
     x64.loadRegSlot rax, slot1
   __il_cont#16:
     x64.cmpRegImm32 rax, 0
@@ -569,92 +552,56 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#65:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at grapheme.maxon:46: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#67:
-    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at grapheme.maxon:69: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#143:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at grapheme.maxon:646: Range check failed: value outside typealias 'BreakProperty'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#146:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at grapheme.maxon:646: Range check failed: value outside typealias 'BreakProperty'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#149:
-    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at grapheme.maxon:646: Range check failed: value outside typealias 'Codepoint'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#75:
-    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at grapheme.maxon:115: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#77:
-    x64.leaRegRdata rcx, [rip + __str_blob_23]  ; "panic at grapheme.maxon:126: Range check failed: value outside typealias 'BytePos'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   __rc_panic#26:
-    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at grapheme.maxon:404: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at grapheme.maxon:398: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#131:
+    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#134:
+    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#137:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#28:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at grapheme.maxon:402: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88

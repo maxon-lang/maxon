@@ -8,9 +8,11 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @main {
@@ -38,20 +40,20 @@ func @main {
     x64.movRegImm32 r12, 6
     x64.movRegImm32 r13, 7
     x64.leaRegRdata r14, [rip + __layout_Array_int]
-  __rc_ok#12:
+  __il_body#11:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_resize
     x64.movRegImm32 r15, 0
-  __rc_ok#27:
+  __il_body#13:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.movRegReg rax, r12
     x64.movRegReg r9, r13
     x64.callDirect __managed_fill
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#16
-  tryerr#17:
+    x64.jcc equal, tryok#14
+  tryerr#15:
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at Array.maxon:444: Array.fillPublished: fill OOB \xe2\x80\x94 the window is inside the length the caller just published\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -63,7 +65,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#16:
+  tryok#14:
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, forhdr
@@ -78,63 +80,63 @@ func @main {
   __im_word:
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_slow#29
-  __im_owned#33:
+    x64.jcc notEqual, __im_slow#25
+  __im_owned#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#29
-  __im_bounds#34:
+    x64.jcc less, __im_slow#25
+  __im_bounds#30:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegReg r15, rax
-    x64.jcc aboveEqual, __im_slow#29
-  __im_buffer#35:
+    x64.jcc aboveEqual, __im_slow#25
+  __im_buffer#31:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#29
-  __im_viewed#36:
+    x64.jcc equal, __im_slow#25
+  __im_viewed#32:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#29
-  __im_store#37:
+    x64.jcc notEqual, __im_slow#25
+  __im_store#33:
     x64.storeBaseIndexScaleReg.word64 [rax + r15*8 + 0], r8
     x64.jmp forstep
   __im_stride:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#29
+    x64.jcc notEqual, __im_slow#25
   __im_byte:
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, __im_slow#29
-  __im_owned#38:
+    x64.jcc notEqual, __im_slow#25
+  __im_owned#34:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#29
-  __im_bounds#39:
+    x64.jcc less, __im_slow#25
+  __im_bounds#35:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegReg r15, rax
-    x64.jcc aboveEqual, __im_slow#29
-  __im_buffer#40:
+    x64.jcc aboveEqual, __im_slow#25
+  __im_buffer#36:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#29
-  __im_viewed#41:
+    x64.jcc equal, __im_slow#25
+  __im_viewed#37:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#29
-  __im_store#42:
+    x64.jcc notEqual, __im_slow#25
+  __im_store#38:
     x64.leaRegRegReg rax, rax, r15
     x64.storeBaseDispReg.byte [rax + 0], r8
     x64.jmp forstep
-  __im_slow#29:
+  __im_slow#25:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.movRegReg rax, r8
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, forstep
-  tryerr#24:
+  tryerr#22:
     x64.leaRegRdata rax, [rip + __str_rec_6]  ; "panic at Array.maxon:450: "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
@@ -249,7 +251,7 @@ func @main {
   __rc_chk:
     x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
-  __rc_ok#4:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12

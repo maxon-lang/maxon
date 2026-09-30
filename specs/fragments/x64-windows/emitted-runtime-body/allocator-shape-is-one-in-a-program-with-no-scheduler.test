@@ -11,19 +11,12 @@ end 'main'
 ExitCode: 1
 ---
 data {
-  __sched_tls_teb_offset@0 = i64 0
-  __sched_allm@8 = i64 0
-  __sched_lock@16 = i64 0
-  __sched_preempt_ext_lock@24 = i64 0
-  __sched_preempt_context@32 = i64 0
-  __slab_arena_list@40 = i64 0
-  __slab_arena_map_l1@48 = i64 0
-  __slab_state@56 = i64 0
-  __ds_base@64 = i64 0
-  __dbg_ctl@72 = i64 0
-  __mrt_console_probe_stdin@80 = i8 0
-  __mrt_console_probe_stdout@81 = i8 0
-  __mrt_console_probe_stderr@82 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @main {
@@ -235,7 +228,7 @@ func @__slab_alloc {
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.cmpRegImm32 r13, 0
     x64.setccReg equal, rdi
-    x64.leaRegRegImm32 r14, rax, 552
+    x64.leaRegRegImm32 r14, rax, 576
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, shard#11
   critsplit#47:
@@ -417,6 +410,10 @@ func @__slab_alloc {
     x64.loadRegSlot r8, slot3
     x64.jmp pop#18
   pop#22:
+    x64.leaRegRdata rdx, [rip + __abort_msg_86]  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
+    x64.movRegImm32 r8, 60
+    x64.movRegImm32 rcx, 4294967284
+    x64.callDirect mrt_write_stream
     x64.movRegImm32 rcx, 86
     x64.movReg32Reg32 rcx, rcx
     x64.iatCall 0
@@ -641,7 +638,7 @@ func @__slab_free {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, rawlocked#26
   rawlocked#27:
-    x64.leaRegRegImm32 rsi, rdi, 552
+    x64.leaRegRegImm32 rsi, rdi, 576
   rawlocked#26:
     x64.movRegImm32 rdi, 1
     x64.lock add [rsi], rdi
@@ -695,7 +692,7 @@ func @__slab_free {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, relist#33
   relist#34:
-    x64.leaRegRegImm32 rsi, rdi, 552
+    x64.leaRegRegImm32 rsi, rdi, 576
   relist#33:
     x64.movRegImm32 rdi, 1
     x64.lock add [rsi], rdi
@@ -745,6 +742,10 @@ func @__slab_free {
     x64.popReg rbp
     x64.ret
   parked:
+    x64.leaRegRdata rdx, [rip + __abort_msg_89]  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
+    x64.movRegImm32 r8, 53
+    x64.movRegImm32 rcx, 4294967284
+    x64.callDirect mrt_write_stream
     x64.movRegImm32 rcx, 89
     x64.movReg32Reg32 rcx, rcx
     x64.iatCall 0

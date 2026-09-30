@@ -1,5 +1,5 @@
 // Test: infallible-cursor-borrow-thrown-edge
-typealias Tag = int(0 to u64.max)
+typealias Tag = int(0 to u64.max) implements ElementIndex
 
 type Item
 	export var name as String
@@ -56,9 +56,11 @@ end 'main'
 ExitCode: 6
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @Item.create {
@@ -71,9 +73,6 @@ func @Item.create {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_ok:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -85,16 +84,6 @@ func @Item.create {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at infallible-cursor-borrow-thrown-edge.test:8: Range check failed: value outside typealias 'Tag'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -149,9 +138,6 @@ func @Reader.consume {
     x64.pushReg r12
     x64.prologue 32
     x64.movRegReg rbx, rcx
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic
-  __rc_ok:
     x64.cmpRegImm32 rdx, 1000000
     x64.jcc belowEqual, ifcont
   rec:
@@ -202,16 +188,6 @@ func @Reader.consume {
   tryok#5:
     x64.movRegImm32 r10, 0
     x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at infallible-cursor-borrow-thrown-edge.test:31: Range check failed: value outside typealias 'Tag'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
@@ -334,7 +310,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at infallible-cursor-borrow-thrown-edge.test:53: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at infallible-cursor-borrow-thrown-edge.test:53: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

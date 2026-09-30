@@ -504,7 +504,16 @@ end 'main'
 
 - Several parameters: `type Pair uses A, B`, instantiated `Pair with (Integer, String)`.
 - A static factory called on the bare generic name infers the arguments from its parameters.
-- One compiled body serves every instantiation.
+- One compiled body serves every instantiation. A method learns how its type arguments are laid out and
+  owned from the instance it is called on, and that includes instances the body composes over its own
+  parameters — `Array with (Pair with T)`, `Box with (T, Integer)`. A closure uses what the function it is
+  written in received.
+- A `static function` has no instance to learn it from. One that needs it — it reads `sizeof` of a type
+  parameter, builds an `Array with T`, stores a borrowed type-parameter value (an element or a field it
+  read, a `for` element), or hands one to a parameter the callee reassigns — must return `Self`, so the
+  caller reads it off the instance the static builds; otherwise it is **E2015**.
+- A generic type whose methods reach an instance of itself through an ever-growing type argument
+  (`Node with (Pair with T)` inside `Node`) has no finite set of instances, and is **E2015**.
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a `float` type argument is not
   yet supported (**E2062**); a type argument to a non-generic type is **E2055**.
 
@@ -592,6 +601,12 @@ function is itself visible like any function: a private one called from another 
 
 A non-generic declaration of the same name is chosen when its parameter types are exactly the argument
 types. Two generic declarations that both infer a type for one call are **E3007**.
+
+A generic function may reassign a parameter declared `T`, and the argument is then passed by reference, as
+for any function (see [Parameter Passing](/docs/language/functions/#parameter-passing)). When a call's name reaches more than one
+declaration visible here — generic or not — and one of them reassigns a parameter, the call is **E2015**:
+the declaration is chosen from the arguments' types after they are read, while a by-reference parameter
+decides how an argument is read. Give the declaration that reassigns its parameter a name of its own.
 
 ### Associated Types
 

@@ -1,0 +1,36 @@
+// Test: a-generic-type-that-is-never-instantiated-may-reassign-its-parameter
+type Lonely uses T
+	export var v as T
+
+	function setOnce(dest T)
+		dest = self.v
+	end 'setOnce'
+end 'Lonely'
+
+function main() returns ExitCode
+	print("ok\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "ok\x0a"
+  __il_body:
+    x64.callDirect __write_stdout
+  __il_cont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

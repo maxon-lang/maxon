@@ -34,9 +34,11 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
 }
 
 func @firstAscii {
@@ -66,6 +68,9 @@ func @main {
     x64.movRegImm32 r13, 0
     x64.jmp forhdr#1
   scan:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#20
+  __rc_ok#19:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
     x64.callDirect findGraphemeEnd
@@ -98,6 +103,9 @@ func @main {
     x64.movRegImm32 r13, 0
     x64.jmp forhdr#7
   scan2:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#22
+  __rc_ok#21:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
     x64.callDirect findGraphemeEnd
@@ -131,6 +139,9 @@ func @main {
     x64.movRegImm32 r13, 0
     x64.jmp forhdr#13
   scan3:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#24
+  __rc_ok#23:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
     x64.callDirect findGraphemeEnd
@@ -361,6 +372,42 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __str_decref
     x64.movRegReg r8, rbx
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at character-literal-adopts-the-character-type.test:8: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#22:
+    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at character-literal-adopts-the-character-type.test:15: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#24:
+    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at character-literal-adopts-the-character-type.test:22: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 248
     x64.popReg r15
     x64.popReg r14

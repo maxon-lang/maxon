@@ -25,13 +25,24 @@
 // part that was identical and that carried the cost: the node space, the seeding rule, the
 // expand-at-most-once discipline, and the termination argument.
 
+export type StructRosterEntry
+	export let layout as StructLayout
+	export let typeNames as TypeNameInterner
+
+	export static function create(layout StructLayout, typeNames TypeNameInterner) returns Self
+		return Self{layout: layout, typeNames: typeNames}
+	end 'create'
+end 'StructRosterEntry'
+
+export typealias StructRosterEntryArray = Array with StructRosterEntry
+
 // One node of the cascade graph — a type whose synthesized cascade body may call other cascades. The
-// LAYOUT travels with the node rather than its name, so a driver never re-fetches it: a struct layout
-// read back out of `signatures` instead of `project` misresolves its field-type ids against the wrong
-// interner (the OPEN #56 mismatch `managedStructFieldDropCallee` exists to prevent). Registered from
-// one table, expanded from the same object.
+// LAYOUT travels with the node rather than its name, and a struct layout with the interner its field-type
+// ids index (`StructRosterEntry`), so a driver never re-fetches it: a layout read against the wrong
+// interner misresolves its field-type ids (the OPEN #56 mismatch `managedStructFieldDropCallee` exists to
+// prevent). Registered from one table, expanded from the same object.
 export union CascadeNode
-	declaredStruct(layout StructLayout)
+	structLayout(entry StructRosterEntry)
 	declaredUnion(layout EnumLayout)
 
 	// A monomorphized generic instance (`Box with String`). Registered by BOTH drivers since W162: an
@@ -48,7 +59,7 @@ export union CascadeNode
 	//
 	// A declared record's (`MmRuntime.dictionaryDestructorSymbol`, W183) — a TUPLE of the enclosing generic's
 	// own parameters is a `structRef` and reaches none of the instance family.
-	declaredStructDictionary(layout StructLayout)
+	structLayoutDictionary(entry StructRosterEntry)
 
 	// A generic instance's DECLARATION VIEW (BATCH41) — a nested declaration-view field names its DICTIONARY
 	// destructor rather than its plain one, which is the second way this classification differs.
