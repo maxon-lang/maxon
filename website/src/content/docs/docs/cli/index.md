@@ -50,6 +50,10 @@ An option the driver does not recognize stops the command before it runs, with
 such as `--workers=0` or an empty `--filter=`, stops it with `error: invalid option value: <arg>`. The
 first such option on the line is the one reported, and the exit code is 1 (2 for `maxon test`).
 
+An option that only other commands take stops the command the same way, before an unknown option is
+looked at, with `error: <option> is taken only by <commands>; <command> does not take it` and the
+command's `Usage:` line on stderr. `maxon help <command>` lists the options a command takes.
+
 ## `maxon execute`
 
 Compiles a program, or reuses a cached build of it, and runs it.
@@ -196,8 +200,8 @@ file and the task name, so each task of a file has a build of its own.
 
 **A task may describe a build**, by calling `Build.build`, `Build.buildWithConfig` or `Build.delegate` —
 the same calls a `.maxproj` target makes (see [Describing a build](/docs/cli/project-structure/#describing-a-build)). The build is
-performed once the task exits 0, and `--output=`, `--target`, `--define` and `--no-debug-info` apply to
-it exactly as they do to `maxon build`, and so does
+performed once the task exits 0, and the options of [`maxon build`](#maxon-build) (`--output=`,
+`--target`, `--define`, `--no-debug-info` and the rest) apply to it exactly as they do there, and so does
 [`rebuild_with_output`](/docs/cli/project-structure/#building-again-with-the-written-program). A task's build that states no output is written to
 `.maxon/<stem>` in the working directory, `<stem>` being the `.maxtasks` file's name without its
 extension.
@@ -407,8 +411,8 @@ nothing looks again, and only a clear that visits every row can still reach it. 
 - **A removal that fails is reported and exits 1**, naming the first file or directory that stayed. A
   cache reported as cleared while it still holds builds is an answer you cannot act on. On Windows, a
   build another process is executing cannot be removed.
-- `cache` takes no options. A word that is not `clear`, or an option, prints a `Usage:` line on
-  **stderr** and exits 1.
+- A word other than `clear` prints a `Usage:` line on **stderr** and exits 1, and any option is refused
+  as [Commands](#_top) describes.
 
 ## `maxon fmt`
 
@@ -646,17 +650,18 @@ maxon help build       # one command's entry and its options
 
 `maxon` with no arguments prints the version, the warning and the commands for using the compiler, and
 exits 0. `maxon help` prints the whole reference, including the commands for working on the compiler,
-with every option each command reads listed under it. An option several commands accept (such as
-`--target=`) is listed under each. Commands are listed alphabetically.
+with every option each command reads listed under it, `--log=` aside (see [Logging](#logging)). An
+option several commands accept (such as `--target=`) is listed under each. Commands are listed alphabetically.
 
 `maxon help <command>` prints one entry. A word that names no command is refused with exit 1 and the
 command list. `help` takes no options.
 
 ## Logging
 
-Every command except [`maxon execute`](#maxon-execute) accepts a logging option. With `run`, a `--log=` after the
-path belongs to the program; written before the command word (`maxon --log=compiler:debug run app.maxon`)
-it is the driver's, and it also brings back the build output `run` otherwise keeps quiet.
+Every command but `cache`, `dap-server`, `fmt`, `help`, `mcp-server` and `upgrade` accepts a logging
+option. With [`maxon execute`](#maxon-execute), a `--log=` after the path belongs to the program; written
+before the command word (`maxon --log=compiler:debug execute app.maxon`) it is the driver's, and it also
+brings back the build output `execute` otherwise keeps quiet.
 
 | Option | Description |
 |--------|-------------|
@@ -667,8 +672,9 @@ it is the driver's, and it also brings back the build output `run` otherwise kee
 
 **Categories:** `compiler`, `lexer`, `parser`, `semantic`, `ir`, `codegen`, `binary`, `testing`
 
-Log lines go to stderr, prefixed with the category and level (`[CMP] INFO: …`). An unrecognized spec is
-reported on stderr and otherwise ignored. `maxon test` lowers the level to `error` unless you pass
+Log lines go to stderr, prefixed with the category and level (`[CMP] INFO: …`). An unrecognized spec
+stops the command before it runs, with `error: invalid option value: <arg>` and exit 1 (2 for
+`maxon test`). `maxon test` lowers the level to `error` unless you pass
 `--log=`, so its stdout is only the report.
 
 ```bash

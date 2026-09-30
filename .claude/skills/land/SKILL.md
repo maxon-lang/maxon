@@ -417,8 +417,9 @@ situation:
   and no branch, and the battery is YOURS, minutes later. The skill's steps 6–7 (gates, commit) are
   standalone-only and it must skip them.
 - **Anything it leaves for triage arrives in its REPORT, and you decide it here**: a defect this change
-  owns is fixed now; a real finding outside it is appended to `todo.md` (a `- ` bullet naming the defect,
-  its file:line and how it was seen) and committed with the change.
+  owns is fixed now; a real finding outside it is fixed too — in this change, or in its own commit
+  landed right after this one. ⛔ **Never a `todo.md` bullet**: a filed defect is a deferred one
+  (AGENTS.md, "No skipped work").
 - ⛔ **COMMENTS ARE NOT ITS CONCERN** — the tree it reads has none by design and §6 writes them all,
   minutes later. Do not brief one in: this file's own warning applies, and a specific instruction in
   your brief outranks the skill's rules.
@@ -548,8 +549,7 @@ folded into the green — CI answers it after the push, and §9's report names i
 
 **ONE commit, on `main`** — this repo develops there; do not branch. The whole change lands together:
 the compiler source, the spec cases, **the documentation and the site pages it regenerates**, **every
-golden the runs touched — minted, modified or deleted** — any `optimization-log.md` row, and any
-`todo.md` bullet §5 filed.
+golden the runs touched — minted, modified or deleted** — and any `optimization-log.md` row.
 ⛔ **Not a commit per piece, and never a partial landing with the rest "to follow"** — the battery you just ran was run on the whole tree, so the whole tree is what it
 licensed you to push.
 

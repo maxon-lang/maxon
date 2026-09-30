@@ -36,7 +36,7 @@ let McpHttpFlagPrefix = "--http="
 let McpIdleTimeoutFlagPrefix = "--idle-timeout="
 let McpMaxSessionsFlagPrefix = "--max-sessions="
 let McpExitOnStdinEofFlag = "--exit-on-stdin-eof"
-let ScaleTestCommandName = "scale-test"
+module let ScaleTestCommandName = "scale-test"
 
 module let OutputFlagPrefix = "--output="
 
@@ -44,10 +44,10 @@ module let OutputFlagPrefix = "--output="
 // usual. Ten minutes gives head room without making a runaway run silent.
 module let CompilerChildTimeoutMs = 600000 as DurationMs
 
-// `fmt` takes no options, including flags other commands implement: `runFmt` refuses any
+// `fmt` takes no options: `main` refuses a flag another command takes, and `runFmt` refuses any other
 // `-`-leading argument (`anyOption`). Silently dropping one is destructive — `maxon fmt --check`
 // would find no path, fall back to the current directory and rewrite the whole tree in place.
-let FmtCommandName = "fmt"
+module let FmtCommandName = "fmt"
 
 // `fmt`'s refusals are its own sentences, not the driver's `Usage:` line. Pinned byte-for-byte by
 // `tests/fmt/fixtures/flag-refused`, `flag-refused-no-path` and `two-paths-refused`.
@@ -167,7 +167,7 @@ let TestColorFlagPrefix = "--color="
 // Failures allowed before the run stops CLAIMING work, when `--bail` is given with no count.
 let DefaultBailAfter = 1
 
-let EmitIrFlag = "--emit-ir"
+module let EmitIrFlag = "--emit-ir"
 
 // Opt-in per build: without it the trace calls are not emitted at all rather than branched over at
 // run time (see `GtRuntime.GtTraceEmitName`).
@@ -234,11 +234,11 @@ module let MetricsFlagPrefix = "--metrics="
 let DefineFlagPrefix = "--define="
 let DefineNameValueSeparator = "="
 
-let RungsFlagPrefix = "--rungs="
-let RepeatFlagPrefix = "--repeat="
-let NoteFlagPrefix = "--note="
-let ResultJsonFlagPrefix = "--result-json="
-let EmitCorpusFlagPrefix = "--emit-corpus="
+module let RungsFlagPrefix = "--rungs="
+module let RepeatFlagPrefix = "--repeat="
+module let NoteFlagPrefix = "--note="
+module let ResultJsonFlagPrefix = "--result-json="
+module let EmitCorpusFlagPrefix = "--emit-corpus="
 
 // Comma, like the `<!-- unsupported-targets: … -->` marker: one separator for every list this
 // project reads.
@@ -279,12 +279,15 @@ function main() returns ExitCode
 
 	let args = MaxonArgs.parse()
 
+	if refusedAnOptionOfAnotherCommand(args) 'anotherCommandsOption'
+		return refusedCommandLineExit(args.command)
+	end 'anotherCommandsOption'
+
 	// A refused option aborts before any command runs: proceeding as though it had been honoured is the
 	// one outcome a caller can neither see nor recover from. The first is reported, being the flag a
-	// reader looks at first. `fmt`, `upgrade` and `mcp-server` are exempt because each refuses what it
-	// does not take itself, and the latter two must be: their own flags are recorded as refused so that no
-	// other command silently accepts them.
-	if not args.refusedOptions.isEmpty() and args.command != MaxonCommand.fmt and args.command != MaxonCommand.upgrade and args.command != MaxonCommand.mcpServer 'badOption'
+	// reader looks at first. `fmt` and `mcp-server` are exempt because each refuses what it does not
+	// take itself, and `mcp-server` must be: the parser records its own flags as unknown.
+	if not args.refusedOptions.isEmpty() and args.command != MaxonCommand.fmt and args.command != MaxonCommand.mcpServer 'badOption'
 		let refusal = try args.refusedOptions.get(0) otherwise panic("main: refusedOptions is not empty and has no first entry")
 
 		match refusal 'why'
@@ -1336,6 +1339,7 @@ end 'refusedFmtPath'
 typealias FormattedFileCount = int(0 to u64.max)
 
 module let ListSeparator = ", "
+let FinalListSeparator = " and "
 
 // A free function because the library carries no `String.join`.
 module function joinedWith(values StringArray, separator String) returns String
@@ -1610,6 +1614,14 @@ union OptionRefusal
 	unknown(spelling String)
 	badValue(spelling String)
 	conflicting(spelling String, other String)
+
+	function refusesAsUnknown(argument String) returns bool
+		return match self 'why'
+			unknown(spelling) gives spelling == argument
+			badValue or
+				conflicting gives false
+		end 'why'
+	end 'refusesAsUnknown'
 end 'OptionRefusal'
 
 typealias OptionRefusalArray = Array with OptionRefusal
@@ -1618,6 +1630,69 @@ function reportUnknownOption(spelling String)
 	printError("error: unknown option: {spelling}\n")
 	printCommandList()
 end 'reportUnknownOption'
+
+function refusedAnOptionOfAnotherCommand(args MaxonArgs) returns bool
+	if args.command == MaxonCommand.unknown 'noCommandGiven'
+		return false
+	end 'noCommandGiven'
+
+	for spelling in args.optionsSeen 'eachOptionSeen'
+		let takers = commandsTaking(spelling, args: args)
+
+		if not takers.isEmpty() and not takers.contains(args.command) 'takenElsewhere'
+			let refusing = try commandReference(args.command) otherwise panic("refusedAnOptionOfAnotherCommand: `unknown` returned above, so the command is a named one")
+			printError("error: {spelling} is taken only by {commandWordsOf(takers)}; {refusing.word} does not take it\n")
+			printError("Usage: maxon {refusing.label()}\n")
+			return true
+		end 'takenElsewhere'
+	end 'eachOptionSeen'
+
+	return false
+end 'refusedAnOptionOfAnotherCommand'
+
+function commandsTaking(spelling String, args MaxonArgs) returns MaxonCommandArray
+	var takers = MaxonCommandArray.create()
+	var admitted = false
+
+	for option in HelpOption.allCases 'eachOption'
+		let entry = optionReference(option)
+
+		if entry.admits(spelling) 'admitted'
+			admitted = true
+
+			for command in entry.commands 'eachTaker'
+				if not takers.contains(command) 'notYetListed'
+					takers.push(command)
+				end 'notYetListed'
+			end 'eachTaker'
+		end 'admitted'
+	end 'eachOption'
+
+	// A parser arm with no entry in `optionReference` panics here on first use, which keeps the table
+	// covering every option the parser accepts. Typed input cannot reach it: an option no arm accepts
+	// is refused as unknown.
+	if not admitted and not args.refusedAsUnknown(spelling) 'unreferenced'
+		panic("commandsTaking: the parser accepted {spelling}, and no option reference admits it")
+	end 'unreferenced'
+
+	return takers
+end 'commandsTaking'
+
+function commandWordsOf(commands MaxonCommandArray) returns String
+	var words = StringArray.create()
+
+	for command in commands 'eachCommand'
+		words.push((try commandReference(command) otherwise panic("commandWordsOf: an option reference names `unknown`, which is no command")).word)
+	end 'eachCommand'
+
+	let last = try words.pop() otherwise panic("commandWordsOf: `refusedAnOptionOfAnotherCommand` names takers only for an option that has one")
+
+	if words.isEmpty() 'aSoleTaker'
+		return last
+	end 'aSoleTaker'
+
+	return "{joinedWith(words, separator: ListSeparator)}{FinalListSeparator}{last}"
+end 'commandWordsOf'
 
 // Written through the diagnostic sink, so an in-process caller capturing it
 // (`SpecTestRunner.compileOneTest`) reads exactly what a command line prints — including the arms
@@ -1703,16 +1778,7 @@ function versionLine() returns String
 end 'versionLine'
 
 function runDapServerCommand(args MaxonArgs) returns ExitCode
-	let usage = "maxon {DapServerCommandName}"
-
-	if not args.anyOption().isEmpty() 'refusedOption'
-		printError("error: {DapServerCommandName} takes no options: {args.anyOption()}\n")
-		printError("Usage: {usage}\n")
-
-		return OwnFailureExit
-	end 'refusedOption'
-
-	if refusedPositionalBeyond(args, allowed: 0, usage: usage) 'unexpectedArgument'
+	if refusedPositionalBeyond(args, allowed: 0, usage: "maxon {DapServerCommandName}") 'unexpectedArgument'
 		return OwnFailureExit
 	end 'unexpectedArgument'
 
@@ -1918,7 +1984,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		monitor gives CommandReference.create(MonitorCommandName, arguments: "<exe> [args...]", summary: "Launch an executable with the debug-stream monitor attached.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		profile gives CommandReference.create(ProfileCommandName, arguments: "run <exe>", summary: "Launch a program and sample where its CPU time goes.", detail: "It needs no instrumentation and no rebuild: only the `.mxdbg` sidecar is read.", audience: CommandAudience.usingTheCompiler)
 		execute gives CommandReference.create(ExecuteCommandName, arguments: "<file|directory> [args...]", summary: "Compile a program and run it, reusing a cached build when nothing changed.", detail: "Everything after the path is the PROGRAM's command line and reaches it untouched; its stdin, stdout, stderr and exit code are this command's own, and the build itself says nothing.{ParagraphSeparator}A first argument ending in `{MaxonSourceExtension}` selects this command with no word at all, which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.{ParagraphSeparator}The build is kept in a per-program directory under the first of {cacheRootChain()} whose variable names a directory this compiler can create, and reused while the program's sources, the standard library and this compiler all still hash the same. `{CacheCommandName} {CacheClearVerb}` empties it. Freshness is a CONTENT hash rather than a timestamp: a file's modification time is whole seconds, so an edit landing in the same second as a build would tie.", audience: CommandAudience.usingTheCompiler)
-		run gives CommandReference.create(RunCommandName, arguments: "[<task> [args...]]", summary: "Run a task declared in the `{TaskFileExtension}` file in the working directory.", detail: "A task is an exported function of no parameters returning `ExitCode`, asked for by its name with each `_` written `-` (`maxon {RunCommandName} build-ext` runs `build_ext`). With no task named, the tasks are listed. Everything after the task name reaches it as its own command line, and its stdin, stdout, stderr and exit code are this command's own.{ParagraphSeparator}A task that describes a build (`Build.build`, `Build.buildWithConfig` or `Build.delegate`) has that build performed once it exits 0, and `{OutputFlagPrefix}<path>`, `{TargetFlagPrefix}<cpu>-<os>` and `{DefineFlagPrefix}<name>=<value>` apply to it exactly as they do to `{BuildSubcommandName}`.", audience: CommandAudience.usingTheCompiler)
+		run gives CommandReference.create(RunCommandName, arguments: "[<task> [args...]]", summary: "Run a task declared in the `{TaskFileExtension}` file in the working directory.", detail: "A task is an exported function of no parameters returning `ExitCode`, asked for by its name with each `_` written `-` (`maxon {RunCommandName} build-ext` runs `build_ext`). With no task named, the tasks are listed. Everything after the task name reaches it as its own command line, and its stdin, stdout, stderr and exit code are this command's own.{ParagraphSeparator}A task that describes a build (`Build.build`, `Build.buildWithConfig` or `Build.delegate`) has that build performed once it exits 0, and the options listed below apply to it exactly as they do to `{BuildSubcommandName}`.", audience: CommandAudience.usingTheCompiler)
 		scaleTest gives CommandReference.create(ScaleTestCommandName, arguments: "", summary: "Measure how this compiler scales, on a doubling ladder of programs.", detail: "Each rung is compiled and its per-phase cost reported. The MEMORY columns (allocations, frees and bytes) are exact and reproducible; the CPU column is the ticks the compiling thread spent. It does NOT collect WALL time: wall time counts every other process on the box, so a dated table of it would compare a loaded machine in July against an idle one in August. The ladder doubles, so the ratio between rungs IS the growth (x2.00 linear, x4.00 quadratic) and nothing is fitted.{ParagraphSeparator}An INSTRUMENT, not a gate: it renders no verdict, and it exits non-zero only when the RUN broke. The trend it feeds is {OptimizationLogRelativePath}.", audience: CommandAudience.workingOnTheCompiler)
 		specTest gives CommandReference.create(SpecTestCommandName, arguments: "[dir]", summary: "Run the specs suite (default dir: {DefaultSpecDir}).", detail: "Every selected case is compiled IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one.", audience: CommandAudience.workingOnTheCompiler)
 		test gives CommandReference.create(TestCommandName, arguments: "[dir]", summary: "Run a PROJECT's own `test` declarations (default: the working dir).", detail: "Every test found is compiled into ONE binary with a generated entry point and run; which of them RUN is a runtime argument, so a filter change costs no recompile. NOT specs: that is `{SpecTestCommandName}`.{ParagraphSeparator}Exit 0 every test passed; 1 a test failed, crashed, timed out, leaked, did not run, or NO TESTS WERE FOUND, which is never reported as success; {NothingRanExitCode} the run could not happen.", audience: CommandAudience.usingTheCompiler)
@@ -1977,68 +2043,102 @@ enum HelpOption
 	mcpIdleTimeout
 	mcpMaxSessions
 	mcpExitOnStdinEof
+	workerPersistent
+	log
 end 'HelpOption'
 
+union OptionArrival
+	exactly(spelling String)
+	prefixed(prefix String)
+
+	function admits(argument String) returns bool
+		return match self 'form'
+			exactly(spelling) gives argument == spelling
+			prefixed(prefix) gives argument.startsWith(prefix)
+		end 'form'
+	end 'admits'
+end 'OptionArrival'
+
+typealias OptionArrivalArray = Array with OptionArrival
+
 // The commands are a field so the option is printed under each command that reads it, making `maxon
-// help <command>` that command's whole surface.
+// help <command>` that command's whole surface, and so `main` refuses it under every other command.
 type OptionReference
 	export var spelling as String
 	export var description as String
 	export var commands as MaxonCommandArray
+	export var arrivals as OptionArrivalArray
+	export var listed as bool
 
-	static function create(spelling String, description String, commands MaxonCommandArray) returns OptionReference
-		return Self{spelling: spelling, description: description, commands: commands}
+	static function create(spelling String, description String, commands MaxonCommandArray, arrivals OptionArrivalArray) returns OptionReference
+		return Self{spelling: spelling, description: description, commands: commands, arrivals: arrivals, listed: true}
 	end 'create'
+
+	static function unlisted(spelling String, commands MaxonCommandArray, arrivals OptionArrivalArray) returns OptionReference
+		return Self{spelling: spelling, description: "", commands: commands, arrivals: arrivals, listed: false}
+	end 'unlisted'
+
+	function admits(argument String) returns bool
+		for arrival in self.arrivals 'eachArrival'
+			if arrival.admits(argument) 'admitted'
+				return true
+			end 'admitted'
+		end 'eachArrival'
+
+		return false
+	end 'admits'
 end 'OptionReference'
 
 // Every spelling is the constant the parser matches, so a renamed flag is renamed here by the same
 // edit.
 function optionReference(option HelpOption) returns OptionReference
 	return match option 'whichOption'
-		output gives OptionReference.create("{OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build])
-		emitIr gives OptionReference.create(EmitIrFlag, description: "Also write the lowered Target IR beside the exe as <output>.ir.", commands: [MaxonCommand.build])
-		emitIrRuntime gives OptionReference.create("{EmitIrRuntimeFlagPrefix}<a>,<b>", description: "Render these compiler-emitted functions in that IR too. A list of functions to print is a request for the printing, so it implies {EmitIrFlag}.", commands: [MaxonCommand.build])
-		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {supportedTargetList()} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it under the vendored runtime. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run.", commands: [MaxonCommand.build, MaxonCommand.specTest, MaxonCommand.test])
-		debugBatch gives OptionReference.create(BatchOption, description: "Drive the session from {CommandsOptionPrefix} instead of a prompt, and write one JSON object per line on stdout. The program's own stdout and stderr both go to this driver's STDERR, so stdout stays pure JSON. The driver exits 0 when the session completed - the program's own code is DATA in the `exit` event - and 1 on a timeout, a refused session or a crash.", commands: [MaxonCommand.debug])
-		debugCommands gives OptionReference.create("{CommandsOptionPrefix}<cmd;cmd;...|@file>", description: "The commands {BatchOption} runs, separated by `;`, or `@<path>` to read them from a file one per line.", commands: [MaxonCommand.debug])
-		debugComplete gives OptionReference.create("{CompleteOptionPrefix}<partial line>", description: "Print the completions for a partially typed debugger line, one per line, and run nothing. The first word completes to the command vocabulary, aliases included; a break target completes to the functions the program holds.", commands: [MaxonCommand.debug])
-		debugClassify gives OptionReference.create("{ClassifyOptionPrefix}[{ClassifyArm64CpuPrefix}]<hex>[,<hex>...]", description: "Classify raw instruction bytes the way arming a breakpoint does, and print one `len= class= cond= disp= target=` line per comma-separated sequence (`{DebugUnclassifiedReason}` for bytes this build cannot decode). The bytes are x64's; leading `{ClassifyArm64CpuPrefix}` reads the whole list as arm64 instead and answers `len= class= cond= target= reg= frame=`, naming the register an indirect branch goes through or a compare-and-branch tests, and what the instruction does to the frame. It reads no program and runs nothing: it is the door onto the classifiers the step planner and the stack unwinder read.", commands: [MaxonCommand.debug])
-		debugStopTimeout gives OptionReference.create("{StopTimeoutOptionPrefix}<seconds>", description: "How long to wait for the program to stop, and how long a driver-walked `step`, `next`, `finish` or `until` may run (default {DefaultStopTimeoutSeconds:.0} seconds). A wait that expires is a `timeout` event and a failed session; the program keeps running and the session stays open, so `break`, `pause` and `continue` still apply.", commands: [MaxonCommand.debug])
-		debugTargetEnv gives OptionReference.create("{TargetEnvOptionPrefix}NAME=VALUE", description: "Set NAME in the DEBUGGED program's environment, repeatable; everything past the first `=` is the value. The program otherwise inherits this driver's environment.", commands: [MaxonCommand.debug])
-		debugTrace gives OptionReference.create(DebugTraceOption, description: "Create the DebugStream ring `{MonitorCommandName}` reads and name it to the debugged program, so the `trace` command can print the events it committed before a stop. The program must have been built with {DebugStreamFlag}; without it `trace` says so rather than printing an empty list.", commands: [MaxonCommand.debug])
-		noDebugInfo gives OptionReference.create(NoDebugInfoFlag, description: "Do NOT write the <output>.mxdbg debug-info sidecar. It is written BY DEFAULT, and the executable is byte-identical either way: the sidecar never decides which instructions are emitted, so the binary you debug is the binary you shipped.", commands: [MaxonCommand.build, MaxonCommand.test])
-		coverageInstrumentation gives OptionReference.create(CoverageFlag, description: "Instrument for code coverage: the binary counts each statement and branch arm it executes and writes them to <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a separate build; read it back with `{CoverageCommandName}`. It requires the debug-info sidecar, which carries what each counter counts.", commands: [MaxonCommand.build])
-		asyncTrace gives OptionReference.create(AsyncTraceFlag, description: "Write the green-thread trace to stderr as the program runs: one line per spawn, io_yield, io_resume and await. Opt-in per build: a build without it emits no trace calls at all.", commands: [MaxonCommand.build])
-		debugStream gives OptionReference.create(DebugStreamFlag, description: "Emit the DebugStream producer that `{MonitorCommandName}` reads: the memory manager writes its events into a shared-memory ring. Opt-in per build: a build without it is unchanged. Refused on a target that cannot provide one.", commands: [MaxonCommand.build])
-		censusByTag gives OptionReference.create("{CensusByTagFlag}, {CensusByTagFlagPrefix}<phase>", description: "Census the LIVE heap by allocation tag at every compile phase boundary, and report it beside the residency table (it implies `--log=compiler:debug`'s sampling) and as `tag` rows in {MetricsFlagPrefix}'s TSV. Naming a phase censuses that phase alone, which is what a large compile can afford. A compiler built without {DebugStreamFlag} carries no tags, so the census is by SIZE CLASS instead and says so.", commands: [MaxonCommand.build])
-		allocationsByTag gives OptionReference.create("{AllocationsByTagFlag}, {AllocationsByTagFlagPrefix}<phase>", description: "Tally every allocation this compile ASKS FOR by allocation tag and by phase, and report it under the memory table (with `--log=compiler:debug`) and as `churn` rows in {MetricsFlagPrefix}'s TSV. It is CHURN, not a level: a phase that allocates a million short-lived boxes shows them here and nowhere else. Naming a phase tallies that phase alone. A compiler built without {DebugStreamFlag} carries no tags, so nothing is tallied and the report says so.", commands: [MaxonCommand.build])
-		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one.", commands: [MaxonCommand.build, MaxonCommand.verifyRecheck])
-		metrics gives OptionReference.create("{MetricsFlagPrefix}<path>", description: "Write this compile's per-phase time + memory attribution to <path> as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table.", commands: [MaxonCommand.build])
-		specFilter gives OptionReference.create("{FilterFlagPrefix}<pattern>", description: "Run only tests whose `<spec>/<test>` label contains <pattern> (case-sensitive). A bare spec name selects that whole spec. Repeatable: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.specTest])
-		updateRequired gives OptionReference.create(UpdateRequiredFlag, description: "Rewrite the committed .test goldens instead of checking against them. Running a test proves its allocation is CORRECT; only the pinned IR proves the code did not get WORSE. REVIEW THE RESULTING DIFF. Pair it with {FilterFlagPrefix}: an unfiltered run rewrites EVERY golden in the suite.", commands: [MaxonCommand.specTest])
-		rewriteDriftedGoldens gives OptionReference.create(RewriteDriftedGoldensFlag, description: "Rewrite each committed .test golden that DRIFTED from what this compiler emits, for a case that passed on this host; a failing case keeps its golden. A rewritten golden is not reported as drift, and no spec file is touched: trace-capture goldens are re-minted only by {UpdateRequiredFlag}, which this flag cannot be combined with. REVIEW THE RESULTING DIFF.", commands: [MaxonCommand.specTest])
-		network gives OptionReference.create(NetworkFlag, description: "Also run the cases marked `{NetworkMarker} {NetworkLiveValue} -->`, which open a socket to a REAL EXTERNAL HOST. They are OUT of a default run because their verdict measures somebody else's uptime rather than this compiler; a default run NAMES every one it left out.", commands: [MaxonCommand.specTest])
-		workers gives OptionReference.create("{WorkersFlagPrefix}<n>", description: "Run the suite on <n> persistent worker subprocesses (default {defaultWorkerCount()}, this machine). 1 is this same pool with one worker in it, NOT a serial path: every worker count must print BYTE-IDENTICAL output, and that invariance is the pool's sharpest gate.", commands: [MaxonCommand.specTest])
-		rungs gives OptionReference.create("{RungsFlagPrefix}<n>", description: "Climb <n> rungs (default {DefaultRungCount}, range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the program, so this is exponential in cost.", commands: [MaxonCommand.scaleTest])
-		repeat gives OptionReference.create("{RepeatFlagPrefix}<n>", description: "Compile every rung <n> times (default {DefaultRepeatCount}, range {MinRepeatCount}-{MaxRepeatCount}) and report the LEAST CPU ticks any of them spent in each phase, the least-disturbed sample:  noise can only ADD to a CPU reading and a mean would be dragged by one stall. The MEMORY columns take nothing from a repeat: they are exact, so they come from the first compile and are CROSS-CHECKED for equality against the rest. A memory number that differs between two compiles of one rung is a BROKEN RUN.", commands: [MaxonCommand.scaleTest])
-		note gives OptionReference.create("{NoteFlagPrefix}<text>", description: "Record this run in {OptimizationLogRelativePath}: one dated row of the per-rung allocations and bytes, with <text> as the reason. Without it a run reports and records nothing; WITH it the row is written, moved or not, because it is an INSTRUCTION. The instrument can see exactly WHAT moved and can never see why; you are the only one who knows, and only now.", commands: [MaxonCommand.scaleTest])
-		emitCorpus gives OptionReference.create("{EmitCorpusFlagPrefix}<dir>", description: "Write the generated corpus to <dir> and compile nothing.", commands: [MaxonCommand.scaleTest])
-		resultJson gives OptionReference.create("{ResultJsonFlagPrefix}<path>", description: "Write the whole run (per-rung and per-phase memory, and the deltas from the last recorded run) to <path> as JSON, so a tool never has to scrape the human report.", commands: [MaxonCommand.scaleTest])
-		testFilter gives OptionReference.create("{FilterFlagPrefix}P", description: "Run only tests whose NAME or FILE contains P (case-insensitive). Repeatable, and each value may hold comma-separated patterns: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.test])
-		testList gives OptionReference.create(TestListFlag, description: "Print the tests that would run, and compile nothing unless {TestBuildFlag} is given.", commands: [MaxonCommand.test])
-		testBuild gives OptionReference.create(TestBuildFlag, description: "With {TestListFlag}, also build the test binary, with its debug-info sidecar, and run nothing.", commands: [MaxonCommand.test])
-		testJson gives OptionReference.create(TestJsonFlag, description: "Emit the report as JSON instead of text.", commands: [MaxonCommand.test])
-		testIsolate gives OptionReference.create(TestIsolateFlag, description: "Run every test in its own process, rather than one process per test FILE.", commands: [MaxonCommand.test])
-		testBail gives OptionReference.create("{TestBailFlag}, {TestBailFlagPrefix}N", description: "Stop claiming new work after N failures (default {DefaultBailAfter}); the shard already running finishes, so the total may exceed N.", commands: [MaxonCommand.test])
-		testTimeout gives OptionReference.create("{TestTimeoutFlagPrefix}<ms>", description: "Kill a test process after <ms> milliseconds (default {DefaultTestTimeoutMs}). A whole file shares one process, so {TestIsolateFlag} is what gives each test the full budget to itself.", commands: [MaxonCommand.test])
-		testNoTiming gives OptionReference.create(TestNoTimingFlag, description: "Omit durations, making stdout byte-reproducible.", commands: [MaxonCommand.test])
-		testColor gives OptionReference.create("{TestColorFlagPrefix}{reportColorChoices()}", description: "Colour the report; `auto` means only when stdout is a terminal: not redirected, NO_COLOR unset, TERM not `dumb`. Only wasm32-wasi cannot detect a terminal; there `auto` degrades to `never`, so use `always` to force colour.", commands: [MaxonCommand.test])
-		dryRun gives OptionReference.create(DryRunFlag, description: "Print the install root and the command that would update it, and run nothing. It never bypasses a refusal.", commands: [MaxonCommand.upgrade])
-		devMode gives OptionReference.create(DevFlag, description: "Enable compiler development tools (run_spec_test, run_scale_test, spec_test_outcome, worktree targeting).", commands: [MaxonCommand.mcpServer])
-		mcpHttp gives OptionReference.create("{McpHttpFlagPrefix}<port>", description: "Serve the tool roster over loopback HTTP instead of stdio, on <port>; written bare as `{McpHttpFlag}` it takes whichever free port the kernel gives. The chosen endpoint is printed once on stdout as one JSON line naming it, and nothing else is ever written there. Loopback only: there is no host to choose.", commands: [MaxonCommand.mcpServer])
-		mcpIdleTimeout gives OptionReference.create("{McpIdleTimeoutFlagPrefix}<seconds>", description: "Close an HTTP session untouched for this long, reaping any debug session it held (default {DefaultMcpIdleTimeoutSeconds}).", commands: [MaxonCommand.mcpServer])
-		mcpMaxSessions gives OptionReference.create("{McpMaxSessionsFlagPrefix}<n>", description: "How many HTTP sessions may be live at once (default {DefaultMcpMaxSessions}); an `initialize` past the cap is answered 429.", commands: [MaxonCommand.mcpServer])
-		mcpExitOnStdinEof gives OptionReference.create(McpExitOnStdinEofFlag, description: "With {McpHttpFlag}, close the listener and end every session once this process's stdin reaches end of file, so a server a parent started ends with that parent. Refused without {McpHttpFlag}: over stdio the end of input already ends the server.", commands: [MaxonCommand.mcpServer])
+		output gives OptionReference.create("{OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(OutputFlagPrefix)])
+		emitIr gives OptionReference.create(EmitIrFlag, description: "Also write the lowered Target IR beside the exe as <output>.ir.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(EmitIrFlag)])
+		emitIrRuntime gives OptionReference.create("{EmitIrRuntimeFlagPrefix}<a>,<b>", description: "Render these compiler-emitted functions in that IR too. A list of functions to print is a request for the printing, so it implies {EmitIrFlag}.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(EmitIrRuntimeFlagPrefix)])
+		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {supportedTargetList()} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it under the vendored runtime. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run.", commands: [MaxonCommand.build, MaxonCommand.run, MaxonCommand.specTest, MaxonCommand.test], arrivals: [OptionArrival.prefixed(TargetFlagPrefix)])
+		debugBatch gives OptionReference.create(BatchOption, description: "Drive the session from {CommandsOptionPrefix} instead of a prompt, and write one JSON object per line on stdout. The program's own stdout and stderr both go to this driver's STDERR, so stdout stays pure JSON. The driver exits 0 when the session completed - the program's own code is DATA in the `exit` event - and 1 on a timeout, a refused session or a crash.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.exactly(BatchOption)])
+		debugCommands gives OptionReference.create("{CommandsOptionPrefix}<cmd;cmd;...|@file>", description: "The commands {BatchOption} runs, separated by `;`, or `@<path>` to read them from a file one per line.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(CommandsOptionPrefix)])
+		debugComplete gives OptionReference.create("{CompleteOptionPrefix}<partial line>", description: "Print the completions for a partially typed debugger line, one per line, and run nothing. The first word completes to the command vocabulary, aliases included; a break target completes to the functions the program holds.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(CompleteOptionPrefix)])
+		debugClassify gives OptionReference.create("{ClassifyOptionPrefix}[{ClassifyArm64CpuPrefix}]<hex>[,<hex>...]", description: "Classify raw instruction bytes the way arming a breakpoint does, and print one `len= class= cond= disp= target=` line per comma-separated sequence (`{DebugUnclassifiedReason}` for bytes this build cannot decode). The bytes are x64's; leading `{ClassifyArm64CpuPrefix}` reads the whole list as arm64 instead and answers `len= class= cond= target= reg= frame=`, naming the register an indirect branch goes through or a compare-and-branch tests, and what the instruction does to the frame. It reads no program and runs nothing: it is the door onto the classifiers the step planner and the stack unwinder read.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(ClassifyOptionPrefix)])
+		debugStopTimeout gives OptionReference.create("{StopTimeoutOptionPrefix}<seconds>", description: "How long to wait for the program to stop, and how long a driver-walked `step`, `next`, `finish` or `until` may run (default {DefaultStopTimeoutSeconds:.0} seconds). A wait that expires is a `timeout` event and a failed session; the program keeps running and the session stays open, so `break`, `pause` and `continue` still apply.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(StopTimeoutOptionPrefix)])
+		debugTargetEnv gives OptionReference.create("{TargetEnvOptionPrefix}NAME=VALUE", description: "Set NAME in the DEBUGGED program's environment, repeatable; everything past the first `=` is the value. The program otherwise inherits this driver's environment.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(TargetEnvOptionPrefix)])
+		debugTrace gives OptionReference.create(DebugTraceOption, description: "Create the DebugStream ring `{MonitorCommandName}` reads and name it to the debugged program, so the `trace` command can print the events it committed before a stop. The program must have been built with {DebugStreamFlag}; without it `trace` says so rather than printing an empty list.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.exactly(DebugTraceOption)])
+		noDebugInfo gives OptionReference.create(NoDebugInfoFlag, description: "Do NOT write the <output>.mxdbg debug-info sidecar. It is written BY DEFAULT, and the executable is byte-identical either way: the sidecar never decides which instructions are emitted, so the binary you debug is the binary you shipped.", commands: [MaxonCommand.build, MaxonCommand.run, MaxonCommand.test], arrivals: [OptionArrival.exactly(NoDebugInfoFlag)])
+		coverageInstrumentation gives OptionReference.create(CoverageFlag, description: "Instrument for code coverage: the binary counts each statement and branch arm it executes and writes them to <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a separate build; read it back with `{CoverageCommandName}`. It requires the debug-info sidecar, which carries what each counter counts.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(CoverageFlag)])
+		asyncTrace gives OptionReference.create(AsyncTraceFlag, description: "Write the green-thread trace to stderr as the program runs: one line per spawn, io_yield, io_resume and await. Opt-in per build: a build without it emits no trace calls at all.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(AsyncTraceFlag)])
+		debugStream gives OptionReference.create(DebugStreamFlag, description: "Emit the DebugStream producer that `{MonitorCommandName}` reads: the memory manager writes its events into a shared-memory ring. Opt-in per build: a build without it is unchanged. Refused on a target that cannot provide one.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(DebugStreamFlag)])
+		censusByTag gives OptionReference.create("{CensusByTagFlag}, {CensusByTagFlagPrefix}<phase>", description: "Census the LIVE heap by allocation tag at every compile phase boundary, and report it beside the residency table (it implies `--log=compiler:debug`'s sampling) and as `tag` rows in {MetricsFlagPrefix}'s TSV. Naming a phase censuses that phase alone, which is what a large compile can afford. A compiler built without {DebugStreamFlag} carries no tags, so the census is by SIZE CLASS instead and says so.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(CensusByTagFlag), OptionArrival.prefixed(CensusByTagFlagPrefix)])
+		allocationsByTag gives OptionReference.create("{AllocationsByTagFlag}, {AllocationsByTagFlagPrefix}<phase>", description: "Tally every allocation this compile ASKS FOR by allocation tag and by phase, and report it under the memory table (with `--log=compiler:debug`) and as `churn` rows in {MetricsFlagPrefix}'s TSV. It is CHURN, not a level: a phase that allocates a million short-lived boxes shows them here and nowhere else. Naming a phase tallies that phase alone. A compiler built without {DebugStreamFlag} carries no tags, so nothing is tallied and the report says so.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(AllocationsByTagFlag), OptionArrival.prefixed(AllocationsByTagFlagPrefix)])
+		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one.", commands: [MaxonCommand.build, MaxonCommand.run, MaxonCommand.verifyRecheck], arrivals: [OptionArrival.prefixed(DefineFlagPrefix)])
+		metrics gives OptionReference.create("{MetricsFlagPrefix}<path>", description: "Write this compile's per-phase time + memory attribution to <path> as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(MetricsFlagPrefix)])
+		specFilter gives OptionReference.create("{FilterFlagPrefix}<pattern>", description: "Run only tests whose `<spec>/<test>` label contains <pattern> (case-sensitive). A bare spec name selects that whole spec. Repeatable: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(FilterFlagPrefix)])
+		updateRequired gives OptionReference.create(UpdateRequiredFlag, description: "Rewrite the committed .test goldens instead of checking against them. Running a test proves its allocation is CORRECT; only the pinned IR proves the code did not get WORSE. REVIEW THE RESULTING DIFF. Pair it with {FilterFlagPrefix}: an unfiltered run rewrites EVERY golden in the suite.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(UpdateRequiredFlag)])
+		rewriteDriftedGoldens gives OptionReference.create(RewriteDriftedGoldensFlag, description: "Rewrite each committed .test golden that DRIFTED from what this compiler emits, for a case that passed on this host; a failing case keeps its golden. A rewritten golden is not reported as drift, and no spec file is touched: trace-capture goldens are re-minted only by {UpdateRequiredFlag}, which this flag cannot be combined with. REVIEW THE RESULTING DIFF.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(RewriteDriftedGoldensFlag)])
+		network gives OptionReference.create(NetworkFlag, description: "Also run the cases marked `{NetworkMarker} {NetworkLiveValue} -->`, which open a socket to a REAL EXTERNAL HOST. They are OUT of a default run because their verdict measures somebody else's uptime rather than this compiler; a default run NAMES every one it left out.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(NetworkFlag)])
+		workers gives OptionReference.create("{WorkersFlagPrefix}<n>", description: "Run the suite on <n> persistent worker subprocesses (default {defaultWorkerCount()}, this machine). 1 is this same pool with one worker in it, NOT a serial path: every worker count must print BYTE-IDENTICAL output, and that invariance is the pool's sharpest gate.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(WorkersFlagPrefix)])
+		rungs gives OptionReference.create("{RungsFlagPrefix}<n>", description: "Climb <n> rungs (default {DefaultRungCount}, range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the program, so this is exponential in cost.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(RungsFlagPrefix)])
+		repeat gives OptionReference.create("{RepeatFlagPrefix}<n>", description: "Compile every rung <n> times (default {DefaultRepeatCount}, range {MinRepeatCount}-{MaxRepeatCount}) and report the LEAST CPU ticks any of them spent in each phase, the least-disturbed sample:  noise can only ADD to a CPU reading and a mean would be dragged by one stall. The MEMORY columns take nothing from a repeat: they are exact, so they come from the first compile and are CROSS-CHECKED for equality against the rest. A memory number that differs between two compiles of one rung is a BROKEN RUN.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(RepeatFlagPrefix)])
+		note gives OptionReference.create("{NoteFlagPrefix}<text>", description: "Record this run in {OptimizationLogRelativePath}: one dated row of the per-rung allocations and bytes, with <text> as the reason. Without it a run reports and records nothing; WITH it the row is written, moved or not, because it is an INSTRUCTION. The instrument can see exactly WHAT moved and can never see why; you are the only one who knows, and only now.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(NoteFlagPrefix)])
+		emitCorpus gives OptionReference.create("{EmitCorpusFlagPrefix}<dir>", description: "Write the generated corpus to <dir> and compile nothing.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(EmitCorpusFlagPrefix)])
+		resultJson gives OptionReference.create("{ResultJsonFlagPrefix}<path>", description: "Write the whole run (per-rung and per-phase memory, and the deltas from the last recorded run) to <path> as JSON, so a tool never has to scrape the human report.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(ResultJsonFlagPrefix)])
+		testFilter gives OptionReference.create("{FilterFlagPrefix}P", description: "Run only tests whose NAME or FILE contains P (case-insensitive). Repeatable, and each value may hold comma-separated patterns: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.test], arrivals: [OptionArrival.prefixed(FilterFlagPrefix)])
+		testList gives OptionReference.create(TestListFlag, description: "Print the tests that would run, and compile nothing unless {TestBuildFlag} is given.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestListFlag)])
+		testBuild gives OptionReference.create(TestBuildFlag, description: "With {TestListFlag}, also build the test binary, with its debug-info sidecar, and run nothing.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestBuildFlag)])
+		testJson gives OptionReference.create(TestJsonFlag, description: "Emit the report as JSON instead of text.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestJsonFlag)])
+		testIsolate gives OptionReference.create(TestIsolateFlag, description: "Run every test in its own process, rather than one process per test FILE.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestIsolateFlag)])
+		testBail gives OptionReference.create("{TestBailFlag}, {TestBailFlagPrefix}N", description: "Stop claiming new work after N failures (default {DefaultBailAfter}); the shard already running finishes, so the total may exceed N.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestBailFlag), OptionArrival.prefixed(TestBailFlagPrefix)])
+		testTimeout gives OptionReference.create("{TestTimeoutFlagPrefix}<ms>", description: "Kill a test process after <ms> milliseconds (default {DefaultTestTimeoutMs}). A whole file shares one process, so {TestIsolateFlag} is what gives each test the full budget to itself.", commands: [MaxonCommand.test], arrivals: [OptionArrival.prefixed(TestTimeoutFlagPrefix)])
+		testNoTiming gives OptionReference.create(TestNoTimingFlag, description: "Omit durations, making stdout byte-reproducible.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestNoTimingFlag)])
+		testColor gives OptionReference.create("{TestColorFlagPrefix}{reportColorChoices()}", description: "Colour the report; `auto` means only when stdout is a terminal: not redirected, NO_COLOR unset, TERM not `dumb`. Only wasm32-wasi cannot detect a terminal; there `auto` degrades to `never`, so use `always` to force colour.", commands: [MaxonCommand.test], arrivals: [OptionArrival.prefixed(TestColorFlagPrefix)])
+		dryRun gives OptionReference.create(DryRunFlag, description: "Print the install root and the command that would update it, and run nothing. It never bypasses a refusal.", commands: [MaxonCommand.upgrade], arrivals: [OptionArrival.exactly(DryRunFlag)])
+		devMode gives OptionReference.create(DevFlag, description: "Enable compiler development tools (run_spec_test, run_scale_test, spec_test_outcome, worktree targeting).", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.exactly(DevFlag)])
+		mcpHttp gives OptionReference.create("{McpHttpFlagPrefix}<port>", description: "Serve the tool roster over loopback HTTP instead of stdio, on <port>; written bare as `{McpHttpFlag}` it takes whichever free port the kernel gives. The chosen endpoint is printed once on stdout as one JSON line naming it, and nothing else is ever written there. Loopback only: there is no host to choose.", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.exactly(McpHttpFlag), OptionArrival.prefixed(McpHttpFlagPrefix)])
+		mcpIdleTimeout gives OptionReference.create("{McpIdleTimeoutFlagPrefix}<seconds>", description: "Close an HTTP session untouched for this long, reaping any debug session it held (default {DefaultMcpIdleTimeoutSeconds}).", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.prefixed(McpIdleTimeoutFlagPrefix)])
+		mcpMaxSessions gives OptionReference.create("{McpMaxSessionsFlagPrefix}<n>", description: "How many HTTP sessions may be live at once (default {DefaultMcpMaxSessions}); an `initialize` past the cap is answered 429.", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.prefixed(McpMaxSessionsFlagPrefix)])
+		mcpExitOnStdinEof gives OptionReference.create(McpExitOnStdinEofFlag, description: "With {McpHttpFlag}, close the listener and end every session once this process's stdin reaches end of file, so a server a parent started ends with that parent. Refused without {McpHttpFlag}: over stdio the end of input already ends the server.", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.exactly(McpExitOnStdinEofFlag)])
+		workerPersistent gives OptionReference.unlisted(WorkerPersistentFlag, commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(WorkerPersistentFlag)])
+		log gives OptionReference.unlisted("{LogFlagPrefix}<spec>", commands: namedCommandsExcept([MaxonCommand.cache, MaxonCommand.dapServer, MaxonCommand.fmt, MaxonCommand.help, MaxonCommand.mcpServer, MaxonCommand.upgrade]), arrivals: [OptionArrival.prefixed(LogFlagPrefix)])
 	end 'whichOption'
 end 'optionReference'
 
@@ -2054,6 +2154,18 @@ function namedCommands() returns MaxonCommandArray
 
 	return named
 end 'namedCommands'
+
+function namedCommandsExcept(excluded MaxonCommandArray) returns MaxonCommandArray
+	var kept = MaxonCommandArray.create()
+
+	for command in namedCommands() 'eachCommand'
+		if not excluded.contains(command) 'notExcluded'
+			kept.push(command)
+		end 'notExcluded'
+	end 'eachCommand'
+
+	return kept
+end 'namedCommandsExcept'
 
 // Declaration order is alphabetical, so a filtered run needs no sort.
 function commandsFor(audience CommandAudience) returns MaxonCommandArray
@@ -2177,7 +2289,7 @@ function printCommandSection(command MaxonCommand)
 	for option in HelpOption.allCases 'eachOption'
 		let entry = optionReference(option)
 
-		if entry.commands.contains(command) 'thisCommandReadsIt'
+		if entry.listed and entry.commands.contains(command) 'thisCommandReadsIt'
 			printHelpEntry("  {entry.spelling}", text: entry.description)
 		end 'thisCommandReadsIt'
 	end 'eachOption'
@@ -2207,16 +2319,7 @@ function helpUsageLine() returns String
 	return "maxon {HelpCommandName} [<command>]"
 end 'helpUsageLine'
 
-// Refuses options through `anyOption`, because `refusedOptions` never holds a well-formed flag this
-// driver implements: `maxon --emit-ir help` would otherwise print the reference as though the flag
-// meant something.
 function runHelp(args MaxonArgs) returns ExitCode
-	if not args.anyOption().isEmpty() 'refusedOption'
-		printError("error: {HelpCommandName} takes no options: {args.anyOption()}\n")
-		printError("Usage: {helpUsageLine()}\n")
-		return OwnFailureExit
-	end 'refusedOption'
-
 	if refusedPositionalBeyond(args, allowed: 1, usage: helpUsageLine()) 'unexpectedArgument'
 		return OwnFailureExit
 	end 'unexpectedArgument'
@@ -2250,7 +2353,7 @@ function noCommandGiven(args MaxonArgs) returns ExitCode
 	end 'nothingWasTyped'
 
 	if args.paths.isEmpty() 'anOptionWithNoCommand'
-		printError("error: no command given, and {args.anyOption()} names an option rather than one\n")
+		printError("error: no command given; {args.anyOption()} names an option rather than one\n")
 	end 'anOptionWithNoCommand' else 'aWordThatNamesNoCommand'
 		printError("error: unknown command: {args.solePositional()}\n")
 	end 'aWordThatNamesNoCommand'
@@ -2402,13 +2505,15 @@ export type MaxonArgs
 	// the chatter. A bool, because `parseLogOption` already applied the spec.
 	export var logOverridden as bool
 
-	// Every `-`-leading argument, whichever arm consumes it and wherever it sat. `refusedOptions` holds
-	// only those no arm accepted, so it never sees a well-formed flag this driver implements, and `maxon
-	// --emit-ir fmt` would format the current directory in place. A command-gated arm cannot replace
-	// this: the parser is order-independent, so a flag may precede the command word.
+	// Every `-`-leading argument the driver reads as its own, whichever arm consumes it and wherever it
+	// sat. The tail after a tail-stopping command word (`execute`, `monitor`, `debug`, `coverage`,
+	// `profile`) and a wordless program's whole command line belong to the program and are not recorded.
+	// `refusedOptions` holds only those no arm accepted, so it never sees a well-formed flag this driver
+	// implements, and `maxon --emit-ir fmt` would format the current directory in place. A command-gated
+	// arm cannot replace this: the parser is order-independent, so a flag may precede the command word.
 	//
-	// Every arrival is kept so a command with options of its own can refuse the rest
-	// (`firstOptionOtherThan`, `runMcpServerCommand`).
+	// Every arrival is kept so `main` can refuse an option the command does not take, and
+	// `runMcpServerCommand` every option it does not name.
 	export var optionsSeen as SourcePathSpellingArray
 
 	// Non-empty when an option was unknown or took a bad value: `main` refuses to run on a partly parsed
@@ -2426,21 +2531,20 @@ export type MaxonArgs
 		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), goldenWrites: GoldenWrites.mintMissing, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
 	end 'create'
 
-	// A command that takes no options refuses by this.
+	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
 	module function anyOption() returns String
 		return try self.optionsSeen.get(0) otherwise ""
 	end 'anyOption'
 
-	// `upgrade` refuses by this: its one option trips `main`'s refused-option gate, which exempts it.
-	module function firstOptionOtherThan(allowed String) returns String
-		for option in self.optionsSeen 'each'
-			if option != allowed 'notMine'
-				return option
-			end 'notMine'
-		end 'each'
+	function refusedAsUnknown(spelling String) returns bool
+		for refusal in self.refusedOptions 'eachRefusal'
+			if refusal.refusesAsUnknown(spelling) 'thisOne'
+				return true
+			end 'thisOne'
+		end 'eachRefusal'
 
-		return ""
-	end 'firstOptionOtherThan'
+		return false
+	end 'refusedAsUnknown'
 
 	function selectGoldenWrites(typed GoldenWrites, spelling String)
 		if self.goldenWrites != typed 'anotherMode'
@@ -2476,11 +2580,6 @@ export type MaxonArgs
 		while i < args.count() 'each'
 			let arg = try args.get(i) otherwise panic("MaxonArgs.parse: index {i} >= args.count() despite the while guard i<args.count()")
 
-			// Recorded before the chain, so it sees a flag whichever arm consumes it. See `anyOption`.
-			if arg.startsWith(OptionPrefix) 'anOption'
-				parsed.optionsSeen.push(arg)
-			end 'anOption'
-
 			// A `.maxon` first argument is `run`: a kernel execs the interpreter for a `#!/usr/bin/env
 			// maxon` script with the script's path first. The tail keeps the file, so both doors hand
 			// `runExecute` the program at position 0. Position 1 only, and no command word ends in that
@@ -2490,6 +2589,13 @@ export type MaxonArgs
 				parsed.paths = monitorTail(args, from: i)
 				break
 			end 'wordlessExecute'
+
+			// Recorded after `wordlessExecute`, whose program path may begin with `-` and is no option
+			// (`refusedAnOptionOfAnotherCommand` would panic on it), and before the chain, so it sees a
+			// flag whichever arm consumes it. See `optionsSeen`.
+			if arg.startsWith(OptionPrefix) 'anOption'
+				parsed.optionsSeen.push(arg)
+			end 'anOption'
 
 			// Tail-stopping: the arms below are order-independent, so a child's `--filter=mm` would become
 			// `spec-test`'s selection and an unimplemented flag would abort the run before the child is
@@ -2685,22 +2791,15 @@ export type MaxonArgs
 				let spec = try CommandLine.optionValue(arg) otherwise ""
 
 				if not parseLogOption(spec) 'badSpec'
-					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
+					parsed.refusedOptions.push(OptionRefusal.badValue(arg))
 				end 'badSpec' else 'goodSpec'
 					// Recorded so `quietTheBuildChatter` leaves a caller's requested logging alone.
 					parsed.logOverridden = true
 				end 'goodSpec'
 			end 'logFlag' else if arg == DryRunFlag 'dryRunFlag'
 				parsed.dryRun = true
-
-				// Also a bad option: only `upgrade` has a dry run, and `main` exempts it. Another command
-				// taking the flag would do for real what the caller asked to see first.
-				parsed.refusedOptions.push(OptionRefusal.unknown(arg))
 			end 'dryRunFlag' else if arg == DevFlag 'devFlag'
 				parsed.devMode = true
-
-				// Also a bad option, as `--dry-run` is: only `mcp-server` has a contributor mode.
-				parsed.refusedOptions.push(OptionRefusal.unknown(arg))
 			end 'devFlag' else if arg.startsWith(OptionPrefix) 'unknownFlag'
 				parsed.refusedOptions.push(OptionRefusal.unknown(arg))
 			end 'unknownFlag' else 'positional'

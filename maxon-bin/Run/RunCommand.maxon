@@ -1,5 +1,5 @@
-// RunCommand.maxon — `maxon run <file|directory> [args...]`: compile a program, or reuse a cached build
-// of it, and run it as though it had been launched directly.
+// RunCommand.maxon — `maxon execute <file|directory> [args...]`: compile a program, or reuse a cached
+// build of it, and run it as though it had been launched directly.
 //
 // ⭐⭐ **THE STREAMS AND THE EXIT CODE ARE THE PROGRAM'S.** stdin, stdout and stderr are inherited and the
 // child's exit code is this command's, so a program run this way is indistinguishable from one launched
@@ -9,7 +9,7 @@
 // compile that fails still says why on stderr (`compile-error.maxtest` asserts exactly that), and so
 // does a build the emitter could not complete.
 //
-// ⭐⭐ **TWO DOORS, ONE COMMAND.** The word (`maxon run f.maxon a b`) and a first argument ending in
+// ⭐⭐ **TWO DOORS, ONE COMMAND.** The word (`maxon execute f.maxon a b`) and a first argument ending in
 // `.maxon` (`maxon f.maxon a b`), which is what a kernel hands the interpreter for a file whose first line
 // is `#!/usr/bin/env maxon`. Both arms of `MaxonArgs.parse` file the same shape — the program at position
 // 0, its own arguments after it — and reach this ONE function, so the two cannot come to behave
@@ -46,7 +46,7 @@ end 'runExecute'
 
 // The one sentence a cache failure reaches a reader through: the arm IS the fact and its payload is the
 // sentence, so there is nothing to decide here. `module` so `CacheCommand` reports a cache it cannot
-// locate in the same words `run` and `build` do.
+// locate in the same words `execute` and `build` do.
 module function reportCacheError(e RunCacheError, speaker String)
 	match e 'why'
 		unavailable(reason) then printError("{speaker}: {reason}\n")
@@ -82,8 +82,8 @@ export enum CachedBuildError implements Error
 end 'CachedBuildError'
 
 // A build in the cache, and whether THIS call is what put it there. `maxon build` tells its reader which
-// of the two happened to the program that runs its manifest, and `maxon run` ignores it — its contract is
-// that the build says nothing at all.
+// of the two happened to the program that runs its manifest, and `maxon execute` and `maxon run` ignore
+// it — their contract is that the build says nothing at all.
 export type CachedProgram
 	export let executable as FilePath
 	export let compiled as bool

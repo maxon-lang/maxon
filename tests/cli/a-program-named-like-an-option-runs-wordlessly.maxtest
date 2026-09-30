@@ -1,0 +1,16 @@
+let CaseDirName = "a-program-named-like-an-option-runs-wordlessly"
+let ProgramFileName = "-dashed.maxon"
+let CacheDirName = "cache"
+let ProgramSource = "function main() returns ExitCode\n\tprint(\"the dashed program ran\\n\")\n\treturn 0\nend 'main'\n"
+let ProgramOutput = "the dashed program ran"
+
+test 'a program whose file name begins with a dash runs with no command word'
+	let dir = freshCaseDir(CaseDirName)
+	writeStagedFile(dir.join(ProgramFileName), content: ProgramSource)
+
+	let run = runWithCacheRoot([ProgramFileName], cacheRoot: dir.join(CacheDirName), workingDirectory: dir)
+	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+	Expect.equal(run.exitCode(), expected: 0, message: "`maxon {ProgramFileName}` did not run the program. A first argument ending in `.maxon` is the program, whatever it begins with. {said}")
+	Expect.contains(run.stdout, needle: ProgramOutput, message: "`maxon {ProgramFileName}` did not print what the program prints. {said}")
+end 'a program whose file name begins with a dash runs with no command word'

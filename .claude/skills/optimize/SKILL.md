@@ -153,8 +153,7 @@ making it. **Write no row you did not measure.**
   **measured** linear-in-practice across the real corpus is filed as debt — WITH the measurement that
   shows it linear today and the trigger that would make it bend (an inliner, a machine-generated wide
   type). A curve you have not measured is not yet a debt; it is a defect to run down. A debt goes in
-  your REPORT and in `docs/optimization-log.md`, and your caller files it in `todo.md` (standalone, you
-  append the `- ` bullet yourself).
+  your REPORT and in `docs/optimization-log.md`, and your caller fixes it — never files it to `todo.md`.
 - **Check exit codes; never grep for a success string.** Exit **101** = memory leak.
 - ⚠ Redirecting suite runs by hand, `--workers=1` and `fmt`'s path argument are in `maxon-bin/AGENTS.md`,
   once — not repeated here.

@@ -308,14 +308,15 @@ tests/
     profile-usage-names-every-option.maxtest      every option `profile`'s usage body documents is in its `Usage:` line (x64-windows only, as `profile` is)
     hidden-command-still-parses.maxtest     a command left off the short LIST is still a command
     unknown-command-refused.maxtest         a word naming no command fails at both doors
-    help-takes-no-options.maxtest           `help` refuses a flag another command implements
+    an-option-of-another-command-is-refused.maxtest         an option only other commands take is refused, naming the option, the command and the takers
+    a-program-named-like-an-option-runs-wordlessly.maxtest  a first argument `-<name>.maxon` is the program, not an option
+    a-bad-log-spec-is-refused.maxtest                       a `--log=` spec naming no level is refused before the command runs
     upgrade-refuses-a-container-image.maxtest               MAXON_IMAGE set: refused, naming `docker pull` of that image
     upgrade-refuses-a-checkout.maxtest                      a source checkout: refused, pointing at `git pull`, `--dry-run` or not
     upgrade-refuses-homebrew.maxtest                        a keg under `Cellar/maxon/<version>/`: refused, naming `brew upgrade`
     upgrade-refuses-an-unrecognised-layout.maxtest          a flat `maxon` + `stdlib/`: refused, giving the install one-liner
     upgrade-dry-run-names-the-install.maxtest               `<root>/bin/maxon`: names THAT root, never the caller's MAXON_INSTALL, runs nothing
     upgrade-takes-no-arguments.maxtest                      a positional argument and a foreign option are both refused
-    dry-run-is-upgrade-only.maxtest                         every other command refuses `--dry-run`
     spec-test-refuses-rewrite-drifted-goldens-with-update-required.maxtest   the two golden-writing flags together are refused, naming both
     reference-documents-every-command.maxtest               docs/CLI_REFERENCE.md has a `###` heading naming `maxon <command>` for every command `help` documents, and spells every option it lists
     reference-documents-only-real-options.maxtest           every `--option` that document shows is listed by `help` or a subcommand's own usage (x64-windows only, as `profile` is)

@@ -13,6 +13,11 @@ module let ChildTimeoutOption = "timeoutSeconds"
 module let WorkersOption = "workers"
 module let RungsOption = "rungs"
 module let RepeatOption = "repeat"
+module let FilterOption = "filter"
+module let TargetOption = "target"
+module let LogOption = "log"
+module let NoteOption = "note"
+module let EmitCorpusOption = "emitCorpus"
 
 typealias SnippetSerial = int(0 to u64.max)
 
@@ -275,7 +280,7 @@ module function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args O
 
 	// A triple is a flag and a target name a positional: `maxon build` reads a bare word as a target
 	// or else a source path, so a triple pushed positionally would compile a file named `wasm32-wasi`.
-	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
+	let targetArg = getOptionalStringArg(reqDoc, args: args, key: TargetOption, defaultVal: "")
 
 	if not targetArg.isEmpty() 'hasTgt'
 		match parseBuildTarget(targetArg) 'targetKind'
@@ -285,10 +290,10 @@ module function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args O
 	end 'hasTgt'
 
 	if getOptionalBoolArg(reqDoc, args: args, key: "emitIr", defaultVal: false) 'hasIr'
-		argv.push("--emit-ir")
+		argv.push(EmitIrFlag)
 	end 'hasIr'
 
-	return target.answeredWith(runAndReport(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: "build"))
+	return target.answeredWith(runAndReport(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: BuildSubcommandName))
 end 'executeBuildToolWithin'
 
 module function executeExecuteToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
@@ -303,7 +308,7 @@ module function executeExecuteToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args
 	end 'nothingToRun'
 
 	var argv = StringArray.create()
-	argv.push("execute")
+	argv.push(ExecuteCommandName)
 	argv.push(target.file.path)
 
 	for a in getOptionalStringListArg(reqDoc, args: args, key: "arguments") 'each'
@@ -336,7 +341,7 @@ end 'boundSecondsOf'
 
 module function executeTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	var argv = StringArray.create()
-	argv.push("test")
+	argv.push(TestCommandName)
 
 	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: ".")
 
@@ -344,14 +349,27 @@ module function executeTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Op
 		argv.push(pathArg)
 	end 'hasPath'
 
-	let filterArg = getOptionalStringArg(reqDoc, args: args, key: "filter", defaultVal: "")
-
-	if not filterArg.isEmpty() 'hasFilter'
-		argv.push("{FilterFlagPrefix}{filterArg}")
-	end 'hasFilter'
+	argv.append(valuedOptionOf(reqDoc, args: args, key: FilterOption, prefix: FilterFlagPrefix))
 
 	return runAndReport(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: "tests")
 end 'executeTestToolWithin'
+
+function valuedOptionOf(reqDoc JsonDoc, args OptionalNode, key String, prefix String) returns StringArray
+	let value = getOptionalStringArg(reqDoc, args: args, key: key, defaultVal: "")
+
+	if value.isEmpty() 'notGiven'
+		return StringArray.create()
+	end 'notGiven'
+
+	return ["{prefix}{value}"]
+end 'valuedOptionOf'
+
+function wholeOptionOf(reqDoc JsonDoc, args OptionalNode, key String, prefix String) returns StringArray
+	return match optionalWholeArg(reqDoc, args: args, key: key) 'whole'
+		absent gives StringArray.create()
+		given(value) gives ["{prefix}{value}"]
+	end 'whole'
+end 'wholeOptionOf'
 
 module function executeFmtToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	let target = resolveSourceTarget(reqDoc, args: args)
@@ -361,7 +379,7 @@ module function executeFmtToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Opt
 	end 'badSource'
 
 	var argv = StringArray.create()
-	argv.push("fmt")
+	argv.push(FmtCommandName)
 
 	// ⚠ With no path `fmt` formats the whole working directory. That is its documented default.
 	if target.named 'hasPath'
@@ -369,12 +387,12 @@ module function executeFmtToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Opt
 	end 'hasPath'
 
 	if not target.isSnippet 'inPlace'
-		return runAndReport(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: "fmt")
+		return runAndReport(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: FmtCommandName)
 	end 'inPlace'
 
 	// A snippet is formatted in its scratch file and read back: `fmt` rewrites in place and prints
 	// nothing, so the formatted text is the file's new contents.
-	return target.answeredWith(runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: "fmt", answer: function(res CollectedOutput, _ DurationMs) gives formattedSnippetReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, staged: target.file, res: res)))
+	return target.answeredWith(runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: FmtCommandName, answer: function(res CollectedOutput, _ DurationMs) gives formattedSnippetReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, staged: target.file, res: res)))
 end 'executeFmtToolWithin'
 
 function formattedSnippetReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, staged FilePath, res CollectedOutput) returns String
@@ -573,15 +591,13 @@ union SpecToolArgv
 end 'SpecToolArgv'
 
 function specToolArgv(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext, directory String, tool String, filterRequired bool) returns SpecToolArgv
-	let filterPatterns = getOptionalStringListArg(reqDoc, args: args, key: SpecFilterArgument) as FilterPatternArray
+	let filterPatterns = getOptionalStringListArg(reqDoc, args: args, key: FilterOption) as FilterPatternArray
 
 	return match specFilterVerdict(filterPatterns, tool: tool, required: filterRequired) 'filter'
 		usable gives SpecToolArgv.built(specTestArgv(reqDoc, args: args, directory: directory, filterPatterns: filterPatterns))
 		refused(reason) gives SpecToolArgv.refused(toolErrorText(reqDoc, idNode: idNode, message: reason, repoRoot: ctx.repoRootLabel))
 	end 'filter'
 end 'specToolArgv'
-
-let SpecFilterArgument = "filter"
 
 union SpecFilterVerdict
 	usable
@@ -590,12 +606,12 @@ end 'SpecFilterVerdict'
 
 function specFilterVerdict(patterns FilterPatternArray, tool String, required bool) returns SpecFilterVerdict
 	if required and patterns.isEmpty() 'noPattern'
-		return SpecFilterVerdict.refused("{tool}: `{SpecFilterArgument}` must name at least one pattern.")
+		return SpecFilterVerdict.refused("{tool}: `{FilterOption}` must name at least one pattern.")
 	end 'noPattern'
 
 	for pattern in patterns 'eachPattern'
 		if pattern.isEmpty() 'emptyPattern'
-			return SpecFilterVerdict.refused("{tool}: `{SpecFilterArgument}` holds an empty pattern, which would select every case.")
+			return SpecFilterVerdict.refused("{tool}: `{FilterOption}` holds an empty pattern, which would select every case.")
 		end 'emptyPattern'
 	end 'eachPattern'
 
@@ -611,22 +627,9 @@ function specTestArgv(reqDoc JsonDoc, args OptionalNode, directory String, filte
 	let includeNetwork = getOptionalBoolArg(reqDoc, args: args, key: "network", defaultVal: false)
 	argv.append(specSelectionArgv(directory, filterPatterns: filterPatterns, goldenWrites: goldenWrites, includeNetwork: includeNetwork))
 
-	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
-
-	if not targetArg.isEmpty() 'hasTgt'
-		argv.push("{TargetFlagPrefix}{targetArg}")
-	end 'hasTgt'
-
-	match optionalWholeArg(reqDoc, args: args, key: WorkersOption) 'workers'
-		absent then break 'workers'
-		given(workers) then argv.push("{WorkersFlagPrefix}{workers}")
-	end 'workers'
-
-	let logArg = getOptionalStringArg(reqDoc, args: args, key: "log", defaultVal: "")
-
-	if not logArg.isEmpty() 'hasLog'
-		argv.push("{LogFlagPrefix}{logArg}")
-	end 'hasLog'
+	argv.append(valuedOptionOf(reqDoc, args: args, key: TargetOption, prefix: TargetFlagPrefix))
+	argv.append(wholeOptionOf(reqDoc, args: args, key: WorkersOption, prefix: WorkersFlagPrefix))
+	argv.append(valuedOptionOf(reqDoc, args: args, key: LogOption, prefix: LogFlagPrefix))
 
 	return argv
 end 'specTestArgv'
@@ -654,38 +657,16 @@ module function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, ar
 	try File.delete(resultPath) otherwise ignore
 
 	var argv = StringArray.create()
-	argv.push("scale-test")
-	argv.push("--result-json={resultPath.path}")
+	argv.push(ScaleTestCommandName)
+	argv.push("{ResultJsonFlagPrefix}{resultPath.path}")
 
-	match optionalWholeArg(reqDoc, args: args, key: RungsOption) 'rungs'
-		absent then break 'rungs'
-		given(rungs) then argv.push("--rungs={rungs}")
-	end 'rungs'
+	argv.append(wholeOptionOf(reqDoc, args: args, key: RungsOption, prefix: RungsFlagPrefix))
+	argv.append(wholeOptionOf(reqDoc, args: args, key: RepeatOption, prefix: RepeatFlagPrefix))
+	argv.append(valuedOptionOf(reqDoc, args: args, key: NoteOption, prefix: NoteFlagPrefix))
+	argv.append(valuedOptionOf(reqDoc, args: args, key: EmitCorpusOption, prefix: EmitCorpusFlagPrefix))
+	argv.append(valuedOptionOf(reqDoc, args: args, key: LogOption, prefix: LogFlagPrefix))
 
-	match optionalWholeArg(reqDoc, args: args, key: RepeatOption) 'repeat'
-		absent then break 'repeat'
-		given(repeat) then argv.push("--repeat={repeat}")
-	end 'repeat'
-
-	let note = getOptionalStringArg(reqDoc, args: args, key: "note", defaultVal: "")
-
-	if not note.isEmpty() 'hasNote'
-		argv.push("--note={note}")
-	end 'hasNote'
-
-	let emitCorpus = getOptionalStringArg(reqDoc, args: args, key: "emitCorpus", defaultVal: "")
-
-	if not emitCorpus.isEmpty() 'hasCorpus'
-		argv.push("--emit-corpus={emitCorpus}")
-	end 'hasCorpus'
-
-	let logArg = getOptionalStringArg(reqDoc, args: args, key: "log", defaultVal: "")
-
-	if not logArg.isEmpty() 'hasLog'
-		argv.push("{LogFlagPrefix}{logArg}")
-	end 'hasLog'
-
-	return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: "scale-test", answer: function(res CollectedOutput, took DurationMs) gives scaleTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: took, resultPath: resultPath))
+	return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: ScaleTestCommandName, answer: function(res CollectedOutput, took DurationMs) gives scaleTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: took, resultPath: resultPath))
 end 'executeScaleTestToolWithin'
 
 function scaleTestReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, resultPath FilePath) returns String

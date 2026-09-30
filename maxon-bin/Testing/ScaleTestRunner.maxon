@@ -349,7 +349,9 @@ end 'parseRepeatCount'
 // numbers are the reason it matters most: a rung measured against a machine running somebody else's
 // suite is a recorded row of noise, and a recorded row is permanent.
 export function runScaleTest(args MaxonArgs) returns ExitCode
-	if refusedPositionalBeyond(args, allowed: 0, usage: ScaleTestUsage) 'noPositional'
+	// Any positional argument is a typo: a run that swallowed it would spend minutes measuring
+	// something the caller did not ask for.
+	if refusedPositionalBeyond(args, allowed: 0, usage: scaleTestUsage()) 'noPositional'
 		return OwnFailureExit
 	end 'noPositional'
 
@@ -369,22 +371,11 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	return runExit
 end 'runScaleTest'
 
-// `scale-test` reads NO positional argument, so any of them is a typo the run must not swallow — it
-// took several minutes and produced a table about something the caller did not ask for. Spelled with
-// the shared helper rather than a second copy of the message, at the ONE count that differs.
-let ScaleTestUsage = "maxon scale-test [--rungs=<n>] [--repeat=<n>] [--note=<text>] [--emit-corpus=<dir>] [--result-json=<path>]"
+function scaleTestUsage() returns String
+	return "maxon {ScaleTestCommandName} [{RungsFlagPrefix}<n>] [{RepeatFlagPrefix}<n>] [{NoteFlagPrefix}<text>] [{EmitCorpusFlagPrefix}<dir>] [{ResultJsonFlagPrefix}<path>]"
+end 'scaleTestUsage'
 
 function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock TreeLockHold) returns ExitCode
-	// The golden-writing flags are spec-test flags, and the driver parses the command line before it
-	// knows which command is running, so without this refusal they would be accepted here and silently
-	// do nothing: this suite has no goldens.
-	if let goldenFlag = try args.goldenWrites.flag() 'noGoldens'
-		printError("scale-test: {goldenFlag} rewrites committed goldens, and this suite has none:\n")
-		printError("            this suite renders no verdict and has nothing to accept.\n")
-		printError("            To RECORD a run in {OptimizationLogRelativePath}, use --note=\"<what changed and why>\".\n")
-		return OwnFailureExit
-	end 'noGoldens'
-
 	// Where this run is measured is resolved first, because it is two things at once: what each rung
 	// is compiled by and from, and the provenance every recorded row carries.
 	//

@@ -52,17 +52,14 @@ for attempt in $(seq 1 "$MaxAttempts"); do
 
 	git checkout --quiet --force --detach "origin/$Branch"
 	git clean -fdq -- "$GOLDENS_ROOT"
-	goldens_place "$artifacts" . > /dev/null
-	git add -- "$GOLDENS_ROOT"
+	changes="$(goldens_place "$artifacts" . | awk '$1 != "unchanged"')"
 
-	if git diff --cached --quiet -- "$GOLDENS_ROOT"; then
+	if [ -z "$changes" ]; then
 		echo "record-goldens.sh: origin/$Branch already holds every golden $short_sha produced"
 		exit 0
 	fi
 
-	# Counted from git after `git add`: under `eol=lf` a byte comparison with the artifact would call
-	# an unchanged golden rewritten.
-	changes="$(goldens_changes)"
+	git add -- "$GOLDENS_ROOT"
 	tally="$(printf '%s\n' "$changes" | goldens_tally)"
 	printf 'goldens recorded by CI for %s\n\n%s\n' "$short_sha" "$tally" > "$message"
 

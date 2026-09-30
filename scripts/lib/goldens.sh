@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Every name here is prefixed `goldens_`, because a sourced file has no locals.
 #
 # An artifact is written by a CI runner and committed to `main` by `scripts/record-goldens.sh`, so
@@ -119,10 +120,18 @@ goldens_place() {
 
 			if [ ! -e "$goldens_target_file" ]; then
 				goldens_kind=new
-			elif cmp -s "$goldens_artifact/$goldens_path" "$goldens_target_file"; then
-				goldens_kind=unchanged
 			else
-				goldens_kind=rewritten
+				# Compared as git would stage them: `--path=` applies that path's `.gitattributes`, so a
+				# golden differing only in line endings under `eol=lf` is unchanged, and
+				# `record-goldens.sh` decides whether to commit from this answer.
+				goldens_placed_blob="$(git hash-object --path="$goldens_path" -- "$goldens_artifact/$goldens_path")" || return 1
+				goldens_held_blob="$(git hash-object --path="$goldens_path" -- "$goldens_target_file")" || return 1
+
+				if [ "$goldens_placed_blob" = "$goldens_held_blob" ]; then
+					goldens_kind=unchanged
+				else
+					goldens_kind=rewritten
+				fi
 			fi
 
 			mkdir -p "$(dirname "$goldens_target_file")" || return 1

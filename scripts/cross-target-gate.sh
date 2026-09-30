@@ -71,7 +71,7 @@
 set -uo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || exit 2
 
 FILTER=""
 # Both OFF by default: run straight, this script is self-contained and assumes nothing was built or
@@ -251,10 +251,13 @@ fi
 # that happen to be testable here, and a matrix that only lists what it can do is one nobody can
 # read a gap out of.
 banner "arm64-macos + arm64-linux"
-echo "No runner in this tree — scripts/remote-mac.sh was deleted 2026-09-01."
-echo "arm64 is UNVERIFIED, not verified-good. Do not report a change as arm64-clean."
-skip_row "arm64-macos" "no runner (remote-mac.sh deleted)"
-skip_row "arm64-linux" "no runner (remote-mac.sh deleted)"
+echo "This gate does not run the arm64 lanes. CI runs both on every push to main or pull"
+echo "request that changes a CI input; arm64-macos can be hosted by hand through"
+echo "scripts/mac-host.sh (see the compiler-workflow skill)."
+echo "arm64 is UNVERIFIED by this run, not verified-good. Do not report a change as"
+echo "arm64-clean on its strength."
+skip_row "arm64-macos" "not run by this gate (CI runs it; scripts/mac-host.sh hosts it)"
+skip_row "arm64-linux" "not run by this gate (CI runs it)"
 
 # --- The matrix ---
 banner "CROSS-TARGET MATRIX"

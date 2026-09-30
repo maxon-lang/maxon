@@ -80,14 +80,6 @@ export function runUpgrade(args MaxonArgs) returns ExitCode
 		return OwnFailureExit
 	end 'unexpectedArgument'
 
-	let stray = args.firstOptionOtherThan(DryRunFlag)
-
-	if not stray.isEmpty() 'anotherOption'
-		printError("error: {commandAsTyped()} takes no option but {DryRunFlag}; it was given {stray}\n")
-		printError("Usage: {upgradeUsageLine()}\n")
-		return OwnFailureExit
-	end 'anotherOption'
-
 	// `--dry-run` is read only for an install this command updates: it never turns a refusal into a report.
 	return match installOrigin() 'origin'
 		scriptInstall(root) gives upgradeScriptInstall(root, dryRun: args.dryRun)

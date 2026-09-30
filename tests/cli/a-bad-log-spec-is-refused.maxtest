@@ -1,0 +1,12 @@
+let BadLogFlag = "--log=nonsense"
+let VersionCommand = "version"
+let RefusedExitCode = 1
+
+test 'a --log spec naming no level is refused before the command runs'
+	let run = runDriver([VersionCommand, BadLogFlag])
+	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+	Expect.equal(run.exitCode(), expected: RefusedExitCode, message: "`maxon {VersionCommand} {BadLogFlag}` was answered. A logging spec that names no level asks for logging nobody gets. {said}")
+	Expect.contains(run.stderr, needle: BadLogFlag, message: "the refusal does not name the option that was typed. {said}")
+	Expect.isEmpty(run.stdout, message: "`maxon {VersionCommand} {BadLogFlag}` ran the command. {said}")
+end 'a --log spec naming no level is refused before the command runs'

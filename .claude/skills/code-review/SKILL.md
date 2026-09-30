@@ -146,8 +146,9 @@ message.
 - If you find something real but genuinely OUTSIDE this change — a **compiler bug this change does
   not own**, a **distinct feature**, or a **measured-linear perf debt** — **say so and leave
   it for your caller to triage**, rather than smuggling it in OR deferring it on your own authority.
-  It goes in your REPORT and the caller files it in `todo.md`; standalone, append it to `todo.md`
-  yourself — a `- ` bullet naming the defect, its file:line and how it was seen. ⚠ **"Too big to ride
+  It goes in your REPORT — naming the defect, its file:line and how it was seen — and the caller FIXES
+  it, in this change or its own commit; standalone, fix it yourself in a separate commit. ⛔ It is never
+  filed to `todo.md`. ⚠ **"Too big to ride
   along" is NOT the same as "a wrong answer in the files I just reviewed"** — that one you fix, exactly
   like a leak. Do not let this bullet become an escape hatch for a defect the change owns.
 

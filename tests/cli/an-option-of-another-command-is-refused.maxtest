@@ -1,0 +1,72 @@
+let CaseDirName = "an-option-of-another-command-is-refused"
+let MainFileName = "main.maxon"
+let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let OutputStem = "program"
+let VersionCommand = "version"
+let ScaleTestCommand = "scale-test"
+let TestCommand = "test"
+let RewriteDriftedGoldensFlag = "--rewrite-drifted-goldens"
+let UpdateRequiredFlag = "--update-required"
+let RungsFlag = "--rungs=3"
+let ListFlag = "--list"
+let EmitIrFlag = "--emit-ir"
+let LogFlag = "--log=compiler:debug"
+let RefusedExitCode = 1
+
+type ForeignOption
+	export var command as String
+	export var option as String
+	export var owner as String
+	export var commandLine as ListedWordArray
+
+	static function trailing(command String, option String, owner String, arguments ListedWordArray) returns ForeignOption
+		var commandLine = ListedWordArray.create()
+		commandLine.append(arguments)
+		commandLine.push(option)
+
+		return Self{command: command, option: option, owner: owner, commandLine: commandLine}
+	end 'trailing'
+
+	static function leading(command String, option String, owner String) returns ForeignOption
+		return Self{command: command, option: option, owner: owner, commandLine: [option, command]}
+	end 'leading'
+end 'ForeignOption'
+
+typealias ForeignOptionArray = Array with ForeignOption
+
+test 'a command refuses an option only another command takes, naming the option, itself and the taker'
+	let dir = freshCaseDir(CaseDirName)
+	let source = dir.join(MainFileName)
+	writeStagedFile(source, content: MainSource)
+
+	let build = [BuildCommandWord, source.toString(), "{OutputOptionPrefix}{dir.join(OutputStem).toString()}"]
+	var cases = ForeignOptionArray.create()
+
+	for goldenFlag in [RewriteDriftedGoldensFlag, UpdateRequiredFlag] 'eachGoldenFlag'
+		cases.push(ForeignOption.trailing(BuildCommandWord, option: goldenFlag, owner: HiddenAnchorCommand, arguments: build))
+		cases.push(ForeignOption.trailing(VersionCommand, option: goldenFlag, owner: HiddenAnchorCommand, arguments: [VersionCommand]))
+		cases.push(ForeignOption.trailing(ScaleTestCommand, option: goldenFlag, owner: HiddenAnchorCommand, arguments: [ScaleTestCommand]))
+	end 'eachGoldenFlag'
+
+	cases.push(ForeignOption.trailing(BuildCommandWord, option: RungsFlag, owner: ScaleTestCommand, arguments: build))
+	cases.push(ForeignOption.trailing(BuildCommandWord, option: ListFlag, owner: TestCommand, arguments: build))
+	cases.push(ForeignOption.trailing(VersionCommand, option: EmitIrFlag, owner: BuildCommandWord, arguments: [VersionCommand]))
+	cases.push(ForeignOption.trailing(VersionCommand, option: DryRunFlag, owner: UpgradeCommandWord, arguments: [VersionCommand]))
+	cases.push(ForeignOption.trailing(VersionCommand, option: DevFlag, owner: McpServerCommandWord, arguments: [VersionCommand]))
+	cases.push(ForeignOption.leading(HelpCommandWord, option: EmitIrFlag, owner: BuildCommandWord))
+	cases.push(ForeignOption.leading(HelpCommandWord, option: ListFlag, owner: TestCommand))
+	cases.push(ForeignOption.trailing(HelpCommandWord, option: LogFlag, owner: BuildCommandWord, arguments: [HelpCommandWord]))
+	cases.push(ForeignOption.trailing(McpServerCommandWord, option: EmitIrFlag, owner: BuildCommandWord, arguments: [McpServerCommandWord]))
+
+	for foreign in cases 'eachCase'
+		let run = runDriver(foreign.commandLine)
+		let typed = "`maxon {listed(foreign.commandLine)}`"
+		let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+		Expect.equal(run.exitCode(), expected: RefusedExitCode, message: "{typed} was not refused. Only `{foreign.owner}` takes it, and a command that ignores it answers a question nobody asked. {said}")
+		Expect.contains(run.stderr, needle: foreign.option, message: "{typed}'s refusal does not name the option that was typed. {said}")
+		Expect.contains(run.stderr, needle: "; {foreign.command} does not take it", message: "{typed}'s refusal does not name the command that refused it. {said}")
+		Expect.contains(run.stderr, needle: "is taken only by {foreign.owner}", message: "{typed}'s refusal does not name `{foreign.owner}`, the command that takes it. {said}")
+		Expect.isEmpty(run.stdout, message: "{typed} wrote to stdout; a refusal says everything on stderr, and `{McpServerCommandWord}`'s stdout is protocol. {said}")
+	end 'eachCase'
+end 'a command refuses an option only another command takes, naming the option, itself and the taker'
