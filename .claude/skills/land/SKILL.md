@@ -525,13 +525,13 @@ during changes; a battery run before the rebase measured a tree that no longer e
 > narrow it, or land it *with* its first consumer.
 
 > ### ⭐ GOLDEN DRIFT IS NOT A CONCERN. COMMIT IT AND MOVE ON.
-> A run MINTS a golden a case has none of, on the host where the case passed, and never rewrites one that
-> exists: a golden whose bytes differ is REPORTED as drift, not rewritten, and only `--update-required
-> --filter=<spec>` rewrites it. Re-mint the specs whose runtime bodies your change moved on every lane
-> you can host — x64-windows here, x64-linux under WSL (the `compiler-workflow` skill), arm64-macos on
-> the Mac. arm64-linux has no local host: CI fails that lane while it leaves untracked goldens and
-> uploads them as `minted-fragments-arm64-linux`, to unpack at the repository root and commit — name it
-> in §9's report as a lane CI still owes. Whatever the runs minted or rewrote — by
+> A default run MINTS a golden a case has none of, on the host where the case passed, and leaves one that
+> exists as it is: a golden whose bytes differ is REPORTED as drift, and `--update-required
+> --filter=<spec>` or `--rewrite-drifted-goldens` rewrites it. Re-mint the specs whose runtime bodies
+> your change moved on the lanes this host runs — x64-windows here, x64-linux under WSL (the
+> `compiler-workflow` skill). The arm64 lanes need nothing from you: every CI lane runs the suite with
+> `--rewrite-drifted-goldens`, and after the push CI's `record-goldens` job commits what they wrote to
+> `main` as `github-actions[bot]`. Whatever the runs minted or rewrote — by
 > your change or anyone else's — goes into the commit with `git add -A specs/`, and that is the whole of
 > it. **Do not measure it, investigate it, attribute it, explain it or review it**, and do not mention it
 > in the message. Never revert it: a `git checkout --` to tidy `git status` is the one wrong thing to do

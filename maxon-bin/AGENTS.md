@@ -587,7 +587,7 @@ The runner has no `--verbose` (it always prints a line per test), no `--no-batch
 
 ### Common flags
 
-- `--filter=PATTERN` (repeatable), `--update-required`, `--log=CATEGORY:LEVEL` (e.g. `--log=ir:debug`),
+- `--filter=PATTERN` (repeatable), `--update-required`, `--rewrite-drifted-goldens`, `--log=CATEGORY:LEVEL` (e.g. `--log=ir:debug`),
   `--workers=<n>`, `--target=ARCH-OS`, `--network`.
 - ⛔ **There is no `--mm-trace` on any command.** The driver refuses an unimplemented flag loudly
   (`Main.MaxonArgs.parse`, which cites this very spelling as the reason it must), so a leak is read off
@@ -777,19 +777,22 @@ no doc comment, which is how it finds them.
 ## Spec files
 
 - **Golden drift needs no attention.** The goldens under `specs/fragments/<target>/` are reference, not
-  a gate. A run MINTS a golden a case has none of, on the host where that case passed; it never rewrites
-  an existing one — a golden whose bytes differ from this run's compile is REPORTED as drift (`N drifted`
-  beside `0 failed`, the differences in a note on stderr) and the case keeps the verdict its assertions
-  earned. Only `--update-required --filter=<spec>` rewrites a committed golden. A golden that only
-  another host can mint (the arm64 lanes) is minted there: CI fails a lane that leaves untracked goldens
-  and uploads them as an artifact to unpack at the repository root. Whatever a run minted, or an
-  `--update-required` rewrote, is committed with the change (`git add -A specs/`) — never measured,
-  investigated, explained or reverted. (A `RequiredIR` block in a spec file is not drift: it is a test
-  input, and a mismatch is a failing test.)
+  a gate. A default run MINTS a golden a case has none of, on the host where that case passed, and
+  leaves an existing one as it is — a golden whose bytes differ from this run's compile is REPORTED as
+  drift (`N drifted` beside `0 failed`, the differences in a note on stderr) and the case keeps the
+  verdict its assertions earned. `--update-required --filter=<spec>` rewrites a committed golden, and
+  `--rewrite-drifted-goldens` rewrites the drifted ones of cases that passed. Whatever a local run
+  minted or rewrote is committed with the change (`git add -A specs/`) — never measured, investigated,
+  explained or reverted.
+- **CI records the lanes this host cannot run.** Every CI lane runs the suite with
+  `--rewrite-drifted-goldens`, and on a push to `main` the `record-goldens` job commits what the lanes
+  wrote as `github-actions[bot]` (`scripts/record-goldens.sh`). An arm64 golden a change leaves unminted
+  or drifted is therefore nothing to act on. To apply a pull request's goldens locally,
+  `scripts/fetch-goldens.sh <run-id>`.
 - Old 3-digit error codes (e.g. `E022`) in spec files must be updated to the new 4-digit codes.
-- If tests using RequiredIR fail, regenerate with `--update-required` **plus a `filter`**.
-- `--update-required` regenerates RequiredIR but **not** `maxoncstderr` blocks — an error-code
-  renumber moves those by hand.
+- A spec fence the harness does not read (` ```RequiredIR ` among them) is refused, naming the case.
+- `--update-required` re-mints the trace-capture blocks (` ```mm-trace `, ` ```log-trace `) in a spec
+  file but **not** its `maxoncstderr` blocks — an error-code renumber moves those by hand.
 
 ## ⚠ A running MCP server keeps answering from the compiler it was started as
 

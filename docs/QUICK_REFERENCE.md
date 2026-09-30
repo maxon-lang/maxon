@@ -1187,6 +1187,7 @@ Full flags and a worked example: `docs/CLI_REFERENCE.md`.
 |--------|-------------|
 | `--filter=PATTERN` | Run the cases whose `<spec>/<test>` label contains PATTERN, a case-sensitive substring. Repeatable: the run takes every case any pattern selects, and a pattern that selects nothing refuses the run |
 | `--update-required` | Rewrite the committed IR goldens. Pair it with `--filter`; unfiltered it rewrites the whole suite |
+| `--rewrite-drifted-goldens` | Rewrite only the committed IR goldens that drifted, for cases that passed on this host. Refused beside `--update-required` |
 | `--workers=N` | Set the number of parallel test workers |
 | `--target=ARCH-OS` | Compile the cases for another target |
 | `--network` | Also run the cases marked `<!-- network: live -->` |

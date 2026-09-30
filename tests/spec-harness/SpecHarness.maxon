@@ -22,6 +22,7 @@ let BrokenCheckIndent = "\n  "
 module let ResultNoteIndent = "  "
 module let FragmentsDirName = "fragments"
 module let GoldenExtension = ".test"
+module let DriftHeadline = "DRIFTED from what the compiler emits"
 
 #if os(Windows)
 	let HostTempVariable = "TEMP"
@@ -279,6 +280,53 @@ end 'testedCompilerPath'
 module function listing(dir FilePath) returns PathArray
 	return try Directory.list(dir) otherwise panic("spec-harness tests: the gate could not run - could not list {dir.toString()}")
 end 'listing'
+
+module function mintedGoldensIn(staged FilePath) returns PathArray
+	var found = PathArray.create()
+	let fragmentsRoot = staged.join(FragmentsDirName)
+
+	if not Directory.exists(fragmentsRoot) 'nothingMinted'
+		return found
+	end 'nothingMinted'
+
+	for lane in fragmentsListing(fragmentsRoot) 'eachLane'
+		for specGoldens in fragmentsListing(lane) 'eachSpec'
+			for golden in fragmentsListing(specGoldens) 'eachGolden'
+				if golden.fileExtension() == GoldenExtension 'isAGolden'
+					found.push(golden)
+				end 'isAGolden'
+			end 'eachGolden'
+		end 'eachSpec'
+	end 'eachLane'
+
+	return found
+end 'mintedGoldensIn'
+
+function fragmentsListing(dir FilePath) returns PathArray
+	if not Directory.isDirectory(dir) 'aStrayFile'
+		panic("spec-harness tests: the gate could not run - {dir.toString()} is a file where the mint run lays out only directories.")
+	end 'aStrayFile'
+
+	return listing(dir)
+end 'fragmentsListing'
+
+module function mintedGoldenOf(minted PathArray, caseName String) returns FilePath
+	for path in minted 'eachGolden'
+		if path.stem() == caseName 'isTheOne'
+			return path
+		end 'isTheOne'
+	end 'eachGolden'
+
+	panic("spec-harness tests: the gate could not run - the fixture minted no golden for `{caseName}`.")
+end 'mintedGoldenOf'
+
+module function readStagedText(path FilePath) returns String
+	return try File.readText(path) otherwise panic("spec-harness tests: the gate could not run - could not read {path.toString()}.")
+end 'readStagedText'
+
+module function writeStagedText(path FilePath, content String)
+	try File.writeText(path, content: content) otherwise panic("spec-harness tests: the gate could not run - could not write {path.toString()}.")
+end 'writeStagedText'
 
 function withoutCarriageReturns(text String) returns String
 	return text.replace(CarriageReturn, with: "")

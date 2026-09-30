@@ -316,6 +316,7 @@ tests/
     upgrade-dry-run-names-the-install.maxtest               `<root>/bin/maxon`: names THAT root, never the caller's MAXON_INSTALL, runs nothing
     upgrade-takes-no-arguments.maxtest                      a positional argument and a foreign option are both refused
     dry-run-is-upgrade-only.maxtest                         every other command refuses `--dry-run`
+    spec-test-refuses-rewrite-drifted-goldens-with-update-required.maxtest   the two golden-writing flags together are refused, naming both
     reference-documents-every-command.maxtest               docs/CLI_REFERENCE.md has a `###` heading naming `maxon <command>` for every command `help` documents, and spells every option it lists
     reference-documents-only-real-options.maxtest           every `--option` that document shows is listed by `help` or a subcommand's own usage (x64-windows only, as `profile` is)
     build-directory-without-output-names-the-directory.maxtest      `build <dir>` with no `--output=` writes `<dir>/<dirname><ext>`, staged outside the checkout
@@ -590,7 +591,8 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   a fixture that fails for some other reason proves nothing about its refusal.
 - **`gates/<case>/`** holds well-formed specs the harness must accept and then report something about:
   a live-network case left out of a default run and named, an `alone` case run with nothing beside it, an
-  orphaned golden named by the census, a drifted golden named and counted, and the two marker shapes the
+  orphaned golden named by the census, a drifted golden named and counted, a drifted golden that
+  `--rewrite-drifted-goldens` rewrites for a passing case and leaves for a failing one, and the two marker shapes the
   reference grammar reads. Each fixture's own preamble says what its test asserts.
 - **`corpus.maxtest`** holds the pairing: every fixture directory has its `<case>.maxtest` beside
   it, every test file its fixture, and every refusal fixture exactly one spec and its expectation.

@@ -2508,11 +2508,18 @@ case is compiled inside this process, so the compiler under test is the executab
 | `--workers=<n>` | Run on `<n>` persistent worker processes (default: this machine's count, shown by `maxon help spec-test`). `1` is the same pool with one worker, not a serial mode, and output is identical for every count. |
 | `--target=<cpu>-<os>` | Cross-compile each selected test for that target and run it under the vendored runtime. |
 | `--network` | Also run the cases that open a socket to a real external host. A default run names every case it left out. |
-| `--update-required` | Rewrite the committed IR goldens instead of checking against them. Review the diff, and pair it with `--filter`: unfiltered, it rewrites every golden. |
+| `--update-required` | Rewrite the committed IR goldens instead of checking against them, and re-mint the trace-capture blocks in the spec files. Review the diff, and pair it with `--filter`: unfiltered, it rewrites every golden. |
+| `--rewrite-drifted-goldens` | Rewrite each committed IR golden that differs from this run's output, for a case that passed on this host. A failing case keeps its golden, and spec files are left as they are. Review the diff. |
+
+`--update-required` and `--rewrite-drifted-goldens` are refused together:
+`error: --rewrite-drifted-goldens cannot be combined with --update-required` (the flags are named in the
+order typed).
 
 The run prints one line per test, then `N passed, M failed` and lines for skipped, not-run and drifted
 cases. A golden whose text differs from this run's output is reported as drift and does not fail the
-case; only `--update-required` rewrites one.
+case; `--update-required` and `--rewrite-drifted-goldens` rewrite one, and a golden the run rewrote is not
+reported as drift. The compiler repository's CI runs the suite with `--rewrite-drifted-goldens` on each
+target it tests, and a push to `main` commits the goldens those runs wrote.
 
 It refuses to start, with exit **2** and nothing run, when the compiler binary is older than the sources
 it was built from, or when another command holds the checkout's [tree lock](#the-tree-lock).
@@ -2529,6 +2536,7 @@ maxon spec-test --filter=arrays/a-pushed-element-survives-the-push
 maxon spec-test --filter=arrays/ --filter=tuples/   # two specs, one run
 maxon spec-test --target=wasm32-wasi
 maxon spec-test --filter=strings --update-required
+maxon spec-test --rewrite-drifted-goldens
 ```
 
 ### `maxon scale-test`

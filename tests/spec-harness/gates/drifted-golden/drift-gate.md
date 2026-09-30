@@ -3,7 +3,7 @@ feature: harness-gate-drifted-goldens
 ---
 # The drifted-golden gate
 
-`drifted-golden.test.maxon`, beside this directory, runs `spec-test` over a copy of it THREE times — once
+`drifted-golden.maxtest`, beside this directory, runs `spec-test` over a copy of it THREE times — once
 to let the three cases below MINT their goldens, once with TWO of those goldens deliberately CORRUPTED,
 and once with both put back — and requires the corrupted run to NAME both, to show what differs, to count
 them, to leave their cases PASSING and the exit code 0, and then to say nothing at all. What is under test

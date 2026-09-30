@@ -375,11 +375,11 @@ end 'runScaleTest'
 let ScaleTestUsage = "maxon scale-test [--rungs=<n>] [--repeat=<n>] [--note=<text>] [--emit-corpus=<dir>] [--result-json=<path>]"
 
 function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock TreeLockHold) returns ExitCode
-	// `--update-required` is a spec-test flag, and the driver parses the command line before it knows
-	// which command is running, so without this refusal it would be accepted here and silently do
-	// nothing: this suite has no goldens.
-	if args.updateRequired 'noGoldens'
-		printError("scale-test: --update-required is gone. It rewrote the committed memory goldens, and there are none:\n")
+	// The golden-writing flags are spec-test flags, and the driver parses the command line before it
+	// knows which command is running, so without this refusal they would be accepted here and silently
+	// do nothing: this suite has no goldens.
+	if let goldenFlag = try args.goldenWrites.flag() 'noGoldens'
+		printError("scale-test: {goldenFlag} rewrites committed goldens, and this suite has none:\n")
 		printError("            this suite renders no verdict and has nothing to accept.\n")
 		printError("            To RECORD a run in {OptimizationLogRelativePath}, use --note=\"<what changed and why>\".\n")
 		return OwnFailureExit

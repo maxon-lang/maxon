@@ -12,24 +12,15 @@
 #   x64-windows   specs/    natively                          YES (this IS the host)
 #   x64-linux     specs/    WSL2 (static ELF, raw syscalls)   YES, if WSL is installed
 #   wasm32-wasi   specs/    vendored wasmtime                 YES, if vendor/wasmtime is present
-#   arm64-macos   —         NO RUNNER IN THIS TREE            NEVER — see below
-#   arm64-linux   —         NO RUNNER IN THIS TREE            NEVER — see below
+#   arm64-macos   —         not run by this gate              NEVER — see below
+#   arm64-linux   —         not run by this gate              NEVER — see below
 #
-# ⛔ THE TWO arm64 LANES HAVE NO RUNNER. `scripts/remote-mac.sh` WAS DELETED 2026-09-01 (user
-# ruling: we are not going to use that process), and it was the only thing that could reach the Mac.
+# ⛔ THIS GATE DOES NOT RUN THE TWO arm64 LANES. CI runs both on every push; the arm64-macos lane is
+# reached by hand through `scripts/mac-host.sh` (see the `compiler-workflow` skill).
 #
-# They had already been demoted from the per-rung gate to a periodic manual sync, for a measured
-# reason: everything expensive about them was the REMOTE part, not the arm64 part — a bundle
-# transport, a second checkout's build, an OrbStack guest, and a machine that could be asleep,
-# wedged, or behind flaky mDNS. One wedged `orb run` preflight alone burned ~95 minutes and produced
-# no verdict at all. Retiring the transport retires the lanes with it.
-#
-# ⚠ THIS IS A COVERAGE LOSS, AND IT IS STATED RATHER THAN ABSORBED. arm64 is now UNTESTED by this
-# gate — not "fine". Both rows still print, as SKIP with that reason, because the one failure this
-# script exists to prevent is a green matrix being read as coverage it never had. **Do not describe
-# any change as cross-target verified on arm64.** `--mac`, `--mac-host=` and `--require-mac` are
-# gone; passing one is now a hard `unknown argument` exit rather than a flag that quietly does
-# nothing, so a stale invocation FAILS instead of reporting a lane it did not run.
+# ⚠ arm64 is UNTESTED by this gate — not "fine". Both rows still print, as SKIP, because the one
+# failure this script exists to prevent is a green matrix being read as coverage it never had. **Do
+# not describe a change as cross-target verified on arm64 on the strength of this gate.**
 #
 # ⭐ BEST EFFORT MEANS UNREACHABLE IS NOT FAILURE — AND IS NOT SUCCESS EITHER.
 #
@@ -254,10 +245,8 @@ else
 	skip_row "wasm32-wasi" "vendor/wasmtime missing"
 fi
 
-# --- arm64-macos + arm64-linux: NO RUNNER ---
+# --- arm64-macos + arm64-linux: not run here ---
 #
-# `scripts/remote-mac.sh` owned everything about reaching the Mac — the availability split, the
-# bundle transport, the OrbStack preflight, the restore-what-we-touched contract — and it is gone.
 # The rows are kept, and kept SKIP, on purpose: dropping them would shrink the matrix to the targets
 # that happen to be testable here, and a matrix that only lists what it can do is one nobody can
 # read a gap out of.

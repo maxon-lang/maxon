@@ -605,35 +605,27 @@ end 'specFilterVerdict'
 function specTestArgv(reqDoc JsonDoc, args OptionalNode, directory String, filterPatterns FilterPatternArray) returns StringArray
 	var argv = StringArray.create()
 	argv.push(SpecTestCommandName)
-	argv.push(directory)
 
-	for pattern in filterPatterns 'eachPattern'
-		argv.push("{FilterFlagPrefix}{pattern}")
-	end 'eachPattern'
-
-	if getOptionalBoolArg(reqDoc, args: args, key: "network", defaultVal: false) 'hasNet'
-		argv.push("--network")
-	end 'hasNet'
+	let updateRequired = getOptionalBoolArg(reqDoc, args: args, key: "updateRequired", defaultVal: false)
+	let goldenWrites = GoldenWrites.updateRequired if updateRequired else GoldenWrites.mintMissing
+	let includeNetwork = getOptionalBoolArg(reqDoc, args: args, key: "network", defaultVal: false)
+	argv.append(specSelectionArgv(directory, filterPatterns: filterPatterns, goldenWrites: goldenWrites, includeNetwork: includeNetwork))
 
 	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
 
 	if not targetArg.isEmpty() 'hasTgt'
-		argv.push("--target={targetArg}")
+		argv.push("{TargetFlagPrefix}{targetArg}")
 	end 'hasTgt'
 
 	match optionalWholeArg(reqDoc, args: args, key: WorkersOption) 'workers'
 		absent then break 'workers'
-		given(workers) then argv.push("--workers={workers}")
+		given(workers) then argv.push("{WorkersFlagPrefix}{workers}")
 	end 'workers'
-
-	if getOptionalBoolArg(reqDoc, args: args, key: "updateRequired", defaultVal: false) 'hasUr'
-		argv.push("--update-required")
-	end 'hasUr'
 
 	let logArg = getOptionalStringArg(reqDoc, args: args, key: "log", defaultVal: "")
 
 	if not logArg.isEmpty() 'hasLog'
-		argv.push("--log={logArg}")
+		argv.push("{LogFlagPrefix}{logArg}")
 	end 'hasLog'
 
 	return argv
@@ -690,7 +682,7 @@ module function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, ar
 	let logArg = getOptionalStringArg(reqDoc, args: args, key: "log", defaultVal: "")
 
 	if not logArg.isEmpty() 'hasLog'
-		argv.push("--log={logArg}")
+		argv.push("{LogFlagPrefix}{logArg}")
 	end 'hasLog'
 
 	return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: "scale-test", answer: function(res CollectedOutput, took DurationMs) gives scaleTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: took, resultPath: resultPath))

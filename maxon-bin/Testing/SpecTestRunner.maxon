@@ -1005,7 +1005,7 @@ end 'TestRun'
 // `prepared` and `observations` hold exactly one entry per selected test in declaration order, a
 // `notRequired` observation included, so the third pass pairs them by index; a length that disagrees
 // panics rather than misattributing a result.
-export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap) returns SpecRun throws CompileError
+export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap) returns SpecRun throws CompileError
 	var results = SpecTestResultArray.create()
 	var cpu = SuiteCpuTally.zero()
 
@@ -1066,7 +1066,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	var prepared = PreparedTestArray.create()
 
 	for test in tests 'eachCompile'
-		prepared.push(prepareOneTest(test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget, fileMemos: fileMemos))
+		prepared.push(prepareOneTest(test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, fileMemos: fileMemos))
 	end 'eachCompile'
 
 	let observations = executeRuns(prepared, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
@@ -1076,10 +1076,10 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 		let observation = try observations.get(iter.index()) otherwise panic("runOneSpec: {observations.count()} run observations for {prepared.count()} prepared tests — `executeRuns` answers one per prepared test, including the ones that needed no execution")
 		let run = match step 'phase'
 			finished(done) gives done
-			awaiting(pending) gives finishPendingRun(pending, observation: observation, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+			awaiting(pending) gives finishPendingRun(pending, observation: observation, fragmentDir: fragmentDir, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget)
 		end 'phase'
 
-		if updateRequired 'collectTraceRemint'
+		if goldenWrites.remintsTraces() 'collectTraceRemint'
 			collectTraceRemint(reminted, test: test, observation: observation)
 		end 'collectTraceRemint'
 
@@ -2152,7 +2152,7 @@ typealias PreparedTestArray = Array with PreparedTest
 
 // Compile one test in this process and take its verdict as far as it can go without running the
 // program.
-function prepareOneTest(test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
+function prepareOneTest(test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, goldenWrites GoldenWrites, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
 	let exeBase = tempDir.join(test.name)
 
 	// The driver appends the platform extension to the `outputOverride` value
@@ -2164,14 +2164,14 @@ function prepareOneTest(test SpecTest, specName String, tempDir FilePath, exeExt
 
 	match stageTest(tempDir, test: test) 'staging'
 		failed(reason) then return PreparedTest.finished(TestRun.notCompiled(reason))
-		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, fragmentDir: fragmentDir, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 	end 'staging'
 end 'prepareOneTest'
 
 // Compile a test whose source is already on disk and decide as much of its verdict as the compiler's
 // answer alone can decide. Split out of `prepareOneTest` only because staging can FAIL, and a union's
 // arms are the honest way to say so — the two functions are one story read top to bottom.
-function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
+function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, fragmentDir FilePath, goldenWrites GoldenWrites, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
 	// ⭐⭐ **THE BREADCRUMB, IMMEDIATELY BEFORE THE COMPILE, AND THIS IS THE WHOLE REASON IT EXISTS.**
 	// The compile runs in THIS process, so a compiler panic kills this worker and the parent never
 	// receives a single record for the job. The parent's plan tells it which tests it is owed; only
@@ -2193,7 +2193,7 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 		// `runPreconditions` yields it only for a compile that BUILT, and `targetRefusalIn` answers
 		// `notRefused` for anything but a compile that REPORTED DIAGNOSTICS. A refusal therefore cannot
 		// be reachable from a test that got as far as being run.
-		settled(outcome) gives PreparedTest.finished(recordFragmentAndCleanup(compiled, outcome: outcomeOrTargetSkip(outcome, expectation: test.expectation, compile: compiled.compile), fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget))
+		settled(outcome) gives PreparedTest.finished(recordFragmentAndCleanup(compiled, outcome: outcomeOrTargetSkip(outcome, expectation: test.expectation, compile: compiled.compile), fragmentDir: fragmentDir, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget))
 		needsExecution(expected, stderr, stdout) gives PreparedTest.awaiting(PendingRun.create(compiled, expected: expected, stderr: stderr, stdout: stdout))
 	end 'verdict'
 end 'compileStagedTest'
@@ -2293,13 +2293,13 @@ end 'compileVerdictOf'
 // happens and the MINT does not; the refusal is counted and named as `GoldenDrift.unrecorded`, never
 // silent. A `compilerError` case on such a target PASSES here and mints normally, which is the same
 // rule rather than an exception to it: its verdict really was established on this machine.
-function recordFragmentAndCleanup(compiled CompiledTest, outcome TestOutcome, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
+function recordFragmentAndCleanup(compiled CompiledTest, outcome TestOutcome, fragmentDir FilePath, goldenWrites GoldenWrites, effectiveTarget Target) returns TestRun
 	if not outcome.pinsEmittedCode() or not emitsTargetIr(effectiveTarget) 'noFragment'
 		cleanup(compiled.staged, exePath: compiled.exePath)
 		return TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.notPinned)
 	end 'noFragment'
 
-	let fragment = checkTestFragment(fragmentDir, test: compiled.test, compile: compiled.compile, staged: compiled.staged, irText: compiled.irText, updateRequired: updateRequired, mayMint: outcome.isPass())
+	let fragment = checkTestFragment(fragmentDir, test: compiled.test, compile: compiled.compile, staged: compiled.staged, irText: compiled.irText, goldenWrites: goldenWrites, mayMint: outcome.isPass())
 
 	cleanup(compiled.staged, exePath: compiled.exePath)
 
@@ -2732,9 +2732,9 @@ end 'withMonitorStderrText'
 // ⚠ It does not consult `outcomeOrTargetSkip`: a test only reaches here through a compile that BUILT,
 // and a target refusal is read off a compile that REPORTED DIAGNOSTICS and printed nothing but E3104s.
 // See `compileStagedTest`'s `settled` arm, which is the only door onto that conversion.
-function finishPendingRun(pending PendingRun, observation RunObservation, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
+function finishPendingRun(pending PendingRun, observation RunObservation, fragmentDir FilePath, goldenWrites GoldenWrites, effectiveTarget Target) returns TestRun
 	let outcome = checkObservedRun(pending.expected, stderr: pending.stderr, stdout: pending.stdout, observation: observation, traceCapture: pending.compiled.test.traceCapture)
-	return recordFragmentAndCleanup(pending.compiled, outcome: outcome, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
+	return recordFragmentAndCleanup(pending.compiled, outcome: outcome, fragmentDir: fragmentDir, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget)
 end 'finishPendingRun'
 
 // Write `test`'s source to disk and describe how the compiler's diagnostics map back onto the
@@ -3217,8 +3217,9 @@ union FragmentCheck
 	// The committed golden and the fresh output differ. REFERENCE DRIFT: reported, never failed.
 	drifted(detail String)
 
-	// There was no committed golden (or `--update-required` asked for a fresh one) and this run wrote
-	// it. NOTHING WAS COMPARED.
+	// This run wrote the golden, so NOTHING WAS VERIFIED against it: there was none committed,
+	// `--update-required` asked for a fresh one, or `--rewrite-drifted-goldens` replaced one that
+	// drifted.
 	minted
 
 	// There was no committed golden and this verdict may not write one — see `recordFragmentAndCleanup`
@@ -3269,9 +3270,9 @@ end 'FragmentCheck'
 // is exactly the difference between "compiled after 130 other programs" and "compiled first".
 //
 // `mayMint` is the caller's verdict-derived permission to WRITE a first golden — see
-// `recordFragmentAndCleanup`, which is the one place it is decided. It gates both write doors, because
-// `--update-required` writes unvalidated content exactly as a first mint does.
-function checkTestFragment(fragmentDir FilePath, test SpecTest, compile CompileAnswer, staged StagedTest, irText String, updateRequired bool, mayMint bool) returns FragmentCheck
+// `recordFragmentAndCleanup`, which is the one place it is decided. It gates every write door,
+// because a regeneration or a drift rewrite writes unvalidated content just as a first mint does.
+function checkTestFragment(fragmentDir FilePath, test SpecTest, compile CompileAnswer, staged StagedTest, irText String, goldenWrites GoldenWrites, mayMint bool) returns FragmentCheck
 	// The fragment records the CODE, so a run expectation contributes only its exit code and
 	// its IR — a pinned ```stderr is an assertion about the RUN, checked there, and adding
 	// it here would move every golden for nothing.
@@ -3285,28 +3286,73 @@ function checkTestFragment(fragmentDir FilePath, test SpecTest, compile CompileA
 	// No committed fragment yet — a NEW test, or a lane that has never seen this case. Record it if
 	// this verdict is allowed to; there is nothing to compare against either way.
 	let committed = try File.readText(outPath) otherwise 'noGolden'
-		return writeFragmentFile(outPath, content: content, what: "new", mayMint: mayMint)
+		return writeFragmentFile(outPath, content: content, what: NewGoldenWord, mayMint: mayMint)
 	end 'noGolden'
 
-	if updateRequired 'regenerate'
-		return writeFragmentFile(outPath, content: content, what: "updated", mayMint: mayMint)
+	if goldenWrites.regeneratesEveryFragment() 'regenerate'
+		return writeFragmentFile(outPath, content: content, what: UpdatedGoldenWord, mayMint: mayMint)
 	end 'regenerate'
 
 	if committed == content 'unchanged'
 		return FragmentCheck.compared
 	end 'unchanged'
 
+	// `mayMint` is asked here, not left to `writeFragmentFile`: there it would turn a drifted golden
+	// this host could not validate into `unrecorded`, and the drift would go unreported.
+	if mayMint and goldenWrites.rewritesDriftedFragments() 'rewriteDrift'
+		return writeFragmentFile(outPath, content: content, what: UpdatedGoldenWord, mayMint: mayMint)
+	end 'rewriteDrift'
+
 	return FragmentCheck.drifted("{firstDifference(committed, actual: content)}\n    {outPath.toString()}")
 end 'checkTestFragment'
 
-// Write one golden, turning the IO failure into the arm that says so. Both write sites go through it:
-// they differ only in the word the message uses, and spelling the failure twice is how the two could
-// come to disagree about whether it is a failure at all.
+let NewGoldenWord = "new"
+let UpdatedGoldenWord = "updated"
+
+export enum GoldenWrites
+	mintMissing
+	rewriteDrifted
+	updateRequired
+
+	function regeneratesEveryFragment() returns bool
+		return self == Self.updateRequired
+	end 'regeneratesEveryFragment'
+
+	function rewritesDriftedFragments() returns bool
+		return match self 'mode'
+			mintMissing gives false
+			rewriteDrifted or
+				updateRequired gives true
+		end 'mode'
+	end 'rewritesDriftedFragments'
+
+	// Only `updateRequired`: a trace capture lives in the spec `.md` and is a gate, so the drift
+	// rewrite CI runs must never re-splice one.
+	function remintsTraces() returns bool
+		return self == Self.updateRequired
+	end 'remintsTraces'
+
+	export function flag() returns String throws GoldenWritesError
+		match self 'mode'
+			mintMissing then throw GoldenWritesError.defaultHasNoFlag
+			rewriteDrifted then return RewriteDriftedGoldensFlag
+			updateRequired then return UpdateRequiredFlag
+		end 'mode'
+	end 'flag'
+end 'GoldenWrites'
+
+export enum GoldenWritesError implements Error
+	defaultHasNoFlag
+end 'GoldenWritesError'
+
+// Write one golden, turning the IO failure into the arm that says so. Every write site goes through
+// it: they differ only in the word the message uses, and spelling the failure twice is how two
+// could come to disagree about whether it is a failure at all.
 //
 // ⭐ **THE MINT PERMISSION IS CHECKED HERE FOR THAT SAME REASON** — it is a rule about WRITING, and
-// this is the one place a golden is written. A first mint and an `--update-required` regeneration are
-// both a fresh reference produced from this run's compile, so both are refused by exactly the verdict
-// that could not validate one (see `recordFragmentAndCleanup`).
+// this is the one place a golden is written. A first mint, an `--update-required` regeneration and
+// a drift rewrite are each a fresh reference produced from this run's compile, so each is refused
+// by exactly the verdict that could not validate one (see `recordFragmentAndCleanup`).
 function writeFragmentFile(outPath FilePath, content String, what String, mayMint bool) returns FragmentCheck
 	if not mayMint 'unvalidatedHere'
 		return FragmentCheck.unrecorded
@@ -3745,9 +3791,9 @@ end 'buildLinuxVmRunCommand'
 // ⚠ ONE machine serves BOTH Linux targets. `OrbMachineName` is aarch64 with Rosetta enabled, so an
 // x64-linux compiler runs there too; a second machine would be a second answer to "where does Linux
 // run here".
-export function runSuiteInGuest(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, workerCount WorkerCount, workersOverridden bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
+export function runSuiteInGuest(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, workerCount WorkerCount, workersOverridden bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
 	return match guestCompilerFor(harnessExe, effectiveTarget: effectiveTarget) 'compiler'
-		ready(guestExe) gives spawnGuestSuite(guestExe, specDir: specDir, filterPatterns: filterPatterns, updateRequired: updateRequired, workerCount: workerCount, workersOverridden: workersOverridden, includeNetwork: includeNetwork)
+		ready(guestExe) gives spawnGuestSuite(guestExe, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, workerCount: workerCount, workersOverridden: workersOverridden, includeNetwork: includeNetwork)
 		unavailable(reason) gives reportGuestUnavailable(reason, effectiveTarget: effectiveTarget)
 	end 'compiler'
 end 'runSuiteInGuest'
@@ -3856,13 +3902,13 @@ let GuestCompilerBuildDeadlineMs = 30 * 60 * MillisecondsPerSecond
 // terminal and a failure would arrive only after everything else. `timeoutMs: 0` for the same reason
 // the deadline above is generous — the pool inside the guest carries every bound this run needs, and a
 // second one out here could only pre-empt a report that was about to arrive.
-function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, workerCount WorkerCount, workersOverridden bool, includeNetwork bool) returns ExitCode
+function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, workerCount WorkerCount, workersOverridden bool, includeNetwork bool) returns ExitCode
 	let launch = buildLinuxVmRunCommand(guestExe)
 
 	var argv = StringArray.create()
 	argv.append(launch.argv)
 	argv.push(SpecTestCommandName)
-	argv.append(specSelectionArgv(specDir, filterPatterns: filterPatterns, updateRequired: updateRequired, includeNetwork: includeNetwork))
+	argv.append(specSelectionArgv(specDir.toString(), filterPatterns: filterPatterns, goldenWrites: goldenWrites, includeNetwork: includeNetwork))
 
 	// ⛔ **`--target` IS NEVER FORWARDED.** `detectHostTarget()` is answered at COMPILE time, so the
 	// binary crossing into the guest already reports the guest's own target as its host and takes the

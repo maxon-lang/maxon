@@ -125,7 +125,8 @@ Three things pin what the compiler emits, and only the third is a gate:
   IR of every function the case's own source declares. A case with no golden mints one on the host where
   it passed; a golden whose bytes differ is reported as drift and changes no verdict. Goldens are
   **reference, not a gate** (user ruling, 2026-08-02) — see `SpecTestRunner.maxon`'s fragment-layout note
-  for why a gate there hides real defects. `--update-required --filter=<spec>` rewrites them.
+  for why a gate there hides real defects. `--update-required --filter=<spec>` rewrites them, and
+  `--rewrite-drifted-goldens` rewrites the ones that drifted (see [Test Fragment Files](#test-fragment-files)).
 - **A `RequiredRuntime` block**, which opts a body the golden would otherwise withhold — an emitted
   runtime function, or a `stdlib/` body the program reaches — into that same golden, one name per line.
   `specs/emitted-runtime-body.md` is the subject and the canonical example. It is still a golden, so it
@@ -449,7 +450,14 @@ end 'main'
 
 Test fragment files — the goldens — are written by the test runner and stored under `specs/fragments/<target>/<spec-name>/<test-name>.test` (e.g. `specs/fragments/x64-windows/arithmetic/addition.test`). The target is the run's effective target, never the host: a golden records the code that was generated. They are machine-maintained — edit the spec file, not the fragment — but agents reading them should understand the format so they don't confuse a golden with an expectation.
 
-A golden is reference, not a gate. A run mints one for a case that has none, on the host where that case passed, and never rewrites one that exists: a committed golden whose bytes differ from this run's compile is reported as drift, and the case keeps the verdict its assertions earned. Only `--update-required` (with a `--filter`) rewrites a committed golden. A golden for a target only another host can run is minted there; CI fails a lane that leaves untracked goldens and uploads them as an artifact to unpack at the repository root.
+A golden is reference, not a gate. A run mints one for a case that has none, on the host where that case passed, and leaves the ones that exist as they are: a committed golden whose bytes differ from this run's compile is reported as drift, and the case keeps the verdict its assertions earned. Two flags rewrite a committed golden, and they are refused together:
+
+- `--update-required` (with a `--filter`) rewrites the golden of every selected case that passed on this host, drifted or not, and re-mints the trace-capture blocks in the spec files.
+- `--rewrite-drifted-goldens` rewrites each golden that drifted, for a case that passed on this host, and leaves the spec files as they are.
+
+**CI records the goldens of every lane**, including the arm64 lanes a developer's machine may not run. Each CI lane runs the suite with `--rewrite-drifted-goldens` and uploads the goldens it minted or rewrote as a `goldens-<target>` artifact; the step fails only when the suite changed a path other than that lane's own goldens. On a push to `main`, the `record-goldens` job runs `scripts/record-goldens.sh`, which commits those goldens to `main` as `github-actions[bot]`, red lanes included, since a golden is written only for a case that passed. When a later commit on `main` changed `maxon-bin/`, `stdlib/`, `runtime/` or `specs/*.md`, it leaves the recording to that commit's own run. The job pushes to `main` directly, so a branch protection rule on `main` would refuse it.
+
+For a pull request's run, or a run whose recording was left to a later commit, apply its goldens from the repository root with `scripts/fetch-goldens.sh <run-id>` (it uses `gh`). It places the files under `specs/fragments/`, ready to review and commit.
 
 #### Fragment Format
 
@@ -518,10 +526,16 @@ error E3061: <fragment>:3:11: Duplicate typealias 'Score'
 
 # Rewrite the committed goldens of the matching cases
 ./maxon-bin/.maxon/maxon.exe spec-test --update-required --filter=arithmetic
+
+# Rewrite only the goldens that drifted, for cases that passed
+./maxon-bin/.maxon/maxon.exe spec-test --rewrite-drifted-goldens
+
+# Apply the goldens a CI run wrote
+scripts/fetch-goldens.sh <run-id>
 ```
 
 #### Adding Tests
 
 1. Create or edit `specs/<feature-name>.md`.
 2. Run `spec-test --filter=<feature-name>` — a passing case with no golden mints one.
-3. Implement until tests pass. Never edit fragments directly; edit the spec file and let the runner mint or, under `--update-required`, rewrite.
+3. Implement until tests pass. Never edit fragments directly; edit the spec file and let the runner mint or, under `--update-required` or `--rewrite-drifted-goldens`, rewrite.

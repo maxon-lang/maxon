@@ -677,7 +677,7 @@ end 'popHeaviestJob'
 // job included. Print none and the parent waits forever on a line that is never coming; print two
 // and the next job's drain ends early, with that job's records read as the job after it. A blank
 // line, which consumed no job, therefore owes no READY. All three READY sites are below.
-export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
+export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool) returns ExitCode
 	silenceCompilerLogging()
 
 	var stdin = Console.stdin()
@@ -708,7 +708,7 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 			let prefix = jobPrefixOf(runs)
 
 			if job.startsWith(prefix) 'thisKind'
-				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos)
+				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos)
 				ran = true
 				break
 			end 'thisKind'
@@ -762,8 +762,8 @@ end 'silenceCompilerLogging'
 // when it dies, so panicking routes this diagnostic through `abortOnDeadWorker`, which prints it.
 // Returning quietly instead would leave the parent to notice a missing record and abort with no
 // idea why.
-function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap)
-	let run = try runOneSpec(specDir, specName: specName, runs: runs, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos) otherwise (e) 'specFailed'
+function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap)
+	let run = try runOneSpec(specDir, specName: specName, runs: runs, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos) otherwise (e) 'specFailed'
 		reportCompileError(e)
 		panic("spec worker: could not run spec '{specName}' — see the error above")
 	end 'specFailed'
@@ -1370,18 +1370,18 @@ type PersistentWorkerHandle
 	//
 	// `harnessExe` is both the worker and the compiler under test, because a worker compiles in process.
 	//
-	// `filterPatterns`, `updateRequired`, `includeNetwork` and the effective target must be forwarded: a
+	// `filterPatterns`, `goldenWrites`, `includeNetwork` and the effective target must be forwarded: a
 	// worker that selected a different set than the parent counted returns records the parent never
 	// asked for, and `resultsFromLines` panics. This list is this function's selection parameters; a new
 	// one joins it in the same edit.
-	static function spawnNoWait(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle throws SubprocessError
+	static function spawnNoWait(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle throws SubprocessError
 		var argv = StringArray.create()
 		argv.push(SpecTestCommandName)
 		argv.push(WorkerPersistentFlag)
 
 		// WHICH directory and WHICH cases, emitted by the one function both re-emitters of this command
 		// line read — see `Main.specSelectionArgv`.
-		argv.append(specSelectionArgv(specDir, filterPatterns: filterPatterns, updateRequired: updateRequired, includeNetwork: includeNetwork))
+		argv.append(specSelectionArgv(specDir.toString(), filterPatterns: filterPatterns, goldenWrites: goldenWrites, includeNetwork: includeNetwork))
 
 		// Forward the effective target ONLY when it differs from the host the worker would otherwise
 		// default to. A worker is this exe relaunched; with no `--target` it resolves
@@ -2037,7 +2037,7 @@ end 'takeDispatchableJob'
 // `harnessExe` is THIS executable — what each worker process is relaunched as, and (since every test
 // is compiled in process) the compiler under test as well. See `spawnNoWait` for why that is one
 // parameter again and not two.
-export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, workerCount WorkerCount, effectiveTarget Target, includeNetwork bool, treeLock TreeLockHold) returns PoolRun throws CompileError
+export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, workerCount WorkerCount, effectiveTarget Target, includeNetwork bool, treeLock TreeLockHold) returns PoolRun throws CompileError
 	// Asked here rather than in `scale-test`: a gate only the instrument's own command reaches is one
 	// nobody runs on the way to a merge.
 	requireScaleHistoryRefusalsFire()
@@ -2089,7 +2089,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		poolSize = jobCount as WorkerCount
 	end 'moreWorkersThanJobs'
 
-	var workers = spawnPool(harnessExe, count: poolSize, specDir: specDir, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+	var workers = spawnPool(harnessExe, count: poolSize, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 
 	// Per-slot state as PARALLEL ARRAYS rather than one array of slot structs: the in-flight drain
 	// Promise cannot live inside a struct the loop also keeps mutating (see `drainResultsThunk`),
@@ -2248,7 +2248,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 				// The dead handle is released HERE and the slot given a fresh worker, so `shutdownPool`
 				// neither shuts down a corpse nor counts it twice: the death is tallied once, now.
 				handle.releaseAfterDeath()
-				try workers.set(readySlot, value: spawnReadyWorker(harnessExe, workerId: handle.workerId, specDir: specDir, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)) otherwise panic("runSpecPool: workers.set({readySlot}) is in bounds by construction")
+				try workers.set(readySlot, value: spawnReadyWorker(harnessExe, workerId: handle.workerId, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)) otherwise panic("runSpecPool: workers.set({readySlot}) is in bounds by construction")
 				try busy.set(readySlot, value: false) otherwise panic("runSpecPool: busy.set({readySlot}) is in bounds by construction")
 
 				deadWorkers = deadWorkers + 1
@@ -2391,11 +2391,11 @@ end 'prepareSharedDirs'
 // A worker that cannot be spawned, or that says anything other than WORKER_READY, is a PANIC.
 // There is no degraded mode to fall back to, and a pool that quietly ran with fewer workers than
 // it was asked for would be a harness lying about what it did.
-function spawnPool(harnessExe FilePath, count WorkerCount, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandleArray
+function spawnPool(harnessExe FilePath, count WorkerCount, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandleArray
 	var workers = PersistentWorkerHandleArray.create()
 
 	for i in 0 upto count 'spawnPhase'
-		workers.push(spawnWorker(harnessExe, workerId: i, specDir: specDir, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork))
+		workers.push(spawnWorker(harnessExe, workerId: i, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork))
 	end 'spawnPhase'
 
 	for i in 0 upto count 'readyPhase'
@@ -2409,8 +2409,8 @@ end 'spawnPool'
 // ONE worker's spawn, without its hello — the half `spawnPool` fires N of and a respawn fires one of.
 // Shared so the command line a worker is launched with, and the sentence a failure to launch it
 // prints, exist once.
-function spawnWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
-	return try PersistentWorkerHandle.spawnNoWait(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork) otherwise (e) 'spawnFailed'
+function spawnWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
+	return try PersistentWorkerHandle.spawnNoWait(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork) otherwise (e) 'spawnFailed'
 		panic("spec worker pool: could not spawn worker {workerId}: {e.displayReason()}")
 	end 'spawnFailed'
 end 'spawnWorker'
@@ -2430,8 +2430,8 @@ end 'awaitWorkerHello'
 // It keeps the DEAD worker's id, deliberately. The id is a SLOT number everywhere it is read (the
 // wedge report indexes by it, and so does every message), so minting a new one would make the report
 // stop lining up with the pool it describes.
-function spawnReadyWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
-	var handle = spawnWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+function spawnReadyWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
+	var handle = spawnWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 	awaitWorkerHello(handle)
 	return handle
 end 'spawnReadyWorker'

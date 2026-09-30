@@ -128,7 +128,7 @@ jobs:
 
       - name: Suite
         if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon spec-test
+        run: ./maxon-bin/.maxon/maxon spec-test --rewrite-drifted-goldens
 
       # ⭐ IN THE MATRIX RATHER THAN IN A JOB OF ITS OWN, because this area is host-specific where
       # almost nothing else is: percent-decoding a uri, un-rooting a drive letter, and
@@ -202,36 +202,58 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/fixpoint.sh
 
-      # ⛔ A GOLDEN THE SUITE MINTED HERE EXISTS NOWHERE ELSE. The harness writes a golden only where a
-      # case actually ran, so a case landed from an x64 host has none for the arm64 lanes, and this is
-      # the only run that can mint them — into a workspace that is discarded. Untracked files under
-      # `specs/fragments/` are therefore a red, and are uploaded, laid out as they sit in the tree, so
-      # the author can unpack them at the repository root and commit them without the host that minted
-      # them. A golden that DRIFTED is a reference, not a gate, and is not listed: only untracked paths
-      # count. Runs after a red suite too, since that is when the list is wanted.
-      - name: Goldens the suite minted
-        id: minted
+      # The suite writes a golden only for a case that passed on this runner, so what a red run
+      # wrote is as valid as a green one's: this step runs after a red suite too, and fails only
+      # when the suite changed something other than this lane's own goldens.
+      - name: Goldens the suite wrote
+        id: goldens
         if: always() && steps.seed.outputs.seeded == 'yes'
         run: |
           set -euo pipefail
-          minted="$(git status --porcelain --untracked-files=all specs/fragments | sed -n 's/^?? //p')"
-          if [ -z "$minted" ]; then
-            echo "minted=no" >> "$GITHUB_OUTPUT"
+          . scripts/lib/goldens.sh
+          changes="$(goldens_stage_lane "$RUNNER_TEMP/goldens" ${{ matrix.target }})"
+          if [ -z "$changes" ]; then
+            echo "goldens=no" >> "$GITHUB_OUTPUT"
+            echo "**Goldens:** ${{ matrix.target }} wrote none" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          echo "minted=yes" >> "$GITHUB_OUTPUT"
-          stage="$RUNNER_TEMP/minted-fragments"
-          printf '%s\n' "$minted" | while IFS= read -r path; do
-            mkdir -p "$stage/$(dirname "$path")"
-            cp "$path" "$stage/$path"
-            echo "::error file=$path::${{ matrix.target }} minted this golden; unpack the minted-fragments-${{ matrix.target }} artifact at the repository root and commit it"
-          done
-          exit 1
+          while read -r kind path; do
+            echo "::notice file=$path::${{ matrix.target }} wrote this golden ($kind); it is in the goldens-${{ matrix.target }} artifact"
+          done <<< "$changes"
+          echo "**Goldens:** $(printf '%s\n' "$changes" | goldens_tally)" >> "$GITHUB_STEP_SUMMARY"
+          echo "goldens=yes" >> "$GITHUB_OUTPUT"
 
-      - name: Upload the minted goldens
-        if: always() && steps.minted.outputs.minted == 'yes'
+      - name: Upload the goldens
+        if: always() && steps.goldens.outputs.goldens == 'yes'
         uses: actions/upload-artifact@v6
         with:
-          name: minted-fragments-${{ matrix.target }}
-          path: ${{ runner.temp }}/minted-fragments
+          name: goldens-${{ matrix.target }}
+          path: ${{ runner.temp }}/goldens
           if-no-files-found: error
+
+  # Commits every lane's goldens to `main`, red lanes included, for the reason above. A push made
+  # with `GITHUB_TOKEN` starts no workflow run, so the recorded commit costs no second CI round. A
+  # branch protection rule on `main` would refuse this push.
+  #
+  # ⛔ NO `concurrency` GROUP: a fixed group lets GitHub cancel a queued `main` run, which the group
+  # at the top of this file exists to prevent. `scripts/record-goldens.sh` handles overlapping
+  # recorders with its retry loop and its staleness guard.
+  record-goldens:
+    needs: suite
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.repository == 'maxon-lang/maxon' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download the goldens
+        uses: actions/download-artifact@v6
+        with:
+          pattern: goldens-*
+          path: ${{ runner.temp }}/goldens-in
+
+      - name: Record the goldens on main
+        run: ./scripts/record-goldens.sh "$GITHUB_SHA" "$RUNNER_TEMP/goldens-in"

@@ -15,8 +15,9 @@ module let DefaultSpecDir = "specs"
 module let NothingRanExitCode = 2
 
 // Re-emitted on the command lines that relaunch this driver — a pool worker
-// (`SpecWorkerPool.spawnNoWait`) and a delegated Linux suite (`SpecTestRunner.spawnGuestSuite`) —
-// and read back by the parser in this file, so the two halves cannot drift apart into a hang.
+// (`SpecWorkerPool.spawnNoWait`), a delegated Linux suite (`SpecTestRunner.spawnGuestSuite`) and the
+// MCP `run_spec_test` tool (`McpTools.specTestArgv`) — and read back by the parser in this file, so
+// the halves cannot drift apart into a hang.
 module let SpecTestCommandName = "spec-test"
 
 // Re-emitted by `SpecTestRunner.buildGuestCompiler` and `ScaleTestRunner.compileRung`, and read
@@ -103,6 +104,8 @@ module let FilterFlagPrefix = "--filter="
 // remedy.
 module let UpdateRequiredFlag = "--update-required"
 
+module let RewriteDriftedGoldensFlag = "--rewrite-drifted-goldens"
+
 // Selects the cases marked `<!-- network: live -->`, which open a socket to a real external host. A
 // default run leaves them out: a verdict that turns on somebody else's uptime is not a claim about
 // this compiler. The cases stay active and parsed (see `SpecTestRunner.networkModeAllows`), and
@@ -122,23 +125,25 @@ module let TargetFlagPrefix = "--target="
 // refused.
 module let WorkersFlagPrefix = "--workers="
 
-// The selection half of a `spec-test` command line, for both re-emitters
-// (`SpecWorkerPool.spawnNoWait` and `SpecTestRunner.spawnGuestSuite`): both must answer for exactly
-// the set the parent planned.
+module let LogFlagPrefix = "--log="
+
+// The selection half of every `spec-test` command line the compiler builds: the two re-emitters
+// (`SpecWorkerPool.spawnNoWait` and `SpecTestRunner.spawnGuestSuite`), which must answer for
+// exactly the set the parent planned, and MCP `run_spec_test` (`McpTools.specTestArgv`).
 //
-// The directory is the resolved one, never a default the far side would re-derive from its own
-// working directory. Each flag is emitted only when set.
-module function specSelectionArgv(specDir FilePath, filterPatterns FilterPatternArray, updateRequired bool, includeNetwork bool) returns StringArray
+// A re-emitter passes the resolved directory, never a default the far side would re-derive from its
+// own working directory. Each flag is emitted only when set.
+module function specSelectionArgv(specDir String, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, includeNetwork bool) returns StringArray
 	var argv = StringArray.create()
-	argv.push(specDir.toString())
+	argv.push(specDir)
 
 	for pattern in filterPatterns 'eachPattern'
 		argv.push("{FilterFlagPrefix}{pattern}")
 	end 'eachPattern'
 
-	if updateRequired 'isUpdate'
-		argv.push(UpdateRequiredFlag)
-	end 'isUpdate'
+	if let flag = try goldenWrites.flag() 'writesGoldens'
+		argv.push(flag)
+	end 'writesGoldens'
 
 	if includeNetwork 'wantsLiveNetwork'
 		argv.push(NetworkFlag)
@@ -285,6 +290,7 @@ function main() returns ExitCode
 		match refusal 'why'
 			unknown(spelling) then reportUnknownOption(spelling)
 			badValue(spelling) then printError("error: invalid option value: {spelling}\n")
+			conflicting(spelling, other) then printError("error: {spelling} cannot be combined with {other}\n")
 		end 'why'
 
 		return refusedCommandLineExit(args.command)
@@ -1159,7 +1165,7 @@ end 'runVerifyRecheck'
 // Every worker count, `--workers=1` included, takes the one path through the pool: a serial branch
 // would be a second implementation of running the suite, free to drift.
 function runSpecTest(args MaxonArgs) returns ExitCode
-	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon spec-test [dir] [--filter=<pattern>]... [--update-required] [--network] [--workers=<n>] [--target=<cpu>-<os>]") 'tooManyPaths'
+	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon spec-test [dir] [--filter=<pattern>]... [--update-required | --rewrite-drifted-goldens] [--network] [--workers=<n>] [--target=<cpu>-<os>]") 'tooManyPaths'
 		return OwnFailureExit
 	end 'tooManyPaths'
 
@@ -1182,7 +1188,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	if args.workerPersistent 'isPoolWorker'
 		// A worker asks nothing before it starts. Minting goldens for a target this host cannot execute
 		// is guarded where the writing happens: see `SpecTestRunner.writeFragmentFile`'s `mayMint`.
-		return runPersistentWorker(specDir, filterPatterns: args.filterPatterns, updateRequired: args.updateRequired, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
+		return runPersistentWorker(specDir, filterPatterns: args.filterPatterns, goldenWrites: args.goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
 	end 'isPoolWorker'
 
 	// Below-normal priority, so a foreground process preempts the pool, which otherwise saturates
@@ -1217,7 +1223,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// hold it yet; `requireRunnerAvailable` is the delegation's preflight, and `refuseIfStale` proves
 	// the binary that builds the guest's compiler current.
 	match runStrategyFor(effectiveTarget) 'lane'
-		inGuest then return runSuiteInGuest(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, updateRequired: args.updateRequired, workerCount: args.workers, workersOverridden: args.workersOverridden, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
+		inGuest then return runSuiteInGuest(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, goldenWrites: args.goldenWrites, workerCount: args.workers, workersOverridden: args.workersOverridden, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
 		individually or
 			wslBatch or
 			noneHere then break 'lane'
@@ -1360,7 +1366,7 @@ end 'backQuoted'
 
 // Separate so `runSpecTest` has one exit that releases the tree lock; see `compileAndReport`.
 function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target, treeLock TreeLockHold) returns ExitCode
-	let run = try runSpecPool(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork, treeLock: treeLock) otherwise (e) 'runErr'
+	let run = try runSpecPool(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, goldenWrites: args.goldenWrites, workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork, treeLock: treeLock) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return OwnFailureExit
 	end 'runErr'
@@ -1603,6 +1609,7 @@ end 'verdictLine'
 union OptionRefusal
 	unknown(spelling String)
 	badValue(spelling String)
+	conflicting(spelling String, other String)
 end 'OptionRefusal'
 
 typealias OptionRefusalArray = Array with OptionRefusal
@@ -1947,6 +1954,7 @@ enum HelpOption
 	metrics
 	specFilter
 	updateRequired
+	rewriteDriftedGoldens
 	network
 	workers
 	rungs
@@ -2008,6 +2016,7 @@ function optionReference(option HelpOption) returns OptionReference
 		metrics gives OptionReference.create("{MetricsFlagPrefix}<path>", description: "Write this compile's per-phase time + memory attribution to <path> as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table.", commands: [MaxonCommand.build])
 		specFilter gives OptionReference.create("{FilterFlagPrefix}<pattern>", description: "Run only tests whose `<spec>/<test>` label contains <pattern> (case-sensitive). A bare spec name selects that whole spec. Repeatable: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.specTest])
 		updateRequired gives OptionReference.create(UpdateRequiredFlag, description: "Rewrite the committed .test goldens instead of checking against them. Running a test proves its allocation is CORRECT; only the pinned IR proves the code did not get WORSE. REVIEW THE RESULTING DIFF. Pair it with {FilterFlagPrefix}: an unfiltered run rewrites EVERY golden in the suite.", commands: [MaxonCommand.specTest])
+		rewriteDriftedGoldens gives OptionReference.create(RewriteDriftedGoldensFlag, description: "Rewrite each committed .test golden that DRIFTED from what this compiler emits, for a case that passed on this host; a failing case keeps its golden. A rewritten golden is not reported as drift, and no spec file is touched: trace-capture goldens are re-minted only by {UpdateRequiredFlag}, which this flag cannot be combined with. REVIEW THE RESULTING DIFF.", commands: [MaxonCommand.specTest])
 		network gives OptionReference.create(NetworkFlag, description: "Also run the cases marked `{NetworkMarker} {NetworkLiveValue} -->`, which open a socket to a REAL EXTERNAL HOST. They are OUT of a default run because their verdict measures somebody else's uptime rather than this compiler; a default run NAMES every one it left out.", commands: [MaxonCommand.specTest])
 		workers gives OptionReference.create("{WorkersFlagPrefix}<n>", description: "Run the suite on <n> persistent worker subprocesses (default {defaultWorkerCount()}, this machine). 1 is this same pool with one worker in it, NOT a serial path: every worker count must print BYTE-IDENTICAL output, and that invariance is the pool's sharpest gate.", commands: [MaxonCommand.specTest])
 		rungs gives OptionReference.create("{RungsFlagPrefix}<n>", description: "Climb <n> rungs (default {DefaultRungCount}, range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the program, so this is exponential in cost.", commands: [MaxonCommand.scaleTest])
@@ -2334,7 +2343,7 @@ export type MaxonArgs
 	export var filterPatterns as FilterPatternArray
 
 	// Deliberately an explicit act: the resulting golden diff is the review.
-	export var updateRequired as bool
+	export var goldenWrites as GoldenWrites
 
 	// 1 is the same pool with one worker in it, not a serial branch; see `runSpecTest`.
 	export var workers as WorkerCount
@@ -2414,7 +2423,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	module static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), goldenWrites: GoldenWrites.mintMissing, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
 	end 'create'
 
 	// A command that takes no options refuses by this.
@@ -2432,6 +2441,16 @@ export type MaxonArgs
 
 		return ""
 	end 'firstOptionOtherThan'
+
+	function selectGoldenWrites(typed GoldenWrites, spelling String)
+		if self.goldenWrites != typed 'anotherMode'
+			if let earlier = try self.goldenWrites.flag() 'alreadyChosen'
+				self.refusedOptions.push(OptionRefusal.conflicting(earlier, other: spelling))
+			end 'alreadyChosen'
+		end 'anotherMode'
+
+		self.goldenWrites = typed
+	end 'selectGoldenWrites'
 
 	// A second positional never reaches this: its callers call `refusedPositionalBeyond` first, so
 	// empty means only absent.
@@ -2580,8 +2599,10 @@ export type MaxonArgs
 					parsed.filterPatterns.push(pattern)
 				end 'aPattern'
 			end 'filterFlag' else if arg == UpdateRequiredFlag 'updateRequiredFlag'
-				parsed.updateRequired = true
-			end 'updateRequiredFlag' else if arg == NetworkFlag 'networkFlag'
+				parsed.selectGoldenWrites(GoldenWrites.updateRequired, spelling: arg)
+			end 'updateRequiredFlag' else if arg == RewriteDriftedGoldensFlag 'rewriteDriftedGoldensFlag'
+				parsed.selectGoldenWrites(GoldenWrites.rewriteDrifted, spelling: arg)
+			end 'rewriteDriftedGoldensFlag' else if arg == NetworkFlag 'networkFlag'
 				parsed.includeNetwork = true
 			end 'networkFlag' else if arg.startsWith(WorkersFlagPrefix) 'workersFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
@@ -2660,7 +2681,7 @@ export type MaxonArgs
 					valid(mode) then parsed.colorMode = mode
 					invalid then parsed.refusedOptions.push(OptionRefusal.badValue(arg))
 				end 'colorArg'
-			end 'colorFlag' else if arg.startsWith("--log=") 'logFlag'
+			end 'colorFlag' else if arg.startsWith(LogFlagPrefix) 'logFlag'
 				let spec = try CommandLine.optionValue(arg) otherwise ""
 
 				if not parseLogOption(spec) 'badSpec'
