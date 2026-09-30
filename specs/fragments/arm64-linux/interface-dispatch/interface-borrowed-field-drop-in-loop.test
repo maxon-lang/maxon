@@ -69,15 +69,17 @@ end 'main'
 ExitCode: 4
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @ConcreteQuery.score {
   entry:
     arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
     arm64.cset x0, hs
     arm64.epilogue 16
@@ -97,25 +99,20 @@ func @main {
     arm64.storeSlotReg slot4, x21
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
+  __il_body#10:
     arm64.movImm x19, 7
-  __rc_ok#11:
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
   __il_cont#9:
     arm64.movImm x0, 0
     arm64.movImm x1, 0
     arm64.b whilehdr
   loop:
-    arm64.leaRdata x19, __witness_ConcreteQuery.Query
-  __il_body#14:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
+    arm64.leaRdata x20, __witness_ConcreteQuery.Query
+  __il_body#12:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
     arm64.bl __retain_existential
     arm64.movRegReg x21, x0
-  __il_body#17:
+  __il_body#15:
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
     arm64.bl __managed_create
@@ -144,37 +141,37 @@ func @main {
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x28, x0
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.movRegReg x1, x21
     arm64.bl __retain_existential
     arm64.storeBaseDispReg.word64 [x28 + 0], x0
-    arm64.storeBaseDispReg.word64 [x28 + 8], x19
+    arm64.storeBaseDispReg.word64 [x28 + 8], x20
     arm64.storeBaseDispReg.word64 [x28 + 16], x22
     arm64.storeBaseDispReg.word64 [x28 + 24], x23
     arm64.storeBaseDispReg.word64 [x28 + 32], x24
     arm64.storeBaseDispReg.word64 [x28 + 40], x25
     arm64.storeBaseDispReg.word64 [x28 + 48], x26
     arm64.storeBaseDispReg.word64 [x28 + 56], x27
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
     arm64.movRegReg x1, x21
     arm64.bl __drop_existential
-  __il_body#18:
+  __il_body#16:
     arm64.loadRegBaseDisp.word64 x0, [x28 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x28 + 8]
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 48]
     arm64.blr x16
-    arm64.movImm x19, 0
-    arm64.cbz x0, __il_cont#15
+    arm64.movImm x20, 0
+    arm64.cbz x0, __il_cont#13
   andrhs:
     arm64.loadRegBaseDisp.word64 x0, [x28 + 16]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x0, 0
-    arm64.cset x19, eq
-  __il_cont#15:
+    arm64.cset x20, eq
+  __il_cont#13:
     arm64.movRegReg x0, x28
     arm64.bl __destruct_Allocator
-  __il_cont#13:
-    arm64.cbz x19, critsplit
+  __il_cont#11:
+    arm64.cbz x20, critsplit
   ok:
     arm64.loadRegSlot x0, slot1
     arm64.add x0, x0, 1
@@ -190,8 +187,6 @@ func @main {
     arm64.cmp x1, 4
     arm64.b.lt loop
   whileexit:
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
     arm64.loadRegSlot x0, slot1
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic
@@ -199,7 +194,7 @@ func @main {
     arm64.loadRegSlot x0, slot1
     arm64.cmp x0, 255
     arm64.b.gt __rc_panic
-  __rc_ok#6:
+  __rc_ok:
     arm64.loadRegSlot x0, slot1
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3
@@ -214,7 +209,7 @@ func @main {
     arm64.epilogue 112
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at interface-borrowed-field-drop-in-loop.test:66: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at interface-borrowed-field-drop-in-loop.test:66: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2

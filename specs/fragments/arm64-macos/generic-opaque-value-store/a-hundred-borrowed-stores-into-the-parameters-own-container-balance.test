@@ -1,11 +1,11 @@
 // Test: a-hundred-borrowed-stores-into-the-parameters-own-container-balance
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element
 	var items as Items
 
-	export function fill(x Element, times Idx)
+	function fill(x Element, times Idx)
 		var n = 0 as Idx
 		while n < times 'fill'
 			items.push(x)
@@ -13,7 +13,7 @@ type Bag uses Element
 		end 'fill'
 	end 'fill'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try self.items.get(i)
 	end 'at'
 
@@ -45,6 +45,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Bag.at {
@@ -52,9 +53,6 @@ func @Bag.at {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x2
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic
-  __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
@@ -63,7 +61,7 @@ func @Bag.at {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
     arm64.b.hs __im_slow
-  __im_load#11:
+  __im_load#9:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
     arm64.b __im_loaded
@@ -74,7 +72,7 @@ func @Bag.at {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
     arm64.b.hs __im_slow
-  __im_load#12:
+  __im_load#10:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
@@ -82,14 +80,14 @@ func @Bag.at {
     arm64.movImm x9, 0
     arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#14
+    arm64.b.eq critsplit#12
   __im_empty:
     arm64.cmp x2, 0
     arm64.b.eq __im_slow
-  critsplit#15:
+  critsplit#13:
     arm64.movRegReg x1, x2
     arm64.b __im_cont
-  critsplit#14:
+  critsplit#12:
     arm64.movRegReg x1, x2
     arm64.b __im_cont
   __im_slow:
@@ -106,14 +104,6 @@ func @Bag.at {
   tryok:
     arm64.movRegReg x0, x19
     arm64.bl __retain_type_param
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at a-hundred-borrowed-stores-into-the-parameters-own-container-balance.test:16: Range check failed: value outside typealias 'Idx'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -159,28 +149,28 @@ func @main {
     arm64.storeBaseDispReg.byte [x22 + 8], x21
   __il_cont#10:
     arm64.leaRdata x19, __str_rec_2  ; "a repeated borrowed string long enough to force a heap allocation"
-  __il_body#24:
+  __il_body#22:
     arm64.movRegReg x0, x19
     arm64.bl __str_bytes_view
     arm64.movRegReg x21, x0
-  __il_body#25:
+  __il_body#23:
     arm64.loadRegBaseDisp.byte x19, [x19 + 48]
-  __il_body#26:
+  __il_body#24:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.movRegReg x1, x21
     arm64.bl __managed_append
     arm64.eor x0, x19, 1
-    arm64.cbz x0, __il_cont#21
+    arm64.cbz x0, __il_cont#19
   clearFlag:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.byte [x22 + 8], x0
-  __il_cont#21:
+  __il_cont#19:
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
-  __il_body#29:
+  __il_body#27:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.loadRegBaseDisp.byte x19, [x22 + 8]
-  __il_body#31:
+  __il_body#29:
     arm64.bl __managed_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x21
@@ -189,7 +179,7 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
-  __il_cont#30:
+  __il_cont#28:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -199,12 +189,12 @@ func @main {
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.byte [x22 + 8], x0
-  __il_cont#18:
+  __il_cont#16:
     arm64.movRegReg x0, x19
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.leaRdata x23, __layout_Bag_String
-  __rc_ok:
+  __il_body#12:
     arm64.movImm x24, 0
     arm64.b whilehdr
   fill:

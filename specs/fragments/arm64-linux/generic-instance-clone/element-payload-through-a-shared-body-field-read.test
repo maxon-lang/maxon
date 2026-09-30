@@ -5,26 +5,26 @@ type Box uses T
 	export var v as T
 	export var tag as Integer
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{v: x, tag: tag}
 	end 'create'
 end 'Box'
 
 type Bag uses Element
-	typealias EBox = Box with Element
-	typealias EBoxArray = Array with EBox
+	export typealias EBox = Box with Element
+	export typealias EBoxArray = Array with EBox
 
 	export var items as EBoxArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: EBoxArray.create()}
 	end 'create'
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		self.items.push(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function copy() returns EBoxArray
+	function copy() returns EBoxArray
 		return self.items.clone()
 	end 'copy'
 end 'Bag'
@@ -43,9 +43,12 @@ end 'main'
 ExitCode: 4
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -55,9 +58,13 @@ func @main {
     arm64.storeSlotReg slot3, x21
     arm64.storeSlotReg slot2, x20
     arm64.storeSlotReg slot1, x19
+    arm64.leaRdata x0, __layout_Bag_Integer
   __il_body#11:
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mm_decref
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 72]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8

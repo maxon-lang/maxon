@@ -6,11 +6,11 @@ typealias Wide = int(0 to 100000)
 type Box
 	export var v as Percent = 7
 
-	export static function make() returns Box
+	static function make() returns Box
 		return Self{}
 	end 'make'
 
-	export static function holding(n Percent) returns Box
+	static function holding(n Percent) returns Box
 		return Self{v: n}
 	end 'holding'
 end 'Box'
@@ -40,6 +40,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -222,14 +223,12 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
-  __rc_ok#38:
-    arm64.movImm x0, 4
   __rc_ok#7:
-    arm64.leaRdata x1, __str_rec_10  ; "q="
-    arm64.loadRegBaseDisp.word64 x19, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x1 + 8]
-    arm64.movImm x1, 100
-    arm64.udiv x22, x1, x0
+    arm64.leaRdata x0, __str_rec_10  ; "q="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.movImm x0, 100
+    arm64.lsr x22, x0, 2
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc

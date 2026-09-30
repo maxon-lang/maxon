@@ -5,23 +5,26 @@ enum Boom implements Error
 end 'Boom'
 type Alpha
 	export var a as Integer
-	export static function create(v Integer) returns Self
+	static function create(v Integer) returns Self
 		return Self{a: v}
 	end 'create'
 end 'Alpha'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function fetch() returns T throws Boom
+	function fetch(strict bool) returns T throws Boom
+		if strict 'strict'
+			throw Boom.bad
+		end 'strict'
 		return self.value
 	end 'fetch'
 end 'Box'
 typealias AlphaBox = Box with Alpha
 function main() returns ExitCode
 	let bx = AlphaBox.create(Alpha.create(9))
-	if let got = try bx.fetch() 'ok'
+	if let got = try bx.fetch(false) 'ok'
 		print("v={got.a}\n")
 	end 'ok' else 'bad'
 		print("boom\n")
@@ -35,14 +38,21 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Box.fetch {
   entry:
     arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.cbz x1, ifcont
+  strict:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.movRegReg x0, x2
     arm64.bl __retain_type_param
     arm64.movImm x9, 0
     arm64.epilogue 16
@@ -83,7 +93,8 @@ func @main {
   __il_cont#4:
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
-    arm64.leaRdata x1, __layout_Box_Alpha
+    arm64.movImm x1, 0
+    arm64.leaRdata x2, __layout_Box_Alpha
     arm64.movRegReg x0, x21
     arm64.bl Box.fetch
     arm64.movRegReg x19, x0

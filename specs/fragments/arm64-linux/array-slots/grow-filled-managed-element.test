@@ -24,9 +24,12 @@ end 'main'
 ExitCode: 42
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -59,7 +62,7 @@ func @main {
     arm64.bl __mm_own
     arm64.movRegReg x21, x0
     arm64.leaRdata x23, __layout_Array_Slot
-  __rc_ok#15:
+  __il_body#12:
     arm64.loadRegBaseDisp.word64 x24, [x19 + 8]
     arm64.cmp x24, 3
     arm64.b.lt ifcont#14
@@ -73,10 +76,12 @@ func @main {
     arm64.movRegReg x1, x20
     arm64.bl __managed_resize
     arm64.sub x20, x20, x24
-  __il_body#28:
+    arm64.cmp x24, 0
+    arm64.b.lt __rc_panic#16
+  __rc_ok#15:
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic#30
-  __rc_ok#29:
+    arm64.b.lt __rc_panic#18
+  __il_body#20:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x24
     arm64.movRegReg x2, x20
@@ -84,7 +89,7 @@ func @main {
     arm64.bl __managed_fill
     arm64.cmp x9, 0
     arm64.b.eq tryok
-  tryerr#19:
+  tryerr#22:
     arm64.leaRdata x0, __str_blob_4  ; "panic at Array.maxon:444: Array.fillPublished: fill OOB \xe2\x80\x94 the window is inside the length the caller just published\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -102,10 +107,10 @@ func @main {
     arm64.ret
   tryok:
     arm64.eor x0, x0, 1
-    arm64.cbz x0, ifcont#27
+    arm64.cbz x0, ifcont#30
   aManagedElement:
     arm64.add x20, x24, x20
-    arm64.b forhdr#21
+    arm64.b forhdr#24
   fill:
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x21
@@ -137,7 +142,7 @@ func @main {
     arm64.b.ne __im_slow
   __im_store#40:
     arm64.storeBaseIndexScaleReg.word64 [x0 + x24*8 + 0], x2
-    arm64.b forstep#23
+    arm64.b forstep#26
   __im_stride:
     arm64.cmp x0, 1
     arm64.b.ne __im_slow
@@ -165,14 +170,14 @@ func @main {
   __im_store#45:
     arm64.add x0, x0, x24
     arm64.storeBaseDispReg.byte [x0 + 0], x2
-    arm64.b forstep#23
+    arm64.b forstep#26
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x24
     arm64.bl __managed_mem_set
     arm64.cmp x9, 0
-    arm64.b.eq forstep#23
-  tryerr#26:
+    arm64.b.eq forstep#26
+  tryerr#29:
     arm64.leaRdata x0, __str_rec_5  ; "panic at Array.maxon:450: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
@@ -255,12 +260,12 @@ func @main {
     arm64.loadRegSlot x28, slot12
     arm64.epilogue 128
     arm64.ret
-  forstep#23:
+  forstep#26:
     arm64.add x24, x24, 1
-  forhdr#21:
+  forhdr#24:
     arm64.cmp x24, x20
     arm64.b.lo fill
-  ifcont#27:
+  ifcont#30:
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x21
     arm64.bl __drop_type_param
@@ -304,8 +309,24 @@ func @main {
     arm64.loadRegSlot x28, slot12
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#30:
-    arm64.leaRdata x0, __str_blob_12  ; "panic at Array.maxon:442: Range check failed: value outside typealias 'ElementIndex'\x0a"
+  __rc_panic#16:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at Array.maxon:412: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.loadRegSlot x23, slot7
+    arm64.loadRegSlot x24, slot8
+    arm64.loadRegSlot x25, slot9
+    arm64.loadRegSlot x26, slot10
+    arm64.loadRegSlot x27, slot11
+    arm64.loadRegSlot x28, slot12
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#18:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at Array.maxon:412: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3

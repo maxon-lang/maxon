@@ -10,9 +10,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -35,34 +38,34 @@ func @main {
     arm64.storeSlotReg slot0, x20
     arm64.leaRdata x3, __str_rec_6  ; "x"
     arm64.leaRdata x21, __str_rec_7  ; "y"
-  __il_body#79:
+  __il_body#83:
     arm64.loadRegBaseDisp.word64 x22, [x3 + 8]
-  __il_cont#78:
+  __il_cont#82:
     arm64.cmp x22, 0
-    arm64.b.ne __il_body#81
+    arm64.b.ne __il_body#85
   empty_old:
     arm64.movRegReg x0, x19
     arm64.bl String.clone
     arm64.movRegReg x21, x0
-    arm64.b __il_cont#34
-  __il_body#81:
+    arm64.b __il_cont#40
+  __il_body#85:
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
-  __il_cont#80:
+  __il_cont#84:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x19
     arm64.movRegReg x2, x23
     arm64.bl findIn
     arm64.movRegReg x24, x0
     arm64.cmp x9, 0
-    arm64.b.eq __il_body#83
-  tryerr#39:
+    arm64.b.eq __il_body#87
+  tryerr#45:
     arm64.movRegReg x0, x19
     arm64.bl String.clone
     arm64.movRegReg x21, x0
-    arm64.b __il_cont#34
-  __il_body#83:
+    arm64.b __il_cont#40
+  __il_body#87:
     arm64.loadRegBaseDisp.word64 x25, [x21 + 8]
-  __il_body#45:
+  __il_body#53:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -74,27 +77,26 @@ func @main {
     arm64.movRegReg x28, x0
     arm64.storeBaseDispReg.word64 [x28 + 0], x26
     arm64.storeBaseDispReg.byte [x28 + 8], x27
-  __il_cont#44:
+  __il_cont#52:
     arm64.sub x0, x23, x22
     arm64.add x25, x0, x25
-  __il_body#55:
     arm64.cmp x25, 0
-    arm64.b.lt __rc_panic#57
-  __rc_ok#56:
+    arm64.b.lt __rc_panic#51
+  __il_body#63:
     arm64.loadRegBaseDisp.word64 x26, [x28 + 0]
-  __rc_ok#64:
+  __il_body#65:
     arm64.movRegReg x0, x26
     arm64.bl __managed_capacity
     arm64.cmp x25, x0
-    arm64.b.le __il_cont#54
+    arm64.b.le __il_cont#62
   grow:
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x25
     arm64.bl __managed_mem_grow
     arm64.cmp x9, 0
-    arm64.b.eq __il_cont#54
-  tryerr#62:
-    arm64.leaRdata x0, __str_blob_18  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    arm64.b.eq __il_cont#62
+  tryerr#68:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot26
@@ -109,7 +111,7 @@ func @main {
     arm64.loadRegSlot x28, slot35
     arm64.epilogue 304
     arm64.ret
-  __il_cont#54:
+  __il_cont#62:
     arm64.movRegReg x0, x19
     arm64.bl String.addressableBytes
     arm64.movRegReg x25, x0
@@ -119,9 +121,9 @@ func @main {
     arm64.bl __managed_slice
     arm64.movRegReg x26, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#40
-  tryerr#41:
-    arm64.leaRdata x0, __str_blob_12  ; "panic at String.maxon:627: String.replaceFirst: head slice \xe2\x80\x94 idx from findIn, always in bounds\x0a"
+    arm64.b.eq tryok#46
+  tryerr#47:
+    arm64.leaRdata x0, __str_blob_13  ; "panic at String.maxon:635: String.replaceFirst: head slice \xe2\x80\x94 idx from findIn, always in bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot26
@@ -136,33 +138,33 @@ func @main {
     arm64.loadRegSlot x28, slot35
     arm64.epilogue 304
     arm64.ret
-  tryok#40:
+  tryok#46:
     arm64.loadRegBaseDisp.byte x2, [x19 + 48]
     arm64.movRegReg x0, x28
     arm64.movRegReg x1, x26
     arm64.bl StringBuilder.appendBytes
-  __il_body#47:
+  __il_body#55:
     arm64.movRegReg x0, x21
     arm64.bl String.addressableBytes
     arm64.movRegReg x27, x0
-  __il_body#49:
+  __il_body#57:
     arm64.loadRegBaseDisp.byte x2, [x21 + 48]
-  __il_cont#48:
+  __il_cont#56:
     arm64.movRegReg x0, x28
     arm64.movRegReg x1, x27
     arm64.bl StringBuilder.appendBytes
     arm64.movRegReg x0, x27
     arm64.bl __managed_decref
-  __il_cont#46:
+  __il_cont#54:
     arm64.add x1, x24, x22
     arm64.movRegReg x0, x25
     arm64.movRegReg x2, x23
     arm64.bl __managed_slice
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#42
-  tryerr#43:
-    arm64.leaRdata x0, __str_blob_13  ; "panic at String.maxon:635: String.replaceFirst: tail slice \xe2\x80\x94 idx+oldLen <= selfLen guaranteed\x0a"
+    arm64.b.eq tryok#48
+  tryerr#49:
+    arm64.leaRdata x0, __str_blob_14  ; "panic at String.maxon:643: String.replaceFirst: tail slice \xe2\x80\x94 idx+oldLen <= selfLen guaranteed\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot26
@@ -177,15 +179,15 @@ func @main {
     arm64.loadRegSlot x28, slot35
     arm64.epilogue 304
     arm64.ret
-  tryok#42:
+  tryok#48:
     arm64.loadRegBaseDisp.byte x2, [x19 + 48]
     arm64.movRegReg x0, x28
     arm64.movRegReg x1, x21
     arm64.bl StringBuilder.appendBytes
-  __il_body#51:
+  __il_body#59:
     arm64.loadRegBaseDisp.word64 x0, [x28 + 0]
     arm64.loadRegBaseDisp.byte x22, [x28 + 8]
-  __il_body#53:
+  __il_body#61:
     arm64.bl __managed_retain
     arm64.movRegReg x23, x0
     arm64.movRegReg x0, x23
@@ -194,7 +196,7 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.movRegReg x0, x23
     arm64.bl __managed_decref
-  __il_cont#52:
+  __il_cont#60:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -204,7 +206,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x28 + 0], x23
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.byte [x28 + 8], x0
-  __il_cont#50:
+  __il_cont#58:
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.movRegReg x0, x26
@@ -214,11 +216,11 @@ func @main {
     arm64.movRegReg x0, x28
     arm64.bl __destruct_StringBuilder
     arm64.movRegReg x21, x22
-  __il_cont#34:
+  __il_cont#40:
     arm64.storeSlotReg slot1, x21
-  __il_body#71:
+  __il_body#75:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-  __il_cont#70:
+  __il_cont#74:
     arm64.cmp x0, 0
     arm64.cset x22, eq
   __il_cont#5:
@@ -237,16 +239,16 @@ func @main {
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
   __il_body#7:
     arm64.movImm x1, 0
-  __il_body#73:
+  __il_body#77:
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
-  __il_cont#72:
+  __il_cont#76:
     arm64.movRegReg x0, x19
     arm64.bl __managed_slice
     arm64.movRegReg x25, x0
     arm64.cmp x9, 0
     arm64.b.eq tryok#8
   tryerr#9:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at String.maxon:157: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
+    arm64.leaRdata x0, __str_blob_11  ; "panic at String.maxon:157: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot26
@@ -270,20 +272,20 @@ func @main {
     arm64.bl __managed_decref
   __il_cont#4:
     arm64.loadRegBaseDisp.word64 x25, [x26 + 8]
-    arm64.movImm x0, 21
+    arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.storeSlotReg slot18, x1
     arm64.movRegReg x0, x25
-    arm64.bl __int_to_string
+    arm64.bl __uint_to_string
     arm64.storeSlotReg slot25, x0
     arm64.leaRdata x0, __str_rec_8  ; " "
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot17, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot23, x0
-  __il_body#31:
+  __il_body#37:
     arm64.loadRegBaseDisp.word64 x25, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x26, [x19 + 8]
     arm64.add x0, x26, 57
@@ -302,7 +304,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
-  __il_body#33:
+  __il_body#39:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -317,11 +319,14 @@ func @main {
     arm64.movImm x26, 0
     arm64.movImm x27, 0
     arm64.loadRegBaseDisp.word64 x0, [x25 + 0]
-  __il_body#75:
+  __il_body#79:
     arm64.loadRegBaseDisp.word64 x28, [x0 + 8]
     arm64.b whilehdr#11
   count_loop#12:
     arm64.loadRegBaseDisp.word64 x0, [x25 + 0]
+    arm64.cmp x27, 0
+    arm64.b.lt __rc_panic#15
+  __rc_ok#14:
     arm64.movRegReg x1, x27
     arm64.bl utf8ByteLengthAt
     arm64.add x27, x27, x0
@@ -331,7 +336,7 @@ func @main {
     arm64.b.lt count_loop#12
   whileexit#13:
     arm64.cmp x26, 0
-    arm64.b.lt __rc_panic#15
+    arm64.b.lt __rc_panic#17
   __il_cont#3:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
@@ -346,7 +351,7 @@ func @main {
     arm64.storeSlotReg slot15, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot20, x0
-  __il_body#27:
+  __il_body#33:
     arm64.loadRegBaseDisp.word64 x25, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
     arm64.add x0, x19, 57
@@ -365,7 +370,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
-  __il_body#29:
+  __il_body#35:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -376,19 +381,23 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.movRegReg x0, x26
     arm64.bl __str_decref
-  __il_body#16:
+  __il_body#18:
     arm64.movImm x25, 0
     arm64.movImm x26, 0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-  __il_body#77:
+  __il_body#81:
     arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
-    arm64.b whilehdr#17
-  count_loop#18:
+    arm64.b whilehdr#19
+  count_loop#20:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x26, 0
+    arm64.b.lt __rc_panic#26
+  __rc_ok#25:
     arm64.movRegReg x1, x26
     arm64.bl utf8DecodeAt
     arm64.movRegReg x28, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+  __rc_ok#27:
     arm64.movRegReg x1, x26
     arm64.bl utf8ByteLengthAt
     arm64.add x26, x26, x0
@@ -401,12 +410,12 @@ func @main {
     arm64.add x0, x25, 2
   ifcont:
     arm64.movRegReg x25, x0
-  whilehdr#17:
+  whilehdr#19:
     arm64.cmp x26, x27
-    arm64.b.lt count_loop#18
-  whileexit#19:
+    arm64.b.lt count_loop#20
+  whileexit#21:
     arm64.cmp x25, 0
-    arm64.b.lt __rc_panic#24
+    arm64.b.lt __rc_panic#30
   __il_cont#2:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
@@ -420,9 +429,9 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot14, x1
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
-  __il_body#68:
+  __il_body#72:
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
-  __il_cont#67:
+  __il_cont#71:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -436,9 +445,9 @@ func @main {
     arm64.storeSlotReg slot12, x1
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
     arm64.storeSlotReg slot22, x26
-  __il_body#69:
+  __il_body#73:
     arm64.loadRegBaseDisp.word64 x21, [x21 + 8]
-  __il_cont#66:
+  __il_cont#70:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -557,7 +566,7 @@ func @main {
     arm64.bl __mm_decref
     arm64.loadRegSlot x0, slot5
     arm64.bl __mm_decref
-  __il_body#25:
+  __il_body#31:
     arm64.loadRegSlot x0, slot10
     arm64.bl __write_stdout
   __il_cont#1:
@@ -587,8 +596,8 @@ func @main {
     arm64.loadRegSlot x28, slot35
     arm64.epilogue 304
     arm64.ret
-  __rc_panic#57:
-    arm64.leaRdata x0, __str_blob_31  ; "panic at String.maxon:861: Range check failed: value outside typealias 'BytePos'\x0a"
+  __rc_panic#51:
+    arm64.leaRdata x0, __str_blob_29  ; "panic at String.maxon:629: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot26
@@ -604,7 +613,7 @@ func @main {
     arm64.epilogue 304
     arm64.ret
   __rc_panic#15:
-    arm64.leaRdata x0, __str_blob_36  ; "panic at views.maxon:112: Range check failed: value outside typealias 'CodepointCount'\x0a"
+    arm64.leaRdata x0, __str_blob_39  ; "panic at views.maxon:106: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot26
@@ -619,8 +628,40 @@ func @main {
     arm64.loadRegSlot x28, slot35
     arm64.epilogue 304
     arm64.ret
-  __rc_panic#24:
-    arm64.leaRdata x0, __str_blob_38  ; "panic at views.maxon:187: Range check failed: value outside typealias 'Utf16UnitCount'\x0a"
+  __rc_panic#17:
+    arm64.leaRdata x0, __str_blob_40  ; "panic at views.maxon:111: Range check failed: value outside typealias 'CodepointCount'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot26
+    arm64.loadRegSlot x20, slot27
+    arm64.loadRegSlot x21, slot28
+    arm64.loadRegSlot x22, slot29
+    arm64.loadRegSlot x23, slot30
+    arm64.loadRegSlot x24, slot31
+    arm64.loadRegSlot x25, slot32
+    arm64.loadRegSlot x26, slot33
+    arm64.loadRegSlot x27, slot34
+    arm64.loadRegSlot x28, slot35
+    arm64.epilogue 304
+    arm64.ret
+  __rc_panic#26:
+    arm64.leaRdata x0, __str_blob_41  ; "panic at views.maxon:175: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot26
+    arm64.loadRegSlot x20, slot27
+    arm64.loadRegSlot x21, slot28
+    arm64.loadRegSlot x22, slot29
+    arm64.loadRegSlot x23, slot30
+    arm64.loadRegSlot x24, slot31
+    arm64.loadRegSlot x25, slot32
+    arm64.loadRegSlot x26, slot33
+    arm64.loadRegSlot x27, slot34
+    arm64.loadRegSlot x28, slot35
+    arm64.epilogue 304
+    arm64.ret
+  __rc_panic#30:
+    arm64.leaRdata x0, __str_blob_43  ; "panic at views.maxon:186: Range check failed: value outside typealias 'Utf16UnitCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot26

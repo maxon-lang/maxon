@@ -9,11 +9,11 @@ end 'Payload'
 type Desc implements Payload
 	export var v as Integer
 
-	export static function create(x Integer) returns Desc
+	static function create(x Integer) returns Desc
 		return Self{v: x}
 	end 'create'
 
-	export function tag() returns Integer
+	function tag() returns Integer
 		return self.v
 	end 'tag'
 end 'Desc'
@@ -22,11 +22,11 @@ end 'Desc'
 type Holder
 	export var p as Payload
 
-	export static function create(p Payload) returns Holder
+	static function create(p Payload) returns Holder
 		return Holder{p: p}
 	end 'create'
 
-	export function run() returns Integer
+	function run() returns Integer
 		return self.p.tag()
 	end 'run'
 end 'Holder'
@@ -49,7 +49,7 @@ end 'forFunc'
 // Pre-loop borrow + early-return guard + per-item loop consume
 // (mirrors allocateRegistersWithTarget).
 function withTarget(items ItemArray, p Payload) returns Integer
-	let n = borrowCount(p, base: items.count())
+	let n = borrowCount(p, base: items.count() as Integer)
 	if n == 0 'empty'
 		return 0
 	end 'empty'
@@ -77,9 +77,12 @@ end 'main'
 ExitCode: 34
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @Desc.tag {
@@ -132,7 +135,7 @@ func @main {
     arm64.b forhdr#19
   r:
     arm64.movRegReg x0, x21
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
     arm64.blr x16
     arm64.add x22, x22, x0
   forstep#21:
@@ -174,7 +177,7 @@ func @main {
   __il_body#28:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x27 + 8]
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 48]
     arm64.blr x16
   __il_cont#25:
     arm64.add x25, x0, x25

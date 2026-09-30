@@ -7,6 +7,7 @@ ExitCode: 3
 ---
 data {
   __slab_state@0 = i64 0
+  __mrt_program_started@8 = i8 0
 }
 
 func @main {
@@ -19,12 +20,12 @@ func @main {
     arm64.leaRdata x19, __str_rec_1  ; "a"
   __il_body#5:
     arm64.movImm x20, 5381
-  __il_body#16:
+  __il_body#18:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
-  __il_cont#15:
+  __il_cont#17:
     arm64.movImm x22, 0
     arm64.b forhdr
-  hash_loop:
+  __rc_ok#12:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.bl String.byteAt
@@ -39,7 +40,7 @@ func @main {
     arm64.movRegReg x20, x0
   forhdr:
     arm64.cmp x22, x21
-    arm64.b.lt hash_loop
+    arm64.b.lt __rc_ok#12
   forexit:
     arm64.movImm x0, 4294967295
     arm64.and x0, x20, x0
@@ -58,7 +59,7 @@ func @main {
   __rc_chk:
     arm64.cmp x0, 255
     arm64.b.gt __rc_panic
-  __rc_ok:
+  __rc_ok#1:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

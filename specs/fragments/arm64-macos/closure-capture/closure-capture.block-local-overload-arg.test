@@ -6,7 +6,7 @@ typealias LRArray = Array with LiveRange
 type LiveRange
 	export var valueId as ValId
 
-	export static function create(v ValId) returns LiveRange
+	static function create(v ValId) returns LiveRange
 		return Self{valueId: v}
 	end 'create'
 end 'LiveRange'
@@ -14,7 +14,7 @@ end 'LiveRange'
 type SlotRange
 	export var off as ValId
 
-	export static function create(o ValId) returns SlotRange
+	static function create(o ValId) returns SlotRange
 		return Self{off: o}
 	end 'create'
 end 'SlotRange'
@@ -55,6 +55,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @LiveRange.create {
@@ -62,20 +63,10 @@ func @LiveRange.create {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_ok:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at closure-capture.block-local-overload-arg.test:9: Range check failed: value outside typealias 'ValId'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -96,7 +87,7 @@ func @allocate$closure_0 {
     arm64.epilogue 16
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at closure-capture.block-local-overload-arg.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at closure-capture.block-local-overload-arg.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -213,7 +204,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic#20:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at closure-capture.block-local-overload-arg.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_4  ; "panic at closure-capture.block-local-overload-arg.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -225,7 +216,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic#11:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at closure-capture.block-local-overload-arg.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_6  ; "panic at closure-capture.block-local-overload-arg.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

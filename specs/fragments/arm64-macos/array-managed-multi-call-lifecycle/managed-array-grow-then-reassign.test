@@ -1,7 +1,7 @@
 // Test: managed-array-grow-then-reassign
 typealias Integer = int(i64.min to i64.max)
 
-export union Tag
+union Tag
 		label(name String)
 		index(n Integer)
 end 'Tag'
@@ -54,6 +54,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Entry.create {
@@ -290,14 +291,14 @@ func @main {
   __il_cont#4:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Store
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic
   __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Store
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

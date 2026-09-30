@@ -14,7 +14,7 @@ function build(n Len, seed Len) returns ByteArray
 end 'build'
 
 function verify(b ByteArray, n Len, seed Len) returns Integer
-	if b.count() != n 'length'
+	if (b.count() as Len) != n 'length'
 		return 1
 	end 'length'
 	var wrong = 0
@@ -58,9 +58,12 @@ typealias Integer = int(i64.min to i64.max)
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @build {
@@ -88,7 +91,7 @@ func @build {
     arm64.movImm x1, 0
     arm64.bl __managed_create
     arm64.movRegReg x21, x0
-  __rc_ok#20:
+  __il_body:
     arm64.movRegReg x0, x21
     arm64.bl __managed_capacity
     arm64.cmp x19, x0
@@ -233,10 +236,10 @@ func @main {
     arm64.add x0, x0, x1
     arm64.add x0, x0, 1
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
+    arm64.b.lt __rc_panic#25
+  __rc_chk#26:
     arm64.cmp x0, 4096
-    arm64.b.gt __rc_panic
+    arm64.b.gt __rc_panic#25
   __rc_ok#24:
     arm64.add x1, x22, x20
   __rc_ok#27:
@@ -271,14 +274,14 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 40]
     arm64.cmp x1, 0
-    arm64.b.eq critsplit#64
+    arm64.b.eq critsplit#67
   __im_empty:
     arm64.cmp x22, 0
     arm64.b.eq __im_slow#34
-  critsplit#65:
+  critsplit#68:
     arm64.movRegReg x9, x0
     arm64.b __im_cont
-  critsplit#64:
+  critsplit#67:
     arm64.movRegReg x9, x0
   __im_cont:
     arm64.cmp x9, 0
@@ -304,6 +307,12 @@ func @main {
     arm64.add x23, x21, 8
   __rc_ok#52:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#56
+  __rc_chk#57:
+    arm64.cmp x0, 4096
+    arm64.b.gt __rc_panic#56
+  __rc_ok#55:
     arm64.cmp x0, x23
     arm64.b.eq ifcont#40
   length:
@@ -322,21 +331,21 @@ func @main {
     arm64.b.ne __im_stride
   __im_word:
     arm64.cmp x25, x27
-    arm64.b.hs __im_slow#56
-  __im_load#61:
+    arm64.b.hs __im_slow#59
+  __im_load#64:
     arm64.loadRegBaseIndexScale.word64 x0, [x28 + x25*8 + 0]
     arm64.b tryok#45
   __im_stride:
     arm64.cmp x26, 1
-    arm64.b.ne __im_slow#56
+    arm64.b.ne __im_slow#59
   __im_byte:
     arm64.cmp x25, x27
-    arm64.b.hs __im_slow#56
-  __im_load#62:
+    arm64.b.hs __im_slow#59
+  __im_load#65:
     arm64.add x0, x28, x25
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.b tryok#45
-  __im_slow#56:
+  __im_slow#59:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x25
     arm64.bl __managed_get
@@ -357,11 +366,11 @@ func @main {
     arm64.mul x2, x2, x16
     arm64.sub x1, x1, x2
     arm64.cmp x0, x1
-    arm64.b.eq critsplit#66
+    arm64.b.eq critsplit#69
   value:
     arm64.add x0, x24, 1
     arm64.b forstep#43
-  critsplit#66:
+  critsplit#69:
     arm64.movRegReg x0, x24
   forstep#43:
     arm64.add x25, x25, 1
@@ -415,8 +424,8 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at slab-allocator.allocation-and-release-interleave.test:41: Range check failed: value outside typealias 'Len'\x0a"
+  __rc_panic#25:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at slab-allocator.allocation-and-release-interleave.test:41: Range check failed: value outside typealias 'Len'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -437,4 +446,20 @@ func @main {
     arm64.bl __managed_get
     arm64.movRegReg x22, x0
     arm64.b __im_cont
+  __rc_panic#56:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at slab-allocator.allocation-and-release-interleave.test:17: Range check failed: value outside typealias 'Len'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
 }

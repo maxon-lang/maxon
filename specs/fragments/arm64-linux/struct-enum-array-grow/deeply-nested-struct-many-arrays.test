@@ -3,12 +3,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 typealias StringArray = Array with String
 
-export union Op
+union Op
 		add(value Integer)
 		nop
 end 'Op'
 
-export type Inner
+type Inner
 		export var revision as Integer
 		export var items as IntArray
 		export var names as StringArray
@@ -19,7 +19,7 @@ export type Inner
 		end 'create'
 end 'Inner'
 
-export type Outer
+type Outer
 		export var inner as Inner
 		export var tag as Op
 		export var data as IntArray
@@ -42,9 +42,12 @@ end 'main'
 ExitCode: 4
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -149,16 +152,16 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x22 + 16]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
     arm64.add x19, x0, x1
-    arm64.movRegReg x0, x22
-    arm64.bl __destruct_Outer
-    arm64.movRegReg x0, x23
-    arm64.bl __destruct_Inner
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic
   __rc_ok:
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Outer
+    arm64.movRegReg x0, x23
+    arm64.bl __destruct_Inner
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

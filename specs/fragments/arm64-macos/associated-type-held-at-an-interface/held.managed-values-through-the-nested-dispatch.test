@@ -14,18 +14,18 @@ type NumberedLines implements Lines
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns String
+	function current() returns String
 		return "a managed line long enough to live on the heap, number {self.pos}"
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -37,18 +37,18 @@ type ShoutedLines implements Lines
 	var pos as Integer
 	let limit as Integer
 
-	export static function create(limit Integer) returns Self throws IterationError
+	static function create(limit Integer) returns Self throws IterationError
 		if limit < 1 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{pos: 1, limit: limit}
 	end 'create'
 
-	export function current() returns String
+	function current() returns String
 		return "A MANAGED LINE LONG ENOUGH TO LIVE ON THE HEAP, NUMBER {self.pos}!!"
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		if self.pos >= self.limit 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
@@ -59,11 +59,11 @@ end 'ShoutedLines'
 type PlainDoc implements Doc with NumberedLines
 	let lineCount as Integer
 
-	export static function create(lineCount Integer) returns Self
+	static function create(lineCount Integer) returns Self
 		return Self{lineCount: lineCount}
 	end 'create'
 
-	export function createIterator() returns NumberedLines throws IterationError
+	function createIterator() returns NumberedLines throws IterationError
 		return try NumberedLines.create(self.lineCount)
 	end 'createIterator'
 end 'PlainDoc'
@@ -71,11 +71,11 @@ end 'PlainDoc'
 type LoudDoc implements Doc with ShoutedLines
 	let lineCount as Integer
 
-	export static function create(lineCount Integer) returns Self
+	static function create(lineCount Integer) returns Self
 		return Self{lineCount: lineCount}
 	end 'create'
 
-	export function createIterator() returns ShoutedLines throws IterationError
+	function createIterator() returns ShoutedLines throws IterationError
 		return try ShoutedLines.create(self.lineCount)
 	end 'createIterator'
 end 'LoudDoc'
@@ -109,6 +109,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @NumberedLines.create {
@@ -383,9 +384,9 @@ func @widthOf {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 48]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 56]
     arm64.add x20, x1, x2
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 48]
     arm64.blr x16
     arm64.movRegReg x21, x0
     arm64.movImm x0, 0
@@ -394,7 +395,7 @@ func @widthOf {
     arm64.b forempty
   walk:
     arm64.movRegReg x0, x21
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
     arm64.blr x16
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
@@ -403,7 +404,7 @@ func @widthOf {
     arm64.bl __str_decref
   forstep:
     arm64.movRegReg x0, x21
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 56]
     arm64.blr x16
     arm64.movRegReg x0, x9
   forhdr:

@@ -2,10 +2,15 @@
 // --- file: a.maxon
 typealias Container = int(0 to 5)
 
-export function useA(c Container) returns ExitCode
+function useA(c Container) returns ExitCode
 	c = 4
+
 	return c
 end 'useA'
+
+export function goA() returns ExitCode
+	return useA(1)
+end 'goA'
 
 // --- file: b.maxon
 union Container
@@ -24,7 +29,7 @@ end 'fromB'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	return useA(2) + fromB()
+	return goA() + fromB()
 end 'main'
 ---
 ExitCode: 7
@@ -33,6 +38,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @useA {
@@ -61,7 +67,6 @@ func @useA {
 func @main {
   entry:
     arm64.prologue 80
-    arm64.storeSlotReg slot7, x26
     arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
@@ -69,7 +74,8 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 2
+  __il_body#5:
+    arm64.movImm x19, 1
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -78,101 +84,97 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl useA
     arm64.movRegReg x19, x0
-  __il_body#5:
-    arm64.leaRdata x21, __str_rec_1  ; "hi"
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+  __il_body#7:
+    arm64.leaRdata x20, __str_rec_1  ; "hi"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
+    arm64.movRegReg x21, x0
     arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 0], x0
-    arm64.movRegReg x0, x21
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x20
     arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x22 + 8], x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.cmp x0, 0
     arm64.b.ne matchnext
-  matcharm#6:
-    arm64.movImm x21, 0
-    arm64.movRegReg x0, x22
-    arm64.bl __destruct_Container
+  matcharm#8:
+    arm64.movImm x20, 0
     arm64.movRegReg x0, x21
-    arm64.b __il_cont#4
+    arm64.bl __destruct_Container
+    arm64.movRegReg x0, x20
+    arm64.b __il_cont#6
   matchnext:
     arm64.cmp x0, 1
     arm64.b.ne matchdead
-  matcharm#7:
-    arm64.loadRegBaseDisp.word64 x21, [x22 + 8]
+  matcharm#9:
+    arm64.loadRegBaseDisp.word64 x20, [x21 + 8]
     arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x22 + 8], x0
-    arm64.leaRdata x23, __str_rec_1  ; "hi"
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.leaRdata x22, __str_rec_1  ; "hi"
   __il_body#41:
-    arm64.loadRegBaseDisp.word64 x24, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x23, [x20 + 8]
   __il_body#42:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
   __il_cont#39:
-    arm64.cmp x24, x0
-    arm64.b.eq __rc_ok#35
+    arm64.cmp x23, x0
+    arm64.b.eq __il_body#24
   lenMismatch:
     arm64.movImm x0, 0
-    arm64.b __il_cont#17
-  __rc_ok#35:
-    arm64.cmp x24, 0
-    arm64.b.lt __rc_panic#38
-  __rc_ok#37:
-    arm64.movImm x25, 0
+    arm64.b __il_cont#19
+  __il_body#24:
+    arm64.movImm x24, 0
     arm64.b forhdr
-  compare_loop:
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x25
+  __rc_ok#35:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
     arm64.bl String.byteAt
-    arm64.movRegReg x26, x0
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#28
-  tryok#27:
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x25
-    arm64.bl String.byteAt
+    arm64.movRegReg x25, x0
     arm64.cmp x9, 0
     arm64.b.ne tryerr#30
-  tryok#29:
-    arm64.cmp x26, x0
+  __rc_ok#37:
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x24
+    arm64.bl String.byteAt
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#32
+  tryok:
+    arm64.cmp x25, x0
     arm64.b.eq forstep
   byte_check:
     arm64.movImm x0, 0
-    arm64.b __il_cont#17
+    arm64.b __il_cont#19
   forstep:
-    arm64.add x25, x25, 1
+    arm64.add x24, x24, 1
   forhdr:
-    arm64.cmp x25, x24
-    arm64.b.lt compare_loop
+    arm64.cmp x24, x23
+    arm64.b.lt __rc_ok#35
   forexit:
     arm64.movImm x0, 1
-  __il_cont#17:
+  __il_cont#19:
     arm64.cbz x0, ternaryfalse
   ternarytrue:
-    arm64.movImm x23, 3
+    arm64.movImm x22, 3
     arm64.b matchcont
   ternaryfalse:
-    arm64.movImm x23, 0
+    arm64.movImm x22, 0
   matchcont:
-    arm64.movRegReg x0, x21
-    arm64.bl __str_decref
-    arm64.movRegReg x0, x22
-    arm64.bl __destruct_Container
-  __rc_ok#14:
-    arm64.movRegReg x0, x23
-  __il_cont#4:
-    arm64.add x19, x19, x0
     arm64.movRegReg x0, x20
-    arm64.bl __mm_decref
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic#2
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Container
+  __rc_ok#16:
+    arm64.movRegReg x0, x22
+  __il_cont#6:
+    arm64.add x0, x19, x0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic#2
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
   __rc_ok#1:
-    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -180,40 +182,11 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
   matchdead:
-  __rc_panic#38:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at String.maxon:1008: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.epilogue 80
-    arm64.ret
-  tryerr#28:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at String.maxon:1010: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.epilogue 80
-    arm64.ret
   tryerr#30:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at String.maxon:1011: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at String.maxon:1018: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -223,10 +196,22 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
-  __rc_panic#2:
+  tryerr#32:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at String.maxon:1019: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic:
     arm64.leaRdata x0, __str_blob_7  ; "panic at main.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -237,7 +222,6 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
 }

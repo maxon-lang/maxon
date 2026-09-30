@@ -22,9 +22,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -96,24 +99,21 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x27 + 8]
   __il_cont#45:
     arm64.cmp x20, x0
-    arm64.b.eq __rc_ok#28
+    arm64.b.eq __il_body#15
   lenMismatch:
     arm64.movImm x19, 0
     arm64.b __il_cont#10
-  __rc_ok#28:
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_ok#30:
+  __il_body#15:
     arm64.movImm x21, 0
     arm64.b forhdr#16
-  compare_loop:
+  __rc_ok#26:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl String.byteAt
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
     arm64.b.ne tryerr#21
-  tryok#20:
+  __rc_ok#28:
     arm64.movRegReg x0, x27
     arm64.movRegReg x1, x21
     arm64.bl String.byteAt
@@ -129,7 +129,7 @@ func @main {
     arm64.add x21, x21, 1
   forhdr#16:
     arm64.cmp x21, x20
-    arm64.b.lt compare_loop
+    arm64.b.lt __rc_ok#26
   forexit#19:
     arm64.movImm x0, 1
   __il_cont#14:
@@ -190,33 +190,33 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
-  __il_body#35:
+  __il_body#33:
     arm64.movImm x20, 5381
   __il_body#50:
     arm64.loadRegBaseDisp.word64 x21, [x27 + 8]
   __il_cont#49:
     arm64.movImm x22, 0
-    arm64.b forhdr#36
-  hash_loop:
+    arm64.b forhdr#34
+  __rc_ok#40:
     arm64.movRegReg x0, x27
     arm64.movRegReg x1, x22
     arm64.bl String.byteAt
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#41
-  tryok#40:
+    arm64.b.ne tryerr#39
+  tryok#38:
     arm64.movImm x16, 33
     arm64.mul x1, x20, x16
     arm64.add x0, x1, x0
-  forstep#38:
+  forstep#36:
     arm64.add x22, x22, 1
     arm64.movRegReg x20, x0
-  forhdr#36:
+  forhdr#34:
     arm64.cmp x22, x21
-    arm64.b.lt hash_loop
-  forexit#39:
+    arm64.b.lt __rc_ok#40
+  forexit#37:
     arm64.movImm x0, 4294967295
     arm64.and x0, x20, x0
-  __il_cont#32:
+  __il_cont#30:
     arm64.movImm x16, 5863446
     arm64.cmp x0, x16
     arm64.cset x20, eq
@@ -278,24 +278,8 @@ func @main {
     arm64.loadRegSlot x28, slot11
     arm64.epilogue 112
     arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_12  ; "panic at String.maxon:1008: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.loadRegSlot x22, slot5
-    arm64.loadRegSlot x23, slot6
-    arm64.loadRegSlot x24, slot7
-    arm64.loadRegSlot x25, slot8
-    arm64.loadRegSlot x26, slot9
-    arm64.loadRegSlot x27, slot10
-    arm64.loadRegSlot x28, slot11
-    arm64.epilogue 112
-    arm64.ret
   tryerr#21:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at String.maxon:1010: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_6  ; "panic at String.maxon:1018: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2
@@ -311,7 +295,7 @@ func @main {
     arm64.epilogue 112
     arm64.ret
   tryerr#23:
-    arm64.leaRdata x0, __str_blob_7  ; "panic at String.maxon:1011: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
+    arm64.leaRdata x0, __str_blob_7  ; "panic at String.maxon:1019: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2
@@ -326,7 +310,7 @@ func @main {
     arm64.loadRegSlot x28, slot11
     arm64.epilogue 112
     arm64.ret
-  tryerr#41:
+  tryerr#39:
     arm64.leaRdata x0, __str_blob_8  ; "panic at hash.maxon:24: hashString: byteAt OOB \xe2\x80\x94 i < s.byteLength() invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0

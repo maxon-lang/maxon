@@ -6,19 +6,19 @@ type IntCursor
 	let items as IntArray
 	var pos as Integer
 
-	export static function create(items IntArray) returns Self throws IterationError
+	static function create(items IntArray) returns Self throws IterationError
 		if items.count() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{items: items, pos: 0}
 	end 'create'
 
-	export function current() returns Integer
-		return try self.items.get(self.pos) otherwise 0
+	function current() returns Integer
+		return try self.items.get(self.pos as ElementIndex) otherwise 0
 	end 'current'
 
-	export function advance() throws IterationError
-		if self.pos + 1 >= self.items.count() 'atTheLast'
+	function advance() throws IterationError
+		if self.pos + 1 >= (self.items.count() as Integer) 'atTheLast'
 			throw IterationError.exhausted
 		end 'atTheLast'
 		self.pos = self.pos + 1
@@ -32,11 +32,11 @@ end 'Bag'
 type Numbers implements Bag
 	let items as IntArray
 
-	export static function create(items IntArray) returns Self
+	static function create(items IntArray) returns Self
 		return Self{items: items}
 	end 'create'
 
-	export function createIterator() returns IntCursor throws IterationError
+	function createIterator() returns IntCursor throws IterationError
 		return try IntCursor.create(self.items)
 	end 'createIterator'
 end 'Numbers'
@@ -65,9 +65,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @IntCursor.create {
@@ -181,7 +184,7 @@ func @total {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 48]
     arm64.blr x16
     arm64.movRegReg x20, x0
     arm64.movImm x0, 0

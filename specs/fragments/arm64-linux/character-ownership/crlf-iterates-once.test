@@ -18,9 +18,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -41,6 +44,9 @@ func @main {
     arm64.movImm x21, 0
     arm64.b forhdr#1
   each:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#10
+  __rc_ok#9:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl findGraphemeEnd
@@ -133,6 +139,9 @@ func @main {
     arm64.movImm x21, 0
     arm64.b forhdr#5
   more:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#12
+  __rc_ok#11:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl findGraphemeEnd
@@ -220,6 +229,38 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#10:
+    arm64.leaRdata x0, __str_blob_20  ; "panic at crlf-iterates-once.test:5: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __rc_panic#12:
+    arm64.leaRdata x0, __str_blob_21  ; "panic at crlf-iterates-once.test:11: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
     arm64.loadRegSlot x20, slot5

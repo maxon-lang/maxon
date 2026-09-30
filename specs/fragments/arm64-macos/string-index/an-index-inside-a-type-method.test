@@ -2,20 +2,20 @@
 type Label
 	var text as String
 
-	export static function create(t String) returns Label
+	static function create(t String) returns Label
 		return Label{text: t}
 	end 'create'
 
-	export function head() returns String
+	function head() returns String
 		return text.slice(text.startIndex(), length: 2)
 	end 'head'
 
-	export function width() returns Integer
+	function width() returns Integer
 		let last = text.endIndex()
 		return last.charIndex()
 	end 'width'
 
-	export function upTo(needle String) returns String
+	function upTo(needle String) returns String
 		let hit = try text.findFirst(needle) otherwise text.endIndex()
 		return text.slice(text.startIndex(), endIndex: hit)
 	end 'upTo'
@@ -35,6 +35,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -87,48 +88,43 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl String.startIndex
     arm64.movRegReg x22, x0
-  __rc_ok#18:
+  __il_body#17:
     arm64.loadRegBaseDisp.word64 x1, [x22 + 8]
-  __il_body#21:
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#33
-  __il_body#41:
+  __il_body#33:
     arm64.loadRegBaseDisp.word64 x23, [x21 + 8]
-  __il_body#42:
+  __il_body#34:
     arm64.loadRegBaseDisp.byte x0, [x21 + 48]
-  __il_cont#39:
+  __il_cont#31:
     arm64.movImm x2, 0
     arm64.cbz x0, critsplit
-  andrhs#22:
+  andrhs#20:
     arm64.cmp x1, x23
     arm64.cset x0, lo
-    arm64.b scmerge#23
+    arm64.b scmerge#21
   critsplit:
     arm64.movRegReg x0, x2
-  scmerge#23:
-    arm64.cbz x0, ifcont#27
+  scmerge#21:
+    arm64.cbz x0, ifcont#25
   oneByteEach:
     arm64.sub x0, x23, x1
     arm64.cmp x0, 2
-    arm64.b.ls ifcont#26
+    arm64.b.ls ifcont#24
   inRange:
     arm64.add x2, x1, 2
-    arm64.cmp x2, 0
-    arm64.b.lt __rc_panic#36
-    arm64.b __il_cont#20
-  ifcont#26:
+    arm64.b __il_cont#18
+  ifcont#24:
     arm64.movRegReg x2, x23
-    arm64.b __il_cont#20
-  ifcont#27:
+    arm64.b __il_cont#18
+  ifcont#25:
     arm64.movImm x24, 0
   whilehdr:
     arm64.cmp x24, 2
     arm64.movImm x0, 0
-    arm64.b.ge scmerge#30
-  andrhs#29:
+    arm64.b.ge scmerge#28
+  andrhs#27:
     arm64.cmp x1, x23
     arm64.cset x0, lo
-  scmerge#30:
+  scmerge#28:
     arm64.cbz x0, whileexit
   advance:
     arm64.movRegReg x0, x21
@@ -137,11 +133,8 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.b whilehdr
   whileexit:
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#38
-  __rc_ok#37:
     arm64.movRegReg x2, x1
-  __il_cont#20:
+  __il_cont#18:
     arm64.loadRegBaseDisp.word64 x1, [x22 + 8]
     arm64.loadRegBaseDisp.byte x3, [x21 + 48]
     arm64.movRegReg x0, x21
@@ -282,54 +275,6 @@ func @main {
     arm64.loadRegSlot x0, slot0
     arm64.bl __destruct_Label
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot9
-    arm64.loadRegSlot x20, slot10
-    arm64.loadRegSlot x21, slot11
-    arm64.loadRegSlot x22, slot12
-    arm64.loadRegSlot x23, slot13
-    arm64.loadRegSlot x24, slot14
-    arm64.loadRegSlot x25, slot15
-    arm64.loadRegSlot x26, slot16
-    arm64.loadRegSlot x27, slot17
-    arm64.loadRegSlot x28, slot18
-    arm64.epilogue 176
-    arm64.ret
-  __rc_panic#33:
-    arm64.leaRdata x0, __str_blob_52  ; "panic at grapheme.maxon:436: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot9
-    arm64.loadRegSlot x20, slot10
-    arm64.loadRegSlot x21, slot11
-    arm64.loadRegSlot x22, slot12
-    arm64.loadRegSlot x23, slot13
-    arm64.loadRegSlot x24, slot14
-    arm64.loadRegSlot x25, slot15
-    arm64.loadRegSlot x26, slot16
-    arm64.loadRegSlot x27, slot17
-    arm64.loadRegSlot x28, slot18
-    arm64.epilogue 176
-    arm64.ret
-  __rc_panic#36:
-    arm64.leaRdata x0, __str_blob_54  ; "panic at grapheme.maxon:449: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot9
-    arm64.loadRegSlot x20, slot10
-    arm64.loadRegSlot x21, slot11
-    arm64.loadRegSlot x22, slot12
-    arm64.loadRegSlot x23, slot13
-    arm64.loadRegSlot x24, slot14
-    arm64.loadRegSlot x25, slot15
-    arm64.loadRegSlot x26, slot16
-    arm64.loadRegSlot x27, slot17
-    arm64.loadRegSlot x28, slot18
-    arm64.epilogue 176
-    arm64.ret
-  __rc_panic#38:
-    arm64.leaRdata x0, __str_blob_55  ; "panic at grapheme.maxon:463: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot9
     arm64.loadRegSlot x20, slot10
     arm64.loadRegSlot x21, slot11

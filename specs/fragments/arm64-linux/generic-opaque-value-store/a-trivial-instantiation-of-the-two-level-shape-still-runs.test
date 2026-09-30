@@ -5,7 +5,7 @@ typealias Small = int(0 to 100)
 type Inner uses U
 	let x as U
 
-	export function value() returns U
+	function value() returns U
 		return x
 	end 'value'
 
@@ -19,7 +19,7 @@ type Box uses T
 	let inner as TInner
 	let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return inner.value()
 	end 'value'
 
@@ -33,11 +33,11 @@ type Bag uses Element
 	typealias BoxArray = Array with EBox
 	var items as BoxArray
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		items.push(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function first() returns Element throws ArrayError
+	function first() returns Element throws ArrayError
 		let slot = try self.items.first() otherwise 'e'
 			throw ArrayError.indexOutOfBounds
 		end 'e'
@@ -59,7 +59,7 @@ function main() returns ExitCode
 	var b = SmallBag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
-		return 9 as ExitCode
+		return 9
 	end 'e'
 	return got
 end 'main'
@@ -67,9 +67,12 @@ end 'main'
 ExitCode: 41
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @Bag.first {
@@ -108,9 +111,13 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Bag_Small
   __il_body#4:
-    arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __destruct_Box_T779624e88745be2b
+    arm64.movImm x1, 8
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 72]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8

@@ -3,7 +3,7 @@ type Flags
 	export let a as bool
 	export let b as bool
 
-	export static function make(a bool, b bool) returns Flags
+	static function make(a bool, b bool) returns Flags
 		return Flags{a: a, b: b}
 	end 'make'
 end 'Flags'
@@ -23,61 +23,21 @@ end 'main'
 ExitCode: 4
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
 }
 
 func @main {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 1
-    arm64.movImm x20, 0
-  __il_body#3:
-    arm64.movImm x0, 16
+    arm64.prologue 16
+  ternarytrue:
+    arm64.movImm x0, 4
+  ternaryfalse:
     arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.byte [x0 + 0], x19
-    arm64.storeBaseDispReg.byte [x0 + 8], x20
-  __il_body#4:
-    arm64.loadRegBaseDisp.byte x1, [x0 + 0]
-    arm64.movImm x2, 1
-    arm64.cbnz x1, scmerge#6
-  orrhs:
-    arm64.loadRegBaseDisp.byte x1, [x0 + 8]
-    arm64.movRegReg x2, x1
-  scmerge#6:
-    arm64.loadRegBaseDisp.byte x1, [x0 + 0]
-    arm64.movImm x3, 0
-    arm64.cbz x1, critsplit
-  andrhs:
-    arm64.loadRegBaseDisp.byte x1, [x0 + 8]
-    arm64.b scmerge#8
-  critsplit:
-    arm64.movRegReg x1, x3
-  scmerge#8:
-    arm64.cbz x2, ternaryfalse#10
-  ternarytrue#9:
-    arm64.movImm x2, 4
-    arm64.b matchcont#11
-  ternaryfalse#10:
-    arm64.movImm x2, 0
-  matchcont#11:
-    arm64.cbz x1, ternaryfalse#13
-  ternarytrue#12:
-    arm64.movImm x1, 1
-    arm64.b matchcont#14
-  ternaryfalse#13:
-    arm64.movImm x1, 0
-  matchcont#14:
-    arm64.add x19, x2, x1
+  matchcont:
+    arm64.add x0, x0, x1
   __il_cont:
-    arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
 }

@@ -1,19 +1,19 @@
 // Test: crossfile-ranged-and-function-alias-coexist
 // --- file: a.maxon
-typealias Handler = int(0 to 10)
+export typealias Handler = int(0 to 10)
 
 export function useA() returns Handler
-	return 5 as Handler
+	return 5
 end 'useA'
 
 // --- file: b.maxon
-typealias Handler = function() returns Integer
+export typealias Handler = function() returns Integer
 
 export function useB(h Handler) returns ExitCode
 	return h() as ExitCode
 end 'useB'
 
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function zero() returns Integer
 	return 0
@@ -26,6 +26,12 @@ typealias Integer = int(i64.min to i64.max)
 ---
 ExitCode: 5
 ---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
 func @zero {
   entry:
     arm64.prologue 16

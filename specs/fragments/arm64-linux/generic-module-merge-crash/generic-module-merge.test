@@ -1,5 +1,5 @@
 // Test: generic-module-merge
-typealias Count = int(0 to u64.max)
+typealias Count = int(0 to u64.max) implements ElementIndex
 typealias Integer = int(i64.min to i64.max)
 
 interface Mergeable uses Func
@@ -12,7 +12,7 @@ interface Mergeable uses Func
 end 'Mergeable'
 
 extension Mergeable
-	export function merge(source Self)
+	function merge(source Self)
 		self.appendOps(source)
 		for i in 0 upto source.itemCount() 'eachItem'
 			let src = source.getItem(i)
@@ -24,7 +24,7 @@ end 'Mergeable'
 
 type Wrapper
 	export var value as Integer
-	export static function create(value Integer) returns Self
+	static function create(value Integer) returns Self
 		return Self{value: value}
 	end 'create'
 end 'Wrapper'
@@ -37,40 +37,40 @@ type Container uses Op implements Mergeable with Wrapper
 	export var ops as OpArray
 	export var items as WrapperArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{
 			ops: OpArray.create(),
 			items: WrapperArray.create()
 		}
 	end 'create'
 
-	export function opsCount() returns Count
+	function opsCount() returns Count
 		return self.ops.count()
 	end 'opsCount'
 
-	export function appendOps(source Self)
+	function appendOps(source Self)
 		self.ops.append(source.ops)
 	end 'appendOps'
 
-	export function itemCount() returns Count
+	function itemCount() returns Count
 		return self.items.count()
 	end 'itemCount'
 
-	export function getItem(index Count) returns Wrapper
+	function getItem(index Count) returns Wrapper
 		return try self.items.get(index) otherwise 'unreachable'
 			panic("getItem: index out of bounds")
 		end 'unreachable'
 	end 'getItem'
 
-	export function pushItem(item Wrapper)
+	function pushItem(item Wrapper)
 		self.items.push(item)
 	end 'pushItem'
 
-	export function cloneItem(src Wrapper) returns Wrapper
+	function cloneItem(src Wrapper) returns Wrapper
 		return Wrapper.create(src.value)
 	end 'cloneItem'
 
-	export function pushOp(op Op)
+	function pushOp(op Op)
 		self.ops.push(op)
 	end 'pushOp'
 end 'Container'
@@ -100,9 +100,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @Wrapper.create {
@@ -148,9 +151,6 @@ func @Container.create {
 func @Container.getItem {
   entry:
     arm64.prologue 16
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic
-  __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
@@ -161,15 +161,15 @@ func @Container.getItem {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.b.eq critsplit#9
+    arm64.b.eq critsplit#7
   __im_empty:
     arm64.cmp x2, 0
     arm64.b.eq __im_slow
-  critsplit#10:
+  critsplit#8:
     arm64.movRegReg x0, x2
     arm64.movRegReg x9, x3
     arm64.b __im_cont
-  critsplit#9:
+  critsplit#7:
     arm64.movRegReg x0, x2
     arm64.movRegReg x9, x3
   __im_cont:
@@ -183,12 +183,6 @@ func @Container.getItem {
     arm64.ret
   tryok:
     arm64.bl __mm_retain
-    arm64.epilogue 16
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at generic-module-merge.test:59: Range check failed: value outside typealias 'Count'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
   __im_slow:
@@ -256,28 +250,28 @@ func @main {
     arm64.bl Container.create
     arm64.movRegReg x20, x0
     arm64.leaRdata x21, __layout_Container_Integer
-  __il_body#16:
+  __il_body#18:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.movRegReg x2, x21
     arm64.bl __managed_append_opaque
-  __il_cont#15:
+  __il_cont#17:
     arm64.movImm x22, 0
-  __il_body#22:
+  __il_body#24:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.b forhdr
-  eachItem:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x21
     arm64.bl Container.getItem
     arm64.movRegReg x24, x0
-  __il_body#18:
+  __il_body#20:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
     arm64.bl Wrapper.create
     arm64.movRegReg x25, x0
-  __il_cont#17:
+  __il_cont#19:
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x25
     arm64.movRegReg x2, x21
@@ -290,7 +284,7 @@ func @main {
     arm64.add x22, x22, 1
   forhdr:
     arm64.cmp x22, x23
-    arm64.b.lt eachItem
+    arm64.b.lt __rc_ok
   __il_body#8:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
@@ -298,10 +292,10 @@ func @main {
     arm64.cmp x0, 2
     arm64.movImm x0, 0
     arm64.b.ne scmerge
-  __il_body#20:
+  __il_body#22:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-  __il_cont#19:
+  __il_cont#21:
     arm64.cmp x0, 1
     arm64.cset x0, eq
   scmerge:

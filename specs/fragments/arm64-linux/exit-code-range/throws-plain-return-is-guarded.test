@@ -1,13 +1,17 @@
 // Test: throws-plain-return-is-guarded
 typealias Integer = int(i64.min to i64.max)
 
+function getValue(v Integer) returns ExitCode throws MatchError
+	if v > 1000 'big'
+		throw MatchError.unmatched
+	end 'big'
+
+	return v
+end 'getValue'
+
 enum MatchError
 	unmatched
 end 'MatchError'
-
-function getValue(v Integer) returns ExitCode throws MatchError
-	return v
-end 'getValue'
 
 function main() returns ExitCode
 	let result = try getValue(-5) otherwise 0
@@ -18,14 +22,25 @@ end 'main'
 ExitCode: 1
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @getValue {
   entry:
     arm64.prologue 16
+    arm64.cmp x0, 1000
+    arm64.b.le ifcont
+  big:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:

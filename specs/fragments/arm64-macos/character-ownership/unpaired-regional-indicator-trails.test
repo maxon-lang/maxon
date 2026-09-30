@@ -15,6 +15,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -35,6 +36,9 @@ func @main {
     arm64.movImm x21, 0
     arm64.b forhdr
   each:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#6
+  __rc_ok#5:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl findGraphemeEnd
@@ -51,17 +55,20 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
     arm64.b.lt each
-  __il_body#21:
+  __il_body#25:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
-  __il_body#19:
+  __il_body#23:
     arm64.loadRegBaseDisp.byte x0, [x19 + 48]
-  __il_cont#18:
-    arm64.cbnz x0, __il_cont#7
+  __il_cont#22:
+    arm64.cbnz x0, __il_cont#9
   ifcont:
     arm64.movImm x22, 0
     arm64.movImm x1, 0
     arm64.b whilehdr
   countLoop:
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#19
+  __rc_ok#18:
     arm64.movRegReg x0, x19
     arm64.bl findGraphemeEnd
     arm64.add x22, x22, 1
@@ -71,10 +78,10 @@ func @main {
     arm64.b.lt countLoop
   whileexit:
     arm64.cmp x22, 0
-    arm64.b.lt __rc_panic
-  __rc_ok:
+    arm64.b.lt __rc_panic#21
+  __rc_ok#20:
     arm64.movRegReg x21, x22
-  __il_cont#7:
+  __il_cont#9:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -138,10 +145,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x24
     arm64.bl __mm_decref
-  __il_body#6:
+  __il_body#8:
     arm64.movRegReg x0, x27
     arm64.bl __write_stdout
-  __il_cont#5:
+  __il_cont#7:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movImm x0, 0
@@ -157,8 +164,40 @@ func @main {
     arm64.loadRegSlot x28, slot11
     arm64.epilogue 112
     arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at grapheme.maxon:404: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_18  ; "panic at unpaired-regional-indicator-trails.test:5: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#19:
+    arm64.leaRdata x0, __str_blob_24  ; "panic at grapheme.maxon:398: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#21:
+    arm64.leaRdata x0, __str_blob_25  ; "panic at grapheme.maxon:402: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2

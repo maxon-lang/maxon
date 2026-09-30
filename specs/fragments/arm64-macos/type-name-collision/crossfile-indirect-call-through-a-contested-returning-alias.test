@@ -4,12 +4,16 @@ typealias Token = int(0 to 5)
 
 export typealias Cb = function() returns Token
 
-export function three() returns Token
+function three() returns Token
 	return 3
 end 'three'
 
+export function goA() returns ExitCode
+	return callIt(three)
+end 'goA'
+
 // --- file: b.maxon
-typealias Slot = int(0 to 100)
+export typealias Slot = int(0 to 100)
 
 export type Token
 	export var value as Slot
@@ -32,7 +36,7 @@ end 'callIt'
 function main() returns ExitCode
 	let boxed = fromB()
 
-	return callIt(three) + (boxed.value as ExitCode)
+	return goA() + (boxed.value as ExitCode)
 end 'main'
 ---
 ExitCode: 12
@@ -41,6 +45,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @three {
@@ -56,25 +61,25 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-  __il_body#10:
+  __il_body#6:
     arm64.movImm x19, 9
-  __rc_ok#13:
+  __rc_ok#9:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
-  __il_cont#9:
+  __il_body#12:
     arm64.leaFuncAddr x1, __fnref_three
     arm64.movImm x0, 0
-  __il_body#5:
+  __il_body#14:
     arm64.blr x1
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#7
-  __rc_chk#8:
+    arm64.b.lt __rc_panic#16
+  __rc_chk#17:
     arm64.cmp x0, 255
-    arm64.b.gt __rc_panic#7
-  __il_cont#4:
+    arm64.b.gt __rc_panic#16
+  __il_cont:
     arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
     arm64.add x19, x0, x1
     arm64.movRegReg x0, x20
@@ -90,7 +95,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  __rc_panic#7:
+  __rc_panic#16:
     arm64.leaRdata x0, __str_blob_2  ; "panic at c.maxon:2: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0

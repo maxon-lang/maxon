@@ -3,22 +3,22 @@ typealias Integer = int(i64.min to i64.max)
 typealias Step = int(0 to u64.max)
 
 type Ticks uses T where T is Hashable and Equatable
-	typealias Items = Array with T
+	export typealias Items = Array with T
 	var items as Items
 	var at = 0
 
-	export static function create(items Items) returns Self throws IterationError
+	static function create(items Items) returns Self throws IterationError
 		if items.count() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
 		return Self{items: items}
 	end 'create'
 
-	export function current() returns T
+	function current() returns T
 		return try items.get(at) otherwise panic("Ticks.current: the positioning invariant holds")
 	end 'current'
 
-	export function advance() throws IterationError
+	function advance() throws IterationError
 		at = at + 1
 		if at >= items.count() 'done'
 			throw IterationError.exhausted
@@ -27,7 +27,7 @@ type Ticks uses T where T is Hashable and Equatable
 end 'Ticks'
 
 extension Ticks
-	export function skip(n Step) throws IterationError
+	function skip(n Step) throws IterationError
 		var i = 0
 		while i < n 'loop'
 			try self.advance()
@@ -55,6 +55,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Ticks.create {
@@ -133,9 +134,6 @@ func @Ticks.skip {
     arm64.movRegReg x20, x1
     arm64.movRegReg x21, x2
     arm64.movRegReg x22, x3
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_ok:
     arm64.movImm x23, 0
     arm64.b whilehdr
   loop:
@@ -160,18 +158,6 @@ func @Ticks.skip {
     arm64.cmp x23, x20
     arm64.b.lt loop
   whileexit:
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_14  ; "panic at where-clauses.interface-extension-over-a-constrained-conformer.test:30: Range check failed: value outside typealias 'Step'\x0a"
-    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
@@ -329,7 +315,7 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   __rc_panic#6:
-    arm64.leaRdata x0, __str_blob_15  ; "panic at where-clauses.interface-extension-over-a-constrained-conformer.test:49: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_14  ; "panic at where-clauses.interface-extension-over-a-constrained-conformer.test:49: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

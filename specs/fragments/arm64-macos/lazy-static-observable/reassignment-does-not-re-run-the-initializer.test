@@ -15,15 +15,15 @@ type Reassigned
 		return Self{n: n}
 	end 'of'
 
-	export static function set(s Reassigned)
+	static function set(s Reassigned)
 		Reassigned.value = s
 	end 'set'
 
-	export static function get() returns Count
+	static function get() returns Count
 		return Reassigned.value.n
 	end 'get'
 
-	export static function runCount() returns Count
+	static function runCount() returns Count
 		return Reassigned.runs
 	end 'runCount'
 end 'Reassigned'
@@ -45,6 +45,7 @@ data {
   __slab_arena_list@16 = i64 0
   __slab_arena_map_l1@24 = i64 0
   __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -60,19 +61,19 @@ func @main {
     arm64.storeSlotReg slot10, x21
     arm64.storeSlotReg slot9, x20
     arm64.storeSlotReg slot8, x19
-  __il_body#14:
+  __il_body#12:
     arm64.leaGlobal x0, __data_Reassigned.value
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
-  __il_cont#13:
+  __il_cont#11:
     arm64.movImm x20, 42
-  __rc_ok:
+  __il_body#5:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
     arm64.storeBaseDispReg.word64 [x21 + 0], x20
-  __il_body#8:
+  __il_body#6:
     arm64.movRegReg x0, x21
     arm64.bl __mm_own
     arm64.movRegReg x20, x0
@@ -84,15 +85,15 @@ func @main {
   __il_cont#3:
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-  __il_body#17:
+  __il_body#15:
     arm64.leaGlobal x0, __data_Reassigned.value
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-  __il_body#18:
+  __il_body#16:
     arm64.leaGlobal x0, __data_Reassigned.value
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
-  __il_cont#15:
+  __il_cont#13:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -129,7 +130,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot4, x1
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
-  __il_body#9:
+  __il_body#7:
     arm64.leaGlobal x0, __data_Reassigned.runs
     arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
     arm64.cmp x27, 0
@@ -207,7 +208,7 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-  __il_body#12:
+  __il_body#10:
     arm64.loadRegSlot x0, slot2
     arm64.bl __write_stdout
   __il_cont#1:
@@ -227,7 +228,7 @@ func @main {
     arm64.epilogue 160
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at reassignment-does-not-re-run-the-initializer.test:27: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at reassignment-does-not-re-run-the-initializer.test:27: Range check failed: value outside typealias 'Count'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot8

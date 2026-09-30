@@ -15,7 +15,7 @@ function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.reserve(2)
 	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
-	try arr.get(launder(-1)) otherwise (e) 'handler'
+	try arr.get(launder(-1) as ElementIndex) otherwise (e) 'handler'
 		match e 'check'
 			emptySlot then return 42
 			indexOutOfBounds then return 99
@@ -30,6 +30,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -42,7 +43,7 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 2
-  __rc_ok:
+  __il_body:
     arm64.movRegReg x0, x19
     arm64.bl __managed_capacity
     arm64.cmp x0, 2

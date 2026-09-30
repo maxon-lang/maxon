@@ -5,15 +5,15 @@ type Point implements Hashable, Equatable
 	export let x as Coord
 	export let y as Coord
 
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 
-	export function hash() returns HashValue
+	function hash() returns HashValue
 		return x * 31 + y
 	end 'hash'
 
-	export function equals(other Self) returns bool
+	function equals(other Self) returns bool
 		return x == other.x and y == other.y
 	end 'equals'
 end 'Point'
@@ -57,9 +57,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @Point.hash {
@@ -117,7 +120,7 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 500
-  __rc_ok#27:
+  __il_body#22:
     arm64.movRegReg x0, x19
     arm64.bl __managed_capacity
     arm64.cmp x0, 500
@@ -129,7 +132,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq __il_cont#21
   tryerr#25:
-    arm64.leaRdata x0, __str_blob_19  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    arm64.leaRdata x0, __str_blob_0  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -151,10 +154,10 @@ func @main {
     arm64.b forhdr#1
   build:
     arm64.add x0, x21, 1
-  __rc_ok#31:
+  __rc_ok#29:
     arm64.lsl x0, x0, 16
     arm64.orr x1, x21, x0
-  __il_cont#29:
+  __il_cont#27:
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
   forstep#3:
@@ -168,27 +171,27 @@ func @main {
     arm64.leaRdata x22, __layout_Map_Point_Coord
     arm64.leaRdata x0, __witness_Point.Hashable
     arm64.leaRdata x0, __witness_Point.Equatable
-  __il_body#40:
+  __il_body#38:
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x1, [x22 + 40]
     arm64.bl __managed_create
     arm64.movRegReg x23, x0
-  __il_body#41:
+  __il_body#39:
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x1, [x22 + 112]
     arm64.bl __managed_create
     arm64.movRegReg x22, x0
-  __il_body#42:
+  __il_body#40:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
     arm64.movRegReg x24, x0
-  __il_body#43:
+  __il_body#41:
     arm64.movImm x0, 4
     arm64.movImm x1, 0
     arm64.bl __managed_create
     arm64.movRegReg x25, x0
-  __il_cont#36:
+  __il_cont#34:
     arm64.movImm x26, 0
     arm64.movImm x27, 0
     arm64.movImm x0, 56
@@ -203,7 +206,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x28 + 40], x27
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x28 + 48], x0
-  __il_cont#34:
+  __il_cont#32:
     arm64.movImm x22, 0
     arm64.b forhdr#5
   insert:
@@ -233,9 +236,9 @@ func @main {
     arm64.leaRdata x25, __layout_Map_Point_Coord
     arm64.leaRdata x26, __witness_Point.Hashable
     arm64.leaRdata x27, __witness_Point.Equatable
-  __il_body#45:
+  __il_body#43:
     arm64.movRegReg x0, x24
-    arm64.loadRegBaseDisp.word64 x16, [x26 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x26 + 48]
     arm64.blr x16
     arm64.movRegReg x2, x0
     arm64.movRegReg x0, x28
@@ -246,18 +249,18 @@ func @main {
     arm64.bl Map.findSlot
     arm64.movRegReg x1, x0
     arm64.cmp x9, 0
-    arm64.b.eq __il_body#49
-  tryerr#47:
+    arm64.b.eq __il_body#47
+  tryerr#45:
     arm64.movImm x0, 0
-    arm64.b __il_cont#44
-  __il_body#49:
+    arm64.b __il_cont#42
+  __il_body#47:
     arm64.cmp x1, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.movImm x0, 4611686018427387904
     arm64.cmp x1, x0
     arm64.b.gt __rc_panic
-  __rc_ok#52:
+  __rc_ok#50:
     arm64.loadRegBaseDisp.word64 x0, [x28 + 16]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
@@ -266,10 +269,10 @@ func @main {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
     arm64.b.hs __im_slow
-  __im_load#61:
+  __im_load#59:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.b __il_body#64
+    arm64.b __il_body#62
   __im_stride:
     arm64.cmp x2, 1
     arm64.b.ne __im_slow
@@ -277,33 +280,33 @@ func @main {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
     arm64.b.hs __im_slow
-  __im_load#62:
+  __im_load#60:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __il_body#64
+    arm64.b __il_body#62
   __im_slow:
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#51
-  __il_body#64:
+    arm64.b.ne tryerr#49
+  __il_body#62:
     arm64.cmp x0, 0
-    arm64.b.ne matchnext#69
-  matcharm#66:
+    arm64.b.ne matchnext#67
+  matcharm#64:
     arm64.movImm x0, 0
-    arm64.b __il_cont#44
-  matchnext#69:
+    arm64.b __il_cont#42
+  matchnext#67:
     arm64.cmp x0, 1
-    arm64.b.ne matchnext#70
-  matcharm#65:
+    arm64.b.ne matchnext#68
+  matcharm#63:
     arm64.movImm x0, 1
-    arm64.b __il_cont#44
-  matchnext#70:
+    arm64.b __il_cont#42
+  matchnext#68:
     arm64.cmp x0, 2
     arm64.b.ne matchdead
-  matcharm#67:
+  matcharm#65:
     arm64.movImm x0, 0
-  __il_cont#44:
+  __il_cont#42:
     arm64.cbz x0, critsplit
   hit:
     arm64.add x0, x22, 1
@@ -383,7 +386,7 @@ func @main {
     arm64.epilogue 96
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_45  ; "panic at Map.maxon:340: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_42  ; "panic at Map.maxon:340: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -398,8 +401,8 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
-  tryerr#51:
-    arm64.leaRdata x0, __str_blob_15  ; "panic at Map.maxon:341: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
+  tryerr#49:
+    arm64.leaRdata x0, __str_blob_17  ; "panic at Map.maxon:341: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

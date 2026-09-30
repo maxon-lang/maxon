@@ -8,11 +8,11 @@ end 'Printer'
 type Thing implements Printer
 	let label as Tag
 
-	export static function create(label Tag) returns Self
+	static function create(label Tag) returns Self
 		return Self{label: label}
 	end 'create'
 
-	export function show()
+	function show()
 		print("never shown\n")
 	end 'show'
 end 'Thing'
@@ -34,9 +34,9 @@ ExitCode: 3
 ---
 data {
   __data_boxes@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Thing.show {
@@ -52,23 +52,17 @@ func @Thing.show {
 
 func @box {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 16
     arm64.leaGlobal x0, __data_boxes
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, 1
     arm64.leaGlobal x1, __data_boxes
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.movImm x19, 7
   __rc_ok:
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.movImm x0, 7
   __il_cont:
     arm64.leaRdata x9, __witness_Thing.Printer
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
 }
 
@@ -91,7 +85,7 @@ func @main {
     arm64.epilogue 16
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at witness-impl-reaching-stdlib-through-a-returned-existential.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at witness-impl-reaching-stdlib-through-a-returned-existential.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

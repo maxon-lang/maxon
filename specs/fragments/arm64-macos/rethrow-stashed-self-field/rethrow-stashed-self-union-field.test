@@ -46,6 +46,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Holder.inner {
@@ -89,11 +90,11 @@ func @Holder.outer {
     arm64.cmp x9, 0
     arm64.b.eq tryok
   tryerr:
-    arm64.loadRegBaseDisp.word64 x19, [x19 + 0]
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __mm_retain
+    arm64.movRegReg x1, x0
     arm64.movImm x0, 0
-    arm64.movRegReg x9, x19
+    arm64.movRegReg x9, x1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

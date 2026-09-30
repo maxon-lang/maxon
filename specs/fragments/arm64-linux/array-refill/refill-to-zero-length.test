@@ -13,9 +13,12 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -38,12 +41,12 @@ func @main {
     arm64.movImm x20, 0
     arm64.movImm x21, 9
     arm64.leaRdata x22, __layout_Array_Integer
-  __rc_ok#6:
+  __il_body#5:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.bl __managed_resize
     arm64.movImm x1, 0
-  __rc_ok#21:
+  __il_body#7:
     arm64.movRegReg x0, x19
     arm64.movRegReg x2, x20
     arm64.movRegReg x3, x21
@@ -70,14 +73,14 @@ func @main {
   __il_cont:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.add x20, x0, 7
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#1:
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

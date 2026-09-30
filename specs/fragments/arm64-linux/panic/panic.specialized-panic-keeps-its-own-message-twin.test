@@ -28,9 +28,12 @@ ExitCode: 1
 data {
   __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
   __data_CharacterSet.cachedLetters@8 = i64 0
-  __slab_arena_list@16 = i64 0
-  __slab_arena_map_l1@24 = i64 0
-  __slab_state@32 = i64 0
+  __mrt_envp@16 = i64 0
+  __mrt_signal_stack_bytes@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_program_started@56 = i8 0
 }
 
 func @main {
@@ -63,12 +66,15 @@ func @main {
   __il_body#118:
     arm64.loadRegBaseDisp.byte x0, [x21 + 48]
   __il_cont#117:
-    arm64.cbnz x0, __il_cont#106
-  ifcont#111:
+    arm64.cbnz x0, __il_cont#104
+  ifcont#109:
     arm64.movImm x23, 0
     arm64.movImm x1, 0
     arm64.b whilehdr
   countLoop:
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#114
+  __rc_ok#113:
     arm64.movRegReg x0, x21
     arm64.bl findGraphemeEnd
     arm64.add x23, x23, 1
@@ -81,12 +87,12 @@ func @main {
     arm64.b.lt __rc_panic#116
   __rc_ok#115:
     arm64.movRegReg x22, x23
-  __il_cont#106:
+  __il_cont#104:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
     arm64.bl __destruct_CharacterSet
-  __il_body#103:
+  __il_body#101:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
     arm64.add x0, x19, 57
@@ -105,7 +111,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x21 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x21 + 24], x0
-  __il_body#105:
+  __il_body#103:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -124,7 +130,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __destruct_ByteView
     arm64.leaRdata x0, __str_rec_14  ; "h\xc3\xa9llo"
-  __il_body#99:
+  __il_body#97:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.add x0, x21, 57
@@ -143,7 +149,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
-  __il_body#101:
+  __il_body#99:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -153,7 +159,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
-  __il_cont#98:
+  __il_cont#96:
     arm64.movRegReg x0, x19
     arm64.bl CodepointView.createIterator
     arm64.movRegReg x21, x0
@@ -180,7 +186,7 @@ func @main {
     arm64.bl __destruct_CodepointIterator
   forjoin#6:
     arm64.leaRdata x0, __str_rec_15  ; "h\xe2\x82\xacllo"
-  __il_body#60:
+  __il_body#58:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.add x0, x21, 57
@@ -199,7 +205,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x22 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
-  __il_body#62:
+  __il_body#60:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -209,7 +215,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.movRegReg x0, x22
     arm64.bl __str_decref
-  __il_cont#59:
+  __il_cont#57:
     arm64.movRegReg x0, x19
     arm64.bl UTF16View.createIterator
     arm64.movRegReg x21, x0
@@ -220,54 +226,54 @@ func @main {
     arm64.cmp x22, 0
     arm64.b.eq forhdr#7
     arm64.b forjoin#12
-  __il_body#64:
+  __il_body#62:
     arm64.loadRegBaseDisp.byte x0, [x21 + 32]
-    arm64.cbz x0, ifcont#66
+    arm64.cbz x0, ifcont#64
   trail:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 16]
-  __il_body#73:
+  __il_body#71:
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#75
-  __rc_chk#76:
+    arm64.b.lt __rc_panic#73
+  __rc_chk#74:
     arm64.movImm x16, 1114111
     arm64.cmp x0, x16
-    arm64.b.gt __rc_panic#75
-  __rc_ok#74:
+    arm64.b.gt __rc_panic#73
+  __rc_ok#72:
     arm64.sub x0, x0, 65536
     arm64.and x0, x0, 1023
     arm64.add x0, x0, 56320
-    arm64.b __il_cont#63
-  ifcont#66:
+    arm64.b __il_cont#61
+  ifcont#64:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 16]
     arm64.cmp x0, 65536
-    arm64.b.ge ifcont#68
+    arm64.b.ge ifcont#66
   bmp:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 16]
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#70
-  __rc_chk#71:
+    arm64.b.lt __rc_panic#68
+  __rc_chk#69:
     arm64.movImm x16, 65535
     arm64.cmp x0, x16
-    arm64.b.gt __rc_panic#70
-    arm64.b __il_cont#63
-  ifcont#68:
+    arm64.b.gt __rc_panic#68
+    arm64.b __il_cont#61
+  ifcont#66:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 16]
-  __il_body#81:
+  __il_body#79:
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#83
-  __rc_chk#84:
+    arm64.b.lt __rc_panic#81
+  __rc_chk#82:
     arm64.movImm x16, 1114111
     arm64.cmp x0, x16
-    arm64.b.gt __rc_panic#83
-  __rc_ok#82:
+    arm64.b.gt __rc_panic#81
+  __rc_ok#80:
     arm64.sub x0, x0, 65536
     arm64.lsr x0, x0, 10
     arm64.add x0, x0, 55296
-  __rc_chk#87:
+  __rc_chk#85:
     arm64.movImm x16, 65535
     arm64.cmp x0, x16
-    arm64.b.gt __rc_panic#86
-  __il_cont#63:
+    arm64.b.gt __rc_panic#84
+  __il_cont#61:
     arm64.add x20, x20, x0
   forstep#10:
     arm64.movRegReg x0, x21
@@ -275,7 +281,7 @@ func @main {
     arm64.movRegReg x0, x9
   forhdr#7:
     arm64.cmp x0, 0
-    arm64.b.eq __il_body#64
+    arm64.b.eq __il_body#62
   forexit#11:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_UTF16Iterator
@@ -284,27 +290,27 @@ func @main {
     arm64.leaRdata x21, __layout_Map_String_int
     arm64.leaRdata x0, __witness_String.Hashable
     arm64.leaRdata x0, __witness_String.Equatable
-  __il_body#94:
+  __il_body#92:
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x1, [x21 + 40]
     arm64.bl __managed_create
     arm64.movRegReg x22, x0
-  __il_body#95:
+  __il_body#93:
     arm64.movImm x0, 8
     arm64.loadRegBaseDisp.word64 x1, [x21 + 112]
     arm64.bl __managed_create
     arm64.movRegReg x21, x0
-  __il_body#96:
+  __il_body#94:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
     arm64.bl __managed_create
     arm64.movRegReg x23, x0
-  __il_body#97:
+  __il_body#95:
     arm64.movImm x0, 4
     arm64.movImm x1, 0
     arm64.bl __managed_create
     arm64.movRegReg x24, x0
-  __il_cont#90:
+  __il_cont#88:
     arm64.movImm x25, 0
     arm64.movImm x26, 0
     arm64.movImm x27, 0
@@ -319,7 +325,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x28 + 32], x25
     arm64.storeBaseDispReg.word64 [x28 + 40], x26
     arm64.storeBaseDispReg.word64 [x28 + 48], x27
-  __il_cont#88:
+  __il_cont#86:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
     arm64.add x0, x19, 57
@@ -437,8 +443,24 @@ func @main {
     arm64.movImm x1, 8
     arm64.storeBaseDispReg.word64 [x0 + 24], x1
     arm64.b __rc_panic#14
+  __rc_panic#114:
+    arm64.leaRdata x0, __str_blob_134  ; "panic at grapheme.maxon:398: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 96
+    arm64.ret
   __rc_panic#116:
-    arm64.leaRdata x0, __str_blob_169  ; "panic at grapheme.maxon:404: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_135  ; "panic at grapheme.maxon:402: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -453,8 +475,8 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
-  __rc_panic#75:
-    arm64.leaRdata x0, __str_blob_179  ; "panic at utf16.maxon:58: Range check failed: value outside typealias 'Codepoint'\x0a"
+  __rc_panic#73:
+    arm64.leaRdata x0, __str_blob_148  ; "panic at utf16.maxon:58: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -469,8 +491,8 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
-  __rc_panic#70:
-    arm64.leaRdata x0, __str_blob_144  ; "panic at views.maxon:214: Range check failed: value outside typealias 'CodeUnit16'\x0a"
+  __rc_panic#68:
+    arm64.leaRdata x0, __str_blob_145  ; "panic at views.maxon:213: Range check failed: value outside typealias 'CodeUnit16'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -485,8 +507,8 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
-  __rc_panic#83:
-    arm64.leaRdata x0, __str_blob_177  ; "panic at utf16.maxon:50: Range check failed: value outside typealias 'Codepoint'\x0a"
+  __rc_panic#81:
+    arm64.leaRdata x0, __str_blob_146  ; "panic at utf16.maxon:50: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -501,8 +523,8 @@ func @main {
     arm64.loadRegSlot x28, slot9
     arm64.epilogue 96
     arm64.ret
-  __rc_panic#86:
-    arm64.leaRdata x0, __str_blob_178  ; "panic at utf16.maxon:52: Range check failed: value outside typealias 'CodeUnit16'\x0a"
+  __rc_panic#84:
+    arm64.leaRdata x0, __str_blob_147  ; "panic at utf16.maxon:52: Range check failed: value outside typealias 'CodeUnit16'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -518,7 +540,7 @@ func @main {
     arm64.epilogue 96
     arm64.ret
   __rc_panic#26:
-    arm64.leaRdata x0, __str_blob_103  ; "panic at Map.maxon:223: Range check failed: value outside typealias 'EntryCount'\x0a"
+    arm64.leaRdata x0, __str_blob_105  ; "panic at Map.maxon:222: Range check failed: value outside typealias 'EntryCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

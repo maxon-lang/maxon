@@ -8,8 +8,12 @@ enum MyError implements Error
 end 'MyError'
 
 // This function signature declares it throws MyError
-function mayFail() returns Integer throws MyError
-	return 10
+function mayFail(n Integer) returns Integer throws MyError
+	if n > 1000 'big'
+		throw MyError.failed
+	end 'big'
+
+	return n
 end 'mayFail'
 
 function main() returns ExitCode
@@ -18,6 +22,12 @@ end 'main'
 ---
 ExitCode: 42
 ---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
 func @main {
   entry:
     arm64.prologue 16

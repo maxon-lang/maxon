@@ -5,7 +5,7 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	export static function create(lo Half, hi Half) returns Self
+	static function create(lo Half, hi Half) returns Self
 		return Self{lo: lo, hi: hi}
 	end 'create'
 end 'Pair'
@@ -48,6 +48,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -61,7 +62,7 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 500
-  __rc_ok:
+  __il_body#17:
     arm64.movRegReg x0, x19
     arm64.bl __managed_capacity
     arm64.cmp x0, 500
@@ -86,17 +87,17 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.movImm x21, 0
     arm64.b forhdr#1
-  __il_body:
+  __il_body#23:
     arm64.lsl x0, x21, 32
     arm64.orr x1, x21, x0
-  __il_cont#24:
+  __il_cont#22:
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
   forstep#3:
     arm64.add x21, x21, 1
   forhdr#1:
     arm64.cmp x21, 500
-    arm64.b.lt __il_body
+    arm64.b.lt __il_body#23
   forexit#4:
     arm64.bl __mm_counter_alloc_live
     arm64.movRegReg x21, x0

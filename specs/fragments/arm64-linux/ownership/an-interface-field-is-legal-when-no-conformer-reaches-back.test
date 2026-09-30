@@ -8,11 +8,11 @@ end 'Backref'
 type Plain implements Backref
 	let mark as Small
 
-	export static function create(m Small) returns Self
+	static function create(m Small) returns Self
 		return Self{mark: m}
 	end 'create'
 
-	export function tag() returns Small
+	function tag() returns Small
 		return self.mark
 	end 'tag'
 end 'Plain'
@@ -20,11 +20,11 @@ end 'Plain'
 type Cell
 	var back as Backref
 
-	export static function create(b Backref) returns Self
+	static function create(b Backref) returns Self
 		return Self{back: b}
 	end 'create'
 
-	export function tag() returns Small
+	function tag() returns Small
 		return self.back.tag()
 	end 'tag'
 end 'Cell'
@@ -37,15 +37,18 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @Plain.tag {
   entry:
     arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.and x0, x0, 255
     arm64.epilogue 16
     arm64.ret
 }
@@ -56,32 +59,27 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movImm x19, 7
   __rc_ok:
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movImm x19, 7
   __il_cont#3:
-    arm64.leaRdata x19, __witness_Plain.Backref
+    arm64.leaRdata x20, __witness_Plain.Backref
   __il_body#8:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
     arm64.bl __retain_existential
     arm64.storeBaseDispReg.word64 [x21 + 0], x0
-    arm64.storeBaseDispReg.word64 [x21 + 8], x19
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
     arm64.bl __drop_existential
   __il_body#9:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x21 + 8]
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 48]
     arm64.blr x16
     arm64.movRegReg x19, x0
   __il_cont#1:

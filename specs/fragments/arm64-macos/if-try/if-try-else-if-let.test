@@ -10,15 +10,19 @@ function tryA() returns Integer throws MyError
 	throw MyError.failed
 end 'tryA'
 
-function tryB() returns Integer throws MyError
-	return 42
+function tryB(n Integer) returns Integer throws MyError
+	if n > 1000 'big'
+		throw MyError.failed
+	end 'big'
+
+	return n
 end 'tryB'
 
 function main() returns ExitCode
 	var result = 0
 	if let a = try tryA() 'a'
 		result = a
-	end 'a' else if let b = try tryB() 'b'
+	end 'a' else if let b = try tryB(42) 'b'
 		result = b
 	end 'b'
 	return result
@@ -26,6 +30,10 @@ end 'main'
 ---
 ExitCode: 42
 ---
+data {
+  __mrt_program_started@0 = i8 0
+}
+
 func @tryA {
   entry:
     arm64.prologue 16
@@ -38,7 +46,14 @@ func @tryA {
 func @tryB {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 42
+    arm64.cmp x0, 1000
+    arm64.b.le ifcont
+  big:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
     arm64.movImm x9, 0
     arm64.epilogue 16
     arm64.ret
@@ -53,6 +68,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq ifcont
   ifelse#2:
+    arm64.movImm x0, 42
     arm64.bl tryB
     arm64.cmp x9, 0
     arm64.b.eq ifcont
@@ -69,7 +85,7 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at if-try-else-if-let.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_0  ; "panic at if-try-else-if-let.test:28: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

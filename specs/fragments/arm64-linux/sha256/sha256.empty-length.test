@@ -7,9 +7,12 @@ end 'main'
 ExitCode: 32
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -33,7 +36,7 @@ func @main {
   __il_body#5:
     arm64.leaRdata x0, __layout_Vector_N8_Word32
     arm64.movImm x20, 8
-  __il_body#69:
+  __il_body#71:
     arm64.movImm x1, 8
     arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
     arm64.movRegReg x0, x1
@@ -43,7 +46,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x20
     arm64.bl __managed_resize
-  __il_cont#68:
+  __il_cont#70:
     arm64.movImm x1, 0
     arm64.movImm x2, 1779033703
     arm64.leaRdata x3, __layout_Vector_N8_Word32
@@ -138,46 +141,41 @@ func @main {
     arm64.bl __managed_push
   whilehdr#22:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
-    arm64.asr x1, x0, 63
-    arm64.lsr x1, x1, 58
-    arm64.add x1, x0, x1
-    arm64.asr x1, x1, 6
-    arm64.lsl x1, x1, 6
-    arm64.sub x0, x0, x1
+    arm64.and x0, x0, 63
     arm64.cmp x0, 56
     arm64.b.ne pad
   whileexit#24:
-    arm64.asr x0, x22, 56
+    arm64.lsr x0, x22, 56
     arm64.and x1, x0, 255
   __rc_ok#44:
     arm64.movRegReg x0, x23
     arm64.bl __managed_push
-    arm64.asr x0, x22, 48
+    arm64.lsr x0, x22, 48
     arm64.and x1, x0, 255
   __rc_ok#47:
     arm64.movRegReg x0, x23
     arm64.bl __managed_push
-    arm64.asr x0, x22, 40
+    arm64.lsr x0, x22, 40
     arm64.and x1, x0, 255
   __rc_ok#50:
     arm64.movRegReg x0, x23
     arm64.bl __managed_push
-    arm64.asr x0, x22, 32
+    arm64.lsr x0, x22, 32
     arm64.and x1, x0, 255
   __rc_ok#53:
     arm64.movRegReg x0, x23
     arm64.bl __managed_push
-    arm64.asr x0, x22, 24
+    arm64.lsr x0, x22, 24
     arm64.and x1, x0, 255
   __rc_ok#56:
     arm64.movRegReg x0, x23
     arm64.bl __managed_push
-    arm64.asr x0, x22, 16
+    arm64.lsr x0, x22, 16
     arm64.and x1, x0, 255
   __rc_ok#59:
     arm64.movRegReg x0, x23
     arm64.bl __managed_push
-    arm64.asr x0, x22, 8
+    arm64.lsr x0, x22, 8
     arm64.and x1, x0, 255
   __rc_ok#62:
     arm64.movRegReg x0, x23
@@ -188,10 +186,10 @@ func @main {
     arm64.bl __managed_push
     arm64.movImm x19, 0
     arm64.b whilehdr#25
-  __il_body#71:
+  processBlocks:
     arm64.cmp x19, 0
-    arm64.b.lt __rc_panic#115
-  __rc_ok#114:
+    arm64.b.lt __rc_panic#69
+  __il_body#73:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -200,205 +198,195 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl Array.reserve
     arm64.movImm x22, 0
-    arm64.b whilehdr#72
+    arm64.b whilehdr#74
   readWords:
     arm64.arm64AddLsl x24, x19, x22, lsl #2
-  __il_body#152:
     arm64.cmp x24, 0
-    arm64.b.lt __rc_panic#162
-  __rc_ok#161:
+    arm64.b.lt __rc_panic#117
+  __il_body#158:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
     arm64.cmp x0, 8
-    arm64.b.ne __im_stride#173
-  __im_word#171:
+    arm64.b.ne __im_stride#171
+  __im_word#169:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
     arm64.cmp x24, x0
-    arm64.b.hs __im_slow#170
-  __im_load#175:
+    arm64.b.hs __im_slow#168
+  __im_load#173:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x24*8 + 0]
-    arm64.b __im_loaded#174
-  __im_stride#173:
+    arm64.b __im_loaded#172
+  __im_stride#171:
     arm64.cmp x0, 1
-    arm64.b.ne __im_slow#170
-  __im_byte#172:
+    arm64.b.ne __im_slow#168
+  __im_byte#170:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
     arm64.cmp x24, x0
-    arm64.b.hs __im_slow#170
-  __im_load#176:
+    arm64.b.hs __im_slow#168
+  __im_load#174:
     arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
     arm64.add x0, x0, x24
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-  __im_loaded#174:
+  __im_loaded#172:
     arm64.movRegReg x25, x0
-    arm64.b tryok#153
-  __im_slow#170:
+    arm64.b tryok#159
+  __im_slow#168:
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x24
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#154
-  critsplit#240:
-    arm64.movRegReg x25, x0
-  tryok#153:
-    arm64.add x1, x24, 1
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#164
-  __rc_ok#163:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride#181
-  __im_word#179:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
-    arm64.cmp x1, x0
-    arm64.b.hs __im_slow#178
-  __im_load#183:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.b __im_loaded#182
-  __im_stride#181:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow#178
-  __im_byte#180:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
-    arm64.cmp x1, x0
-    arm64.b.hs __im_slow#178
-  __im_load#184:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.add x0, x0, x1
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-  __im_loaded#182:
-    arm64.movRegReg x26, x0
-    arm64.b tryok#155
-  __im_slow#178:
-    arm64.movRegReg x0, x23
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#156
-  critsplit#241:
-    arm64.movRegReg x26, x0
-  tryok#155:
-    arm64.add x1, x24, 2
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#166
-  __rc_ok#165:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride#189
-  __im_word#187:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
-    arm64.cmp x1, x0
-    arm64.b.hs __im_slow#186
-  __im_load#191:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.b __im_loaded#190
-  __im_stride#189:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow#186
-  __im_byte#188:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
-    arm64.cmp x1, x0
-    arm64.b.hs __im_slow#186
-  __im_load#192:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.add x0, x0, x1
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-  __im_loaded#190:
-    arm64.movRegReg x27, x0
-    arm64.b tryok#157
-  __im_slow#186:
-    arm64.movRegReg x0, x23
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#158
-  critsplit#242:
-    arm64.movRegReg x27, x0
-  tryok#157:
-    arm64.add x1, x24, 3
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#168
-  __rc_ok#167:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride#197
-  __im_word#195:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
-    arm64.cmp x1, x0
-    arm64.b.hs __im_slow#194
-  __im_load#199:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
-    arm64.b tryok#159
-  __im_stride#197:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow#194
-  __im_byte#196:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
-    arm64.cmp x1, x0
-    arm64.b.hs __im_slow#194
-  __im_load#200:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
-    arm64.add x0, x0, x1
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b tryok#159
-  __im_slow#194:
-    arm64.movRegReg x0, x23
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
     arm64.b.ne tryerr#160
+  critsplit#234:
+    arm64.movRegReg x25, x0
   tryok#159:
+    arm64.add x1, x24, 1
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride#179
+  __im_word#177:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#176
+  __im_load#181:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+    arm64.b __im_loaded#180
+  __im_stride#179:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow#176
+  __im_byte#178:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#176
+  __im_load#182:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.add x0, x0, x1
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+  __im_loaded#180:
+    arm64.movRegReg x26, x0
+    arm64.b tryok#161
+  __im_slow#176:
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#162
+  critsplit#235:
+    arm64.movRegReg x26, x0
+  tryok#161:
+    arm64.add x1, x24, 2
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride#187
+  __im_word#185:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#184
+  __im_load#189:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+    arm64.b __im_loaded#188
+  __im_stride#187:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow#184
+  __im_byte#186:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#184
+  __im_load#190:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.add x0, x0, x1
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+  __im_loaded#188:
+    arm64.movRegReg x27, x0
+    arm64.b tryok#163
+  __im_slow#184:
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#164
+  critsplit#236:
+    arm64.movRegReg x27, x0
+  tryok#163:
+    arm64.add x1, x24, 3
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride#195
+  __im_word#193:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#192
+  __im_load#197:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
+    arm64.b tryok#165
+  __im_stride#195:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow#192
+  __im_byte#194:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#192
+  __im_load#198:
+    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.add x0, x0, x1
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b tryok#165
+  __im_slow#192:
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#166
+  tryok#165:
     arm64.lsl x1, x25, 24
     arm64.lsl x2, x26, 16
     arm64.orr x1, x1, x2
     arm64.lsl x2, x27, 8
     arm64.orr x1, x1, x2
     arm64.orr x1, x1, x0
-  __il_cont#151:
+  __il_cont#157:
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
     arm64.add x22, x22, 1
-  whilehdr#72:
+  whilehdr#74:
     arm64.cmp x22, 16
     arm64.b.lt readWords
-    arm64.b whilehdr#75
+    arm64.b whilehdr#77
   extend:
     arm64.sub x1, x22, 2
-  __rc_ok#116:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
-    arm64.cmp x1, x0
-    arm64.b.hs __im_slow#131
-  __im_load#132:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseIndexScale.word64 x19, [x0 + x1*8 + 0]
-  tryok#78:
-    arm64.sub x1, x22, 7
   __rc_ok#118:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#134
-  __im_load#135:
+    arm64.b.hs __im_slow#133
+  __im_load#134:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseIndexScale.word64 x24, [x0 + x1*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x19, [x0 + x1*8 + 0]
   tryok#80:
-    arm64.sub x1, x22, 15
+    arm64.sub x1, x22, 7
   __rc_ok#120:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#137
-  __im_load#138:
+    arm64.b.hs __im_slow#136
+  __im_load#137:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseIndexScale.word64 x25, [x0 + x1*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x24, [x0 + x1*8 + 0]
   tryok#82:
-    arm64.sub x1, x22, 16
+    arm64.sub x1, x22, 15
   __rc_ok#122:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#140
-  __im_load#141:
+    arm64.b.hs __im_slow#139
+  __im_load#140:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseIndexScale.word64 x25, [x0 + x1*8 + 0]
+  tryok#84:
+    arm64.sub x1, x22, 16
+  __rc_ok#124:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x1, x0
+    arm64.b.hs __im_slow#142
+  __im_load#143:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseIndexScale.word64 x26, [x0 + x1*8 + 0]
-  __il_body#203:
+  __il_body#155:
     arm64.movImm x1, 7
     arm64.movRegReg x0, x25
     arm64.bl sha256RotR
@@ -413,7 +401,7 @@ func @main {
     arm64.eor x0, x0, x1
     arm64.movImm x1, 4294967295
     arm64.and x25, x0, x1
-  __il_body#204:
+  __il_body#156:
     arm64.movImm x1, 17
     arm64.movRegReg x0, x19
     arm64.bl sha256RotR
@@ -428,7 +416,7 @@ func @main {
     arm64.eor x0, x0, x1
     arm64.movImm x1, 4294967295
     arm64.and x0, x0, x1
-  __il_cont#201:
+  __il_cont#153:
     arm64.add x1, x26, x25
     arm64.add x1, x1, x24
     arm64.add x0, x1, x0
@@ -437,172 +425,172 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
     arm64.add x22, x22, 1
-  whilehdr#75:
+  whilehdr#77:
     arm64.cmp x22, 64
     arm64.b.lt extend
-  whileexit#77:
+  whileexit#79:
     arm64.movImm x1, 0
     arm64.leaRdata x0, __barr_rec_7
     arm64.movImm x2, 0
-  __us_test#230:
+  __us_test#224:
     arm64.loadRegBaseDisp.word64 x3, [x20 + 8]
     arm64.loadRegBaseDisp.word64 x4, [x20 + 16]
     arm64.cmp x4, 0
-    arm64.b.lt forhdr#86
-  __us_test#231:
+    arm64.b.lt forhdr#88
+  __us_test#225:
     arm64.loadRegBaseDisp.word64 x4, [x20 + 0]
     arm64.cmp x4, 0
-    arm64.b.eq forhdr#86
-  __us_test#232:
+    arm64.b.eq forhdr#88
+  __us_test#226:
     arm64.sub x5, x4, 24
     arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
     arm64.cmp x5, 0
-    arm64.b.ne forhdr#86
-    arm64.b forhdr#213
-  foldRoundConstants#87:
+    arm64.b.ne forhdr#88
+    arm64.b forhdr#207
+  foldRoundConstants#89:
     arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x3, [x3 + x2*8 + 0]
-  __im_cont#128:
+  __im_cont#130:
     arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#125
-  __rc_ok#124:
+    arm64.b.lt __rc_panic#127
+  __rc_ok#126:
     arm64.loadRegBaseDisp.word64 x4, [x20 + 8]
     arm64.cmp x1, x4
-    arm64.b.hs __im_slow#143
-  __im_load#144:
+    arm64.b.hs __im_slow#145
+  __im_load#146:
     arm64.loadRegBaseDisp.word64 x4, [x20 + 0]
     arm64.loadRegBaseIndexScale.word64 x4, [x4 + x1*8 + 0]
-  tryok#90:
+  tryok#92:
     arm64.add x3, x4, x3
     arm64.movImm x4, 4294967295
     arm64.and x3, x3, x4
-  __rc_ok#126:
+  __rc_ok#128:
     arm64.loadRegBaseDisp.word64 x4, [x20 + 16]
     arm64.cmp x4, 0
-    arm64.b.lt __im_slow#146
+    arm64.b.lt __im_slow#148
   __im_bounds:
     arm64.loadRegBaseDisp.word64 x4, [x20 + 8]
     arm64.cmp x1, x4
-    arm64.b.hs __im_slow#146
+    arm64.b.hs __im_slow#148
   __im_buffer:
     arm64.loadRegBaseDisp.word64 x4, [x20 + 0]
     arm64.cmp x4, 0
-    arm64.b.eq __im_slow#146
+    arm64.b.eq __im_slow#148
   __im_viewed:
     arm64.sub x5, x4, 24
     arm64.loadRegBaseDisp.word64 x5, [x5 + 16]
     arm64.cmp x5, 0
-    arm64.b.ne __im_slow#146
-  __im_store#150:
+    arm64.b.ne __im_slow#148
+  __im_store#152:
     arm64.storeBaseIndexScaleReg.word64 [x4 + x1*8 + 0], x3
-  tryok#92:
+  tryok#94:
     arm64.add x1, x1, 1
-  forstep#88:
+  forstep#90:
     arm64.add x2, x2, 1
-  forhdr#86:
+  forhdr#88:
     arm64.loadRegBaseDisp.word64 x3, [x0 + 8]
     arm64.cmp x2, x3
-    arm64.b.lt foldRoundConstants#87
-    arm64.b forexit#89
-  foldRoundConstants#229:
+    arm64.b.lt foldRoundConstants#89
+    arm64.b forexit#91
+  foldRoundConstants#223:
     arm64.loadRegBaseDisp.word64 x5, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x5, [x5 + x2*8 + 0]
-  __im_cont#228:
+  __im_cont#222:
     arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#125
-  __rc_ok#227:
+    arm64.b.lt __rc_panic#127
+  __rc_ok#221:
     arm64.cmp x1, x3
-    arm64.b.hs __im_slow#225
-  __im_load#226:
+    arm64.b.hs __im_slow#219
+  __im_load#220:
     arm64.loadRegBaseIndexScale.word64 x6, [x4 + x1*8 + 0]
-  tryok#223:
+  tryok#217:
     arm64.add x5, x6, x5
     arm64.movImm x6, 4294967295
     arm64.and x5, x5, x6
-  __im_store#218:
+  __im_store#212:
     arm64.storeBaseIndexScaleReg.word64 [x4 + x1*8 + 0], x5
-  tryok#215:
+  tryok#209:
     arm64.add x1, x1, 1
-  forstep#214:
+  forstep#208:
     arm64.add x2, x2, 1
-  forhdr#213:
+  forhdr#207:
     arm64.loadRegBaseDisp.word64 x5, [x0 + 8]
     arm64.cmp x2, x5
-    arm64.b.lt foldRoundConstants#229
-  forexit#89:
+    arm64.b.lt foldRoundConstants#223
+  forexit#91:
     arm64.movImm x1, 0
     arm64.leaRdata x2, __layout_Vector_N8_Word32
     arm64.movRegReg x0, x21
     arm64.bl Vector.get
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#95
-  tryok#94:
+    arm64.b.ne tryerr#97
+  tryok#96:
     arm64.movImm x1, 1
     arm64.leaRdata x2, __layout_Vector_N8_Word32
     arm64.movRegReg x0, x21
     arm64.bl Vector.get
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#97
-  tryok#96:
+    arm64.b.ne tryerr#99
+  tryok#98:
     arm64.movImm x1, 2
     arm64.leaRdata x2, __layout_Vector_N8_Word32
     arm64.movRegReg x0, x21
     arm64.bl Vector.get
     arm64.movRegReg x24, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#99
-  tryok#98:
+    arm64.b.ne tryerr#101
+  tryok#100:
     arm64.movImm x1, 3
     arm64.leaRdata x2, __layout_Vector_N8_Word32
     arm64.movRegReg x0, x21
     arm64.bl Vector.get
     arm64.movRegReg x25, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#101
-  tryok#100:
+    arm64.b.ne tryerr#103
+  tryok#102:
     arm64.movImm x1, 4
     arm64.leaRdata x2, __layout_Vector_N8_Word32
     arm64.movRegReg x0, x21
     arm64.bl Vector.get
     arm64.movRegReg x26, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#103
-  tryok#102:
+    arm64.b.ne tryerr#105
+  tryok#104:
     arm64.movImm x1, 5
     arm64.leaRdata x2, __layout_Vector_N8_Word32
     arm64.movRegReg x0, x21
     arm64.bl Vector.get
     arm64.movRegReg x27, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#105
-  tryok#104:
+    arm64.b.ne tryerr#107
+  tryok#106:
     arm64.movImm x1, 6
     arm64.leaRdata x2, __layout_Vector_N8_Word32
     arm64.movRegReg x0, x21
     arm64.bl Vector.get
     arm64.movRegReg x28, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#107
-  tryok#106:
+    arm64.b.ne tryerr#109
+  tryok#108:
     arm64.movImm x1, 7
     arm64.leaRdata x2, __layout_Vector_N8_Word32
     arm64.movRegReg x0, x21
     arm64.bl Vector.get
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#109
-  tryok#108:
+    arm64.b.ne tryerr#111
+  tryok#110:
     arm64.movImm x1, 0
     arm64.movRegReg x2, x22
     arm64.movRegReg x3, x24
     arm64.movRegReg x4, x25
     arm64.xchgRegReg x0, x19
-    arm64.b forhdr#110
+    arm64.b forhdr#112
   rounds:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseIndexScale.word64 x22, [x0 + x1*8 + 0]
-  __il_body#209:
+  __il_body#203:
     arm64.movImm x1, 6
     arm64.movRegReg x0, x26
     arm64.bl sha256RotR
@@ -618,9 +606,9 @@ func @main {
     arm64.eor x0, x1, x0
     arm64.movImm x1, 4294967295
     arm64.and x0, x0, x1
-  __il_cont#208:
+  __il_cont#202:
     arm64.add x0, x19, x0
-  __il_body#210:
+  __il_body#204:
     arm64.movImm x1, 4294967295
     arm64.eor x1, x1, x26
     arm64.movImm x2, 4294967295
@@ -630,12 +618,12 @@ func @main {
     arm64.eor x1, x2, x1
     arm64.movImm x2, 4294967295
     arm64.and x1, x1, x2
-  __il_cont#207:
+  __il_cont#201:
     arm64.add x0, x0, x1
     arm64.add x0, x0, x22
     arm64.movImm x1, 4294967295
     arm64.and x19, x0, x1
-  __il_body#211:
+  __il_body#205:
     arm64.movImm x1, 2
     arm64.loadRegSlot x0, slot6
     arm64.bl sha256RotR
@@ -651,7 +639,7 @@ func @main {
     arm64.eor x0, x1, x0
     arm64.movImm x1, 4294967295
     arm64.and x0, x0, x1
-  __il_body#212:
+  __il_body#206:
     arm64.loadRegSlot x1, slot5
     arm64.loadRegSlot x2, slot6
     arm64.and x3, x2, x1
@@ -662,7 +650,7 @@ func @main {
     arm64.eor x1, x2, x1
     arm64.movImm x2, 4294967295
     arm64.and x1, x1, x2
-  __il_cont#205:
+  __il_cont#199:
     arm64.add x0, x0, x1
     arm64.movImm x1, 4294967295
     arm64.and x0, x0, x1
@@ -673,7 +661,7 @@ func @main {
     arm64.add x0, x19, x0
     arm64.movImm x2, 4294967295
     arm64.and x0, x0, x2
-  forstep#112:
+  forstep#114:
     arm64.loadRegSlot x2, slot2
     arm64.add x2, x2, 1
     arm64.loadRegSlot x4, slot4
@@ -685,7 +673,7 @@ func @main {
     arm64.movRegReg x26, x1
     arm64.movRegReg x1, x2
     arm64.movRegReg x2, x5
-  forhdr#110:
+  forhdr#112:
     arm64.storeSlotReg slot6, x0
     arm64.storeSlotReg slot5, x2
     arm64.storeSlotReg slot4, x3
@@ -694,7 +682,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x1, x0
     arm64.b.lt rounds
-  forexit#113:
+  forexit#115:
     arm64.movImm x1, 0
     arm64.loadRegSlot x2, slot6
     arm64.movRegReg x0, x21
@@ -729,7 +717,7 @@ func @main {
     arm64.bl sha256AddIntoState
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-  __il_cont#70:
+  __il_cont#72:
     arm64.loadRegSlot x0, slot1
     arm64.add x0, x0, 64
     arm64.movRegReg x19, x0
@@ -737,7 +725,7 @@ func @main {
     arm64.storeSlotReg slot1, x19
     arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
     arm64.cmp x19, x0
-    arm64.b.lt __il_body#71
+    arm64.b.lt processBlocks
   whileexit#27:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
@@ -834,14 +822,14 @@ func @main {
     arm64.loadRegSlot x0, slot0
     arm64.bl __managed_decref
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic#2
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic#2
   __rc_ok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot13
     arm64.loadRegSlot x20, slot14
@@ -856,7 +844,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#7:
-    arm64.leaRdata x0, __str_blob_24  ; "panic at Sha256.maxon:201: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_24  ; "panic at Sha256.maxon:199: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -872,7 +860,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#9:
-    arm64.leaRdata x0, __str_blob_25  ; "panic at Sha256.maxon:202: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_25  ; "panic at Sha256.maxon:200: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -888,7 +876,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#11:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at Sha256.maxon:203: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_26  ; "panic at Sha256.maxon:201: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -904,7 +892,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#13:
-    arm64.leaRdata x0, __str_blob_27  ; "panic at Sha256.maxon:204: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_27  ; "panic at Sha256.maxon:202: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -920,7 +908,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#15:
-    arm64.leaRdata x0, __str_blob_28  ; "panic at Sha256.maxon:205: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_28  ; "panic at Sha256.maxon:203: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -936,7 +924,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#17:
-    arm64.leaRdata x0, __str_blob_29  ; "panic at Sha256.maxon:206: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_29  ; "panic at Sha256.maxon:204: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -952,7 +940,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#19:
-    arm64.leaRdata x0, __str_blob_30  ; "panic at Sha256.maxon:207: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_30  ; "panic at Sha256.maxon:205: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -968,7 +956,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#21:
-    arm64.leaRdata x0, __str_blob_31  ; "panic at Sha256.maxon:208: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_31  ; "panic at Sha256.maxon:206: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -983,8 +971,8 @@ func @main {
     arm64.loadRegSlot x28, slot22
     arm64.epilogue 208
     arm64.ret
-  __rc_panic#115:
-    arm64.leaRdata x0, __str_blob_51  ; "panic at Sha256.maxon:111: Range check failed: value outside typealias 'BufferPos'\x0a"
+  __rc_panic#69:
+    arm64.leaRdata x0, __str_blob_60  ; "panic at Sha256.maxon:232: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -999,104 +987,8 @@ func @main {
     arm64.loadRegSlot x28, slot22
     arm64.epilogue 208
     arm64.ret
-  __rc_panic#162:
-    arm64.leaRdata x0, __str_blob_47  ; "panic at Sha256.maxon:96: Range check failed: value outside typealias 'BufferPos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot13
-    arm64.loadRegSlot x20, slot14
-    arm64.loadRegSlot x21, slot15
-    arm64.loadRegSlot x22, slot16
-    arm64.loadRegSlot x23, slot17
-    arm64.loadRegSlot x24, slot18
-    arm64.loadRegSlot x25, slot19
-    arm64.loadRegSlot x26, slot20
-    arm64.loadRegSlot x27, slot21
-    arm64.loadRegSlot x28, slot22
-    arm64.epilogue 208
-    arm64.ret
-  tryerr#154:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at Sha256.maxon:99: sha256: read past the block the caller sized\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot13
-    arm64.loadRegSlot x20, slot14
-    arm64.loadRegSlot x21, slot15
-    arm64.loadRegSlot x22, slot16
-    arm64.loadRegSlot x23, slot17
-    arm64.loadRegSlot x24, slot18
-    arm64.loadRegSlot x25, slot19
-    arm64.loadRegSlot x26, slot20
-    arm64.loadRegSlot x27, slot21
-    arm64.loadRegSlot x28, slot22
-    arm64.epilogue 208
-    arm64.ret
-  __rc_panic#164:
-    arm64.leaRdata x0, __str_blob_48  ; "panic at Sha256.maxon:100: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot13
-    arm64.loadRegSlot x20, slot14
-    arm64.loadRegSlot x21, slot15
-    arm64.loadRegSlot x22, slot16
-    arm64.loadRegSlot x23, slot17
-    arm64.loadRegSlot x24, slot18
-    arm64.loadRegSlot x25, slot19
-    arm64.loadRegSlot x26, slot20
-    arm64.loadRegSlot x27, slot21
-    arm64.loadRegSlot x28, slot22
-    arm64.epilogue 208
-    arm64.ret
-  tryerr#156:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at Sha256.maxon:100: sha256: read past the block the caller sized\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot13
-    arm64.loadRegSlot x20, slot14
-    arm64.loadRegSlot x21, slot15
-    arm64.loadRegSlot x22, slot16
-    arm64.loadRegSlot x23, slot17
-    arm64.loadRegSlot x24, slot18
-    arm64.loadRegSlot x25, slot19
-    arm64.loadRegSlot x26, slot20
-    arm64.loadRegSlot x27, slot21
-    arm64.loadRegSlot x28, slot22
-    arm64.epilogue 208
-    arm64.ret
-  __rc_panic#166:
-    arm64.leaRdata x0, __str_blob_49  ; "panic at Sha256.maxon:101: Range check failed: value outside typealias 'ElementIndex'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot13
-    arm64.loadRegSlot x20, slot14
-    arm64.loadRegSlot x21, slot15
-    arm64.loadRegSlot x22, slot16
-    arm64.loadRegSlot x23, slot17
-    arm64.loadRegSlot x24, slot18
-    arm64.loadRegSlot x25, slot19
-    arm64.loadRegSlot x26, slot20
-    arm64.loadRegSlot x27, slot21
-    arm64.loadRegSlot x28, slot22
-    arm64.epilogue 208
-    arm64.ret
-  tryerr#158:
-    arm64.leaRdata x0, __str_blob_5  ; "panic at Sha256.maxon:101: sha256: read past the block the caller sized\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot13
-    arm64.loadRegSlot x20, slot14
-    arm64.loadRegSlot x21, slot15
-    arm64.loadRegSlot x22, slot16
-    arm64.loadRegSlot x23, slot17
-    arm64.loadRegSlot x24, slot18
-    arm64.loadRegSlot x25, slot19
-    arm64.loadRegSlot x26, slot20
-    arm64.loadRegSlot x27, slot21
-    arm64.loadRegSlot x28, slot22
-    arm64.epilogue 208
-    arm64.ret
-  __rc_panic#168:
-    arm64.leaRdata x0, __str_blob_50  ; "panic at Sha256.maxon:102: Range check failed: value outside typealias 'ElementIndex'\x0a"
+  __rc_panic#117:
+    arm64.leaRdata x0, __str_blob_44  ; "panic at Sha256.maxon:120: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1112,7 +1004,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#160:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at Sha256.maxon:102: sha256: read past the block the caller sized\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at Sha256.maxon:97: sha256: read past the block the caller sized\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1127,13 +1019,8 @@ func @main {
     arm64.loadRegSlot x28, slot22
     arm64.epilogue 208
     arm64.ret
-  __im_slow#131:
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq critsplit#234
-  tryerr#79:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at Sha256.maxon:128: sha256: extend w[wi-2] unreachable\x0a"
+  tryerr#162:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at Sha256.maxon:98: sha256: read past the block the caller sized\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1148,16 +1035,45 @@ func @main {
     arm64.loadRegSlot x28, slot22
     arm64.epilogue 208
     arm64.ret
-  critsplit#234:
-    arm64.movRegReg x19, x0
-    arm64.b tryok#78
-  __im_slow#134:
+  tryerr#164:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at Sha256.maxon:99: sha256: read past the block the caller sized\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot13
+    arm64.loadRegSlot x20, slot14
+    arm64.loadRegSlot x21, slot15
+    arm64.loadRegSlot x22, slot16
+    arm64.loadRegSlot x23, slot17
+    arm64.loadRegSlot x24, slot18
+    arm64.loadRegSlot x25, slot19
+    arm64.loadRegSlot x26, slot20
+    arm64.loadRegSlot x27, slot21
+    arm64.loadRegSlot x28, slot22
+    arm64.epilogue 208
+    arm64.ret
+  tryerr#166:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at Sha256.maxon:100: sha256: read past the block the caller sized\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot13
+    arm64.loadRegSlot x20, slot14
+    arm64.loadRegSlot x21, slot15
+    arm64.loadRegSlot x22, slot16
+    arm64.loadRegSlot x23, slot17
+    arm64.loadRegSlot x24, slot18
+    arm64.loadRegSlot x25, slot19
+    arm64.loadRegSlot x26, slot20
+    arm64.loadRegSlot x27, slot21
+    arm64.loadRegSlot x28, slot22
+    arm64.epilogue 208
+    arm64.ret
+  __im_slow#133:
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.eq critsplit#235
+    arm64.b.eq critsplit#228
   tryerr#81:
-    arm64.leaRdata x0, __str_blob_9  ; "panic at Sha256.maxon:129: sha256: extend w[wi-7] unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_8  ; "panic at Sha256.maxon:126: sha256: extend w[wi-2] unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1172,16 +1088,16 @@ func @main {
     arm64.loadRegSlot x28, slot22
     arm64.epilogue 208
     arm64.ret
-  critsplit#235:
-    arm64.movRegReg x24, x0
+  critsplit#228:
+    arm64.movRegReg x19, x0
     arm64.b tryok#80
-  __im_slow#137:
+  __im_slow#136:
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.eq critsplit#236
+    arm64.b.eq critsplit#229
   tryerr#83:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at Sha256.maxon:130: sha256: extend w[wi-15] unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_9  ; "panic at Sha256.maxon:127: sha256: extend w[wi-7] unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1196,16 +1112,16 @@ func @main {
     arm64.loadRegSlot x28, slot22
     arm64.epilogue 208
     arm64.ret
-  critsplit#236:
-    arm64.movRegReg x25, x0
+  critsplit#229:
+    arm64.movRegReg x24, x0
     arm64.b tryok#82
-  __im_slow#140:
+  __im_slow#139:
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.eq critsplit#237
+    arm64.b.eq critsplit#230
   tryerr#85:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at Sha256.maxon:131: sha256: extend w[wi-16] unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_10  ; "panic at Sha256.maxon:128: sha256: extend w[wi-15] unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1220,10 +1136,34 @@ func @main {
     arm64.loadRegSlot x28, slot22
     arm64.epilogue 208
     arm64.ret
-  critsplit#237:
+  critsplit#230:
+    arm64.movRegReg x25, x0
+    arm64.b tryok#84
+  __im_slow#142:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq critsplit#231
+  tryerr#87:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at Sha256.maxon:129: sha256: extend w[wi-16] unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot13
+    arm64.loadRegSlot x20, slot14
+    arm64.loadRegSlot x21, slot15
+    arm64.loadRegSlot x22, slot16
+    arm64.loadRegSlot x23, slot17
+    arm64.loadRegSlot x24, slot18
+    arm64.loadRegSlot x25, slot19
+    arm64.loadRegSlot x26, slot20
+    arm64.loadRegSlot x27, slot21
+    arm64.loadRegSlot x28, slot22
+    arm64.epilogue 208
+    arm64.ret
+  critsplit#231:
     arm64.movRegReg x26, x0
-    arm64.b __il_body#203
-  __im_slow#143:
+    arm64.b __il_body#155
+  __im_slow#145:
     arm64.storeSlotReg slot7, x0
     arm64.storeSlotReg slot8, x1
     arm64.storeSlotReg slot9, x2
@@ -1236,9 +1176,9 @@ func @main {
     arm64.loadRegSlot x2, slot9
     arm64.loadRegSlot x3, slot10
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#91
-    arm64.b tryok#90
-  __im_slow#146:
+    arm64.b.ne tryerr#93
+    arm64.b tryok#92
+  __im_slow#148:
     arm64.storeSlotReg slot7, x0
     arm64.storeSlotReg slot8, x1
     arm64.storeSlotReg slot9, x2
@@ -1250,9 +1190,9 @@ func @main {
     arm64.loadRegSlot x1, slot8
     arm64.loadRegSlot x2, slot9
     arm64.cmp x9, 0
-    arm64.b.eq tryok#92
-  tryerr#93:
-    arm64.leaRdata x0, __str_blob_13  ; "panic at Sha256.maxon:146: sha256: schedule index unreachable\x0a"
+    arm64.b.eq tryok#94
+  tryerr#95:
+    arm64.leaRdata x0, __str_blob_13  ; "panic at Sha256.maxon:144: sha256: schedule index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1267,8 +1207,8 @@ func @main {
     arm64.loadRegSlot x28, slot22
     arm64.epilogue 208
     arm64.ret
-  __rc_panic#125:
-    arm64.leaRdata x0, __str_blob_56  ; "panic at Sha256.maxon:145: Range check failed: value outside typealias 'ElementIndex'\x0a"
+  __rc_panic#127:
+    arm64.leaRdata x0, __str_blob_49  ; "panic at Sha256.maxon:143: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1283,7 +1223,7 @@ func @main {
     arm64.loadRegSlot x28, slot22
     arm64.epilogue 208
     arm64.ret
-  __im_slow#225:
+  __im_slow#219:
     arm64.storeSlotReg slot7, x0
     arm64.storeSlotReg slot8, x1
     arm64.storeSlotReg slot9, x2
@@ -1300,25 +1240,9 @@ func @main {
     arm64.loadRegSlot x4, slot11
     arm64.loadRegSlot x5, slot12
     arm64.cmp x9, 0
-    arm64.b.eq tryok#223
-  tryerr#91:
-    arm64.leaRdata x0, __str_blob_12  ; "panic at Sha256.maxon:145: sha256: schedule index unreachable\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot13
-    arm64.loadRegSlot x20, slot14
-    arm64.loadRegSlot x21, slot15
-    arm64.loadRegSlot x22, slot16
-    arm64.loadRegSlot x23, slot17
-    arm64.loadRegSlot x24, slot18
-    arm64.loadRegSlot x25, slot19
-    arm64.loadRegSlot x26, slot20
-    arm64.loadRegSlot x27, slot21
-    arm64.loadRegSlot x28, slot22
-    arm64.epilogue 208
-    arm64.ret
-  tryerr#95:
-    arm64.leaRdata x0, __str_blob_14  ; "panic at Sha256.maxon:150: sha256: state index unreachable\x0a"
+    arm64.b.eq tryok#217
+  tryerr#93:
+    arm64.leaRdata x0, __str_blob_12  ; "panic at Sha256.maxon:143: sha256: schedule index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1334,7 +1258,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#97:
-    arm64.leaRdata x0, __str_blob_15  ; "panic at Sha256.maxon:151: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_14  ; "panic at Sha256.maxon:148: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1350,7 +1274,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#99:
-    arm64.leaRdata x0, __str_blob_16  ; "panic at Sha256.maxon:152: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_15  ; "panic at Sha256.maxon:149: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1366,7 +1290,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#101:
-    arm64.leaRdata x0, __str_blob_17  ; "panic at Sha256.maxon:153: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_16  ; "panic at Sha256.maxon:150: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1382,7 +1306,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#103:
-    arm64.leaRdata x0, __str_blob_18  ; "panic at Sha256.maxon:154: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_17  ; "panic at Sha256.maxon:151: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1398,7 +1322,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#105:
-    arm64.leaRdata x0, __str_blob_19  ; "panic at Sha256.maxon:155: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_18  ; "panic at Sha256.maxon:152: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1414,7 +1338,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#107:
-    arm64.leaRdata x0, __str_blob_20  ; "panic at Sha256.maxon:156: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_19  ; "panic at Sha256.maxon:153: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1430,7 +1354,23 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#109:
-    arm64.leaRdata x0, __str_blob_21  ; "panic at Sha256.maxon:157: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_20  ; "panic at Sha256.maxon:154: sha256: state index unreachable\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot13
+    arm64.loadRegSlot x20, slot14
+    arm64.loadRegSlot x21, slot15
+    arm64.loadRegSlot x22, slot16
+    arm64.loadRegSlot x23, slot17
+    arm64.loadRegSlot x24, slot18
+    arm64.loadRegSlot x25, slot19
+    arm64.loadRegSlot x26, slot20
+    arm64.loadRegSlot x27, slot21
+    arm64.loadRegSlot x28, slot22
+    arm64.epilogue 208
+    arm64.ret
+  tryerr#111:
+    arm64.leaRdata x0, __str_blob_21  ; "panic at Sha256.maxon:155: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1446,7 +1386,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#29:
-    arm64.leaRdata x0, __str_blob_32  ; "panic at Sha256.maxon:240: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_32  ; "panic at Sha256.maxon:238: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1462,7 +1402,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#31:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at Sha256.maxon:241: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_33  ; "panic at Sha256.maxon:239: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1478,7 +1418,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#33:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at Sha256.maxon:242: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_34  ; "panic at Sha256.maxon:240: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1494,7 +1434,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#35:
-    arm64.leaRdata x0, __str_blob_35  ; "panic at Sha256.maxon:243: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_35  ; "panic at Sha256.maxon:241: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1510,7 +1450,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#37:
-    arm64.leaRdata x0, __str_blob_36  ; "panic at Sha256.maxon:244: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_36  ; "panic at Sha256.maxon:242: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1526,7 +1466,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#39:
-    arm64.leaRdata x0, __str_blob_37  ; "panic at Sha256.maxon:245: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_37  ; "panic at Sha256.maxon:243: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1542,7 +1482,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#41:
-    arm64.leaRdata x0, __str_blob_38  ; "panic at Sha256.maxon:246: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_38  ; "panic at Sha256.maxon:244: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13
@@ -1558,7 +1498,7 @@ func @main {
     arm64.epilogue 208
     arm64.ret
   tryerr#43:
-    arm64.leaRdata x0, __str_blob_39  ; "panic at Sha256.maxon:247: sha256: state index unreachable\x0a"
+    arm64.leaRdata x0, __str_blob_39  ; "panic at Sha256.maxon:245: sha256: state index unreachable\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot13

@@ -10,6 +10,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -21,15 +22,15 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x19, __str_rec_2  ; "hello"
     arm64.leaRdata x0, __str_rec_3  ; "ab"
-  __il_body#33:
+  __il_body#37:
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-  __il_cont#32:
+  __il_cont#36:
     arm64.cmp x20, 0
     arm64.b.ne ifcont
   empty:
     arm64.bl String.clone
     arm64.movRegReg x20, x0
-    arm64.b __il_body#30
+    arm64.b __il_body#34
   ifcont:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.byte x3, [x0 + 48]
@@ -38,7 +39,7 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movImm x22, 0
     arm64.b forhdr
-  convert:
+  __rc_ok#28:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
     arm64.bl String.byteAt
@@ -55,6 +56,7 @@ func @main {
     arm64.cbz x1, forstep
   inRange:
     arm64.eor x2, x0, 32
+  __rc_ok#30:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
     arm64.bl String.setByte
@@ -64,24 +66,24 @@ func @main {
     arm64.add x22, x22, 1
   forhdr:
     arm64.cmp x22, x20
-    arm64.b.lt convert
+    arm64.b.lt __rc_ok#28
   forexit:
     arm64.movRegReg x20, x21
-  __il_body#30:
+  __il_body#34:
     arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
-  __il_cont#29:
+  __il_cont#33:
     arm64.movRegReg x0, x19
     arm64.bl String.clone
-  __il_body#31:
+  __il_body#35:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-  __il_cont#28:
+  __il_cont#32:
     arm64.add x19, x21, x1
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic
-  __rc_ok:
+  __rc_ok#1:
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
@@ -93,7 +95,7 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   tryerr#15:
-    arm64.leaRdata x0, __str_blob_5  ; "panic at String.maxon:697: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.leaRdata x0, __str_blob_5  ; "panic at String.maxon:705: String.mapAsciiCase: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -103,7 +105,7 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   tryerr#20:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at String.maxon:700: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
+    arm64.leaRdata x0, __str_blob_6  ; "panic at String.maxon:708: String.mapAsciiCase: setByte OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

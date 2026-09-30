@@ -2,15 +2,15 @@
 typealias Num = int(0 to 1000)
 
 type Array uses Element implements BuiltinArrayLiteral
-	typealias ElementMemory = __ManagedMemory with Element
+	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
 
-	export static function init(managed ElementMemory) returns Self
+	static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{}
 	end 'create'
 end 'Array'
@@ -40,6 +40,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -87,31 +88,37 @@ func @main {
     arm64.leaFuncAddr x1, __str_decref
     arm64.bl __managed_create
     arm64.movRegReg x23, x0
-  __il_body#28:
+  __il_body#38:
     arm64.loadRegBaseDisp.word64 x24, [x22 + 8]
-  __il_cont#27:
+  __il_cont#37:
     arm64.cmp x24, 0
-    arm64.b.ne __il_body#30
-  __il_body#24:
+    arm64.b.ne __il_body#40
+  __il_body#34:
     arm64.movImm x1, 0
-  __il_body#32:
+  __il_body#42:
     arm64.loadRegBaseDisp.word64 x2, [x21 + 8]
-  __il_cont#31:
+  __il_cont#41:
     arm64.loadRegBaseDisp.byte x3, [x21 + 48]
     arm64.movRegReg x0, x21
     arm64.bl String.sliceBytes
     arm64.movRegReg x1, x0
-  __il_cont#23:
+  __il_cont#33:
     arm64.movRegReg x0, x23
     arm64.bl __managed_push
     arm64.b __il_cont#13
-  __il_body#30:
+  __il_body#40:
     arm64.loadRegBaseDisp.word64 x25, [x21 + 8]
-  __il_cont#29:
+  __il_cont#39:
     arm64.movImm x26, 0
     arm64.b whilehdr
   search:
     arm64.sub x2, x25, x26
+    arm64.cmp x26, 0
+    arm64.b.lt __rc_panic#24
+  __rc_ok#23:
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic#26
+  __rc_ok#25:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x26
     arm64.movRegReg x3, x22
@@ -121,6 +128,10 @@ func @main {
   try_find:
     arm64.add x27, x26, x0
     arm64.loadRegBaseDisp.byte x3, [x21 + 48]
+  __rc_ok#27:
+    arm64.cmp x27, 0
+    arm64.b.lt __rc_panic#30
+  __rc_ok#29:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x26
     arm64.movRegReg x2, x27
@@ -137,6 +148,9 @@ func @main {
     arm64.b.le search
   whileexit:
     arm64.loadRegBaseDisp.byte x3, [x21 + 48]
+    arm64.cmp x26, 0
+    arm64.b.lt __rc_panic#32
+  __rc_ok#31:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x26
     arm64.movRegReg x2, x25
@@ -151,9 +165,9 @@ func @main {
     arm64.b forhdr#5
   librarysLoop:
     arm64.loadRegBaseIndexScale.word64 x3, [x2 + x0*8 + 0]
-  __il_body#26:
+  __il_body#36:
     arm64.loadRegBaseDisp.word64 x3, [x3 + 8]
-  __il_cont#25:
+  __il_cont#35:
     arm64.add x20, x20, x3
   forstep#7:
     arm64.add x0, x0, 1
@@ -164,11 +178,11 @@ func @main {
     arm64.movRegReg x0, x23
     arm64.bl __managed_decref
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
+    arm64.b.lt __rc_panic#10
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
+    arm64.b.gt __rc_panic#10
+  __rc_ok#9:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -183,7 +197,67 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  __rc_panic:
+  __rc_panic#24:
+    arm64.leaRdata x0, __str_blob_12  ; "panic at String.maxon:668: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#26:
+    arm64.leaRdata x0, __str_blob_12  ; "panic at String.maxon:668: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#30:
+    arm64.leaRdata x0, __str_blob_13  ; "panic at String.maxon:670: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#32:
+    arm64.leaRdata x0, __str_blob_14  ; "panic at String.maxon:678: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#10:
     arm64.leaRdata x0, __str_blob_10  ; "panic at for-in-walks-both-arrays-in-one-program.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0

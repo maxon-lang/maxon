@@ -5,17 +5,20 @@ enum Boom implements Error
 end 'Boom'
 type Box uses T
 	export var value as T
-	export static function create(v T) returns Self
+	static function create(v T) returns Self
 		return Self{value: v}
 	end 'create'
-	export function fetch() returns T throws Boom
+	function fetch(strict bool) returns T throws Boom
+		if strict 'strict'
+			throw Boom.bad
+		end 'strict'
 		return self.value
 	end 'fetch'
 end 'Box'
 typealias IntBox = Box with Integer
 function main() returns ExitCode
 	let bx = IntBox.create(9)
-	let got = try bx.fetch() otherwise 0
+	let got = try bx.fetch(false) otherwise 0
 	print("v={got}\n")
 	return 0
 end 'main'
@@ -23,17 +26,26 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @Box.fetch {
   entry:
     arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
+    arm64.cbz x1, ifcont
+  strict:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.movRegReg x0, x2
     arm64.bl __retain_type_param
     arm64.movImm x9, 0
     arm64.epilogue 16
@@ -61,7 +73,8 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
   __il_cont#4:
-    arm64.leaRdata x1, __layout_Box_Integer
+    arm64.movImm x1, 0
+    arm64.leaRdata x2, __layout_Box_Integer
     arm64.movRegReg x0, x20
     arm64.bl Box.fetch
     arm64.cmp x9, 0

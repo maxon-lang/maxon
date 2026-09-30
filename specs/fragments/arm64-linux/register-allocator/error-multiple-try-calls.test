@@ -6,12 +6,20 @@ enum MyError implements Error
 	failed
 end 'MyError'
 
-function getA() returns Integer throws MyError
-	return 10
+function getA(n Integer) returns Integer throws MyError
+	if n > 1000 'big'
+		throw MyError.failed
+	end 'big'
+
+	return n
 end 'getA'
 
-function getB() returns Integer throws MyError
-	return 20
+function getB(n Integer) returns Integer throws MyError
+	if n > 1000 'big'
+		throw MyError.failed
+	end 'big'
+
+	return n
 end 'getB'
 
 function getC() returns Integer throws MyError
@@ -19,18 +27,31 @@ function getC() returns Integer throws MyError
 end 'getC'
 
 function main() returns ExitCode
-	let a = try getA() otherwise 0
-	let b = try getB() otherwise 0
+	let a = try getA(10) otherwise 0
+	let b = try getB(20) otherwise 0
 	let c = try getC() otherwise 12
 	return a + b + c
 end 'main'
 ---
 ExitCode: 42
 ---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
 func @getA {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 10
+    arm64.cmp x0, 1000
+    arm64.b.le ifcont
+  big:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
     arm64.movImm x9, 0
     arm64.epilogue 16
     arm64.ret
@@ -39,7 +60,14 @@ func @getA {
 func @getB {
   entry:
     arm64.prologue 16
-    arm64.movImm x0, 20
+    arm64.cmp x0, 1000
+    arm64.b.le ifcont
+  big:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
     arm64.movImm x9, 0
     arm64.epilogue 16
     arm64.ret
@@ -59,6 +87,7 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 10
     arm64.bl getA
     arm64.cmp x9, 0
     arm64.b.eq tryok#1
@@ -68,6 +97,7 @@ func @main {
   tryok#1:
     arm64.movRegReg x19, x0
   trycont#3:
+    arm64.movImm x0, 20
     arm64.bl getB
     arm64.cmp x9, 0
     arm64.b.eq tryok#4
@@ -96,7 +126,7 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_0  ; "panic at error-multiple-try-calls.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_0  ; "panic at error-multiple-try-calls.test:33: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

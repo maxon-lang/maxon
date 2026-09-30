@@ -1,6 +1,6 @@
 // Test: extension-spells-a-member-the-type-body-declares
 // --- file: a.maxon
-typealias Num = int(0 to 200)
+export typealias Num = int(0 to 200)
 
 export type Holder
 	typealias Idx = int(0 to 100)
@@ -15,7 +15,7 @@ end 'Holder'
 // --- file: b.maxon
 extension Holder
 	export function fromB(i Idx) returns Num
-		return self.v + i
+		return self.v + (i as Num)
 	end 'fromB'
 end 'Holder'
 
@@ -31,9 +31,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -41,12 +44,12 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 4
-  __rc_ok:
+  __rc_ok#6:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
-  __il_body:
+  __rc_ok#10:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.add x1, x1, 3
     arm64.cmp x1, 0
@@ -72,7 +75,7 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at b.maxon:3: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic at b.maxon:3: Range check failed: value outside typealias 'Num'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

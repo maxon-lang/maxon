@@ -22,6 +22,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -42,6 +43,9 @@ func @main {
     arm64.movImm x21, 0
     arm64.b forhdr#1
   scan:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#14
+  __rc_ok#13:
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x21
     arm64.bl findGraphemeEnd
@@ -72,6 +76,9 @@ func @main {
     arm64.movImm x22, 0
     arm64.b forhdr#7
   scan2:
+    arm64.cmp x22, 0
+    arm64.b.lt __rc_panic#16
+  __rc_ok#15:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
     arm64.bl findGraphemeEnd
@@ -167,6 +174,38 @@ func @main {
   __il_cont:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_20  ; "panic at a-single-byte-literal-adopts-on-the-left-too.test:4: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#16:
+    arm64.leaRdata x0, __str_blob_21  ; "panic at a-single-byte-literal-adopts-on-the-left-too.test:10: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2
     arm64.loadRegSlot x20, slot3

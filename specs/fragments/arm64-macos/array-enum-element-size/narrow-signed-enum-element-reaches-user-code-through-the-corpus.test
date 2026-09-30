@@ -50,6 +50,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @bySignal {
@@ -126,6 +127,9 @@ func @main {
   __il_body#20:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic#22
+  __rc_ok#21:
     arm64.movRegReg x0, x19
     arm64.bl Array.driftsortRange
   __il_cont#19:
@@ -152,7 +156,7 @@ func @main {
     arm64.leaFuncAddr x23, __fnref_markNegative
     arm64.movImm x24, 0
     arm64.leaRdata x0, __layout_Array_Signal
-  __il_body#22:
+  __il_body#24:
     arm64.movImm x1, 8
     arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
     arm64.movRegReg x0, x1
@@ -160,40 +164,40 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x25, x0
     arm64.movImm x26, 0
-    arm64.b forhdr#23
+    arm64.b forhdr#25
   loop:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.cmp x0, 8
-    arm64.b.ne __im_stride#31
-  __im_word#29:
+    arm64.b.ne __im_stride#33
+  __im_word#31:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x26*8 + 0]
-    arm64.b __im_cont#27
-  __im_stride#31:
+    arm64.b __im_cont#29
+  __im_stride#33:
     arm64.cmp x0, 1
-    arm64.b.ne __im_slow#28
-  __im_byte#30:
+    arm64.b.ne __im_slow#30
+  __im_byte#32:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.add x0, x0, x26
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-    arm64.b __im_cont#27
-  __im_slow#28:
+    arm64.b __im_cont#29
+  __im_slow#30:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x26
     arm64.bl __managed_get_unchecked
-  __im_cont#27:
+  __im_cont#29:
     arm64.movRegReg x1, x24
     arm64.blr x23
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x25
     arm64.bl __managed_push
-  forstep#25:
+  forstep#27:
     arm64.add x26, x26, 1
-  forhdr#23:
+  forhdr#25:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x26, x0
     arm64.b.lt loop
-  __il_cont#21:
+  __il_cont#23:
     arm64.movImm x23, 0
   __us_test:
     arm64.loadRegBaseDisp.word64 x24, [x25 + 8]
@@ -238,11 +242,11 @@ func @main {
     arm64.add x0, x0, x1
     arm64.add x20, x0, x22
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
+    arm64.b.lt __rc_panic#12
   __rc_chk:
     arm64.cmp x20, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
+    arm64.b.gt __rc_panic#12
+  __rc_ok#11:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -257,8 +261,23 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_68  ; "panic at narrow-signed-enum-element-reaches-user-code-through-the-corpus.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic#22:
+    arm64.leaRdata x0, __str_blob_70  ; "panic at Array.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#12:
+    arm64.leaRdata x0, __str_blob_67  ; "panic at narrow-signed-enum-element-reaches-user-code-through-the-corpus.test:44: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

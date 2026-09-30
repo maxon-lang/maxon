@@ -5,8 +5,8 @@ typealias Integer = int(i64.min to i64.max)
 var counters = [0, 0, 0]
 
 function increment(index Integer)
-	let current = try counters.get(index) otherwise 0
-	try counters.set(index, value: current + 1) otherwise panic("test invariant: set OOB")
+	let current = try counters.get(index as ElementIndex) otherwise 0
+	try counters.set(index as ElementIndex, value: current + 1) otherwise panic("test invariant: set OOB")
 end 'increment'
 
 function total() returns Integer
@@ -33,6 +33,7 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @increment {
@@ -57,8 +58,8 @@ func @increment {
   trycont:
     arm64.leaGlobal x2, __data_counters
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.add x3, x0, 1
   __rc_ok#8:
+    arm64.add x3, x0, 1
     arm64.loadRegBaseDisp.word64 x0, [x2 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow#14

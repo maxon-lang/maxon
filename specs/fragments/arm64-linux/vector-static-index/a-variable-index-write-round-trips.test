@@ -19,9 +19,12 @@ end 'main'
 ExitCode: 12
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -33,7 +36,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __layout_Vector_N3_Int
     arm64.movImm x19, 3
-  __il_body#16:
+  __il_body#18:
     arm64.movImm x1, 8
     arm64.loadRegBaseDisp.word64 x2, [x0 + 40]
     arm64.movRegReg x0, x1
@@ -43,11 +46,12 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x19
     arm64.bl __managed_resize
-  __il_cont#15:
+  __il_cont#17:
     arm64.movImm x19, 0
     arm64.b whilehdr
   fill:
     arm64.movImm x2, 4
+  __rc_ok#12:
     arm64.leaRdata x3, __layout_Vector_N3_Int
     arm64.movImm x4, 3
     arm64.movRegReg x0, x20
@@ -71,13 +75,13 @@ func @main {
     arm64.b forjoin
   sum:
     arm64.leaRdata x22, __layout_ArrayIterator_Int
-  __il_body#18:
+  __il_body#20:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.bl __managed_cursor_current
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x22
     arm64.bl __retain_type_param
-  __il_cont#17:
+  __il_cont#19:
     arm64.add x19, x19, x0
   forstep:
     arm64.movRegReg x0, x21
@@ -97,7 +101,7 @@ func @main {
   __rc_chk:
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic
-  __rc_ok:
+  __rc_ok#14:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -116,7 +120,7 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at a-variable-index-write-round-trips.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_4  ; "panic at a-variable-index-write-round-trips.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

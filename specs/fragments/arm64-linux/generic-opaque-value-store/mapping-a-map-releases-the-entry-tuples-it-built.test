@@ -10,17 +10,20 @@ function main() returns ExitCode
 	let m = ["a": 1, "b": 2, "c": 3]
 	let mapped = m.map(function(p) gives p)
 	var e = EnvMap.create()
-	try e.insert("k", value: "v") otherwise return 9 as ExitCode
+	try e.insert("k", value: "v") otherwise return 9
 	print("mapped {mapped.count()}\n")
-	return (mapped.count() + envSize(e)) as ExitCode
+	return ((mapped.count() as Cnt) + envSize(e)) as ExitCode
 end 'main'
 ---
 ExitCode: 4
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -124,151 +127,152 @@ func @main {
     arm64.movRegReg x2, x19
     arm64.bl Map.upsert
     arm64.leaFuncAddr x19, main$closure_0
-    arm64.leaRdata x20, __witness_String.Hashable
-    arm64.leaRdata x22, __witness_String.Equatable
-  __il_body#9:
+    arm64.leaRdata x20, __layout_Map_String_int
+    arm64.leaRdata x22, __witness_String.Hashable
+    arm64.leaRdata x23, __witness_String.Equatable
+  __il_body#12:
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __mm_decref
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 144]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
     arm64.bl __managed_create
-    arm64.movRegReg x23, x0
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x22
-    arm64.bl Map.createIterator
     arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl Map.createIterator
+    arm64.movRegReg x25, x0
     arm64.movImm x0, 0
     arm64.cmp x9, 0
     arm64.b.eq forhdr
-    arm64.b __il_cont#8
-  loop:
-    arm64.leaRdata x25, __layout_MapIterator_T7cd8090be60770aa_T5d84c0fc6312cff6
-  __il_body#17:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
-    arm64.loadRegBaseDisp.word64 x1, [x24 + 32]
+    arm64.b __il_cont#11
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x25 + 32]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.b.ne __im_stride#26
-  __im_word#24:
+    arm64.b.ne __im_stride#29
+  __im_word#27:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#23
-  __im_load#28:
+    arm64.b.hs __im_slow#26
+  __im_load#31:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
-    arm64.b __im_loaded#27
-  __im_stride#26:
+    arm64.b __im_loaded#30
+  __im_stride#29:
     arm64.cmp x2, 1
-    arm64.b.ne __im_slow#23
-  __im_byte#25:
+    arm64.b.ne __im_slow#26
+  __im_byte#28:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#23
-  __im_load#29:
+    arm64.b.hs __im_slow#26
+  __im_load#32:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
-  __im_loaded#27:
+  __im_loaded#30:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.b.eq critsplit#51
-  __im_empty#30:
+    arm64.b.eq critsplit#54
+  __im_empty#33:
     arm64.cmp x2, 0
-    arm64.b.eq __im_slow#23
-  critsplit#52:
+    arm64.b.eq __im_slow#26
+  critsplit#55:
     arm64.movRegReg x26, x2
-    arm64.b __im_cont#22
-  critsplit#51:
+    arm64.b __im_cont#25
+  critsplit#54:
     arm64.movRegReg x26, x2
-    arm64.b __im_cont#22
-  __im_slow#23:
+    arm64.b __im_cont#25
+  __im_slow#26:
     arm64.bl __managed_get
     arm64.movRegReg x26, x0
     arm64.movRegReg x3, x9
-  __im_cont#22:
+  __im_cont#25:
     arm64.cmp x3, 0
-    arm64.b.ne tryerr#19
-  tryok#18:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
-    arm64.loadRegBaseDisp.word64 x1, [x24 + 32]
+    arm64.b.ne tryerr#22
+  tryok#21:
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x25 + 32]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.b.ne __im_stride#35
-  __im_word#33:
+    arm64.b.ne __im_stride#38
+  __im_word#36:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#32
-  __im_load#37:
+    arm64.b.hs __im_slow#35
+  __im_load#40:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
-    arm64.b __im_loaded#36
-  __im_stride#35:
+    arm64.b __im_loaded#39
+  __im_stride#38:
     arm64.cmp x2, 1
-    arm64.b.ne __im_slow#32
-  __im_byte#34:
+    arm64.b.ne __im_slow#35
+  __im_byte#37:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#32
-  __im_load#38:
+    arm64.b.hs __im_slow#35
+  __im_load#41:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
-  __im_loaded#36:
+  __im_loaded#39:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.b.eq critsplit#53
-  __im_empty#39:
+    arm64.b.eq critsplit#56
+  __im_empty#42:
     arm64.cmp x2, 0
-    arm64.b.eq __im_slow#32
-  critsplit#54:
+    arm64.b.eq __im_slow#35
+  critsplit#57:
     arm64.movRegReg x27, x2
-    arm64.b __im_cont#31
-  critsplit#53:
+    arm64.b __im_cont#34
+  critsplit#56:
     arm64.movRegReg x27, x2
-    arm64.b __im_cont#31
-  __im_slow#32:
+    arm64.b __im_cont#34
+  __im_slow#35:
     arm64.bl __managed_get
     arm64.movRegReg x27, x0
     arm64.movRegReg x3, x9
-  __im_cont#31:
+  __im_cont#34:
     arm64.cmp x3, 0
-    arm64.b.ne tryerr#21
-  tryok#20:
+    arm64.b.ne tryerr#24
+  tryok#23:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x28, x0
-    arm64.movRegReg x0, x25
+    arm64.movRegReg x0, x20
     arm64.movRegReg x1, x26
     arm64.bl __retain_type_param
     arm64.storeBaseDispReg.word64 [x28 + 0], x0
-    arm64.add x0, x25, 72
+    arm64.add x0, x20, 72
     arm64.movRegReg x1, x27
     arm64.bl __retain_type_param
     arm64.storeBaseDispReg.word64 [x28 + 8], x0
-  __il_cont#16:
+  __il_cont#19:
     arm64.movRegReg x0, x28
     arm64.movImm x1, 0
     arm64.blr x19
     arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x23
-    arm64.bl __managed_push
-    arm64.movRegReg x0, x28
-    arm64.bl __mm_decref
-  forstep:
     arm64.movRegReg x0, x24
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x22
+    arm64.bl __managed_push
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x28
+    arm64.bl __destruct_dict___Tuple2.T7cd8090be60770aa.T5d84c0fc6312cff6
+  forstep:
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
     arm64.bl MapIterator.advance
     arm64.movRegReg x0, x9
   forhdr:
     arm64.cmp x0, 0
-    arm64.b.eq loop
+    arm64.b.eq __il_body#20
   forexit:
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x25
     arm64.bl __destruct_MapIterator_T7cd8090be60770aa_T5d84c0fc6312cff6
-  __il_cont#8:
+  __il_cont#11:
     arm64.leaRdata x0, __layout_Map_String_String
     arm64.leaRdata x1, __witness_String.Hashable
     arm64.leaRdata x2, __witness_String.Equatable
@@ -278,19 +282,19 @@ func @main {
     arm64.leaRdata x0, __str_rec_10  ; "k"
     arm64.leaRdata x20, __str_rec_11  ; "v"
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
-    arm64.add x0, x24, 57
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x0, x23, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x25, x0
     arm64.add x26, x25, 56
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x22
-    arm64.movRegReg x2, x24
+    arm64.movRegReg x2, x23
     arm64.bl __str_copy
-    arm64.add x0, x26, x24
+    arm64.add x0, x26, x23
     arm64.storeBaseDispReg.word64 [x25 + 0], x26
-    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.storeBaseDispReg.word64 [x25 + 8], x23
     arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x25 + 16], x0
     arm64.movImm x0, 1
@@ -300,25 +304,25 @@ func @main {
     arm64.add x0, x20, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x24, x0
-    arm64.add x26, x24, 56
+    arm64.movRegReg x23, x0
+    arm64.add x26, x23, 56
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x20
     arm64.bl __str_copy
     arm64.add x0, x26, x20
-    arm64.storeBaseDispReg.word64 [x24 + 0], x26
-    arm64.storeBaseDispReg.word64 [x24 + 8], x20
+    arm64.storeBaseDispReg.word64 [x23 + 0], x26
+    arm64.storeBaseDispReg.word64 [x23 + 8], x20
     arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
     arm64.leaRdata x3, __layout_Map_String_String
     arm64.leaRdata x4, __witness_String.Hashable
     arm64.leaRdata x5, __witness_String.Equatable
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x25
-    arm64.movRegReg x2, x24
+    arm64.movRegReg x2, x23
     arm64.bl Map.insert
     arm64.cmp x9, 0
     arm64.b.eq tryok#1
@@ -326,7 +330,7 @@ func @main {
     arm64.movImm x20, 9
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Map_String_String
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x24
     arm64.bl __managed_decref
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Map_String_int
@@ -347,17 +351,17 @@ func @main {
     arm64.leaRdata x0, __str_rec_12  ; "mapped "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x21, [x23 + 8]
-    arm64.movImm x0, 21
+    arm64.loadRegBaseDisp.word64 x21, [x24 + 8]
+    arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
-    arm64.bl __int_to_string
+    arm64.bl __uint_to_string
     arm64.movRegReg x21, x0
     arm64.leaRdata x0, __str_rec_13  ; "\x0a"
-    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.add x0, x20, x21
     arm64.add x26, x0, x25
@@ -377,7 +381,7 @@ func @main {
     arm64.bl __str_copy
     arm64.add x19, x19, x21
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x24
+    arm64.movRegReg x1, x23
     arm64.movRegReg x2, x25
     arm64.bl __str_copy
     arm64.add x0, x19, x25
@@ -389,39 +393,42 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
-  __il_body#7:
+  __il_body#10:
     arm64.movRegReg x0, x27
     arm64.bl __write_stdout
-  __il_cont#6:
+  __il_cont#9:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 8]
-  __il_body#41:
+    arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#4
+  __rc_chk#5:
+    arm64.cmp x0, 1000
+    arm64.b.gt __rc_panic#4
+  __il_body#44:
     arm64.leaRdata x1, __witness_String.Hashable
     arm64.leaRdata x1, __witness_String.Equatable
-  __il_body#46:
+  __il_body#49:
     arm64.loadRegSlot x1, slot1
     arm64.loadRegBaseDisp.word64 x1, [x1 + 32]
     arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#48
-  __rc_chk#49:
+    arm64.b.lt __rc_panic#51
+  __rc_chk#52:
     arm64.movImm x2, 4611686018427387904
     arm64.cmp x1, x2
-    arm64.b.gt __rc_panic#48
-  __rc_chk#44:
+    arm64.b.gt __rc_panic#51
+  __rc_chk#47:
     arm64.cmp x1, 1000
-    arm64.b.gt __rc_panic#43
-  __il_cont#40:
+    arm64.b.gt __rc_panic#46
+  __il_cont#43:
     arm64.add x19, x0, x1
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic#4
-  __rc_chk#5:
+  __rc_chk#8:
     arm64.cmp x19, 255
-    arm64.b.gt __rc_panic#4
+    arm64.b.gt __rc_panic#7
   __rc_ok:
     arm64.loadRegSlot x0, slot1
     arm64.bl __destruct_Map_String_String
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x24
     arm64.bl __managed_decref
     arm64.loadRegSlot x0, slot0
     arm64.bl __destruct_Map_String_int
@@ -438,8 +445,8 @@ func @main {
     arm64.loadRegSlot x28, slot11
     arm64.epilogue 112
     arm64.ret
-  tryerr#19:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at Map.maxon:471: MapIterator.current: invariant violated \xe2\x80\x94 slot not populated\x0a"
+  tryerr#22:
+    arm64.leaRdata x0, __str_blob_32  ; "panic at Map.maxon:470: MapIterator.current: invariant violated \xe2\x80\x94 slot not populated\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2
@@ -454,40 +461,8 @@ func @main {
     arm64.loadRegSlot x28, slot11
     arm64.epilogue 112
     arm64.ret
-  tryerr#21:
-    arm64.leaRdata x0, __str_blob_27  ; "panic at Map.maxon:472: MapIterator.current: invariant violated \xe2\x80\x94 slot not populated\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.loadRegSlot x22, slot5
-    arm64.loadRegSlot x23, slot6
-    arm64.loadRegSlot x24, slot7
-    arm64.loadRegSlot x25, slot8
-    arm64.loadRegSlot x26, slot9
-    arm64.loadRegSlot x27, slot10
-    arm64.loadRegSlot x28, slot11
-    arm64.epilogue 112
-    arm64.ret
-  __rc_panic#48:
-    arm64.leaRdata x0, __str_blob_46  ; "panic at Map.maxon:223: Range check failed: value outside typealias 'EntryCount'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.loadRegSlot x22, slot5
-    arm64.loadRegSlot x23, slot6
-    arm64.loadRegSlot x24, slot7
-    arm64.loadRegSlot x25, slot8
-    arm64.loadRegSlot x26, slot9
-    arm64.loadRegSlot x27, slot10
-    arm64.loadRegSlot x28, slot11
-    arm64.epilogue 112
-    arm64.ret
-  __rc_panic#43:
-    arm64.leaRdata x0, __str_blob_38  ; "panic at mapping-a-map-releases-the-entry-tuples-it-built.test:6: Range check failed: value outside typealias 'Cnt'\x0a"
+  tryerr#24:
+    arm64.leaRdata x0, __str_blob_33  ; "panic at Map.maxon:471: MapIterator.current: invariant violated \xe2\x80\x94 slot not populated\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2
@@ -503,7 +478,55 @@ func @main {
     arm64.epilogue 112
     arm64.ret
   __rc_panic#4:
-    arm64.leaRdata x0, __str_blob_39  ; "panic at mapping-a-map-releases-the-entry-tuples-it-built.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_39  ; "panic at mapping-a-map-releases-the-entry-tuples-it-built.test:15: Range check failed: value outside typealias 'Cnt'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#51:
+    arm64.leaRdata x0, __str_blob_53  ; "panic at Map.maxon:222: Range check failed: value outside typealias 'EntryCount'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#46:
+    arm64.leaRdata x0, __str_blob_38  ; "panic at mapping-a-map-releases-the-entry-tuples-it-built.test:6: Range check failed: value outside typealias 'Cnt'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot2
+    arm64.loadRegSlot x20, slot3
+    arm64.loadRegSlot x21, slot4
+    arm64.loadRegSlot x22, slot5
+    arm64.loadRegSlot x23, slot6
+    arm64.loadRegSlot x24, slot7
+    arm64.loadRegSlot x25, slot8
+    arm64.loadRegSlot x26, slot9
+    arm64.loadRegSlot x27, slot10
+    arm64.loadRegSlot x28, slot11
+    arm64.epilogue 112
+    arm64.ret
+  __rc_panic#7:
+    arm64.leaRdata x0, __str_blob_40  ; "panic at mapping-a-map-releases-the-entry-tuples-it-built.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2

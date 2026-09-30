@@ -21,6 +21,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -36,6 +37,9 @@ func @main {
     arm64.movImm x21, 0
     arm64.b forhdr#1
   loop1:
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic#14
+  __rc_ok#13:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl findGraphemeEnd
@@ -57,6 +61,9 @@ func @main {
     arm64.movImm x22, 0
     arm64.b forhdr#5
   loop2:
+    arm64.cmp x22, 0
+    arm64.b.lt __rc_panic#16
+  __rc_ok#15:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.bl findGraphemeEnd
@@ -93,6 +100,28 @@ func @main {
     arm64.ret
   ifcont:
     arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_14  ; "panic at string-double-iteration.test:5: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic#16:
+    arm64.leaRdata x0, __str_blob_15  ; "panic at string-double-iteration.test:9: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

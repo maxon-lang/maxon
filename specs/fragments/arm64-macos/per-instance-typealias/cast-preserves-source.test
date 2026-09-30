@@ -7,15 +7,15 @@ type Wrapper uses T
 	export var value as T
 	export var tag as Idx
 
-	export static function create(value T, tag Idx) returns Self
+	static function create(value T, tag Idx) returns Self
 		return Self{value: value, tag: tag}
 	end 'create'
 
-	export function getTag() returns Idx
+	function getTag() returns Idx
 		return self.tag
 	end 'getTag'
 
-	export function setTag(t Idx)
+	function setTag(t Idx)
 		self.tag = t
 	end 'setTag'
 end 'Wrapper'
@@ -42,6 +42,7 @@ ExitCode: 0
 ---
 data {
   __slab_state@0 = i64 0
+  __mrt_program_started@8 = i8 0
 }
 
 func @main {
@@ -52,19 +53,21 @@ func @main {
     arm64.leaRegSlot x2, slot0
     arm64.storeBaseDispReg.word64 [x2 + 0], x0
     arm64.storeBaseDispReg.word64 [x2 + 8], x1
-  __il_body#8:
+  __il_body#10:
     arm64.loadRegBaseDisp.word64 x0, [x2 + 8]
-  __il_cont#7:
+  __il_cont#9:
     arm64.movImm x1, 9
     arm64.movImm x2, 0
     arm64.leaRegSlot x3, slot2
     arm64.storeBaseDispReg.word64 [x3 + 0], x1
     arm64.storeBaseDispReg.word64 [x3 + 8], x2
-  __il_body#6:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __il_body#8:
     arm64.storeBaseDispReg.word64 [x3 + 8], x0
-  __il_body#10:
+  __il_body#12:
     arm64.loadRegBaseDisp.word64 x1, [x3 + 8]
-  __il_cont#9:
+  __il_cont#11:
     arm64.cmp x0, 5
     arm64.b.ne ifcont
   converted:
@@ -76,6 +79,12 @@ func @main {
     arm64.ret
   ifcont:
     arm64.movImm x0, 1
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at cast-preserves-source.test:31: Range check failed: value outside typealias 'Idx'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.epilogue 48
     arm64.ret
 }

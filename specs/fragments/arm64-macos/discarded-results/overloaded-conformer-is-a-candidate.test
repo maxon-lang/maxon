@@ -10,11 +10,11 @@ end 'Digest'
 type Quiet implements Digest
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function digest() returns Code
+	function digest() returns Code
 		return self.x
 	end 'digest'
 end 'Quiet'
@@ -22,15 +22,15 @@ end 'Quiet'
 type Loud implements Digest
 	export var x as Code
 
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
 
-	export function digest(salt Code) returns Code
+	function digest(salt Code) returns Code
 		return self.x + salt
 	end 'digest'
 
-	export function digest() returns Code
+	function digest() returns Code
 		noise = noise + 1
 		return self.x
 	end 'digest'
@@ -39,11 +39,11 @@ end 'Loud'
 type Box uses T where T is Digest
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
 
-	export function itemDigest() returns Code
+	function itemDigest() returns Code
 		return self.item.digest()
 	end 'itemDigest'
 end 'Box'
@@ -65,6 +65,7 @@ data {
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @Quiet.digest {
@@ -106,7 +107,7 @@ func @Box.itemDigest {
   entry:
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 48]
     arm64.blr x16
     arm64.epilogue 16
     arm64.ret

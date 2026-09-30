@@ -68,9 +68,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @Chunk.create {
@@ -78,20 +81,10 @@ func @Chunk.create {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_ok:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at two-sink-persist-and-transient.test:10: Range check failed: value outside typealias 'Payload'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -100,7 +93,6 @@ func @Chunk.create {
 func @Backend.makeChunk {
   entry:
     arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl Chunk.create
     arm64.epilogue 16
     arm64.ret
@@ -108,28 +100,10 @@ func @Backend.makeChunk {
 
 func @obtainMaker {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __il_body:
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.prologue 16
   __il_cont:
     arm64.leaRdata x9, __witness_Backend.ChunkMaker
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_5  ; "panic at two-sink-persist-and-transient.test:56: Range check failed: value outside typealias 'Payload'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+    arm64.epilogue 16
     arm64.ret
 }
 
@@ -166,7 +140,7 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x22, x0
     arm64.movRegReg x0, x19
-    arm64.loadRegBaseDisp.word64 x16, [x21 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x21 + 48]
     arm64.blr x16
     arm64.movRegReg x23, x0
     arm64.loadRegBaseDisp.word64 x24, [x20 + 0]

@@ -16,6 +16,10 @@ enum ForwardError implements Error
 end 'ForwardError'
 
 function reassign(cur Node, replacement Node) returns Integer throws ForwardError
+	if replacement.id < 0 'negative'
+		throw ForwardError.failed
+	end 'negative'
+
 	cur = replacement
 	return cur.id
 end 'reassign'
@@ -44,6 +48,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Node.create {
@@ -66,6 +71,17 @@ func @reassign {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.cmp x0, 0
+    arm64.b.ge ifcont
+  negative:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
     arm64.movRegReg x0, x1
     arm64.bl __mm_own
     arm64.movRegReg x20, x0

@@ -11,10 +11,10 @@ end 'Digest'
 
 type Point implements Digest
 	export var x as Code
-	export static function create(x Code) returns Self
+	static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function digest() returns Code throws DigestError
+	function digest() returns Code throws DigestError
 		if self.x < 10 'small'
 			throw DigestError.tooSmall
 		end 'small'
@@ -24,10 +24,10 @@ end 'Point'
 
 type Box uses T where T is Digest
 	export var item as T
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function itemDigest() returns Code throws DigestError
+	function itemDigest() returns Code throws DigestError
 		let d = try self.item.digest()
 		return d + 1
 	end 'itemDigest'
@@ -49,6 +49,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Point.create {
@@ -115,7 +116,7 @@ func @Box.itemDigest {
   entry:
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 40]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 48]
     arm64.blr x16
     arm64.cmp x9, 0
     arm64.b.eq tryok

@@ -6,20 +6,20 @@ type Bag uses Element
 	var chain as EChain
 	var spare as EChain
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{chain: EChain.create(), spare: EChain.create()}
 	end 'create'
 
-	export function add(v Element)
+	function add(v Element)
 		self.chain.append(v)
 	end 'add'
 
-	export function shift() throws ArrayError
+	function shift() throws ArrayError
 		let moved = try self.chain.removeFirst()
 		self.spare.append(moved)
 	end 'shift'
 
-	export function total() returns Count
+	function total() returns Count
 		return self.chain.count() + self.spare.count()
 	end 'total'
 end 'Bag'
@@ -37,9 +37,12 @@ end 'main'
 ExitCode: 2
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @Bag.add {
@@ -105,7 +108,7 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.storeBaseDispReg.word64 [x21 + 0], x20
     arm64.storeBaseDispReg.word64 [x21 + 8], x19
-  __il_cont:
+  __il_cont#6:
     arm64.leaRdata x0, __str_rec_2  ; "alpha"
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
@@ -164,11 +167,12 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.bl List.count
     arm64.add x19, x19, x0
+  __il_cont#8:
     arm64.cmp x19, 0
-    arm64.b.lt __rc_panic#11
+    arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
-    arm64.b.gt __rc_panic#4
+    arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Bag_String
@@ -191,19 +195,8 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_panic#11:
-    arm64.leaRdata x0, __str_blob_6  ; "panic at an-opaque-element-removed-from-one-chain-and-moved-into-another.test:23: Range check failed: value outside typealias 'Count'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.ret
-  __rc_panic#4:
-    arm64.leaRdata x0, __str_blob_7  ; "panic at an-opaque-element-removed-from-one-chain-and-moved-into-another.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at an-opaque-element-removed-from-one-chain-and-moved-into-another.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

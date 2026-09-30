@@ -39,7 +39,7 @@ function nthPerm4(k Integer) returns IntArray
 		// unreachable (matching the `panic` used for this function's other impossible failures).
 		let idx = trunc(try (remaining / d) otherwise panic("nthPerm4: divs entry was 0"))
 		remaining = try (remaining mod d) otherwise panic("nthPerm4: divs entry was 0")
-		let v = try pool.get(idx) otherwise panic("pool OOB")
+		let v = try pool.get(idx as ElementIndex) otherwise panic("pool OOB")
 		result.push(v)
 		try pool.remove(idx as ElementIndex) otherwise panic("pool.remove OOB")
 	end 'pick'
@@ -67,6 +67,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @ascending {
@@ -174,7 +175,7 @@ func @main {
     arm64.cbnz x2, tryerr#21
   tryok#20:
     arm64.cmp x25, 0
-    arm64.b.lt __rc_panic
+    arm64.b.lt __rc_panic#27
   __rc_ok#26:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x25, x0
@@ -210,53 +211,56 @@ func @main {
   __il_body#36:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x22 + 8]
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic#38
+  __rc_ok#37:
     arm64.movRegReg x0, x22
     arm64.bl Array.driftsortRange
-  __il_body#37:
+  __il_body#39:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x0, 1
-    arm64.b.gt ifcont#39
+    arm64.b.hi ifcont#41
   trivial:
     arm64.movImm x0, 1
     arm64.b __il_cont#6
-  ifcont#39:
+  ifcont#41:
     arm64.movImm x1, 1
   __us_test:
     arm64.loadRegBaseDisp.word64 x2, [x22 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x22 + 0]
-    arm64.b whilehdr#40
+    arm64.b whilehdr#42
   scan:
     arm64.sub x4, x1, 1
-  __rc_ok#49:
-    arm64.cmp x4, x2
-    arm64.b.hs __im_slow#54
-    arm64.b __im_load#55
-  tryerr#44:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#6
-  __im_load#55:
-    arm64.loadRegBaseIndexScale.word64 x4, [x3 + x4*8 + 0]
   __rc_ok#51:
-    arm64.cmp x1, x2
-    arm64.b.hs __im_slow#57
-    arm64.b __im_load#58
+    arm64.cmp x4, x2
+    arm64.b.hs __im_slow#56
+    arm64.b __im_load#57
   tryerr#46:
     arm64.movImm x0, 0
     arm64.b __il_cont#6
-  __im_load#58:
+  __im_load#57:
+    arm64.loadRegBaseIndexScale.word64 x4, [x3 + x4*8 + 0]
+  __rc_ok#53:
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#59
+    arm64.b __im_load#60
+  tryerr#48:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#6
+  __im_load#60:
     arm64.loadRegBaseIndexScale.word64 x5, [x3 + x1*8 + 0]
-  tryok#45:
+  tryok#47:
     arm64.cmp x4, x5
-    arm64.b.le ifcont#48
+    arm64.b.le ifcont#50
   oop:
     arm64.movImm x0, 0
     arm64.b __il_cont#6
-  ifcont#48:
+  ifcont#50:
     arm64.add x1, x1, 1
-  whilehdr#40:
+  whilehdr#42:
     arm64.cmp x1, x0
     arm64.b.lt scan
-  whileexit#42:
+  whileexit#44:
     arm64.movImm x0, 1
   __il_cont#6:
     arm64.eor x0, x0, 1
@@ -306,10 +310,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
-  __il_body#60:
+  __il_body#62:
     arm64.movRegReg x0, x24
     arm64.bl __write_stdout
-  __il_cont#59:
+  __il_cont#61:
     arm64.movRegReg x0, x24
     arm64.bl __str_decref
     arm64.movImm x0, 0
@@ -388,7 +392,7 @@ func @main {
     arm64.loadRegSlot x26, slot12
     arm64.epilogue 128
     arm64.ret
-  __rc_panic:
+  __rc_panic#27:
     arm64.leaRdata x0, __str_blob_78  ; "panic at small-sort-network-n4-all-perms.test:42: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -439,7 +443,21 @@ func @main {
     arm64.loadRegSlot x26, slot12
     arm64.epilogue 128
     arm64.ret
-  __im_slow#54:
+  __rc_panic#38:
+    arm64.leaRdata x0, __str_blob_81  ; "panic at Array.maxon:604: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.epilogue 128
+    arm64.ret
+  __im_slow#56:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
@@ -453,9 +471,9 @@ func @main {
     arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x3, slot3
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#44
-    arm64.b __rc_ok#51
-  __im_slow#57:
+    arm64.b.ne tryerr#46
+    arm64.b __rc_ok#53
+  __im_slow#59:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
@@ -470,6 +488,6 @@ func @main {
     arm64.loadRegSlot x3, slot3
     arm64.loadRegSlot x4, slot4
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#46
-    arm64.b tryok#45
+    arm64.b.ne tryerr#48
+    arm64.b tryok#47
 }

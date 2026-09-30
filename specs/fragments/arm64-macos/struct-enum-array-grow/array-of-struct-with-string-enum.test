@@ -1,12 +1,12 @@
 // Test: array-of-struct-with-string-enum
-export union QueryKey
+union QueryKey
 		sourceFile(path String)
 		tokens(path String)
 		allModule
 		codeResult
 end 'QueryKey'
 
-export type Dependency
+type Dependency
 		export var dependent as QueryKey
 		export var dependency as QueryKey
 
@@ -34,6 +34,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Dependency.create {
@@ -164,6 +165,12 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
+    arm64.cmp x23, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x23, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
     arm64.movRegReg x0, x22
     arm64.bl __destruct_Dependency
     arm64.movRegReg x0, x21
@@ -172,12 +179,6 @@ func @main {
     arm64.bl __destruct_Dependency
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.cmp x23, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x23, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
     arm64.movRegReg x0, x23
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

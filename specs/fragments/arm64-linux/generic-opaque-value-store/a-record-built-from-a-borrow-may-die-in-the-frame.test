@@ -1,16 +1,16 @@
 // Test: a-record-built-from-a-borrow-may-die-in-the-frame
 typealias Integer = int(i64.min to i64.max)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Box uses T
 	export let x as T
 	export let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{x: x, tag: tag}
 	end 'create'
 end 'Box'
@@ -20,11 +20,11 @@ type Bag uses Element
 	typealias Items = Array with Element
 	var items as Items
 
-	export function add(x Element)
+	function add(x Element)
 		items.push(x)
 	end 'add'
 
-	export function tagOfFirst() returns Integer
+	function tagOfFirst() returns Integer
 		let w = EBox.create(try items.get(0 as Idx) otherwise panic("oob"), tag: 7)
 		return w.tag
 	end 'tagOfFirst'
@@ -47,9 +47,12 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {

@@ -8,25 +8,31 @@ function pick() returns Step
 	return function(acc Tally, more Tally) gives acc + more
 end 'pick'
 
-export function runA(start Tally, f Other) returns Tally
+function runA(start Tally, f Other) returns Tally
 	return f(start, 3)
 end 'runA'
 
-export function goA() returns Tally
+export function goA() returns ExitCode
 	let s = pick()
-	return runA(1, f: s)
+	return runA(1, f: s) as ExitCode
 end 'goA'
 
 // --- file: b.maxon
 typealias Step = function(String) returns String
 
-export function runB(label String, step Step) returns String
+function runB(label String, step Step) returns String
 	return step(label)
 end 'runB'
 
+export function goB(label String) returns String
+	return runB(label, step: function(text) gives "{text}!")
+end 'goB'
+
 // --- file: main.maxon
 function main() returns ExitCode
-	print("{goA()} {runB("go", step: function(text) gives "{text}!")}\n")
+	let n = goA()
+	let s = goB("go")
+	print("{n} {s}\n")
 	return 0
 end 'main'
 ---

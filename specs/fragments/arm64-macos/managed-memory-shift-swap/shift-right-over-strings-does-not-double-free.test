@@ -23,6 +23,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -53,7 +54,7 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
     arm64.movImm x20, 3
-  __rc_ok#35:
+  __il_body:
     arm64.movRegReg x0, x19
     arm64.bl __managed_capacity
     arm64.cmp x0, 3
@@ -138,14 +139,14 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#37
+    arm64.b.eq critsplit#35
   __im_empty#20:
     arm64.cmp x0, 0
     arm64.b.eq __im_slow#18
-  critsplit#38:
+  critsplit#36:
     arm64.movRegReg x9, x2
     arm64.b __im_cont#17
-  critsplit#37:
+  critsplit#35:
     arm64.movRegReg x9, x2
   __im_cont#17:
     arm64.cmp x9, 0
@@ -164,15 +165,15 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x19 + 40]
     arm64.cmp x4, 0
-    arm64.b.eq critsplit#39
+    arm64.b.eq critsplit#37
   __im_empty#24:
     arm64.cmp x2, 0
     arm64.b.eq __im_slow#22
-  critsplit#40:
+  critsplit#38:
     arm64.movRegReg x1, x2
     arm64.movRegReg x9, x3
     arm64.b __im_cont#21
-  critsplit#39:
+  critsplit#37:
     arm64.movRegReg x1, x2
     arm64.movRegReg x9, x3
   __im_cont#21:
@@ -195,15 +196,15 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x19 + 40]
     arm64.cmp x4, 0
-    arm64.b.eq critsplit#41
+    arm64.b.eq critsplit#39
   __im_empty#28:
     arm64.cmp x2, 0
     arm64.b.eq __im_slow#26
-  critsplit#42:
+  critsplit#40:
     arm64.movRegReg x1, x2
     arm64.movRegReg x9, x3
     arm64.b __im_cont#25
-  critsplit#41:
+  critsplit#39:
     arm64.movRegReg x1, x2
     arm64.movRegReg x9, x3
   __im_cont#25:
@@ -309,14 +310,14 @@ func @main {
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#14:
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2

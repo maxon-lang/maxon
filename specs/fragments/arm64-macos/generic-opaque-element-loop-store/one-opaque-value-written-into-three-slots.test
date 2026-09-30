@@ -1,19 +1,19 @@
 // Test: one-opaque-value-written-into-three-slots
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type Bag uses Element
 	typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function fillTo(newLength Idx, value Element)
+	function fillTo(newLength Idx, value Element)
 		items.resize(newLength)
 
 		var n = 0 as Idx
@@ -25,7 +25,7 @@ type Bag uses Element
 		end 'fill'
 	end 'fillTo'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -49,6 +49,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Bag.at {
@@ -56,9 +57,6 @@ func @Bag.at {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x2
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic
-  __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
@@ -67,7 +65,7 @@ func @Bag.at {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
     arm64.b.hs __im_slow
-  __im_load#11:
+  __im_load#9:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
     arm64.b __im_loaded
@@ -78,7 +76,7 @@ func @Bag.at {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
     arm64.b.hs __im_slow
-  __im_load#12:
+  __im_load#10:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
@@ -86,14 +84,14 @@ func @Bag.at {
     arm64.movImm x9, 0
     arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#14
+    arm64.b.eq critsplit#12
   __im_empty:
     arm64.cmp x2, 0
     arm64.b.eq __im_slow
-  critsplit#15:
+  critsplit#13:
     arm64.movRegReg x1, x2
     arm64.b __im_cont
-  critsplit#14:
+  critsplit#12:
     arm64.movRegReg x1, x2
     arm64.b __im_cont
   __im_slow:
@@ -110,14 +108,6 @@ func @Bag.at {
   tryok:
     arm64.movRegReg x0, x19
     arm64.bl __retain_type_param
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at one-opaque-value-written-into-three-slots.test:28: Range check failed: value outside typealias 'Idx'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -172,7 +162,7 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
     arm64.leaRdata x21, __layout_Bag_String
-  __rc_ok#17:
+  __il_body#11:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movRegReg x1, x19
     arm64.bl __managed_resize
@@ -184,7 +174,6 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __retain_type_param
     arm64.movRegReg x2, x0
-  __rc_ok#19:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 24]
     arm64.cmp x0, 8
     arm64.b.ne __im_stride
@@ -192,24 +181,24 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x22 + 40]
     arm64.cmp x0, 0
     arm64.b.ne __im_slow
-  __im_owned#26:
+  __im_owned#22:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow
-  __im_bounds#27:
+  __im_bounds#23:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x19, x0
     arm64.b.hs __im_slow
-  __im_buffer#28:
+  __im_buffer#24:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.cmp x0, 0
     arm64.b.eq __im_slow
-  __im_viewed#29:
+  __im_viewed#25:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
     arm64.b.ne __im_slow
-  __im_store#30:
+  __im_store#26:
     arm64.storeBaseIndexScaleReg.word64 [x0 + x19*8 + 0], x2
     arm64.b tryok#15
   __im_stride:
@@ -219,24 +208,24 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x22 + 40]
     arm64.cmp x0, 0
     arm64.b.ne __im_slow
-  __im_owned#31:
+  __im_owned#27:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 16]
     arm64.cmp x0, 0
     arm64.b.lt __im_slow
-  __im_bounds#32:
+  __im_bounds#28:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x19, x0
     arm64.b.hs __im_slow
-  __im_buffer#33:
+  __im_buffer#29:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.cmp x0, 0
     arm64.b.eq __im_slow
-  __im_viewed#34:
+  __im_viewed#30:
     arm64.sub x1, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
     arm64.cmp x1, 0
     arm64.b.ne __im_slow
-  __im_store#35:
+  __im_store#31:
     arm64.add x0, x0, x19
     arm64.storeBaseDispReg.byte [x0 + 0], x2
     arm64.b tryok#15
@@ -386,16 +375,16 @@ func @main {
     arm64.bl print
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
-  __il_body#37:
+  __il_body#33:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-  __il_cont#36:
+  __il_cont#32:
     arm64.cmp x22, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x22, 255
     arm64.b.gt __rc_panic
-  __rc_ok#5:
+  __rc_ok:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
@@ -416,7 +405,7 @@ func @main {
     arm64.epilogue 96
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_9  ; "panic at one-opaque-value-written-into-three-slots.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_6  ; "panic at one-opaque-value-written-into-three-slots.test:43: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

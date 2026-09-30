@@ -10,9 +10,12 @@ ExitCode: 0
 ---
 data {
   __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __mrt_envp@8 = i64 0
+  __mrt_signal_stack_bytes@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
 }
 
 func @main {
@@ -28,7 +31,7 @@ func @main {
     arm64.storeSlotReg slot10, x21
     arm64.storeSlotReg slot9, x20
     arm64.storeSlotReg slot8, x19
-    arm64.leaRdata x0, __str_rec_18  ; "file.txt"
+    arm64.leaRdata x0, __str_rec_31  ; "file.txt"
   __il_body#4:
     arm64.bl FilePath.create
     arm64.movRegReg x19, x0
@@ -36,27 +39,27 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#6
   __il_cont#3:
-    arm64.leaRdata x20, __str_rec_19  ; ".md"
+    arm64.leaRdata x20, __str_rec_32  ; ".md"
   __il_body#10:
     arm64.movRegReg x0, x19
     arm64.bl FilePath.lastSepPlusOne
     arm64.movRegReg x21, x0
-  __il_body#31:
+  __il_body#33:
     arm64.movRegReg x0, x19
     arm64.bl FilePath.lastSepPlusOne
     arm64.movRegReg x22, x0
     arm64.cmp x22, 0
-    arm64.b.ne ifcont#33
+    arm64.b.ne ifcont#35
   noSep:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl __str_retain
     arm64.movRegReg x22, x0
-    arm64.b __il_cont#30
-  ifcont#33:
+    arm64.b __il_cont#32
+  ifcont#35:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-  __il_body#41:
+  __il_body#43:
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-  __il_cont#40:
+  __il_cont#42:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl String.addressableBytes
     arm64.movRegReg x24, x0
@@ -66,9 +69,9 @@ func @main {
     arm64.bl __managed_slice
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#34
-  tryerr#35:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at FilePath.maxon:324: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    arm64.b.eq tryok#36
+  tryerr#37:
+    arm64.leaRdata x0, __str_blob_86  ; "panic at FilePath.maxon:336: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot8
@@ -83,7 +86,7 @@ func @main {
     arm64.loadRegSlot x28, slot17
     arm64.epilogue 160
     arm64.ret
-  tryok#34:
+  tryok#36:
     arm64.movRegReg x0, x24
     arm64.bl __managed_decref
     arm64.movRegReg x0, x22
@@ -93,11 +96,11 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
     arm64.movRegReg x22, x23
-  __il_cont#30:
+  __il_cont#32:
     arm64.storeSlotReg slot1, x22
-  __il_body#39:
+  __il_body#41:
     arm64.loadRegBaseDisp.word64 x23, [x22 + 8]
-  __il_cont#38:
+  __il_cont#40:
     arm64.movRegReg x0, x22
     arm64.bl String.addressableBytes
     arm64.movRegReg x24, x0
@@ -105,12 +108,23 @@ func @main {
     arm64.movImm x25, 0
     arm64.movImm x26, 0
     arm64.cmp x23, 1
-    arm64.b.ls critsplit#43
-  __il_body#37:
+    arm64.b.ls critsplit#45
+  __il_body#39:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.b whilehdr
   scan:
     arm64.sub x23, x0, 1
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x1, x0, x16
+    arm64.and x1, x1, 1
+    arm64.eor x0, x0, 1
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x0, x0, x16
+    arm64.and x0, x0, x23
+    arm64.orr x0, x1, x0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_ok:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x23
     arm64.bl String.byteAtOrPanic
@@ -126,13 +140,13 @@ func @main {
   whilehdr:
     arm64.cmp x0, 1
     arm64.b.hi scan
-  critsplit#42:
+  critsplit#44:
     arm64.movRegReg x0, x25
     arm64.movRegReg x1, x26
   whileexit:
     arm64.movRegReg x2, x0
     arm64.b ifcont#17
-  critsplit#43:
+  critsplit#45:
     arm64.movRegReg x2, x25
     arm64.movRegReg x1, x26
   ifcont#17:
@@ -146,7 +160,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#19
   tryerr#20:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at FilePath.maxon:472: FilePath.changeExtension: stem slice \xe2\x80\x94 dotPos from backwards scan, always < nameLen\x0a"
+    arm64.leaRdata x0, __str_blob_87  ; "panic at FilePath.maxon:484: FilePath.changeExtension: stem slice \xe2\x80\x94 dotPos from backwards scan, always < nameLen\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot8
@@ -225,7 +239,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#23
   tryerr#24:
-    arm64.leaRdata x0, __str_blob_35  ; "panic at FilePath.maxon:482: FilePath.changeExtension: parent slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    arm64.leaRdata x0, __str_blob_88  ; "panic at FilePath.maxon:494: FilePath.changeExtension: parent slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot8
@@ -356,7 +370,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#28
   tryerr#29:
-    arm64.leaRdata x0, __str_blob_36  ; "panic at FilePath.maxon:494: FilePath.changeExtension: parent slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    arm64.leaRdata x0, __str_blob_89  ; "panic at FilePath.maxon:506: FilePath.changeExtension: parent slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot8
@@ -434,7 +448,7 @@ func @main {
   __il_cont#2:
     arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x20 + 8]
-    arm64.leaRdata x0, __str_rec_20  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_33  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.add x25, x22, x24
@@ -486,7 +500,23 @@ func @main {
     arm64.epilogue 160
     arm64.ret
   tryerr#6:
-    arm64.leaRdata x0, __str_blob_29  ; "panic at FilePath.maxon:34: FilePath: invalid path\x0a"
+    arm64.leaRdata x0, __str_blob_77  ; "panic at FilePath.maxon:46: FilePath: invalid path\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot8
+    arm64.loadRegSlot x20, slot9
+    arm64.loadRegSlot x21, slot10
+    arm64.loadRegSlot x22, slot11
+    arm64.loadRegSlot x23, slot12
+    arm64.loadRegSlot x24, slot13
+    arm64.loadRegSlot x25, slot14
+    arm64.loadRegSlot x26, slot15
+    arm64.loadRegSlot x27, slot16
+    arm64.loadRegSlot x28, slot17
+    arm64.epilogue 160
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_165  ; "panic at FilePath.maxon:474: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot8

@@ -6,11 +6,11 @@ type Box uses T
 	export let x as T
 	export let tag as Integer
 
-	export function value() returns T
+	function value() returns T
 		return x
 	end 'value'
 
-	export static function create(x T, tag Integer) returns Self
+	static function create(x T, tag Integer) returns Self
 		return Self{x: x, tag: tag}
 	end 'create'
 end 'Box'
@@ -20,11 +20,11 @@ type Bag uses Element
 	typealias Store = List with EBox
 	var items as Store
 
-	export function add(x Element, tag Integer)
+	function add(x Element, tag Integer)
 		items.append(EBox.create(x, tag: tag))
 	end 'add'
 
-	export function first() returns Element
+	function first() returns Element
 		let slot = try items.first() otherwise panic("empty")
 		return slot.value()
 	end 'first'
@@ -45,21 +45,26 @@ end 'main'
 ExitCode: 41
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
   entry:
     arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Bag_Small
   __il_body#4:
-    arm64.leaRdata x0, __layout_List_Bag.EBox
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 72]
   __il_body#6:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
     arm64.bl __list_create
@@ -78,30 +83,30 @@ func @main {
   __il_cont#3:
     arm64.movImm x20, 41
     arm64.movImm x21, 7
-    arm64.leaRdata x0, __layout_Bag_Small
+    arm64.leaRdata x22, __layout_Bag_Small
   __il_body#7:
-    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 0]
   __il_body#9:
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.storeBaseDispReg.word64 [x23 + 0], x20
-    arm64.storeBaseDispReg.word64 [x23 + 8], x21
+    arm64.movRegReg x24, x0
+    arm64.storeBaseDispReg.word64 [x24 + 0], x20
+    arm64.storeBaseDispReg.word64 [x24 + 8], x21
   __il_cont#8:
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x24
     arm64.bl __mm_incref
-    arm64.leaRdata x2, __layout_List_Bag.EBox
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x23
-    arm64.bl List.append
+    arm64.loadRegBaseDisp.word64 x2, [x22 + 72]
     arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x24
+    arm64.bl List.append
+    arm64.movRegReg x0, x24
     arm64.bl __mm_decref
   __il_cont#2:
     arm64.leaRdata x20, __layout_Bag_Small
   __il_body#10:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.leaRdata x1, __layout_List_Bag.EBox
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 72]
     arm64.bl List.first
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
@@ -123,6 +128,7 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
   tryerr:
@@ -134,6 +140,7 @@ func @main {
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
     arm64.epilogue 64
     arm64.ret
 }

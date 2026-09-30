@@ -1,20 +1,20 @@
 // Test: an-opaque-element-array-adopts-and-becomes-the-last-owner
-typealias Count = int(0 to u64.max)
+typealias Count = int(0 to u64.max) implements ElementIndex
 
 type Container uses Element
 	typealias ElementArray = Array with Element
 
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: ElementArray.create()}
 	end 'create'
 
-	export function push(item Element)
+	function push(item Element)
 		self.items.push(item)
 	end 'push'
 
-	export function drain() returns Count
+	function drain() returns Count
 		let t = ElementArray.init(self.items)
 		self.items = ElementArray.create()
 		return t.count()
@@ -37,6 +37,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @Container.push {

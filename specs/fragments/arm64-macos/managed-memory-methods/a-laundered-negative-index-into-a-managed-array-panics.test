@@ -9,7 +9,7 @@ end 'launder'
 function main() returns ExitCode
 	var xs = StrArray.create()
 	xs.push("a published string, long enough to require an allocation")
-	try xs.set(launder(-1), value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
+	try xs.set(launder(-1) as ElementIndex, value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
 		return 42
 	end 'negativeIndex'
 	return 5
@@ -21,6 +21,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -36,9 +37,6 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-  __il_cont:
-    arm64.leaRdata x0, __str_rec_3  ; "a string refused for a negative index, long enough to allocate"
-    arm64.bl __str_retain
   __rc_panic:
     arm64.leaRdata x0, __str_blob_5  ; "panic at a-laundered-negative-index-into-a-managed-array-panics.test:12: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic

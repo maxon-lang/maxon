@@ -1,6 +1,6 @@
 // Test: generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters
 typealias Integer = int(i64.min to i64.max)
-typealias Cap = int(0 to u64.max)
+typealias Cap = int(0 to u64.max) implements ElementIndex
 
 enum SlotState
 	Empty
@@ -21,15 +21,15 @@ type Tbl uses Key where Key is Hashable and Equatable
 	var count = 0
 	var capacity = 0
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{keys: KeyArray{}, values: ValueArray{}, states: StateArray{}, hashes: HashSlotArray{}}
 	end 'create'
 
-	export function slots() returns Cap
+	function slots() returns Cap
 		return capacity
 	end 'slots'
 
-	export function entries() returns Cap
+	function entries() returns Cap
 		return count
 	end 'entries'
 
@@ -41,7 +41,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 		count = count + 1
 	end 'insertAtSlot'
 
-	export function grow()
+	function grow()
 		let oldCapacity = capacity
 		var newCapacity = oldCapacity * 2
 		if newCapacity == 0 'handle_zero'
@@ -90,7 +90,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 				end 'skip_hash'
 
 				var index = spreadHash(hash) and mask
-				var currentState = try states.get(index) otherwise SlotState.Empty
+				var currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
 				var isNotEmpty = match currentState 'ns1'
 					Empty gives false
 					Occupied gives true
@@ -98,7 +98,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 				end 'ns1'
 				while isNotEmpty 'find_slot'
 					index = (index + 1) and mask
-					currentState = try states.get(index) otherwise SlotState.Empty
+					currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
 					isNotEmpty = match currentState 'ns2'
 						Empty gives false
 						Occupied gives true
@@ -129,9 +129,12 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -283,28 +286,28 @@ func @main {
   __rc_ok#72:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 24]
     arm64.cmp x0, 8
-    arm64.b.ne __im_stride#96
-  __im_word#94:
+    arm64.b.ne __im_stride#94
+  __im_word#92:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 8]
     arm64.cmp x21, x0
-    arm64.b.hs __im_slow#93
-  __im_load#98:
+    arm64.b.hs __im_slow#91
+  __im_load#96:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x21*8 + 0]
     arm64.b trycont#25
-  __im_stride#96:
+  __im_stride#94:
     arm64.cmp x0, 1
-    arm64.b.ne __im_slow#93
-  __im_byte#95:
+    arm64.b.ne __im_slow#91
+  __im_byte#93:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 8]
     arm64.cmp x21, x0
-    arm64.b.hs __im_slow#93
-  __im_load#99:
+    arm64.b.hs __im_slow#91
+  __im_load#97:
     arm64.loadRegBaseDisp.word64 x0, [x27 + 0]
     arm64.add x0, x0, x21
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.b trycont#25
-  __im_slow#93:
+  __im_slow#91:
     arm64.movRegReg x0, x27
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
@@ -334,23 +337,23 @@ func @main {
   __rc_ok#74:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 24]
     arm64.cmp x0, 8
-    arm64.b.ne __im_stride#104
-  __im_word#102:
+    arm64.b.ne __im_stride#102
+  __im_word#100:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 8]
     arm64.cmp x21, x0
-    arm64.b.hs __im_slow#101
-  __im_load#106:
+    arm64.b.hs __im_slow#99
+  __im_load#104:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x21*8 + 0]
     arm64.b __im_loaded
-  __im_stride#104:
+  __im_stride#102:
     arm64.cmp x0, 1
-    arm64.b.ne __im_slow#101
-  __im_byte#103:
+    arm64.b.ne __im_slow#99
+  __im_byte#101:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 8]
     arm64.cmp x21, x0
-    arm64.b.hs __im_slow#101
-  __im_load#107:
+    arm64.b.hs __im_slow#99
+  __im_load#105:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 0]
     arm64.add x0, x0, x21
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
@@ -358,17 +361,17 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x26 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#180
+    arm64.b.eq critsplit#176
   __im_empty:
     arm64.cmp x0, 0
-    arm64.b.eq __im_slow#101
-  critsplit#181:
+    arm64.b.eq __im_slow#99
+  critsplit#177:
     arm64.movRegReg x22, x0
     arm64.b __im_cont
-  critsplit#180:
+  critsplit#176:
     arm64.movRegReg x22, x0
     arm64.b __im_cont
-  __im_slow#101:
+  __im_slow#99:
     arm64.movRegReg x0, x26
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
@@ -381,8 +384,8 @@ func @main {
     arm64.loadRegSlot x0, slot9
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.cmp x21, x0
-    arm64.b.hs __im_slow#110
-  __im_load#111:
+    arm64.b.hs __im_slow#108
+  __im_load#109:
     arm64.loadRegSlot x0, slot9
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x23, [x0 + x21*8 + 0]
@@ -393,14 +396,14 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
     arm64.b.ne forstep
-  __il_body#121:
+  __il_body#119:
     arm64.cmp x21, 0
-    arm64.b.lt __rc_panic#123
-  __rc_chk#124:
+    arm64.b.lt __rc_panic#121
+  __rc_chk#122:
     arm64.movImm x0, 4294967295
     arm64.cmp x21, x0
-    arm64.b.gt __rc_panic#123
-  __rc_ok#122:
+    arm64.b.gt __rc_panic#121
+  __rc_ok#120:
     arm64.lsr x0, x21, 16
     arm64.eor x0, x21, x0
     arm64.movImm x1, 2246822507
@@ -416,39 +419,39 @@ func @main {
     arm64.asr x1, x0, 16
     arm64.eor x0, x0, x1
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#126
-  __rc_chk#127:
+    arm64.b.lt __rc_panic#124
+  __rc_chk#125:
     arm64.movImm x1, 4294967295
     arm64.cmp x0, x1
-    arm64.b.gt __rc_panic#126
-  __il_cont#120:
+    arm64.b.gt __rc_panic#124
+  __il_cont#118:
     arm64.and x1, x0, x20
     arm64.storeSlotReg slot1, x1
     arm64.loadRegBaseDisp.word64 x0, [x25 + 16]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.b.ne __im_stride#88
-  __im_word#86:
+    arm64.b.ne __im_stride#86
+  __im_word#84:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#85
-  __im_load#90:
+    arm64.b.hs __im_slow#83
+  __im_load#88:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
     arm64.b trycont#42
-  __im_stride#88:
+  __im_stride#86:
     arm64.cmp x2, 1
-    arm64.b.ne __im_slow#85
-  __im_byte#87:
+    arm64.b.ne __im_slow#83
+  __im_byte#85:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#85
-  __im_load#91:
+    arm64.b.hs __im_slow#83
+  __im_load#89:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.b trycont#42
-  __im_slow#85:
+  __im_slow#83:
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.eq trycont#42
@@ -484,28 +487,28 @@ func @main {
   __rc_ok#80:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
-    arm64.b.ne __im_stride#116
-  __im_word#114:
+    arm64.b.ne __im_stride#114
+  __im_word#112:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#113
-  __im_load#118:
+    arm64.b.hs __im_slow#111
+  __im_load#116:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
     arm64.b trycont#55
-  __im_stride#116:
+  __im_stride#114:
     arm64.cmp x2, 1
-    arm64.b.ne __im_slow#113
-  __im_byte#115:
+    arm64.b.ne __im_slow#111
+  __im_byte#113:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
-    arm64.b.hs __im_slow#113
-  __im_load#119:
+    arm64.b.hs __im_slow#111
+  __im_load#117:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.b trycont#55
-  __im_slow#113:
+  __im_slow#111:
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.eq trycont#55
@@ -536,158 +539,155 @@ func @main {
     arm64.b whileexit
   matchdead#59:
   whileexit:
-    arm64.cmp x24, 0
-    arm64.b.lt __rc_panic#83
-  __rc_ok#82:
     arm64.loadRegSlot x0, slot7
     arm64.movRegReg x1, x22
     arm64.bl __retain_type_param
     arm64.movRegReg x2, x0
-  __rc_ok#140:
+  __rc_ok#136:
     arm64.loadRegBaseDisp.word64 x0, [x25 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
     arm64.cmp x1, 8
-    arm64.b.ne __im_stride#166
-  __im_word#164:
+    arm64.b.ne __im_stride#162
+  __im_word#160:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 40]
     arm64.cmp x1, 0
-    arm64.b.ne __im_slow#163
-  __im_owned#167:
+    arm64.b.ne __im_slow#159
+  __im_owned#163:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.lt __im_slow#163
-  __im_bounds#168:
+    arm64.b.lt __im_slow#159
+  __im_bounds#164:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x24, x1
-    arm64.b.hs __im_slow#163
-  __im_buffer#169:
+    arm64.b.hs __im_slow#159
+  __im_buffer#165:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.eq __im_slow#163
-  __im_viewed#170:
+    arm64.b.eq __im_slow#159
+  __im_viewed#166:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#163
-  __im_store#171:
+    arm64.b.ne __im_slow#159
+  __im_store#167:
     arm64.storeBaseIndexScaleReg.word64 [x1 + x24*8 + 0], x2
-    arm64.b tryok#130
-  __im_stride#166:
+    arm64.b tryok#128
+  __im_stride#162:
     arm64.cmp x1, 1
-    arm64.b.ne __im_slow#163
-  __im_byte#165:
+    arm64.b.ne __im_slow#159
+  __im_byte#161:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 40]
     arm64.cmp x1, 0
-    arm64.b.ne __im_slow#163
-  __im_owned#172:
+    arm64.b.ne __im_slow#159
+  __im_owned#168:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.lt __im_slow#163
-  __im_bounds#173:
+    arm64.b.lt __im_slow#159
+  __im_bounds#169:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x24, x1
-    arm64.b.hs __im_slow#163
-  __im_buffer#174:
+    arm64.b.hs __im_slow#159
+  __im_buffer#170:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.eq __im_slow#163
-  __im_viewed#175:
+    arm64.b.eq __im_slow#159
+  __im_viewed#171:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#163
-  __im_store#176:
+    arm64.b.ne __im_slow#159
+  __im_store#172:
     arm64.add x0, x1, x24
     arm64.storeBaseDispReg.byte [x0 + 0], x2
-    arm64.b tryok#130
-  __im_slow#163:
+    arm64.b tryok#128
+  __im_slow#159:
     arm64.movRegReg x1, x24
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#131
-  tryok#130:
+    arm64.b.ne tryerr#129
+  tryok#128:
     arm64.loadRegBaseDisp.word64 x0, [x25 + 8]
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.lt __im_slow#144
-  __im_bounds#145:
+    arm64.b.lt __im_slow#140
+  __im_bounds#141:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x24, x1
-    arm64.b.hs __im_slow#144
-  __im_buffer#146:
+    arm64.b.hs __im_slow#140
+  __im_buffer#142:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.eq __im_slow#144
-  __im_viewed#147:
+    arm64.b.eq __im_slow#140
+  __im_viewed#143:
     arm64.sub x2, x1, 24
     arm64.loadRegBaseDisp.word64 x2, [x2 + 16]
     arm64.cmp x2, 0
-    arm64.b.ne __im_slow#144
-  __im_store#148:
+    arm64.b.ne __im_slow#140
+  __im_store#144:
     arm64.storeBaseIndexScaleReg.word64 [x1 + x24*8 + 0], x23
-  tryok#132:
+  tryok#130:
     arm64.loadRegBaseDisp.word64 x0, [x25 + 16]
     arm64.movImm x2, 1
     arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
     arm64.cmp x1, 8
-    arm64.b.ne __im_stride#153
-  __im_word#151:
+    arm64.b.ne __im_stride#149
+  __im_word#147:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
     arm64.cmp x1, 0
-    arm64.b.lt __im_slow#150
+    arm64.b.lt __im_slow#146
+  __im_bounds#150:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.cmp x24, x1
+    arm64.b.hs __im_slow#146
+  __im_buffer#151:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.eq __im_slow#146
+  __im_viewed#152:
+    arm64.sub x3, x1, 24
+    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
+    arm64.cmp x3, 0
+    arm64.b.ne __im_slow#146
+  __im_store#153:
+    arm64.storeBaseIndexScaleReg.word64 [x1 + x24*8 + 0], x2
+    arm64.b tryok#132
+  __im_stride#149:
+    arm64.cmp x1, 1
+    arm64.b.ne __im_slow#146
+  __im_byte#148:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.cmp x1, 0
+    arm64.b.lt __im_slow#146
   __im_bounds#154:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.cmp x24, x1
-    arm64.b.hs __im_slow#150
+    arm64.b.hs __im_slow#146
   __im_buffer#155:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
-    arm64.b.eq __im_slow#150
+    arm64.b.eq __im_slow#146
   __im_viewed#156:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#150
+    arm64.b.ne __im_slow#146
   __im_store#157:
-    arm64.storeBaseIndexScaleReg.word64 [x1 + x24*8 + 0], x2
-    arm64.b tryok#134
-  __im_stride#153:
-    arm64.cmp x1, 1
-    arm64.b.ne __im_slow#150
-  __im_byte#152:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
-    arm64.cmp x1, 0
-    arm64.b.lt __im_slow#150
-  __im_bounds#158:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.cmp x24, x1
-    arm64.b.hs __im_slow#150
-  __im_buffer#159:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.cmp x1, 0
-    arm64.b.eq __im_slow#150
-  __im_viewed#160:
-    arm64.sub x3, x1, 24
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
-    arm64.cmp x3, 0
-    arm64.b.ne __im_slow#150
-  __im_store#161:
     arm64.add x0, x1, x24
     arm64.storeBaseDispReg.byte [x0 + 0], x2
-    arm64.b tryok#134
-  __im_slow#150:
+    arm64.b tryok#132
+  __im_slow#146:
     arm64.movRegReg x1, x24
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#135
-  tryok#134:
+    arm64.b.ne tryerr#133
+  tryok#132:
     arm64.loadRegBaseDisp.word64 x0, [x25 + 24]
     arm64.movRegReg x1, x24
     arm64.movRegReg x2, x21
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#137
-  tryok#136:
+    arm64.b.ne tryerr#135
+  tryok#134:
     arm64.loadRegBaseDisp.word64 x0, [x25 + 32]
     arm64.add x0, x0, 1
     arm64.storeBaseDispReg.word64 [x25 + 32], x0
@@ -793,7 +793,7 @@ func @main {
     arm64.epilogue 176
     arm64.ret
   __rc_panic#65:
-    arm64.leaRdata x0, __str_blob_18  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:52: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_17  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:52: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot10
@@ -808,17 +808,17 @@ func @main {
     arm64.loadRegSlot x28, slot19
     arm64.epilogue 176
     arm64.ret
-  __im_slow#110:
+  __im_slow#108:
     arm64.loadRegSlot x0, slot9
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.ne forstep
-  critsplit#182:
+  critsplit#178:
     arm64.movRegReg x23, x0
     arm64.b __rc_ok#78
-  __rc_panic#123:
-    arm64.leaRdata x0, __str_blob_28  ; "panic at Interfaces.maxon:110: Range check failed: value outside typealias 'HashValue'\x0a"
+  __rc_panic#121:
+    arm64.leaRdata x0, __str_blob_30  ; "panic at Interfaces.maxon:111: Range check failed: value outside typealias 'HashValue'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot10
@@ -833,8 +833,8 @@ func @main {
     arm64.loadRegSlot x28, slot19
     arm64.epilogue 176
     arm64.ret
-  __rc_panic#126:
-    arm64.leaRdata x0, __str_blob_29  ; "panic at Interfaces.maxon:117: Range check failed: value outside typealias 'HashValue'\x0a"
+  __rc_panic#124:
+    arm64.leaRdata x0, __str_blob_31  ; "panic at Interfaces.maxon:118: Range check failed: value outside typealias 'HashValue'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot10
@@ -850,7 +850,7 @@ func @main {
     arm64.epilogue 176
     arm64.ret
   __rc_panic#81:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:101: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_25  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:101: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot10
@@ -865,23 +865,7 @@ func @main {
     arm64.loadRegSlot x28, slot19
     arm64.epilogue 176
     arm64.ret
-  __rc_panic#83:
-    arm64.leaRdata x0, __str_blob_27  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:109: Range check failed: value outside typealias 'Cap'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot10
-    arm64.loadRegSlot x20, slot11
-    arm64.loadRegSlot x21, slot12
-    arm64.loadRegSlot x22, slot13
-    arm64.loadRegSlot x23, slot14
-    arm64.loadRegSlot x24, slot15
-    arm64.loadRegSlot x25, slot16
-    arm64.loadRegSlot x26, slot17
-    arm64.loadRegSlot x27, slot18
-    arm64.loadRegSlot x28, slot19
-    arm64.epilogue 176
-    arm64.ret
-  tryerr#131:
+  tryerr#129:
     arm64.leaRdata x0, __str_blob_0  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:37: k\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -897,13 +881,13 @@ func @main {
     arm64.loadRegSlot x28, slot19
     arm64.epilogue 176
     arm64.ret
-  __im_slow#144:
+  __im_slow#140:
     arm64.movRegReg x1, x24
     arm64.movRegReg x2, x23
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.b.eq tryok#132
-  tryerr#133:
+    arm64.b.eq tryok#130
+  tryerr#131:
     arm64.leaRdata x0, __str_blob_1  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:38: v\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -919,7 +903,7 @@ func @main {
     arm64.loadRegSlot x28, slot19
     arm64.epilogue 176
     arm64.ret
-  tryerr#135:
+  tryerr#133:
     arm64.leaRdata x0, __str_blob_2  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:39: s\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -935,7 +919,7 @@ func @main {
     arm64.loadRegSlot x28, slot19
     arm64.epilogue 176
     arm64.ret
-  tryerr#137:
+  tryerr#135:
     arm64.leaRdata x0, __str_blob_3  ; "panic at generic-hash-table-regalloc.rehash-loop-forwards-hidden-parameters.test:40: h\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0

@@ -9,7 +9,7 @@ type Box uses T
 		return Self{held: held}
 	end 'create'
 
-	export function get() returns T
+	function get() returns T
 		return held
 	end 'get'
 end 'Box'
@@ -18,7 +18,7 @@ extension Vector
 	typealias Bufs = Array with ElementMemory
 	typealias BufBox = Box with ElementMemory
 
-	export function survey() returns Int
+	function survey() returns Int
 		var b = Bufs.create()
 		b.push(try managed.slice(0, 2) otherwise panic("slice"))
 		var fromContainer = try b.get(0) otherwise panic("no element")
@@ -43,14 +43,18 @@ end 'main'
 ExitCode: 30
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
   entry:
     arm64.prologue 80
+    arm64.storeSlotReg slot7, x26
     arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
@@ -74,7 +78,8 @@ func @main {
     arm64.leaRdata x19, __layout_Vector_N3_Int
   __il_body#7:
     arm64.movImm x0, 8
-    arm64.leaFuncAddr x1, __managed_decref
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 72]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 40]
     arm64.bl __managed_create
     arm64.movRegReg x21, x0
     arm64.movImm x1, 0
@@ -140,25 +145,25 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.movRegReg x3, x19
     arm64.bl __managed_slice_opaque
-    arm64.movRegReg x19, x0
+    arm64.movRegReg x23, x0
     arm64.cmp x9, 0
     arm64.b.ne tryerr#15
   tryok#14:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x23
     arm64.bl __managed_retain
-    arm64.movRegReg x23, x0
+    arm64.movRegReg x24, x0
   __il_body#24:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x24, x0
-    arm64.storeBaseDispReg.word64 [x24 + 0], x23
+    arm64.movRegReg x26, x0
+    arm64.storeBaseDispReg.word64 [x26 + 0], x24
   __il_cont#23:
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x23
     arm64.bl __managed_decref
-    arm64.leaRdata x0, __layout_Box_Array_T4b39db24a89d29c9
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 80]
   __il_body#25:
-    arm64.loadRegBaseDisp.word64 x1, [x24 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x26 + 0]
     arm64.bl __retain_type_param
     arm64.movRegReg x19, x0
   __il_cont#22:
@@ -173,7 +178,7 @@ func @main {
     arm64.add x23, x0, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x26
     arm64.bl __destruct_Box_Array_T4b39db24a89d29c9
     arm64.movRegReg x0, x25
     arm64.bl __destruct___Tuple2.Array_T4b39db24a89d29c9.int
@@ -198,6 +203,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
   tryerr#9:
@@ -211,6 +217,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
   __im_slow:
@@ -228,6 +235,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
   tryerr#13:
@@ -241,6 +249,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
   tryerr#15:
@@ -254,6 +263,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
   __rc_panic:
@@ -267,6 +277,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
 }

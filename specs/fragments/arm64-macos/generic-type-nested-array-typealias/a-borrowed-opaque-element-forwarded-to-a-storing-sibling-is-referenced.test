@@ -1,6 +1,6 @@
 // Test: a-borrowed-opaque-element-forwarded-to-a-storing-sibling-is-referenced
 typealias ExitCode = int(0 to 125)
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 
 type GHolder uses T
 	typealias TArray = Array with T
@@ -8,11 +8,11 @@ type GHolder uses T
 	export var items as TArray
 	export var spare as TArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ items: TArray.create(), spare: TArray.create() }
 	end 'create'
 
-	export function seed(s T)
+	function seed(s T)
 		items.push(s)
 	end 'seed'
 
@@ -20,11 +20,11 @@ type GHolder uses T
 		spare.push(v)
 	end 'stash'
 
-	export function relay(i Idx)
+	function relay(i Idx)
 		stash(try items.get(i) otherwise panic("out of range"))
 	end 'relay'
 
-	export function spareCount() returns Idx
+	function spareCount() returns Idx
 		return spare.count()
 	end 'spareCount'
 end 'GHolder'
@@ -49,6 +49,7 @@ data {
   __slab_arena_list@0 = i64 0
   __slab_arena_map_l1@8 = i64 0
   __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -111,7 +112,7 @@ func @main {
   relayMany:
     arm64.movImm x1, 0
     arm64.leaRdata x20, __layout_GHolder_String
-  __rc_ok:
+  __il_body#13:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
@@ -120,7 +121,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
     arm64.b.ls __im_slow
-  __im_load#24:
+  __im_load#22:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.b __im_loaded
@@ -131,21 +132,21 @@ func @main {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
     arm64.b.ls __im_slow
-  __im_load#25:
+  __im_load#23:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
   __im_loaded:
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x0 + 40]
     arm64.cmp x4, 0
-    arm64.b.eq critsplit#29
+    arm64.b.eq critsplit#27
   __im_empty:
     arm64.cmp x2, 0
     arm64.b.eq __im_slow
-  critsplit#30:
+  critsplit#28:
     arm64.movRegReg x1, x2
     arm64.b __im_cont
-  critsplit#29:
+  critsplit#27:
     arm64.movRegReg x1, x2
     arm64.b __im_cont
   __im_slow:
@@ -159,7 +160,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __retain_type_param
     arm64.movRegReg x1, x0
-  __il_body#28:
+  __il_body#26:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.bl __managed_push
   __il_cont#12:

@@ -1,21 +1,21 @@
 // Test: a-trivial-elements-borrowed-store-is-inert
-typealias Idx = int(0 to u64.max)
+typealias Idx = int(0 to u64.max) implements ElementIndex
 typealias Num = int(0 to 1000)
 typealias Nums = Array with Num
 
 type Bag uses Element
-	typealias Items = Array with Element
+	export typealias Items = Array with Element
 	export var items as Items
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{items: Items.create()}
 	end 'create'
 
-	export function count() returns Idx
+	function count() returns Idx
 		return items.count()
 	end 'count'
 
-	export function copyFrom(other Items)
+	function copyFrom(other Items)
 		let n = other.count()
 		for i in 0 upto n 'copy'
 			let value = try other.get(i) otherwise 'getErr'
@@ -25,7 +25,7 @@ type Bag uses Element
 		end 'copy'
 	end 'copyFrom'
 
-	export function at(i Idx) returns Element throws ArrayError
+	function at(i Idx) returns Element throws ArrayError
 		return try items.get(i)
 	end 'at'
 end 'Bag'
@@ -45,9 +45,12 @@ end 'main'
 ExitCode: 7
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @Bag.at {
@@ -55,9 +58,6 @@ func @Bag.at {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x2
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic
-  __rc_ok:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 8
@@ -66,7 +66,7 @@ func @Bag.at {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
     arm64.b.hs __im_slow
-  __im_load#11:
+  __im_load#9:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
     arm64.b __im_loaded
@@ -77,7 +77,7 @@ func @Bag.at {
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x1, x2
     arm64.b.hs __im_slow
-  __im_load#12:
+  __im_load#10:
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.add x2, x2, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
@@ -85,14 +85,14 @@ func @Bag.at {
     arm64.movImm x9, 0
     arm64.loadRegBaseDisp.word64 x3, [x0 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#14
+    arm64.b.eq critsplit#12
   __im_empty:
     arm64.cmp x2, 0
     arm64.b.eq __im_slow
-  critsplit#15:
+  critsplit#13:
     arm64.movRegReg x1, x2
     arm64.b __im_cont
-  critsplit#14:
+  critsplit#12:
     arm64.movRegReg x1, x2
     arm64.b __im_cont
   __im_slow:
@@ -109,14 +109,6 @@ func @Bag.at {
   tryok:
     arm64.movRegReg x0, x19
     arm64.bl __retain_type_param
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at a-trivial-elements-borrowed-store-is-inert.test:28: Range check failed: value outside typealias 'Idx'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -275,7 +267,7 @@ func @main {
     arm64.epilogue 64
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at a-trivial-elements-borrowed-store-is-inert.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-trivial-elements-borrowed-store-is-inert.test:42: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

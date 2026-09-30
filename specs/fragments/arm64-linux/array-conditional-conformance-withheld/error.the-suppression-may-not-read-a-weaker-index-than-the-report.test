@@ -5,7 +5,7 @@ typealias Integer = int(i64.min to i64.max)
 type Handle
 	export var f as __ManagedFile
 
-	export static function create(f __ManagedFile) returns Self
+	static function create(f __ManagedFile) returns Self
 		return Self{f: f}
 	end 'create'
 end 'Handle'
@@ -25,15 +25,15 @@ type Container uses Element where Element is Sizer
 
 	export var items as ElementArray
 
-	export static function create() returns Self
+	static function create() returns Self
 		return Self{ items: ElementArray.create() }
 	end 'create'
 
-	export function push(item Element)
+	function push(item Element)
 		self.items.push(item)
 	end 'push'
 
-	export function duplicate() returns Self
+	function duplicate() returns Self
 		return Self{ items: self.items.clone() }
 	end 'duplicate'
 end 'Container'
@@ -49,5 +49,5 @@ function main() returns ExitCode
 end 'main'
 ---
 CompilerError:
-error E2015: <fragment>:41:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
+error E2015: <fragment>:41:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
 note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above

@@ -3,20 +3,20 @@ typealias Integer = int(i64.min to i64.max)
 
 type Cell uses T
 	export var v as T
-	export static function make(v T) returns Self
+	static function make(v T) returns Self
 		return Self{v: v}
 	end 'make'
-	export function get() returns T
+	function get() returns T
 		return self.v
 	end 'get'
 end 'Cell'
 
 type Holder uses T
 	export var cell as Cell
-	export static function create(cell Cell) returns Self
+	static function create(cell Cell) returns Self
 		return Self{cell: cell}
 	end 'create'
-	export function value() returns T
+	function value() returns T
 		return self.cell.get()
 	end 'value'
 end 'Holder'
@@ -36,9 +36,12 @@ end 'main'
 ExitCode: 9
 ---
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -54,11 +57,11 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x19, __str_rec_1  ; "a string long enough to force a heap allocation"
-  __il_body#152:
+  __il_body#140:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
-  __il_body#26:
+  __il_body#28:
     arm64.loadRegBaseDisp.byte x0, [x19 + 48]
-  __il_cont#25:
+  __il_cont#27:
     arm64.cbz x0, ifcont#19
   oneByteEach:
     arm64.movRegReg x0, x20
@@ -67,25 +70,25 @@ func @main {
     arm64.movImm x21, 0
     arm64.movImm x22, 0
     arm64.b whilehdr#20
-  __il_body#28:
+  countLoop:
     arm64.cmp x22, 0
-    arm64.b.lt __rc_panic#63
-  __il_body#154:
+    arm64.b.lt __rc_panic#24
+  __il_body#142:
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
-  __il_cont#153:
+  __il_cont#141:
     arm64.cmp x22, x23
-    arm64.b.lo ifcont#30
+    arm64.b.lo ifcont#32
   atEnd:
     arm64.movRegReg x0, x22
-    arm64.b __il_cont#27
-  ifcont#30:
+    arm64.b __il_cont#29
+  ifcont#32:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.bl String.byteAt
     arm64.cmp x9, 0
-    arm64.b.eq tryok#31
-  tryerr#32:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at grapheme.maxon:58: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    arm64.b.eq tryok#33
+  tryerr#34:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -99,23 +102,23 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  tryok#31:
+  tryok#33:
     arm64.cmp x0, 128
-    arm64.b.ge ifcont#56
+    arm64.b.ge ifcont#58
   isAscii:
     arm64.cmp x0, 13
-    arm64.b.ne ifcont#41
+    arm64.b.ne ifcont#43
   isCR:
     arm64.add x1, x22, 1
     arm64.cmp x1, x23
-    arm64.b.hs ifcont#41
+    arm64.b.hs ifcont#43
   hasNext:
     arm64.movRegReg x0, x19
     arm64.bl String.byteAt
     arm64.cmp x9, 0
-    arm64.b.eq tryok#36
-  tryerr#37:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at grapheme.maxon:65: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    arm64.b.eq tryok#38
+  tryerr#39:
+    arm64.leaRdata x0, __str_blob_11  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -129,25 +132,23 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  tryok#36:
+  tryok#38:
     arm64.cmp x0, 10
-    arm64.b.ne ifcont#41
+    arm64.b.ne ifcont#43
   isCRLF:
     arm64.add x0, x22, 2
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#65
-    arm64.b __il_cont#27
-  ifcont#41:
+    arm64.b __il_cont#29
+  ifcont#43:
     arm64.add x1, x22, 1
     arm64.cmp x1, x23
-    arm64.b.hs __rc_ok#70
+    arm64.b.hs ifelse#56
   hasNextByte:
     arm64.movRegReg x0, x19
     arm64.bl String.byteAt
     arm64.cmp x9, 0
-    arm64.b.eq tryok#43
-  tryerr#44:
-    arm64.leaRdata x0, __str_blob_12  ; "panic at grapheme.maxon:77: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    arm64.b.eq tryok#45
+  tryerr#46:
+    arm64.leaRdata x0, __str_blob_12  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -161,9 +162,9 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  tryok#43:
+  tryok#45:
     arm64.cmp x0, 128
-    arm64.b.lt ifelse
+    arm64.b.lt ifelse#54
   nextIsMultibyte:
     arm64.add x1, x22, 1
     arm64.movRegReg x0, x19
@@ -171,31 +172,31 @@ func @main {
     arm64.bl graphemeBreakProperty
     arm64.cmp x0, 4
     arm64.movImm x1, 0
-    arm64.b.eq scmerge#47
-  andrhs#46:
+    arm64.b.eq scmerge#49
+  andrhs#48:
     arm64.cmp x0, 5
     arm64.cset x1, ne
-  scmerge#47:
+  scmerge#49:
     arm64.movImm x2, 0
     arm64.cbz x1, critsplit
-  andrhs#48:
+  andrhs#50:
     arm64.cmp x0, 8
     arm64.cset x0, ne
-    arm64.b scmerge#49
+    arm64.b scmerge#51
   critsplit:
     arm64.movRegReg x0, x2
-  scmerge#49:
-    arm64.cbz x0, ifcont#56
+  scmerge#51:
+    arm64.cbz x0, ifcont#58
   notCombining:
     arm64.add x0, x22, 1
-    arm64.b __il_cont#27
-  ifelse:
+    arm64.b __il_cont#29
+  ifelse#54:
     arm64.add x0, x22, 1
-    arm64.b __il_cont#27
-  __rc_ok#70:
+    arm64.b __il_cont#29
+  ifelse#56:
     arm64.movRegReg x0, x1
-    arm64.b __il_cont#27
-  ifcont#56:
+    arm64.b __il_cont#29
+  ifcont#58:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
     arm64.bl utf8DecodeAt
@@ -207,14 +208,14 @@ func @main {
     arm64.movRegReg x0, x24
     arm64.bl graphemeBreakProperty
     arm64.movRegReg x25, x0
-  __il_body#77:
+  __il_body#65:
     arm64.movImm x0, 0
-  __il_cont#76:
+  __il_cont#64:
     arm64.movRegReg x1, x25
     arm64.movRegReg x2, x24
     arm64.bl graphemeStateUpdate
     arm64.movRegReg x24, x0
-    arm64.b whilehdr#57
+    arm64.b whilehdr#59
   scan:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
@@ -223,210 +224,207 @@ func @main {
     arm64.movRegReg x0, x26
     arm64.bl graphemeBreakProperty
     arm64.movRegReg x27, x0
-  __il_body#79:
+  __il_body#67:
     arm64.cmp x25, 0
-    arm64.b.lt __rc_panic#141
-  __rc_chk#142:
+    arm64.b.lt __rc_panic#129
+  __rc_chk#130:
     arm64.cmp x25, 13
-    arm64.b.gt __rc_panic#141
-  __rc_ok#140:
+    arm64.b.gt __rc_panic#129
+  __rc_ok#128:
     arm64.cmp x27, 0
-    arm64.b.lt __rc_panic#144
-  __rc_chk#145:
+    arm64.b.lt __rc_panic#132
+  __rc_chk#133:
     arm64.cmp x27, 13
-    arm64.b.gt __rc_panic#144
-  __rc_ok#143:
+    arm64.b.gt __rc_panic#132
+  __rc_ok#131:
     arm64.cmp x26, 0
-    arm64.b.lt __rc_panic#147
-  __rc_chk#148:
+    arm64.b.lt __rc_panic#135
+  __rc_chk#136:
     arm64.movImm x16, 1114111
     arm64.cmp x26, x16
-    arm64.b.gt __rc_panic#147
-  __rc_ok#146:
+    arm64.b.gt __rc_panic#135
+  __rc_ok#134:
     arm64.cmp x25, 1
     arm64.cset x0, eq
     arm64.movImm x1, 0
-    arm64.b.ne scmerge#81
-  andrhs#80:
+    arm64.b.ne scmerge#69
+  andrhs#68:
     arm64.cmp x27, 2
     arm64.cset x1, eq
-  scmerge#81:
-    arm64.cbz x1, ifcont#83
+  scmerge#69:
+    arm64.cbz x1, ifcont#71
   gb3:
     arm64.movImm x0, 0
-    arm64.b __il_cont#78
-  ifcont#83:
+    arm64.b __il_cont#66
+  ifcont#71:
     arm64.cmp x25, 3
     arm64.movImm x1, 1
-    arm64.b.eq scmerge#85
-  orrhs#84:
+    arm64.b.eq scmerge#73
+  orrhs#72:
     arm64.movRegReg x1, x0
-  scmerge#85:
+  scmerge#73:
     arm64.movImm x0, 1
-    arm64.cbnz x1, scmerge#87
-  orrhs#86:
+    arm64.cbnz x1, scmerge#75
+  orrhs#74:
     arm64.cmp x25, 2
     arm64.cset x0, eq
-  scmerge#87:
-    arm64.cbz x0, ifcont#89
+  scmerge#75:
+    arm64.cbz x0, ifcont#77
   gb4:
     arm64.movImm x0, 1
-    arm64.b __il_cont#78
-  ifcont#89:
+    arm64.b __il_cont#66
+  ifcont#77:
     arm64.cmp x27, 3
     arm64.movImm x0, 1
-    arm64.b.eq scmerge#91
-  orrhs#90:
+    arm64.b.eq scmerge#79
+  orrhs#78:
     arm64.cmp x27, 1
     arm64.cset x0, eq
-  scmerge#91:
+  scmerge#79:
     arm64.movImm x1, 1
-    arm64.cbnz x0, scmerge#93
-  orrhs#92:
+    arm64.cbnz x0, scmerge#81
+  orrhs#80:
     arm64.cmp x27, 2
     arm64.cset x0, eq
     arm64.movRegReg x1, x0
-  scmerge#93:
-    arm64.cbz x1, ifcont#95
+  scmerge#81:
+    arm64.cbz x1, ifcont#83
   gb5:
     arm64.movImm x0, 1
-    arm64.b __il_cont#78
-  ifcont#95:
+    arm64.b __il_cont#66
+  ifcont#83:
     arm64.cmp x25, 9
-    arm64.b.ne ifcont#105
+    arm64.b.ne ifcont#93
   gb6:
     arm64.cmp x27, 9
     arm64.movImm x0, 1
-    arm64.b.eq scmerge#98
-  orrhs#97:
+    arm64.b.eq scmerge#86
+  orrhs#85:
     arm64.cmp x27, 10
     arm64.cset x0, eq
-  scmerge#98:
+  scmerge#86:
     arm64.movImm x1, 1
-    arm64.cbnz x0, scmerge#100
-  orrhs#99:
+    arm64.cbnz x0, scmerge#88
+  orrhs#87:
     arm64.cmp x27, 12
     arm64.cset x0, eq
     arm64.movRegReg x1, x0
-  scmerge#100:
+  scmerge#88:
     arm64.movImm x0, 1
-    arm64.cbnz x1, scmerge#102
-  orrhs#101:
+    arm64.cbnz x1, scmerge#90
+  orrhs#89:
     arm64.cmp x27, 13
     arm64.cset x0, eq
-  scmerge#102:
-    arm64.cbz x0, ifcont#105
+  scmerge#90:
+    arm64.cbz x0, ifcont#93
   gb6_inner:
     arm64.movImm x0, 0
-    arm64.b __il_cont#78
-  ifcont#105:
+    arm64.b __il_cont#66
+  ifcont#93:
     arm64.cmp x25, 12
     arm64.movImm x0, 1
-    arm64.b.eq scmerge#107
-  orrhs#106:
+    arm64.b.eq scmerge#95
+  orrhs#94:
     arm64.cmp x25, 10
     arm64.cset x0, eq
-  scmerge#107:
-    arm64.cbz x0, ifcont#113
+  scmerge#95:
+    arm64.cbz x0, ifcont#101
   gb7:
     arm64.cmp x27, 10
     arm64.movImm x0, 1
-    arm64.b.eq scmerge#110
-  orrhs#109:
+    arm64.b.eq scmerge#98
+  orrhs#97:
     arm64.cmp x27, 11
     arm64.cset x0, eq
-  scmerge#110:
-    arm64.cbz x0, ifcont#113
+  scmerge#98:
+    arm64.cbz x0, ifcont#101
   gb7_inner:
     arm64.movImm x0, 0
-    arm64.b __il_cont#78
-  ifcont#113:
+    arm64.b __il_cont#66
+  ifcont#101:
     arm64.cmp x25, 13
     arm64.movImm x0, 1
-    arm64.b.eq scmerge#115
-  orrhs#114:
+    arm64.b.eq scmerge#103
+  orrhs#102:
     arm64.cmp x25, 11
     arm64.cset x0, eq
-  scmerge#115:
-    arm64.cbz x0, ifcont#119
+  scmerge#103:
+    arm64.cbz x0, ifcont#107
   gb8:
     arm64.cmp x27, 11
-    arm64.b.ne ifcont#119
+    arm64.b.ne ifcont#107
   gb8_inner:
     arm64.movImm x0, 0
-    arm64.b __il_cont#78
-  ifcont#119:
+    arm64.b __il_cont#66
+  ifcont#107:
     arm64.cmp x27, 4
     arm64.movImm x0, 1
-    arm64.b.eq scmerge#121
-  orrhs#120:
+    arm64.b.eq scmerge#109
+  orrhs#108:
     arm64.cmp x27, 5
     arm64.cset x0, eq
-  scmerge#121:
-    arm64.cbz x0, ifcont#123
+  scmerge#109:
+    arm64.cbz x0, ifcont#111
   gb9:
     arm64.movImm x0, 0
-    arm64.b __il_cont#78
-  ifcont#123:
+    arm64.b __il_cont#66
+  ifcont#111:
     arm64.cmp x27, 8
-    arm64.b.ne ifcont#125
+    arm64.b.ne ifcont#113
   gb9a:
     arm64.movImm x0, 0
-    arm64.b __il_cont#78
-  ifcont#125:
+    arm64.b __il_cont#66
+  ifcont#113:
     arm64.cmp x25, 7
-    arm64.b.ne ifcont#127
+    arm64.b.ne ifcont#115
   gb9b:
     arm64.movImm x0, 0
-    arm64.b __il_cont#78
-  ifcont#127:
+    arm64.b __il_cont#66
+  ifcont#115:
     arm64.cmp x25, 5
     arm64.movImm x0, 0
-    arm64.b.ne scmerge#129
-  andrhs#128:
+    arm64.b.ne scmerge#117
+  andrhs#116:
     arm64.movRegReg x0, x26
     arm64.bl isExtendedPictographic
-  scmerge#129:
-    arm64.cbz x0, ifcont#133
-  __il_body#156:
+  scmerge#117:
+    arm64.cbz x0, ifcont#121
+  __il_body#144:
     arm64.and x0, x24, 1
     arm64.cmp x0, 0
     arm64.cset x0, ne
-  __il_cont#155:
-    arm64.cbz x0, ifcont#133
+  __il_cont#143:
+    arm64.cbz x0, ifcont#121
   gb11_check:
     arm64.movImm x0, 0
-    arm64.b __il_cont#78
-  ifcont#133:
+    arm64.b __il_cont#66
+  ifcont#121:
     arm64.cmp x25, 6
     arm64.movImm x0, 0
-    arm64.b.ne scmerge#135
-  andrhs#134:
+    arm64.b.ne scmerge#123
+  andrhs#122:
     arm64.cmp x27, 6
     arm64.cset x0, eq
-  scmerge#135:
-    arm64.cbz x0, ifcont#139
-  __il_body#150:
+  scmerge#123:
+    arm64.cbz x0, ifcont#127
+  __il_body#138:
     arm64.lsr x0, x24, 1
     arm64.and x0, x0, 1
     arm64.cmp x0, 0
     arm64.cset x0, ne
-  __il_cont#149:
-    arm64.cbz x0, ifcont#139
+  __il_cont#137:
+    arm64.cbz x0, ifcont#127
   gb12_odd:
     arm64.movImm x0, 0
-    arm64.b __il_cont#78
-  ifcont#139:
+    arm64.b __il_cont#66
+  ifcont#127:
     arm64.movImm x0, 1
-  __il_cont#78:
-    arm64.cbz x0, ifcont#61
+  __il_cont#66:
+    arm64.cbz x0, ifcont#63
   breakFound:
-    arm64.cmp x22, 0
-    arm64.b.lt __rc_panic#73
-  __rc_ok#72:
     arm64.movRegReg x0, x22
-    arm64.b __il_cont#27
-  ifcont#61:
+    arm64.b __il_cont#29
+  ifcont#63:
     arm64.movRegReg x0, x24
     arm64.movRegReg x1, x27
     arm64.movRegReg x2, x26
@@ -437,24 +435,21 @@ func @main {
     arm64.bl utf8ByteLengthAt
     arm64.add x22, x22, x0
     arm64.movRegReg x25, x27
-  whilehdr#57:
+  whilehdr#59:
     arm64.cmp x22, x23
     arm64.b.lo scan
-  whileexit#59:
-    arm64.cmp x22, 0
-    arm64.b.lt __rc_panic#75
-  __rc_ok#74:
+  whileexit#61:
     arm64.movRegReg x0, x22
-  __il_cont#27:
+  __il_cont#29:
     arm64.add x21, x21, 1
     arm64.movRegReg x22, x0
   whilehdr#20:
     arm64.cmp x22, x20
-    arm64.b.lt __il_body#28
+    arm64.b.lt countLoop
   whileexit#22:
     arm64.cmp x21, 0
-    arm64.b.lt __rc_panic#24
-  __rc_ok#23:
+    arm64.b.lt __rc_panic#26
+  __rc_ok#25:
     arm64.movRegReg x0, x21
   __il_cont#14:
     arm64.cmp x0, 47
@@ -519,113 +514,68 @@ func @main {
     arm64.loadRegSlot x27, slot8
     arm64.epilogue 96
     arm64.ret
-  __rc_panic#63:
-    arm64.leaRdata x0, __str_blob_24  ; "panic at grapheme.maxon:46: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
-  __rc_panic#65:
-    arm64.leaRdata x0, __str_blob_25  ; "panic at grapheme.maxon:69: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
-  __rc_panic#141:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at grapheme.maxon:646: Range check failed: value outside typealias 'BreakProperty'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
-  __rc_panic#144:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at grapheme.maxon:646: Range check failed: value outside typealias 'BreakProperty'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
-  __rc_panic#147:
-    arm64.leaRdata x0, __str_blob_35  ; "panic at grapheme.maxon:646: Range check failed: value outside typealias 'Codepoint'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
-  __rc_panic#73:
-    arm64.leaRdata x0, __str_blob_29  ; "panic at grapheme.maxon:115: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
-  __rc_panic#75:
-    arm64.leaRdata x0, __str_blob_30  ; "panic at grapheme.maxon:126: Range check failed: value outside typealias 'BytePos'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.loadRegSlot x25, slot6
-    arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
-    arm64.ret
   __rc_panic#24:
-    arm64.leaRdata x0, __str_blob_31  ; "panic at grapheme.maxon:404: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_20  ; "panic at grapheme.maxon:398: Range check failed: value outside typealias 'BytePos'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#129:
+    arm64.leaRdata x0, __str_blob_24  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#132:
+    arm64.leaRdata x0, __str_blob_24  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#135:
+    arm64.leaRdata x0, __str_blob_25  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic#26:
+    arm64.leaRdata x0, __str_blob_21  ; "panic at grapheme.maxon:402: Range check failed: value outside typealias 'GraphemeIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
