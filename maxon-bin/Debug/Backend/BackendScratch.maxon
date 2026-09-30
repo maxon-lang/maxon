@@ -1,9 +1,5 @@
 let ScratchBytes = 0x1000
 
-module let WordBytes = 8
-
-module let ByteMask = 0xFF
-
 export let TransferWindowBytes = 512
 
 module typealias BackendPageOffset = int(0 to 0xFF8)
@@ -11,8 +7,8 @@ module typealias BackendPageOffset = int(0 to 0xFF8)
 module let MaxBackendPageOffset = 0xFF8
 
 export function requireBackendPageOffsetSpansItsScratch()
-	if MaxBackendPageOffset != ScratchBytes - WordBytes 'aBoundThatIsNotTheScratchs'
-		panic("BackendScratch: BackendPageOffset is bounded at {MaxBackendPageOffset} and the last whole word of a {ScratchBytes}-byte scratch page begins at {ScratchBytes - WordBytes}")
+	if MaxBackendPageOffset != ScratchBytes - DebuggeeWordBytes 'aBoundThatIsNotTheScratchs'
+		panic("BackendScratch: BackendPageOffset is bounded at {MaxBackendPageOffset} and the last whole word of a {ScratchBytes}-byte scratch page begins at {ScratchBytes - DebuggeeWordBytes}")
 	end 'aBoundThatIsNotTheScratchs'
 end 'requireBackendPageOffsetSpansItsScratch'
 
@@ -50,42 +46,27 @@ module type BackendScratchPage
 
 	module function bytesAt(offset BackendPageOffset, count BackendByteCount) returns ByteArray
 		var taken = ByteArray.create()
-		var word = 0 as BackendWord
-		var held = 0
-		let start = offset as BackendWord
+		var index = 0 as BackendByteCount
 
-		for index in 0 upto count 'eachByte'
-			if held == 0 'aFreshWord'
-				word = self.word((start + index - (index mod WordBytes)) as BackendPageOffset)
-				held = WordBytes
-			end 'aFreshWord'
-
-			taken.push(((word shr ((index mod WordBytes) * BitsPerByte)) and ByteMask) as Byte)
-			held = held - 1
-		end 'eachByte'
+		while index < count 'eachWord'
+			taken.append(debuggeeWordBytes(self.word(((offset as BackendByteCount) + index) as BackendPageOffset) as DebuggeeWord, width: debugWordWidthWithin((count - index) as DebugAddress)))
+			index = index + (DebuggeeWordBytes as BackendByteCount)
+		end 'eachWord'
 
 		return taken
 	end 'bytesAt'
 
 	module function fill(offset BackendPageOffset, bytes ByteArray)
-		var word = 0 as BackendWord
-		var filled = 0
+		let count = bytes.count() as BackendByteCount
+		var index = 0 as BackendByteCount
 
-		let start = offset as BackendWord
+		while index < count 'eachWord'
+			match debugLittleEndianAt(bytes, at: index as DebugAddress, width: debugWordWidthWithin((count - index) as DebugAddress)) 'word'
+				pastTheBytes then panic("BackendScratchPage.fill: the word at byte {index} is cut to the {count} bytes in hand")
+				read(value) then self.setWord(((offset as BackendByteCount) + index) as BackendPageOffset, value: value as BackendWord)
+			end 'word'
 
-		for (iter, value) in bytes.withIterator() 'eachByte'
-			let index = iter.index() as BackendWord
-			word = word or ((value as BackendWord) shl ((index mod WordBytes) * BitsPerByte))
-			filled = index
-
-			if (index mod WordBytes) == WordBytes - 1 'aWholeWord'
-				self.setWord((start + index - WordBytes + 1) as BackendPageOffset, value: word)
-				word = 0
-			end 'aWholeWord'
-		end 'eachByte'
-
-		if (filled mod WordBytes) != WordBytes - 1 'aPartialTail'
-			self.setWord((start + filled - (filled mod WordBytes)) as BackendPageOffset, value: word)
-		end 'aPartialTail'
+			index = index + (DebuggeeWordBytes as BackendByteCount)
+		end 'eachWord'
 	end 'fill'
 end 'BackendScratchPage'

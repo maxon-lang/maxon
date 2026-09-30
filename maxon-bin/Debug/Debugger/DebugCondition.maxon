@@ -74,18 +74,6 @@ let DbgWidthHalf = 2
 let DbgWidthWord32 = 4
 let DbgWidthWord64 = 8
 
-let ByteWidthMask = 0xFF as DebuggeeWord
-let ByteWidthSignBit = 0x80 as DebuggeeWord
-let ByteWidthSpan = 0x100 as DebuggeeWord
-
-let HalfWidthMask = 0xFFFF as DebuggeeWord
-let HalfWidthSignBit = 0x8000 as DebuggeeWord
-let HalfWidthSpan = 0x10000 as DebuggeeWord
-
-let Word32Mask = 0xFFFFFFFF as DebuggeeWord
-let Word32SignBit = 0x80000000 as DebuggeeWord
-let Word32Span = 0x100000000 as DebuggeeWord
-
 union ConditionOperandRead
 	unreadable
 	word(value DebuggeeWord)
@@ -134,32 +122,14 @@ function conditionOperandValue(record DebugConditionRecord, memory DebugMemory, 
 		return ConditionOperandRead.unreadable
 	end 'notAnAddressAtAll'
 
-	return ConditionOperandRead.word(try memory.readDebuggeeWord(slot as DebugAddress, width: DbgWidthWord64 as DebugWidth) otherwise return ConditionOperandRead.unreadable)
+	return ConditionOperandRead.word(try memory.readDebuggeeWord(slot as DebugAddress, width: DebuggeeWordBytes) otherwise return ConditionOperandRead.unreadable)
 end 'conditionOperandValue'
 
 function narrowedToWidth(raw DebuggeeWord, width DebugConditionWidth, signed bool) returns DebuggeeWord
-	if width == DbgWidthByte 'aByte'
-		return signExtended(raw and ByteWidthMask, signBit: ByteWidthSignBit, span: ByteWidthSpan, signed: signed)
-	end 'aByte'
+	let masked = debugMaskedToWidth(raw, width: width as DebugWidth)
 
-	if width == DbgWidthHalf 'aHalfWord'
-		return signExtended(raw and HalfWidthMask, signBit: HalfWidthSignBit, span: HalfWidthSpan, signed: signed)
-	end 'aHalfWord'
-
-	if width == DbgWidthWord32 'aDoubleWord'
-		return signExtended(raw and Word32Mask, signBit: Word32SignBit, span: Word32Span, signed: signed)
-	end 'aDoubleWord'
-
-	return raw
+	return debugSignExtended(masked, width: width as DebugWidth) if signed else masked
 end 'narrowedToWidth'
-
-function signExtended(masked DebuggeeWord, signBit DebuggeeWord, span DebuggeeWord, signed bool) returns DebuggeeWord
-	if signed and (masked and signBit) != 0 'negative'
-		return masked - span
-	end 'negative'
-
-	return masked
-end 'signExtended'
 
 function conditionCompare(value DebuggeeWord, literal DebuggeeWord, op DebugAddress, signed bool) returns bool
 	if op == DbgCondOpEqual 'equal'

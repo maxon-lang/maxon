@@ -23,7 +23,7 @@ let WaitStoppedMarker = 0x7F
 let WaitCodeShift = 8
 let WaitEventShift = 16
 
-let ByteMaskWord = 0xFF as BackendWord
+let ByteMask = 0xFF
 
 let GroupStopSliceMs = 50
 
@@ -998,9 +998,9 @@ export type PtraceBackend
 
 		while written < count 'eachWord'
 			let target = (address as BackendWord) + written
-			let aligned = target - (target mod WordBytes)
+			let aligned = target - (target mod DebuggeeWordBytes)
 			let inWord = target - aligned
-			let room = WordBytes - inWord
+			let room = DebuggeeWordBytes - inWord
 			let left = count - written
 			let take = room if left > room else left
 
@@ -1035,16 +1035,17 @@ export type PtraceBackend
 			return false
 		end 'unreadable'
 
-		var word = self.scratch.word(PtracePeekOffset as BackendPageOffset)
+		var bytes = debuggeeWordBytes(self.scratch.word(PtracePeekOffset as BackendPageOffset) as DebuggeeWord, width: DebuggeeWordBytes)
 
 		for step in 0 upto taking 'eachByte'
-			let shift = ((at + step) * BitsPerByte) as BackendWord
-			let value = (try from.get((startingAt + step) as ElementIndex) otherwise panic("PtraceBackend.wordOverlaid: the caller's window is bounded by the byte count, so byte {startingAt + step} of {from.count()} is in hand — a zero taken here would be poked into the debuggee's own code")) as BackendWord
-			let hole = word and (ByteMaskWord shl shift)
-			word = (word - hole) or (value shl shift)
+			let value = try from.get((startingAt + step) as ElementIndex) otherwise panic("PtraceBackend.wordOverlaid: the caller's window is bounded by the byte count, so byte {startingAt + step} of {from.count()} is in hand — a zero taken here would be poked into the debuggee's own code")
+			try bytes.set((at + step) as ElementIndex, value: value) otherwise panic("PtraceBackend.wordOverlaid: the caller keeps byte {at} + {step} inside the {DebuggeeWordBytes}-byte word it peeked")
 		end 'eachByte'
 
-		return hostDebugCall(HostDebugVerb.traceRequest, a0: PtracePokeData, a1: through, a2: aligned, a3: word, a4: 0) != 0
+		match debugLittleEndianAt(bytes, at: 0, width: DebuggeeWordBytes) 'overlaid'
+			pastTheBytes then panic("PtraceBackend.wordOverlaid: the peeked word was split into {DebuggeeWordBytes} bytes, so all of them are in hand")
+			read(word) then return hostDebugCall(HostDebugVerb.traceRequest, a0: PtracePokeData, a1: through, a2: aligned, a3: word as BackendWord, a4: 0) != 0
+		end 'overlaid'
 	end 'wordOverlaid'
 
 	function stoppedThreadForRequests() returns PtraceRequestThread

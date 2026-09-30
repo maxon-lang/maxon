@@ -34,8 +34,6 @@ let GdbRegisterInfoNameKey = "name"
 let GdbRegisterInfoBitsizeKey = "bitsize"
 let GdbRegisterInfoContainerKey = "container-regs"
 
-let GdbBitsPerRegisterByte = 8
-
 module union GdbAnswer
 	answered(payload String)
 	unsupported
@@ -416,11 +414,11 @@ end 'gdbPushRegister'
 function gdbRegisterWidthOf(spelled String) returns GdbRegisterBytes
 	let bits = try int.fromString(spelled) otherwise return 0
 
-	if bits <= 0 or bits > (64 * GdbBitsPerRegisterByte) 'notARegisterThisFileHolds'
+	if bits <= 0 or bits > (64 * BitsPerByte) 'notARegisterThisFileHolds'
 		return 0
 	end 'notARegisterThisFileHolds'
 
-	return (bits / GdbBitsPerRegisterByte) as GdbRegisterBytes
+	return (bits / BitsPerByte) as GdbRegisterBytes
 end 'gdbRegisterWidthOf'
 
 function classifiedAnswer(raw ByteArray) returns GdbAnswer
@@ -576,29 +574,3 @@ module function gdbHexTextOf(bytes ByteArray) returns String
 
 	return out
 end 'gdbHexTextOf'
-
-// ⛔ **A REGISTER ARRIVES AS ITS RAW BYTES, WHICH ON THIS CPU ARE LEAST SIGNIFICANT FIRST**, so the digits
-// a reply spells are not the digits of the number: the pairs are read as memory and reassembled.
-module function gdbRegisterValueOf(bytes ByteArray) returns GdbWireWord
-	var value = 0 as GdbWireWord
-
-	for (iter, value8) in bytes.withIterator() 'eachByte'
-		if iter.index() >= WordBytes 'pastAWord'
-			break
-		end 'pastAWord'
-
-		value = value or ((value8 as GdbWireWord) shl (iter.index() * BitsPerByte))
-	end 'eachByte'
-
-	return value
-end 'gdbRegisterValueOf'
-
-module function gdbRegisterBytesOf(value GdbWireWord, width GdbRegisterBytes) returns ByteArray
-	var bytes = ByteArray.create()
-
-	for index in 0 upto width 'eachByte'
-		bytes.push(((value shr (index * BitsPerByte)) and 0xFF) as Byte)
-	end 'eachByte'
-
-	return bytes
-end 'gdbRegisterBytesOf'

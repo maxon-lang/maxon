@@ -3,7 +3,7 @@ let EventOffset = 0x600
 let TransferOffset = 0x700
 
 let OutWordOffset = TransferOffset + TransferWindowBytes
-let SecondOutWordOffset = OutWordOffset + WordBytes
+let SecondOutWordOffset = OutWordOffset + DebuggeeWordBytes
 
 let Win64DebugEventBytes = 0xB0
 
@@ -20,7 +20,7 @@ export function requireWindowsScratchLayoutIsDisjoint()
 		panic("WindowsBackend: a {TransferWindowBytes}-byte transfer window at {TransferOffset} runs into the byte-count word at {OutWordOffset}")
 	end 'theTransferWindowReachesTheOutWord'
 
-	if SecondOutWordOffset + WordBytes > MaxBackendPageOffset + WordBytes 'theOutWordsLeaveThePage'
+	if SecondOutWordOffset + DebuggeeWordBytes > MaxBackendPageOffset + DebuggeeWordBytes 'theOutWordsLeaveThePage'
 		panic("WindowsBackend: the saved-protection word at {SecondOutWordOffset} runs off a scratch page whose last whole word begins at {MaxBackendPageOffset}")
 	end 'theOutWordsLeaveThePage'
 end 'requireWindowsScratchLayoutIsDisjoint'
@@ -560,7 +560,7 @@ export type WindowsBackend
 		var file = DebugRegisterFile.create()
 
 		for slot in 0 upto BackendGprSlots 'eachGeneralRegister'
-			file.setValue(slot as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextGprBase + slot * WordBytes) as BackendPageOffset))
+			file.setValue(slot as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextGprBase + slot * DebuggeeWordBytes) as BackendPageOffset))
 		end 'eachGeneralRegister'
 
 		file.setValue(BackendRegSlotPc as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextRipOffset) as BackendPageOffset))

@@ -152,8 +152,3 @@ Since you're building the compiler itself, you can provide the AI with a "Mental
   byte-identical exes from before and after that change and passed 60/60 direct + 30/30 spec-test each, but both
   landed on the OLD image. Needs a sample on 20260925.250.1 (the diag workflow keeps crash dumps). The VEH is the
   only converter: no `SetUnhandledExceptionFilter` exists in the tree.
-- `Debug/Backend` restates the debuggee word and its byte conversion: `BackendScratch.maxon:3` `module let WordBytes = 8`
-  with hand-rolled word<->bytes at ~63/~78, and `GdbRemoteConnection.gdbRegisterValueOf`/`gdbRegisterBytesOf` (~582-604)
-  with a bare `0xFF`. `Debug/Debugger/DebugBytes.maxon` owns `DebuggeeWordBytes`, `debugLittleEndianAt` and
-  `debuggeeWordBytes`; the backend copies use other types (`GdbWireWord` unsigned, `GdbRegisterBytes` up to 64 wide), so
-  sharing needs a width-generic helper visible to both directories. Seen reviewing the debugger's byte helpers.

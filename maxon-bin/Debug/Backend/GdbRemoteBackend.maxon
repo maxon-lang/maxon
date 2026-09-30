@@ -144,7 +144,12 @@ union GdbThreadCounter
 end 'GdbThreadCounter'
 
 typealias GdbStopRegisterNumberArray = Array with GdbRegisterNumber
-typealias GdbStopRegisterValueArray = Array with GdbWireWord
+typealias GdbStopRegisterValueArray = Array with DebuggeeWord
+
+union GdbRegisterRead
+	value(word DebuggeeWord)
+	unreadable
+end 'GdbRegisterRead'
 
 type GdbStopReport
 	module var signal as GdbSignalNumber
@@ -159,7 +164,7 @@ type GdbStopReport
 		return Self{signal: 0, thread: "", threads: StringArray.create(), threadPcs: StringArray.create(), stopInfo: "", numbers: GdbStopRegisterNumberArray.create(), values: GdbStopRegisterValueArray.create()}
 	end 'create'
 
-	module function setRegister(number GdbRegisterNumber, value GdbWireWord)
+	module function setRegister(number GdbRegisterNumber, value DebuggeeWord)
 		for (iter, spelled) in self.numbers.withIterator() 'eachRegister'
 			if spelled == number 'thisOne'
 				try self.values.set(iter.index(), value: value) otherwise panic("GdbStopReport.setRegister: the two columns are filled together, so register {number} has a value to replace")
@@ -172,14 +177,14 @@ type GdbStopReport
 		self.values.push(value)
 	end 'setRegister'
 
-	module function valueOf(number GdbRegisterNumber) returns GdbHexRead
+	function valueOf(number GdbRegisterNumber) returns GdbRegisterRead
 		for (iter, spelled) in self.numbers.withIterator() 'eachRegister'
 			if spelled == number 'thisOne'
-				return GdbHexRead.value(try self.values.get(iter.index()) otherwise panic("GdbStopReport.valueOf: the two columns are filled together, so register {number} has a value"))
+				return GdbRegisterRead.value(try self.values.get(iter.index()) otherwise panic("GdbStopReport.valueOf: the two columns are filled together, so register {number} has a value"))
 			end 'thisOne'
 		end 'eachRegister'
 
-		return GdbHexRead.notHex
+		return GdbRegisterRead.unreadable
 	end 'valueOf'
 end 'GdbStopReport'
 
@@ -863,13 +868,13 @@ export type GdbRemoteBackend
 			end 'anotherRegister'
 
 			match stop.valueOf(info.number) 'held'
-				value(word) then return debugAddressOrZero(word as DebuggeeWord)
-				notHex then break 'held'
+				value(word) then return debugAddressOrZero(word)
+				unreadable then break 'held'
 			end 'held'
 
 			match self.registerRead(info, thread: thread) 'read'
-				value(word) then return debugAddressOrZero(word as DebuggeeWord)
-				notHex then break 'eachRegister'
+				value(word) then return debugAddressOrZero(word)
+				unreadable then break 'eachRegister'
 			end 'read'
 		end 'eachRegister'
 
@@ -1325,23 +1330,23 @@ export type GdbRemoteBackend
 
 	function slotFilled(file DebugRegisterFile, slot BackendRegisterNumber, info GdbRegisterInfo, thread String, expedited GdbExpedited) returns bool
 		match gdbExpeditedValue(expedited, number: info.number) 'held'
-			notHex then break 'held'
+			unreadable then break 'held'
 			value(word) then return gdbSlotSet(file, slot: slot, value: word)
 		end 'held'
 
 		match self.registerRead(info, thread: thread) 'read'
-			notHex then return false
+			unreadable then return false
 			value(word) then return gdbSlotSet(file, slot: slot, value: word)
 		end 'read'
 	end 'slotFilled'
 
-	function registerRead(info GdbRegisterInfo, thread String) returns GdbHexRead
+	function registerRead(info GdbRegisterInfo, thread String) returns GdbRegisterRead
 		match self.askStub("p{info.number:x}{gdbThreadSuffix(thread, suffixed: self.threadSuffixSupported())}") 'read'
 			answered(payload) then return gdbRegisterHexRead(payload)
 			unsupported or
 				failed or
 				timedOut or
-				broken then return GdbHexRead.notHex
+				broken then return GdbRegisterRead.unreadable
 		end 'read'
 	end 'registerRead'
 
@@ -1350,15 +1355,15 @@ export type GdbRemoteBackend
 
 		for info in self.registers 'eachRegister'
 			if info.name == GdbProgramCounterName 'theProgramCounter'
-				return self.registerWritten(info, thread: spelled, value: address as GdbWireWord)
+				return self.registerWritten(info, thread: spelled, value: address as DebuggeeWord)
 			end 'theProgramCounter'
 		end 'eachRegister'
 
 		return false
 	end 'setProgramCounter'
 
-	function registerWritten(info GdbRegisterInfo, thread String, value GdbWireWord) returns bool
-		match self.askStub("P{info.number:x}={gdbHexTextOf(gdbRegisterBytesOf(value, width: info.bytes))}{gdbThreadSuffix(thread, suffixed: self.threadSuffixSupported())}") 'written'
+	function registerWritten(info GdbRegisterInfo, thread String, value DebuggeeWord) returns bool
+		match self.askStub("P{info.number:x}={gdbHexTextOf(debuggeeWordBytes(value, width: info.bytes as DebugWidth))}{gdbThreadSuffix(thread, suffixed: self.threadSuffixSupported())}") 'written'
 			answered then break 'written'
 
 			unsupported or
@@ -1429,9 +1434,9 @@ function gdbExpeditedIn(payload String, thread String) returns GdbExpedited
 	end 'read'
 end 'gdbExpeditedIn'
 
-function gdbExpeditedValue(expedited GdbExpedited, number GdbRegisterNumber) returns GdbHexRead
+function gdbExpeditedValue(expedited GdbExpedited, number GdbRegisterNumber) returns GdbRegisterRead
 	return match expedited 'which'
-		none gives GdbHexRead.notHex
+		none gives GdbRegisterRead.unreadable
 		from (stop) gives stop.valueOf(number)
 	end 'which'
 end 'gdbExpeditedValue'
@@ -1514,18 +1519,31 @@ function gdbThreadSuffix(thread String, suffixed bool) returns String
 	return ";thread:{thread};"
 end 'gdbThreadSuffix'
 
-function gdbSlotSet(file DebugRegisterFile, slot BackendRegisterNumber, value GdbWireWord) returns bool
+function gdbSlotSet(file DebugRegisterFile, slot BackendRegisterNumber, value DebuggeeWord) returns bool
 	file.setValue(slot, value: value as BackendWord)
 
 	return true
 end 'gdbSlotSet'
 
-function gdbRegisterHexRead(payload String) returns GdbHexRead
+// ⛔ **A REGISTER ARRIVES AS ITS RAW BYTES, WHICH ON THIS CPU ARE LEAST SIGNIFICANT FIRST**, so the digits
+// a reply spells are not the digits of the number: the pairs are read as memory and reassembled.
+function gdbRegisterHexRead(payload String) returns GdbRegisterRead
 	match gdbHexBytesOf(payload) 'read'
-		notHex then return GdbHexRead.notHex
-		bytes(raw) then return GdbHexRead.value(gdbRegisterValueOf(raw))
+		notHex then return GdbRegisterRead.unreadable
+		bytes(raw) then return gdbRegisterValueIn(raw)
 	end 'read'
 end 'gdbRegisterHexRead'
+
+function gdbRegisterValueIn(raw ByteArray) returns GdbRegisterRead
+	if raw.isEmpty() 'noBytes'
+		return GdbRegisterRead.unreadable
+	end 'noBytes'
+
+	match debugLittleEndianAt(raw, at: 0, width: debugWordWidthWithin(raw.count() as DebugAddress)) 'read'
+		pastTheBytes then panic("gdbRegisterValueIn: the width is bounded by the {raw.count()} bytes in hand")
+		read(word) then return GdbRegisterRead.value(word)
+	end 'read'
+end 'gdbRegisterValueIn'
 
 function gdbMemoryOf(payload String, bytes BackendByteCount) returns BackendMemoryRead
 	match gdbHexBytesOf(payload) 'read'
@@ -1680,7 +1698,7 @@ end 'gdbReadStopRegister'
 
 function gdbPushStopRegister(stop GdbStopReport, number GdbRegisterNumber, spelled String)
 	match gdbRegisterHexRead(spelled) 'read'
-		notHex then return
+		unreadable then return
 		value(word) then stop.setRegister(number, value: word)
 	end 'read'
 end 'gdbPushStopRegister'

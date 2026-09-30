@@ -89,7 +89,7 @@ module function ptraceGprBlockOffsets() returns PtraceRegOffsetArray
 
 	#if arch(arm64)
 		for slot in 0 upto BackendGprSlots 'eachGeneralRegister'
-			offsets.push((slot * WordBytes) as BackendWord)
+			offsets.push((slot * DebuggeeWordBytes) as BackendWord)
 		end 'eachGeneralRegister'
 	#endif
 
@@ -157,7 +157,7 @@ export function requirePtraceScratchLayoutIsDisjoint()
 		panic("PtraceRegisters: a {RegisterBlockBytes}-byte register block at {PtraceRegsOffset} runs into the iovec at {PtraceIovecOffset}")
 	end 'theRegisterBlockReachesTheIovec'
 
-	if PtraceIovecOffset + 2 * WordBytes > PtraceFpRegsOffset 'theIovecReachesTheVectorBlock'
+	if PtraceIovecOffset + 2 * DebuggeeWordBytes > PtraceFpRegsOffset 'theIovecReachesTheVectorBlock'
 		panic("PtraceRegisters: the iovec at {PtraceIovecOffset} runs into the vector block at {PtraceFpRegsOffset}")
 	end 'theIovecReachesTheVectorBlock'
 
@@ -165,7 +165,7 @@ export function requirePtraceScratchLayoutIsDisjoint()
 		panic("PtraceRegisters: a {VectorBlockBytes}-byte vector block at {PtraceFpRegsOffset} runs into the wait status at {PtraceStatusOffset}")
 	end 'theVectorBlockReachesTheStatusWord'
 
-	if PtraceReadCountOffset + WordBytes > PtraceSigInfoOffset 'theReadCountReachesTheSignalBlock'
+	if PtraceReadCountOffset + DebuggeeWordBytes > PtraceSigInfoOffset 'theReadCountReachesTheSignalBlock'
 		panic("PtraceRegisters: the read count at {PtraceReadCountOffset} runs into the signal block at {PtraceSigInfoOffset}")
 	end 'theReadCountReachesTheSignalBlock'
 
@@ -173,7 +173,7 @@ export function requirePtraceScratchLayoutIsDisjoint()
 		panic("PtraceRegisters: a {SigInfoBlockBytes}-byte signal block at {PtraceSigInfoOffset} runs into the transfer window at {PtraceTransferOffset}")
 	end 'theSignalBlockReachesTheTransferWindow'
 
-	if PtraceTransferOffset + TransferWindowBytes > MaxBackendPageOffset + WordBytes 'theTransferWindowLeavesThePage'
+	if PtraceTransferOffset + TransferWindowBytes > MaxBackendPageOffset + DebuggeeWordBytes 'theTransferWindowLeavesThePage'
 		panic("PtraceRegisters: a {TransferWindowBytes}-byte transfer window at {PtraceTransferOffset} runs off a scratch page whose last whole word begins at {MaxBackendPageOffset}")
 	end 'theTransferWindowLeavesThePage'
 end 'requirePtraceScratchLayoutIsDisjoint'
