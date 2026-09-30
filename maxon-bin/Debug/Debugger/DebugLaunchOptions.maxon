@@ -3,10 +3,6 @@ export let DebugStopTimeoutOption = "stopTimeoutSeconds"
 
 export typealias AskedNumber = float(f64.min to f64.max)
 export typealias WholeBound = int(i64.min to i64.max)
-typealias ProcessorAsk = int(1 to u32.max)
-
-export let LowestProcessorAsk = 1 as ProcessorAsk
-export let HighestProcessorAsk = u32.max as ProcessorAsk
 
 export type NumberReading
 	export var value as AskedNumber
@@ -36,7 +32,7 @@ end 'NumberAskError'
 
 export function debugLaunchOptionsFrom(maxProcs NumberAsk, stopTimeoutSeconds NumberAsk, targetEnv EnvMap) returns DebugLaunchOptions
 	if not processorsAskFits(maxProcs) 'notAProcessorCount'
-		return DebugLaunchOptions.refused("`{DebugMaxProcsOption}` is a whole number of processors from {LowestProcessorAsk} to {HighestProcessorAsk}; {askedNumberOf(maxProcs)} is not")
+		return DebugLaunchOptions.refused("`{DebugMaxProcsOption}` is a whole number of processors from {FewestRequestedProcessors} to {MostRequestedProcessors}; {askedNumberOf(maxProcs)} is not")
 	end 'notAProcessorCount'
 
 	match maxProcs 'processors'
@@ -53,7 +49,7 @@ end 'debugLaunchOptionsFrom'
 function processorsAskFits(ask NumberAsk) returns bool
 	return match ask 'which'
 		absent gives true
-		given(procs) gives isWholeWithin(procs.value, least: LowestProcessorAsk, most: HighestProcessorAsk)
+		given(procs) gives isWholeWithin(procs.value, least: FewestRequestedProcessors, most: MostRequestedProcessors)
 	end 'which'
 end 'processorsAskFits'
 

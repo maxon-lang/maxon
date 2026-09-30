@@ -950,8 +950,9 @@ public type StreamingSubprocess
 		return try Self.spawnTraceable(executable, arguments: arguments, workingDirectory: workingDirectory, environment: environment, traced: false)
 	end 'spawnWithEnvironment'
 
-	/// Same as `spawnWithEnvironment`, with the child created under this process as its DEBUGGER when
-	/// `traced` is set.
+	/// Same as `spawnWithEnvironment`, with the child created for a debugger when `traced` is set. On
+	/// Windows and Linux this process becomes its debugger; on macOS the child is created suspended, for
+	/// a debugger to attach to by its `processId()` before its first instruction runs.
 	public static function spawnTraceable(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment, traced bool) returns StreamingSubprocess throws SubprocessError
 		let exePath = try resolveExecutablePath(executable, workingDirectory: workingDirectory)
 		let argvBlob = buildArgvBlob(exePath, args: arguments)
@@ -1074,6 +1075,18 @@ public type StreamingSubprocess
 
 		return rc as ExitInt
 	end 'waitWithTimeout'
+
+	/// The child's operating-system process id. Throws once the handle is released.
+	public function processId() returns Pid throws SubprocessError
+		try requireLive()
+		let pid = __Builtins.subprocessGetPid(handle)
+
+		if pid < 0 'noProcessRecorded'
+			throw SubprocessError.ioFailed("the runtime holds no process id for this child")
+		end 'noProcessRecorded'
+
+		return pid as Pid
+	end 'processId'
 
 	/// Has the child exited? Answers without blocking and WITHOUT killing it.
 	///

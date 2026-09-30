@@ -196,33 +196,6 @@ export function forwardChildTail(child StreamingSubprocess, routing ChildOutputR
 	return faulted
 end 'forwardChildTail'
 
-// ⚠ **A STUB's FORWARDED OUTPUT IS ALREADY A TERMINATED LINE AND ARRIVES FROM A TERMINAL.** The stub gives the
-// program it launched a pseudo-terminal, which turns every newline the program writes into a carriage return
-// and a newline, so the carriage returns are taken back out before a line reaches the routing every other
-// line of the program's output goes through.
-module function routeStubOutput(text String, routing ChildOutputRouting) returns bool
-	if text.isEmpty() 'nothingArrived'
-		return false
-	end 'nothingArrived'
-
-	let lines = text.replace(CarriageReturnText, with: "").split(LineTerminatorText)
-	let last = lines.count() - 1
-	var faulted = false
-
-	for (iter, line) in lines.withIterator() 'eachLine'
-		if iter.index() == (last as ElementIndex) and line.isEmpty() 'theEmptyPiecePastTheLastTerminator'
-			continue
-		end 'theEmptyPiecePastTheLastTerminator'
-
-		faulted = emitChildStreamLine(line, stream: ChildStream.stdout, routing: routing) or faulted
-	end 'eachLine'
-
-	return faulted
-end 'routeStubOutput'
-
-let CarriageReturnText = "\r"
-let LineTerminatorText = "\n"
-
 export function endChild(child StreamingSubprocess, routing ChildOutputRouting) returns bool
 	_ = try child.waitWithTimeout(KillDeadlineMs) otherwise 0
 	let faulted = forwardChildTail(child, routing: routing)

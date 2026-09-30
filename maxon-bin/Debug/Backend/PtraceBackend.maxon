@@ -29,9 +29,27 @@ let GroupStopSliceMs = 50
 
 let GroupStopBudgetMs = 2000
 
-let BorrowedStopAttempts = 4
+let NoWaitMs = 0
 
-typealias PtraceSignalArray = Array with BackendWord
+function ptraceSignalsWith(signals PtraceOwedSignalArray, signal BackendWord) returns PtraceOwedSignalArray
+	var more = signals.clone()
+	more.push(signal)
+
+	return more
+end 'ptraceSignalsWith'
+
+function ptraceFirstSignalOf(owed PtraceOwedSignalArray) returns BackendWord
+	if owed.count() == 0 'nothingIsOwed'
+		return NoSignal
+	end 'nothingIsOwed'
+
+	return try owed.get(0) otherwise panic("ptraceFirstSignalOf: {owed.count()} signal(s) are owed, so the first is there to hand on")
+end 'ptraceFirstSignalOf'
+
+enum PtraceFaultDrain
+	keptForTheDebugger
+	handedToTheProgram
+end 'PtraceFaultDrain'
 
 function ptraceStopSignal() returns BackendWord
 	return posixStopSignalNumber(detectHostTarget().os) as BackendWord
@@ -40,19 +58,31 @@ end 'ptraceStopSignal'
 enum PtraceTrapKind
 	stepLanding
 	requestedStop
+	retiredRequest
 	plantedTrap
 end 'PtraceTrapKind'
 
 union PtraceHeldStop
 	trap(thread BackendWord, reason BackendStopReason, address DebugAddress)
+	fault(thread BackendWord, signal BackendWord, address DebugAddress)
 	departure(reporter BackendWord, event DebugStopEvent)
 
 	function threadIs(id BackendThreadId) returns bool
 		return match self 'held'
 			trap(thread, _, _) gives thread == id as BackendWord
+			fault(thread, _, _) gives thread == id as BackendWord
 			departure(reporter, _) gives reporter == id as BackendWord
 		end 'held'
 	end 'threadIs'
+
+	function isARequestedStop() returns bool
+		return match self 'held'
+			trap(_, reason, _) gives reason == BackendStopReason.interrupt
+
+			fault or
+				departure gives false
+		end 'held'
+	end 'isARequestedStop'
 end 'PtraceHeldStop'
 
 typealias PtraceHeldStopArray = Array with PtraceHeldStop
@@ -100,13 +130,17 @@ union PtraceRequestThread
 	at(thread BackendWord)
 end 'PtraceRequestThread'
 
+typealias PtraceOwedSignalArray = Array with BackendWord
+
 type PtraceThreadEntry
 	export let id as BackendThreadId
 	export var stopped as bool
-	export var pendingSignal as BackendWord
+	export var owedSignals as PtraceOwedSignalArray
+	export var stopOwed as bool
+	export var standingSignal as BackendWord
 
-	static function create(id BackendThreadId, stopped bool, pendingSignal BackendWord) returns PtraceThreadEntry
-		return Self{id: id, stopped: stopped, pendingSignal: pendingSignal}
+	static function create(id BackendThreadId, stopped bool, owedSignals PtraceOwedSignalArray, stopOwed bool, standingSignal BackendWord) returns PtraceThreadEntry
+		return Self{id: id, stopped: stopped, owedSignals: owedSignals, stopOwed: stopOwed, standingSignal: standingSignal}
 	end 'create'
 end 'PtraceThreadEntry'
 
@@ -125,12 +159,13 @@ export type PtraceBackend
 	var stopOutstanding as bool
 	var sawFirstStop as bool
 	var stopRequested as bool
+	var driverTrapInFlight as bool
 	var stepping as BackendStepRoster
 	var held as PtraceHeldStopArray
 	var status as BackendExitStatus
 
 	export static function create() returns PtraceBackend
-		return Self{scratch: BackendScratchPage.create(), process: 0, threads: PtraceThreadEntryArray.create(), pendingThreadId: 0, stopOutstanding: false, sawFirstStop: false, stopRequested: false, stepping: BackendStepRoster.create(), held: PtraceHeldStopArray.create(), status: BackendExitStatus.running}
+		return Self{scratch: BackendScratchPage.create(), process: 0, threads: PtraceThreadEntryArray.create(), pendingThreadId: 0, stopOutstanding: false, sawFirstStop: false, stopRequested: false, driverTrapInFlight: false, stepping: BackendStepRoster.create(), held: PtraceHeldStopArray.create(), status: BackendExitStatus.running}
 	end 'create'
 
 	export function holdsItsScratch() returns bool
@@ -199,9 +234,11 @@ export type PtraceBackend
 			return PtraceWaitStatus.killed(waited)
 		end 'aSignalKilledIt'
 
-		self.rememberThread(reporter as BackendThreadId, stopped: true)
+		let signal = (waited shr WaitCodeShift) and ByteMask
+		let event = (waited shr WaitEventShift) and ByteMask
+		self.rememberThread(reporter as BackendThreadId, signal: signal, event: event)
 
-		return PtraceWaitStatus.stopped((waited shr WaitCodeShift) and ByteMask, event: (waited shr WaitEventShift) and ByteMask)
+		return PtraceWaitStatus.stopped(signal, event: event)
 	end 'takenWaitStatus'
 
 	function classified(reporter BackendWord, waited BackendWord) returns BackendEventClass
@@ -234,7 +271,9 @@ export type PtraceBackend
 
 	function departed(reporter BackendWord, event DebugStopEvent) returns BackendEventClass
 		if reporter != self.process 'anotherThreadOfTheGroup'
-			self.forgetThread(reporter as BackendThreadId)
+			if self.forgotEndingTheHold(reporter as BackendThreadId) 'theHoldEndsWithIt'
+				self.stopOutstanding = true
+			end 'theHoldEndsWithIt'
 
 			return BackendEventClass.stop(DebugStopEvent.threadExited(reporter as BackendThreadId))
 		end 'anotherThreadOfTheGroup'
@@ -258,9 +297,7 @@ export type PtraceBackend
 	// debugger — so a session that set it later would leave an orphan for the window in between.
 	function stoppedWith(reporter BackendWord, signal BackendWord, event BackendWord) returns BackendEventClass
 		if event == PtraceEventClone 'aThreadWasBorn'
-			_ = self.resumeThread(reporter, signal: NoSignal, request: PtraceCont)
-
-			return BackendEventClass.bookkeeping
+			return self.resumedUnlessHeld(reporter, signal: NoSignal)
 		end 'aThreadWasBorn'
 
 		if not self.sawFirstStop 'theExecStop'
@@ -271,9 +308,7 @@ export type PtraceBackend
 		end 'theExecStop'
 
 		if signal == ptraceStopSignal() 'aThreadArrivedStopped'
-			_ = self.resumeThread(reporter, signal: NoSignal, request: self.resumeRequestFor(reporter as BackendThreadId))
-
-			return BackendEventClass.bookkeeping
+			return self.resumedUnlessHeld(reporter, signal: NoSignal)
 		end 'aThreadArrivedStopped'
 
 		if signal == SignalTrap 'aTrapOrAStep'
@@ -282,14 +317,27 @@ export type PtraceBackend
 
 		if self.debuggerOwns(signal) 'aFault'
 			self.recordPendingSignal(reporter as BackendThreadId, signal: signal)
+			self.stepping.forget(reporter as BackendThreadId)
 
 			return self.standing(reporter, reason: BackendStopReason.fault, faultCode: signal, at: self.programCounterOf(reporter))
 		end 'aFault'
 
-		_ = self.resumeThread(reporter, signal: signal, request: self.resumeRequestFor(reporter as BackendThreadId))
+		return self.resumedUnlessHeld(reporter, signal: signal)
+	end 'stoppedWith'
+
+	function resumedUnlessHeld(reporter BackendWord, signal BackendWord) returns BackendEventClass
+		let thread = reporter as BackendThreadId
+
+		if signal != NoSignal 'aSignalToHandOn'
+			self.recordPendingSignal(thread, signal: signal)
+		end 'aSignalToHandOn'
+
+		if self.mayRun(thread) 'itIsNotHeldThroughAStep'
+			_ = self.resumeThread(reporter, request: self.resumeRequestFor(thread))
+		end 'itIsNotHeldThroughAStep'
 
 		return BackendEventClass.bookkeeping
-	end 'stoppedWith'
+	end 'resumedUnlessHeld'
 
 	function debuggerOwns(signal BackendWord) returns bool
 		return posixSignalIsAHardwareFault(signal as MachineWord, on: detectHostTarget().os)
@@ -310,6 +358,7 @@ export type PtraceBackend
 		return match self.tookTheTrapsKind(reporter) 'kind'
 			stepLanding gives self.standingAt(reporter, reason: BackendStopReason.singleStep, faultCode: 0, at: pc)
 			requestedStop gives self.standingAt(reporter, reason: BackendStopReason.interrupt, faultCode: 0, at: pc)
+			retiredRequest gives self.resumedUnlessHeld(reporter, signal: NoSignal)
 			plantedTrap gives self.standingAt(reporter, reason: BackendStopReason.breakpoint, faultCode: 0, at: atTheTrap(pc))
 		end 'kind'
 	end 'trapStopAt'
@@ -319,11 +368,17 @@ export type PtraceBackend
 	// that thread's breakpoint hit as an interrupt, at an address the trap rewind never reached. Asked
 	// ahead of the step roster, so a thread that takes the injected signal mid-step keeps its step.
 	function tookTheTrapsKind(reporter BackendWord) returns PtraceTrapKind
-		if self.stopRequested and self.trapCameFromTheDriversSignal(reporter) 'theDriverAskedForIt'
+		if self.driverTrapInFlight and self.trapCameFromTheDriversSignal(reporter) 'theDriversOwnSignal'
+			self.driverTrapInFlight = false
+
+			if not self.stopRequested 'itsPauseWasAnsweredAlready'
+				return PtraceTrapKind.retiredRequest
+			end 'itsPauseWasAnsweredAlready'
+
 			self.stopRequested = false
 
 			return PtraceTrapKind.requestedStop
-		end 'theDriverAskedForIt'
+		end 'theDriversOwnSignal'
 
 		if self.stepping.holds(reporter as BackendThreadId) 'theStepLanded'
 			self.stepping.forget(reporter as BackendThreadId)
@@ -387,7 +442,9 @@ export type PtraceBackend
 
 	function isTheLeadersDeparture(stop PtraceHeldStop) returns bool
 		return match stop 'held'
-			trap gives false
+			trap or
+				fault gives false
+
 			departure(reporter, _) gives reporter == self.process
 		end 'held'
 	end 'isTheLeadersDeparture'
@@ -395,6 +452,7 @@ export type PtraceBackend
 	function heldTrapNamesADepartedThread(stop PtraceHeldStop) returns bool
 		return match stop 'held'
 			trap(thread, _, _) gives not self.knowsThread(thread as BackendThreadId)
+			fault(thread, _, _) gives not self.knowsThread(thread as BackendThreadId)
 			departure gives false
 		end 'held'
 	end 'heldTrapNamesADepartedThread'
@@ -408,16 +466,17 @@ export type PtraceBackend
 
 	function heldStopDelivered(stop PtraceHeldStop) returns BackendEventClass
 		return match stop 'held'
-			trap(thread, reason, address) gives self.deliveredTrap(thread, reason: reason, at: address)
+			trap(thread, reason, address) gives self.deliveredStop(thread, reason: reason, faultCode: 0, at: address)
+			fault(thread, signal, address) gives self.deliveredStop(thread, reason: BackendStopReason.fault, faultCode: signal, at: address)
 			departure(reporter, event) gives self.departed(reporter, event: event)
 		end 'held'
 	end 'heldStopDelivered'
 
-	function deliveredTrap(thread BackendWord, reason BackendStopReason, at DebugAddress) returns BackendEventClass
+	function deliveredStop(thread BackendWord, reason BackendStopReason, faultCode BackendWord, at DebugAddress) returns BackendEventClass
 		self.pendingThreadId = thread
 
-		return self.standingAt(thread, reason: reason, faultCode: 0, at: at)
-	end 'deliveredTrap'
+		return self.standingAt(thread, reason: reason, faultCode: faultCode, at: at)
+	end 'deliveredStop'
 
 	function holdsAStopFor(id BackendThreadId) returns bool
 		for stop in self.held 'eachHeld'
@@ -454,29 +513,129 @@ export type PtraceBackend
 	end 'standingAt'
 
 	function stopEveryOtherThread()
-		var asked = BackendThreadIdArray.create()
+		var running = BackendThreadIdArray.create()
 
 		for entry in self.threads 'eachThread'
 			if not entry.stopped 'stillRunning'
-				if hostDebugCall(HostDebugVerb.threadSignal, a0: self.process, a1: entry.id as BackendWord, a2: ptraceStopSignal(), a3: 0, a4: 0) != 0 'theSignalWasDelivered'
-					asked.push(entry.id)
-				end 'theSignalWasDelivered'
+				running.push(entry.id)
 			end 'stillRunning'
 		end 'eachThread'
 
+		_ = self.threadsBroughtToAStop(running)
+	end 'stopEveryOtherThread'
+
+	function threadsBroughtToAStop(targets BackendThreadIdArray) returns bool
+		var asked = BackendThreadIdArray.create()
+
+		for id in targets 'eachTarget'
+			if self.owesAStop(id) or self.stopSignalSent(id) 'itWillStop'
+				asked.push(id)
+			end 'itWillStop'
+		end 'eachTarget'
+
+		self.awaitStops(asked)
+		self.drainOwedStops(asked, faults: PtraceFaultDrain.keptForTheDebugger)
+
+		return self.everyAskedThreadStopped(asked)
+	end 'threadsBroughtToAStop'
+
+	function stopSignalSent(id BackendThreadId) returns bool
+		if not self.signalRaised(id, signal: ptraceStopSignal()) 'theSignalWasRefused'
+			return false
+		end 'theSignalWasRefused'
+
+		self.markStopOwed(id)
+
+		return true
+	end 'stopSignalSent'
+
+	// A thread that answered this backend's SIGSTOP with another stop still has the SIGSTOP pending
+	// (`stopOwed`), so it is continued until it takes it, before anything resumes or detaches it: left
+	// pending, it lands later as a stop nobody asked for. A lower-numbered pending signal such as SIGCHLD
+	// is delivered ahead of it, which is why this loops.
+	function drainOwedStops(asked BackendThreadIdArray, faults PtraceFaultDrain)
+		let deadline = debugDeadlineAfter(GroupStopBudgetMs as StopTimeoutMs)
+
+		while not debugDeadlinePassed(deadline) 'eachRound'
+			let owing = self.continuedToTheirOwedStops(asked, faults: faults)
+
+			if owing.count() == 0 'noneOwesAStop'
+				return
+			end 'noneOwesAStop'
+
+			self.awaitStops(owing)
+		end 'eachRound'
+	end 'drainOwedStops'
+
+	function continuedToTheirOwedStops(asked BackendThreadIdArray, faults PtraceFaultDrain) returns BackendThreadIdArray
+		var owing = BackendThreadIdArray.create()
+
+		for id in asked 'eachAsked'
+			if self.standsOwingAStop(id) and self.continuedTowardItsStop(id, faults: faults) 'itGoesToTakeIt'
+				owing.push(id)
+			end 'itGoesToTakeIt'
+		end 'eachAsked'
+
+		return owing
+	end 'continuedToTheirOwedStops'
+
+	// A thread standing in a fault is resumed only from that stop, its fault's own delivery-stop, where
+	// the kernel still holds the fault's siginfo (`si_addr`) for the program's handler.
+	function continuedTowardItsStop(id BackendThreadId, faults PtraceFaultDrain) returns bool
+		if not self.standsInAFault(id) and not self.holdsAStopFor(id) 'nothingTheDebuggerIsShownStands'
+			return self.continuedKeepingItsSignal(id)
+		end 'nothingTheDebuggerIsShownStands'
+
+		return match faults 'fault'
+			keptForTheDebugger gives false
+			handedToTheProgram gives self.resumeThread(id as BackendWord, request: PtraceCont)
+		end 'fault'
+	end 'continuedTowardItsStop'
+
+	function standsInAFault(id BackendThreadId) returns bool
+		return match self.entryOf(id) 'known'
+			none gives false
+			at(entry) gives entry.stopped and self.debuggerOwns(entry.standingSignal)
+		end 'known'
+	end 'standsInAFault'
+
+	function standsOwingAStop(id BackendThreadId) returns bool
+		return match self.entryOf(id) 'known'
+			none gives false
+			at(entry) gives entry.stopped and entry.stopOwed
+		end 'known'
+	end 'standsOwingAStop'
+
+	function continuedKeepingItsSignal(id BackendThreadId) returns bool
+		if hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceCont, a1: id as BackendWord, a2: 0, a3: NoSignal, a4: 0) == 0 'theKernelRefused'
+			return false
+		end 'theKernelRefused'
+
+		self.markResumed(id, keepsItsSignals: true)
+
+		return true
+	end 'continuedKeepingItsSignal'
+
+	function awaitStops(asked BackendThreadIdArray)
 		let deadline = debugDeadlineAfter(GroupStopBudgetMs as StopTimeoutMs)
 
 		while not self.everyAskedThreadStopped(asked) and not debugDeadlinePassed(deadline) 'eachAnswer'
-			self.scratch.setWord(PtraceStatusOffset as BackendPageOffset, value: 0)
-			let reporter = hostDebugCall(HostDebugVerb.awaitTracee, a0: self.scratch.addressOf(PtraceStatusOffset as BackendPageOffset), a1: GroupStopSliceMs, a2: self.process, a3: 0, a4: 0)
-
-			if reporter == 0 'nothingCameBack'
-				continue
-			end 'nothingCameBack'
-
-			self.settleGroupStop(reporter, waited: self.scratch.word(PtraceStatusOffset as BackendPageOffset) and DwordMask)
+			_ = self.settledOneReport(GroupStopSliceMs)
 		end 'eachAnswer'
-	end 'stopEveryOtherThread'
+	end 'awaitStops'
+
+	function settledOneReport(budgetMs BackendWord) returns bool
+		self.scratch.setWord(PtraceStatusOffset as BackendPageOffset, value: 0)
+		let reporter = hostDebugCall(HostDebugVerb.awaitTracee, a0: self.scratch.addressOf(PtraceStatusOffset as BackendPageOffset), a1: budgetMs, a2: self.process, a3: 0, a4: 0)
+
+		if reporter == 0 'nothingCameBack'
+			return false
+		end 'nothingCameBack'
+
+		self.settleGroupStop(reporter, waited: self.scratch.word(PtraceStatusOffset as BackendPageOffset) and DwordMask)
+
+		return true
+	end 'settledOneReport'
 
 	function everyAskedThreadStopped(asked BackendThreadIdArray) returns bool
 		for id in asked 'eachAsked'
@@ -499,7 +658,7 @@ export type PtraceBackend
 	// the same instant. A trap of its own is classified here and held, drained ahead of the next
 	// wait and reported to the driver, and a thread that owes a held report is never resumed, so the
 	// hit cannot be run past. Any other signal is kept for that thread's resume, so a fault stays
-	// owed to the program.
+	// owed to the program; a fault is also held and shown to the debugger.
 	function settleGroupStop(reporter BackendWord, waited BackendWord)
 		match self.takenWaitStatus(reporter, waited: waited) 'status'
 			exited(code) then self.departureHeld(reporter, event: DebugStopEvent.exited(code))
@@ -519,10 +678,25 @@ export type PtraceBackend
 			return
 		end 'aTrapOrAStepOfItsOwn'
 
-		if signal != ptraceStopSignal() 'notOursToSwallow'
-			self.recordPendingSignal(reporter as BackendThreadId, signal: signal)
-		end 'notOursToSwallow'
+		if signal == ptraceStopSignal() 'oursToSwallow'
+			return
+		end 'oursToSwallow'
+
+		self.recordPendingSignal(reporter as BackendThreadId, signal: signal)
+
+		if self.debuggerOwns(signal) 'aFaultTheDebuggerIsShown'
+			self.faultHeld(reporter, signal: signal)
+		end 'aFaultTheDebuggerIsShown'
 	end 'settleStoppedThread'
+
+	function faultHeld(reporter BackendWord, signal BackendWord)
+		self.stepping.forget(reporter as BackendThreadId)
+
+		match self.programCounterOf(reporter) 'counter'
+			unreadable then return
+			at(pc) then self.hold(PtraceHeldStop.fault(reporter, signal: signal, address: pc))
+		end 'counter'
+	end 'faultHeld'
 
 	function settleTrapTakenByTheBackend(reporter BackendWord)
 		match self.programCounterOf(reporter) 'counter'
@@ -535,7 +709,7 @@ export type PtraceBackend
 		match self.tookTheTrapsKind(reporter) 'kind'
 			stepLanding then self.hold(PtraceHeldStop.trap(reporter, reason: BackendStopReason.singleStep, address: pc))
 			requestedStop then self.hold(PtraceHeldStop.trap(reporter, reason: BackendStopReason.interrupt, address: pc))
-
+			retiredRequest then return
 			plantedTrap then self.rewoundAndHeld(reporter, pc: pc)
 		end 'kind'
 	end 'settleTrapAt'
@@ -546,20 +720,13 @@ export type PtraceBackend
 	end 'rewoundAndHeld'
 
 	function departureHeld(reporter BackendWord, event DebugStopEvent)
-		self.forgetThread(reporter as BackendThreadId)
+		_ = self.forgotEndingTheHold(reporter as BackendThreadId)
 		self.hold(PtraceHeldStop.departure(reporter, event: event))
 	end 'departureHeld'
 
 	function drainEveryPendingReport()
-		while true 'eachReport'
-			self.scratch.setWord(PtraceStatusOffset as BackendPageOffset, value: 0)
-			let reporter = hostDebugCall(HostDebugVerb.awaitTracee, a0: self.scratch.addressOf(PtraceStatusOffset as BackendPageOffset), a1: 0, a2: self.process, a3: 0, a4: 0)
-
-			if reporter == 0 'nothingIsPending'
-				return
-			end 'nothingIsPending'
-
-			self.settleGroupStop(reporter, waited: self.scratch.word(PtraceStatusOffset as BackendPageOffset) and DwordMask)
+		while self.settledOneReport(NoWaitMs) 'eachReport'
+			continue
 		end 'eachReport'
 	end 'drainEveryPendingReport'
 
@@ -584,23 +751,23 @@ export type PtraceBackend
 
 		self.stopOutstanding = false
 
-		return self.everyStoppedThreadResumed()
+		return self.stoppedThreadsResumed()
 	end 'resumeAll'
 
-	// A step resumes the whole process with the stepping threads stepping and the rest continuing,
-	// so `stepping` is a roster and more than one step can be outstanding. ⚠ Every ptrace resume
+	// A step resumes the stepping threads stepping and the rest continuing, or held where the step
+	// asks for it, so `stepping` is a roster and more than one step can be outstanding. ⚠ Every ptrace resume
 	// takes its request from `resumeRequestFor`: one that downgraded an outstanding step to a
 	// continue would run past the landing the engine replants a breakpoint on, leaving that
 	// breakpoint out of the program for good.
-	export function stepThread(thread BackendThreadId) returns bool
+	export function stepThread(thread BackendThreadId, others BackendOtherThreads) returns bool
 		if not self.stopOutstanding 'nothingIsStopped'
 			return false
 		end 'nothingIsStopped'
 
 		self.stopOutstanding = false
-		self.stepping.note(thread)
+		self.stepping.note(thread, others: others)
 
-		if not self.everyStoppedThreadResumed() 'theKernelRefused'
+		if not self.stoppedThreadsResumed() 'theKernelRefused'
 			self.stepping.forget(thread)
 
 			return false
@@ -610,71 +777,145 @@ export type PtraceBackend
 	end 'stepThread'
 
 	// ⛔ THE ROSTER IS SNAPSHOT BEFORE THE FIRST RESUME, because a resume rewrites the table it would otherwise
-	// be read through — `markStopped` replaces the whole array, which a live borrow refuses (E3070).
-	function everyStoppedThreadResumed() returns bool
-		var ids = BackendThreadIdArray.create()
-		var signals = PtraceSignalArray.create()
-
-		for entry in self.threads 'eachThread'
-			if entry.stopped and not self.holdsAStopFor(entry.id) 'itIsStoppedAndOwesNoReport'
-				ids.push(entry.id)
-				signals.push(entry.pendingSignal)
-			end 'itIsStoppedAndOwesNoReport'
-		end 'eachThread'
-
+	// be read through — `withEntryReplaced` replaces the whole array, which a live borrow refuses (E3070).
+	function stoppedThreadsResumed() returns bool
 		var resumed = true
 
-		for (iter, id) in ids.withIterator() 'eachStoppedThread'
-			let signal = try signals.get(iter.index()) otherwise panic("PtraceBackend.everyStoppedThreadResumed: the two columns are filled together, so thread {id} has a pending signal beside it — dropping one would withhold a fault from the program it is owed to")
-			let request = self.resumeRequestFor(id)
-
-			if not self.resumeThread(id as BackendWord, signal: signal, request: request) 'theKernelRefused'
+		for entry in self.resumableRoster() 'eachStoppedThread'
+			if not self.resumeThread(entry.id as BackendWord, request: self.resumeRequestFor(entry.id)) 'theKernelRefused'
 				resumed = false
 			end 'theKernelRefused'
 		end 'eachStoppedThread'
 
 		return resumed
-	end 'everyStoppedThreadResumed'
+	end 'stoppedThreadsResumed'
+
+	// The reporter resumes last, giving every thread held through the stop a head start on it.
+	function resumableRoster() returns PtraceThreadEntryArray
+		let reporter = self.stoppedThread()
+		var roster = PtraceThreadEntryArray.create()
+
+		for entry in self.threads 'eachThread'
+			if entry.id != reporter and self.resumable(entry) 'anotherThreadResumes'
+				roster.push(entry)
+			end 'anotherThreadResumes'
+		end 'eachThread'
+
+		for entry in self.threads 'theReporterLast'
+			if entry.id == reporter and self.resumable(entry) 'theReporterResumes'
+				roster.push(entry)
+			end 'theReporterResumes'
+		end 'theReporterLast'
+
+		return roster
+	end 'resumableRoster'
+
+	function resumable(entry PtraceThreadEntry) returns bool
+		if not entry.stopped or self.holdsAStopFor(entry.id) 'itStaysWhereItIs'
+			return false
+		end 'itStaysWhereItIs'
+
+		return self.mayRun(entry.id)
+	end 'resumable'
+
+	function mayRun(id BackendThreadId) returns bool
+		return match self.stepping.company() 'company'
+			run gives true
+			hold gives self.stepping.holds(id)
+		end 'company'
+	end 'mayRun'
 
 	function resumeRequestFor(id BackendThreadId) returns BackendWord
 		return PtraceSingleStep if self.stepping.holds(id) else PtraceCont
 	end 'resumeRequestFor'
 
-	function resumeThread(thread BackendWord, signal BackendWord, request BackendWord) returns bool
-		if hostDebugCall(HostDebugVerb.traceRequest, a0: request, a1: thread, a2: 0, a3: signal, a4: 0) == 0 'theKernelRefused'
+	// A ptrace resume injects one signal, so every other owed signal is raised again once the request
+	// succeeds: the kernel does not re-raise an asynchronous signal its tracer withheld.
+	function resumeThread(thread BackendWord, request BackendWord) returns bool
+		let id = thread as BackendThreadId
+		let owed = self.owedSignalsOf(id)
+
+		if hostDebugCall(HostDebugVerb.traceRequest, a0: request, a1: thread, a2: 0, a3: ptraceFirstSignalOf(owed), a4: 0) == 0 'theKernelRefused'
 			return false
 		end 'theKernelRefused'
 
-		self.withEntryReplaced(thread as BackendThreadId, stopped: false, pendingSignal: NoSignal)
+		self.markResumed(id, keepsItsSignals: false)
+		self.laterSignalsRaised(id, owed: owed)
 
 		return true
 	end 'resumeThread'
 
 	export function requestStop() returns bool
-		self.stopRequested = hostDebugCall(HostDebugVerb.processSignal, a0: self.process, a1: SignalTrap, a2: 0, a3: 0, a4: 0) != 0
+		if not self.driverTrapInFlight 'noSignalIsOnItsWay'
+			if hostDebugCall(HostDebugVerb.processSignal, a0: self.process, a1: SignalTrap, a2: 0, a3: 0, a4: 0) == 0 'theKernelRefused'
+				return false
+			end 'theKernelRefused'
 
-		return self.stopRequested
+			self.driverTrapInFlight = true
+		end 'noSignalIsOnItsWay'
+
+		self.stopRequested = true
+
+		return true
 	end 'requestStop'
 
-	export function abandonStopRequest()
+	export function forgetStep(thread BackendThreadId)
+		self.stepping.forget(thread)
+	end 'forgetStep'
+
+	export function retireStopRequest()
 		self.stopRequested = false
-	end 'abandonStopRequest'
+		var kept = PtraceHeldStopArray.create()
+
+		for stop in self.held 'eachHeld'
+			if not stop.isARequestedStop() 'notTheDriversPause'
+				kept.push(stop)
+			end 'notTheDriversPause'
+		end 'eachHeld'
+
+		self.held = kept
+	end 'retireStopRequest'
+
+	// A SIGTRAP the driver sent for a pause is taken before the detach: delivered after it, its default
+	// action would kill the program.
+	function driverTrapTaken()
+		let leader = self.process as BackendThreadId
+
+		if not self.driverTrapInFlight or not self.knowsThread(leader) 'nothingIsOnItsWay'
+			return
+		end 'nothingIsOnItsWay'
+
+		if not self.continuedKeepingItsSignal(leader) 'theKernelRefused'
+			return
+		end 'theKernelRefused'
+
+		var leaderAlone = BackendThreadIdArray.create()
+		leaderAlone.push(leader)
+		self.awaitStops(leaderAlone)
+	end 'driverTrapTaken'
 
 	export function detach() returns bool
 		self.drainEveryPendingReport()
 		_ = self.borrowedStop()
 		self.stopEveryOtherThread()
+		self.drainOwedStops(self.listThreads(), faults: PtraceFaultDrain.handedToTheProgram)
+		self.stopRequested = false
+		self.driverTrapTaken()
 		var detached = true
 
 		for entry in self.threads 'eachThread'
-			if hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceDetach, a1: entry.id as BackendWord, a2: 0, a3: entry.pendingSignal, a4: 0) == 0 'theKernelRefused'
+			if hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceDetach, a1: entry.id as BackendWord, a2: 0, a3: ptraceFirstSignalOf(entry.owedSignals), a4: 0) == 0 'theKernelRefused'
 				detached = false
+
+				continue
 			end 'theKernelRefused'
+
+			self.laterSignalsRaised(entry.id, owed: entry.owedSignals)
 		end 'eachThread'
 
 		self.stopOutstanding = false
-		self.stopRequested = false
 		self.stepping.clear()
+		self.held = PtraceHeldStopArray.create()
 
 		return detached
 	end 'detach'
@@ -691,22 +932,20 @@ export type PtraceBackend
 			return PtraceStopBorrow.alreadyStopped
 		end 'itIsAlreadyStopped'
 
-		if hostDebugCall(HostDebugVerb.processSignal, a0: self.process, a1: ptraceStopSignal(), a2: 0, a3: 0, a4: 0) == 0 'theKernelRefused'
+		let leader = self.process as BackendThreadId
+
+		if not self.knowsThread(leader) 'theLeaderHasLeft'
 			return PtraceStopBorrow.unavailable
-		end 'theKernelRefused'
+		end 'theLeaderHasLeft'
 
-		for _ in 0 upto BorrowedStopAttempts 'eachAttempt'
-			self.scratch.setWord(PtraceStatusOffset as BackendPageOffset, value: 0)
-			let reporter = hostDebugCall(HostDebugVerb.awaitTracee, a0: self.scratch.addressOf(PtraceStatusOffset as BackendPageOffset), a1: GroupStopSliceMs, a2: self.process, a3: 0, a4: 0)
+		if not self.threadIsStillRunning(leader) 'theLeaderStandsAlready'
+			return PtraceStopBorrow.alreadyStopped
+		end 'theLeaderStandsAlready'
 
-			if reporter != 0 'oneStopped'
-				self.settleGroupStop(reporter, waited: self.scratch.word(PtraceStatusOffset as BackendPageOffset) and DwordMask)
+		var leaderAlone = BackendThreadIdArray.create()
+		leaderAlone.push(leader)
 
-				return PtraceStopBorrow.taken
-			end 'oneStopped'
-		end 'eachAttempt'
-
-		return PtraceStopBorrow.unavailable
+		return PtraceStopBorrow.taken if self.threadsBroughtToAStop(leaderAlone) else PtraceStopBorrow.unavailable
 	end 'borrowedStop'
 
 	function returnedTheBorrowedStop(borrowed PtraceStopBorrow)
@@ -714,7 +953,7 @@ export type PtraceBackend
 			return
 		end 'nothingWasBorrowed'
 
-		_ = self.everyStoppedThreadResumed()
+		_ = self.stoppedThreadsResumed()
 	end 'returnedTheBorrowedStop'
 
 	export function readMemory(address DebugAddress, bytes BackendByteCount) returns BackendMemoryRead
@@ -835,7 +1074,6 @@ export type PtraceBackend
 		file.setValue(BackendRegSlotPc as BackendRegisterNumber, value: self.scratch.word(ptraceProgramCounterSlot()))
 		file.setValue(BackendRegSlotFlags as BackendRegisterNumber, value: self.scratch.word(ptraceStatusWordSlot()))
 		file.setValue(BackendRegSlotSp as BackendRegisterNumber, value: self.scratch.word(ptraceStackPointerSlot()))
-		self.readVectorRegisters(thread as BackendWord, into: file)
 
 		return BackendRegisterRead.read(file)
 	end 'readRegisters'
@@ -845,33 +1083,15 @@ export type PtraceBackend
 	// `DebugRegisterFile.create` left them, which is what the engine already reads for a thread it cannot
 	// reach; only the low half of each XMM is taken, because that is the half the other lane's `CONTEXT`
 	// decode stores and the slot is one word wide.
-	function readVectorRegisters(thread BackendWord, into DebugRegisterFile)
-		if not ptraceVectorRegistersRead(self.scratch, thread: thread) 'noVectorFile'
+	export function fillVectorRegisters(thread BackendThreadId, into DebugRegisterFile)
+		if not ptraceVectorRegistersRead(self.scratch, thread: thread as BackendWord) 'noVectorFile'
 			return
 		end 'noVectorFile'
 
 		for lane in 0 upto BackendVectorSlots 'eachVectorRegister'
 			into.setValue((BackendGprSlots + lane) as BackendRegisterNumber, value: self.scratch.word(ptraceVectorLaneSlot(lane as BackendWord)))
 		end 'eachVectorRegister'
-	end 'readVectorRegisters'
-
-	export function writeRegisters(thread BackendThreadId, file DebugRegisterFile) returns bool
-		if not self.registersRead(thread as BackendWord) 'unreadable'
-			return false
-		end 'unreadable'
-
-		let offsets = ptraceGprBlockOffsets()
-
-		for (iter, offset) in offsets.withIterator() 'eachGeneralRegister'
-			self.scratch.setWord(ptraceGprBlockSlot(offset), value: file.valueOf(iter.index() as BackendRegisterNumber))
-		end 'eachGeneralRegister'
-
-		self.scratch.setWord(ptraceProgramCounterSlot(), value: file.valueOf(BackendRegSlotPc as BackendRegisterNumber))
-		self.scratch.setWord(ptraceStatusWordSlot(), value: file.valueOf(BackendRegSlotFlags as BackendRegisterNumber))
-		self.scratch.setWord(ptraceStackPointerSlot(), value: file.valueOf(BackendRegSlotSp as BackendRegisterNumber))
-
-		return self.registersWritten(thread as BackendWord)
-	end 'writeRegisters'
+	end 'fillVectorRegisters'
 
 	export function setProgramCounter(thread BackendThreadId, address DebugAddress) returns bool
 		if not self.registersRead(thread as BackendWord) 'unreadable'
@@ -901,10 +1121,13 @@ export type PtraceBackend
 
 	// --- the thread table ---
 
-	function rememberThread(id BackendThreadId, stopped bool)
+	function rememberThread(id BackendThreadId, signal BackendWord, event BackendWord)
+		let standingSignal = signal if event == 0 else NoSignal
+		let stopObserved = standingSignal == ptraceStopSignal()
+
 		match self.entryOf(id) 'known'
-			none then self.threads.push(PtraceThreadEntry.create(id, stopped: stopped, pendingSignal: NoSignal))
-			at(entry) then self.withEntryReplaced(id, stopped: stopped, pendingSignal: entry.pendingSignal)
+			none then self.threads.push(PtraceThreadEntry.create(id, stopped: true, owedSignals: PtraceOwedSignalArray.create(), stopOwed: false, standingSignal: standingSignal))
+			at(entry) then self.withEntryReplaced(PtraceThreadEntry.create(id, stopped: true, owedSignals: entry.owedSignals, stopOwed: entry.stopOwed and not stopObserved, standingSignal: standingSignal))
 		end 'known'
 	end 'rememberThread'
 
@@ -918,12 +1141,12 @@ export type PtraceBackend
 		return PtraceThreadEntryLookup.none
 	end 'entryOf'
 
-	function withEntryReplaced(id BackendThreadId, stopped bool, pendingSignal BackendWord)
+	function withEntryReplaced(updated PtraceThreadEntry)
 		var kept = PtraceThreadEntryArray.create()
 
 		for entry in self.threads 'eachThread'
-			if entry.id == id 'thisOne'
-				kept.push(PtraceThreadEntry.create(entry.id, stopped: stopped, pendingSignal: pendingSignal))
+			if entry.id == updated.id 'thisOne'
+				kept.push(updated)
 			end 'thisOne' else 'anotherThread'
 				kept.push(entry)
 			end 'anotherThread'
@@ -935,13 +1158,52 @@ export type PtraceBackend
 	function recordPendingSignal(id BackendThreadId, signal BackendWord)
 		match self.entryOf(id) 'known'
 			none then return
-			at(entry) then self.withEntryReplaced(id, stopped: entry.stopped, pendingSignal: signal)
+			at(entry) then self.withEntryReplaced(PtraceThreadEntry.create(id, stopped: entry.stopped, owedSignals: ptraceSignalsWith(entry.owedSignals, signal: signal), stopOwed: entry.stopOwed, standingSignal: entry.standingSignal))
 		end 'known'
 	end 'recordPendingSignal'
 
-	function forgetThread(id BackendThreadId)
-		self.stepping.forget(id)
+	function markResumed(id BackendThreadId, keepsItsSignals bool)
+		match self.entryOf(id) 'known'
+			none then return
+			at(entry) then self.withEntryReplaced(PtraceThreadEntry.create(id, stopped: false, owedSignals: entry.owedSignals if keepsItsSignals else PtraceOwedSignalArray.create(), stopOwed: entry.stopOwed, standingSignal: NoSignal))
+		end 'known'
+	end 'markResumed'
 
+	function markStopOwed(id BackendThreadId)
+		match self.entryOf(id) 'known'
+			none then return
+			at(entry) then self.withEntryReplaced(PtraceThreadEntry.create(id, stopped: entry.stopped, owedSignals: entry.owedSignals, stopOwed: true, standingSignal: entry.standingSignal))
+		end 'known'
+	end 'markStopOwed'
+
+	function owedSignalsOf(id BackendThreadId) returns PtraceOwedSignalArray
+		return match self.entryOf(id) 'known'
+			none gives PtraceOwedSignalArray.create()
+			at(entry) gives entry.owedSignals
+		end 'known'
+	end 'owedSignalsOf'
+
+	function laterSignalsRaised(id BackendThreadId, owed PtraceOwedSignalArray)
+		for (iter, signal) in owed.withIterator() 'eachLaterSignal'
+			if iter.index() > 0 and not self.signalRaised(id, signal: signal) 'theThreadHasLeft'
+				return
+			end 'theThreadHasLeft'
+		end 'eachLaterSignal'
+	end 'laterSignalsRaised'
+
+	function signalRaised(id BackendThreadId, signal BackendWord) returns bool
+		return hostDebugCall(HostDebugVerb.threadSignal, a0: self.process, a1: id as BackendWord, a2: signal, a3: 0, a4: 0) != 0
+	end 'signalRaised'
+
+	function owesAStop(id BackendThreadId) returns bool
+		return match self.entryOf(id) 'known'
+			none gives false
+			at(entry) gives entry.stopOwed
+		end 'known'
+	end 'owesAStop'
+
+	function forgotEndingTheHold(id BackendThreadId) returns bool
+		let holdEnded = self.stepping.forgetEndingTheHold(id)
 		var kept = PtraceThreadEntryArray.create()
 
 		for entry in self.threads 'eachThread'
@@ -951,5 +1213,7 @@ export type PtraceBackend
 		end 'eachThread'
 
 		self.threads = kept
-	end 'forgetThread'
+
+		return holdEnded
+	end 'forgotEndingTheHold'
 end 'PtraceBackend'

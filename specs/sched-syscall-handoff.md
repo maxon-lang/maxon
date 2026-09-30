@@ -467,10 +467,8 @@ in whichever order those machines woke, and this case would flake on its first l
 third. The `blocked=` witness reads the same here as at one processor: `blocked=no` is a feed that arrived
 early, never a scheduling result.
 
-⚠ **It pins an ORDER, not a count.** `MAXON_MAX_PROCS` is clamped to the host's processor count, so on a
-one-core machine this case degenerates into the case above and would read `R: read returned` first. That
-is a real limitation of the pair and not a flake to re-run; a host that cannot give the runtime two
-processors cannot exhibit the difference the pair exists to show.
+⚠ **It pins an ORDER, not a count.** `MAXON_MAX_PROCS` is taken exactly, so the runtime has four
+processors on every host, a one-core machine included.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

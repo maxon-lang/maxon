@@ -13,6 +13,8 @@ export enum HostDebugVerb
 	protectRegion
 	flushCode
 	closeHandle
+	suspendThread
+	resumeThread
 	traceRequest
 	traceeRead
 	awaitTracee
@@ -43,6 +45,8 @@ module function hostDebugCall(verb HostDebugVerb, a0 BackendWord, a1 BackendWord
 			protectRegion then answer = __Builtins.debugProtectRegion(a0, a1, a2, a3, a4)
 			flushCode then answer = __Builtins.debugFlushCode(a0, a1, a2)
 			closeHandle then answer = __Builtins.debugCloseHandle(a0)
+			suspendThread then answer = __Builtins.debugSuspendThread(a0)
+			resumeThread then answer = __Builtins.debugResumeThread(a0)
 			traceRequest or
 				traceeRead or
 				awaitTracee or
@@ -71,7 +75,9 @@ module function hostDebugCall(verb HostDebugVerb, a0 BackendWord, a1 BackendWord
 				detachProcess or
 				protectRegion or
 				flushCode or
-				closeHandle then panic("hostDebugCall: `{verb.name}` is a debug-port verb and this build drives a debuggee through ptrace — `backendForHost` hands this host a backend that spells neither lane's verbs")
+				closeHandle or
+				suspendThread or
+				resumeThread then panic("hostDebugCall: `{verb.name}` is a debug-port verb and this build drives a debuggee through ptrace — `backendForHost` hands this host a backend that spells neither lane's verbs")
 		end 'verb'
 	#endif
 
@@ -91,6 +97,8 @@ module function hostDebugCall(verb HostDebugVerb, a0 BackendWord, a1 BackendWord
 				protectRegion or
 				flushCode or
 				closeHandle or
+				suspendThread or
+				resumeThread or
 				traceRequest or
 				traceeRead or
 				awaitTracee or

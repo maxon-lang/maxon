@@ -1,0 +1,27 @@
+let PauseBlockedCaseLabel = "pause-stops-a-program-blocked-outside-its-code"
+let BlockedFixtureName = "blocked"
+let NotPausableRefusal = "not-pausable"
+
+let OneSecond = 1
+let TimedOutSessionExitCode = 1
+
+test 'pause stops a program that has started and is blocked outside its own code'
+	let staged = builtFixture(PauseBlockedCaseLabel, fixture: BlockedFixtureName)
+	let oneSecondStopTimeout = "{DebugStopTimeoutOptionPrefix}{OneSecond}"
+	let commands = debugCommandLine([RunCommand, PauseCommand, QuitCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [oneSecondStopTimeout])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 1, message: "the `{RunCommand}` over a program that sleeps forever must answer one `{TimeoutEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	Expect.equal(eventsOfKind(events, kind: ErrorEventName).count(), expected: 0, message: "a `{PauseCommand}` of a program blocked in a system call answered an `{ErrorEventName}`. A program that has started is pausable wherever its thread is waiting, inside its own code or not, so a `{NotPausableRefusal}` refusal here is the debugger mistaking a blocked program for one still loading. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	Expect.equal(stops.count(), expected: 1, message: "the `{PauseCommand}` of a program blocked outside its own code must stop it. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: PauseStopReason, message: "a stop the driver asked for is reported `{PauseStopReason}`. {said}")
+
+	Expect.equal(session.exitCode(), expected: TimedOutSessionExitCode, message: "the `{RunCommand}` timed out, and the driver's exit code on any timeout is {TimedOutSessionExitCode} whatever the session went on to do. {said}")
+end 'pause stops a program that has started and is blocked outside its own code'

@@ -304,7 +304,7 @@ extension runs it as its debug adapter.
 **`launch` arguments:** `program`, `args`, `env`, `cwd`, `stopOnEntry`, `maxProcs`, `trace`,
 `stopTimeoutSeconds`. `stopTimeoutSeconds` is a number of seconds, default 10, with a fraction honoured
 to the millisecond, from 0.001 to 922337203685; `maxProcs` is a whole number of processors from 1 to
-4294967295, passed to the program as `MAXON_MAX_PROCS`. A value outside its bounds refuses the `launch`,
+2147483647, passed to the program as `MAXON_MAX_PROCS`. A value outside its bounds refuses the `launch`,
 naming the argument.
 
 **Events:** `initialized`, `stopped`, `continued`, `output`, `exited`, `terminated`.

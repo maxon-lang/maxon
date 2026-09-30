@@ -745,7 +745,7 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 
 | Variable | Effect |
 |----------|--------|
-| `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A number from 1 up sets it exactly; a larger number is capped at the machine's count; a value that is not a positive number is ignored. `Scheduler.processorCount()` answers the resulting count. |
+| `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A decimal number from 1 to 2147483647, optionally led by `+`, sets it exactly, above the machine's count as well as below it; any other value is ignored. `Scheduler.processorCount()` answers the resulting count. |
 | `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
 
 `MAXON_DEBUGSTREAM` is set by `maxon monitor`, and by `maxon debug --trace`, to attach a `--debugstream`
@@ -1132,7 +1132,7 @@ maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 the loader gives it before any of the program's code runs, then arms whatever was asked for. A
 breakpoint is the driver saving the original bytes and writing the host's own trap instruction over them
 through the debug interface — an `int3` on the x64 hosts and a `brk #0` on the arm64 ones; resuming off one
-restores the bytes, single-steps the instruction and plants the trap again.
+restores the bytes, single-steps the instruction with every other thread held, and plants the trap again.
 The host keeps the pair together: quitting the session ends the program with it, and `detach` is how you
 leave a program running.
 
@@ -1924,7 +1924,7 @@ extension runs it as its debug adapter.
 **`launch` arguments:** `program`, `args`, `env`, `cwd`, `stopOnEntry`, `maxProcs`, `trace`,
 `stopTimeoutSeconds`. `stopTimeoutSeconds` is a number of seconds, default 10, with a fraction honoured
 to the millisecond, from 0.001 to 922337203685; `maxProcs` is a whole number of processors from 1 to
-4294967295, passed to the program as `MAXON_MAX_PROCS`. A value outside its bounds refuses the `launch`,
+2147483647, passed to the program as `MAXON_MAX_PROCS`. A value outside its bounds refuses the `launch`,
 naming the argument.
 
 **Events:** `initialized`, `stopped`, `continued`, `output`, `exited`, `terminated`.
@@ -2316,7 +2316,7 @@ Launches a program under the debugger, parked before `main`, so a fresh session 
 | `env` | array of strings | Environment variables for the debuggee, each spelled `NAME=VALUE` |
 | `stopTimeoutSeconds` | number | How long a command waits for the program to stop, and the budget for one step: seconds, fractions honoured, from 0.001 to 922337203685 (default 10) |
 | `trace` | boolean | Record the DebugStream ring, so `debug_trace` has events to report. A `source` is then built with `--debugstream`; an `executable` must already have been |
-| `maxProcs` | integer | Pin the debuggee's scheduler to this many processors, 1 to 4294967295 (`MAXON_MAX_PROCS`) |
+| `maxProcs` | integer | Pin the debuggee's scheduler to this many processors, 1 to 2147483647 (`MAXON_MAX_PROCS`) |
 | `timeoutSeconds` | number | Seconds the build of a `source` may take (default 600). It bounds a build, so given with `executable` it is refused by name. |
 
 A `source` is built with debug info into the host's Maxon cache and removed when the session ends; see

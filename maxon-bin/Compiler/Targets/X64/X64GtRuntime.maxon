@@ -2040,9 +2040,7 @@ end 'emitX64ClaimExtLockAs'
 // Release `__sched_preempt_ext_lock`. A plain store, because x86-64 is total store order: every write this
 // window made is already visible to any thread that then wins the claim.
 function emitPreemptReleaseExtLock(asm X64RuntimeAsm)
-	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptExtLockLabel)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PreemptClaimFree)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: 0, srcReg: X64Register.rax, wide: true)
+	emitStoreGlobalImm(asm, label: SchedPreemptExtLockLabel, value: PreemptClaimFree, width: X64AccessWidth.word64, through: X64Register.r10)
 end 'emitPreemptReleaseExtLock'
 
 // `__gt_async_preempt` — see `SchedRuntime.AsyncPreemptName`. NOT a normal call: it is entered by a `ret`

@@ -27,24 +27,12 @@ export union DebugBackend
 		end 'which'
 	end 'exitStatus'
 
-	// ⭐ **THE PROGRAM IS THE DEBUGGER's OWN TRACED CHILD ON TWO OF THE THREE LANES**, and on the third it is a
-	// stub's child and the stub is the debugger's. Everything below this line that reads the same for the two
-	// native lanes is written once here rather than twice in their backends.
-	export function launchPlan(program FilePath, arguments StringArray) returns BackendLaunchPlan
-		return match self 'which'
-			debugPort or
-				processTrace gives BackendLaunchPlan.create(program, arguments: arguments, traced: true)
-
-			remoteStub(backend) gives backend.launchPlan(program, arguments: arguments)
-		end 'which'
-	end 'launchPlan'
-
-	export function adoptLaunchedProgram() returns BackendAdoption
+	export function adoptLaunchedProgram(program Pid) returns BackendAdoption
 		return match self 'which'
 			debugPort or
 				processTrace gives BackendAdoption.ready(BackendImagePlacement.asLinked)
 
-			remoteStub(backend) gives backend.adoptLaunchedProgram()
+			remoteStub(backend) gives backend.adoptLaunchedProgram(program)
 		end 'which'
 	end 'adoptLaunchedProgram'
 
@@ -60,17 +48,6 @@ export union DebugBackend
 			remoteStub(backend) gives backend.threadIdentityFigure()
 		end 'which'
 	end 'threadIdentityFigure'
-
-	// A stub that launched the program owns its standard streams, so its output arrives here rather than on a
-	// pipe of the driver's; a lane whose debuggee is the driver's own child has none to hand over.
-	export function takeStubOutput() returns String
-		return match self 'which'
-			debugPort or
-				processTrace gives ""
-
-			remoteStub(backend) gives backend.takeStubOutput()
-		end 'which'
-	end 'takeStubOutput'
 
 	export function listThreads() returns BackendThreadIdArray
 		return match self 'which'
@@ -104,13 +81,21 @@ export union DebugBackend
 		end 'which'
 	end 'resumeAll'
 
-	export function stepThread(thread BackendThreadId) returns bool
+	export function stepThread(thread BackendThreadId, others BackendOtherThreads) returns bool
 		return match self 'which'
-			debugPort(backend) gives backend.stepThread(thread)
-			processTrace(backend) gives backend.stepThread(thread)
-			remoteStub(backend) gives backend.stepThread(thread)
+			debugPort(backend) gives backend.stepThread(thread, others: others)
+			processTrace(backend) gives backend.stepThread(thread, others: others)
+			remoteStub(backend) gives backend.stepThread(thread, others: others)
 		end 'which'
 	end 'stepThread'
+
+	export function forgetStep(thread BackendThreadId)
+		match self 'which'
+			debugPort(backend) then backend.forgetStep(thread)
+			processTrace(backend) then backend.forgetStep(thread)
+			remoteStub(backend) then backend.forgetStep(thread)
+		end 'which'
+	end 'forgetStep'
 
 	export function requestStop() returns bool
 		return match self 'which'
@@ -120,13 +105,13 @@ export union DebugBackend
 		end 'which'
 	end 'requestStop'
 
-	export function abandonStopRequest()
+	export function retireStopRequest()
 		match self 'which'
-			debugPort(backend) then backend.abandonStopRequest()
-			processTrace(backend) then backend.abandonStopRequest()
-			remoteStub(backend) then backend.abandonStopRequest()
+			debugPort(backend) then backend.retireStopRequest()
+			processTrace(backend) then backend.retireStopRequest()
+			remoteStub(backend) then backend.retireStopRequest()
 		end 'which'
-	end 'abandonStopRequest'
+	end 'retireStopRequest'
 
 	export function detach() returns bool
 		return match self 'which'
@@ -136,9 +121,9 @@ export union DebugBackend
 		end 'which'
 	end 'detach'
 
-	// On the two lanes whose debuggee is the driver's own child the kernel ends it — the debug port
-	// kills a debuggee whose debugger exits and `PTRACE_O_EXITKILL` says the same thing — so there
-	// the reap of that child is the ending and `killTheProgram` is never asked.
+	// The debuggee is the driver's own child on every lane. Where the driver is also its debugger the
+	// kernel ends it — the debug port kills a debuggee whose debugger exits and `PTRACE_O_EXITKILL` says
+	// the same thing — so the reap of that child is the ending and `killTheProgram` is never asked.
 	export function endsTheProgramItself() returns bool
 		return match self 'which'
 			debugPort or
@@ -223,13 +208,15 @@ export union DebugBackend
 		end 'which'
 	end 'readRegisters'
 
-	export function writeRegisters(thread BackendThreadId, file DebugRegisterFile) returns bool
-		return match self 'which'
-			debugPort(backend) gives backend.writeRegisters(thread, file: file)
-			processTrace(backend) gives backend.writeRegisters(thread, file: file)
-			remoteStub(backend) gives backend.writeRegisters(thread, file: file)
+	export function fillVectorRegisters(thread BackendThreadId, into DebugRegisterFile)
+		match self 'which'
+			debugPort(backend) then backend.fillVectorRegisters(thread, into: into)
+			processTrace(backend) then backend.fillVectorRegisters(thread, into: into)
+			remoteStub(backend) then backend.fillVectorRegisters(thread, into: into)
 		end 'which'
-	end 'writeRegisters'
+
+		into.markVectorsRead()
+	end 'fillVectorRegisters'
 
 	export function setProgramCounter(thread BackendThreadId, address DebugAddress) returns bool
 		return match self 'which'

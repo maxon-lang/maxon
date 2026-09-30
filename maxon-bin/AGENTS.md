@@ -682,7 +682,7 @@ facts worth knowing before you get there:
   ```
   ⚠ **CI runs four of them on every lane** — `tests/lsp` (with `--timeout=60000`: its cases wait out
   whole-project checks), `tests/fmt`, `tests/spec-harness` and `tests/ladders` — plus `tests/debug`,
-  `tests/dap` and `tests/mcp` on x64-windows, and `/land`'s battery runs `fmt`, `spec-harness` and
+  `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `/land`'s battery runs `fmt`, `spec-harness` and
   `ladders` beside the suite and the self-compile. Every other corpus runs only when someone names it.
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
@@ -699,7 +699,7 @@ facts worth knowing before you get there:
 One test per file is structural, not tidiness: a file is what ONE process runs and that process has a
 5 s default deadline, so twelve compiler-spawning tests in one file report a spurious `TIMED OUT`.
 
-⚠ **`tests/debug` IS 120 CASES AND MOST OF THEM DEBUG A RUNNING PROGRAM**, which is a compile plus a
+⚠ **`tests/debug` IS 129 CASES AND MOST OF THEM DEBUG A RUNNING PROGRAM**, which is a compile plus a
 debugged run inside one file's deadline. Run it as `maxon test tests/debug --timeout=60000`; the default
 deadline reports the corpus as timed out rather than failed.
 

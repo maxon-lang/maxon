@@ -7,6 +7,12 @@ let Arm64Brk0SecondByte = 0x00 as Byte
 let Arm64Brk0ThirdByte = 0x20 as Byte
 let Arm64Brk0FourthByte = 0xD4 as Byte
 
+export union BackendTrapPresence
+	stands
+	removed
+	unreadable
+end 'BackendTrapPresence'
+
 export type DebugTrapShape
 	export let instruction as ByteArray
 	export let programCounterMovesPast as bool
@@ -18,6 +24,13 @@ export type DebugTrapShape
 	export function bytes() returns BackendByteCount
 		return self.instruction.count() as BackendByteCount
 	end 'bytes'
+
+	export function presenceIn(read BackendMemoryRead) returns BackendTrapPresence
+		return match read 'read'
+			unreadable gives BackendTrapPresence.unreadable
+			read(bytes) gives BackendTrapPresence.stands if bytes.equals(self.instruction) else BackendTrapPresence.removed
+		end 'read'
+	end 'presenceIn'
 
 	function rewind() returns TrapRewindBytes
 		if not self.programCounterMovesPast 'itStopsAtTheTrap'

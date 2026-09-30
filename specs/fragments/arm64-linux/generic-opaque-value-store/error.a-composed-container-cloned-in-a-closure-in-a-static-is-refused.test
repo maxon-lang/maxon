@@ -1,0 +1,62 @@
+// Test: error.a-composed-container-cloned-in-a-closure-in-a-static-is-refused
+typealias Count = int(0 to 100000)
+typealias NameArray = Array with String
+
+type Box
+	export var n as Count
+	export var names as NameArray
+
+	static function create(n Count) returns Box
+		return Self{n: n, names: NameArray.create()}
+	end 'create'
+end 'Box'
+
+type Holder uses Value
+	typealias Pair = (String, Value)
+	typealias Pairs = Array with Pair
+	typealias Copier = function() returns Pairs
+	var pairs as Pairs
+
+	static function create() returns Self
+		return Self{pairs: Pairs.create()}
+	end 'create'
+
+	function put(key String, value Value)
+		self.pairs.push((key, value))
+	end 'put'
+
+	function snapshot() returns Pairs
+		return self.apply(function() gives self.pairs.clone())
+	end 'snapshot'
+
+	function apply(copier Copier) returns Pairs
+		return copier()
+	end 'apply'
+
+	static function countOf(ps Pairs) returns Count
+		let f = function() gives ps.clone().count()
+		return f()
+	end 'countOf'
+end 'Holder'
+
+typealias BoxHolder = Holder with Box
+
+function main() returns ExitCode
+	var h = BoxHolder.create()
+	h.put("x", value: Box.create(5))
+	h.put("y", value: Box.create(6))
+	let snap = h.snapshot()
+	let k = BoxHolder.countOf(snap)
+	h.put("z", value: Box.create(7))
+	var total = 0 as Count
+
+	for pair in snap 'eachPair'
+		total = total + pair.1.n
+	end 'eachPair'
+
+	print("{total} {snap.count()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:37:31: Unsupported: 'Array.clone' is called on 'Holder.Pairs', whose type arguments mix this type's own parameters with other types, so the layout descriptor it is handed is composed at run time from the calling method's own descriptor — and this method reserves none. A method reserves one when its body reaches that instance through a field, an inner typealias, a parameter or a local bound from one of those; call it through one of them (e.g. 'self.<field>.<method>(…)')

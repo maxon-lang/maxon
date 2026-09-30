@@ -346,7 +346,7 @@
 	// ⚠ The session is built into a LOCAL `var` rather than handed back inside a union: it is written on
 	// every tick, and a value bound by a `match` arm is immutable (E3063).
 	function sampleUntilItEnds(request ProfileRequest, placement ProfilePlacement, sidecar MxdbgReader, child StreamingSubprocess, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
-		let pid = __Builtins.subprocessGetPid(child.handle) as ProfileWord
+		let pid = (try child.processId() otherwise panic("ProfileCommand.sampleUntilItEnds: the child was spawned for this session and is released only after sampling, so the spawn recorded a process id for it")) as ProfileWord
 
 		let process = __Builtins.profileOpenTarget(pid)
 

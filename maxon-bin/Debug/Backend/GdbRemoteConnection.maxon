@@ -581,15 +581,13 @@ end 'gdbHexTextOf'
 // a reply spells are not the digits of the number: the pairs are read as memory and reassembled.
 module function gdbRegisterValueOf(bytes ByteArray) returns GdbWireWord
 	var value = 0 as GdbWireWord
-	var shift = 0
 
-	for value8 in bytes 'eachByte'
-		if shift >= (WordBytes * BitsPerByte) 'pastAWord'
+	for (iter, value8) in bytes.withIterator() 'eachByte'
+		if iter.index() >= WordBytes 'pastAWord'
 			break
 		end 'pastAWord'
 
-		value = value or ((value8 as GdbWireWord) shl shift)
-		shift = shift + BitsPerByte
+		value = value or ((value8 as GdbWireWord) shl (iter.index() * BitsPerByte))
 	end 'eachByte'
 
 	return value

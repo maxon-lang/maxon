@@ -293,9 +293,10 @@ keeps beside that list. Go reads the same number on every wake decision — whet
 when a processor is handed off, and how many spinners are worth having — which is why it is a maintained word
 rather than a walk of the list.
 
-⚠ **IT ASSERTS AN AGREEMENT AND NOT A NUMBER.** The scheduler clamps `procs: 4` to the host's processor count,
-so `idle=3` would be a claim about a box with at least four; `schedProcessorCount() - 1` is the answer on
-every host. The idle count is read first, because it is the query that brings the scheduler up.
+⚠ **IT ASSERTS AN AGREEMENT AND NOT A NUMBER.** The scheduler takes `procs: 4` exactly on every host, and
+the case checks the idle count against `schedProcessorCount() - 1`, the count the scheduler itself resolved,
+so the two readings of one scheduler must agree. The idle count is read first, because it is the query that
+brings the scheduler up.
 ```maxon
 function main() returns ExitCode
 	let idle = __Builtins.schedIdleProcessorCount()

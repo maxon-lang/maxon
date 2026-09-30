@@ -252,7 +252,7 @@ Launches a program under the debugger, parked before `main`, so a fresh session 
 | `env` | array of strings | Environment variables for the debuggee, each spelled `NAME=VALUE` |
 | `stopTimeoutSeconds` | number | How long a command waits for the program to stop, and the budget for one step: seconds, fractions honoured, from 0.001 to 922337203685 (default 10) |
 | `trace` | boolean | Record the DebugStream ring, so `debug_trace` has events to report. A `source` is then built with `--debugstream`; an `executable` must already have been |
-| `maxProcs` | integer | Pin the debuggee's scheduler to this many processors, 1 to 4294967295 (`MAXON_MAX_PROCS`) |
+| `maxProcs` | integer | Pin the debuggee's scheduler to this many processors, 1 to 2147483647 (`MAXON_MAX_PROCS`) |
 | `timeoutSeconds` | number | Seconds the build of a `source` may take (default 600). It bounds a build, so given with `executable` it is refused by name. |
 
 A `source` is built with debug info into the host's Maxon cache and removed when the session ends; see

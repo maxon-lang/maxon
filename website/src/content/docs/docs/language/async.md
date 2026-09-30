@@ -510,8 +510,8 @@ APIs.
 - **Green threads.** Every green thread starts on a small stack that grows on demand, so thousands are
   cheap. A stack stops growing at 1 GiB; a recursion past it stops the program with `panic: stack overflow`.
 - **Parallelism.** By default the scheduler creates one processor per logical CPU. The environment
-  variable `MAXON_MAX_PROCS=N` sets the count, clamped to between 1 and the CPU count; a value that is not a
-  positive number leaves the default. `Scheduler.processorCount()` answers the resolved count. Services use
+  variable `MAXON_MAX_PROCS=N` sets the count exactly, for any decimal `N` from 1 to 2147483647, including a
+  count above the CPU count; any other value leaves the default. `Scheduler.processorCount()` answers the resolved count. Services use
   the processors in parallel; an `async`-only program's coroutines stay on the green thread that started
   them.
 - **Preemption.** A green thread that has run for 10 ms is stopped at its next function entry and moved

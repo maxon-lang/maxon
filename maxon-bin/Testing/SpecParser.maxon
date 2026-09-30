@@ -764,12 +764,6 @@ export union SpecNetwork
 	live
 end 'SpecNetwork'
 
-// A processor count a `<!-- procs: N -->` marker may name. The scheduler CLAMPS whatever it is given against
-// the machine's own count and floors it at one (`SchedRuntime.emitResolveMaxProcs`), so the only bound this
-// alias owes is the one the decimal itself has — a spec that names more processors than exist gets the
-// machine, which is the same answer the variable gives when it is set by hand.
-export typealias ProcessorCount = int(1 to i64.max)
-
 // ⭐ **HOW MANY PROCESSORS A CASE ASKS FOR — see `ProcsMarker` for why this is a per-case fact.**
 //
 // A UNION rather than a count with a zero standing in for "no marker", for `SpecNetwork`'s reason: the
@@ -782,7 +776,7 @@ export union SpecProcs
 	unset
 
 	// `<!-- procs: N -->`: `MAXON_MAX_PROCS=N` is placed in the environment of this case's program alone.
-	pinned(count ProcessorCount)
+	pinned(count RequestedProcessorCount)
 end 'SpecProcs'
 
 // ⭐ **WHETHER A CASE WITHDRAWS THE MONITOR'S PREEMPTION — see `PreemptMarker` for why this is a per-case
@@ -2207,22 +2201,64 @@ end 'parseNetworkValue'
 
 // How many processors a `<!-- procs: … -->` marker asks for.
 //
-// ⛔ **AN UNREADABLE OR NON-POSITIVE VALUE IS A PANIC, NOT AN `unset`**, for `parseNetworkValue`'s reason
-// exactly: a defaulted value would run the case at whatever the machine happened to give it and report the
-// answer as though the number had been honoured. The scheduler itself treats a malformed `MAXON_MAX_PROCS`
-// as "leave the default alone" (`SchedRuntime.emitResolveMaxProcs`) — which is the right answer for a value
-// a USER typed at a shell and the wrong one for a value a SPEC FILE states, because only one of the two is
-// a committed claim somebody expects to be checked.
+// ⛔ **AN UNREADABLE VALUE, OR ONE OUTSIDE `RequestedProcessorCount`, IS A PANIC, NOT AN `unset`**, for
+// `parseNetworkValue`'s reason exactly: a defaulted value would run the case at whatever the machine happened
+// to give it and report the answer as though the number had been honoured. The scheduler itself treats such
+// a `MAXON_MAX_PROCS` as "leave the default alone" (`SchedRuntime.emitParseRequestedProcessorCount`) —
+// which is the right answer for a value a USER typed at a shell and the wrong one for a value a SPEC FILE
+// states, because only one of the two is a committed claim somebody expects to be checked.
 function parseProcsValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecProcs
 	let value = markerValueOf(opening)
-	let count = try int.fromString(value) otherwise panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{ProcsMarker} {value} -->`, and this marker takes a positive decimal processor count. It becomes `{String.from(MaxProcsEnvName)}={value}` in the environment of this case's program alone, so a value the harness cannot read is a claim the file makes and nothing honours")
 
-	if count < 1 'notPositive'
-		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{ProcsMarker} {value} -->`, and a processor count below 1 is not one. The scheduler builds at least one P whatever it is told (`emitResolveMaxProcs` floors it), so this number would be silently discarded rather than honoured")
-	end 'notPositive'
+	match specRequestedProcessorsIn(value) 'reading'
+		count(requested) then return SpecProcs.pinned(requested)
+		notACount then break 'reading'
+	end 'reading'
 
-	return SpecProcs.pinned(count as ProcessorCount)
+	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{ProcsMarker} {value} -->`, and the scheduler honours a processor count from {FewestRequestedProcessors} to {MostRequestedProcessors} only, spelled as decimal digits with an optional leading `+`: it ignores any other `{String.from(MaxProcsEnvName)}` and runs on the machine's count, so this value would be silently discarded rather than honoured")
 end 'parseProcsValue'
+
+union SpecProcsReading
+	count(requested RequestedProcessorCount)
+	notACount
+end 'SpecProcsReading'
+
+// Accepts exactly what `SchedRuntime.emitParseRequestedProcessorCount` accepts: a value the scheduler
+// ignores would pass here and run the case on the machine's count.
+function specRequestedProcessorsIn(value String) returns SpecProcsReading
+	var total = 0 as ParsedInt
+	var sawADigit = false
+	var atTheStart = true
+
+	for cp in value.codepoints() 'eachCharacter'
+		let code = cp as ParsedInt
+
+		if atTheStart and code == RequestedProcessorCountSign 'theOptionalSign'
+			atTheStart = false
+
+			continue
+		end 'theOptionalSign'
+
+		atTheStart = false
+
+		if code < AsciiZeroDigit or code > AsciiNineDigit 'notADigit'
+			return SpecProcsReading.notACount
+		end 'notADigit'
+
+		total = total * DecimalRadix + (code - AsciiZeroDigit)
+		sawADigit = true
+
+		if total > (MostRequestedProcessors as ParsedInt) 'pastTheRange'
+			return SpecProcsReading.notACount
+		end 'pastTheRange'
+	end 'eachCharacter'
+
+	if not sawADigit or total < (FewestRequestedProcessors as ParsedInt) 'noCount'
+		return SpecProcsReading.notACount
+	end 'noCount'
+
+	return SpecProcsReading.count(total as RequestedProcessorCount)
+end 'specRequestedProcessorsIn'
 
 // What a `<!-- preempt: … -->` marker withdraws. The one value is spelled from the constant the
 // emitted scheduler reads it back through, for `MaxProcsEnvName`'s reason: a value written under

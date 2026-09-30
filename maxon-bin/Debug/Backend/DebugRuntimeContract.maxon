@@ -1,9 +1,10 @@
 export typealias ContractFigure = int(i64.min to i64.max)
 typealias ContractFigureArray = Array with ContractFigure
+typealias ContractGlobalWidthArray = Array with DebugWidth
 
 export union ContractGlobalLookup
 	none
-	at(address DebugAddress)
+	at(address DebugAddress, bytes DebugWidth)
 end 'ContractGlobalLookup'
 
 export type DebugRuntimeContract
@@ -14,6 +15,7 @@ export type DebugRuntimeContract
 	var figureValues as ContractFigureArray
 	var globalNames as StringArray
 	var globalAddresses as DebugAddressArray
+	var globalBytes as ContractGlobalWidthArray
 
 	// ⛔ **EVERY ADDRESS BELOW IS AN OFFSET FROM WHERE THE IMAGE ACTUALLY IS, NOT FROM WHERE IT WAS LINKED.**
 	// A PE and an `ET_EXEC` ELF are loaded at the base their header names, so the two are the same number
@@ -36,16 +38,18 @@ export type DebugRuntimeContract
 
 		var globalNames = StringArray.create()
 		var globalAddresses = DebugAddressArray.create()
+		var globalBytes = ContractGlobalWidthArray.create()
 
 		for index in 0 upto reader.globalCount() 'eachGlobal'
 			let record = reader.globalRecord(index as MxdbgIndex)
 			globalNames.push(record.name)
 			globalAddresses.push(imageBase + (record.imageOffset as DebugAddress))
+			globalBytes.push(contractGlobalWidthOf(record))
 		end 'eachGlobal'
 
 		let textRva = figureIn(figureNames, values: figureValues, name: ImageTextRvaFigureName)
 
-		return Self{base: imageBase, text: imageBase + (textRva as DebugAddress), bytes: textBytes, figureNames: figureNames, figureValues: figureValues, globalNames: globalNames, globalAddresses: globalAddresses}
+		return Self{base: imageBase, text: imageBase + (textRva as DebugAddress), bytes: textBytes, figureNames: figureNames, figureValues: figureValues, globalNames: globalNames, globalAddresses: globalAddresses, globalBytes: globalBytes}
 	end 'readFrom'
 
 	export function textBase() returns DebugAddress
@@ -73,7 +77,10 @@ export type DebugRuntimeContract
 	export function globalAt(name String) returns ContractGlobalLookup
 		for (iter, spelled) in self.globalNames.withIterator() 'eachGlobal'
 			if spelled == name 'thisOne'
-				return ContractGlobalLookup.at(try self.globalAddresses.get(iter.index()) otherwise panic("DebugRuntimeContract.globalAt: the two columns are filled together, so '{name}' has an address"))
+				let address = try self.globalAddresses.get(iter.index()) otherwise panic("DebugRuntimeContract.globalAt: the columns are filled together, so '{name}' has an address")
+				let width = try self.globalBytes.get(iter.index()) otherwise panic("DebugRuntimeContract.globalAt: the columns are filled together, so '{name}' has a width")
+
+				return ContractGlobalLookup.at(address, bytes: width)
 			end 'thisOne'
 		end 'eachGlobal'
 
@@ -90,3 +97,11 @@ function figureIn(names StringArray, values ContractFigureArray, name String) re
 
 	panic("figureIn: the `.mxdbg` sidecar publishes no layout figure named '{name}'. `Compiler/Debug/DebugContract.maxon` is the roster it is written from, so a name that roster does not carry cannot be answered")
 end 'figureIn'
+
+function contractGlobalWidthOf(record MxdbgGlobalInfo) returns DebugWidth
+	if record.slotBytes < MinDebugWidth or record.slotBytes > MaxDebugWidth 'notAScalarSlot'
+		panic("DebugRuntimeContract.readFrom: the `.mxdbg` sidecar gives global '{record.name}' a {record.slotBytes}-byte slot, and every global it publishes is a scalar of {MinDebugWidth} to {MaxDebugWidth} bytes, so the sidecar is malformed")
+	end 'notAScalarSlot'
+
+	return record.slotBytes as DebugWidth
+end 'contractGlobalWidthOf'

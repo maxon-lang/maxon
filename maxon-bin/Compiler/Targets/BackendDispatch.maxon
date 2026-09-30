@@ -193,8 +193,25 @@ export function dataSectionRoster(userGlobals DataSectionEntryArray, usage Runti
 	appendDataSectionEntries(roster, entries: slabRuntimeGlobals())
 	appendDataSectionEntries(roster, entries: debugStreamRuntimeGlobals())
 	appendDataSectionEntries(roster, entries: managedSocketRuntimeGlobals())
+	appendDataSectionEntries(roster, entries: programStartedGlobals(target))
 	return roster
 end 'dataSectionRoster'
+
+// Written by every native lane's `mrt_runtime_init` and read by `DebugEngine.runtimeNotYetStarted`. A
+// lane that lays the byte out and never writes it has every pause retried until the deadline and refused.
+export let ProgramStartedLabel = b"__mrt_program_started"
+export let ProgramStartedMark = 1
+
+function programStartedGlobals(target Target) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+
+	if target.cpu == CpuArch.wasm32 'noDebuggerAttachesHere'
+		return out
+	end 'noDebuggerAttachesHere'
+
+	pushRuntimeGlobal(out, label: ProgramStartedLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared, valueType: StdType.i8)
+	return out
+end 'programStartedGlobals'
 
 module function releaseAllocatedStdModule(project Project, stdModule StdModule)
 	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)

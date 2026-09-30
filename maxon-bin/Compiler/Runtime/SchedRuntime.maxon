@@ -1260,8 +1260,8 @@ let GtRecordsCarvedLabel = b"__gt_records_carved"
 //
 // ⭐⭐ **IT IS ALSO THE ANSWER `__Builtins.schedProcessorCount()` GIVES, WHICH IS WHY IT IS EXPORTED.** That
 // query is the processor count's only observable consequence that does not depend on how the work happened
-// to be scheduled: `emitResolveMaxProcs` settles this word to `osCpuCount`, or to `min(requested,
-// osCpuCount)` when `MAXON_MAX_PROCS` names a count, before a single green thread runs — so reading it is
+// to be scheduled: `emitResolveMaxProcs` settles this word to `osCpuCount`, or to the requested count
+// when `MAXON_MAX_PROCS` names one, before a single green thread runs — so reading it is
 // reading the resolution itself. `runtime/CpuParallel.maxon` owns the query's body.
 export let SchedNumProcsLabel = b"__sched_num_procs"
 
@@ -2153,19 +2153,19 @@ end 'emitLoadCurrentGtAndProcIdOrZero'
 
 // ⛔ **THERE IS NO `DefaultMaxProcs` CONSTANT, AND ITS ABSENCE IS THE DECISION.** The default is the
 // MACHINE'S OWN PROCESSOR COUNT, which is not a number a compile-time constant can hold. It is read by
-// `StdOp.osCpuCount` inside `emitResolveMaxProcs`, once, at scheduler bring-up — so the default and the
-// ceiling are one reading of one machine rather than a constant and a clamp that could disagree.
+// `StdOp.osCpuCount` inside `emitResolveMaxProcs`, once, at scheduler bring-up.
 
 // The environment variable that SETS the processor count for a deliberate run.
 //
-// ⭐⭐ **IT IS GOMAXPROCS: AN EXACT SETTING, CLAMPED TO `[MinimumProcessorCount, osCpuCount]`, WHICH CAN
-// LOWER THE COUNT AS WELL AS RAISE IT.** The ceiling is the reason there is one: a P nothing can ever run
-// on is a P nobody can schedule.
+// It is an exact setting in `FewestRequestedProcessors..MostRequestedProcessors`, above the machine's
+// count as well as below it. A count above the machine is honoured: a program whose services never
+// yield, with preemption off, needs a P for each of them and one more for anything else to run.
 //
-// ⚠ **A VALUE THAT IS NOT A PROCESSOR COUNT IS THE DEFAULT, NEVER AN ERROR** — unset, longer than the
-// buffer, non-numeric, or below one. `emitResolveMaxProcs` carries which readings land where.
+// ⚠ **A VALUE THAT IS NOT A PROCESSOR COUNT IS THE DEFAULT, NEVER AN ERROR** — unset, empty, anything
+// but an optional `+` and decimal digits, zero, or past the 32-bit bound.
+// `emitParseRequestedProcessorCount` is the rule.
 //
-// ⭐ **EXPORTED BECAUSE THE SPEC HARNESS NOW WRITES IT.** `<!-- procs: N -->` puts this variable into the
+// ⭐ **EXPORTED BECAUSE THE SPEC HARNESS WRITES IT.** `<!-- procs: N -->` puts this variable into the
 // environment of one case's program (`SpecParser.ProcsMarker`, `SpecTestRunner.runEnvironmentFor`), and the
 // name the harness SETS has to be the name the emitted scheduler READS. Written down twice, the marker would
 // go on being accepted, the child would go on resolving the default, and every case that named a count would
@@ -2186,9 +2186,9 @@ export let PreemptEnvName = b"MAXON_PREEMPT"
 export let PreemptEnvOffValue = b"off"
 let PreemptEnvOnValue = b"on"
 
-// The scratch one `GetEnvironmentVariableA` of a scheduler setting gets. Far more than any processor count
-// or switch value spells, so a value that fills it is neither, and each reader refuses or declines rather
-// than retrying.
+// The first scratch one `GetEnvironmentVariableA` of a scheduler setting gets. A switch value that fills
+// it is not a switch value, so `emitResolvePreemptSwitch` refuses it; a processor count may carry any
+// number of leading zeros, so `emitResolveMaxProcs` reads a longer one again at the size the OS reports.
 let SchedEnvValueBufBytes = 32 as ParsedInt
 
 // ⭐⭐ **THE BASE OF THIS OS THREAD'S PER-THREAD SLOT ARRAY — the one number that turns `tlsAlloc`'s answer
@@ -2918,8 +2918,9 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// out only where a scheduler exists and every heap program's allocator asks the question.
 	emitSlabPublishScheduler(module, block: slotHeld, tebOffset: tebOffset, ids: ids)
 
-	// How many Ps: the machine's processor count, unless `MAXON_MAX_PROCS` names another count within it.
-	// The answer arrives as `settled`'s block arg, because the decision is a five-way merge.
+	// How many Ps: the machine's processor count, unless `MAXON_MAX_PROCS` names another count.
+	// The answer arrives as `settled`'s block arg, because the request and the machine's count reach it
+	// by two roads.
 	let numProcs = ids.mint()
 	settled.blockArgs.push(IrBlockArg.create(numProcs, argType: StdType.i64))
 	emitResolveMaxProcs(module, func: func, cur: slotHeld, settled: settled, ids: ids)
@@ -3159,13 +3160,15 @@ end 'emitSchedAdoptProc'
 // name crosses the tier boundary.
 let MinimumProcessorCount = 1 as ParsedInt
 
-// ⭐⭐ **HOW MANY Ps TO BUILD: THE MACHINE'S PROCESSOR COUNT, unless `MAXON_MAX_PROCS` names a different
-// count in `[MinimumProcessorCount, osCpuCount]`.** The answer reaches `settled` as its single block arg;
-// every arm below terminates in a branch that supplies it.
-//
-// ⭐⭐ **THE MACHINE IS READ FIRST AND UNCONDITIONALLY, BECAUSE IT IS BOTH THE DEFAULT AND THE CEILING.**
-// No arm does without it, and reading it once at the top is what keeps *"the default"* and *"the ceiling"*
-// the same number by construction rather than by two agreeing readings.
+// The counts `MAXON_MAX_PROCS` is honoured at; `emitParseRequestedProcessorCount` ignores any other
+// value. The spec harness and `debug_start` refuse a count outside it, which would be dropped silently.
+export typealias RequestedProcessorCount = int(1 to i32.max)
+
+export let FewestRequestedProcessors = 1 as RequestedProcessorCount
+export let MostRequestedProcessors = i32.max as RequestedProcessorCount
+
+export let RequestedProcessorCountSign = 0x2B as ParsedInt
+
 // `osCpuCount` is read directly rather than through `__cpu_count`, which is a separate runtime entry a
 // program opts into and which a scheduler must not drag in.
 //
@@ -3177,20 +3180,15 @@ let MinimumProcessorCount = 1 as ParsedInt
 // out of a zero-byte region and write three fields through whatever it found: a wild write. ⭐ **AND THE
 // FLOOR CARRIES EVERY PROGRAM, NOT ONLY THE ONES THAT SET THE VARIABLE**, because this reading IS the
 // default count.
-//
-// ⚠ **A VALUE THAT IS NOT A PROCESSOR COUNT IS THE MACHINE'S COUNT, NEVER AN ERROR, AND THE THREE WAYS OF
-// NOT BEING ONE ARE THREE ARMS OF ONE ANSWER.** `osEnvRead` answers 0 for unset; a value too long for the
-// buffer declines; the digit walk answers 0 for anything that does not start with a digit, which is the same
-// answer a literal `0` gives — so `< MinimumProcessorCount` covers the malformed value and the out-of-range
-// one together: parsed < 1 means ignore.
 function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, settled IrBlock, ids ValueMinter)
 	var cpuFloor = module.addBlock(func, label: b"maxprocscpufloor", heat: BlockHeat.normal)
 	var cpuKnown = module.addBlock(func, label: b"maxprocscpuok", heat: BlockHeat.normal)
-	var lengthOk = module.addBlock(func, label: b"maxprocslen", heat: BlockHeat.normal)
+	var reread = module.addBlock(func, label: b"maxprocsreread", heat: BlockHeat.normal)
+	var unfit = module.addBlock(func, label: b"maxprocsunfit", heat: BlockHeat.normal)
 	var parseStart = module.addBlock(func, label: b"maxprocsparse", heat: BlockHeat.normal)
-	var parsed = module.addBlock(func, label: b"maxprocsparsed", heat: BlockHeat.normal)
-	var underCeiling = module.addBlock(func, label: b"maxprocsceiling", heat: BlockHeat.normal)
-	var takeRequested = module.addBlock(func, label: b"maxprocsreq", heat: BlockHeat.normal)
+	var parsedCount = module.addBlock(func, label: b"maxprocsparsed", heat: BlockHeat.normal)
+	var parseRefused = module.addBlock(func, label: b"maxprocsrefused", heat: BlockHeat.normal)
+	var rejected = module.addBlock(func, label: b"maxprocsrejected", heat: BlockHeat.normal)
 
 	let cpus = ids.mint()
 	module.appendOp(cur, op: StdOp.osCpuCount(cpus))
@@ -3204,45 +3202,38 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 	module.setTerminator(cpuFloor, op: StdOp.branch(cpuKnown.id))
 	cpuFloor.branchEdges.push(BranchEdge.create(cpuKnown.id, argIds: argsOf(flooredCpus)))
 
-	// ⚠ **`cpuKnown` DOMINATES EVERY BLOCK BELOW, WHICH IS WHY `liveCpus` NEEDS NO SECOND BLOCK ARG.** The
-	// decimal walk's own blocks hang off `parseStart`, which this block reaches, so the four arms that answer
-	// *"the machine's count"* all name the one value this block settled.
-	let read = emitReadSchedEnvValue(module, block: cpuKnown, name: MaxProcsEnvName, ids: ids)
-
-	// ⚠ **`osEnvRead` HAS THREE ANSWERS AND THIS SITE DECODES THEM DIFFERENTLY FROM ITS TWO SIBLINGS, ON
-	// PURPOSE.** `GetEnvironmentVariableA` returns 0 for unset, the CHARACTERS WRITTEN when the value fits, and
-	// the size it NEEDS when the buffer is too small. `SubprocessRuntime.emitSubpReadEnvInto` retries at exactly
-	// that size, because a `PATH` legitimately overflows any guess; a processor count does not, so this site
-	// DECLINES to the machine's count; and `emitResolvePreemptSwitch` ABORTS, because a switch has no default a
-	// malformed value can safely fall to. Three policies over one API contract, which is why they name each
-	// other.
+	let firstCapacity = emitConst(module, block: cpuKnown, value: SchedEnvValueBufBytes, ids: ids)
+	let read = emitReadSchedEnvValue(module, block: cpuKnown, name: MaxProcsEnvName, capacity: firstCapacity, ids: ids)
+	let valueBuf = ids.mint()
+	parseStart.blockArgs.push(IrBlockArg.create(valueBuf, argType: StdType.i64))
 	let tooLong = emitCmp(module, block: cpuKnown, a: read.written, b: read.capacity, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(cpuKnown, op: StdOp.condBranch(tooLong, thenBlockId: settled.id, elseBlockId: lengthOk.id))
-	cpuKnown.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
+	module.setTerminator(cpuKnown, op: StdOp.condBranch(tooLong, thenBlockId: reread.id, elseBlockId: parseStart.id))
+	cpuKnown.branchEdges.push(BranchEdge.create(parseStart.id, argIds: argsOf(read.buf)))
 
-	let zero = emitConst(module, block: lengthOk, value: 0, ids: ids)
-	let unset = emitCmp(module, block: lengthOk, a: read.written, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(lengthOk, op: StdOp.condBranch(unset, thenBlockId: settled.id, elseBlockId: parseStart.id))
-	lengthOk.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
+	// A too-small read answers the size the value needs, terminator included, so one re-read at that size
+	// fits unless the environment changed in between.
+	emitSlabFree(module, block: reread, ptr: read.buf, ids: ids)
+	let fullRead = emitReadSchedEnvValue(module, block: reread, name: MaxProcsEnvName, capacity: read.written, ids: ids)
+	let fits = emitCmp(module, block: reread, a: fullRead.written, b: fullRead.capacity, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(reread, op: StdOp.condBranch(fits, thenBlockId: parseStart.id, elseBlockId: unfit.id))
+	reread.branchEdges.push(BranchEdge.create(parseStart.id, argIds: argsOf(fullRead.buf)))
 
-	// The decimal walk hands its accumulator to `parsed` as that block's arg.
+	emitSlabFree(module, block: unfit, ptr: fullRead.buf, ids: ids)
+	module.setTerminator(unfit, op: StdOp.branch(rejected.id))
+
 	let requested = ids.mint()
-	parsed.blockArgs.push(IrBlockArg.create(requested, argType: StdType.i64))
-	emitParseUnsignedDecimal(module, func: func, cur: parseStart, cstr: read.buf, parsed: parsed, ids: ids)
+	parsedCount.blockArgs.push(IrBlockArg.create(requested, argType: StdType.i64))
+	emitParseRequestedProcessorCount(module, func: func, cur: parseStart, cstr: valueBuf, accepted: parsedCount, rejected: parseRefused, ids: ids)
 
-	let requestFloor = emitConst(module, block: parsed, value: MinimumProcessorCount, ids: ids)
-	let belowFloorRequest = emitCmp(module, block: parsed, a: requested, b: requestFloor, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(parsed, op: StdOp.condBranch(belowFloorRequest, thenBlockId: settled.id, elseBlockId: underCeiling.id))
-	parsed.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
+	emitSlabFree(module, block: parsedCount, ptr: valueBuf, ids: ids)
+	module.setTerminator(parsedCount, op: StdOp.branch(settled.id))
+	parsedCount.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(requested)))
 
-	// ⭐ **THE CEILING, AND IT IS THE ONLY TEST LEFT — a request at or below the machine is taken EXACTLY, so
-	// `MAXON_MAX_PROCS=1` on a 16-way box builds one P.**
-	let overCpu = emitCmp(module, block: underCeiling, a: requested, b: liveCpus, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(underCeiling, op: StdOp.condBranch(overCpu, thenBlockId: settled.id, elseBlockId: takeRequested.id))
-	underCeiling.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
+	emitSlabFree(module, block: parseRefused, ptr: valueBuf, ids: ids)
+	module.setTerminator(parseRefused, op: StdOp.branch(rejected.id))
 
-	module.setTerminator(takeRequested, op: StdOp.branch(settled.id))
-	takeRequested.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(requested)))
+	module.setTerminator(rejected, op: StdOp.branch(settled.id))
+	rejected.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(liveCpus)))
 end 'emitResolveMaxProcs'
 
 // One `osEnvRead` of a scheduler setting: the byte count the OS answered, the zeroed buffer it wrote into,
@@ -3257,16 +3248,17 @@ type SchedEnvRead
 	end 'create'
 end 'SchedEnvRead'
 
-// Read the environment variable `name` into a fresh zeroed slab buffer of `SchedEnvValueBufBytes`. The buffer
-// is zeroed (`__slab_alloc`, not the raw door), so a value that fits is NUL-terminated and a byte walk that
-// reads at most `capacity` bytes stays in bounds whatever the OS wrote.
-function emitReadSchedEnvValue(module StdModule, block IrBlock, name ByteArray, ids ValueMinter) returns SchedEnvRead
+// Read the environment variable `name` into a fresh zeroed slab buffer of `capacity` bytes, which the
+// caller frees. The buffer is zeroed (`__slab_alloc`, not the raw door), so a value that fits is
+// NUL-terminated and a byte walk that reads at most `capacity` bytes stays in bounds whatever the OS wrote.
+function emitReadSchedEnvValue(module StdModule, block IrBlock, name ByteArray, capacity ValueId, ids ValueMinter) returns SchedEnvRead
 	let nameBuf = emitLiteralCString(module, block: block, ids: ids, text: name)
-	let capacity = emitConst(module, block: block, value: SchedEnvValueBufBytes, ids: ids)
 	let buf = ids.mint()
 	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(capacity)))
 	let written = ids.mint()
 	module.appendOp(block, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: buf, bufLenId: capacity))
+	emitSlabFree(module, block: block, ptr: nameBuf, ids: ids)
+
 	return SchedEnvRead.create(written, buf: buf, capacity: capacity)
 end 'emitReadSchedEnvValue'
 
@@ -3308,7 +3300,11 @@ function emitResolvePreemptSwitch(module StdModule, func IrFunction, cur IrBlock
 	var notOff = module.addBlock(func, label: b"preemptnotoff", heat: BlockHeat.normal)
 	var unreadable = module.addBlock(func, label: b"preemptunreadable", heat: BlockHeat.normal)
 
-	let read = emitReadSchedEnvValue(module, block: cur, name: PreemptEnvName, ids: ids)
+	let capacity = emitConst(module, block: cur, value: SchedEnvValueBufBytes, ids: ids)
+	let read = emitReadSchedEnvValue(module, block: cur, name: PreemptEnvName, capacity: capacity, ids: ids)
+	let isOff = emitCStringEqualsLiteral(module, block: cur, cstr: read.buf, literal: PreemptEnvOffValue, ids: ids)
+	let isOn = emitCStringEqualsLiteral(module, block: cur, cstr: read.buf, literal: PreemptEnvOnValue, ids: ids)
+	emitSlabFree(module, block: cur, ptr: read.buf, ids: ids)
 	let tooLong = emitCmp(module, block: cur, a: read.written, b: read.capacity, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(tooLong, thenBlockId: unreadable.id, elseBlockId: lengthOk.id))
 
@@ -3317,12 +3313,10 @@ function emitResolvePreemptSwitch(module StdModule, func IrFunction, cur IrBlock
 	module.setTerminator(lengthOk, op: StdOp.condBranch(unset, thenBlockId: settled.id, elseBlockId: isSet.id))
 	lengthOk.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(zero)))
 
-	let isOff = emitCStringEqualsLiteral(module, block: isSet, cstr: read.buf, literal: PreemptEnvOffValue, ids: ids)
 	let off = emitConst(module, block: isSet, value: 1, ids: ids)
 	module.setTerminator(isSet, op: StdOp.condBranch(isOff, thenBlockId: settled.id, elseBlockId: notOff.id))
 	isSet.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(off)))
 
-	let isOn = emitCStringEqualsLiteral(module, block: notOff, cstr: read.buf, literal: PreemptEnvOnValue, ids: ids)
 	let on = emitConst(module, block: notOff, value: 0, ids: ids)
 	module.setTerminator(notOff, op: StdOp.condBranch(isOn, thenBlockId: settled.id, elseBlockId: unreadable.id))
 	notOff.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(on)))
@@ -3330,47 +3324,79 @@ function emitResolvePreemptSwitch(module StdModule, func IrFunction, cur IrBlock
 	emitRuntimeAbort(module, func: func, block: unreadable, abort: RuntimeAbort.schedulerPreemptSwitchUnreadable, ids: ids)
 end 'emitResolvePreemptSwitch'
 
-// The unsigned decimal value of the NUL-terminated bytes at `cstr`, delivered as `parsed`'s block arg.
-// The walk stops at the first non-digit (the
-// terminator included), so a trailing suffix is IGNORED rather than rejected, and a string that does not
-// start with a digit answers 0 — which every caller reads as *"leave the default alone"*.
-function emitParseUnsignedDecimal(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, parsed IrBlock, ids ValueMinter)
-	var scanHdr = module.addBlock(func, label: b"decscan", heat: BlockHeat.normal)
-	var notBelow = module.addBlock(func, label: b"decnotbelow", heat: BlockHeat.normal)
-	var scanStep = module.addBlock(func, label: b"decstep", heat: BlockHeat.normal)
+function emitParseRequestedProcessorCount(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, accepted IrBlock, rejected IrBlock, ids ValueMinter)
+	var signed = module.addBlock(func, label: b"reqprocssigned", heat: BlockHeat.normal)
+	var leading = module.addBlock(func, label: b"reqprocslead", heat: BlockHeat.normal)
+	var scanHdr = module.addBlock(func, label: b"reqprocsscan", heat: BlockHeat.normal)
+	var scanDigit = module.addBlock(func, label: b"reqprocsdigit", heat: BlockHeat.normal)
+	var ended = module.addBlock(func, label: b"reqprocsended", heat: BlockHeat.normal)
 
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let leadIndex = ids.mint()
+	leading.blockArgs.push(IrBlockArg.create(leadIndex, argType: StdType.i64))
+	let unsignedStart = emitConst(module, block: cur, value: 0, ids: ids)
+	let plus = emitByteAtEquals(module, block: cur, cstr: cstr, index: 0, expected: RequestedProcessorCountSign, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(plus, thenBlockId: signed.id, elseBlockId: leading.id))
+	cur.branchEdges.push(BranchEdge.create(leading.id, argIds: argsOf(unsignedStart)))
+
+	let signedStart = emitConst(module, block: signed, value: 1, ids: ids)
+	module.setTerminator(signed, op: StdOp.branch(leading.id))
+	signed.branchEdges.push(BranchEdge.create(leading.id, argIds: argsOf(signedStart)))
+
 	let indexId = ids.mint()
 	let accId = ids.mint()
 	scanHdr.blockArgs.push(IrBlockArg.create(indexId, argType: StdType.i64))
 	scanHdr.blockArgs.push(IrBlockArg.create(accId, argType: StdType.i64))
-	module.setTerminator(cur, op: StdOp.branch(scanHdr.id))
-	cur.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(zero, second: zero)))
 
-	// The digit band is tested at BOTH ends rather than by one unsigned wrap: the byte load zero-extends, so
-	// the wrap trick would work — and it would also rest on the load's width, which is exactly the kind of
-	// implicit dependency a later widening breaks silently. Two compares, no premise.
+	let leadByte = emitLoadByteIndexed(module, block: leading, base: cstr, index: leadIndex, ids: ids)
+	var leadIsDigit = emitRequireDecimalDigit(module, func: func, block: leading, ch: leadByte, rejected: rejected, ids: ids)
+	let emptyAcc = emitConst(module, block: leadIsDigit, value: 0, ids: ids)
+	module.setTerminator(leadIsDigit, op: StdOp.branch(scanHdr.id))
+	leadIsDigit.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(leadIndex, second: emptyAcc)))
+
 	let ch = emitLoadByteIndexed(module, block: scanHdr, base: cstr, index: indexId, ids: ids)
-	let asciiZero = emitConst(module, block: scanHdr, value: AsciiZeroDigit, ids: ids)
-	let below = emitCmp(module, block: scanHdr, a: ch, b: asciiZero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(scanHdr, op: StdOp.condBranch(below, thenBlockId: parsed.id, elseBlockId: notBelow.id))
-	scanHdr.branchEdges.push(BranchEdge.create(parsed.id, argIds: argsOf(accId)))
+	let terminator = emitConst(module, block: scanHdr, value: 0, ids: ids)
+	let atEnd = emitCmp(module, block: scanHdr, a: ch, b: terminator, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: ended.id, elseBlockId: scanDigit.id))
 
-	let asciiNine = emitConst(module, block: notBelow, value: AsciiNineDigit, ids: ids)
-	let above = emitCmp(module, block: notBelow, a: ch, b: asciiNine, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(notBelow, op: StdOp.condBranch(above, thenBlockId: parsed.id, elseBlockId: scanStep.id))
-	notBelow.branchEdges.push(BranchEdge.create(parsed.id, argIds: argsOf(accId)))
+	let fewest = emitConst(module, block: ended, value: FewestRequestedProcessors as ParsedInt, ids: ids)
+	let belowFewest = emitCmp(module, block: ended, a: accId, b: fewest, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(ended, op: StdOp.condBranch(belowFewest, thenBlockId: rejected.id, elseBlockId: accepted.id))
+	ended.branchEdges.push(BranchEdge.create(accepted.id, argIds: argsOf(accId)))
 
-	let stepAsciiZero = emitConst(module, block: scanStep, value: AsciiZeroDigit, ids: ids)
-	let digit = emitBin(module, block: scanStep, a: ch, b: stepAsciiZero, opcode: StdBinOpcode.sub, ids: ids)
+	var scanStep = emitRequireDecimalDigit(module, func: func, block: scanDigit, ch: ch, rejected: rejected, ids: ids)
+	let asciiZero = emitConst(module, block: scanStep, value: AsciiZeroDigit, ids: ids)
+	let digit = emitBin(module, block: scanStep, a: ch, b: asciiZero, opcode: StdBinOpcode.sub, ids: ids)
 	let radix = emitConst(module, block: scanStep, value: DecimalRadix, ids: ids)
 	let scaled = emitBin(module, block: scanStep, a: accId, b: radix, opcode: StdBinOpcode.mul, ids: ids)
 	let nextAcc = emitBin(module, block: scanStep, a: scaled, b: digit, opcode: StdBinOpcode.add, ids: ids)
 	let one = emitConst(module, block: scanStep, value: 1, ids: ids)
 	let nextIndex = emitBin(module, block: scanStep, a: indexId, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(scanStep, op: StdOp.branch(scanHdr.id))
+
+	// The bound is tested after every digit: tested once at the end, a long enough run of digits wraps the
+	// 64-bit accumulator back into range and is taken as a count.
+	let most = emitConst(module, block: scanStep, value: MostRequestedProcessors as ParsedInt, ids: ids)
+	let overflows = emitCmp(module, block: scanStep, a: nextAcc, b: most, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(scanStep, op: StdOp.condBranch(overflows, thenBlockId: rejected.id, elseBlockId: scanHdr.id))
 	scanStep.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(nextIndex, second: nextAcc)))
-end 'emitParseUnsignedDecimal'
+end 'emitParseRequestedProcessorCount'
+
+// The digit band is tested at BOTH ends rather than by one unsigned wrap: the byte load zero-extends, so
+// the wrap trick would work — and it would also rest on the load's width, which is exactly the kind of
+// implicit dependency a later widening breaks silently. Two compares, no premise.
+function emitRequireDecimalDigit(module StdModule, func IrFunction, block IrBlock, ch ValueId, rejected IrBlock, ids ValueMinter) returns IrBlock
+	var notBelow = module.addBlock(func, label: b"decnotbelow", heat: BlockHeat.normal)
+	var isDigit = module.addBlock(func, label: b"decdigit", heat: BlockHeat.normal)
+
+	let asciiZero = emitConst(module, block: block, value: AsciiZeroDigit, ids: ids)
+	let below = emitCmp(module, block: block, a: ch, b: asciiZero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(below, thenBlockId: rejected.id, elseBlockId: notBelow.id))
+
+	let asciiNine = emitConst(module, block: notBelow, value: AsciiNineDigit, ids: ids)
+	let above = emitCmp(module, block: notBelow, a: ch, b: asciiNine, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(notBelow, op: StdOp.condBranch(above, thenBlockId: rejected.id, elseBlockId: isDigit.id))
+
+	return isDigit
+end 'emitRequireDecimalDigit'
 
 // ==========================================================================
 // The per-P ring — `__sched_runq_put` / `__sched_runq_get` / `__sched_steal`

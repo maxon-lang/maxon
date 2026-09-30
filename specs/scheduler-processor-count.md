@@ -10,8 +10,11 @@ category: concurrency
 ## Documentation
 
 `Scheduler.processorCount()` answers the number of processors the green-thread scheduler runs services on:
-the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets, clamped to between 1 and the
-machine's count. It is the number a program sizes a pool of services by.
+the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets. Like Go's `GOMAXPROCS`, a set
+count is taken exactly whether it is below the machine's count or above it. A value that is not a decimal
+fitting a positive 32-bit signed integer — `0`, a non-number, or a number above 2147483647 — is ignored, and
+the machine's count applies, as Go's `schedinit` ignores a `GOMAXPROCS` it cannot parse as a positive
+`int32`. It is the number a program sizes a pool of services by.
 
 ### The answer never depends on what the program has already started
 
@@ -55,24 +58,183 @@ end 'main'
 procs=1
 ```
 
-<!-- test: scheduler-processor-count.never-above-the-machine -->
-<!-- procs: 2 -->
-A requested count above the machine's is capped at the machine's, so on a one-processor host the answer is
-1 and everywhere else it is the 2 requested.
+<!-- test: scheduler-processor-count.a-request-above-the-machine-is-honoured -->
+<!-- procs: 64 -->
+A requested count above the machine's is taken exactly, as Go takes a `GOMAXPROCS` above `NumCPU`. 64 is
+above the processor count of every host a lane runs on, so the answer can only be 64 if the request was
+honoured rather than lowered to the machine's count.
 ```maxon
 function main() returns ExitCode
-	let requested = 2
-	let cpus = __Builtins.cpuCount()
-	let expected = requested if cpus > requested else cpus
-
-	if Scheduler.processorCount() == expected 'clamped'
-		return 5
-	end 'clamped'
-	return 1
+	print("procs={Scheduler.processorCount()}\n")
+	return 0
 end 'main'
 ```
+```stdout
+procs=64
+```
+
+<!-- test: scheduler-processor-count.a-request-beyond-32-bits-is-ignored -->
+<!-- unsupported-targets: wasm32-wasi -->
+`18446744073709551621` is `2^64 + 5`: a decimal walk that wraps in 64 bits reads it as 5, and a count is only
+a count when it fits a positive 32-bit signed integer, so the value is ignored and the machine's count
+applies. The `procs:` marker takes only a count the harness can read as one, so the program re-executes
+itself with that text as `MAXON_MAX_PROCS` in the child's environment and prints what the child reports.
+The child compares against `__Builtins.cpuCount()`, which keeps the answer the same on every host. Not on
+`wasm32-wasi`, where the subprocess band is refused at compile time (`subprocess-unsupported.md`).
+```maxon
+typealias StringArray = Array with String
+
+function child() returns ExitCode
+	let machine = Scheduler.processorCount() == __Builtins.cpuCount()
+	print("machine={machine}\n")
+	return 0
+end 'child'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return child()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	var argv = StringArray.create()
+	argv.push("child")
+
+	var config = Configuration.create(Executable.path(me))
+	config.arguments = argv
+	config.environment = Environment.inheritUpdating(["MAXON_MAX_PROCS": "18446744073709551621"])
+	let run = try Subprocess.runConfiguration(config) otherwise return 4
+
+	print("child {run.stdout}")
+	print("child exit={run.exitCode()}\n")
+	return 0
+end 'main'
+```
+```stdout
+child machine=true
+child exit=0
+```
 ```exitcode
-5
+0
+```
+
+<!-- test: scheduler-processor-count.a-count-with-trailing-text-is-ignored -->
+<!-- unsupported-targets: wasm32-wasi -->
+`12abc` starts with a count and is not one: the whole value must be a decimal, so a trailing suffix makes it
+ignored rather than read as 12, and the machine's count applies. The same re-execution as its sibling
+above, with this text as `MAXON_MAX_PROCS`.
+```maxon
+typealias StringArray = Array with String
+
+function child() returns ExitCode
+	let machine = Scheduler.processorCount() == __Builtins.cpuCount()
+	print("machine={machine}\n")
+	return 0
+end 'child'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return child()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	var argv = StringArray.create()
+	argv.push("child")
+
+	var config = Configuration.create(Executable.path(me))
+	config.arguments = argv
+	config.environment = Environment.inheritUpdating(["MAXON_MAX_PROCS": "12abc"])
+	let run = try Subprocess.runConfiguration(config) otherwise return 4
+
+	print("child {run.stdout}")
+	print("child exit={run.exitCode()}\n")
+	return 0
+end 'main'
+```
+```stdout
+child machine=true
+child exit=0
+```
+```exitcode
+0
+```
+
+<!-- test: scheduler-processor-count.a-count-with-a-leading-plus-is-taken -->
+<!-- unsupported-targets: wasm32-wasi -->
+`+4` is a decimal, as Go's `strconv.ParseInt` reads one: a leading `+` is part of the number, so the count
+is 4. The same re-execution as the siblings above, with this text as `MAXON_MAX_PROCS`.
+```maxon
+typealias StringArray = Array with String
+
+function child() returns ExitCode
+	print("procs={Scheduler.processorCount()}\n")
+	return 0
+end 'child'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return child()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	var argv = StringArray.create()
+	argv.push("child")
+
+	var config = Configuration.create(Executable.path(me))
+	config.arguments = argv
+	config.environment = Environment.inheritUpdating(["MAXON_MAX_PROCS": "+4"])
+	let run = try Subprocess.runConfiguration(config) otherwise return 4
+
+	print("child {run.stdout}")
+	print("child exit={run.exitCode()}\n")
+	return 0
+end 'main'
+```
+```stdout
+child procs=4
+child exit=0
+```
+```exitcode
+0
+```
+
+<!-- test: scheduler-processor-count.a-count-longer-than-thirty-two-bytes-is-read-whole -->
+<!-- unsupported-targets: wasm32-wasi -->
+Forty `0`s and a `4` are 41 bytes of one decimal whose value is 4. The length of the text is not what makes a
+count; its value is, so a value longer than any first read's buffer is read whole and the count is 4. The
+same re-execution as the siblings above, with this text as `MAXON_MAX_PROCS`.
+```maxon
+typealias StringArray = Array with String
+
+function child() returns ExitCode
+	print("procs={Scheduler.processorCount()}\n")
+	return 0
+end 'child'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return child()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	var argv = StringArray.create()
+	argv.push("child")
+
+	var config = Configuration.create(Executable.path(me))
+	config.arguments = argv
+	config.environment = Environment.inheritUpdating(["MAXON_MAX_PROCS": "00000000000000000000000000000000000000004"])
+	let run = try Subprocess.runConfiguration(config) otherwise return 4
+
+	print("child {run.stdout}")
+	print("child exit={run.exitCode()}\n")
+	return 0
+end 'main'
+```
+```stdout
+child procs=4
+child exit=0
+```
+```exitcode
+0
 ```
 
 <!-- test: scheduler-processor-count.asked-before-the-first-spawn -->

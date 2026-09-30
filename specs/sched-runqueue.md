@@ -687,7 +687,7 @@ one are both empty, so a runtime that reclaims every dropped sleeper carves no m
 once — `main`, this round's sleeper and its finisher — plus fewer than 64 waiting on each other processor's
 list, however many rounds run. A thousand rounds is more than five times that bound at four processors, so a
 record stranded every round cannot stay under it. The bound is taken from `schedProcessorCount()` rather than
-written as a number, for `sched-processor.md`'s reason: `procs: 4` is clamped to the host.
+written as a number, so it follows the count the scheduler resolved.
 
 ✅ **SABOTAGE-VERIFIED, AND THE EXIT GATE CANNOT SEE IT.** With the runner's half removed from the parked-drop
 arm, this case reads `bounded=false` — 1,002 records carved at four processors against a bound of 192 — and

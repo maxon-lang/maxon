@@ -1,0 +1,247 @@
+// Test: a-record-over-the-enclosing-parameter-fed-to-a-list-is-kept
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export let x as T
+	export let tag as Integer
+
+	function value() returns T
+		return x
+	end 'value'
+
+	static function create(x T, tag Integer) returns Self
+		return Self{x: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias Store = List with EBox
+	var items as Store
+
+	function add(x Element, tag Integer)
+		items.append(EBox.create(x, tag: tag))
+	end 'add'
+
+	function first() returns Element
+		let slot = try items.first() otherwise panic("empty")
+		return slot.value()
+	end 'first'
+
+	static function create() returns Self
+		return Self{items: Store.create()}
+	end 'create'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function fill(b StrBag)
+	var sb = StringBuilder.create()
+	sb.append("hello ")
+	sb.append("heap world")
+	b.add(sb.build(), tag: 7)
+end 'fill'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	fill(b)
+	print("{b.first()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __layout_Bag_String
+  __il_body#5:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 72]
+  __il_body#7:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
+    arm64.bl __list_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#6:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x20
+  __il_body#16:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x20
+    arm64.storeBaseDispReg.byte [x22 + 8], x21
+  __il_cont#15:
+    arm64.leaRdata x1, __str_rec_4  ; "hello "
+    arm64.movRegReg x0, x22
+    arm64.bl StringBuilder.append
+    arm64.leaRdata x1, __str_rec_5  ; "heap world"
+    arm64.movRegReg x0, x22
+    arm64.bl StringBuilder.append
+  __il_body#19:
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseDisp.byte x20, [x22 + 8]
+  __il_body#21:
+    arm64.bl __managed_retain
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.bl __str_of_buffer
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+  __il_cont#20:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.bl __managed_decref
+    arm64.storeBaseDispReg.word64 [x22 + 0], x21
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.byte [x22 + 8], x0
+  __il_cont#18:
+    arm64.movImm x21, 7
+    arm64.leaRdata x23, __layout_Bag_String
+  __il_body#22:
+    arm64.loadRegBaseDisp.word64 x24, [x19 + 0]
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.bl __retain_type_param
+    arm64.movRegReg x25, x0
+  __il_body#24:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.storeBaseDispReg.word64 [x26 + 0], x25
+    arm64.storeBaseDispReg.word64 [x26 + 8], x21
+  __il_cont#23:
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_incref
+    arm64.loadRegBaseDisp.word64 x2, [x23 + 72]
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x26
+    arm64.bl List.append
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x26
+    arm64.bl __destruct_dict_Box_T779624e88745be2b
+  __il_cont#17:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_StringBuilder
+  __il_cont#13:
+    arm64.leaRdata x20, __layout_Bag_String
+  __il_body#8:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 72]
+    arm64.bl List.first
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __retain_type_param
+    arm64.movRegReg x22, x0
+  __il_cont#11:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl __destruct_dict_Box_T779624e88745be2b
+  __il_cont#3:
+    arm64.loadRegBaseDisp.word64 x20, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x22 + 8]
+    arm64.leaRdata x0, __str_rec_6  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.add x25, x21, x24
+    arm64.add x0, x25, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.add x27, x26, 56
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x27, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x0, x20, x24
+    arm64.storeBaseDispReg.word64 [x26 + 0], x27
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+  __il_body#2:
+    arm64.movRegReg x0, x26
+    arm64.bl __write_stdout
+  __il_cont#1:
+    arm64.movRegReg x0, x26
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __str_decref
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag_String
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  tryerr:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-record-over-the-enclosing-parameter-fed-to-a-list-is-kept.test:27: empty\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}

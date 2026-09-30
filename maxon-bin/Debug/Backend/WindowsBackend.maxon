@@ -43,6 +43,12 @@ let EventImageFileOffset = 0x10
 let EventCreateProcessHandleOffset = 0x18
 let EventCreateProcessThreadOffset = 0x20
 let EventExceptionAddressOffset = 0x20
+let EventCreateProcessImageBaseOffset = 0x28
+let EventCreateThreadStartOffset = 0x20
+
+let PeNewHeaderPointerOffset = 0x3C
+let PeSizeOfImageOffset = 0x50
+let PeDwordBytes = 4
 
 let ExceptionCodeBreakpoint = 0x80000003
 let ExceptionCodeSingleStep = 0x80000004
@@ -53,6 +59,11 @@ let ContinueUnhandled = 0x80010001
 let PageExecuteReadWrite = 0x40
 
 let Win32True = 1
+
+let SuspendCountRefused = 0xFFFFFFFF
+
+let DetachDrainBudgetMs = 2000
+let DetachDrainSliceMs = 50
 
 type BackendThreadEntry
 	export let id as BackendThreadId
@@ -81,10 +92,16 @@ export type WindowsBackend
 	var stopOutstanding as bool
 	var sawFirstBreakpoint as bool
 	var stopRequested as bool
+	var stepping as BackendStepRoster
+	var suspended as BackendThreadIdArray
+	var imageBase as BackendWord
+	var imageEnd as BackendWord
+	var breakInThreads as BackendThreadIdArray
+	var breakInsOwed as BackendWord
 	var status as BackendExitStatus
 
 	export static function create() returns WindowsBackend
-		return Self{scratch: BackendScratchPage.create(), process: 0, processId: 0, threads: BackendThreadEntryArray.create(), pendingProcessId: 0, pendingThreadId: 0, pendingUnowned: false, stopOutstanding: false, sawFirstBreakpoint: false, stopRequested: false, status: BackendExitStatus.running}
+		return Self{scratch: BackendScratchPage.create(), process: 0, processId: 0, threads: BackendThreadEntryArray.create(), pendingProcessId: 0, pendingThreadId: 0, pendingUnowned: false, stopOutstanding: false, sawFirstBreakpoint: false, stopRequested: false, stepping: BackendStepRoster.create(), suspended: BackendThreadIdArray.create(), imageBase: 0, imageEnd: 0, breakInThreads: BackendThreadIdArray.create(), breakInsOwed: 0, status: BackendExitStatus.running}
 	end 'create'
 
 	export function holdsItsScratch() returns bool
@@ -141,6 +158,8 @@ export type WindowsBackend
 			self.process = self.scratch.word((EventOffset + EventCreateProcessHandleOffset) as BackendPageOffset) as BackendHandle
 			self.processId = self.pendingProcessId
 			self.rememberThread(self.pendingThreadId as BackendThreadId, handle: self.scratch.word((EventOffset + EventCreateProcessThreadOffset) as BackendPageOffset) as BackendHandle)
+			self.imageBase = self.scratch.word((EventOffset + EventCreateProcessImageBaseOffset) as BackendPageOffset)
+			self.imageEnd = self.imageBase + self.imageDwordAt(self.imageBase + self.imageDwordAt(self.imageBase + PeNewHeaderPointerOffset) + PeSizeOfImageOffset)
 			self.closeEventImageFile()
 			_ = self.continueEvent(ContinueHandled)
 
@@ -156,13 +175,33 @@ export type WindowsBackend
 
 		if code == DebugEventCodeCreateThread 'aThreadArrived'
 			self.rememberThread(self.pendingThreadId as BackendThreadId, handle: self.scratch.word((EventOffset + EventPayloadOffset) as BackendPageOffset) as BackendHandle)
+
+			if not self.insideTheImage(self.scratch.word((EventOffset + EventCreateThreadStartOffset) as BackendPageOffset)) 'aThreadTheProgramDidNotStart'
+				self.breakInThreads.push(self.pendingThreadId as BackendThreadId)
+			end 'aThreadTheProgramDidNotStart'
+
+			if self.stepping.company() == BackendOtherThreads.hold 'bornDuringAHeldStep'
+				self.suspendEveryThreadNotStepping()
+			end 'bornDuringAHeldStep'
+
 			_ = self.continueEvent(ContinueHandled)
 
 			return BackendEventClass.bookkeeping
 		end 'aThreadArrived'
 
 		if code == DebugEventCodeExitThread 'aThreadLeft'
-			self.forgetThread(self.pendingThreadId as BackendThreadId)
+			let departed = self.pendingThreadId as BackendThreadId
+
+			if self.stepping.holds(departed) 'aStepperLeft'
+				self.stepping.forget(departed)
+				self.forgetThread(departed)
+				self.stopOutstanding = true
+				self.pendingUnowned = false
+
+				return BackendEventClass.stop(DebugStopEvent.threadExited(departed))
+			end 'aStepperLeft'
+
+			self.forgetThread(departed)
 			_ = self.continueEvent(ContinueHandled)
 
 			return BackendEventClass.bookkeeping
@@ -171,6 +210,8 @@ export type WindowsBackend
 		if code == DebugEventCodeExitProcess 'theProcessLeft'
 			let ending = self.scratch.word((EventOffset + EventPayloadOffset) as BackendPageOffset) and DwordMask
 			self.status = BackendExitStatus.ended(ending as BackendExitCode)
+			self.stepping.clear()
+			self.suspended = BackendThreadIdArray.create()
 			_ = self.continueEvent(ContinueHandled)
 
 			return BackendEventClass.ended(DebugStopEvent.exited(ending as BackendExitCode))
@@ -182,7 +223,7 @@ export type WindowsBackend
 			return BackendEventClass.bookkeeping
 		end 'nothingTheDriverActsOn'
 
-		return BackendEventClass.stop(self.exceptionStop())
+		return self.exceptionStop()
 	end 'classified'
 
 	function closeEventImageFile()
@@ -197,43 +238,68 @@ export type WindowsBackend
 
 	// ⭐ The breakpoint address is `ExceptionRecord.ExceptionAddress` and never arithmetic on the reported
 	// program counter: the two conventions differ by one byte and this field is authoritative on both.
-	function exceptionStop() returns DebugStopEvent
+	function exceptionStop() returns BackendEventClass
 		let excCode = self.scratch.word((EventOffset + EventPayloadOffset) as BackendPageOffset) and DwordMask
-		let address = self.scratch.word((EventOffset + EventExceptionAddressOffset) as BackendPageOffset)
+		let address = debugAddressOrZero(self.scratch.word((EventOffset + EventExceptionAddressOffset) as BackendPageOffset) as DebuggeeWord)
+		let thread = self.pendingThreadId as BackendThreadId
 		self.stopOutstanding = true
+		self.stepping.forget(thread)
 
 		if excCode == ExceptionCodeBreakpoint 'aPlantedByteOrTheLoadersOwn'
-			let first = not self.sawFirstBreakpoint
-			self.sawFirstBreakpoint = true
 			self.pendingUnowned = false
 
-			return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: self.breakpointExceptionReason(first), faultCode: 0, address: debugAddressOrZero(address as DebuggeeWord))
+			return self.breakpointExceptionStop(thread, address: address)
 		end 'aPlantedByteOrTheLoadersOwn'
 
 		if excCode == ExceptionCodeSingleStep 'aStepLanded'
 			self.pendingUnowned = false
 
-			return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: BackendStopReason.singleStep, faultCode: 0, address: debugAddressOrZero(address as DebuggeeWord))
+			return BackendEventClass.stop(DebugStopEvent.stopped(thread, reason: BackendStopReason.singleStep, faultCode: 0, address: address))
 		end 'aStepLanded'
 
 		self.pendingUnowned = true
 
-		return DebugStopEvent.stopped(self.pendingThreadId as BackendThreadId, reason: BackendStopReason.fault, faultCode: excCode, address: debugAddressOrZero(address as DebuggeeWord))
+		return BackendEventClass.stop(DebugStopEvent.stopped(thread, reason: BackendStopReason.fault, faultCode: excCode, address: address))
 	end 'exceptionStop'
 
-	function breakpointExceptionReason(first bool) returns BackendStopReason
-		if first 'theLoadersOwn'
-			return BackendStopReason.entry
+	// A pause's `DebugBreakProcess` breaks in on a thread started outside the image, at an address outside
+	// it. Both are asked, because a thread the loader started can still reach a trap planted in the image.
+	function breakpointExceptionStop(thread BackendThreadId, address DebugAddress) returns BackendEventClass
+		if not self.sawFirstBreakpoint 'theLoadersOwn'
+			self.sawFirstBreakpoint = true
+
+			return BackendEventClass.stop(DebugStopEvent.stopped(thread, reason: BackendStopReason.entry, faultCode: 0, address: address))
 		end 'theLoadersOwn'
 
-		if self.stopRequested 'theDriverAskedForIt'
-			self.stopRequested = false
+		if not backendRosterHolds(self.breakInThreads, thread: thread) or self.insideTheImage(address as BackendWord) 'aProgramThreadsTrap'
+			return BackendEventClass.stop(DebugStopEvent.stopped(thread, reason: BackendStopReason.breakpoint, faultCode: 0, address: address))
+		end 'aProgramThreadsTrap'
 
-			return BackendStopReason.interrupt
-		end 'theDriverAskedForIt'
+		self.breakInsOwed = self.breakInsOwed - 1 if self.breakInsOwed > 0 else 0
 
-		return BackendStopReason.breakpoint
-	end 'breakpointExceptionReason'
+		if not self.stopRequested 'aBreakInAnsweredAlready'
+			_ = self.resumeAll()
+
+			return BackendEventClass.bookkeeping
+		end 'aBreakInAnsweredAlready'
+
+		self.stopRequested = false
+
+		return BackendEventClass.stop(DebugStopEvent.stopped(thread, reason: BackendStopReason.interrupt, faultCode: 0, address: address))
+	end 'breakpointExceptionStop'
+
+	function insideTheImage(address BackendWord) returns bool
+		return address >= self.imageBase and address < self.imageEnd
+	end 'insideTheImage'
+
+	function imageDwordAt(address BackendWord) returns BackendWord
+		match self.readMemory(debugAddressOrZero(address as DebuggeeWord), bytes: PeDwordBytes as BackendByteCount) 'read'
+			unreadable then panic("WindowsBackend.imageDwordAt: the program's image header at {address:x} could not be read while the process was being created, so no thread could be told from a debugger break-in")
+			read then break 'read'
+		end 'read'
+
+		return self.scratch.word(TransferOffset as BackendPageOffset) and DwordMask
+	end 'imageDwordAt'
 
 	// --- resuming ---
 
@@ -244,16 +310,28 @@ export type WindowsBackend
 
 		self.stopOutstanding = false
 
+		if self.stepping.company() == BackendOtherThreads.run 'noStepHoldsTheOthers'
+			self.releaseEverySuspendedThread()
+		end 'noStepHoldsTheOthers'
+
 		return self.continueEvent(ContinueUnhandled if self.pendingUnowned else ContinueHandled)
 	end 'resumeAll'
 
-	export function stepThread(thread BackendThreadId) returns bool
+	export function stepThread(thread BackendThreadId, others BackendOtherThreads) returns bool
 		if not self.trapFlagSet(thread, armed: true) 'noRegisterFile'
 			return false
 		end 'noRegisterFile'
 
+		self.stepping.note(thread, others: others)
+		self.releasedFromTheHold(thread)
+
+		if self.stepping.company() == BackendOtherThreads.hold 'aStepOverALiftedTrap'
+			self.suspendEveryThreadNotStepping()
+		end 'aStepOverALiftedTrap'
+
 		if not self.resumeAll() 'theKernelRefused'
-			_ = self.trapFlagSet(thread, armed: false)
+			self.forgetStep(thread)
+			self.releaseEverySuspendedThread()
 
 			return false
 		end 'theKernelRefused'
@@ -261,22 +339,153 @@ export type WindowsBackend
 		return true
 	end 'stepThread'
 
-	export function requestStop() returns bool
-		self.stopRequested = hostDebugCall(HostDebugVerb.breakProcess, a0: self.process as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) == Win32True
+	function suspendEveryThreadNotStepping()
+		for entry in self.threads 'eachThread'
+			if self.stepping.holds(entry.id) or backendRosterHolds(self.suspended, thread: entry.id) 'itRunsOrIsHeldAlready'
+				continue
+			end 'itRunsOrIsHeldAlready'
 
-		return self.stopRequested
+			let previous = hostDebugCall(HostDebugVerb.suspendThread, a0: entry.handle as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) and DwordMask
+
+			if previous != SuspendCountRefused 'theKernelSuspendedIt'
+				self.suspended.push(entry.id)
+			end 'theKernelSuspendedIt'
+		end 'eachThread'
+	end 'suspendEveryThreadNotStepping'
+
+	function releasedFromTheHold(thread BackendThreadId)
+		if not backendRosterHolds(self.suspended, thread: thread) 'itWasNotSuspended'
+			return
+		end 'itWasNotSuspended'
+
+		self.suspended = backendRosterWithout(self.suspended, thread: thread)
+		self.threadResumed(thread)
+	end 'releasedFromTheHold'
+
+	function releaseEverySuspendedThread()
+		if self.suspended.count() == 0 'noneIsSuspended'
+			return
+		end 'noneIsSuspended'
+
+		for thread in self.suspended 'eachSuspended'
+			self.threadResumed(thread)
+		end 'eachSuspended'
+
+		self.suspended = BackendThreadIdArray.create()
+	end 'releaseEverySuspendedThread'
+
+	function threadResumed(thread BackendThreadId)
+		let handle = self.knownHandleOf(thread)
+
+		if handle == 0 'itHasLeft'
+			return
+		end 'itHasLeft'
+
+		let previous = hostDebugCall(HostDebugVerb.resumeThread, a0: handle as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) and DwordMask
+
+		if previous == SuspendCountRefused 'theKernelRefused'
+			panic("WindowsBackend.threadResumed: ResumeThread refused thread {thread}, which this backend suspended to hold it through a step, so it would stay frozen for the rest of the session")
+		end 'theKernelRefused'
+	end 'threadResumed'
+
+	export function requestStop() returns bool
+		if hostDebugCall(HostDebugVerb.breakProcess, a0: self.process as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) != Win32True 'theKernelRefused'
+			return false
+		end 'theKernelRefused'
+
+		self.breakInsOwed = self.breakInsOwed + 1
+		self.stopRequested = true
+
+		return true
 	end 'requestStop'
 
-	export function abandonStopRequest()
-		self.stopRequested = false
-	end 'abandonStopRequest'
+	export function forgetStep(thread BackendThreadId)
+		self.stepping.forget(thread)
+		_ = self.trapFlagSet(thread, armed: false)
+	end 'forgetStep'
 
+	export function retireStopRequest()
+		self.stopRequested = false
+	end 'retireStopRequest'
+
+	// Before `DebugActiveProcessStop` every stepper's trap flag is cleared, since left set it raises a
+	// single-step exception no debugger answers, and every queued event is drained and continued here.
 	export function detach() returns bool
+		for stepper in self.stepping.outstanding().clone() 'eachStepper'
+			self.stepperLetGo(stepper)
+		end 'eachStepper'
+
+		self.releaseEverySuspendedThread()
 		_ = self.resumeAll()
 		self.stopRequested = false
+		self.queuedEventsDrained()
 
 		return hostDebugCall(HostDebugVerb.detachProcess, a0: self.processId, a1: 0, a2: 0, a3: 0, a4: 0) == Win32True
 	end 'detach'
+
+	// A thread's context is written only while it stands still, so a stepper still running is suspended
+	// around the write.
+	function stepperLetGo(thread BackendThreadId)
+		if self.stopOutstanding 'everyThreadStandsStill'
+			self.forgetStep(thread)
+
+			return
+		end 'everyThreadStandsStill'
+
+		let handle = self.knownHandleOf(thread)
+
+		if handle == 0 or (hostDebugCall(HostDebugVerb.suspendThread, a0: handle as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) and DwordMask) == SuspendCountRefused 'itHasLeft'
+			self.stepping.forget(thread)
+
+			return
+		end 'itHasLeft'
+
+		self.forgetStep(thread)
+		self.threadResumed(thread)
+	end 'stepperLetGo'
+
+	function queuedEventsDrained()
+		let deadline = debugDeadlineAfter(DetachDrainBudgetMs as StopTimeoutMs)
+
+		while not debugDeadlinePassed(deadline) and self.oneQueuedEventDrained() 'eachEvent'
+			continue
+		end 'eachEvent'
+	end 'queuedEventsDrained'
+
+	function oneQueuedEventDrained() returns bool
+		return match self.waitForStop(DetachDrainSliceMs as BackendWaitBudgetMs) 'seen'
+			stopped(thread, reason, _, address) gives self.resumedPastAStopNobodyTakes(thread, reason: reason, address: address)
+
+			threadStarted or
+				threadExited gives true
+
+			timedOut gives self.breakInsOwed > 0
+
+			exited or
+				signalled gives false
+		end 'seen'
+	end 'oneQueuedEventDrained'
+
+	// A breakpoint stop queued before its byte was restored leaves the program counter past the trap; it
+	// is put back onto the restored instruction, or the program resumes inside it.
+	function resumedPastAStopNobodyTakes(thread BackendThreadId, reason BackendStopReason, address DebugAddress) returns bool
+		if reason == BackendStopReason.breakpoint and self.trapByteRemovedAt(address) 'backOntoTheRestoredInstruction'
+			_ = self.setProgramCounter(thread, address: address)
+		end 'backOntoTheRestoredInstruction'
+
+		return self.resumeAll()
+	end 'resumedPastAStopNobodyTakes'
+
+	function trapByteRemovedAt(address DebugAddress) returns bool
+		let trap = hostTrapShape()
+
+		return match trap.presenceIn(self.readMemory(address, bytes: trap.bytes())) 'presence'
+			removed gives true
+
+			stands or
+				unreadable gives false
+		end 'presence'
+	end 'trapByteRemovedAt'
 
 	function continueEvent(disposition BackendWord) returns bool
 		return hostDebugCall(HostDebugVerb.continueEvent, a0: self.pendingProcessId, a1: self.pendingThreadId, a2: disposition, a3: 0, a4: 0) == Win32True
@@ -354,36 +563,23 @@ export type WindowsBackend
 			file.setValue(slot as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextGprBase + slot * WordBytes) as BackendPageOffset))
 		end 'eachGeneralRegister'
 
-		for lane in 0 upto BackendVectorSlots 'eachVectorRegister'
-			file.setValue((BackendGprSlots + lane) as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextXmm0Offset + lane * Win64ContextXmmBytes) as BackendPageOffset))
-		end 'eachVectorRegister'
-
 		file.setValue(BackendRegSlotPc as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextRipOffset) as BackendPageOffset))
 		file.setValue(BackendRegSlotFlags as BackendRegisterNumber, value: (self.scratch.word((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset) shr HighDwordShift) and DwordMask)
 
 		return BackendRegisterRead.read(file)
 	end 'readRegisters'
 
-	export function writeRegisters(thread BackendThreadId, file DebugRegisterFile) returns bool
+	export function fillVectorRegisters(thread BackendThreadId, into DebugRegisterFile)
 		let handle = self.knownHandleOf(thread)
 
-		if handle == 0 'noSuchThread'
-			return false
-		end 'noSuchThread'
+		if handle == 0 or not self.contextRead(handle) 'theContextIsUnreadable'
+			return
+		end 'theContextIsUnreadable'
 
-		if not self.contextRead(handle) 'unreadable'
-			return false
-		end 'unreadable'
-
-		for slot in 0 upto BackendGprSlots 'eachGeneralRegister'
-			self.scratch.setWord((ContextOffset + Win64ContextGprBase + slot * WordBytes) as BackendPageOffset, value: file.valueOf(slot as BackendRegisterNumber))
-		end 'eachGeneralRegister'
-
-		self.scratch.setWord((ContextOffset + Win64ContextRipOffset) as BackendPageOffset, value: file.valueOf(BackendRegSlotPc as BackendRegisterNumber))
-		self.storeFlags(file.valueOf(BackendRegSlotFlags as BackendRegisterNumber))
-
-		return self.contextWritten(handle)
-	end 'writeRegisters'
+		for lane in 0 upto BackendVectorSlots 'eachVectorRegister'
+			into.setValue((BackendGprSlots + lane) as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextXmm0Offset + lane * Win64ContextXmmBytes) as BackendPageOffset))
+		end 'eachVectorRegister'
+	end 'fillVectorRegisters'
 
 	export function setProgramCounter(thread BackendThreadId, address DebugAddress) returns bool
 		return self.contextWordPatched(thread, offset: (ContextOffset + Win64ContextRipOffset) as BackendPageOffset, value: address as BackendWord)
@@ -424,12 +620,6 @@ export type WindowsBackend
 		return self.contextWritten(handle)
 	end 'trapFlagSet'
 
-	function storeFlags(flags BackendWord)
-		let word = self.scratch.word((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset)
-		let low = word and DwordMask
-		self.scratch.setWord((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset, value: low or ((flags and DwordMask) shl HighDwordShift))
-	end 'storeFlags'
-
 	// --- the thread table ---
 
 	function rememberThread(id BackendThreadId, handle BackendHandle)
@@ -438,6 +628,8 @@ export type WindowsBackend
 	end 'rememberThread'
 
 	function forgetThread(id BackendThreadId)
+		self.suspended = backendRosterWithout(self.suspended, thread: id)
+		self.breakInThreads = backendRosterWithout(self.breakInThreads, thread: id)
 		var kept = BackendThreadEntryArray.create()
 
 		for entry in self.threads 'eachThread'

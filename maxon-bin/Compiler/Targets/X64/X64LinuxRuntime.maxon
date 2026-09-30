@@ -2846,9 +2846,7 @@ function buildX64LinuxTlsAllocChunk() returns FunctionCodeChunk
 	// ⭐ RAISE THE PROCESS-WIDE FLAG the errno access reads (`x64LinuxEmitStoreErrno` carries why a per-thread
 	// test is unaffordable there and why a process-wide one is sound). It is raised AFTER FS is published, so
 	// no reader can be sent to a block that does not exist yet.
-	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: X64LinuxTlsReadyLabel)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: X64LinuxTlsBlocksAreLive)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, wide: true)
+	emitStoreGlobalImm(asm, label: X64LinuxTlsReadyLabel, value: X64LinuxTlsBlocksAreLive, width: X64AccessWidth.word64, through: X64Register.rdi)
 
 	asm.placeLabel(haveBlock)
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxTlsNextKeyLabel)
@@ -4165,8 +4163,8 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxExePathChunk())
 	end 'executablePath'
 
-	// ⚠ **THE PROCESSOR COUNT RIDES A UNION.** Every green-thread program reads `MAXON_MAX_PROCS` and clamps
-	// it against the machine (`SchedRuntime.emitResolveMaxProcs`), so `usesGt` is a second producer of
+	// ⚠ **THE PROCESSOR COUNT RIDES A UNION.** Every green-thread program reads the machine's count as the
+	// default for `MAXON_MAX_PROCS` (`SchedRuntime.emitResolveMaxProcs`), so `usesGt` is a second producer of
 	// `osCpuCount` behind `usesCpuCount`'s back — the arm64 lane measured that as an unresolved-symbol panic
 	// on its first green-thread program.
 	if usage.usesCpuCount or usage.usesGt 'cpuCount'

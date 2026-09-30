@@ -19,38 +19,30 @@ default build never executed it.** Flipping the default is what puts it under th
 ⭐ **THE DEFAULT IS NO LONGER A CONSTANT, WHICH IS WHY IT COULD NOT BE A CONSTANT SUBSTITUTION.** A
 processor count is a fact about the machine, so `emitResolveMaxProcs` reads `StdOp.osCpuCount` at scheduler
 bring-up — floored at `SchedRuntime.MinimumProcessorCount`, since the OS read can answer 0 or -1 — and
-that ONE reading is both the default and the ceiling. Two readings could have disagreed; one cannot.
+that reading is the default.
 
-### `MAXON_MAX_PROCS` is GOMAXPROCS now — it LOWERS as well as raises
+### `MAXON_MAX_PROCS` is GOMAXPROCS — it LOWERS as well as raises
 
-The variable sets the count **exactly**, clamped to `[MinimumProcessorCount, osCpuCount]`. It used to be
-able only to RAISE, and the reason was the default it was raising from: with a default of 1 a variable that
-could only lower would have had nothing to lower to. That argument died with the constant.
+The variable sets the count **exactly**, as Go's `schedinit` takes any positive `GOMAXPROCS`: a request
+below the machine's count lowers it, and a request above the machine's count raises it.
 
-**A value that is not a processor count never errors**, and the ways of not being one land on three tests,
-MEASURED on this tree (16-processor host):
+**A value that is not a processor count never errors.** A processor count is a decimal that fits a positive
+32-bit signed integer, the test Go's `schedinit` makes with `strconv.ParseInt(…, 10, 32)` and `n > 0`;
+anything else is ignored and the machine's count applies. On a 16-processor host:
 
 | `MAXON_MAX_PROCS` | `schedProcessorCount()` | why |
 |---|---|---|
 | unset | 16 | `osEnvRead` answers 0 characters |
-| `1` | 1 | in band, taken exactly — the LOWERING the flip bought |
-| `2` | 2 | in band, taken exactly |
-| `16` | 16 | in band, and the band's top |
-| `999` | 16 | above the machine ⇒ the ceiling |
-| `0` | 16 | below the floor ⇒ not a count, so: the default |
-| `abc` | 16 | the digit walk answers 0, which is the same predicate as `0` |
-| `12abc` | 12 | the walk stops at the first non-digit, so a suffix is ignored rather than rejected |
-| 39 digits | 16 | longer than the 32-byte buffer ⇒ declined, not retried |
-| `18446744073709551621` | **5** | ⚠ the decimal walk WRAPS in i64, so a 20-digit value can land in band |
-
-⚠ **THE LAST ROW IS WHY THIS SECTION NO LONGER CLAIMS "resolves to the machine's count".** A value that
-overflows i64 wraps to whatever the low 64 bits say, and if that happens to be in `[1, cpuCount]` it is
-taken *exactly* — `18446744073709551621` is `2^64 + 5`, so it reads as 5. Nothing is unsafe: the result is
-still clamped into the band, so no `P*` array is mis-sized and nothing wild-writes. But it is not the
-machine's count, and the earlier wording promised it was. **This is pre-flip behaviour, unchanged** — the
-old code clamped the same 5 to `min(5, 16)` — so it is a documentation correction, not a regression.
-Rejecting an overflowing value would need the walk to detect the wrap, which is a real change to
-`emitParseUnsignedDecimal` and is not this one.
+| `1` | 1 | taken exactly — a lowering |
+| `2` | 2 | taken exactly |
+| `16` | 16 | taken exactly |
+| `64` | 64 | taken exactly — a raising above the machine |
+| `0` | 16 | not positive ⇒ ignored |
+| `abc` | 16 | not a decimal ⇒ ignored |
+| `12abc` | 16 | not a decimal ⇒ ignored |
+| `2147483648` | 16 | above 2147483647 ⇒ ignored |
+| `18446744073709551621` | 16 | above 2147483647 ⇒ ignored; it is `2^64 + 5`, so a walk that wraps in 64 bits would read 5 |
+| 39 digits | 16 | above 2147483647 ⇒ ignored |
 
 ### `<!-- procs: N -->` — the marker that makes the count a property of the CASE
 
@@ -76,13 +68,9 @@ same program with the marker removed prints `procs=16` on this host.** A `procs:
 dropped turns it red.
 
 **`the-procs-marker-raises-the-processor-count` is the same gate pointing the other way**, and it is last
-below. It names a count ABOVE one and asserts the scheduler RESOLVED it, so an unread marker on the
-PRE-flip default left it at one P and its `clamped=` reading went to 0 — MEASURED then, by running the very
-same program with no marker at all: `procs=1 cpus=16 clamped=0`, against `procs=4 clamped=1` with the
-marker. ⚠ **After the flip that particular reading no longer reproduces on a host with more than four
-processors** — an unread marker now leaves the case at the machine's count, and `clamped=0` because 16 is
-not the `min(4, 16)` it expects. The case still goes red on an ignored marker, which is what it is for; what
-changed is the number it prints when it does.
+below. It names a count ABOVE one and asserts the scheduler RESOLVED it, so an unread marker leaves the
+case at the machine's count and it prints that count instead of `procs=4` on any host without exactly four
+processors.
 
 ### ⛔⛔ THESE CASES ASSERT THE PROCESSOR COUNT, AND THEY USED TO ASSERT THE WORKER COUNT — WHICH READ EITHER WAY DEPENDING ON MACHINE LOAD
 
@@ -97,7 +85,7 @@ else the machine is doing is worse than no case**: it teaches every later reader
 than believe it.
 
 ⇒ **The marker's contract is the PROCESSOR COUNT, so that is what a case about the marker asserts.**
-`MAXON_MAX_PROCS` settles `__sched_num_procs` to `min(requested, osCpuCount)` in `emitResolveMaxProcs`,
+`MAXON_MAX_PROCS` settles `__sched_num_procs` to the requested count in `emitResolveMaxProcs`,
 once, inside `__sched_init_procs`, before a single green thread runs and without consulting the workload.
 How many worker Ms get built out of those Ps is a consequence of the WORK — the scheduler's business, not
 the marker's promise. `schedMaxActiveWorkers()` is unchanged and still honest about what it is, a
@@ -114,9 +102,6 @@ each a chunk of index-derived integer work, and collects the eight partial sums 
   marker decides. It is not an inference and it is not a race: that word is written once at scheduler
   bring-up and never again. Asking installs the scheduler, so no program reads the word's `.data` seed of
   **0** — `Scheduler.processorCount()` is the public spelling of the same read (`scheduler-processor-count.md`).
-- **`clamped=`** is `1` when the count the scheduler resolved is exactly `min(requested, cpuCount())` —
-  the marker's contract stated as a comparison the program can make on ANY machine, from two independent
-  readings: an OS call and a scheduler word. A bare `procs=4` would have been a claim about this box.
 - **`aggregate=`** is an order-independent sum of eight index-derived partial sums, so it is the SAME
   number however many processors serviced the work. That invariance is the property the entire flip must
   preserve, and it is the reason a wrong answer here is a wrong answer rather than a scheduling artefact.
@@ -138,7 +123,7 @@ because a real fan-out across eight services is what makes that invariance worth
 longer load-bearing against flakiness, and nothing here depends on how long the work takes.
 
 ⚠ **NO CASE HERE CARRIES A LANE RESTRICTION.** A `spawn` runs on all four native lanes and is refused on
-wasm32-wasi by `SemanticCheck.requireTargetSupportsServiceEntry`; the last case's `cpuCount()` is an OS
+wasm32-wasi by `SemanticCheck.requireTargetSupportsServiceEntry`; the first case's `cpuCount()` is an OS
 call refused there with E3104. Both refusals are REPORTED as counted SKIPs naming the case, so a marker
 would state what the run already says and hide the case while doing it. `schedProcessorCount()` is refused
 there with E3104 too, as a query about a scheduler that lane does not have.
@@ -243,11 +228,8 @@ aggregate=479997
 
 <!-- test: the-procs-marker-pins-one-processor -->
 <!-- procs: 1 -->
-**THE MARKER'S OWN GATE, AND IT IS LOAD-BEARING ONLY AFTER THE FLIP.** The same program pinned to one
-processor, and the one count here that can be asserted as a BARE NUMBER on any machine: `min(1, cpuCount)`
-is 1 wherever this runs, because a machine cannot report fewer than one processor
-(`SchedRuntime.MinimumProcessorCount` is the floor that guarantees it). The aggregate is unchanged,
-because it is unchangeable.
+**THE MARKER'S OWN GATE.** The same program pinned to one processor, which the scheduler takes exactly on
+any machine. The aggregate is unchanged, because it is unchangeable.
 
 ⭐ **THIS CASE IS LOAD-BEARING.** The default is the machine's processor count, so `procs=1` is reachable
 ONLY through the marker — **MEASURED: the identical program with the marker removed prints `procs=16` on
@@ -326,7 +308,7 @@ this file would notice a chunk of work that ran twice, or a reply that resolved 
 `self.acc` two Ms both stepped — a count reading answers what the scheduler was given and would go on
 answering it through all three.
 
-⚠ **IT PRINTS THE AGGREGATE ALONE, AND THE OMISSION IS THE POINT.** A `procs=` or `clamped=` reading is
+⚠ **IT PRINTS THE AGGREGATE ALONE, AND THE OMISSION IS THE POINT.** A `procs=` reading is
 about the PROCESSOR COUNT, which is the one thing this case deliberately varies; asserting it here would
 pin the very axis the case exists to be indifferent to, and would turn the case red at the flip for a
 reason having nothing to do with the answer. What this case claims is `479997`, three times, off three
@@ -396,20 +378,13 @@ aggregate=479997
 
 <!-- test: the-procs-marker-raises-the-processor-count -->
 <!-- procs: 4 -->
-⭐⭐ **THE MARKER'S OWN GATE IN THE OTHER DIRECTION, AND THE ONLY CASE HERE THAT COULD SEE AN INERT
-`procs:` TODAY.** Its two `procs:`-marked siblings above cannot: one names the count the default already
-has, and the other deliberately asserts nothing about the count. This one names a count ABOVE the
-current default and asserts the scheduler RESOLVED it — so with the marker unread it runs at one P,
-`schedProcessorCount()` answers 1 against an `expected` of 4, and it prints `clamped=0` against an
-expectation of `clamped=1`. **MEASURED: the identical program with the marker removed prints exactly
-that**, which is this case's red half seen rather than argued.
+⭐⭐ **THE MARKER'S OWN GATE IN THE OTHER DIRECTION.** It names a count above one and asserts the scheduler
+RESOLVED it. An unread marker leaves the case at the machine's count, which prints some count other than
+`procs=4` on every host that does not have exactly four processors.
 
-⚠ **IT ASSERTS AN AGREEMENT AND NOT A NUMBER, WHICH IS WHAT MAKES IT MACHINE-INDEPENDENT.** `procs=4`
-would be a claim about a box with at least four processors; `clamped=1` is the claim
-`min(requested, cpuCount())`, which is the clamp `emitResolveMaxProcs` actually applies, and it holds on a
-two-processor box (where it pins 2) exactly as it holds here (where it pins 4). ⚠ On a strictly
-SINGLE-processor host it would pin 1 and become vacuous — no `procs:` value can raise a count there, so
-nothing could see an inert marker on such a machine and the case is honest to say so rather than red.
+⚠ **IT ASSERTS A BARE NUMBER, AND THAT IS MACHINE-INDEPENDENT.** `emitResolveMaxProcs` takes a requested
+count exactly, above the machine's count as well as below it, so `procs=4` holds on a one-, two- or
+sixteen-processor host alike.
 
 ⚠ **IT NAMES ITS OWN COUNT, WHICH IS WHY IT COULD LAND BEFORE THE FLIP.** The case that reads whatever the
 host has — `the-default-is-every-processor`, first in this file — belongs to the flip and arrived with it.
@@ -420,11 +395,6 @@ typealias AdderHandleArray = Array with Adder.handle
 let serviceCount = 8
 let workPerService = 20000
 let mixModulus = 7
-
-// ⚠ **THIS MUST MATCH THE `procs:` MARKER ABOVE, AND NOTHING CHECKS THAT IT DOES** — the marker is read by
-// the harness and this is read by the program, so the one thing the case cannot verify from inside is that
-// it was told the same number the scheduler was.
-let requestedProcs = 4
 
 type Adder
 	var acc as Integer
@@ -470,26 +440,13 @@ function main() returns ExitCode
 		n = n + 1
 	end 'collect'
 
-	// ⭐ The marker's contract, as a comparison this program can make on any machine: the count the
-	// scheduler resolved IS the count the marker named, clamped against the processors that exist. The two
-	// readings come from independent places — an OS call and a `.data` word `__sched_init_procs` settled —
-	// so an agreement between them is a real one.
-	let procs = __Builtins.schedProcessorCount()
-	let cpus = __Builtins.cpuCount()
-	let expected = requestedProcs if cpus > requestedProcs else cpus
-
-	var clamped = 0
-	if procs == expected 'clamped'
-		clamped = 1
-	end 'clamped'
-
-	print("clamped={clamped}\n")
+	print("procs={__Builtins.schedProcessorCount()}\n")
 	print("aggregate={aggregate}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-clamped=1
+procs=4
 aggregate=479997
 ```
 ```exitcode

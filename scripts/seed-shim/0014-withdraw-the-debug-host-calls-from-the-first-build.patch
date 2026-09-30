@@ -1,5 +1,5 @@
-# The published seed knows none of the nineteen `__Builtins.debug*`/`__Builtins.*Machine` names this tree
-# adds, so it refuses the tree at every call that spells one (E3004). All nineteen are called from this one
+# The published seed knows none of the twenty-one `__Builtins.debug*`/`__Builtins.*Machine` names this tree
+# adds, so it refuses the tree at every call that spells one (E3004). All twenty-one are called from this one
 # function, which is what lets one patch withdraw the whole band: the parser arms, the runtime installer and
 # the name constants are left standing, so `C1` knows them and compiles the unshimmed tree into `C2`.
 #
@@ -14,7 +14,7 @@
 diff --git a/maxon-bin/Debug/Backend/DebugBackend.maxon b/maxon-bin/Debug/Backend/DebugBackend.maxon
 --- a/maxon-bin/Debug/Backend/DebugBackend.maxon
 +++ b/maxon-bin/Debug/Backend/DebugBackend.maxon
-@@ -25,81 +25,13 @@ end 'HostDebugVerb'
+@@ -27,87 +27,13 @@ end 'HostDebugVerb'
  // this tree is shimmable only while ONE body spells them (`scripts/seed-shim/README.md` owns that rule).
  // Spelling one at a second call site leaves every CI lane red until a release ships.
  module function hostDebugCall(verb HostDebugVerb, a0 BackendWord, a1 BackendWord, a2 BackendWord, a3 BackendWord, a4 BackendWord) returns BackendWord
@@ -37,6 +37,8 @@ diff --git a/maxon-bin/Debug/Backend/DebugBackend.maxon b/maxon-bin/Debug/Backen
 -			protectRegion then answer = __Builtins.debugProtectRegion(a0, a1, a2, a3, a4)
 -			flushCode then answer = __Builtins.debugFlushCode(a0, a1, a2)
 -			closeHandle then answer = __Builtins.debugCloseHandle(a0)
+-			suspendThread then answer = __Builtins.debugSuspendThread(a0)
+-			resumeThread then answer = __Builtins.debugResumeThread(a0)
 -			traceRequest or
 -				traceeRead or
 -				awaitTracee or
@@ -68,7 +70,9 @@ diff --git a/maxon-bin/Debug/Backend/DebugBackend.maxon b/maxon-bin/Debug/Backen
 -				detachProcess or
 -				protectRegion or
 -				flushCode or
--				closeHandle then panic("hostDebugCall: `{verb.name}` is a debug-port verb and this build drives a debuggee through ptrace — `backendForHost` hands this host a backend that spells neither lane's verbs")
+-				closeHandle or
+-				suspendThread or
+-				resumeThread then panic("hostDebugCall: `{verb.name}` is a debug-port verb and this build drives a debuggee through ptrace — `backendForHost` hands this host a backend that spells neither lane's verbs")
 -		end 'verb'
 -	#endif
 -
@@ -88,6 +92,8 @@ diff --git a/maxon-bin/Debug/Backend/DebugBackend.maxon b/maxon-bin/Debug/Backen
 -				protectRegion or
 -				flushCode or
 -				closeHandle or
+-				suspendThread or
+-				resumeThread or
 -				traceRequest or
 -				traceeRead or
 -				awaitTracee or

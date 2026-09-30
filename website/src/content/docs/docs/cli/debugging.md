@@ -101,7 +101,7 @@ maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 the loader gives it before any of the program's code runs, then arms whatever was asked for. A
 breakpoint is the driver saving the original bytes and writing the host's own trap instruction over them
 through the debug interface — an `int3` on the x64 hosts and a `brk #0` on the arm64 ones; resuming off one
-restores the bytes, single-steps the instruction and plants the trap again.
+restores the bytes, single-steps the instruction with every other thread held, and plants the trap again.
 The host keeps the pair together: quitting the session ends the program with it, and `detach` is how you
 leave a program running.
 

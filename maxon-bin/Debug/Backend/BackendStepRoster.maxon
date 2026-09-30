@@ -1,4 +1,4 @@
-function backendRosterHolds(roster BackendThreadIdArray, thread BackendThreadId) returns bool
+export function backendRosterHolds(roster BackendThreadIdArray, thread BackendThreadId) returns bool
 	for held in roster 'eachThread'
 		if held == thread 'thisOne'
 			return true
@@ -8,11 +8,41 @@ function backendRosterHolds(roster BackendThreadIdArray, thread BackendThreadId)
 	return false
 end 'backendRosterHolds'
 
+function backendRosterAmong(roster BackendThreadIdArray, reported BackendThreadIdArray) returns BackendThreadIdArray
+	var kept = BackendThreadIdArray.create()
+
+	for thread in roster 'eachThread'
+		if backendRosterHolds(reported, thread: thread) 'itIsStillThere'
+			kept.push(thread)
+		end 'itIsStillThere'
+	end 'eachThread'
+
+	return kept
+end 'backendRosterAmong'
+
+module function backendRosterWithout(roster BackendThreadIdArray, thread BackendThreadId) returns BackendThreadIdArray
+	var kept = BackendThreadIdArray.create()
+
+	for held in roster 'eachThread'
+		if held != thread 'anotherThread'
+			kept.push(held)
+		end 'anotherThread'
+	end 'eachThread'
+
+	return kept
+end 'backendRosterWithout'
+
+export enum BackendOtherThreads
+	run
+	hold
+end 'BackendOtherThreads'
+
 export type BackendStepRoster
 	var threads as BackendThreadIdArray
+	var holders as BackendThreadIdArray
 
 	export static function create() returns BackendStepRoster
-		return Self{threads: BackendThreadIdArray.create()}
+		return Self{threads: BackendThreadIdArray.create(), holders: BackendThreadIdArray.create()}
 	end 'create'
 
 	export function holds(thread BackendThreadId) returns bool
@@ -23,39 +53,54 @@ export type BackendStepRoster
 		return self.threads
 	end 'outstanding'
 
-	export function note(thread BackendThreadId)
-		if self.holds(thread) 'itIsAlreadyStepping'
-			return
-		end 'itIsAlreadyStepping'
+	export function company() returns BackendOtherThreads
+		return BackendOtherThreads.run if self.holders.count() == 0 else BackendOtherThreads.hold
+	end 'company'
 
-		self.threads.push(thread)
+	export function note(thread BackendThreadId, others BackendOtherThreads)
+		if not self.holds(thread) 'aNewStep'
+			self.threads.push(thread)
+		end 'aNewStep'
+
+		match others 'company'
+			run then return
+			hold then self.notedHolder(thread)
+		end 'company'
 	end 'note'
 
+	function notedHolder(thread BackendThreadId)
+		if backendRosterHolds(self.holders, thread: thread) 'itAlreadyHolds'
+			return
+		end 'itAlreadyHolds'
+
+		self.holders.push(thread)
+	end 'notedHolder'
+
 	export function forget(thread BackendThreadId)
-		var kept = BackendThreadIdArray.create()
+		if not self.holds(thread) 'itIsNotStepping'
+			return
+		end 'itIsNotStepping'
 
-		for stepper in self.threads 'eachStepper'
-			if stepper != thread 'anotherThread'
-				kept.push(stepper)
-			end 'anotherThread'
-		end 'eachStepper'
-
-		self.threads = kept
+		self.threads = backendRosterWithout(self.threads, thread: thread)
+		self.holders = backendRosterWithout(self.holders, thread: thread)
 	end 'forget'
+
+	// True when the thread held every other thread through its step and no step holds them now. The
+	// caller then stands at a stop the engine must resume, or the held threads stay stopped for good.
+	export function forgetEndingTheHold(thread BackendThreadId) returns bool
+		let heldTheOthers = backendRosterHolds(self.holders, thread: thread)
+		self.forget(thread)
+
+		return heldTheOthers and self.company() == BackendOtherThreads.run
+	end 'forgetEndingTheHold'
 
 	export function clear()
 		self.threads = BackendThreadIdArray.create()
+		self.holders = BackendThreadIdArray.create()
 	end 'clear'
 
 	export function keptAmong(reported BackendThreadIdArray)
-		var kept = BackendThreadIdArray.create()
-
-		for stepper in self.threads 'eachStepper'
-			if backendRosterHolds(reported, thread: stepper) 'itIsStillThere'
-				kept.push(stepper)
-			end 'itIsStillThere'
-		end 'eachStepper'
-
-		self.threads = kept
+		self.threads = backendRosterAmong(self.threads, reported: reported)
+		self.holders = backendRosterAmong(self.holders, reported: reported)
 	end 'keptAmong'
 end 'BackendStepRoster'

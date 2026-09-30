@@ -1,0 +1,92 @@
+// Test: error.a-bare-field-reassignment-in-a-body-without-a-descriptor-is-refused
+typealias Integer = int(i64.min to i64.max)
+
+type Inner uses U
+	let x as U
+
+	function value() returns U
+		return x
+	end 'value'
+
+	static function create(x U) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Box uses T
+	typealias TInner = Inner with T
+	let inner as TInner
+	export let tag as Integer
+
+	function value() returns T
+		return inner.value()
+	end 'value'
+
+	static function create(x T, tag Integer) returns Self
+		return Self{inner: TInner.create(x), tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias BoxArray = Array with EBox
+	var items as BoxArray
+	export var one as EBox
+
+	function add(x Element, tag Integer)
+		items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	function first() returns Element throws ArrayError
+		let slot = try self.items.first() otherwise 'e'
+			throw ArrayError.indexOutOfBounds
+		end 'e'
+		return slot.value()
+	end 'first'
+
+	static function create(x Element) returns Self
+		return Self{items: BoxArray{}, one: EBox.create(x, tag: 0)}
+	end 'create'
+
+	function replaceWith(b EBox)
+		one = b
+	end 'replaceWith'
+
+	function probe(x Element) returns Integer
+		let b = EBox.create(x, tag: 3)
+		self.one = EBox.create(x, tag: 4)
+		return b.tag + self.one.tag
+	end 'probe'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function fill(b StrBag)
+	var sb = StringBuilder.create()
+	sb.append("hello ")
+	sb.append("heap world")
+	let s = sb.build()
+	b.add(s, tag: 7)
+end 'fill'
+
+function main() returns ExitCode
+	var b = StrBag.create("seed")
+	fill(b)
+	let got = try b.first() otherwise 'e'
+		return 9
+	end 'e'
+	var total = 0 as Integer
+
+	for i in 0 upto 50 'eachRound'
+		var sb = StringBuilder.create()
+		sb.append("a heap string of some length {i}")
+		total = total + b.probe(sb.build())
+	end 'eachRound'
+
+	b.replaceWith(b.one)
+	print("{got} {total} {b.one.value()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:52:3: Unsupported: reassigning 'one' of 'Bag', whose type 'EBox' is built over this type's OWN parameters — the shared generic body compiles once for every instantiation, and the destructor that releases the displaced value is not the same at every one of them. This body carries no layout descriptor to release it through, so write the reassignment as `self.<field> = …`, which reserves one for the method, or reassign it through a CONCRETE receiver

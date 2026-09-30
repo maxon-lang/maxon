@@ -247,6 +247,7 @@ tests/
     gt-words-after-exit-answer-not-running.maxtest      after the exit every word says the program is gone
     stop-is-a-consistent-snapshot.maxtest      with two processors a stop names its machine and its thread
     pause-stops-a-spinning-program.maxtest      `pause` is the only way into a program that plants no trap
+    pause-stops-a-program-blocked-outside-its-code.maxtest      a program that has started and sleeps in a system call is paused, never refused as still loading
     timeout-leaves-the-program-running.maxtest      a timeout leaves it running, and the session close still reaps it
     breakpoint-set-while-running-is-hit.maxtest      a breakpoint armed into running code is placed and hit
     clear-while-running.maxtest             a breakpoint cleared live fires no more, and nothing faults

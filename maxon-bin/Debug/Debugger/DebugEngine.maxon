@@ -21,7 +21,7 @@ export let DbgGtStatusHeld = 5
 
 let MaxBacktraceFrames = 64
 let MaxMachinesWalked = 4096
-let FrameRecordBytes = 16
+let FrameRecordBytes = (DebuggeeWordBytes as EngineReadLength) * 2
 
 let AsyncPreemptionWithdrawn = 1
 
@@ -133,7 +133,6 @@ let PollIntervalMs = 1
 let WaitSliceMs = 5
 let PauseAttemptBudgetMs = 1000
 
-let WordBytes = 8
 let FirstStopSeq = 1
 
 type EngineBreakpoint
@@ -175,6 +174,16 @@ union EngineLiftedTrapLookup
 	none
 	at(lifted EngineLiftedTrap)
 end 'EngineLiftedTrapLookup'
+
+union EngineReaderStep
+	none
+	on(thread BackendThreadId)
+end 'EngineReaderStep'
+
+union EngineGlobalRead
+	absent
+	read(value DebuggeeWord)
+end 'EngineGlobalRead'
 
 union EngineReturnPoint
 	at(point DebugReturnPoint, offset DebugAddress, heldOverACondition bool)
@@ -280,11 +289,6 @@ end 'DebugReturnPoint'
 
 module typealias DebugReturnPointArray = Array with DebugReturnPoint
 
-union EngineStepPost
-	none
-	on(machine DebugAddress)
-end 'EngineStepPost'
-
 union EngineExecutedTrap
 	none
 	at(address DebugAddress)
@@ -326,7 +330,6 @@ export type DebugEngine implements DebugMemory
 	var registers as DebugRegisterFile
 	var stopThread as BackendThreadId
 	var stopped as bool
-	var stepPosted as EngineStepPost
 	var answeredUnder as DebugAddress
 	var liftedTraps as EngineLiftedTrapArray
 	var detached as bool
@@ -336,6 +339,8 @@ export type DebugEngine implements DebugMemory
 	var lastFault as DebugAddress
 	var lastPc as DebugAddress
 	var lastConditionMissed as bool
+	var pausePending as bool
+	var readerStep as EngineReaderStep
 
 	export static function start(program FilePath, reader MxdbgReader, textBytes DebugAddress, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, routing ChildOutputRouting, stopTimeoutMs StopTimeoutMs, traced bool) returns EngineStart
 		requireEngineBoundsMatchTheBackend()
@@ -364,7 +369,7 @@ export type DebugEngine implements DebugMemory
 			ring(collector) then environment.upsert(DsActivationEnvVar, value: collector.segmentName())
 		end 'ring'
 
-		let target = try DebugTarget.launchTraced(backend.launchPlan(program, arguments: arguments), workingDirectory: workingDirectory, environment: environment, routing: routing) otherwise (e) 'noChild'
+		let target = try DebugTarget.launchTraced(program, arguments: arguments, workingDirectory: workingDirectory, environment: environment, routing: routing) otherwise (e) 'noChild'
 			backend.close()
 			closeTraceRing(trace)
 			releaseDebugSessionPin()
@@ -374,13 +379,13 @@ export type DebugEngine implements DebugMemory
 
 		var placement = BackendImagePlacement.asLinked
 
-		match backend.adoptLaunchedProgram() 'adopted'
+		match backend.adoptLaunchedProgram(target.processId()) 'adopted'
 			refused(reason) then return refusedAfterLaunch(reason, backend: backend, target: target, trace: trace)
 			ready(placed) then placement = placed
 		end 'adopted'
 
 		let contract = DebugRuntimeContract.readFrom(reader, textBytes: textBytes, placement: placement)
-		var engine = Self{backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: EngineReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, stepPosted: EngineStepPost.none, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), detached: false, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false}
+		var engine = Self{backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: EngineReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), detached: false, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false, pausePending: false, readerStep: EngineReaderStep.none}
 
 		return engine.awaitEntryStop()
 	end 'start'
@@ -392,7 +397,7 @@ export type DebugEngine implements DebugMemory
 		let deadline = debugDeadlineAfter(self.stopTimeoutMs)
 
 		while not debugDeadlinePassed(deadline) 'poll'
-			self.pumpTheProgramsOutput()
+			self.target.pump()
 
 			match self.oneEntrySlice() 'slice'
 				keepWaiting then continue
@@ -415,21 +420,17 @@ export type DebugEngine implements DebugMemory
 			timedOut then return EngineEntrySlice.keepWaiting
 			threadStarted or
 				threadExited then return EngineEntrySlice.keepWaiting
-			signalled then return self.entryEnded(self.close())
-			exited(code) then return self.entryEnded(self.settledWith(code))
+			signalled then return EngineEntrySlice.ended(self.close())
+			exited(code) then return EngineEntrySlice.ended(self.closedWith(TargetSettling.exitedWith(code as DebugExitCode)))
 			stopped(thread, reason, faultCode, address) then return self.entryLanded(thread, reason: reason, faultCode: faultCode, address: address)
 		end 'seen'
 	end 'oneEntrySlice'
-
-	function entryEnded(outcome TargetOutcome) returns EngineEntrySlice
-		return EngineEntrySlice.ended(self.closedAfter(outcome))
-	end 'entryEnded'
 
 	function entryLanded(thread BackendThreadId, reason BackendStopReason, faultCode BackendWord, address DebugAddress) returns EngineEntrySlice
 		match self.landedAt(thread, reason: reason, faultCode: faultCode, address: address) 'landed'
 			stopped then return EngineEntrySlice.landed
 			timedOut then return EngineEntrySlice.keepWaiting
-			ended(outcome) then return self.entryEnded(outcome)
+			ended then return EngineEntrySlice.ended(self.closedWith(TargetSettling.polled))
 		end 'landed'
 	end 'entryLanded'
 
@@ -454,35 +455,37 @@ export type DebugEngine implements DebugMemory
 	// child sits burning nothing and the reap never returns.
 	export function close() returns TargetOutcome
 		if self.backend.endsTheProgramItself() 'theBackendEndsTheProgramItself'
-			_ = self.backend.killTheProgram()
-
-			return self.closedAfter(self.target.reap())
+			return self.closedWith(TargetSettling.killed if self.backend.killTheProgram() else TargetSettling.reaped)
 		end 'theBackendEndsTheProgramItself'
 
 		_ = self.detach()
 
-		return self.closedAfter(self.target.reap())
+		return self.closedWith(TargetSettling.reaped)
 	end 'close'
 
 	export function closeLeavingItRunning() returns TargetOutcome
 		_ = self.detach()
 
-		return self.closedAfter(self.target.letGo())
+		return self.closedWith(TargetSettling.letGo)
 	end 'closeLeavingItRunning'
 
-	function closedAfter(outcome TargetOutcome) returns TargetOutcome
+	function closedWith(how TargetSettling) returns TargetOutcome
 		if self.closed 'alreadyClosed'
-			return outcome
+			return self.target.settle(how)
 		end 'alreadyClosed'
 
 		self.closed = true
-		self.pumpTheProgramsOutput()
+
+		// The backend closes before the target settles: while a stub is attached XNU makes it the program's
+		// parent, and the driver can reap the program only once the stub has let it go.
 		self.backend.close()
+		let outcome = self.target.settle(how)
+		self.target.pump()
 		closeTraceRing(self.trace)
 		releaseDebugSessionPin()
 
 		return outcome
-	end 'closedAfter'
+	end 'closedWith'
 
 	// ⭐ A detach restores every byte the debugger wrote, lifts every hold, puts asynchronous preemption
 	// back and then lets the kernel go: the program runs on and reports its OWN ending, which the
@@ -502,6 +505,8 @@ export type DebugEngine implements DebugMemory
 
 		self.detached = true
 		self.stopped = false
+		self.pausePending = false
+		self.readerStep = EngineReaderStep.none
 
 		return CommandOutcome.done
 	end 'detach'
@@ -511,18 +516,10 @@ export type DebugEngine implements DebugMemory
 	end 'hasDetached'
 
 	export function takeOutput() returns CollectedLines
-		self.pumpTheProgramsOutput()
+		self.target.pump()
 
 		return self.collectedOutput()
 	end 'takeOutput'
-
-	// ⭐ **THE PROGRAM's OUTPUT REACHES THE DRIVER BY ONE OF TWO ROADS AND BOTH ARE PUMPED HERE.** A debuggee
-	// this process launched writes down a pipe; one a stub launched writes to the stub, which forwards it over
-	// the debug connection — and the driver routes either the same way.
-	function pumpTheProgramsOutput()
-		self.target.pump()
-		self.target.noteFaultSeen(routeStubOutput(self.backend.takeStubOutput(), routing: self.routing))
-	end 'pumpTheProgramsOutput'
 
 	export function collectedOutput() returns CollectedLines
 		return match self.routing 'where'
@@ -636,7 +633,13 @@ export type DebugEngine implements DebugMemory
 	end 'holdInCache'
 
 	export function registerValue(number EngineRegisterNumber) returns DebuggeeWord
-		return self.registers.valueOf(number as BackendRegisterNumber)
+		let slot = number as BackendRegisterNumber
+
+		if self.registers.awaitsItsVectors(slot) 'theVectorClassIsUnread'
+			self.backend.fillVectorRegisters(self.stopThread, into: self.registers)
+		end 'theVectorClassIsUnread'
+
+		return self.registers.valueOf(slot)
 	end 'registerValue'
 
 	// --- breakpoints ---
@@ -946,14 +949,8 @@ export type DebugEngine implements DebugMemory
 	// --- resuming, stepping and interrupting ---
 
 	export function resume() returns CommandOutcome
-		self.forgetThePostedStep()
-
 		return self.resumedFromTheStop(false)
 	end 'resume'
-
-	export function forgetThePostedStep()
-		self.stepPosted = EngineStepPost.none
-	end 'forgetThePostedStep'
 
 	export function stepOneInstruction() returns CommandOutcome
 		if not self.stopped 'nothingIsParked'
@@ -964,18 +961,13 @@ export type DebugEngine implements DebugMemory
 			return CommandOutcome.refused(DebugFaultIsTerminalReason)
 		end 'aFaultIsTerminal'
 
-		let outcome = self.resumedFromTheStop(true)
-
-		if outcome.accepted() 'aStepIsOutstanding'
-			self.stepPosted = EngineStepPost.on(self.stopMachine())
-		end 'aStepIsOutstanding'
-
-		return outcome
+		return self.resumedFromTheStop(true)
 	end 'stepOneInstruction'
 
-	// ⭐⭐ Delve's dance, and the only way to resume off a byte the debugger owns: restore the original,
-	// single-step it, and re-plant the trap at the next stop. `steppingOverABreakpoint` is what makes that
-	// intermediate stop the engine's own rather than the reader's.
+	// The only way to resume off a byte the debugger owns: restore the original, single-step it, and
+	// re-plant the trap at the next stop. `liftedTraps` is what makes that intermediate stop the engine's
+	// own rather than the reader's. Every other thread is held for that step, because while the trap is
+	// lifted a running thread would pass the address unseen.
 	function resumedFromTheStop(reportingTheStep bool) returns CommandOutcome
 		if not self.stopped 'nothingIsParked'
 			return CommandOutcome.nothingParked
@@ -985,10 +977,15 @@ export type DebugEngine implements DebugMemory
 			return CommandOutcome.refused(DebugFaultIsTerminalReason)
 		end 'aFaultIsTerminal'
 
+		self.departedSteppersReconciled()
 		self.cacheFilled = false
 		let pc = self.registers.programCounter()
 		let thread = self.stopThread
 		self.forgetLiftedTrap(thread)
+
+		if reportingTheStep 'theReaderWaitsForThisStep'
+			self.readerStep = EngineReaderStep.on(thread)
+		end 'theReaderWaitsForThisStep'
 
 		if self.armedAt(pc) 'sittingOnOurOwnTrap'
 			if not self.restoreBytesAt(pc - self.textBase) 'unwritable'
@@ -998,17 +995,21 @@ export type DebugEngine implements DebugMemory
 			self.liftedTraps.push(EngineLiftedTrap.create(thread, offset: pc - self.textBase, reportTheStep: reportingTheStep))
 			self.stopped = false
 
-			return CommandOutcome.done if self.backend.stepThread(thread) else CommandOutcome.refused(DebugUnwritableReason)
+			return self.steppedOutcome(thread, others: BackendOtherThreads.hold)
 		end 'sittingOnOurOwnTrap'
 
 		self.stopped = false
 
 		if reportingTheStep 'aStep'
-			return CommandOutcome.done if self.backend.stepThread(thread) else CommandOutcome.refused(DebugUnwritableReason)
+			return self.steppedOutcome(thread, others: BackendOtherThreads.run)
 		end 'aStep'
 
 		return CommandOutcome.done if self.backend.resumeAll() else CommandOutcome.refused(DebugUnwritableReason)
 	end 'resumedFromTheStop'
+
+	function steppedOutcome(thread BackendThreadId, others BackendOtherThreads) returns CommandOutcome
+		return CommandOutcome.done if self.backend.stepThread(thread, others: others) else CommandOutcome.refused(DebugUnwritableReason)
+	end 'steppedOutcome'
 
 	function byteIsReplanted(offset DebugAddress) returns bool
 		if self.someThreadStepsOver(offset) 'itIsStillLifted'
@@ -1061,20 +1062,28 @@ export type DebugEngine implements DebugMemory
 			return CommandOutcome.refused(DebugNotPausableReason)
 		end 'theKernelRefused'
 
+		self.pausePending = true
 		let deadline = debugDeadlineAfter(self.stopTimeoutMs + PauseAttemptBudgetMs)
 
-		while not debugDeadlinePassed(deadline) 'wait'
+		while self.pausePending and not debugDeadlinePassed(deadline) 'wait'
 			match self.lastLookForAStop() 'seen'
 				stopped then return CommandOutcome.done
-				ended(ending) then return CommandOutcome.gone(ending)
+				ended(ending) then return self.pauseOvertakenByTheEnding(ending)
 				timedOut then continue
 			end 'seen'
 		end 'wait'
 
-		self.backend.abandonStopRequest()
+		self.pausePending = false
+		self.backend.retireStopRequest()
 
 		return CommandOutcome.refused(DebugNotPausableReason)
 	end 'requestPause'
+
+	function pauseOvertakenByTheEnding(ending TargetOutcome) returns CommandOutcome
+		self.pausePending = false
+
+		return CommandOutcome.gone(ending)
+	end 'pauseOvertakenByTheEnding'
 
 	function lastStopWasAFault() returns bool
 		return self.stopped and self.lastReason == DbgStopReasonFault
@@ -1101,7 +1110,7 @@ export type DebugEngine implements DebugMemory
 	// The child's two streams are pumped on every look, because a full pipe blocks the debuggee and reads
 	// back as a timeout.
 	export function lastLookForAStop() returns StopWait
-		self.pumpTheProgramsOutput()
+		self.target.pump()
 		self.pumpTrace()
 
 		if self.detached 'letGo'
@@ -1113,9 +1122,10 @@ export type DebugEngine implements DebugMemory
 		end 'aStopAlreadyStands'
 
 		match self.backend.waitForStop(WaitSliceMs as BackendWaitBudgetMs) 'seen'
-			timedOut then return StopWait.timedOut
-			threadStarted or
-				threadExited then return StopWait.timedOut
+			timedOut or
+				threadStarted then return StopWait.timedOut
+
+			threadExited then return self.departedThreadSettled()
 			signalled(status) then return StopWait.ended(self.settledWith(status as BackendExitCode))
 			exited(code) then return StopWait.ended(self.settledWith(code))
 			stopped(thread, reason, faultCode, address) then return self.landedAt(thread, reason: reason, faultCode: faultCode, address: address)
@@ -1127,23 +1137,20 @@ export type DebugEngine implements DebugMemory
 	end 'parkedAtEntry'
 
 	function lookAtADetachedProgram() returns StopWait
-		let outcome = self.target.poll()
+		let outcome = self.target.settle(TargetSettling.polled)
 
 		if targetIsRunning(outcome) 'stillRunning'
 			return StopWait.timedOut
 		end 'stillRunning'
 
-		return StopWait.ended(self.target.reap())
+		return StopWait.ended(self.target.settle(TargetSettling.reaped))
 	end 'lookAtADetachedProgram'
 
-	// ⚠ The last of the program's output is drained HERE, because the ending is the last thing the driver
-	// asks about: a stub forwards what the program wrote over the same connection the exit arrived on, and
-	// nothing polls it afterwards.
 	function settledWith(code BackendExitCode) returns TargetOutcome
 		self.stopped = false
-		self.pumpTheProgramsOutput()
+		self.target.pump()
 
-		return self.target.settleWith(code as DebugExitCode)
+		return self.target.settle(TargetSettling.exitedWith(code as DebugExitCode))
 	end 'settledWith'
 
 	function landedAt(thread BackendThreadId, reason BackendStopReason, faultCode BackendWord, address DebugAddress) returns StopWait
@@ -1161,6 +1168,10 @@ export type DebugEngine implements DebugMemory
 
 		self.rewindOntoAPlantedTrap(thread, reason: landedReason, address: landedAddress)
 		self.standOnAProgramThread(thread, reason: landedReason)
+
+		if landedReason == BackendStopReason.interrupt and self.pausePending and self.runtimeNotYetStarted() 'aPauseBeforeTheProgramRan'
+			return self.pauseRequestedAgainOnceItRuns()
+		end 'aPauseBeforeTheProgramRan'
 
 		match self.liftedTrapOn(self.stopThread) 'lifted'
 			none then break 'lifted'
@@ -1195,8 +1206,8 @@ export type DebugEngine implements DebugMemory
 	function landedFresh(reason BackendStopReason, faultCode BackendWord, address DebugAddress) returns StopWait
 		match reason 'why'
 			entry then return self.stoodAt(DbgStopReasonEntry, fault: 0, pc: address, conditionMissed: false)
-			singleStep then return self.steppedTo(address)
-			interrupt then return self.stoodAt(DbgStopReasonPause, fault: 0, pc: self.registers.programCounter(), conditionMissed: false)
+			singleStep then return self.stepLanded(address)
+			interrupt then return self.pausedByTheBackend()
 			trap then return self.stoodAt(DbgStopReasonTrap, fault: 0, pc: address, conditionMissed: false)
 			fault then return self.stoodAt(DbgStopReasonFault, fault: debugAddressOrZero(faultCode as DebuggeeWord), pc: address, conditionMissed: false)
 			breakpoint then return self.reachedABreakpoint(address)
@@ -1206,6 +1217,30 @@ export type DebugEngine implements DebugMemory
 	function insideTheImage(pc DebugAddress) returns bool
 		return pc >= self.textBase and pc < self.textBase + self.textSize
 	end 'insideTheImage'
+
+	// A pause that lands before the program's runtime is up (the loader, or `mrt_start` ahead of
+	// `mrt_runtime_init`) has no frame of the program's to show, so the program runs on and is asked again;
+	// `requestPause`'s deadline bounds the retries.
+	function pauseRequestedAgainOnceItRuns() returns StopWait
+		if not self.backend.resumeAll() 'itStaysStopped'
+			return self.pausedByTheBackend()
+		end 'itStaysStopped'
+
+		if not self.backend.requestStop() 'theRenewalWasRefused'
+			self.pausePending = false
+		end 'theRenewalWasRefused'
+
+		return StopWait.timedOut
+	end 'pauseRequestedAgainOnceItRuns'
+
+	// A mark the sidecar does not name, or a read that fails, counts as started: an older binary is then
+	// paused where it lands, and a wrong slide cannot turn every pause into a refusal.
+	function runtimeNotYetStarted() returns bool
+		return match self.contractGlobal(String.from(ProgramStartedLabel)) 'mark'
+			absent gives false
+			read(value) gives value != (ProgramStartedMark as DebuggeeWord)
+		end 'mark'
+	end 'runtimeNotYetStarted'
 
 	function standOnAProgramThread(reported BackendThreadId, reason BackendStopReason)
 		if reason != BackendStopReason.interrupt 'notARequestedHalt'
@@ -1277,33 +1312,17 @@ export type DebugEngine implements DebugMemory
 	end 'registersStandOn'
 
 	function replantedAfterTheStepOver(lifted EngineLiftedTrap, reason BackendStopReason, faultCode BackendWord, address DebugAddress) returns StopWait
-		self.forgetLiftedTrap(lifted.thread)
+		self.liftedTrapReplanted(lifted)
 
-		if not self.byteIsReplanted(lifted.offset) 'unwritable'
-			return StopWait.timedOut
-		end 'unwritable'
-
-		self.cacheFilled = false
+		if reason != BackendStopReason.singleStep 'notTheStepsLanding'
+			return self.landedFresh(reason, faultCode: faultCode, address: address)
+		end 'notTheStepsLanding'
 
 		if lifted.reportTheStep 'theReaderAskedForOneInstruction'
 			return self.steppedTo(self.registers.programCounter())
 		end 'theReaderAskedForOneInstruction'
 
-		match reason 'why'
-			singleStep then break 'why'
-
-			entry or
-				breakpoint or
-				interrupt or
-				trap or
-				fault then return self.landedFresh(reason, faultCode: faultCode, address: address)
-		end 'why'
-
-		if not self.backend.resumeAll() 'unresumable'
-			return StopWait.timedOut
-		end 'unresumable'
-
-		return StopWait.timedOut
+		return self.stepLanded(self.registers.programCounter())
 	end 'replantedAfterTheStepOver'
 
 	function steppedTo(address DebugAddress) returns StopWait
@@ -1336,36 +1355,112 @@ export type DebugEngine implements DebugMemory
 			return self.stoodAt(DbgStopReasonBreakpoint, fault: 0, pc: address, conditionMissed: true)
 		end 'theWalkWantsItAnyway'
 
-		self.standAt(DbgStopReasonBreakpoint, fault: 0, pc: address, conditionMissed: true)
-
-		if not self.resumedFromTheStop(false).accepted() 'couldNotResume'
-			return StopWait.stopped(self.currentStop())
-		end 'couldNotResume'
-
-		return StopWait.timedOut
+		return self.hiddenStopResumed(DbgStopReasonBreakpoint, pc: address, conditionMissed: true)
 	end 'reachedABreakpoint'
 
-	function reachedATrapNobodyPlanted(address DebugAddress) returns StopWait
-		self.standAt(DbgStopReasonTrap, fault: 0, pc: address, conditionMissed: false)
+	function readerStepIsOn(thread BackendThreadId) returns bool
+		return match self.readerStep 'step'
+			none gives false
+			on(stepper) gives stepper == thread
+		end 'step'
+	end 'readerStepIsOn'
 
-		if self.trapInstructionStandsAt(address) 'theProgramsOwnTrap'
-			return StopWait.stopped(self.currentStop())
-		end 'theProgramsOwnTrap'
+	// A pending pause is answered by the first stop the program makes, so a stop the reader would not see
+	// is presented as the pause instead of resumed. `standAt` retires the backend's own request.
+	function hiddenStopResumed(reason DebugAddress, pc DebugAddress, conditionMissed bool) returns StopWait
+		if self.pausePending 'aPauseTakesTheStop'
+			return self.pausedAt(pc)
+		end 'aPauseTakesTheStop'
+
+		self.standAt(reason, fault: 0, pc: pc, conditionMissed: conditionMissed)
 
 		if not self.resumedFromTheStop(false).accepted() 'couldNotResume'
-			return StopWait.stopped(self.currentStop())
+			return self.presentedStop()
 		end 'couldNotResume'
 
 		return StopWait.timedOut
+	end 'hiddenStopResumed'
+
+	function stepLanded(address DebugAddress) returns StopWait
+		if self.readerStepIsOn(self.stopThread) 'theReaderAskedForIt'
+			return self.steppedTo(address)
+		end 'theReaderAskedForIt'
+
+		if self.armedAt(address) 'itLandedOnAnArmedInstruction'
+			return self.reachedABreakpoint(address)
+		end 'itLandedOnAnArmedInstruction'
+
+		return self.hiddenStopResumed(DbgStopReasonStep, pc: address, conditionMissed: false)
+	end 'stepLanded'
+
+	function departedThreadSettled() returns StopWait
+		self.departedSteppersReconciled()
+		_ = self.backend.resumeAll()
+
+		return StopWait.timedOut
+	end 'departedThreadSettled'
+
+	// A stepper that exited never reports its landing, so its lifted trap is replanted here, before any
+	// resume lets the threads its step held run past the address.
+	function departedSteppersReconciled()
+		let live = self.backend.listThreads()
+		var departed = EngineLiftedTrapArray.create()
+
+		for lifted in self.liftedTraps 'eachLifted'
+			if not backendRosterHolds(live, thread: lifted.thread) 'itsStepperLeft'
+				departed.push(lifted)
+			end 'itsStepperLeft'
+		end 'eachLifted'
+
+		for lifted in departed 'eachDeparted'
+			self.liftedTrapReplanted(lifted)
+		end 'eachDeparted'
+
+		match self.readerStep 'step'
+			none then break 'step'
+			on(thread) then self.readerStepKeptIfLive(thread, live: live)
+		end 'step'
+	end 'departedSteppersReconciled'
+
+	function readerStepKeptIfLive(thread BackendThreadId, live BackendThreadIdArray)
+		if not backendRosterHolds(live, thread: thread) 'itsStepCannotLand'
+			self.readerStep = EngineReaderStep.none
+		end 'itsStepCannotLand'
+	end 'readerStepKeptIfLive'
+
+	function liftedTrapReplanted(lifted EngineLiftedTrap)
+		self.forgetLiftedTrap(lifted.thread)
+		self.cacheFilled = false
+		_ = self.byteIsReplanted(lifted.offset)
+	end 'liftedTrapReplanted'
+
+	function pausedAt(pc DebugAddress) returns StopWait
+		return self.stoodAt(DbgStopReasonPause, fault: 0, pc: pc, conditionMissed: false)
+	end 'pausedAt'
+
+	function pausedByTheBackend() returns StopWait
+		self.pausePending = false
+
+		return self.pausedAt(self.registers.programCounter())
+	end 'pausedByTheBackend'
+
+	function reachedATrapNobodyPlanted(address DebugAddress) returns StopWait
+		if self.trapInstructionStandsAt(address) 'theProgramsOwnTrap'
+			return self.stoodAt(DbgStopReasonTrap, fault: 0, pc: address, conditionMissed: false)
+		end 'theProgramsOwnTrap'
+
+		return self.hiddenStopResumed(DbgStopReasonTrap, pc: address, conditionMissed: false)
 	end 'reachedATrapNobodyPlanted'
 
 	function trapInstructionStandsAt(address DebugAddress) returns bool
 		let trap = hostTrapShape()
 
-		return match self.backend.readMemory(address, bytes: trap.bytes()) 'read'
-			unreadable gives false
-			read(bytes) gives bytes.equals(trap.instruction)
-		end 'read'
+		return match trap.presenceIn(self.backend.readMemory(address, bytes: trap.bytes())) 'presence'
+			stands gives true
+
+			removed or
+				unreadable gives false
+		end 'presence'
 	end 'trapInstructionStandsAt'
 
 	function walkHoldsTheByteAt(address DebugAddress) returns bool
@@ -1385,13 +1480,49 @@ export type DebugEngine implements DebugMemory
 		end 'known'
 	end 'conditionHoldsAt'
 
+	function presentedStop() returns StopWait
+		self.departedSteppersReconciled()
+
+		match self.readerStep 'step'
+			none then break 'step'
+			on(thread) then self.readerStepRetired(thread)
+		end 'step'
+
+		return StopWait.stopped(self.currentStop())
+	end 'presentedStop'
+
+	// A step the reader posted on another thread is retired by any stop presented first: landing later, it
+	// would be reported as the answer to a command the reader no longer waits on.
+	function readerStepRetired(thread BackendThreadId)
+		self.readerStep = EngineReaderStep.none
+
+		if thread == self.stopThread and self.lastReason == DbgStopReasonStep 'itsOwnStepLanded'
+			return
+		end 'itsOwnStepLanded'
+
+		match self.liftedTrapOn(thread) 'lifted'
+			none then self.backend.forgetStep(thread)
+			at(lifted) then self.liftedTrapKeptUnreported(lifted)
+		end 'lifted'
+	end 'readerStepRetired'
+
+	function liftedTrapKeptUnreported(lifted EngineLiftedTrap)
+		self.forgetLiftedTrap(lifted.thread)
+		self.liftedTraps.push(EngineLiftedTrap.create(lifted.thread, offset: lifted.offset, reportTheStep: false))
+	end 'liftedTrapKeptUnreported'
+
 	function stoodAt(reason DebugAddress, fault DebugAddress, pc DebugAddress, conditionMissed bool) returns StopWait
 		self.standAt(reason, fault: fault, pc: pc, conditionMissed: conditionMissed)
 
-		return StopWait.stopped(self.currentStop())
+		return self.presentedStop()
 	end 'stoodAt'
 
 	function standAt(reason DebugAddress, fault DebugAddress, pc DebugAddress, conditionMissed bool)
+		if self.pausePending 'aPauseIsAnsweredByThisStop'
+			self.pausePending = false
+			self.backend.retireStopRequest()
+		end 'aPauseIsAnsweredByThisStop'
+
 		self.stopped = true
 		self.lastReason = reason
 		self.lastFault = fault
@@ -1399,7 +1530,6 @@ export type DebugEngine implements DebugMemory
 		self.lastConditionMissed = conditionMissed
 		self.lastStopSeq = self.lastStopSeq + 1
 		self.answeredUnder = self.lastStopSeq as DebugAddress
-		self.stepPosted = EngineStepPost.none
 	end 'standAt'
 
 	function currentStop() returns EngineStop
@@ -1429,7 +1559,7 @@ export type DebugEngine implements DebugMemory
 			let record = try self.readDebuggeeBytes(cursor, length: FrameRecordBytes as EngineReadLength) otherwise break
 
 			let next = wordIn(record, at: 0)
-			let returnPc = wordIn(record, at: WordBytes)
+			let returnPc = wordIn(record, at: DebuggeeWordBytes as DebugAddress)
 
 			if returnPc < self.textBase or returnPc >= limit 'notAReturnIntoThisImage'
 				break
@@ -1467,7 +1597,7 @@ export type DebugEngine implements DebugMemory
 	function writeContractWord(name String, value DebuggeeWord)
 		match self.contract.globalAt(name) 'known'
 			none then break 'known'
-			at(address) then _ = self.backend.writeMemory(address, bytes: debuggeeWordBytes(value))
+			at(address, bytes) then _ = self.backend.writeMemory(address, bytes: debuggeeWordBytes(value, width: bytes))
 		end 'known'
 	end 'writeContractWord'
 
@@ -1476,11 +1606,18 @@ export type DebugEngine implements DebugMemory
 	end 'recordOffset'
 
 	function contractWord(name String) returns DebuggeeWord
-		match self.contract.globalAt(name) 'known'
-			none then return 0
-			at(address) then return try self.readDebuggeeWord(address, width: WordBytes as DebugWidth) otherwise 0
-		end 'known'
+		return match self.contractGlobal(name) 'global'
+			absent gives 0
+			read(value) gives value
+		end 'global'
 	end 'contractWord'
+
+	function contractGlobal(name String) returns EngineGlobalRead
+		match self.contract.globalAt(name) 'known'
+			none then return EngineGlobalRead.absent
+			at(address, bytes) then return EngineGlobalRead.read(try self.readDebuggeeWord(address, width: bytes) otherwise return EngineGlobalRead.absent)
+		end 'known'
+	end 'contractGlobal'
 
 	function traceMark() returns DebugAddress
 		let ring = self.contractWord(String.from(DsBaseLabel))
@@ -1489,7 +1626,7 @@ export type DebugEngine implements DebugMemory
 			return 0
 		end 'noRing'
 
-		let cursor = try self.readDebuggeeWord((ring as DebugAddress) + self.contract.offset(DsOffWriteCursorFigureName), width: WordBytes as DebugWidth) otherwise 0
+		let cursor = try self.readDebuggeeWord((ring as DebugAddress) + self.contract.offset(DsOffWriteCursorFigureName), width: DebuggeeWordBytes) otherwise 0
 
 		return debugAddressOrZero(cursor)
 	end 'traceMark'
@@ -1537,7 +1674,7 @@ export type DebugEngine implements DebugMemory
 	end 'machineWhoseFieldHolds'
 
 	function wordAt(address DebugAddress) returns DebuggeeWord
-		return try self.readDebuggeeWord(address, width: WordBytes as DebugWidth) otherwise 0
+		return try self.readDebuggeeWord(address, width: DebuggeeWordBytes) otherwise 0
 	end 'wordAt'
 
 	// --- green threads ---
@@ -1557,7 +1694,7 @@ export type DebugEngine implements DebugMemory
 		var records = DebugGreenThreadArray.create()
 
 		for index in 0 upto length 'eachSlot'
-			let gt = debugAddressOrZero(self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (WordBytes as DebugAddress)))
+			let gt = debugAddressOrZero(self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (DebuggeeWordBytes as DebugAddress)))
 
 			if self.greenThreadIsLive(gt) 'aLiveRecord'
 				records.push(self.greenThreadRecordOf(gt))
@@ -1675,7 +1812,7 @@ export type DebugEngine implements DebugMemory
 	end 'stepHoldEpoch'
 
 	function holdFieldSetTo(gt DebugAddress, hold ContractFigure) returns bool
-		return self.backend.writeMemory(gt + self.contract.offset(GtOffHoldFigureName), bytes: debuggeeWordBytes(hold as DebuggeeWord))
+		return self.backend.writeMemory(gt + self.contract.offset(GtOffHoldFigureName), bytes: debuggeeWordBytes(hold as DebuggeeWord, width: DebuggeeWordBytes))
 	end 'holdFieldSetTo'
 
 	function fieldHoldsFigure(gt DebugAddress, offset String, figure String) returns bool
@@ -1704,7 +1841,7 @@ export type DebugEngine implements DebugMemory
 		let released = self.contract.figure(GtHoldReleasedFigureName)
 
 		for index in 0 upto length 'eachSlot'
-			let gt = debugAddressOrZero(self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (WordBytes as DebugAddress)))
+			let gt = debugAddressOrZero(self.wordAt((roster as DebugAddress) + (index as DebugAddress) * (DebuggeeWordBytes as DebugAddress)))
 
 			if gt != 0 'aRecord'
 				_ = self.holdFieldSetTo(gt, hold: released)
@@ -1722,40 +1859,26 @@ function refusedBeforeLaunch(reason String) returns EngineStart
 	return EngineStart.refused(reason)
 end 'refusedBeforeLaunch'
 
-// The program is already running by the time a backend can be refused, so what it launched is ended before
-// the refusal is reported: on a lane whose debuggee is a stub's child the stub is that child.
+// The program exists by the time a backend can be refused, so it is ended before the refusal is
+// reported, in `closedWith`'s order.
 function refusedAfterLaunch(reason String, backend DebugBackend, target DebugTarget, trace DebugTraceState) returns EngineStart
 	if backend.endsTheProgramItself() 'theBackendEndsTheProgramItself'
 		_ = backend.killTheProgram()
 	end 'theBackendEndsTheProgramItself'
 
-	_ = target.reap()
 	backend.close()
+	_ = target.settle(TargetSettling.reaped)
 	closeTraceRing(trace)
 
 	return refusedBeforeLaunch(reason)
 end 'refusedAfterLaunch'
 
-function wordIn(record ByteArray, at ElementIndex) returns DebugAddress
-	var value = 0 as DebuggeeWord
-
-	for index in 0 upto WordBytes 'eachByte'
-		let byte = try record.get(at + (index as ElementIndex)) otherwise 0
-		value = value or ((byte as DebuggeeWord) shl (index * 8))
-	end 'eachByte'
-
-	return debugAddressOrZero(value)
+function wordIn(record ByteArray, at DebugAddress) returns DebugAddress
+	match debugLittleEndianAt(record, at: at, width: DebuggeeWordBytes) 'read'
+		pastTheBytes then panic("wordIn: a {record.count()}-byte frame record holds no word at {at}, and `readDebuggeeBytes` answers the whole record or throws")
+		read(value) then return debugAddressOrZero(value)
+	end 'read'
 end 'wordIn'
-
-function debuggeeWordBytes(value DebuggeeWord) returns ByteArray
-	var bytes = ByteArray.create()
-
-	for index in 0 upto WordBytes 'eachByte'
-		bytes.push(((value shr (index * 8)) and 0xFF) as Byte)
-	end 'eachByte'
-
-	return bytes
-end 'debuggeeWordBytes'
 
 // The walk records one (return address, frame pointer) pair per frame; a frame's CALLER frame pointer is
 // the next frame's own, and the outermost one is the link the walk did not take.

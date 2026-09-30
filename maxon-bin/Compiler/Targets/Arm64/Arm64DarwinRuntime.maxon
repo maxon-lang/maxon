@@ -943,16 +943,16 @@ let DarwinTlsKeyZeroMessage = b"panic: pthread_key_create handed out key 0, whic
 // ==========================================================================
 
 // `GetEnvironmentVariableA` — copy an environment variable's value into the caller's buffer and answer the
-// byte count, NOT counting the NUL. That is `StdOp.osEnvRead`'s contract, and the one caller
-// (`SchedRuntime.emitResolveMaxProcs`, reading `MAXON_MAX_PROCS`) decodes exactly three answers: 0 for
-// "unset", `>= bufLen` for "too small", and anything between for a value that fits.
+// byte count, NOT counting the NUL. That is `StdOp.osEnvRead`'s contract, and every caller decodes
+// exactly three answers: 0 for "unset", `>= bufLen` for "too small", and anything between for a value
+// that fits.
 //
 // ⚠ **`getenv` ANSWERS A POINTER INTO THE PROCESS ENVIRONMENT AND WINDOWS FILLS A BUFFER**, so the copy is
 // this chunk's work rather than the OS's — the same shape difference `mrt_darwin_exe_path` pays for one
 // section up, and the same `strlen`-then-copy answer.
 //
 // ⚠ **AN UNSET VARIABLE IS `0`, WHICH IS ALSO "an empty value"** — exactly as it is on Windows, where
-// `GetEnvironmentVariableA` answers 0 for both. The caller treats both as "leave the default alone", so the
+// `GetEnvironmentVariableA` answers 0 for both. Every caller treats both as "leave the default alone", so the
 // ambiguity is the op's and not this lowering's.
 function buildArm64DarwinEnvReadChunk() returns FunctionCodeChunk
 	let SlotBufPtr = 0 as StackSize
@@ -1803,6 +1803,10 @@ let DarwinSpawnSetSid = 0x400
 // `posix_spawnattr_init` zeroes the attributes and a pgroup of 0 is exactly "become your own group leader".
 let DarwinSpawnSetPgroup = 0x0002
 
+// The traced spawn bit (`DebugOnlyThisProcess`). Darwin has no spawn that makes the parent a debugger, so
+// the child is created suspended and a debug stub attaches to it before its first instruction runs.
+let DarwinSpawnStartSuspended = 0x0080
+
 // `O_DIRECTORY|O_CLOEXEC` as Darwin numbers them — the flags a spawn's working directory is opened with, so the
 // open refuses a path that is not a directory and no launched program inherits the descriptor.
 let DarwinOpenDirectory = 0x100000
@@ -1860,6 +1864,7 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	let cwdReady = asm.newLabel()
 	let inheritCwd = asm.newLabel()
 	let groupReady = asm.newLabel()
+	let suspensionReady = asm.newLabel()
 	let spawned = asm.newLabel()
 	let published = asm.newLabel()
 	let noCwdToClose = asm.newLabel()
@@ -1920,6 +1925,13 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(groupReady)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x5)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: DebugOnlyThisProcess as MachineWord)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x4, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: suspensionReady)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: DarwinSpawnStartSuspended)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x5)
+
+	asm.placeLabel(suspensionReady)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotAttributes)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnattrSetflags)
 

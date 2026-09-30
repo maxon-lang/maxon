@@ -52,8 +52,13 @@ end 'BackendRegisterRead'
 
 typealias BackendRegisterWordArray = Array with BackendWord
 
+export function backendIsVectorSlot(number BackendRegisterNumber) returns bool
+	return number >= BackendGprSlots and number < BackendGprSlots + BackendVectorSlots
+end 'backendIsVectorSlot'
+
 export type DebugRegisterFile
 	var slots as BackendRegisterWordArray
+	var vectorsRead as bool
 
 	export static function create() returns DebugRegisterFile
 		var slots = BackendRegisterWordArray.create()
@@ -62,10 +67,22 @@ export type DebugRegisterFile
 			slots.push(0)
 		end 'eachSlot'
 
-		return Self{slots: slots}
+		return Self{slots: slots, vectorsRead: false}
 	end 'create'
 
+	export function awaitsItsVectors(number BackendRegisterNumber) returns bool
+		return backendIsVectorSlot(number) and not self.vectorsRead
+	end 'awaitsItsVectors'
+
+	export function markVectorsRead()
+		self.vectorsRead = true
+	end 'markVectorsRead'
+
 	export function valueOf(number BackendRegisterNumber) returns BackendWord
+		if self.awaitsItsVectors(number) 'aVectorNobodyFetched'
+			panic("DebugRegisterFile.valueOf: slot {number} is a vector register and this file was read without its vector class — the engine fetches that class before any vector slot is read, so a reader that reached here went around it")
+		end 'aVectorNobodyFetched'
+
 		return try self.slots.get(number) otherwise panic("DebugRegisterFile.valueOf: slot {number} is one of the {BackendRegisterSlots} this file holds")
 	end 'valueOf'
 

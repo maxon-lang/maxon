@@ -5,6 +5,17 @@ export union TargetOutcome
 	terminated
 end 'TargetOutcome'
 
+export union TargetSettling
+	// ⭐ The debug interface is the only thing that sees the child stop and the only thing that sees it end,
+	// so the status arrives from there rather than from a liveness poll: a poll that reaped the child would
+	// take the debugger's own notification with it.
+	exitedWith(code DebugExitCode)
+	polled
+	reaped
+	killed
+	letGo
+end 'TargetSettling'
+
 let WindowsExitCodeMask = 0xFFFFFFFF
 let NtStatusSeverityMask = 0xC0000000
 
@@ -14,70 +25,56 @@ export type DebugTarget
 	var faulted as bool
 	var settled as TargetOutcome
 
-	export static function launchTraced(plan BackendLaunchPlan, workingDirectory FilePath, environment EnvMap, routing ChildOutputRouting) returns DebugTarget throws SubprocessError
-		var spawned = try StreamingSubprocess.spawnTraceable(Executable.path(plan.executable), arguments: plan.arguments, workingDirectory: workingDirectory, environment: Environment.inheritUpdating(environment), traced: plan.traced)
+	export static function launchTraced(program FilePath, arguments StringArray, workingDirectory FilePath, environment EnvMap, routing ChildOutputRouting) returns DebugTarget throws SubprocessError
+		var spawned = try StreamingSubprocess.spawnTraceable(Executable.path(program), arguments: arguments, workingDirectory: workingDirectory, environment: Environment.inheritUpdating(environment), traced: true)
 		spawned.closeStdin()
 
 		return Self{child: spawned, routing: routing, faulted: false, settled: TargetOutcome.running}
 	end 'launchTraced'
 
-	// ⭐ The debug interface is the only thing that sees the child stop and the only thing that sees it end,
-	// so the status arrives from there rather than from a liveness poll: a poll that reaped the child would
-	// take the debugger's own notification with it.
-	export function settleWith(code DebugExitCode) returns TargetOutcome
-		if not targetIsRunning(self.settled) 'alreadySettled'
-			return self.settled
-		end 'alreadySettled'
-
-		self.settleAfterExit(code)
-
-		return self.settled
-	end 'settleWith'
+	export function processId() returns Pid
+		return try self.child.processId() otherwise panic("DebugTarget.processId: the program was spawned by this target and its handle is released only when it is settled, so the spawn recorded a process id for it")
+	end 'processId'
 
 	export function pump()
 		self.faulted = forwardChildOutput(self.child, routing: self.routing, budget: ChildLineBudget.unbounded) or self.faulted
 	end 'pump'
 
-	export function noteFaultSeen(seen bool)
-		self.faulted = seen or self.faulted
-	end 'noteFaultSeen'
-
-	export function poll() returns TargetOutcome
+	export function settle(how TargetSettling) returns TargetOutcome
 		if not targetIsRunning(self.settled) 'alreadySettled'
 			return self.settled
 		end 'alreadySettled'
 
-		match self.child.pollExit() 'polled'
-			running then return TargetOutcome.running
-			exited(code) then self.settleAfterExit(code as DebugExitCode)
-		end 'polled'
+		match how 'how'
+			exitedWith(code) then self.settleAfterExit(code)
+			polled then self.settleIfItExited()
+			reaped then self.settleEvenIfRunning()
+			killed then self.settleAfterKill()
+			letGo then self.releasedRunning()
+		end 'how'
 
 		return self.settled
-	end 'poll'
+	end 'settle'
 
-	export function letGo() returns TargetOutcome
-		if not targetIsRunning(self.settled) 'alreadySettled'
-			return self.settled
-		end 'alreadySettled'
+	function settleIfItExited()
+		match self.child.pollExit() 'polled'
+			exited(code) then self.settleAfterExit(code as DebugExitCode)
+			running then return
+		end 'polled'
+	end 'settleIfItExited'
 
-		self.faulted = forwardChildOutput(self.child, routing: self.routing, budget: ChildLineBudget.unbounded) or self.faulted
+	function settleEvenIfRunning()
+		self.settleIfItExited()
+
+		if targetIsRunning(self.settled) 'itIsEndedHere'
+			self.settleAfterKill()
+		end 'itIsEndedHere'
+	end 'settleEvenIfRunning'
+
+	function releasedRunning()
+		self.pump()
 		self.child.release()
-
-		return self.settled
-	end 'letGo'
-
-	export function reap() returns TargetOutcome
-		if not targetIsRunning(self.settled) 'alreadySettled'
-			return self.settled
-		end 'alreadySettled'
-
-		match self.child.pollExit() 'polled'
-			running then self.settleAfterKill()
-			exited(code) then self.settleAfterExit(code as DebugExitCode)
-		end 'polled'
-
-		return self.settled
-	end 'reap'
+	end 'releasedRunning'
 
 	function settleAfterExit(code DebugExitCode)
 		self.faulted = forwardChildTail(self.child, routing: self.routing) or self.faulted

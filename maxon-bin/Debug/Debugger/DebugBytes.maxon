@@ -1,12 +1,17 @@
 export typealias DebugWidth = int(1 to 8)
+
+export let MinDebugWidth = 1 as DebugWidth
+export let MaxDebugWidth = 8 as DebugWidth
+
 module typealias DebugBitShift = int(0 to 63)
 
 let DebugByteBits = 8
-module let DebuggeeWordBytes = 8 as DebugWidth
+module let DebuggeeWordBytes = MaxDebugWidth
 module let DebugUserSpaceLimit = 0x0000800000000000 as DebuggeeWord
 
 let DebugSignBearingByteValue = 128
 let DebugByteModulus = 256
+let DebugByteMask = DebugByteModulus - 1
 
 export union DebugBytesRead
 	pastTheBytes
@@ -43,6 +48,16 @@ module function debugLittleEndianAt(bytes ByteArray, at DebugAddress, width Debu
 
 	return DebugBytesRead.read(value)
 end 'debugLittleEndianAt'
+
+module function debuggeeWordBytes(value DebuggeeWord, width DebugWidth) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for index in 0 upto width 'eachByte'
+		bytes.push(((value shr ((index * DebugByteBits) as DebugBitShift)) and DebugByteMask) as Byte)
+	end 'eachByte'
+
+	return bytes
+end 'debuggeeWordBytes'
 
 module function debugSignExtended(value DebuggeeWord, width DebugWidth) returns DebuggeeWord
 	if width >= DebuggeeWordBytes 'theWordCarriesItsSign'
