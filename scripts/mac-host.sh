@@ -90,9 +90,8 @@ usage() {
 		"Environment:" \
 		"  MAXON_MAC_HOST   user@host of the Mac; host is a name, an IPv4 or an IPv6 address. On Windows" \
 		"                   a .local name is resolved to its IPv4 address with PowerShell." \
-		"  MAXON_MAC_ALIAS  ssh HostKeyAlias (default: the host part of MAXON_MAC_HOST)" \
 		"" \
-		"  Both are read from the environment, or else from KEY=VALUE lines in the repository's .env" \
+		"  It is read from the environment, or else from a KEY=VALUE line in the repository's .env" \
 		"  (see .env.example; an export prefix and one pair of quotes are allowed, and a MAXON_MAC_ line" \
 		"  that does not parse or names an unknown key is an error, not a skip). When MAXON_MAC_HOST is" \
 		"  set in neither, every command whose arguments are valid prints" \
@@ -182,8 +181,8 @@ load_env() {
 		value="${value%"${value##*[![:space:]]}"}"
 
 		case "$key" in
-			MAXON_MAC_HOST|MAXON_MAC_ALIAS) ;;
-			*) die "$file line $number sets the unknown key $key; the known keys are MAXON_MAC_HOST and MAXON_MAC_ALIAS" ;;
+			MAXON_MAC_HOST) ;;
+			*) die "$file line $number sets the unknown key $key; the only known key is MAXON_MAC_HOST" ;;
 		esac
 
 		case "$value" in
@@ -211,9 +210,6 @@ connect() {
 	[[ "$mac_user" =~ $LoginUserPattern ]] || die "MAXON_MAC_HOST has an unusable user '$mac_user'"
 	[[ "$mac_name" =~ $LoginHostPattern ]] || die "MAXON_MAC_HOST has an unusable host '$mac_name'"
 
-	local mac_alias="${MAXON_MAC_ALIAS:-$mac_name}"
-	[[ "$mac_alias" =~ $LoginHostPattern ]] || die "MAXON_MAC_ALIAS is unusable: '$mac_alias'"
-
 	mac_address="$(resolve_address)"
 	mac_login="$mac_user@$mac_address"
 
@@ -222,7 +218,7 @@ connect() {
 		*)   scp_login="$mac_login" ;;
 	esac
 
-	ssh_options=(-o BatchMode=yes -o "ConnectTimeout=$ConnectTimeoutSeconds" -o "HostKeyAlias=$mac_alias")
+	ssh_options=(-o BatchMode=yes -o "ConnectTimeout=$ConnectTimeoutSeconds" -o "HostKeyAlias=$mac_name")
 }
 
 r_init() {
