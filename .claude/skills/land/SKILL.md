@@ -25,12 +25,9 @@ that answers wrong, a feature however large. There is no heavier sibling to esca
 > ***"There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it
 > properly."***
 >
-> **What ceremony buys is COORDINATION ACROSS TREES — a contract so agents in separate worktrees can
-> code against an interface that is still moving, and a board so nobody takes the same row twice.** You
-> delegate too, heavily (see *Coordinating*, below) — but every agent you send works in the **SAME tree,
-> under you, integrated as it arrives**. There is no second tree and no second owner, so the contract has
-> nobody to inform and the board has nobody to tell. It buys you nothing and costs you the red set, the
-> diagnosis and the context you have already paid for.
+> You delegate, heavily (see *Coordinating*, below) — but every agent you send works in the **SAME
+> tree, under you, integrated as it arrives**. A second tree buys nothing and costs you the red set,
+> the diagnosis and the context you have already paid for.
 >
 > **When the change turns out to be big, the loop is what scales — not the process:** widen the spec set
 > (§1), write new IR ops as ordinary code (§2 — a "contract" is a signature you land *with* its first
@@ -225,8 +222,7 @@ cheapest moment to ask.
   another. (Goldens the suite touches along the way are not a concern — §8.)
 - **BUILD — IF, AND ONLY IF, THE BINARY IS STALE** (the check in the box under the gate table). The
   compiler binary is gitignored and nothing rebuilds it, so a stale one lies in *both* directions.
-  `./maxon-bin/.maxon/maxon run build` at the repo root (or MCP `build` with `path: "maxon-bin"`)
-  compiles `maxon-bin/` with the compiler already in the slot and renames the result into place. An
+  `./maxon-bin/.maxon/maxon run build` at the repo root compiles `maxon-bin/` with the compiler already in the slot and renames the result into place. An
   EMPTY slot is refused, not seeded: fetch the seed with `scripts/fetch-seed.sh` and build with it as
   `maxon-bin/AGENTS.md` says. A current binary is already what every red in §1 is read off: rebuilding
   it is minutes spent to learn nothing.
@@ -307,9 +303,9 @@ run_spec_test filter=["<spec-a>/", "<spec-b>/", …]
 >
 > ⛔ **A case you cannot make pass is a HALT.** It is never removed, narrowed or excluded to get green.
 
-## 2. Write the code — a `general-purpose` implementer agent
+## 2. Write the code — an `implementer` agent
 
-**Hand the implementation to a `general-purpose` agent.** The brief is §1's red set, the eight things
+**Hand the implementation to an `implementer` agent** (`subagent_type: "implementer"`; its definition sets the model and effort, so pass no `model` override). **Every implementer is one** — the first, any further one, and every later implementer round (a review fix, a defect found while gating). The brief is §1's red set, the eight things
 every brief carries, and above all **the diagnosis you already did while reading the red** — that is
 the most valuable thing in it.
 
@@ -347,8 +343,6 @@ deliverable stays one chunk and one commit.)*
   duplicate NAME does not compile, and a duplicate NUMBER is structural in neither direction and is
   caught only by `website/scripts/sync-docs.mjs`, which §8's documentation row runs. Never write a bare
   `"E3010"` in source — a diagnostic names `ErrorCode.<case>`.
-  ⛔ **`docs/error-codes.txt` and `maxon error-codes generate` DO NOT EXIST** — no such file was ever
-  tracked in git and `MaxonCommand` has no such case. Follow the enum.
 - **A mechanism that does not exist yet gets BUILT** — a builtin, a runtime slice, an opcode on every
   target. Size is never a reason to stop; see the two boxes at the top of this file.
 - **Documentation is §6's, not theirs** — the `docs/` source, the site regeneration and the doc-coverage
@@ -464,7 +458,7 @@ review then rewrites, which is the write-it-twice waste the no-comments rule exi
 - **What the change made user-visible**, in `AGENTS.md`'s terms — or that nothing is, which is
   an answer it must state rather than skip.
 - ⛔ **It runs NO tests** — not the suite, not the wasm lane, not the doc-coverage gates. Its
-  verification is `mcp__maxon__build`, and §8's battery runs everything else minutes later on the same
+  verification is the slot build, `./maxon-bin/.maxon/maxon run build`, and §8's battery runs everything else minutes later on the same
   tree. It regenerates the site pages but does not run `sync-docs.mjs --check`; that is §8's.
 - **It does not commit, `git add`, push, rebase or stash**, and it changes not one byte of code.
 

@@ -373,7 +373,7 @@ stdlib API; a runtime environment variable; target support; LSP, VS Code or MCP 
 
 ## Verification — a recompile, and nothing else
 
-> ⭐ **The verification is `mcp__maxon__build`.** A comments-and-docs pass can break exactly one thing:
+> ⭐ **The verification is the slot build, `./maxon-bin/.maxon/maxon run build`.** A comments-and-docs pass can break exactly one thing:
 > the code, by accident. The build catches that, and it is the whole gate.
 >
 > ⛔ **No test runs. Not the spec suite, not the wasm lane, not the doc-coverage gates.** None of them
@@ -397,7 +397,9 @@ Two things precede the build. Both cost seconds, and both catch what a build can
    never see. A deleted CODE line is still caught: stripped of its comment it is non-blank. Both sides
    get identical mangling of any `//` inside a string. Put the output in the report verbatim; **an
    empty diff is the only acceptable result** — do not argue around a non-empty one.
-3. **`mcp__maxon__build`** — about a minute, exit 0. ⛔ Skip only when the caller says it is batching the build.
+3. **`./maxon-bin/.maxon/maxon run build`** — about a minute, exit 0. MCP `build` with
+   `path: "maxon-bin"` is a path build that leaves the slot as it was, so the caller's battery would
+   find the binary stale. ⛔ Skip only when the caller says it is batching the build.
 
 `node website/scripts/sync-docs.mjs` still **runs** — it is the regeneration this pass owes, not a
 check. Its `--check` form is the caller's gate and is not run here.

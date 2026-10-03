@@ -120,11 +120,9 @@ it is answered by four instruments, none of which is a single command:
   bootstrap's `.symtab` placement and this compiler's `.text`-closing one. ⚠ Windows x64 only. It takes
   the command to profile as its trailing arguments; it is not a flag of anything.
 
-⛔ **THERE IS NO TWO-COMPILER `scale-test` RATIO TABLE, AND NO `scripts/self-host-ab.sh`** — that path
-has never been tracked in git. The per-phase ratio table it was described as printing (stage-1 and
-stage-2 `scale-test`ed interleaved, so any allocation ratio above 1.00 is a construct this tree's codegen
-allocates for and the seed's does not) is a real and useful measurement that **nothing in the tree
-performs**. Building one is blocked on a separate defect, filed in `todo.md`: `scale-test --repeat=N`
+⛔ **NOTHING IN THE TREE PRODUCES A TWO-COMPILER `scale-test` RATIO TABLE** — stage-1 and stage-2
+`scale-test`ed interleaved, so any allocation ratio above 1.00 is a construct this tree's codegen
+allocates for and the seed's does not. Building one is blocked on a separate defect, filed in `todo.md`: `scale-test --repeat=N`
 for N≥2 reports the compiler nondeterministic, and the REPEAT is what is nondeterministic — state carried
 from one compile to the next inside one process. Fix that first or the ratio table cannot be trusted.
 

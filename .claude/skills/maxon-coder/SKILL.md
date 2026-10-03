@@ -24,7 +24,7 @@ defect: fix the doc in the same change (the `documenter` skill owns that step).
 | Where | Extra rules |
 |---|---|
 | `maxon-bin/` — the compiler | Read `maxon-bin/AGENTS.md` first. A diagnostic names `ErrorCode.<case>`, never `"E3010"`; `maxon-bin/Compiler/ErrorCodeRegistry.maxon` is hand-authored — add a case there. A change under `Compiler/Runtime/` needs two self-compiles; `maxon run build` does both by itself. |
-| `runtime/` | The tier rules in `maxon-bin/AGENTS.md`: no managed values (E3153), no guarded construct in an always-reached family, a restated geometry figure owes its pin. |
+| `runtime/` | The tier rules in `maxon-bin/AGENTS.md`: no managed values (E3153), a restated geometry figure owes its pin. |
 | `stdlib/` | A symbol callers outside the stdlib use is `public`, not `export`. No instrumentation (no `Log` calls) in stdlib algorithms. |
 | `specs/` | The language's canonical definition. Under `/land` it is read-only except to the agent briefed to write the cases. A case is a program in a spec `.md` file, pinned by `exitcode` / `stdout` / `maxoncstderr` blocks. |
 | `tests/` | Read `tests/README.md` first. A fixture `.maxon` is stored as `<name>.fixture`; one test per `.maxtest` file; expectations are generated, never hand-written. |
@@ -52,7 +52,8 @@ After each edit:
 | a standalone program or example | `mcp__maxon__check`, then `mcp__maxon__execute` if it should run — `path:` the file for a one-file program, **the directory** for one spread over several files |
 | a `.maxtest` or its project | `mcp__maxon__test` (`path:` the project directory, `filter:` the test) |
 | a spec case | `mcp__maxon__spec_test_outcome` (`filter:` a case-sensitive substring of `<spec>/<test>`, or an array of them selecting their union in one run) |
-| `maxon-bin/`, `stdlib/` or `runtime/` | build the slot — `./maxon-bin/.maxon/maxon run build`, or `mcp__maxon__build` with `path: "maxon-bin"` — then the spec filter that owns the behaviour |
+| `maxon-bin/` | build the slot — `./maxon-bin/.maxon/maxon run build` — then the spec filter that owns the behaviour |
+| `stdlib/` or `runtime/` | the spec filter that owns the behaviour — the suite compiles both from source. Build the slot too when a driver command (`fmt`, `test`, the LSP) must see the change |
 
 ⚠ **Traps in the instruments:**
 
@@ -69,7 +70,7 @@ After each edit:
   clean.
 - **Exit 101 is a leak.** Read exit codes; never grep output for a success string.
 - The compiler binary is gitignored and nothing rebuilds it, so a stale one lies in both directions —
-  build before you trust a run of compiler, stdlib or runtime changes.
+  build after editing `maxon-bin/`. `spec-test` and `scale-test` refuse a stale binary by themselves.
 - In a worktree, pass `repoRoot` (the worktree's absolute path) to the tools that act in a tree — `build`,
   `run_spec_test`, `spec_test_outcome`, `run_scale_test`, `execute`, `test`, `fmt`. `check`, `dump_ir`,
   `lookup_error_code` and `info` take none.

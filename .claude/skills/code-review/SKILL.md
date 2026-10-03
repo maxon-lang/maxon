@@ -139,9 +139,7 @@ message.
 - **A DEFECT you find by PROBING is still a blocker — a WRONG ANSWER as much as a leak —
   fix-or-cleanly-reject, NEVER "defer".** *Leaks are not ok, and neither is a wrong answer in code this
   change owns*, even latent ones the committed suite is green over: a reachable leak, or a construct
-  that miscompiles, is fixed, or turned into a clean compile error, before this lands. (This exists
-  because a boxed-union return leak was once recommended for deferral here; the right call was to reject
-  it — and the same call binds a wrong answer.)
+  that miscompiles, is fixed, or turned into a clean compile error, before this lands.
 - **Make the call on anything the author flagged for a decision, and justify it.**
 - If you find something real but genuinely OUTSIDE this change — a **compiler bug this change does
   not own**, a **distinct feature**, or a **measured-linear perf debt** — **say so and leave

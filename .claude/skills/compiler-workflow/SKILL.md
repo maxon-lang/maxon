@@ -17,8 +17,8 @@ the compiler indexes by, and READ it.
 - **It has no verdict and there is nothing to pass.** It exits **0** whatever the numbers say; a
   non-zero exit means the **RUN ITSELF BROKE** (a degenerate corpus, a rung that failed to compile, an
   IO failure) and produced no valid data.
-- ✅ **The gate apparatus is GONE** — committed memory goldens, exponent budgets, `--update-required`
-  and the PASS/FAIL/VOID/NOISY verdicts are all deleted. **Do not reintroduce them.**
+- **Give it no gate apparatus** — no committed memory goldens, no exponent budgets, no PASS/FAIL
+  verdict.
 - ⚠ **DO NOT CHASE A GREEN SCALE-TEST. There isn't one**, and **never touch the instrument to make a
   number look better.** A curve that looks wrong is a **reading to explain**.
 - **The ladder DOUBLES, so the RATIO between rungs IS the growth** — ×2 linear, ×4 quadratic. Read it
@@ -36,8 +36,8 @@ the `optimize` skill.** Load it before acting on a ladder.
 
 ⚠ The compiler's own per-phase timing is a **different thing**: `--metrics=<path>` writes a TSV whose
 7th field is `cputicks`, and `--log=compiler:debug` prints a timing table with a `cpu%` beside the wall
-`%`. **A phase where the two disagree spent its wall time NOT RUNNING** — `load` is 51.2% of wall but
-25.4% of CPU because it waits on IO; `regalloc` is 22.2% of wall and 36.1% of CPU.
+`%`. **A phase where the two disagree spent its wall time NOT RUNNING** — `load`, which waits on IO,
+takes a far larger share of wall time than of CPU.
 
 ## ⭐ `scripts/fixpoint.sh` — does the compiler reproduce itself exactly?
 
