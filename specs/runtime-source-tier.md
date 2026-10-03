@@ -27,9 +27,9 @@ The privileges are what a runtime needs and nothing else:
 - **It may DECLARE a `__`-prefixed name.** The reserved prefix is the runtime's own name space, so the
   E2051 reservation that stops user code from declaring into it is lifted across the whole cone.
   ⚠ One tier entry wears no prefix and cannot take one, because its name is a FRAME a backtrace prints:
-  `maxon_force_segfault` (`specs/safety.md`). It is reserved from user declarations by NAME under the same
-  E2051, and that reservation is what keeps a second declaration of it from making the name contested
-  across directories and renaming the tier's own symbol.
+  `maxon_force_segfault` (`specs/safety.md`). It is reserved by NAME in the free-function name space under
+  the same E2051, and that reservation is what keeps a second free function of it from making the name
+  contested across directories and renaming the tier's own symbol.
 - **It may CALL a `__Raw.*` intrinsic.** `__Raw` is the closed table of raw machine and OS operations
   — the floor a runtime is written on top of, and the one surface below which there is no Maxon.
 

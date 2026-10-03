@@ -1,18 +1,19 @@
-// ⭐⭐ **FIVE OF THE OBJECT LAYER'S FOURTEEN ENTRY POINTS.** Two are the whole OS-DIRECT road, which above
+// The object layer's tier-source entry points. Two are the whole OS-DIRECT road, which above
 // `SlabMaxSmallSize` makes a request its own mapping rather than a slot in a span: one `osAllocPages` per
-// allocation, one `osFreePages` per free, and the mapping's own length in a 16-byte prefix. The other three
+// allocation, one `osFreePages` per free, and the mapping's own length in a 16-byte prefix. Three
 // are the allocator's STATE — the lazily committed region every shared structure lives in, and the metadata
 // slab's two cursors, which hand mspan headers out and take them back.
+// The four census entries are walks, each called from a locked wrapper
+// `SlabRuntime.installSlabRuntime` builds.
 //
-// ⛔⛔ **THE REST OF `Compiler/Runtime/SlabRuntime.maxon` IS NOT MISSING — IT CANNOT BE SOURCE, AND THE
-// BLOCKER IS THE TARGET.** The allocation doors, the free door and the lock pair read the target's
+// The allocation doors, the free door, the refill, the scavenger and the census wrappers are
+// builders in `Compiler/Runtime/SlabRuntime.maxon`, and each reads the target's
 // `MachineModel`: on wasm the walk to *"which processor am I"* is a constant because the backend has no
-// `tlsSlotLoad`, and on every other lane it is a TLS read. Tier source is compiled once and has no such
-// knob. One more is blocked for a different reason: `__slab_rounded_size` shares
+// `tlsSlotLoad`, and on every other lane it is a TLS read. `__slab_rounded_size` shares
 // `SlabRuntime.emitSlabClassIndex` with `__slab_alloc`, so porting it alone would be a SECOND SPELLING of
 // one walk.
 //
-// ⛔ **AND `__slab_span_destroy` IS EXCLUDED ON THE SAME RULE, WHICH IS NOT WHERE ITS BLOCKER WAS EXPECTED.**
+// ⛔ **AND `__slab_span_destroy` IS EXCLUDED ON THE SAME RULE.**
 // It reads no usage record at all and every callee it names is here, so the machine model above does not
 // touch it; what stops it is that it and `__slab_refill` compute a span's chunk run from the same packed
 // class geometry, and the refill stays. `SlabRuntime.emitSpanChunkCount` states why that must be ONE

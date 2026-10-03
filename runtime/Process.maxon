@@ -8,9 +8,10 @@
 // ahead of the `__proc_` band that answers `processInfo`.
 //
 // `__proc_exe_path` is IR the compiler builds (`Compiler/Runtime/ProcessRuntime.maxon`), not tier
-// source. Its body allocates and builds an `__ManagedMemory`, so here it would call other runtime
-// entries, and `scanRuntimeUsage` walks every runtime body in every program: that call would set
-// its family's bit for a program dead-function elimination sweeps the body out of.
+// source. Its body allocates and builds an `__ManagedMemory`, which tier source refuses (E3153),
+// and the allocator entries it calls (`__mm_alloc`, `__mm_free`, `__managed_create`) are declared
+// in no source file, so `Parser.requireCalleeIsNotReservedName` refuses a tier body naming one
+// (E3004).
 
 module typealias ProcessId = int(0 to u64.max)
 
