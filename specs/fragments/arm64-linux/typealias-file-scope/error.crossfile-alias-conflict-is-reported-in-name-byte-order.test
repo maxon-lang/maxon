@@ -1,0 +1,22 @@
+// Test: error.crossfile-alias-conflict-is-reported-in-name-byte-order
+// --- file: a.maxon
+export typealias Measure = int(0 to 100)
+
+export function useInt(x Measure) returns Measure
+	return x + 1
+end 'useInt'
+
+// --- file: B.maxon
+export typealias Measure = float(0.0 to 1.0)
+
+export function useFloat(x Measure) returns Measure
+	return x
+end 'useFloat'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return trunc(useInt(41))
+end 'main'
+---
+CompilerError:
+error E3061: <fragment>:3:18: Duplicate typealias 'Measure'
