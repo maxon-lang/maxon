@@ -1,0 +1,18 @@
+// Test: error.a-qualified-static-call-head-the-reader-cannot-see-is-refused-and-the-file-reads-on
+// --- file: feature/types.maxon
+module typealias Bag = Array with ExitCode
+
+module typealias Score = int(0 to 100)
+
+// --- file: other/main.maxon
+function main() returns ExitCode
+	var b = feature.Bag.create()
+	b.push(4)
+	let s = 7 as feature.Score
+	print("{s} {b.count()}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3088: other/<fragment>:9:10: typealias 'feature.Bag' is module-scoped and not visible from this directory
+error E3088: other/<fragment>:11:15: typealias 'feature.Score' is module-scoped and not visible from this directory

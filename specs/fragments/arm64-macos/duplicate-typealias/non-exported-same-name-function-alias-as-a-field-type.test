@@ -52,15 +52,25 @@ func @Holder.incrementing$closure_0 {
   entry:
     arm64.prologue 16
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
     arm64.cmp x0, 1000
-    arm64.b.gt __rc_panic
-  __rc_ok:
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
     arm64.add x0, x0, 1
+  __rc_chk#6:
+    arm64.cmp x0, 1000
+    arm64.b.gt __rc_panic#5
+  __rc_ok#4:
     arm64.epilogue 16
     arm64.ret
-  __rc_panic:
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at a.maxon:12: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#5:
     arm64.leaRdata x0, __str_blob_9  ; "panic at a.maxon:12: Range check failed: value outside typealias 'Tally'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -131,20 +141,28 @@ func @main {
     arm64.storeSlotReg slot5, x20
     arm64.storeSlotReg slot4, x19
   __il_body#12:
-    arm64.leaFuncAddr x19, Holder.incrementing$closure_0
+    arm64.leaRdata x19, __fnrec_Holder.incrementing$closure_0
   __il_body#14:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeSlotReg slot0, x0
-    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot0, x20
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
   __il_cont#11:
-    arm64.movImm x1, 1
-  __rc_ok:
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
-    arm64.movImm x3, 0
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x3
+    arm64.movImm x19, 1
+  __rc_ok#4:
+    arm64.loadRegBaseDisp.word64 x20, [x20 + 0]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_retain
+    arm64.movRegReg x21, x0
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
     arm64.blr x2
     arm64.movRegReg x19, x0
     arm64.cmp x19, 0
@@ -152,12 +170,15 @@ func @main {
   __rc_chk:
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic
+  __rc_ok#7:
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
   __il_cont#2:
     arm64.leaRdata x0, __str_rec_5  ; "go"
   __il_body#16:
-    arm64.leaFuncAddr x2, goB$closure_0
-    arm64.movImm x1, 0
+    arm64.leaRdata x1, __fnrec_goB$closure_0
   __il_body#18:
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.blr x2
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot1, x20
@@ -227,7 +248,7 @@ func @main {
     arm64.loadRegSlot x0, slot1
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot0
-    arm64.bl __mm_decref
+    arm64.bl __destruct_Holder
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot4
     arm64.loadRegSlot x20, slot5

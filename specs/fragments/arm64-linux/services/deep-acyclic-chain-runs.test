@@ -119,9 +119,7 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
+    arm64.prologue 48
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -180,28 +178,14 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x19, x0
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x21
-    arm64.bl __mm_share_box
-    arm64.bl __mm_walk_settle
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_handle_retain_box
-    arm64.movRegReg x23, x0
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_share_box
-    arm64.bl __mm_walk_settle
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_retain_box
-    arm64.movRegReg x24, x0
     arm64.movImm x0, 32
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x23
-    arm64.storeBaseDispReg.word64 [x1 + 16], x24
+    arm64.storeBaseDispReg.word64 [x1 + 8], x21
+    arm64.storeBaseDispReg.word64 [x1 + 16], x20
     arm64.storeBaseDispReg.word64 [x1 + 24], x19
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
     arm64.bl __mbox_send
@@ -223,18 +207,12 @@ func @main {
   __rc_ok:
     arm64.movRegReg x0, x22
     arm64.bl __mbox_handle_drop_box
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_handle_drop_box
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at deep-acyclic-chain-runs.test:45: Range check failed: value outside typealias 'ExitCode'\x0a"
@@ -244,9 +222,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
 }
 

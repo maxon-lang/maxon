@@ -1,0 +1,18 @@
+// Test: pass-by-reference.captured-let-to-mutating-param-error
+
+typealias Integer = int(i64.min to i64.max)
+
+function setIt(dest Integer) returns Integer
+	dest = 99
+	return dest
+end 'setIt'
+
+function main() returns ExitCode
+	let x = 1
+	let f = function() gives setIt(x)
+	print("{f()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:12:27: cannot pass 'x' to function that mutates parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach it

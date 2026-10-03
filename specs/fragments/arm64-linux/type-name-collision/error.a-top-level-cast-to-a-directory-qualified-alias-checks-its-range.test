@@ -1,0 +1,18 @@
+// Test: error.a-top-level-cast-to-a-directory-qualified-alias-checks-its-range
+// --- file: api/score.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/score.maxon
+export typealias Score = int(0 to 50)
+
+// --- file: app/main.maxon
+let a = 70 as api.Score
+let b = 70 as legacy.Score
+
+function main() returns ExitCode
+	print("{a} {b}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: app/<fragment>:10:12: Value 70 is outside the range of 'legacy.Score' (int(0 to 50))

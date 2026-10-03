@@ -15,11 +15,13 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let buf = "hello {1}"
-	let peek = function() gives buf
+	var held = Strings.create()
+	held.push(buf)
 	h.keep(buf)
-	return peek().byteLength() as ExitCode
+	return held.count() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias Strings = Array with String
 ---
 CompilerError:
-error E3138: <fragment>:19:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:20:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name

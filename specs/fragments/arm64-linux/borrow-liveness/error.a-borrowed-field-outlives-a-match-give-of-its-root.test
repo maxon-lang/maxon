@@ -1,0 +1,42 @@
+// Test: error.a-borrowed-field-outlives-a-match-give-of-its-root
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+enum Pick
+	first
+	second
+end 'Pick'
+
+function choose(n Integer) returns Pick
+	return Pick.first if n > 0 else Pick.second
+end 'choose'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	var r = match choose(1) 'pick'
+		first gives b
+		second gives Outer.create(2)
+	end 'pick'
+	r = Outer.create(3)
+	print("{inner.label.byteLength()} {r.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:33:3: cannot move 'b' into the value its branch gives while it is borrowed by 'inner' (borrowed at line 31)

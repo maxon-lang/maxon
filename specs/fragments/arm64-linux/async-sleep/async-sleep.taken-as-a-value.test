@@ -83,27 +83,25 @@ data {
 func @main {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaFuncAddr x19, __fnref_sleep
+    arm64.leaRdata x0, __fnrec_sleep
     arm64.bl Clock.nowMs
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x19, x0
     arm64.movImm x0, 60
-    arm64.movImm x1, 0
-    arm64.blr x19
+    arm64.bl sleep
   __il_body:
     arm64.bl Clock.nowMs
-    arm64.cmp x0, x20
+    arm64.cmp x0, x19
     arm64.b.hs ifcont#6
   clockSkew:
     arm64.movImm x0, 0
     arm64.b __il_cont
   ifcont#6:
-    arm64.sub x1, x0, x20
+    arm64.sub x1, x0, x19
     arm64.movImm x16, 18446744073709551615
     arm64.eor x2, x0, x16
-    arm64.and x2, x2, x20
-    arm64.eor x0, x0, x20
+    arm64.and x2, x2, x19
+    arm64.eor x0, x0, x19
     arm64.movImm x16, 18446744073709551615
     arm64.eor x0, x0, x16
     arm64.and x0, x0, x1
@@ -118,13 +116,11 @@ func @main {
   slept:
     arm64.movImm x0, 7
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
   ifcont#2:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
@@ -132,7 +128,6 @@ func @main {
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }

@@ -1,0 +1,30 @@
+// Test: error.a-missing-closer-in-a-method-is-refused-where-the-next-one-stands
+typealias Integer = int(0 to 100)
+
+type Box
+	var v as Integer
+
+	static function make(v Integer) returns Self
+		return Self{v: v, w: 2}
+	end 'make'
+
+	function show()
+		if self.v > 1 'big'
+			print("{self.v}")
+	end 'show'
+
+	function other()
+		print("o")
+	end 'other'
+
+	var w as Integer
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.make(3)
+	b.show()
+	return 0
+end 'main'
+---
+CompilerError:
+error E2008: <fragment>:14:2: Mismatched end label: expected 'big', got 'show'

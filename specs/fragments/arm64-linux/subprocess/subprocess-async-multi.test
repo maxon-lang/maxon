@@ -19,7 +19,7 @@ function main() returns ExitCode
 		argv.push("echo")
 		#endif
 		argv.push("child-{i}")
-		promises.push(async Subprocess.run(exe, arguments: argv))
+		promises.push(async Subprocess.run(exe.clone(), arguments: argv))
 		i = i + 1
 	end 'spawn'
 
@@ -209,15 +209,13 @@ func @main {
     arm64.movRegReg x1, x27
     arm64.bl __managed_push
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x22
-    arm64.bl __managed_retain
+    arm64.bl __clone_Executable
     arm64.movRegReg x21, x0
     arm64.leaFuncAddr x0, Subprocess.run
     arm64.bl __gt_spawn
     arm64.movRegReg x23, x0
-    arm64.storeBaseDispReg.word64 [x23 + 200], x20
-    arm64.storeBaseDispReg.word64 [x23 + 208], x21
+    arm64.storeBaseDispReg.word64 [x23 + 200], x21
+    arm64.storeBaseDispReg.word64 [x23 + 208], x22
     arm64.leaFuncAddr x0, __gt_release_Subprocess.run
     arm64.storeBaseDispReg.word64 [x23 + 176], x0
     arm64.movRegReg x0, x23
@@ -226,9 +224,8 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __managed_push
     arm64.loadRegSlot x0, slot3
-    arm64.add x21, x0, 1
-    arm64.movRegReg x0, x22
-    arm64.bl __managed_decref
+    arm64.add x0, x0, 1
+    arm64.movRegReg x21, x0
   whilehdr:
     arm64.storeSlotReg slot3, x21
     arm64.cmp x21, 4

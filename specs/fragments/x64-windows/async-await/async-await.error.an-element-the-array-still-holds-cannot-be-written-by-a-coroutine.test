@@ -1,0 +1,29 @@
+// Test: async-await.error.an-element-the-array-still-holds-cannot-be-written-by-a-coroutine
+typealias Integer = int(i64.min to i64.max)
+typealias Boxes = Array with Box
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function poke(p Box) returns Integer
+	Scheduler.yield()
+	p.n = 99
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	var items = Boxes.create()
+	items.push(Box.create())
+	let a = try items.get(0) otherwise panic("no box")
+	print("{await async poke(a)}\n")
+	print("{items.count()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:23:22: cannot pass 'a' to function that mutates parameter 'p' (in main)

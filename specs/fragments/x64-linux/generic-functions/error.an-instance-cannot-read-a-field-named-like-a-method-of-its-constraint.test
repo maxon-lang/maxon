@@ -1,0 +1,38 @@
+// Test: error.an-instance-cannot-read-a-field-named-like-a-method-of-its-constraint
+// --- file: lib.maxon
+export typealias Score = int(i64.min to i64.max)
+
+export interface Ranked
+	function rank() returns Score
+end 'Ranked'
+
+extension Ranked
+	function tally() returns Score
+		return self.rank()
+	end 'tally'
+end 'Ranked'
+
+export function tallyOf(a T) uses T returns Score where T is Ranked
+	return a.tally
+end 'tallyOf'
+
+// --- file: main.maxon
+type Point implements Ranked
+	export var tally as Score
+
+	static function make(tally Score) returns Self
+		return Self{tally: tally}
+	end 'make'
+
+	function rank() returns Score
+		return self.tally
+	end 'rank'
+end 'Point'
+
+function main() returns ExitCode
+	print("{tallyOf(Point.make(7))}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3008: <fragment>:16:11: type 'Point' is not exported

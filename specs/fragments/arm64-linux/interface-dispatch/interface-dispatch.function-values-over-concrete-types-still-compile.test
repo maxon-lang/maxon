@@ -85,30 +85,35 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaFuncAddr x19, __fnref_measure
+    arm64.leaRdata x19, __fnrec_measure
     arm64.movImm x0, 31
     arm64.bl Sq.create
     arm64.movRegReg x20, x0
-    arm64.movImm x1, 0
   __il_body#7:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.movRegReg x0, x20
-    arm64.blr x19
+    arm64.movRegReg x1, x19
+    arm64.blr x2
     arm64.movRegReg x19, x0
   __il_cont#6:
-    arm64.leaFuncAddr x21, __fnref_measure
+    arm64.leaRdata x21, __fnrec_measure
   __il_body#8:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
     arm64.storeBaseDispReg.word64 [x22 + 0], x21
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
   __il_cont#5:
     arm64.movImm x0, 11
     arm64.bl Sq.create
     arm64.movRegReg x21, x0
   __il_body#9:
-    arm64.loadRegBaseDisp.word64 x2, [x22 + 0]
-    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x1, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.movRegReg x0, x21
     arm64.blr x2
   __il_cont#4:
@@ -122,7 +127,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.movRegReg x0, x22
-    arm64.bl __mm_decref
+    arm64.bl __destruct_Holder
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19

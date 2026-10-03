@@ -30,9 +30,7 @@ function echoOnce(listener TcpListener, n Tally) returns Tally throws NetworkErr
 	return 0
 end 'echoOnce'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async echoRounds(listener)
 	_ = try echoOnce(listener, n: 0) otherwise 0
 
@@ -58,6 +56,11 @@ function main() returns ExitCode
 
 	print("ok={ok} brackets={brackets}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ---
 ExitCode: 0
@@ -477,7 +480,7 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
     arm64.cmp x9, 0
-    arm64.b.eq tryok#1
+    arm64.b.eq __il_body#4
   tryerr#2:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot4
@@ -492,7 +495,7 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryok#1:
+  __il_body#4:
     arm64.movRegReg x0, x19
     arm64.bl __mm_own
     arm64.movRegReg x20, x0
@@ -508,8 +511,8 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl echoOnce
     arm64.cmp x9, 0
-    arm64.b.ne trycont#5
-  trycont#5:
+    arm64.b.ne trycont#7
+  trycont#7:
     arm64.bl __sched_syscall_count
     arm64.movRegReg x20, x0
     arm64.movImm x22, 1
@@ -567,40 +570,40 @@ func @main {
     arm64.movRegReg x0, x24
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.b.eq tryok#6
-  tryerr#7:
+    arm64.b.eq tryok#8
+  tryerr#9:
     arm64.movImm x19, 0
-    arm64.b trycont#8
-  tryok#6:
+    arm64.b trycont#10
+  tryok#8:
     arm64.movRegReg x19, x0
-  trycont#8:
+  trycont#10:
     arm64.movRegReg x0, x25
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.b.eq tryok#9
-  tryerr#10:
+    arm64.b.eq tryok#11
+  tryerr#12:
     arm64.movImm x22, 0
-    arm64.b trycont#11
-  tryok#9:
+    arm64.b trycont#13
+  tryok#11:
     arm64.movRegReg x22, x0
-  trycont#11:
+  trycont#13:
     arm64.movRegReg x0, x26
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.b.eq tryok#12
-  tryerr#13:
+    arm64.b.eq tryok#14
+  tryerr#15:
     arm64.movImm x24, 0
-    arm64.b trycont#14
-  tryok#12:
+    arm64.b trycont#16
+  tryok#14:
     arm64.movRegReg x24, x0
-  trycont#14:
+  trycont#16:
     arm64.movRegReg x0, x23
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.b.eq trycont#17
-  tryerr#16:
+    arm64.b.eq trycont#19
+  tryerr#18:
     arm64.movImm x0, 0
-  trycont#17:
+  trycont#19:
     arm64.add x1, x19, x22
     arm64.add x1, x1, x24
     arm64.add x19, x1, x0
@@ -612,7 +615,7 @@ func @main {
     arm64.cmp x21, 5
     arm64.b.eq ifcont
   peer:
-    arm64.leaRdata x0, __str_blob_17  ; "panic at netpoll-socket.a-literal-address-round-trip-enters-no-kernel-bracket.test:56: unreachable: every round-trip that returned was answered by this peer\x0a"
+    arm64.leaRdata x0, __str_blob_17  ; "panic at netpoll-socket.a-literal-address-round-trip-enters-no-kernel-bracket.test:54: unreachable: every round-trip that returned was answered by this peer\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot4
@@ -702,13 +705,14 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-  __il_body:
+  __il_body#23:
     arm64.loadRegSlot x0, slot2
     arm64.bl __write_stdout
-  __il_cont:
+  __il_cont#22:
     arm64.loadRegSlot x0, slot2
     arm64.bl __str_decref
     arm64.movImm x19, 0
+  __il_cont#3:
     arm64.loadRegSlot x0, slot0
     arm64.bl __destruct_TcpListener
     arm64.movRegReg x0, x19

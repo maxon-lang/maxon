@@ -41,7 +41,7 @@ func @applyChecked {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegReg rsi, rcx
+    x64.movRegReg rax, rcx
     x64.cmpRegImm32 rdx, 0
     x64.jcc greaterEqual, ifcont
   guard:
@@ -51,6 +51,7 @@ func @applyChecked {
     x64.popReg rbp
     x64.ret
   ifcont:
+    x64.loadRegBaseDisp.word64 rsi, [rax + 0]
     x64.movRegReg rcx, rdx
     x64.movRegReg rdx, rax
     x64.callReg rsi
@@ -66,18 +67,17 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rbx, 5
-    x64.leaRegFunc r12, [rip + main$closure_0]
-    x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rcx, 16
     x64.callDirect __mm_alloc
-    x64.movRegReg r13, r8
-    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.movRegReg r12, r8
+    x64.leaRegFunc rax, [rip + main$closure_0]
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
     x64.movRegImm32 rdx, 10
     x64.movRegReg rcx, r12
-    x64.movRegReg rax, r13
     x64.callDirect applyChecked
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#1
@@ -89,7 +89,6 @@ func @main {
   trycont#3:
     x64.movRegImm rdx, 18446744073709551615
     x64.movRegReg rcx, r12
-    x64.movRegReg rax, r13
     x64.callDirect applyChecked
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#4
@@ -106,11 +105,10 @@ func @main {
     x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -119,8 +117,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at first-class-function.capturing-closure-passed-to-try-call.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -131,7 +128,7 @@ func @main$closure_0 {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rdx + 8]
     x64.leaRegRegReg r8, rcx, rax
     x64.popReg rbp
     x64.ret

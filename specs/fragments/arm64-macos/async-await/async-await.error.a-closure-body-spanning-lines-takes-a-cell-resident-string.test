@@ -1,0 +1,36 @@
+// Test: async-await.error.a-closure-body-spanning-lines-takes-a-cell-resident-string
+typealias Integer = int(i64.min to i64.max)
+typealias Integers = Array with Integer
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return text.byteLength() as Integer
+end 'shout'
+
+function total(values Integers) returns Integer
+	var sum = 0
+
+	for v in values 'each'
+		sum = sum + v
+	end 'each'
+
+	return sum
+end 'total'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {1}"
+	fill(word, n: 2)
+	let peek = function() gives total([1,
+		word.byteLength() as Integer])
+	let p = async shout(word)
+	print("{await p} {peek()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:30:22: use of moved value 'word': its ownership moved to the closure that captures it

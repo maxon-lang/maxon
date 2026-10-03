@@ -1,0 +1,40 @@
+// Test: closure-capture.error.a-closure-stored-into-a-fresh-record-another-fresh-record-holds
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Holder
+	export var n as Integer
+	export var read as Thunk
+
+	static function create() returns Self
+		return Self{n: 1, read: idle}
+	end 'create'
+end 'Holder'
+
+type Box
+	export var n as Integer
+	export var held as Holder
+
+	static function create() returns Self
+		return Self{n: 2, held: Holder.create()}
+	end 'create'
+
+	function attach(h Holder)
+		self.held = h
+	end 'attach'
+end 'Box'
+
+function main() returns ExitCode
+	var a = Holder.create()
+	var b = Box.create()
+	b.attach(a)
+	a.read = function() gives b.n
+	return a.read() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3183: <fragment>:35:11: this closure captures 'b' and is stored into a record 'b' holds, so 'b' would hold the closure and the closure would hold 'b', and neither would ever be released. Store it somewhere 'b' does not reach, or capture what the closure needs instead of 'b' itself

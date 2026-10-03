@@ -1,0 +1,57 @@
+// Test: a-local-binding-named-like-a-directory-keeps-its-member-access
+// --- file: api/score.maxon
+export type Score
+	export let v as ExitCode
+
+	export static function make() returns Score
+		return Score{v: 30}
+	end 'make'
+end 'Score'
+
+// --- file: app/main.maxon
+type Panel
+	let Score as ExitCode
+
+	static function make() returns Panel
+		return Panel{Score: 12}
+	end 'make'
+
+	function total(api Panel) returns ExitCode
+		return api.Score + self.Score
+	end 'total'
+end 'Panel'
+
+function main() returns ExitCode
+	let p = Panel.make()
+	return p.total(Panel.make()) + api.Score.make().v
+end 'main'
+---
+ExitCode: 54
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body#13:
+    x64.movRegImm32 rax, 12
+  __il_body#14:
+    x64.movRegImm32 rcx, 12
+  __il_body#6:
+    x64.andRegImm32 rcx, rcx, 255
+    x64.andRegImm32 rax, rax, 255
+    x64.leaRegRegReg rax, rcx, rax
+  __il_body#10:
+    x64.movRegImm32 rcx, 30
+  __il_cont:
+    x64.andRegImm32 rcx, rcx, 255
+    x64.leaRegRegReg r8, rax, rcx
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}

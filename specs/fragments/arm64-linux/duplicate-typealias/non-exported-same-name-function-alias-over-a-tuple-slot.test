@@ -47,6 +47,18 @@ func @goA$closure_0 {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.add x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 1000
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_9  ; "panic at a.maxon:10: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
 }
@@ -56,6 +68,18 @@ func @goB$closure_0 {
     arm64.prologue 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.add x0, x0, 1
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 5
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_10  ; "panic at b.maxon:10: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
 }
@@ -74,24 +98,24 @@ func @main {
     arm64.storeSlotReg slot4, x20
     arm64.storeSlotReg slot3, x19
   __il_body#5:
-    arm64.leaFuncAddr x19, goA$closure_0
-    arm64.movImm x20, 0
+    arm64.leaRdata x19, __fnrec_goA$closure_0
   __il_body#7:
-    arm64.movImm x21, 700
-    arm64.leaRdata x22, __str_rec_4  ; "a"
+    arm64.movImm x20, 700
+    arm64.leaRdata x21, __str_rec_4  ; "a"
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.storeBaseDispReg.word64 [x23 + 0], x21
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x22, x0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x20
+    arm64.movRegReg x0, x21
     arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x23 + 8], x0
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x20
-    arm64.blr x19
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.blr x2
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x22
     arm64.bl __destruct___Tuple2.int.String
   __il_cont#6:
     arm64.movImm x0, 20
@@ -128,24 +152,24 @@ func @main {
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
   __il_body#8:
-    arm64.leaFuncAddr x23, goB$closure_0
-    arm64.movImm x24, 0
+    arm64.leaRdata x23, __fnrec_goB$closure_0
   __il_body#10:
-    arm64.leaRdata x25, __str_rec_5  ; "b"
-    arm64.movImm x26, 3
+    arm64.leaRdata x24, __str_rec_5  ; "b"
+    arm64.movImm x25, 3
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x27, x0
-    arm64.movRegReg x0, x25
+    arm64.movRegReg x26, x0
+    arm64.movRegReg x0, x24
     arm64.bl __str_retain
-    arm64.storeBaseDispReg.word64 [x27 + 0], x0
-    arm64.storeBaseDispReg.word64 [x27 + 8], x26
-    arm64.movRegReg x0, x27
-    arm64.movRegReg x1, x24
-    arm64.blr x23
+    arm64.storeBaseDispReg.word64 [x26 + 0], x0
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.loadRegBaseDisp.word64 x2, [x23 + 0]
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x23
+    arm64.blr x2
     arm64.movRegReg x23, x0
-    arm64.movRegReg x0, x27
+    arm64.movRegReg x0, x26
     arm64.bl __destruct___Tuple2.String.int
   __il_cont#9:
     arm64.movImm x0, 20

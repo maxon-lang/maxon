@@ -123,9 +123,8 @@ func @main {
     arm64.movImm x1, 18446744073709551615
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.leaFuncAddr x3, __fnref_bySignal
-    arm64.movImm x4, 0
-    arm64.leaRdata x5, __layout_Array_Signal
+    arm64.leaRdata x3, __fnrec_bySignal
+    arm64.leaRdata x4, __layout_Array_Signal
   __il_body#20:
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
@@ -155,8 +154,7 @@ func @main {
     arm64.movImm x21, 0
   trycont#6:
     arm64.movImm x22, 0
-    arm64.leaFuncAddr x23, __fnref_markNegative
-    arm64.movImm x24, 0
+    arm64.leaRdata x23, __fnrec_markNegative
     arm64.leaRdata x0, __layout_Array_Signal
   __il_body#24:
     arm64.movImm x1, 8
@@ -164,8 +162,8 @@ func @main {
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __managed_create
-    arm64.movRegReg x25, x0
-    arm64.movImm x26, 0
+    arm64.movRegReg x24, x0
+    arm64.movImm x25, 0
     arm64.b forhdr#25
   loop:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
@@ -173,38 +171,39 @@ func @main {
     arm64.b.ne __im_stride#33
   __im_word#31:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x26*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x25*8 + 0]
     arm64.b __im_cont#29
   __im_stride#33:
     arm64.cmp x0, 1
     arm64.b.ne __im_slow#30
   __im_byte#32:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.add x0, x0, x26
+    arm64.add x0, x0, x25
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.b __im_cont#29
   __im_slow#30:
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x26
+    arm64.movRegReg x1, x25
     arm64.bl __managed_get_unchecked
   __im_cont#29:
-    arm64.movRegReg x1, x24
-    arm64.blr x23
+    arm64.loadRegBaseDisp.word64 x2, [x23 + 0]
+    arm64.movRegReg x1, x23
+    arm64.blr x2
     arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x25
+    arm64.movRegReg x0, x24
     arm64.bl __managed_push
   forstep#27:
-    arm64.add x26, x26, 1
+    arm64.add x25, x25, 1
   forhdr#25:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x26, x0
+    arm64.cmp x25, x0
     arm64.b.lt loop
   __il_cont#23:
     arm64.movImm x23, 0
   __us_test:
-    arm64.loadRegBaseDisp.word64 x24, [x25 + 8]
-    arm64.loadRegBaseDisp.word64 x26, [x25 + 24]
-    arm64.loadRegBaseDisp.word64 x27, [x25 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x24 + 8]
+    arm64.loadRegBaseDisp.word64 x26, [x24 + 24]
+    arm64.loadRegBaseDisp.word64 x27, [x24 + 0]
     arm64.b forhdr#7
   each:
     arm64.cmp x26, 8
@@ -220,7 +219,7 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.b __im_cont#14
   __im_slow#15:
-    arm64.movRegReg x0, x25
+    arm64.movRegReg x0, x24
     arm64.movRegReg x1, x23
     arm64.bl __managed_get_unchecked
   __im_cont#14:
@@ -230,10 +229,10 @@ func @main {
   forstep#9:
     arm64.add x23, x23, 1
   forhdr#7:
-    arm64.cmp x23, x24
+    arm64.cmp x23, x25
     arm64.b.lt each
   forexit:
-    arm64.movRegReg x0, x25
+    arm64.movRegReg x0, x24
     arm64.bl __managed_decref
     arm64.add x0, x20, 2
     arm64.movImm x16, 100

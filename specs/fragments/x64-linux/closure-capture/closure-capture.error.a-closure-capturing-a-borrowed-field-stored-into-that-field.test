@@ -1,0 +1,39 @@
+// Test: closure-capture.error.a-closure-capturing-a-borrowed-field-stored-into-that-field
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Inner
+	export var n as Integer
+	export var read as Thunk
+
+	static function create() returns Self
+		return Self{n: 1, read: idle}
+	end 'create'
+end 'Inner'
+
+type Counter
+	export var inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create()}
+	end 'create'
+
+	export function arm()
+		let held = self.inner
+		self.inner.read = function() gives held.n
+	end 'arm'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	c.arm()
+	return c.inner.read() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3159: <fragment>:27:3: cannot write through 'self.inner', which may be the record of immutable variable 'held'; use clone()
+error E3183: <fragment>:27:21: this closure captures 'held' and is stored into a record 'held' holds, so 'held' would hold the closure and the closure would hold 'held', and neither would ever be released. Store it somewhere 'held' does not reach, or capture what the closure needs instead of 'held' itself

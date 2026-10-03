@@ -5,11 +5,8 @@ typealias Integer = int(i64.min to i64.max)
 // An interface (or type-parameter) method call may name its FIRST argument:
 // the receiver dispatches through interface monomorphization, which is
 // receiver-type-dependent and so cannot be ruled out syntactically at parse
-// time. The C# bootstrap accepts this (it routes interface/type-param method
-// calls through a path that silently consumes a first-arg label); the self-
-// hosted parser defers the E2052 check to TypeResolution, which re-applies it
-// only for concrete-struct / enum / builtin receivers. This is the regression
-// guard for that split.
+// time. The E2052 check is deferred to TypeResolution, which re-applies it
+// only for concrete-struct / enum / builtin receivers.
 interface Combiner
 	function combine(first Integer, second Integer) returns Integer
 end 'Combiner'
@@ -92,7 +89,7 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at dispatch-named-first-arg.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at dispatch-named-first-arg.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

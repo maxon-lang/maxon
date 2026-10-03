@@ -148,8 +148,8 @@ func @Holder.snapshot$closure_0 {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseDisp.word64 r9, [rax + 72]
   __il_body:
@@ -179,6 +179,20 @@ func @Holder.snapshot$closure_0 {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.snapshot$closure_0$drop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.callDirect __destruct_Holder
+    x64.movRegReg rax, r8
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -231,16 +245,22 @@ func @main {
     x64.callDirect __destruct_Box
     x64.leaRegRdata rbx, [rip + __layout_Holder_Box]
   __il_body#11:
-    x64.leaRegFunc r13, [rip + Holder.snapshot$closure_0]
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __clone_Holder]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_own_deep
+    x64.movRegReg r13, r8
+    x64.leaRegFunc rdx, [rip + Holder.snapshot$closure_0$drop]
+    x64.movRegImm32 rcx, 24
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], r12
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.leaRegFunc rax, [rip + Holder.snapshot$closure_0]
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.storeBaseDispReg.word64 [r14 + 16], rbx
   __il_body#13:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.movRegReg rcx, r14
-    x64.callReg r13
+    x64.callReg rax
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot1, rbx
   __il_cont#12:

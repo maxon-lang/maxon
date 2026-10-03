@@ -66,8 +66,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x0, 8
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
-    arm64.leaFuncAddr x20, __fnref_double
-    arm64.movImm x21, 0
+    arm64.leaRdata x20, __fnrec_double
     arm64.leaRdata x0, __layout_Array_int
   __il_body:
     arm64.movImm x1, 8
@@ -75,9 +74,9 @@ func @main {
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __managed_create
-    arm64.movRegReg x22, x0
-    arm64.storeSlotReg slot1, x22
-    arm64.movImm x23, 0
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot1, x21
+    arm64.movImm x22, 0
     arm64.b forhdr
   loop:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
@@ -85,35 +84,36 @@ func @main {
     arm64.b.ne __im_stride
   __im_word:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x23*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x22*8 + 0]
     arm64.b __im_cont
   __im_stride:
     arm64.cmp x0, 1
     arm64.b.ne __im_slow#38
   __im_byte:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.add x0, x0, x23
+    arm64.add x0, x0, x22
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.b __im_cont
   __im_slow#38:
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
+    arm64.movRegReg x1, x22
     arm64.bl __managed_get_unchecked
   __im_cont:
-    arm64.movRegReg x1, x21
-    arm64.blr x20
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.movRegReg x1, x20
+    arm64.blr x2
     arm64.movRegReg x1, x0
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __managed_push
   forstep:
-    arm64.add x23, x23, 1
+    arm64.add x22, x22, 1
   forhdr:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-    arm64.cmp x23, x0
+    arm64.cmp x22, x0
     arm64.b.lt loop
   __il_cont:
     arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 0
     arm64.b.ls __im_slow#17
     arm64.b __im_load#18
@@ -121,13 +121,13 @@ func @main {
     arm64.movImm x19, 0
     arm64.b trycont#3
   __im_load#18:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
   tryok#1:
     arm64.movRegReg x19, x0
   trycont#3:
     arm64.movImm x1, 1
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 1
     arm64.b.ls __im_slow#20
     arm64.b __im_load#21
@@ -135,29 +135,29 @@ func @main {
     arm64.movImm x20, 0
     arm64.b trycont#6
   __im_load#21:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, 8
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
   tryok#4:
     arm64.movRegReg x20, x0
   trycont#6:
     arm64.movImm x1, 2
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 2
     arm64.b.ls __im_slow#23
     arm64.b __im_load#24
   tryerr#8:
-    arm64.movImm x21, 0
+    arm64.movImm x22, 0
     arm64.b trycont#9
   __im_load#24:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, 16
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
   tryok#7:
-    arm64.movRegReg x21, x0
+    arm64.movRegReg x22, x0
   trycont#9:
     arm64.movImm x1, 3
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 3
     arm64.b.ls __im_slow#26
     arm64.b __im_load#27
@@ -165,14 +165,14 @@ func @main {
     arm64.movImm x23, 0
     arm64.b trycont#12
   __im_load#27:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, 24
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
   tryok#10:
     arm64.movRegReg x23, x0
   trycont#12:
     arm64.movImm x1, 4
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x0, 4
     arm64.b.ls __im_slow#29
     arm64.b __im_load#30
@@ -180,7 +180,7 @@ func @main {
     arm64.movImm x0, 0
     arm64.b trycont#15
   __im_load#30:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, 32
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
   trycont#15:
@@ -188,9 +188,9 @@ func @main {
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
+    arm64.movRegReg x21, x0
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x22
+    arm64.movRegReg x1, x21
     arm64.bl __int_to_string
     arm64.movRegReg x19, x0
     arm64.leaRdata x0, __str_rec_2  ; "\x0a"
@@ -203,7 +203,7 @@ func @main {
     arm64.movRegReg x27, x0
     arm64.add x28, x27, 56
     arm64.movRegReg x0, x28
-    arm64.movRegReg x1, x22
+    arm64.movRegReg x1, x21
     arm64.movRegReg x2, x19
     arm64.bl __str_copy
     arm64.add x19, x28, x19
@@ -218,7 +218,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
     arm64.movRegReg x0, x27
     arm64.bl print
@@ -233,7 +233,7 @@ func @main {
     arm64.bl __int_to_string
     arm64.movRegReg x20, x0
     arm64.leaRdata x0, __str_rec_2  ; "\x0a"
-    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.add x25, x20, x24
     arm64.add x0, x25, 57
@@ -247,7 +247,7 @@ func @main {
     arm64.bl __str_copy
     arm64.add x20, x27, x20
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x22
+    arm64.movRegReg x1, x21
     arm64.movRegReg x2, x24
     arm64.bl __str_copy
     arm64.add x0, x20, x24
@@ -267,7 +267,7 @@ func @main {
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x22
     arm64.movRegReg x1, x19
     arm64.bl __int_to_string
     arm64.movRegReg x20, x0
@@ -399,31 +399,31 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __im_slow#17:
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.ne tryerr#2
     arm64.b tryok#1
   __im_slow#20:
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.ne tryerr#5
     arm64.b tryok#4
   __im_slow#23:
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.ne tryerr#8
     arm64.b tryok#7
   __im_slow#26:
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.ne tryerr#11
     arm64.b tryok#10
   __im_slow#29:
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.ne tryerr#14

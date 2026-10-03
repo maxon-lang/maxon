@@ -16,8 +16,7 @@ function staySilent(listener TcpListener) returns String
 	return "heard {heard.byteLength()} more bytes"
 end 'staySilent'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async staySilent(listener)
 	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return 2
 	var limits = HttpClientLimits.create()
@@ -31,6 +30,11 @@ function main() returns ExitCode
 
 	print("client=answered {response.statusCode().number()} peer={await peer}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ---
 ExitCode: 0
@@ -322,13 +326,13 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 296
-    x64.leaRegRdata rcx, [rip + __str_rec_114]  ; "127.0.0.1"
+    x64.leaRegRdata rcx, [rip + __str_rec_125]  ; "127.0.0.1"
     x64.movRegImm32 rdx, 0
     x64.callDirect TcpListener.bind
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc equal, __il_body#4
   tryerr#2:
     x64.movRegImm32 r8, 1
     x64.epilogue 296
@@ -339,28 +343,28 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#1:
+  __il_body#4:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
     x64.movRegReg r12, r8
     x64.leaRegFunc rcx, [rip + staySilent]
     x64.callDirect __gt_spawn
-    x64.storeSlotReg slot17, r8
+    x64.storeSlotReg slot19, r8
     x64.storeBaseDispReg.word64 [r8 + 200], r12
     x64.leaRegFunc rax, [rip + __gt_release_staySilent]
     x64.storeBaseDispReg.word64 [r8 + 176], rax
     x64.movRegReg rcx, r8
     x64.callDirect __gt_ready
-    x64.leaRegRdata rax, [rip + __str_rec_115]  ; "http://127.0.0.1:"
+    x64.leaRegRdata rax, [rip + __str_rec_114]  ; "http://127.0.0.1:"
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-  __il_body#8:
+  __il_body#10:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __ml_port
-    x64.movRegReg r14, r8
+    x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#9
-  tryerr#10:
+    x64.jcc equal, tryok#11
+  tryerr#12:
     x64.leaRegRdata rcx, [rip + __str_blob_129]  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -372,90 +376,79 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#9:
-    x64.cmpRegImm32 r14, 0
+  tryok#11:
+    x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 r14, 65535
+    x64.cmpRegImm32 rbx, 65535
     x64.jcc greater, __rc_panic
-  __il_cont#7:
+  __il_cont#9:
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r15, r8
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r15
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
     x64.callDirect __uint_to_string
-    x64.storeSlotReg slot32, r8
-    x64.leaRegRdata rax, [rip + __str_rec_116]  ; "/"
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_115]  ; "/"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot29, rcx
+    x64.storeSlotReg slot31, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.storeSlotReg slot26, rax
-    x64.leaRegRegReg rcx, r13, r8
+    x64.storeSlotReg slot28, rax
+    x64.leaRegRegReg rcx, r13, rbx
     x64.leaRegRegReg rax, rcx, rax
-    x64.storeSlotReg slot20, rax
+    x64.storeSlotReg slot22, rax
     x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot23, r8
-    x64.leaRegRegImm32 r14, r8, 56
-    x64.movRegReg rcx, r14
+    x64.storeSlotReg slot25, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg r12, r14, r13
-    x64.loadRegSlot rax, slot32
+    x64.leaRegRegReg r12, r15, r13
     x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r15
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot32
-    x64.leaRegRegReg r12, r12, rax
-    x64.loadRegSlot rax, slot26
-    x64.loadRegSlot rdx, slot29
-    x64.movRegReg rcx, r12
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rax, slot28
+    x64.loadRegSlot rdx, slot31
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot26
-    x64.leaRegRegReg rax, r12, rax
-    x64.loadRegSlot r12, slot23
-    x64.storeBaseDispReg.word64 [r12 + 0], r14
-    x64.loadRegSlot rax, slot20
-    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.loadRegSlot rax, slot28
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot25
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot22
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r12 + 24], rax
-    x64.movRegReg rcx, r15
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
     x64.movRegImm32 rcx, 0
-    x64.movRegReg rdx, r12
+    x64.movRegReg rdx, rbx
     x64.callDirect HttpRequest.create
-    x64.movRegReg r12, r8
-    x64.storeSlotReg slot1, r12
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot1, rbx
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#3
-  tryerr#4:
-    x64.movRegImm32 r12, 2
-    x64.loadRegSlot rcx, slot23
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.movRegImm32 rbx, 2
+    x64.loadRegSlot rcx, slot25
     x64.callDirect __str_decref
-    x64.loadRegSlot rcx, slot17
+    x64.loadRegSlot rcx, slot19
     x64.callDirect __gt_promise_drop
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_TcpListener
-    x64.movRegReg r8, r12
-    x64.epilogue 296
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#3:
-    x64.loadRegSlot rcx, slot23
+    x64.jmp __il_cont#3
+  tryok#5:
+    x64.loadRegSlot rcx, slot25
     x64.callDirect __str_decref
-  __il_body#15:
-    x64.movRegImm32 rbx, 30000
+  __il_body#17:
+    x64.movRegImm32 r12, 30000
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -469,28 +462,28 @@ func @main {
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.storeSlotReg slot2, r14
-    x64.storeBaseDispReg.word64 [r14 + 0], rbx
+    x64.storeBaseDispReg.word64 [r14 + 0], r12
     x64.storeBaseDispReg.word64 [r14 + 8], r13
-  __il_cont#14:
+  __il_cont#16:
     x64.movRegImm32 rax, 200
     x64.storeBaseDispReg.word64 [r14 + 0], rax
     x64.callDirect Clock.nowMs
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect HttpClient.send
     x64.storeSlotReg slot5, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#5
-  tryerr#6:
+    x64.jcc equal, tryok#7
+  tryerr#8:
     x64.leaRegRegImm32 rax, r10, -1
-    x64.leaRegRdata rcx, [rip + __str_rec_120]  ; "client="
+    x64.leaRegRdata rcx, [rip + __str_rec_119]  ; "client="
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
-    x64.storeSlotReg slot31, rdx
-    x64.loadRegBaseDisp.word64 r12, [rcx + 8]
+    x64.storeSlotReg slot30, rdx
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rcx
-    x64.leaRegRdata rdx, [rip + __str_rec_121]  ; "invalidUrl"
+    x64.leaRegRdata rdx, [rip + __str_rec_120]  ; "invalidUrl"
     x64.imulRegReg rcx, rcx, rdx
     x64.cmpRegImm32 rax, 1
     x64.setccReg equal, rdx
@@ -509,12 +502,12 @@ func @main {
     x64.leaRegRegReg rcx, rcx, rdx
     x64.cmpRegImm32 rax, 4
     x64.setccReg equal, rdx
-    x64.leaRegRdata rsi, [rip + __str_rec_122]  ; "invalidResponse"
+    x64.leaRegRdata rsi, [rip + __str_rec_121]  ; "invalidResponse"
     x64.imulRegReg rdx, rdx, rsi
     x64.leaRegRegReg rcx, rcx, rdx
     x64.cmpRegImm32 rax, 5
     x64.setccReg equal, rdx
-    x64.leaRegRdata rsi, [rip + __str_rec_123]  ; "unsupportedScheme"
+    x64.leaRegRdata rsi, [rip + __str_rec_122]  ; "unsupportedScheme"
     x64.imulRegReg rdx, rdx, rsi
     x64.leaRegRegReg rcx, rcx, rdx
     x64.cmpRegImm32 rax, 6
@@ -524,48 +517,48 @@ func @main {
     x64.leaRegRegReg rcx, rcx, rdx
     x64.cmpRegImm32 rax, 7
     x64.setccReg equal, rax
-    x64.leaRegRdata rdx, [rip + __str_rec_124]  ; "bodyTooLarge"
+    x64.leaRegRdata rdx, [rip + __str_rec_123]  ; "bodyTooLarge"
     x64.imulRegReg rax, rax, rdx
     x64.leaRegRegReg rax, rcx, rax
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot27, rcx
+    x64.storeSlotReg slot26, rcx
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.leaRegRdata rax, [rip + __str_rec_125]  ; " prompt="
+    x64.leaRegRdata rax, [rip + __str_rec_124]  ; " prompt="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot24, rcx
+    x64.storeSlotReg slot23, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect Clock.elapsedMs
     x64.cmpRegImm32 r8, 2000
-    x64.setccReg below, rbx
+    x64.setccReg below, r12
     x64.movRegImm32 rcx, 5
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot21, r8
-    x64.movRegReg rcx, rbx
+    x64.storeSlotReg slot18, r8
+    x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
     x64.callDirect __bool_to_string
-    x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_118]  ; " peer="
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_117]  ; " peer="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot16, rcx
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
-    x64.storeSlotReg slot19, r15
-    x64.loadRegSlot rcx, slot17
+    x64.storeSlotReg slot21, r15
+    x64.loadRegSlot rcx, slot19
     x64.callDirect __gt_await
     x64.storeSlotReg slot3, r8
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.storeSlotReg slot14, rax
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeSlotReg slot12, rax
-    x64.leaRegRdata rcx, [rip + __str_rec_119]  ; "\x0a"
+    x64.leaRegRdata rcx, [rip + __str_rec_118]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
     x64.storeSlotReg slot8, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.storeSlotReg slot4, rcx
-    x64.leaRegRegReg rdx, r12, r13
+    x64.leaRegRegReg rdx, rbx, r13
     x64.leaRegRegReg rdx, rdx, r14
-    x64.leaRegRegReg rdx, rdx, rbx
+    x64.leaRegRegReg rdx, rdx, r12
     x64.leaRegRegReg rdx, rdx, r15
     x64.leaRegRegReg rax, rdx, rax
     x64.leaRegRegReg rax, rax, rcx
@@ -575,31 +568,31 @@ func @main {
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot10, r8
     x64.leaRegRegImm32 r15, r8, 56
-    x64.loadRegSlot rdx, slot31
+    x64.loadRegSlot rdx, slot30
     x64.movRegReg rcx, r15
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg r12, r15, r12
-    x64.loadRegSlot rdx, slot27
-    x64.movRegReg rcx, r12
-    x64.movRegReg rax, r13
-    x64.callDirect __str_copy
-    x64.leaRegRegReg r12, r12, r13
-    x64.loadRegSlot rdx, slot24
-    x64.movRegReg rcx, r12
-    x64.movRegReg rax, r14
-    x64.callDirect __str_copy
-    x64.leaRegRegReg r12, r12, r14
-    x64.loadRegSlot rdx, slot21
-    x64.movRegReg rcx, r12
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, r12, rbx
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.loadRegSlot rdx, slot26
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.loadRegSlot rdx, slot23
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rdx, slot18
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
     x64.loadRegSlot rdx, slot16
-    x64.loadRegSlot rax, slot19
+    x64.loadRegSlot rax, slot21
     x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot19
+    x64.loadRegSlot rax, slot21
     x64.leaRegRegReg rbx, rbx, rax
     x64.loadRegSlot rax, slot12
     x64.loadRegSlot rdx, slot14
@@ -621,7 +614,7 @@ func @main {
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.loadRegSlot rcx, slot21
+    x64.loadRegSlot rcx, slot18
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
     x64.callDirect print
@@ -634,19 +627,9 @@ func @main {
     x64.callDirect __destruct_HttpClientLimits
     x64.loadRegSlot rcx, slot1
     x64.callDirect __destruct_HttpRequest
-    x64.loadRegSlot rcx, slot0
-    x64.callDirect __destruct_TcpListener
-    x64.movRegReg r8, rbx
-    x64.epilogue 296
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#5:
-    x64.leaRegRdata rax, [rip + __str_rec_117]  ; "client=answered "
+    x64.jmp __il_cont#3
+  tryok#7:
+    x64.leaRegRdata rax, [rip + __str_rec_116]  ; "client=answered "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.movRegReg rcx, r8
@@ -663,21 +646,21 @@ func @main {
     x64.movRegReg rdx, r14
     x64.callDirect __uint_to_string
     x64.movRegReg r13, r8
-    x64.leaRegRdata rax, [rip + __str_rec_118]  ; " peer="
+    x64.leaRegRdata rax, [rip + __str_rec_117]  ; " peer="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot30, rcx
+    x64.storeSlotReg slot29, rcx
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
-    x64.storeSlotReg slot28, r15
-    x64.loadRegSlot rcx, slot17
+    x64.storeSlotReg slot27, r15
+    x64.loadRegSlot rcx, slot19
     x64.callDirect __gt_await
     x64.storeSlotReg slot9, r8
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.storeSlotReg slot25, rax
+    x64.storeSlotReg slot24, rax
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeSlotReg slot22, rax
-    x64.leaRegRdata rcx, [rip + __str_rec_119]  ; "\x0a"
+    x64.storeSlotReg slot20, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_118]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
-    x64.storeSlotReg slot18, rdx
+    x64.storeSlotReg slot17, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.storeSlotReg slot15, rcx
     x64.leaRegRegReg rdx, r12, r13
@@ -700,20 +683,20 @@ func @main {
     x64.movRegReg rax, r13
     x64.callDirect __str_copy
     x64.leaRegRegReg rbx, rbx, r13
-    x64.loadRegSlot rax, slot28
-    x64.loadRegSlot rdx, slot30
+    x64.loadRegSlot rax, slot27
+    x64.loadRegSlot rdx, slot29
     x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot28
+    x64.loadRegSlot rax, slot27
     x64.leaRegRegReg rbx, rbx, rax
-    x64.loadRegSlot rax, slot22
-    x64.loadRegSlot rdx, slot25
+    x64.loadRegSlot rax, slot20
+    x64.loadRegSlot rdx, slot24
     x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot22
+    x64.loadRegSlot rax, slot20
     x64.leaRegRegReg rbx, rbx, rax
     x64.loadRegSlot rax, slot15
-    x64.loadRegSlot rdx, slot18
+    x64.loadRegSlot rdx, slot17
     x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
     x64.loadRegSlot rax, slot15
@@ -743,6 +726,7 @@ func @main {
     x64.callDirect __destruct_HttpClientLimits
     x64.loadRegSlot rcx, slot1
     x64.callDirect __destruct_HttpRequest
+  __il_cont#3:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_TcpListener
     x64.movRegReg r8, rbx

@@ -14,9 +14,7 @@ function acceptNobody(listener TcpListener) returns AcceptOutcome
 	return code
 end 'acceptNobody'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let first = async acceptNobody(listener)
 	sleep(200)
 
@@ -25,6 +23,11 @@ function main() returns ExitCode
 
 	let unreachable = await first
 	return unreachable as ExitCode
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ---
 ExitCode: 107
@@ -149,7 +152,7 @@ func @main {
     x64.callDirect TcpListener.bind
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc equal, __il_body#4
   tryerr:
     x64.movRegImm32 r8, 1
     x64.epilogue 40
@@ -158,7 +161,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#1:
+  __il_body#4:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
     x64.movRegReg r12, r8
@@ -171,20 +174,21 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __gt_ready
     x64.movRegImm32 rcx, 200
-  __il_body:
+  __il_body#9:
     x64.callDirect __gt_sleep
-  __il_cont:
+  __il_cont#8:
     x64.movRegReg rcx, rbx
     x64.callDirect TcpListener.accept
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, trycont
-  tryok#3:
+  tryok:
     x64.movRegReg rcx, r8
     x64.callDirect __destruct_TcpClient
   trycont:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_await
     x64.movRegReg r12, r8
+  __il_cont#3:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_TcpListener
     x64.movRegReg r8, r12

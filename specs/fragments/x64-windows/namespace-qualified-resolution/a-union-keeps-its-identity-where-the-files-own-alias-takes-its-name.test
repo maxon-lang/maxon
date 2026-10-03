@@ -1,0 +1,92 @@
+// Test: a-union-keeps-its-identity-where-the-files-own-alias-takes-its-name
+// --- file: a/s.maxon
+export union Shape
+	dot
+	line(length ExitCode)
+end 'Shape'
+
+export function longest() returns Shape
+	return Shape.line(9)
+end 'longest'
+
+// --- file: app/main.maxon
+typealias Shape = int(0 to 10)
+
+function measure(s a.Shape) returns ExitCode
+	match s 'kind'
+		dot then return 1
+		line(length) then return length
+	end 'kind'
+end 'measure'
+
+function main() returns ExitCode
+	let local = 2 as Shape
+	return measure(a.longest()) + measure(a.Shape.dot) + (local as ExitCode)
+end 'main'
+---
+ExitCode: 12
+---
+data {
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+  __mrt_program_started@11 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+  __il_body#5:
+    x64.movRegImm32 rax, 9
+    x64.movRegImm32 rcx, 1
+  __il_body#8:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext#12
+  matcharm#9:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#7
+  matchnext#12:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead#11
+  __il_cont#7:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+  __il_body#14:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext#18
+  matcharm#15:
+    x64.movRegImm32 rcx, 1
+    x64.jmp __il_cont#6
+  matchnext#18:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead#17
+  matcharm#16:
+    x64.movRegReg rcx, rdx
+  __il_cont#6:
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegImm32 r8, rax, 2
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead#17:
+  matchdead#11:
+  matchcont#13:
+  matchcont#19:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at main.maxon:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

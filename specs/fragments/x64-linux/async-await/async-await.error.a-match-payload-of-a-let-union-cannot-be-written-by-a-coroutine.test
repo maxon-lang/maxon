@@ -1,0 +1,35 @@
+// Test: async-await.error.a-match-payload-of-a-let-union-cannot-be-written-by-a-coroutine
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+union Wrap
+	held(box Box)
+	empty
+end 'Wrap'
+
+function poke(p Box) returns Integer
+	Scheduler.yield()
+	p.n = 99
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	let w = Wrap.held(Box.create())
+
+	match w 'w'
+		held(b) then print("{await async poke(b)}\n")
+		empty then print("empty\n")
+	end 'w'
+
+	return 0
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:27:36: cannot pass 'b' to function that mutates parameter 'p' (in main)

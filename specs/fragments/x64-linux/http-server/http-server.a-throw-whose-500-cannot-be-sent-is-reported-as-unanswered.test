@@ -76,12 +76,7 @@ function serveUntilClosed(server HttpServer, handler ResetHandler) returns HttpS
 	return server.serve(handler)
 end 'serveUntilClosed'
 
-function main() returns ExitCode
-	lowerFlag(RequestReadFlag)
-	lowerFlag(PeerResetFlag)
-	lowerFlag(FaultReportedFlag)
-
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveUntilClosed(server, handler: ResetHandler.create())
 	let reset = sendThenReset(server.port())
 	raiseFlag(PeerResetFlag)
@@ -96,6 +91,15 @@ function main() returns ExitCode
 	print("reset={reset} reported={reported} ended={ended.name}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	lowerFlag(RequestReadFlag)
+	lowerFlag(PeerResetFlag)
+	lowerFlag(FaultReportedFlag)
+
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ---
 ExitCode: 0
@@ -2068,13 +2072,13 @@ func @main {
     x64.callDirect lowerFlag
     x64.leaRegRdata rcx, [rip + __str_rec_195]  ; "http-throw-after-reset.faulted"
     x64.callDirect lowerFlag
-    x64.leaRegRdata rcx, [rip + __str_rec_211]  ; "127.0.0.1"
+    x64.leaRegRdata rcx, [rip + __str_rec_217]  ; "127.0.0.1"
     x64.movRegImm32 rdx, 0
     x64.callDirect HttpServer.bind
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot1, rbx
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body#5
+    x64.jcc equal, __il_body#7
   tryerr#2:
     x64.movRegImm32 r8, 1
     x64.epilogue 248
@@ -2085,12 +2089,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __il_body#5:
+  __il_body#7:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
-  __il_cont#4:
+  __il_cont#6:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
     x64.movRegReg r13, r8
@@ -2103,9 +2107,9 @@ func @main {
     x64.storeBaseDispReg.word64 [r8 + 176], rax
     x64.movRegReg rcx, r8
     x64.callDirect __gt_ready
-  __il_body#6:
+  __il_body#8:
     x64.loadRegBaseDisp.word64 rbx, [rbx + 24]
-  __il_body#12:
+  __il_body#14:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -2242,8 +2246,8 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect Subprocess.run
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body#19
-  tryerr#14:
+    x64.jcc equal, __il_body#21
+  tryerr#16:
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r10
     x64.callDirect __destruct_SubprocessError
@@ -2251,46 +2255,46 @@ func @main {
     x64.callDirect __destruct_Executable
     x64.loadRegSlot rcx, slot2
     x64.callDirect __managed_decref
-    x64.jmp __il_cont#11
-  __il_body#19:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jmp __il_cont#13
   __il_body#21:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_body#23:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, matchnext
-  matcharm#22:
+  matcharm#24:
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rbx
-    x64.jmp __il_cont#18
+    x64.jmp __il_cont#20
   matchnext:
     x64.cmpRegImm32 rcx, 1
     x64.jcc notEqual, matchdead
-  matcharm#23:
+  matcharm#25:
     x64.movRegImm32 rbx, 0
-  __il_cont#18:
+  __il_cont#20:
     x64.movRegReg rcx, r8
     x64.callDirect __destruct_CollectedOutput
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Executable
     x64.loadRegSlot rcx, slot2
     x64.callDirect __managed_decref
-  __il_cont#11:
+  __il_cont#13:
     x64.leaRegRdata rcx, [rip + __str_rec_192]  ; "http-throw-after-reset.reset"
     x64.callDirect raiseFlag
     x64.leaRegRdata rcx, [rip + __str_rec_195]  ; "http-throw-after-reset.faulted"
     x64.callDirect awaitFlag
     x64.movRegReg r12, r8
-  __il_body#8:
+  __il_body#10:
     x64.loadRegSlot rax, slot1
     x64.loadRegBaseDisp.word64 rcx, [rax + 16]
     x64.movRegImm32 rdx, 1
     x64.storeBaseDispReg.byte [rcx + 0], rdx
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-  __il_body#10:
+  __il_body#12:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __ms_close
-  __il_cont#7:
+  __il_cont#9:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __gt_await
     x64.movRegReg r13, r8
@@ -2300,7 +2304,7 @@ func @main {
     x64.callDirect lowerFlag
     x64.leaRegRdata rcx, [rip + __str_rec_195]  ; "http-throw-after-reset.faulted"
     x64.callDirect lowerFlag
-    x64.leaRegRdata rax, [rip + __str_rec_212]  ; "reset="
+    x64.leaRegRdata rax, [rip + __str_rec_211]  ; "reset="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot23, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
@@ -2312,7 +2316,7 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __bool_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_213]  ; " reported="
+    x64.leaRegRdata rax, [rip + __str_rec_212]  ; " reported="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot19, rcx
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
@@ -2324,23 +2328,23 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __bool_to_string
     x64.movRegReg r12, r8
-    x64.leaRegRdata rax, [rip + __str_rec_214]  ; " ended="
+    x64.leaRegRdata rax, [rip + __str_rec_213]  ; " ended="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot15, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot25, rax
     x64.cmpRegImm32 r13, 0
     x64.setccReg equal, rcx
-    x64.leaRegRdata rdx, [rip + __str_rec_215]  ; "closed"
+    x64.leaRegRdata rdx, [rip + __str_rec_214]  ; "closed"
     x64.imulRegReg rcx, rcx, rdx
     x64.cmpRegImm32 r13, 1
     x64.setccReg equal, rdx
-    x64.leaRegRdata rsi, [rip + __str_rec_216]  ; "listenerFailed"
+    x64.leaRegRdata rsi, [rip + __str_rec_215]  ; "listenerFailed"
     x64.imulRegReg rdx, rdx, rsi
     x64.leaRegRegReg rcx, rcx, rdx
     x64.cmpRegImm32 r13, 2
     x64.setccReg equal, rdx
-    x64.leaRegRdata rsi, [rip + __str_rec_217]  ; "acceptDeadlinePassed"
+    x64.leaRegRdata rsi, [rip + __str_rec_216]  ; "acceptDeadlinePassed"
     x64.imulRegReg rdx, rdx, rsi
     x64.leaRegRegReg rcx, rcx, rdx
     x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
@@ -2419,6 +2423,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
+  __il_cont#3:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __destruct_HttpServer
     x64.movRegReg r8, rbx

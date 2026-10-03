@@ -1,0 +1,35 @@
+// Test: services.error.a-sent-let-used-as-a-method-receiver-is-use-after-move
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function doubled() returns Integer
+		return self.n * 2
+	end 'doubled'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.take(b)
+	return b.doubled() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3102: <fragment>:30:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment

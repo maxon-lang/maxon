@@ -1,0 +1,29 @@
+// Test: error.a-hidden-types-method-is-refused-through-a-value
+// --- file: lib.maxon
+type Box uses T
+	var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Box'
+
+export typealias StrBox = Box with String
+
+export function makeBox() returns StrBox
+	return StrBox.make("boxed")
+end 'makeBox'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let b = makeBox()
+	print("{b.get()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3008: <fragment>:24:12: type 'Box' is not exported

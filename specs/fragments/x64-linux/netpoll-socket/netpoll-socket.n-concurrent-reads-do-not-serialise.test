@@ -42,7 +42,10 @@ end 'echoOnce'
 // attempt leaves no green thread behind.
 function attempt() returns (Tally, bool) throws Attempt
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise throw Attempt.noListener
+	return try attemptOver(listener)
+end 'attempt'
 
+function attemptOver(listener TcpListener) returns (Tally, bool) throws Attempt
 	let peer = async echoRounds(listener)
 	_ = try echoOnce(listener, n: 0) otherwise 0
 
@@ -75,7 +78,7 @@ function attempt() returns (Tally, bool) throws Attempt
 	end 'noise'
 
 	return (ok, stuck)
-end 'attempt'
+end 'attemptOver'
 
 function main() returns ExitCode
 	var tries = 0
@@ -484,22 +487,17 @@ func @attempt {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 72
+    x64.prologue 40
     x64.leaRegRdata rcx, [rip + __str_rec_15]  ; "127.0.0.1"
     x64.movRegImm32 rdx, 0
     x64.callDirect TcpListener.bind
     x64.movRegReg rbx, r8
-    x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 r10, 1
     x64.movRegImm32 r8, 0
-    x64.epilogue 72
-    x64.popReg r15
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -507,11 +505,52 @@ func @attempt {
     x64.ret
   tryok#1:
     x64.movRegReg rcx, rbx
+    x64.callDirect attemptOver
+    x64.movRegReg r12, r8
+    x64.movRegReg r13, r10
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpListener
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpListener
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @attemptOver {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
     x64.movRegReg r12, r8
     x64.leaRegFunc rcx, [rip + echoRounds]
     x64.callDirect __gt_spawn
-    x64.storeSlotReg slot1, r8
+    x64.storeSlotReg slot0, r8
     x64.storeBaseDispReg.word64 [r8 + 200], r12
     x64.leaRegFunc rax, [rip + __gt_release_echoRounds]
     x64.storeBaseDispReg.word64 [r8 + 176], rax
@@ -521,12 +560,12 @@ func @attempt {
     x64.movRegReg rcx, rbx
     x64.callDirect echoOnce
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, trycont#5
-  trycont#5:
+    x64.jcc notEqual, trycont#3
+  trycont#3:
     x64.callDirect __sched_retake_count
-    x64.storeSlotReg slot3, r8
-    x64.callDirect __sched_preempt_count
     x64.storeSlotReg slot2, r8
+    x64.callDirect __sched_preempt_count
+    x64.storeSlotReg slot1, r8
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
@@ -582,66 +621,66 @@ func @attempt {
     x64.movRegReg rcx, r14
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#6
-  tryerr#7:
+    x64.jcc equal, tryok#4
+  tryerr#5:
     x64.movRegImm32 rbx, 0
-    x64.jmp trycont#8
-  tryok#6:
+    x64.jmp trycont#6
+  tryok#4:
     x64.movRegReg rbx, r8
-  trycont#8:
+  trycont#6:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#9
-  tryerr#10:
+    x64.jcc equal, tryok#7
+  tryerr#8:
     x64.movRegImm32 r13, 0
-    x64.jmp trycont#11
-  tryok#9:
+    x64.jmp trycont#9
+  tryok#7:
     x64.movRegReg r13, r8
-  trycont#11:
+  trycont#9:
     x64.movRegReg rcx, r15
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#12
-  tryerr#13:
+    x64.jcc equal, tryok#10
+  tryerr#11:
     x64.movRegImm32 r14, 0
-    x64.jmp trycont#14
-  tryok#12:
+    x64.jmp trycont#12
+  tryok#10:
     x64.movRegReg r14, r8
-  trycont#14:
+  trycont#12:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#15
-  tryerr#16:
+    x64.jcc equal, tryok#13
+  tryerr#14:
     x64.movRegImm32 rax, 0
-    x64.jmp trycont#17
-  tryok#15:
+    x64.jmp trycont#15
+  tryok#13:
     x64.movRegReg rax, r8
-  trycont#17:
+  trycont#15:
     x64.leaRegRegReg rcx, rbx, r13
     x64.leaRegRegReg rcx, rcx, r14
     x64.leaRegRegReg rbx, rcx, rax
     x64.callDirect __sched_retake_count
-    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rax, slot2
     x64.movRegReg r12, r8
     x64.subRegReg r12, r8, rax
     x64.callDirect __sched_preempt_count
-    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rax, slot1
     x64.subRegReg r8, r8, rax
     x64.leaRegRegReg rax, r12, r8
     x64.cmpRegImm32 rax, 0
     x64.setccReg greater, r12
-    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rcx, slot0
     x64.callDirect __gt_await
     x64.cmpRegImm32 r8, 5
-    x64.jcc equal, ifcont#19
+    x64.jcc equal, ifcont#17
   peer:
-    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at netpoll-socket.n-concurrent-reads-do-not-serialise.test:70: unreachable: every round-trip that returned was answered by this peer\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at netpoll-socket.n-concurrent-reads-do-not-serialise.test:73: unreachable: every round-trip that returned was answered by this peer\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
-    x64.epilogue 72
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -649,7 +688,7 @@ func @attempt {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#19:
+  ifcont#17:
     x64.cmpRegImm32 rbx, 4
     x64.movRegImm32 rax, 0
     x64.jcc notEqual, scmerge
@@ -657,13 +696,11 @@ func @attempt {
     x64.movRegReg rax, r12
   scmerge:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#23
+    x64.jcc equal, ifcont#21
   noise:
-    x64.loadRegSlot rcx, slot0
-    x64.callDirect __destruct_TcpListener
     x64.movRegImm32 r10, 2
     x64.movRegImm32 r8, 0
-    x64.epilogue 72
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -671,18 +708,14 @@ func @attempt {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#23:
+  ifcont#21:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r13, r8
-    x64.storeBaseDispReg.word64 [r13 + 0], rbx
-    x64.storeBaseDispReg.byte [r13 + 8], r12
-    x64.loadRegSlot rcx, slot0
-    x64.callDirect __destruct_TcpListener
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.byte [r8 + 8], r12
     x64.movRegImm32 r10, 0
-    x64.movRegReg r8, r13
-    x64.epilogue 72
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

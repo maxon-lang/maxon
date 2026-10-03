@@ -1,0 +1,189 @@
+// Test: random.fill-random-fills-a-buffer-longer-than-one-request
+typealias ByteTally = int(0 to 1000)
+
+function main() returns ExitCode
+	var bytes = ByteArray.create()
+	bytes.resize(1000)
+
+	if __Builtins.fillRandom(bytes.managed) != 0 'refused'
+		return 1
+	end 'refused'
+
+	var nonZeroInTheLastPiece = 0 as ByteTally
+
+	for (iter, byte) in bytes.withIterator() 'eachByte'
+		if iter.index() >= 768 and byte != 0 'filled'
+			nonZeroInTheLastPiece = nonZeroInTheLastPiece + 1
+		end 'filled'
+	end 'eachByte'
+
+	if nonZeroInTheLastPiece == 0 'unfilled'
+		return 2
+	end 'unfilled'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rdx, 1000
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __rand_fill
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg notEqual, r13
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, ifcont#2
+  refused:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.withIterator
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, unfilled
+  critsplit#21:
+    x64.movRegReg rcx, r12
+    x64.jmp forhdr
+  eachByte:
+    x64.leaRegRdata r12, [rip + __layout_WithIterIterator_ArrayIterator_Byte_Byte]
+    x64.leaRegRdata rax, [rip + __witness_ArrayIterator_Byte.Iterator]
+  __il_body#17:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callMem [rax + 48]
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __retain_type_param
+    x64.storeBaseDispReg.word64 [r15 + 0], r8
+    x64.storeBaseDispReg.word64 [r15 + 8], r14
+  __il_cont#16:
+    x64.loadRegBaseDisp.word64 rax, [r15 + 0]
+    x64.loadRegBaseDisp.word64 r12, [r15 + 8]
+  __il_body#18:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __managed_cursor_index
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __il_cont#15:
+    x64.cmpRegImm32 r8, 768
+    x64.movRegImm32 rax, 0
+    x64.jcc below, scmerge
+  andrhs:
+    x64.cmpRegImm32 r12, 0
+    x64.setccReg notEqual, rax
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#23
+  filled:
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegImm32 r12, rax, 1
+    x64.jmp ifcont#11
+  critsplit#23:
+    x64.loadRegSlot r12, slot1
+  ifcont#11:
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct___Tuple2.ArrayIterator_Byte.int
+  forstep:
+    x64.leaRegRdata rdx, [rip + __witness_ArrayIterator_Byte.Iterator]
+    x64.movRegReg rcx, rbx
+    x64.callDirect WithIterIterator.advance
+    x64.movRegReg rax, r10
+    x64.movRegReg rcx, r12
+  forhdr:
+    x64.storeSlotReg slot1, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, eachByte
+  forexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_WithIterIterator_ArrayIterator_Byte_Byte
+    x64.loadRegSlot rax, slot1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, unfilled
+  ifcont#14:
+    x64.movRegImm32 rbx, 42
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  unfilled:
+    x64.movRegImm32 rbx, 2
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Array.maxon:497: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

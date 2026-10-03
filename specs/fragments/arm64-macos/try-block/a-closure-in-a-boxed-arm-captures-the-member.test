@@ -214,7 +214,6 @@ func @fb {
 func @captured {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -247,23 +246,25 @@ func @captured {
     arm64.cmp x0, 0
     arm64.b.ne matchnext#9
   matcharm#5:
-    arm64.leaFuncAddr x21, captured$closure_0
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, captured$closure_0$drop
+    arm64.movImm x0, 16
     arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x19
-  __il_body#20:
-    arm64.movRegReg x0, x22
-    arm64.blr x21
     arm64.movRegReg x21, x0
+    arm64.leaFuncAddr x0, captured$closure_0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+  __il_body#20:
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
     arm64.movRegReg x0, x21
+    arm64.blr x1
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
   __il_body#25:
-    arm64.loadRegBaseDisp.word64 x20, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
   __il_cont#24:
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic#22
@@ -271,13 +272,11 @@ func @captured {
     arm64.cmp x20, 1000
     arm64.b.gt __rc_panic#22
   __rc_ok#21:
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x19
     arm64.bl __str_decref
   __il_cont#19:
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_BoxErr
     arm64.movRegReg x0, x20
     arm64.b tryblkcont
   matchnext#9:
@@ -305,7 +304,6 @@ func @captured {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   __rc_panic#14:
@@ -315,7 +313,6 @@ func @captured {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   __rc_panic#22:
@@ -325,7 +322,6 @@ func @captured {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   __rc_panic#17:
@@ -335,7 +331,6 @@ func @captured {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }
@@ -344,7 +339,7 @@ func @captured$closure_0 {
   entry:
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
@@ -359,6 +354,16 @@ func @captured$closure_0 {
     arm64.epilogue 32
     arm64.ret
   matchdead:
+}
+
+func @captured$closure_0$drop {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.bl __destruct_BoxErr
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @main {

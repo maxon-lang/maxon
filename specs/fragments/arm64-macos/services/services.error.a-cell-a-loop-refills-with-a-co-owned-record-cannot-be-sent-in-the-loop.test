@@ -1,0 +1,46 @@
+// Test: services.error.a-cell-a-loop-refills-with-a-co-owned-record-cannot-be-sent-in-the-loop
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+type Keeper
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function put(b Box) returns Integer
+		self.total = self.total + b.v
+		return self.total
+	end 'put'
+end 'Keeper'
+
+function bump(b Box)
+	b = Box.create(b.v + 10)
+end 'bump'
+
+function main() returns ExitCode
+	let h = spawn Keeper.create()
+	let t = Box.create(5)
+	var s = Box.create(1)
+	bump(s)
+
+	for _ in 0 upto 2 'each'
+		let r = try await h.put(s) otherwise 0
+		print("{r}\n")
+		s = t
+	end 'each'
+
+	print("{t.v}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3138: <fragment>:36:27: argument `b` of the message `Keeper.put` cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name

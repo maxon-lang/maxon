@@ -26,7 +26,8 @@ function endedByItsDeadline(child StreamingSubprocess) returns bool
 			executableNotFound or
 				spawnFailed or
 				ioFailed or
-				inputTooLarge gives false
+				inputTooLarge or
+				endOfStream gives false
 		end 'why'
 	end 'ended'
 
@@ -258,8 +259,7 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
+    x64.prologue 40
   __il_body#8:
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 rcx, 8
@@ -297,20 +297,12 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_share_box
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_walk_settle
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_retain_box
-    x64.movRegReg r14, r8
     x64.movRegImm32 rcx, 24
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], r14
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
     x64.storeBaseDispReg.word64 [r8 + 16], rbx
     x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
     x64.movRegReg rdx, r8
@@ -326,11 +318,8 @@ func @main {
     x64.movRegImm32 rbx, 1
     x64.movRegReg rcx, r13
     x64.callDirect __mbox_handle_drop_box
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -340,11 +329,8 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r13
     x64.callDirect __mbox_handle_drop_box
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -566,7 +552,12 @@ func @Waiter.__loop {
     x64.jmp matchcont
   matchnext#30:
     x64.cmpRegImm32 rax, 4
-    x64.jcc notEqual, matchdead
+    x64.setccReg greaterEqual, rcx
+    x64.cmpRegImm32 rax, 5
+    x64.setccReg lessEqual, rax
+    x64.andRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matchdead
   matcharm#27:
     x64.movRegImm32 rax, 0
   matchcont:

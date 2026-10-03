@@ -46,7 +46,9 @@ func @runner {
     x64.prologue 32
     x64.movRegReg rax, rcx
     x64.movRegImm32 rcx, 21
-    x64.callReg rax
+    x64.loadRegBaseDisp.word64 rsi, [rax + 0]
+    x64.movRegReg rdx, rax
+    x64.callReg rsi
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -57,10 +59,10 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.leaRegFunc rax, [rip + __fnref_runner]
-    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rdx, [rip + __fnrec_runner]
   __il_body:
-    x64.leaRegFunc rcx, [rip + __fnref_dbl]
+    x64.leaRegRdata rcx, [rip + __fnrec_dbl]
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
     x64.callReg rax
   __il_cont:
     x64.cmpRegImm32 r8, 0

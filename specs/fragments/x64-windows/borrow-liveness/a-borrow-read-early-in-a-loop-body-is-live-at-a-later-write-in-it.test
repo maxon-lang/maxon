@@ -1,0 +1,21 @@
+// Test: a-borrow-read-early-in-a-loop-body-is-live-at-a-later-write-in-it
+function main() returns ExitCode
+	var arr = StringArray.create()
+	arr.push("a{3}")
+	arr.push("b{4}")
+	let first = try arr.get(0) otherwise "none"
+	var i = 0
+
+	while i < 2 'loop'
+		print("{first}\n")
+		arr.clear()
+		arr.push("c{5}")
+		i = i + 1
+	end 'loop'
+
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:11:7: cannot mutate 'arr' via 'clear' while it is borrowed by 'first' (borrowed at line 6)
+error E3070: <fragment>:12:7: cannot mutate 'arr' via 'push' while it is borrowed by 'first' (borrowed at line 6)

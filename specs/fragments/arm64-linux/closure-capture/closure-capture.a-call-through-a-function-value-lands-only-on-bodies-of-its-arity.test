@@ -1,0 +1,282 @@
+// Test: closure-capture.a-call-through-a-function-value-lands-only-on-bodies-of-its-arity
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Counter
+	export var n as Integer
+	export var read as Thunk
+
+	static function create(n Integer) returns Self
+		return Self{n: n, read: idle}
+	end 'create'
+end 'Counter'
+
+function wire(target Counter, source Counter)
+	target.read = function() gives source.n
+end 'wire'
+
+function readTwice(c Counter) returns Integer
+	let reader = function(t Counter) gives t.n + c.n
+	return reader(c)
+end 'readTwice'
+
+function main() returns ExitCode
+	let wiring = wire
+	var a = Counter.create(1)
+	let b = Counter.create(2)
+	wiring(a, b)
+	print("{a.read()} {readTwice(b)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @idle {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x20, __fnrec_idle
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @wire {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x1
+    arm64.bl __mm_own
+    arm64.movRegReg x20, x0
+    arm64.leaFuncAddr x1, wire$closure_0$drop
+    arm64.movImm x0, 16
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.leaFuncAddr x0, wire$closure_0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @wire$closure_0 {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @wire$closure_0$drop {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.bl __destruct_Counter
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @readTwice$closure_0 {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @readTwice$closure_0$drop {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.bl __destruct_Counter
+    arm64.movRegReg x1, x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 144
+    arm64.storeSlotReg slot14, x28
+    arm64.storeSlotReg slot13, x27
+    arm64.storeSlotReg slot12, x26
+    arm64.storeSlotReg slot11, x25
+    arm64.storeSlotReg slot10, x24
+    arm64.storeSlotReg slot9, x23
+    arm64.storeSlotReg slot8, x22
+    arm64.storeSlotReg slot7, x21
+    arm64.storeSlotReg slot6, x20
+    arm64.storeSlotReg slot5, x19
+    arm64.leaRdata x0, __fnrec_wire
+    arm64.movImm x0, 1
+    arm64.bl Counter.create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 2
+    arm64.bl Counter.create
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl wire
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_retain
+    arm64.storeSlotReg slot2, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.movRegReg x0, x19
+    arm64.blr x1
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot3, x21
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x21
+    arm64.bl __int_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_2  ; " "
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+  __il_body#3:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_own
+    arm64.movRegReg x24, x0
+    arm64.leaFuncAddr x1, readTwice$closure_0$drop
+    arm64.movImm x0, 16
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.leaFuncAddr x0, readTwice$closure_0
+    arm64.storeBaseDispReg.word64 [x25 + 0], x0
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.loadRegBaseDisp.word64 x2, [x25 + 0]
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x25
+    arm64.blr x2
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x25
+    arm64.bl __mm_decref
+  __il_cont#2:
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.bl __int_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_3  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.add x0, x19, x23
+    arm64.add x0, x0, x20
+    arm64.add x0, x0, x26
+    arm64.storeSlotReg slot4, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.add x28, x27, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x28, x19
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x19, x19, x23
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x19, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x0, x19, x26
+    arm64.storeBaseDispReg.word64 [x27 + 0], x28
+    arm64.loadRegSlot x0, slot4
+    arm64.storeBaseDispReg.word64 [x27 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x27 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x27 + 24], x0
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+  __il_body#4:
+    arm64.movRegReg x0, x27
+    arm64.bl __write_stdout
+  __il_cont#1:
+    arm64.movRegReg x0, x27
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __mm_decref
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __destruct_Counter
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_Counter
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.loadRegSlot x21, slot7
+    arm64.loadRegSlot x22, slot8
+    arm64.loadRegSlot x23, slot9
+    arm64.loadRegSlot x24, slot10
+    arm64.loadRegSlot x25, slot11
+    arm64.loadRegSlot x26, slot12
+    arm64.loadRegSlot x27, slot13
+    arm64.loadRegSlot x28, slot14
+    arm64.epilogue 144
+    arm64.ret
+}

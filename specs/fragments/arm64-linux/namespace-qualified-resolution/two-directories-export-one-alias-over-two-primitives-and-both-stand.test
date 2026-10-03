@@ -1,0 +1,33 @@
+// Test: two-directories-export-one-alias-over-two-primitives-and-both-stand
+// --- file: api/t.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/t.maxon
+export typealias Score = float(0.0 to 1.0)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let a = 50 as api.Score
+	let f = 0.5 as legacy.Score
+	return (a + (1 if f > 0.25 else 0)) as ExitCode
+end 'main'
+---
+ExitCode: 51
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  ternarytrue:
+    arm64.movImm x0, 1
+  matchcont:
+    arm64.add x0, x0, 50
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

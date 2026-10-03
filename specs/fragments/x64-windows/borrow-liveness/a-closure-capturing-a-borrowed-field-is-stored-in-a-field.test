@@ -1,0 +1,253 @@
+// Test: a-closure-capturing-a-borrowed-field-is-stored-in-a-field
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+typealias Reader = function() returns Integer
+
+type Slot
+	export var read as Reader
+
+	static function create(read Reader) returns Self
+		return Self{read: read}
+	end 'create'
+end 'Slot'
+
+function fill(slot Slot)
+	let b = Outer.create(1)
+	let inner = b.inner
+	slot.read = function() gives inner.label.byteLength() as Integer
+end 'fill'
+
+function zero() returns Integer
+	return 0
+end 'zero'
+
+function main() returns ExitCode
+	var s = Slot.create(zero)
+	fill(s)
+	print("{s.read()}\n")
+	return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
+}
+
+func @fill$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  __il_body:
+    x64.loadRegBaseDisp.word64 r8, [rax + 8]
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @fill$closure_0$drop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.callDirect __destruct_Inner
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @zero {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.leaRegRdata rbx, [rip + __fnrec_zero]
+  __il_body#3:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+  __il_body#6:
+    x64.movRegImm32 rbx, 1
+  __il_body#10:
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "an inner label padded long enough to heap allocate "
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot7, r8
+    x64.leaRegRegReg rax, r14, r8
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r13, rbx, r14
+    x64.loadRegSlot rax, slot7
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rax, r13, rax
+    x64.loadRegSlot r13, slot5
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [r13 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.storeBaseDispReg.word64 [rbx + 0], r13
+  __il_cont#9:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+  __il_cont#7:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __mm_own
+    x64.movRegReg rbx, r8
+    x64.leaRegFunc rdx, [rip + fill$closure_0$drop]
+    x64.movRegImm32 rcx, 16
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegFunc rax, [rip + fill$closure_0]
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [r12 + 0], r14
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Outer
+  __il_cont#5:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.storeSlotReg slot1, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rcx, rbx
+    x64.callReg rax
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot3, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot6, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rax, slot6
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot4
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __mm_decref
+  __il_body#4:
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __write_stdout
+  __il_cont#1:
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_Slot
+    x64.movRegReg r8, rbx
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

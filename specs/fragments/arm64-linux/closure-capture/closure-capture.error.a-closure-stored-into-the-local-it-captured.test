@@ -1,0 +1,25 @@
+// Test: closure-capture.error.a-closure-stored-into-the-local-it-captured
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Counter
+	export var n as Integer
+	export var read as Thunk
+
+	static function create() returns Self
+		return Self{n: 1, read: idle}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var h = Counter.create()
+	h.read = function() gives h.n
+	return h.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:20:2: use of moved value 'h': its ownership moved to the closure that captures it

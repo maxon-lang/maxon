@@ -66,7 +66,8 @@ data {
 func @apply {
   entry:
     arm64.prologue 16
-    arm64.movRegReg x3, x0
+    arm64.movRegReg x2, x0
+    arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.blr x3
@@ -122,9 +123,8 @@ func @main {
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x21*8 + 0]
   __im_cont:
     arm64.add x20, x20, x0
-    arm64.leaFuncAddr x0, main$closure_0
+    arm64.leaRdata x0, __fnrec_main$closure_0
     arm64.movImm x1, 0
-    arm64.movImm x2, 0
     arm64.bl apply
     arm64.add x20, x20, x0
   forstep:
@@ -172,9 +172,8 @@ func @main {
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.leaRdata x26, __witness_W.Named
   __il_body#12:
-    arm64.leaFuncAddr x0, Holder.go$closure_0
+    arm64.leaRdata x0, __fnrec_Holder.go$closure_0
     arm64.movImm x1, 0
-    arm64.movImm x2, 0
     arm64.bl apply
     arm64.movRegReg x27, x0
     arm64.loadRegBaseDisp.word64 x0, [x22 + 0]

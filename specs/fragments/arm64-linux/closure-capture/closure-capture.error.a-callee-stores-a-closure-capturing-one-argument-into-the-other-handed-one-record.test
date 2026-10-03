@@ -1,0 +1,33 @@
+// Test: closure-capture.error.a-callee-stores-a-closure-capturing-one-argument-into-the-other-handed-one-record
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Counter
+	export var n as Integer
+	export var read as Thunk
+
+	static function create() returns Self
+		return Self{n: 1, read: idle}
+	end 'create'
+end 'Counter'
+
+function wire(target Counter, source Counter)
+	target.read = function() gives source.n
+end 'wire'
+
+function rewire(c Counter)
+	wire(c, source: c)
+end 'rewire'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	rewire(c)
+	return c.read() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3183: <fragment>:23:10: this value holds a closure that captures 'c' and is stored into a record 'c' holds, so 'c' would hold the closure and the closure would hold 'c', and neither would ever be released. Store it somewhere 'c' does not reach, or capture what the closure needs instead of 'c' itself

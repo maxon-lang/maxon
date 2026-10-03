@@ -1,0 +1,28 @@
+// Test: closure-capture.error.a-local-array-holding-the-closure-stored-into-what-it-captures
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Thunks = Array with Thunk
+
+type Counter
+	export var n as Integer
+	export var reads as Thunks
+
+	static function create() returns Self
+		return Self{n: 1, reads: Thunks.create()}
+	end 'create'
+
+	export function arm()
+		var fresh = Thunks.create()
+		fresh.push(function() gives self.n)
+		self.reads = fresh
+	end 'arm'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	c.arm()
+	return c.reads.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3183: <fragment>:17:16: this value holds a closure that captures 'self' and is stored into a record 'self' holds, so 'self' would hold the closure and the closure would hold 'self', and neither would ever be released. Store it somewhere 'self' does not reach, or capture what the closure needs instead of 'self' itself

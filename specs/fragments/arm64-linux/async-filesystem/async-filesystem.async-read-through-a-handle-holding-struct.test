@@ -291,7 +291,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok#23
   tryerr#24:
-    arm64.leaRdata x0, __str_blob_90  ; "panic at String.maxon:157: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
+    arm64.leaRdata x0, __str_blob_90  ; "panic at String.maxon:149: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -324,32 +324,23 @@ func @main {
   tryok#16:
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_own
-    arm64.movRegReg x21, x0
     arm64.leaFuncAddr x0, readOn
     arm64.bl __gt_spawn
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 200], x21
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x20
     arm64.leaFuncAddr x0, __gt_release_readOn
-    arm64.storeBaseDispReg.word64 [x22 + 176], x0
-    arm64.movRegReg x0, x22
+    arm64.storeBaseDispReg.word64 [x21 + 176], x0
+    arm64.movRegReg x0, x21
     arm64.bl __gt_ready
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.b.eq tryok#18
+    arm64.b.eq trycont#20
   tryerr#19:
     arm64.leaRdata x0, __str_rec_34  ; "READFAILED"
     arm64.bl __str_retain
-    arm64.movRegReg x21, x0
-    arm64.b trycont#20
-  tryok#18:
-    arm64.movRegReg x21, x0
   trycont#20:
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Holder
-    arm64.movRegReg x20, x21
+    arm64.movRegReg x20, x0
   __il_cont#14:
     arm64.movRegReg x0, x19
     arm64.bl File.delete

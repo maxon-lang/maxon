@@ -111,14 +111,13 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot0, r8
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
   __il_cont#3:
-    x64.leaRegFunc rbx, [rip + __fnref_isBig]
-    x64.movRegImm32 r12, 0
+    x64.leaRegRdata rbx, [rip + __fnrec_isBig]
     x64.leaRegRdata r13, [rip + __layout_Bag_Int]
   __il_body#6:
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
     x64.callDirect Bag.createIterator
     x64.movRegReg r14, r8
@@ -132,9 +131,10 @@ func @main {
     x64.callDirect __retain_type_param
     x64.movRegReg r15, r8
   __il_cont#15:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r12
-    x64.callReg rbx
+    x64.movRegReg rdx, rbx
+    x64.callReg rax
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, ifcont#13
   match:
@@ -167,7 +167,7 @@ func @main {
     x64.jcc equal, ifcont#2
   yes:
     x64.movRegImm32 rbx, 1
-    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
@@ -180,7 +180,7 @@ func @main {
     x64.ret
   ifcont#2:
     x64.movRegImm32 rbx, 0
-    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40

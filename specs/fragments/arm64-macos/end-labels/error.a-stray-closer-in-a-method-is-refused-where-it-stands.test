@@ -1,0 +1,27 @@
+// Test: error.a-stray-closer-in-a-method-is-refused-where-it-stands
+typealias Integer = int(0 to 100)
+
+type Box
+	var v as Integer
+
+	static function make(v Integer) returns Self
+		return Self{v: v, w: 2}
+	end 'make'
+
+	function show()
+		print("{self.v}")
+	end 'noEnclosingType'
+		print("y")
+	end 'show'
+
+	var w as Integer
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.make(3)
+	b.show()
+	return 0
+end 'main'
+---
+CompilerError:
+error E2008: <fragment>:13:2: Mismatched end label: expected 'show', got 'noEnclosingType'

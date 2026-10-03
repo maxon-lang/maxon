@@ -1,0 +1,36 @@
+// Test: services.error.a-cell-resident-var-a-closure-only-reads-cannot-be-sent
+typealias Integer = int(i64.min to i64.max)
+
+type Echo
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function shout(text String) returns String
+		self.count = self.count + 1
+		return "{text}!"
+	end 'shout'
+end 'Echo'
+
+function opening() returns (String, Integer)
+	return ("hello padded out long enough to heap allocate {1}", 1)
+end 'opening'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	let h = spawn Echo.create()
+	var (word, _) = opening()
+	fill(word, n: 2)
+	let peek = function() gives word.byteLength()
+	let loud = try await h.shout(word) otherwise "stopped"
+	print("{loud} {peek()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:30:31: use of moved value 'word': its ownership moved to the closure that captures it

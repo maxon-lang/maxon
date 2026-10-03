@@ -1,0 +1,82 @@
+// Test: first-class-function.capturing-closure-returned-from-other-block
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function makeAdder(bump Integer) returns UnaryOp
+	let f = function(n Integer) gives n + bump
+	if bump > 0 'guard'
+		return f
+	end 'guard'
+	return dbl
+end 'makeAdder'
+
+function main() returns ExitCode
+	let add = makeAdder(20)
+	return add(22)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @makeAdder$closure_0 {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 20
+  __il_body:
+    arm64.movImm x1, 0
+    arm64.movImm x0, 16
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.leaFuncAddr x0, makeAdder$closure_0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+  __il_cont:
+    arm64.movImm x0, 22
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.movRegReg x1, x20
+    arm64.blr x2
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at first-class-function.capturing-closure-returned-from-other-block.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

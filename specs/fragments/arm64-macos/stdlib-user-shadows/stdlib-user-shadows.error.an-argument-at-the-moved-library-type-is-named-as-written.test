@@ -1,0 +1,22 @@
+// Test: stdlib-user-shadows.error.an-argument-at-the-moved-library-type-is-named-as-written
+
+type FileInfo
+	var size = 0
+
+	static function make() returns Self
+		return Self{}
+	end 'make'
+end 'FileInfo'
+
+typealias Num = int(0 to 9)
+
+function measure(info stdlib.FileInfo) returns Num
+	return 1
+end 'measure'
+
+function main() returns ExitCode
+	return measure(FileInfo.make())
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:18:9: argument type mismatch for 'info': expected 'stdlib.FileInfo', got 'FileInfo'

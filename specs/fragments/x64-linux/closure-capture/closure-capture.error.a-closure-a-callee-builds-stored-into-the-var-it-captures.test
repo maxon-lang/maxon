@@ -1,0 +1,25 @@
+// Test: closure-capture.error.a-closure-a-callee-builds-stored-into-the-var-it-captures
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+type Counter
+	export var n as Integer
+	export var read as Thunk
+
+	static function create() returns Self
+		return Self{n: 1, read: function() gives 0}
+	end 'create'
+end 'Counter'
+
+function reader(h Counter) returns Thunk
+	return function() gives h.n
+end 'reader'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	c.read = reader(c)
+	return c.read() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3183: <fragment>:20:11: this closure captures 'c' and is stored into a record 'c' holds, so 'c' would hold the closure and the closure would hold 'c', and neither would ever be released. Store it somewhere 'c' does not reach, or capture what the closure needs instead of 'c' itself

@@ -47,22 +47,37 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegFunc rbx, [rip + __fnref_inc]
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __fnrec_inc]
   __il_body:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
   __il_cont:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 10
-    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rdx, rbx
     x64.callReg rax
-    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 41
-    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rdx, rbx
     x64.callReg rax
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 rbx, 0
@@ -71,10 +86,13 @@ func @main {
     x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Handler
     x64.movRegReg r8, rbx
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -83,7 +101,8 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at first-class-function.field-value-called-as-statement-discarded.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

@@ -62,12 +62,25 @@ data {
 func @Cell.later$closure_0 {
   entry:
     arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.bl __retain_type_param
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Cell.later$closure_0$drop {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __destruct_dict_Cell
+    arm64.movRegReg x1, x0
     arm64.epilogue 16
     arm64.ret
 }
@@ -110,16 +123,21 @@ func @main {
   eachRound:
     arm64.leaRdata x20, __layout_Cell_Box
   __il_body#22:
-    arm64.leaFuncAddr x21, Cell.later$closure_0
-    arm64.movImm x0, 16
-    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_own
+    arm64.movRegReg x21, x0
+    arm64.leaFuncAddr x1, Cell.later$closure_0$drop
+    arm64.movImm x0, 24
     arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 0], x19
-    arm64.storeBaseDispReg.word64 [x22 + 8], x20
+    arm64.leaFuncAddr x0, Cell.later$closure_0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.storeBaseDispReg.word64 [x22 + 16], x20
   __il_body#24:
+    arm64.loadRegBaseDisp.word64 x1, [x22 + 0]
     arm64.movRegReg x0, x22
-    arm64.blr x21
+    arm64.blr x1
     arm64.movRegReg x20, x0
   __il_cont#23:
     arm64.movRegReg x0, x22

@@ -11,8 +11,9 @@ end 'apply'
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
+	let length = mm.length()
 	let r = apply(function(n Integer) gives (ByteArray.init(mm).count() as Integer) + n, x: 5)
-	return (r * 10 + mm.length()) as ExitCode
+	return (r * 10 + length) as ExitCode
 end 'main'
 ---
 ExitCode: 72
@@ -66,31 +67,31 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok#3:
-    x64.leaRegFunc r12, [rip + main$closure_0]
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.leaRegFunc rdx, [rip + main$closure_0$drop]
+    x64.movRegImm32 rcx, 16
     x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
-    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.leaRegFunc rax, [rip + main$closure_0]
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.storeBaseDispReg.word64 [r13 + 8], rbx
     x64.movRegImm32 rcx, 5
   __il_body:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.movRegReg rdx, r13
-    x64.callReg r12
+    x64.callReg rax
+    x64.movRegReg rbx, r8
   __il_cont:
-    x64.imulRegRegImm32 rax, r8, 10
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-    x64.leaRegRegReg r12, rax, rcx
-    x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r12, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r12
+    x64.imulRegRegImm32 rax, rbx, 10
+    x64.leaRegRegReg r8, rax, r12
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -98,7 +99,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-captured-buffer-adopts-inside-a-closure.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-captured-buffer-adopts-inside-a-closure.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -116,7 +117,7 @@ func @main$closure_0 {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 8]
     x64.callDirect __managed_retain
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.leaRegRegReg rbx, rax, rbx
@@ -125,6 +126,19 @@ func @main$closure_0 {
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main$closure_0$drop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.callDirect __managed_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

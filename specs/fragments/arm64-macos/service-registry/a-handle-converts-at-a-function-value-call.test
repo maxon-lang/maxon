@@ -148,38 +148,35 @@ func @readSource {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
+    arm64.prologue 48
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.leaFuncAddr x19, __fnref_readSource
+    arm64.leaRdata x0, __fnrec_readSource
     arm64.movImm x0, 1
     arm64.bl Fixed.create
     arm64.movRegReg x1, x0
     arm64.leaFuncAddr x0, Fixed.__loop
     arm64.leaFuncAddr x2, Fixed.__abandon
     arm64.bl __svc_spawn
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x19, x0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x21, x0
-    arm64.storeBaseDispReg.word64 [x21 + 0], x20
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_iface_from.Fixed.Source
     arm64.movRegReg x20, x0
-    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
     arm64.movRegReg x0, x20
-    arm64.blr x19
+    arm64.bl __mbox_iface_from.Fixed.Source
     arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl readSource
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
-    arm64.movRegReg x0, x21
-    arm64.bl __mbox_handle_drop_box
-    arm64.leaFuncAddr x20, __fnref_readSource
-    arm64.movImm x21, 0
+    arm64.leaRdata x19, __fnrec_readSource
   __il_body:
     arm64.movImm x0, 5
     arm64.bl Fixed.create
@@ -187,27 +184,28 @@ func @main {
     arm64.leaFuncAddr x0, Fixed.__loop
     arm64.leaFuncAddr x2, Fixed.__abandon
     arm64.bl __svc_spawn
-    arm64.movRegReg x22, x0
+    arm64.movRegReg x20, x0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.storeBaseDispReg.word64 [x23 + 0], x22
-    arm64.movRegReg x0, x23
-    arm64.bl __mbox_iface_from.Fixed.Source
     arm64.movRegReg x22, x0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x20
     arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x21
-    arm64.blr x20
+    arm64.bl __mbox_iface_from.Fixed.Source
     arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x22
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.blr x2
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x22
     arm64.bl __mbox_handle_drop_box
   __il_cont:
     arm64.movImm x16, 10
-    arm64.mul x0, x19, x16
-    arm64.add x0, x0, x20
+    arm64.mul x0, x21, x16
+    arm64.add x0, x0, x19
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
@@ -218,8 +216,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-handle-converts-at-a-function-value-call.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
@@ -229,8 +226,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
 }
 

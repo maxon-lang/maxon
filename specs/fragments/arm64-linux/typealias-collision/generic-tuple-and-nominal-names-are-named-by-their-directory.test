@@ -1,0 +1,169 @@
+// Test: generic-tuple-and-nominal-names-are-named-by-their-directory
+// --- file: lib/t.maxon
+export type Point
+	export var x as ExitCode
+
+	export static function make() returns Point
+		return Point{x: 5}
+	end 'make'
+end 'Point'
+
+export typealias Bag = Array with ExitCode
+export typealias Pair = (ExitCode, ExitCode)
+
+// --- file: alt/u.maxon
+export typealias Bag = Array with bool
+export typealias Pair = (bool, bool)
+
+// --- file: app/main.maxon
+function first(b lib.Bag) returns ExitCode
+	return try b.get(0) otherwise 0
+end 'first'
+
+function sum(p lib.Pair) returns ExitCode
+	let (a, b) = p
+	return a + b
+end 'sum'
+
+function flags(p alt.Pair) returns ExitCode
+	let (a, b) = p
+	return 1 if a and not b else 0
+end 'flags'
+
+function main() returns ExitCode
+	var b = lib.Bag.create()
+	b.push(7)
+	let p = lib.Point.make()
+	return first(b) + sum((1, 2)) + p.x + flags((true, false))
+end 'main'
+---
+ExitCode: 16
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  __il_body#8:
+    arm64.movImm x20, 5
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+  __il_body#9:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.cmp x0, 8
+    arm64.b.ne __im_stride
+  __im_word:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow
+  __im_load#19:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b __il_cont#6
+  __im_stride:
+    arm64.cmp x0, 1
+    arm64.b.ne __im_slow
+  __im_byte:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 0
+    arm64.b.ls __im_slow
+  __im_load#20:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b __il_cont#6
+  __im_slow:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont#6
+  tryerr:
+    arm64.movImm x0, 0
+  __il_cont#6:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 2
+  __il_body#21:
+    arm64.add x1, x1, x2
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#23
+  __rc_chk#24:
+    arm64.cmp x1, 255
+    arm64.b.gt __rc_panic#23
+  __il_cont#5:
+    arm64.add x0, x0, x1
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.add x0, x0, x1
+    arm64.movImm x1, 1
+    arm64.movImm x2, 0
+  __il_body#25:
+    arm64.movImm x3, 0
+    arm64.cbz x1, critsplit
+  andrhs:
+    arm64.eor x1, x2, 1
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x1, x3
+  scmerge:
+    arm64.cbz x1, ternaryfalse
+  ternarytrue:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#4
+  ternaryfalse:
+    arm64.movImm x1, 0
+  __il_cont#4:
+    arm64.add x20, x0, x1
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic#2
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#23:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at main.maxon:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at main.maxon:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -60,6 +60,10 @@ func @runA$closure_0 {
     x64.jcc greater, __rc_panic#5
   __rc_ok#4:
     x64.leaRegRegReg r8, rcx, rdx
+  __rc_chk#9:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc greater, __rc_panic#8
+  __rc_ok#7:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -71,6 +75,13 @@ func @runA$closure_0 {
     x64.popReg rbp
     x64.ret
   __rc_panic#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at a.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#8:
     x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at a.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -141,18 +152,18 @@ func @main {
     x64.prologue 104
   __il_body#5:
     x64.movRegImm32 rcx, 1
-    x64.leaRegFunc rsi, [rip + runA$closure_0]
-    x64.movRegImm32 rax, 0
+    x64.leaRegRdata rax, [rip + __fnrec_runA$closure_0]
   __rc_ok:
     x64.movRegImm32 rdx, 3
+    x64.loadRegBaseDisp.word64 rsi, [rax + 0]
     x64.callReg rsi
     x64.movRegReg rbx, r8
   __il_cont#4:
     x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "go"
   __il_body#11:
-    x64.leaRegFunc rax, [rip + runB$closure_0]
-    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rdx, [rip + __fnrec_runB$closure_0]
   __il_body#13:
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
     x64.callReg rax
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12

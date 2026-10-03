@@ -1,0 +1,25 @@
+// Test: async-await.error.a-let-and-its-alias-handed-to-one-async-call-are-refused
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function pair(a Box, other Box) returns Integer
+	Scheduler.yield()
+	return a.n + other.n
+end 'pair'
+
+function main() returns ExitCode
+	let b = Box.create()
+	let c = b
+	let p = async pair(b, other: c)
+	return (await p) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3138: <fragment>:20:31: the value handed to `async pair(…)` is also read through a name that holds no reference of its own (`b`): a second name for the same record. An `async` call moves this value: the coroutine takes over the reference this frame held and releases it when it ends, so a reader holding no reference of its own would go on reading a record the coroutine may already have released. Pass a `.clone()`, or build the value at the call: an INTERPOLATION over it is a record nothing else can name

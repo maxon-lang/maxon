@@ -39,7 +39,9 @@ func @main {
     arm64.storeSlotReg slot3, x20
     arm64.storeSlotReg slot2, x19
     arm64.movImm x19, 0
-    arm64.leaRdata x20, __str_rec_4  ; "banana"
+    arm64.leaRdata x0, __str_rec_4  ; "banana"
+    arm64.bl __str_retain
+    arm64.movRegReg x20, x0
     arm64.movImm x21, 0
     arm64.b forhdr#1
   scan:
@@ -71,8 +73,12 @@ func @main {
     arm64.cmp x21, x0
     arm64.b.lt scan
   forexit#4:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
     arm64.movImm x20, 0
-    arm64.leaRdata x21, __str_rec_4  ; "banana"
+    arm64.leaRdata x0, __str_rec_4  ; "banana"
+    arm64.bl __str_retain
+    arm64.movRegReg x21, x0
     arm64.movImm x22, 0
     arm64.b forhdr#7
   scan2:
@@ -105,6 +111,8 @@ func @main {
     arm64.cmp x22, x0
     arm64.b.lt scan2
   forexit#10:
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc

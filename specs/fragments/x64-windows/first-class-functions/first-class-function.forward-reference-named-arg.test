@@ -41,9 +41,8 @@ func @apply {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegReg rsi, rdx
-    x64.movRegReg rdx, rax
-    x64.callReg rsi
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.callReg rax
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -75,14 +74,12 @@ func @main {
     x64.prologue 40
   __il_body#6:
     x64.movRegImm32 rcx, 20
-    x64.leaRegFunc rdx, [rip + __fnref_dbl]
-    x64.movRegImm32 rax, 0
+    x64.leaRegRdata rdx, [rip + __fnrec_dbl]
     x64.callDirect apply
     x64.movRegReg rbx, r8
   __il_body#7:
     x64.movRegImm32 rcx, 10
-    x64.leaRegFunc rdx, [rip + __fnref_trip]
-    x64.movRegImm32 rax, 0
+    x64.leaRegRdata rdx, [rip + __fnrec_trip]
     x64.callDirect apply
   __il_cont:
     x64.subRegReg rbx, rbx, r8

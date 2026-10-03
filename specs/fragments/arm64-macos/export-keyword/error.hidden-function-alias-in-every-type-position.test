@@ -1,0 +1,52 @@
+// Test: error.hidden-function-alias-in-every-type-position
+// --- file: probe.maxon
+typealias Flip = function(bool) returns bool
+
+function same(b bool) returns bool
+	return b
+end 'same'
+
+function applied(op Flip, b bool) returns bool
+	return op(b)
+end 'applied'
+
+export function probeFlip() returns ExitCode
+	return 2 if applied(same, b: false) else 0
+end 'probeFlip'
+
+// --- file: main.maxon
+function negate(b bool) returns bool
+	return not b
+end 'negate'
+
+type Holder
+	var op as Flip
+
+	static function create() returns Self
+		return Self{op: negate}
+	end 'create'
+
+	function run(b bool) returns bool
+		return self.op(b)
+	end 'run'
+end 'Holder'
+
+function chosen(op Flip) returns Flip
+	return op
+end 'chosen'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let f = chosen(negate)
+
+	if h.run(true) or f(true) 'eitherHolds'
+		return 1
+	end 'eitherHolds'
+
+	return probeFlip()
+end 'main'
+---
+CompilerError:
+error E3008: <fragment>:23:12: typealias 'Flip' is not exported
+error E3008: <fragment>:34:20: typealias 'Flip' is not exported
+error E3008: <fragment>:34:34: typealias 'Flip' is not exported

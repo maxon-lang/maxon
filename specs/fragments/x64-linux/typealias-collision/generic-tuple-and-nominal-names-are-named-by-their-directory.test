@@ -1,0 +1,179 @@
+// Test: generic-tuple-and-nominal-names-are-named-by-their-directory
+// --- file: lib/t.maxon
+export type Point
+	export var x as ExitCode
+
+	export static function make() returns Point
+		return Point{x: 5}
+	end 'make'
+end 'Point'
+
+export typealias Bag = Array with ExitCode
+export typealias Pair = (ExitCode, ExitCode)
+
+// --- file: alt/u.maxon
+export typealias Bag = Array with bool
+export typealias Pair = (bool, bool)
+
+// --- file: app/main.maxon
+function first(b lib.Bag) returns ExitCode
+	return try b.get(0) otherwise 0
+end 'first'
+
+function sum(p lib.Pair) returns ExitCode
+	let (a, b) = p
+	return a + b
+end 'sum'
+
+function flags(p alt.Pair) returns ExitCode
+	let (a, b) = p
+	return 1 if a and not b else 0
+end 'flags'
+
+function main() returns ExitCode
+	var b = lib.Bag.create()
+	b.push(7)
+	let p = lib.Point.make()
+	return first(b) + sum((1, 2)) + p.x + flags((true, false))
+end 'main'
+---
+ExitCode: 16
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 7
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  __il_body#8:
+    x64.movRegImm32 r12, 5
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], r12
+  __il_body#9:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load#19:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.jmp __il_cont#6
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow
+  __im_load#20:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __il_cont#6
+  __im_slow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit#34
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#6
+  critsplit#34:
+    x64.movRegReg rax, r8
+  __il_cont#6:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+  __il_body#21:
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#23
+  __rc_chk#24:
+    x64.cmpRegImm32 rcx, 255
+    x64.jcc greater, __rc_panic#23
+  __il_cont#5:
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+  __il_body#25:
+    x64.movRegImm32 rsi, 0
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#35
+  andrhs:
+    x64.xorRegImm32 rdx, rdx, 1
+    x64.jmp scmerge
+  critsplit#35:
+    x64.movRegReg rdx, rsi
+  scmerge:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 rcx, 1
+    x64.jmp __il_cont#4
+  ternaryfalse:
+    x64.movRegImm32 rcx, 0
+  __il_cont#4:
+    x64.leaRegRegReg r12, rax, rcx
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic#2
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#23:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at main.maxon:7: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at main.maxon:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

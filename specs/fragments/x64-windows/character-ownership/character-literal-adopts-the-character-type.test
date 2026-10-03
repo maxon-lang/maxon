@@ -66,7 +66,9 @@ func @main {
     x64.pushReg r15
     x64.prologue 248
     x64.movRegImm32 rbx, 0
-    x64.leaRegRdata r12, [rip + __str_rec_8]  ; "banana"
+    x64.leaRegRdata rcx, [rip + __str_rec_8]  ; "banana"
+    x64.callDirect __str_retain
+    x64.movRegReg r12, r8
     x64.movRegImm32 r13, 0
     x64.jmp forhdr#1
   scan:
@@ -100,8 +102,12 @@ func @main {
     x64.cmpRegReg r13, rax
     x64.jcc less, scan
   forexit#4:
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
-    x64.leaRegRdata r12, [rip + __str_rec_8]  ; "banana"
+    x64.leaRegRdata rcx, [rip + __str_rec_8]  ; "banana"
+    x64.callDirect __str_retain
+    x64.movRegReg r12, r8
     x64.movRegImm32 r13, 0
     x64.jmp forhdr#7
   scan2:
@@ -136,8 +142,12 @@ func @main {
     x64.cmpRegReg r13, rax
     x64.jcc less, scan2
   forexit#10:
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
-    x64.leaRegRdata r12, [rip + __str_rec_9]  ; "h\xc3\xa9ll\xc3\xb6 th\xc3\xa9r\xc3\xa9"
+    x64.leaRegRdata rcx, [rip + __str_rec_9]  ; "h\xc3\xa9ll\xc3\xb6 th\xc3\xa9r\xc3\xa9"
+    x64.callDirect __str_retain
+    x64.movRegReg r12, r8
     x64.movRegImm32 r13, 0
     x64.jmp forhdr#13
   scan3:
@@ -171,6 +181,8 @@ func @main {
     x64.cmpRegReg r13, rax
     x64.jcc less, scan3
   forexit#16:
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
     x64.leaRegRdata rax, [rip + __str_rec_10]  ; "\xc3\xa9"
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]

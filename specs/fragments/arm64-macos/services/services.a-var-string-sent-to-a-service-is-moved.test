@@ -1,0 +1,27 @@
+// Test: services.a-var-string-sent-to-a-service-is-moved
+typealias Integer = int(i64.min to i64.max)
+
+type Echo
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function shout(text String) returns String
+		self.count = self.count + 1
+		return "{text}!"
+	end 'shout'
+end 'Echo'
+
+function main() returns ExitCode
+	let h = spawn Echo.create()
+	var word = "hello padded out long enough to heap allocate {1}"
+	let loud = try await h.shout(word) otherwise "stopped"
+	print("{loud}\n")
+	print("{word}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:22:10: use of moved value 'word': its ownership moved to another binding at an earlier bind or assignment

@@ -33,10 +33,7 @@ function cancelFirstReader(client TcpClient) returns ReadOutcome
 	return 0
 end 'cancelFirstReader'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
-
+function readOver(client TcpClient) returns ExitCode
 	let canceller = async cancelFirstReader(client)
 	sleep(200)
 
@@ -46,6 +43,12 @@ function main() returns ExitCode
 	let unreachable = await canceller
 	print("second={second} canceller={unreachable}\n")
 	return 0
+end 'readOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
+	return readOver(client)
 end 'main'
 ---
 ExitCode: 107
@@ -208,7 +211,7 @@ func @main {
     arm64.storeSlotReg slot7, x21
     arm64.storeSlotReg slot6, x20
     arm64.storeSlotReg slot5, x19
-    arm64.leaRdata x0, __str_rec_5  ; "127.0.0.1"
+    arm64.leaRdata x0, __str_rec_8  ; "127.0.0.1"
     arm64.movImm x1, 0
     arm64.bl TcpListener.bind
     arm64.movRegReg x19, x0
@@ -230,7 +233,7 @@ func @main {
     arm64.epilogue 144
     arm64.ret
   tryok#1:
-    arm64.leaRdata x20, __str_rec_5  ; "127.0.0.1"
+    arm64.leaRdata x20, __str_rec_8  ; "127.0.0.1"
   __il_body#6:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl __ml_port
@@ -266,7 +269,7 @@ func @main {
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot1, x20
     arm64.cmp x9, 0
-    arm64.b.eq tryok#3
+    arm64.b.eq __il_body#13
   tryerr#4:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -284,7 +287,7 @@ func @main {
     arm64.loadRegSlot x28, slot14
     arm64.epilogue 144
     arm64.ret
-  tryok#3:
+  __il_body#13:
     arm64.movRegReg x0, x20
     arm64.bl __mm_own
     arm64.movRegReg x19, x0
@@ -297,9 +300,9 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __gt_ready
     arm64.movImm x0, 200
-  __il_body#14:
+  __il_body#16:
     arm64.bl __gt_sleep
-  __il_cont#13:
+  __il_cont#15:
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __data_phase
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
@@ -309,7 +312,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __gt_await
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_6  ; "second="
+    arm64.leaRdata x0, __str_rec_5  ; "second="
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.movImm x0, 20
@@ -320,7 +323,7 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __uint_to_string
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_7  ; " canceller="
+    arm64.leaRdata x0, __str_rec_6  ; " canceller="
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.movImm x0, 20
@@ -331,7 +334,7 @@ func @main {
     arm64.movRegReg x1, x26
     arm64.bl __uint_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_8  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_7  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot4, x0
@@ -383,13 +386,14 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-  __il_body#15:
+  __il_body#17:
     arm64.loadRegSlot x0, slot3
     arm64.bl __write_stdout
-  __il_cont#12:
+  __il_cont#14:
     arm64.loadRegSlot x0, slot3
     arm64.bl __str_decref
     arm64.movImm x19, 0
+  __il_cont#12:
     arm64.loadRegSlot x0, slot1
     arm64.bl __destruct_TcpClient
     arm64.loadRegSlot x0, slot0

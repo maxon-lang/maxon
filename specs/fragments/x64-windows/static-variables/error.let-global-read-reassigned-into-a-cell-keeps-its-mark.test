@@ -1,0 +1,24 @@
+// Test: error.let-global-read-reassigned-into-a-cell-keeps-its-mark
+typealias Names = Array with String
+
+let A = ["a", "b"]
+
+function grow(xs Names) returns Integer
+	xs.push("zz")
+	return xs.count()
+end 'grow'
+
+function regrow(xs Names) returns Integer
+	xs = A
+	return grow(xs)
+end 'regrow'
+
+function main() returns ExitCode
+	var b = ["c"]
+	let n = regrow(b)
+	return ((A.count() as Integer) + n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3019: <fragment>:13:9: cannot pass 'xs' to function that mutates parameter 'xs' (in regrow)

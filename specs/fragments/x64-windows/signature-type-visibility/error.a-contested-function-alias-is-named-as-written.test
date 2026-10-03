@@ -1,0 +1,23 @@
+// Test: error.a-contested-function-alias-is-named-as-written
+// --- file: aaa/a.maxon
+export typealias Small = int(0 to 1000)
+typealias Op = function(Small) returns Small
+
+export function twice(f Op) returns Small
+	return f(f(1))
+end 'twice'
+
+// --- file: zzz/z.maxon
+export typealias Op = function(ExitCode) returns ExitCode
+
+export function once(f Op) returns ExitCode
+	return f(1)
+end 'once'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (aaa.twice(function(x) gives x + 1) as ExitCode) + zzz.once(function(x) gives x)
+end 'main'
+---
+CompilerError:
+error E3167: aaa/<fragment>:6:17: exported function 'aaa.twice' names file-private typealias 'Op' in the type of parameter 'f'

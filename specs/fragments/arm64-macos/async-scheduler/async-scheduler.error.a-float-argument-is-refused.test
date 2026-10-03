@@ -1,0 +1,16 @@
+// Test: async-scheduler.error.a-float-argument-is-refused
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+function half(x Real) returns Integer
+	Scheduler.yield()
+	return trunc(x / 2.0)
+end 'half'
+
+function main() returns ExitCode
+	let p = async half(84.0)
+	return (await p) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:11:16: Unsupported: an `async` call argument must ride the green thread's integer channel — a `float` travels in an XMM register the hand-assembled trampoline never fills, a value held at an interface type is released through a witness table and one held at an opaque type parameter through a layout descriptor, and the green-thread struct carries neither. A managed String/struct/array argument is one heap pointer and is accepted, and so is a float or an interface value handed to a parameter the callee reassigns, which rides a cell the coroutine owns

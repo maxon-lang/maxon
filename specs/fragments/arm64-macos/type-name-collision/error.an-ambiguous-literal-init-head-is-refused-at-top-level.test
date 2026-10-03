@@ -1,0 +1,19 @@
+// Test: error.an-ambiguous-literal-init-head-is-refused-at-top-level
+// --- file: lib/path.maxon
+export type FilePath implements InitableFromStringLiteral
+	export let text as String
+
+	export static function init(value String) returns FilePath
+		return Self{text: value}
+	end 'init'
+end 'FilePath'
+
+// --- file: app/main.maxon
+let p = FilePath from "x"
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3063: app/<fragment>:12:9: Ambiguous type name 'FilePath': more than one visible declaration matches it. Qualify it as one of: lib.FilePath, stdlib.FilePath

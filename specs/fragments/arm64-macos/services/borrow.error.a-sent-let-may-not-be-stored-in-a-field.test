@@ -1,0 +1,41 @@
+// Test: borrow.error.a-sent-let-may-not-be-stored-in-a-field
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Holder
+	export var item as Box
+
+	static function create() returns Self
+		return Self{item: Box.create()}
+	end 'create'
+end 'Holder'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var holder = Holder.create()
+	let b = Box.create()
+	h.take(b)
+	holder.item = b
+	return holder.item.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3102: <fragment>:35:16: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment

@@ -39,23 +39,26 @@ function paddedHead() returns String
 	return head
 end 'paddedHead'
 
-function main() returns ExitCode
-	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
-	var limits = HttpServerLimits.create()
-	limits.maxHeaderBytes = HeadCap
-	server.setLimits(limits)
-
-	let port = server.port()
+function exchangeOver(listening HttpServer) returns ExitCode
+	let port = listening.port()
 	let blocks = ["GET / HTTP/1.1\r\n\r\n", "GET @127.0.0.1/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\nhi", "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nHost: 127.0.0.1\r\n\r\n", paddedHead()]
 
 	for block in blocks 'eachBlock'
-		let peer = async acceptedAs(server)
+		let peer = async acceptedAs(listening)
 		let status = shout(port, block: block)
 		let accepted = await peer
 		print("status={status} accept={accepted}\n")
 	end 'eachBlock'
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var limits = HttpServerLimits.create()
+	limits.maxHeaderBytes = HeadCap
+	server.setLimits(limits)
+	return exchangeOver(server)
 end 'main'
 ---
 ExitCode: 0
@@ -306,16 +309,16 @@ func @main {
     arm64.storeSlotReg slot0, x0
     arm64.movImm x1, 160
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
-  __il_body#11:
+  __il_body#4:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
     arm64.bl __mm_own
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __mm_decref
     arm64.storeBaseDispReg.word64 [x19 + 8], x21
-  __il_body#12:
+  __il_body#14:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 24]
-  __il_cont#9:
+  __il_cont#13:
     arm64.leaRdata x21, __str_rec_172  ; "GET / HTTP/1.1\x0d\x0a\x0d\x0a"
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
@@ -341,7 +344,7 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x22
     arm64.bl __managed_push
-  __il_body#13:
+  __il_body#15:
     arm64.leaRdata x0, __str_rec_169  ; "GET / HTTP/1.1\x0d\x0aHost: 127.0.0.1\x0d\x0aX-Pad: "
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
@@ -361,21 +364,21 @@ func @main {
     arm64.storeBaseDispReg.word64 [x24 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
-    arm64.b __il_body#46
+    arm64.b __il_body#48
   pad:
     arm64.leaRdata x1, __str_rec_170  ; "aaaaaaaaaa"
     arm64.movRegReg x0, x24
     arm64.bl String.append
-  __il_body#46:
+  __il_body#48:
     arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
-  __il_cont#45:
+  __il_cont#47:
     arm64.cmp x0, 160
     arm64.b.ls pad
   whileexit:
     arm64.leaRdata x1, __str_rec_171  ; "\x0d\x0a\x0d\x0a"
     arm64.movRegReg x0, x24
     arm64.bl String.append
-  __il_cont#8:
+  __il_cont#12:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x24
     arm64.bl __managed_push
@@ -384,7 +387,7 @@ func @main {
   eachBlock:
     arm64.loadRegBaseDisp.word64 x1, [x22 + 0]
     arm64.loadRegBaseIndexScale.word64 x21, [x1 + x0*8 + 0]
-  __im_cont#7:
+  __im_cont#11:
     arm64.movRegReg x0, x19
     arm64.bl __mm_own
     arm64.movRegReg x23, x0
@@ -396,7 +399,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x24 + 176], x0
     arm64.movRegReg x0, x24
     arm64.bl __gt_ready
-  __il_body#20:
+  __il_body#22:
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
@@ -409,43 +412,43 @@ func @main {
     arm64.bl TcpClient.connect
     arm64.movRegReg x23, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#21
-  tryerr#22:
+    arm64.b.eq tryok#23
+  tryerr#24:
     arm64.leaRdata x0, __str_rec_148  ; "connect-failed"
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
-    arm64.b __il_cont#19
-  tryok#21:
+    arm64.b __il_cont#21
+  tryok#23:
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x21
     arm64.bl TcpClient.send
     arm64.cmp x9, 0
-    arm64.b.eq tryok#23
-  tryerr#24:
+    arm64.b.eq tryok#25
+  tryerr#26:
     arm64.leaRdata x0, __str_rec_149  ; "send-failed"
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x23
     arm64.bl __destruct_TcpClient
-    arm64.b __il_cont#19
-  tryok#23:
+    arm64.b __il_cont#21
+  tryok#25:
     arm64.movImm x1, 4096
     arm64.movRegReg x0, x23
     arm64.bl TcpClient.recv
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#25
-  tryerr#26:
+    arm64.b.eq tryok#27
+  tryerr#28:
     arm64.leaRdata x0, __str_rec_150  ; "recv-failed"
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x23
     arm64.bl __destruct_TcpClient
-    arm64.b __il_cont#19
-  tryok#25:
+    arm64.b __il_cont#21
+  tryok#27:
     arm64.movRegReg x0, x23
     arm64.bl TcpClient.close
-  __il_body#31:
+  __il_body#33:
     arm64.leaRdata x1, __str_rec_143  ; "\x0d\x0a"
     arm64.movRegReg x0, x21
     arm64.bl String.split
@@ -453,60 +456,60 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x25 + 8]
     arm64.cmp x0, 0
-    arm64.b.ls __im_slow#38
-  __im_load#39:
+    arm64.b.ls __im_slow#40
+  __im_load#41:
     arm64.loadRegBaseDisp.word64 x0, [x25 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x25 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#47
-  __im_empty#40:
+    arm64.b.eq critsplit#49
+  __im_empty#42:
     arm64.cmp x0, 0
-    arm64.b.eq __im_slow#38
-  critsplit#48:
+    arm64.b.eq __im_slow#40
+  critsplit#50:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont#37
-  critsplit#47:
+    arm64.b __im_cont#39
+  critsplit#49:
     arm64.movRegReg x9, x2
-  __im_cont#37:
+  __im_cont#39:
     arm64.cmp x9, 0
-    arm64.b.eq tryok#32
-  tryerr#33:
+    arm64.b.eq tryok#34
+  tryerr#35:
     arm64.leaRdata x0, __str_rec_145  ; "no-status-line"
     arm64.bl __str_retain
     arm64.movRegReg x26, x0
     arm64.movRegReg x0, x25
     arm64.bl __managed_decref
-    arm64.b __il_cont#30
-  tryok#32:
+    arm64.b __il_cont#32
+  tryok#34:
     arm64.leaRdata x1, __str_rec_144  ; " "
     arm64.bl String.split
     arm64.movRegReg x26, x0
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x26 + 8]
     arm64.cmp x0, 1
-    arm64.b.ls __im_slow#42
-  __im_load#43:
+    arm64.b.ls __im_slow#44
+  __im_load#45:
     arm64.loadRegBaseDisp.word64 x0, [x26 + 0]
     arm64.add x0, x0, 8
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x26 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#49
-  __im_empty#44:
+    arm64.b.eq critsplit#51
+  __im_empty#46:
     arm64.cmp x0, 0
-    arm64.b.eq __im_slow#42
-  critsplit#50:
+    arm64.b.eq __im_slow#44
+  critsplit#52:
     arm64.movRegReg x9, x2
-    arm64.b __im_cont#41
-  critsplit#49:
+    arm64.b __im_cont#43
+  critsplit#51:
     arm64.movRegReg x9, x2
-  __im_cont#41:
+  __im_cont#43:
     arm64.cmp x9, 0
     arm64.b.eq trycont
-  tryerr#35:
+  tryerr#37:
     arm64.leaRdata x0, __str_rec_146  ; "no-status-code"
   trycont:
     arm64.bl __str_retain
@@ -516,13 +519,13 @@ func @main {
     arm64.movRegReg x0, x25
     arm64.bl __managed_decref
     arm64.movRegReg x26, x27
-  __il_cont#30:
+  __il_cont#32:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
     arm64.movRegReg x0, x23
     arm64.bl __destruct_TcpClient
     arm64.movRegReg x21, x26
-  __il_cont#19:
+  __il_cont#21:
     arm64.storeSlotReg slot2, x21
     arm64.movRegReg x0, x24
     arm64.bl __gt_await
@@ -589,10 +592,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
     arm64.movImm x1, 1
     arm64.storeBaseDispReg.word64 [x0 + 24], x1
-  __il_body#18:
+  __il_body#20:
     arm64.loadRegSlot x0, slot5
     arm64.bl __write_stdout
-  __il_cont#17:
+  __il_cont#19:
     arm64.loadRegSlot x0, slot5
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot3
@@ -611,6 +614,7 @@ func @main {
     arm64.movImm x20, 0
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
+  __il_cont#5:
     arm64.loadRegSlot x0, slot0
     arm64.bl __mm_decref
     arm64.movRegReg x0, x19
@@ -644,12 +648,12 @@ func @main {
     arm64.loadRegSlot x28, slot19
     arm64.epilogue 176
     arm64.ret
-  __im_slow#38:
+  __im_slow#40:
     arm64.movRegReg x0, x25
     arm64.bl __managed_get
-    arm64.b __im_cont#37
-  __im_slow#42:
+    arm64.b __im_cont#39
+  __im_slow#44:
     arm64.movRegReg x0, x26
     arm64.bl __managed_get
-    arm64.b __im_cont#41
+    arm64.b __im_cont#43
 }

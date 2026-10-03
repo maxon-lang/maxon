@@ -1,0 +1,31 @@
+// Test: closure-capture.error.a-closure-in-a-union-payload-stored-into-what-it-captures
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+union Armed
+	ready(read Thunk)
+	idle
+end 'Armed'
+
+type Counter
+	export var n as Integer
+	export var armed as Armed
+
+	static function create() returns Self
+		return Self{n: 1, armed: Armed.idle}
+	end 'create'
+
+	export function arm()
+		self.armed = Armed.ready(function() gives self.n)
+	end 'arm'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	c.arm()
+	print("{c.armed.name}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3183: <fragment>:19:16: this value holds a closure that captures 'self' and is stored into a record 'self' holds, so 'self' would hold the closure and the closure would hold 'self', and neither would ever be released. Store it somewhere 'self' does not reach, or capture what the closure needs instead of 'self' itself

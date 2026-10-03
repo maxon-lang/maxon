@@ -23,9 +23,7 @@ function dialAfterSettling(listener TcpListener) returns bool
 	return true
 end 'dialAfterSettling'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let beforeParks = __Builtins.schedNetpollBlockCount()
 
 	let acceptor = async acceptOne(listener)
@@ -39,6 +37,11 @@ function main() returns ExitCode
 
 	print("served={served} dialled={dialled} parked={parked}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ---
 ExitCode: 0
@@ -262,7 +265,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
+    x64.jcc equal, __il_body#4
   tryerr:
     x64.movRegImm32 r8, 1
     x64.epilogue 136
@@ -273,7 +276,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  __il_body#4:
     x64.callDirect __sched_netpoll_block_count
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
@@ -415,13 +418,14 @@ func @main {
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot11
     x64.callDirect __mm_decref
-  __il_body:
+  __il_body#6:
     x64.loadRegSlot rcx, slot4
     x64.callDirect __write_stdout
-  __il_cont:
+  __il_cont#5:
     x64.loadRegSlot rcx, slot4
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
+  __il_cont#3:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_TcpListener
     x64.movRegReg r8, rbx

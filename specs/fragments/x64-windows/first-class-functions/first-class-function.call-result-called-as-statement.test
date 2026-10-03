@@ -21,10 +21,13 @@ ExitCode: 12
 ---
 data {
   __data_sideEffect@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @bump {
@@ -41,17 +44,24 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.pushReg rbx
+    x64.prologue 40
   __il_body#6:
-    x64.leaRegFunc rax, [rip + __fnref_bump]
+    x64.leaRegRdata rbx, [rip + __fnrec_bump]
   __il_cont#5:
-    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rcx, rbx
     x64.callReg rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
   __il_body#7:
-    x64.leaRegFunc rax, [rip + __fnref_bump]
+    x64.leaRegRdata rbx, [rip + __fnrec_bump]
   __il_cont#4:
-    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rcx, rbx
     x64.callReg rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
     x64.leaRegGlobal rax, __data_sideEffect
     x64.loadRegBaseDisp.word64 r8, [rax + 0]
     x64.cmpRegImm32 r8, 0
@@ -61,14 +71,16 @@ func @main {
     x64.cmpRegReg r8, rax
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at first-class-function.call-result-called-as-statement.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at first-class-function.call-result-called-as-statement.test:17: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

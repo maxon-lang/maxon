@@ -1,0 +1,87 @@
+// Test: a-splice-keeps-a-deep-trace-under-the-frame-cap
+typealias Integer = int(i64.min to i64.max)
+
+function innermost(n Integer) returns Integer
+	if n > 0 'deep'
+		panic("innermost: reached with a positive n")
+	end 'deep'
+
+	return n
+end 'innermost'
+
+function middle(n Integer) returns Integer
+	return innermost(n) + 1
+end 'middle'
+
+function outer(n Integer) returns Integer
+	return middle(n) + 1
+end 'outer'
+
+function descend(depth Integer, n Integer) returns Integer
+	if depth == 0 'bottom'
+		return outer(n)
+	end 'bottom'
+
+	return descend(depth - 1, n: n) + 1
+end 'descend'
+
+function main() returns ExitCode
+	return descend(96, n: 1) as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __mrt_program_started@0 = i8 0
+}
+
+func @descend {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  __il_body:
+    arm64.cmp x1, 0
+    arm64.b.le __il_cont#7
+  deep:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at a-splice-keeps-a-deep-trace-under-the-frame-cap.test:6: innermost: reached with a positive n\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __il_cont#7:
+    arm64.add x0, x1, 1
+  __il_cont#5:
+    arm64.add x0, x0, 1
+  __il_cont#3:
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.sub x0, x0, 1
+    arm64.bl descend
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 96
+    arm64.movImm x1, 1
+    arm64.bl descend
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-splice-keeps-a-deep-trace-under-the-frame-cap.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

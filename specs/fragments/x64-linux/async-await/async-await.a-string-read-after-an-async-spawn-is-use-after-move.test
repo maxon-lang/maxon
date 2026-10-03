@@ -1,0 +1,19 @@
+// Test: async-await.a-string-read-after-an-async-spawn-is-use-after-move
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return 1
+end 'shout'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {1}"
+	let p = async shout(word)
+	print("{word}\n")
+	print("{await p}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:13:10: use of moved value 'word': its ownership moved to another binding at an earlier bind or assignment

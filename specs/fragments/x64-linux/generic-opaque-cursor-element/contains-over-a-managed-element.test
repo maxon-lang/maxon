@@ -134,14 +134,13 @@ func @main {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot0, r8
-    x64.storeBaseDispReg.word64 [r8 + 0], r13
+    x64.movRegReg rbx, r8
+    x64.storeBaseDispReg.word64 [rbx + 0], r13
   __il_cont#3:
-    x64.leaRegFunc rbx, [rip + __fnref_isLong]
-    x64.movRegImm32 r12, 0
+    x64.leaRegRdata r12, [rip + __fnrec_isLong]
     x64.leaRegRdata r13, [rip + __layout_Bag_String]
   __il_body#6:
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect Bag.createIterator
     x64.movRegReg r14, r8
@@ -155,20 +154,21 @@ func @main {
     x64.callDirect __retain_type_param
     x64.movRegReg r15, r8
   __il_cont#15:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
-    x64.callReg rbx
+    x64.callReg rax
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, ifcont#13
   match:
-    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 1
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r15
     x64.callDirect __drop_type_param
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
     x64.callDirect __destruct_dict_BagIter_T779624e88745be2b
-    x64.movRegReg rax, rbx
+    x64.movRegReg rax, r12
     x64.jmp __il_cont#5
   ifcont#13:
     x64.movRegReg rcx, r13
@@ -193,10 +193,10 @@ func @main {
   long:
     x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "long\x0a"
     x64.callDirect print
-    x64.movRegImm32 rbx, 1
-    x64.loadRegSlot rcx, slot0
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Bag_String
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -208,10 +208,10 @@ func @main {
   ifcont#2:
     x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "short\x0a"
     x64.callDirect print
-    x64.movRegImm32 rbx, 0
-    x64.loadRegSlot rcx, slot0
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Bag_String
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

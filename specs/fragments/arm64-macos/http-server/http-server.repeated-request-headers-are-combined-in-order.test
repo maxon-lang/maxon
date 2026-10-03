@@ -12,8 +12,7 @@ function acceptedHeader(server HttpServer) returns String
 	return accepted
 end 'acceptedHeader'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async acceptedHeader(server)
 
 	let client = try TcpClient.connect("127.0.0.1", port: server.port()) otherwise return 2
@@ -27,6 +26,11 @@ function main() returns ExitCode
 	print("accept={seen}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ---
 ExitCode: 0
@@ -283,7 +287,7 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
     arm64.cmp x9, 0
-    arm64.b.eq tryok#1
+    arm64.b.eq __il_body#4
   tryerr#2:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot2
@@ -298,7 +302,7 @@ func @main {
     arm64.loadRegSlot x28, slot11
     arm64.epilogue 112
     arm64.ret
-  tryok#1:
+  __il_body#4:
     arm64.movRegReg x0, x19
     arm64.bl __mm_own
     arm64.movRegReg x20, x0
@@ -311,103 +315,61 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __gt_ready
     arm64.leaRdata x0, __str_rec_152  ; "127.0.0.1"
-  __il_body#10:
+  __il_body#12:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-  __il_cont#9:
+  __il_cont#11:
     arm64.bl TcpClient.connect
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot1, x20
     arm64.cmp x9, 0
-    arm64.b.eq tryok#3
-  tryerr#4:
-    arm64.movImm x20, 2
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.movImm x19, 2
     arm64.movRegReg x0, x21
     arm64.bl __gt_promise_drop
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_HttpServer
-    arm64.movRegReg x0, x20
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.loadRegSlot x22, slot5
-    arm64.loadRegSlot x23, slot6
-    arm64.loadRegSlot x24, slot7
-    arm64.loadRegSlot x25, slot8
-    arm64.loadRegSlot x26, slot9
-    arm64.loadRegSlot x27, slot10
-    arm64.loadRegSlot x28, slot11
-    arm64.epilogue 112
-    arm64.ret
-  tryok#3:
+    arm64.b __il_cont#3
+  tryok#5:
     arm64.leaRdata x1, __str_rec_153  ; "GET / HTTP/1.1\x0d\x0aHost: 127.0.0.1\x0d\x0aAccept: text/html\x0d\x0aX-Other: 1\x0d\x0aACCEPT: text/plain\x0d\x0a\x0d\x0a"
     arm64.movRegReg x0, x20
     arm64.bl TcpClient.send
     arm64.cmp x9, 0
-    arm64.b.eq tryok#5
-  tryerr#6:
-    arm64.movImm x22, 3
+    arm64.b.eq tryok#7
+  tryerr#8:
+    arm64.movImm x19, 3
     arm64.movRegReg x0, x20
     arm64.bl __destruct_TcpClient
     arm64.movRegReg x0, x21
     arm64.bl __gt_promise_drop
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_HttpServer
-    arm64.movRegReg x0, x22
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.loadRegSlot x22, slot5
-    arm64.loadRegSlot x23, slot6
-    arm64.loadRegSlot x24, slot7
-    arm64.loadRegSlot x25, slot8
-    arm64.loadRegSlot x26, slot9
-    arm64.loadRegSlot x27, slot10
-    arm64.loadRegSlot x28, slot11
-    arm64.epilogue 112
-    arm64.ret
-  tryok#5:
+    arm64.b __il_cont#3
+  tryok#7:
     arm64.movImm x1, 4096
     arm64.movRegReg x0, x20
     arm64.bl TcpClient.recv
     arm64.cmp x9, 0
-    arm64.b.eq tryok#7
-  tryerr#8:
-    arm64.movImm x22, 4
+    arm64.b.eq tryok#9
+  tryerr#10:
+    arm64.movImm x19, 4
     arm64.movRegReg x0, x20
     arm64.bl __destruct_TcpClient
     arm64.movRegReg x0, x21
     arm64.bl __gt_promise_drop
-    arm64.movRegReg x0, x19
-    arm64.bl __destruct_HttpServer
-    arm64.movRegReg x0, x22
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.loadRegSlot x22, slot5
-    arm64.loadRegSlot x23, slot6
-    arm64.loadRegSlot x24, slot7
-    arm64.loadRegSlot x25, slot8
-    arm64.loadRegSlot x26, slot9
-    arm64.loadRegSlot x27, slot10
-    arm64.loadRegSlot x28, slot11
-    arm64.epilogue 112
-    arm64.ret
-  tryok#7:
+    arm64.b __il_cont#3
+  tryok#9:
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
     arm64.bl TcpClient.close
     arm64.movRegReg x0, x21
     arm64.bl __gt_await
     arm64.movRegReg x20, x0
-  __il_body#14:
+  __il_body#16:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.movImm x1, 1
     arm64.storeBaseDispReg.byte [x0 + 0], x1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-  __il_body#16:
+  __il_body#18:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl __ms_close
-  __il_cont#13:
+  __il_cont#15:
     arm64.leaRdata x0, __str_rec_154  ; "accept="
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
@@ -444,10 +406,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
-  __il_body#12:
+  __il_body#14:
     arm64.movRegReg x0, x27
     arm64.bl __write_stdout
-  __il_cont#11:
+  __il_cont#13:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movImm x19, 0
@@ -455,6 +417,7 @@ func @main {
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot1
     arm64.bl __destruct_TcpClient
+  __il_cont#3:
     arm64.loadRegSlot x0, slot0
     arm64.bl __destruct_HttpServer
     arm64.movRegReg x0, x19

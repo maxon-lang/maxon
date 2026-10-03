@@ -99,7 +99,6 @@ data {
 func @main {
   entry:
     arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -113,7 +112,6 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   tryok:
@@ -133,42 +131,32 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_retain
-    arm64.movRegReg x21, x0
     arm64.leaFuncAddr x0, Subprocess.run
     arm64.bl __gt_spawn
-    arm64.movRegReg x22, x0
-    arm64.storeBaseDispReg.word64 [x22 + 200], x20
-    arm64.storeBaseDispReg.word64 [x22 + 208], x21
-    arm64.leaFuncAddr x0, __gt_release_Subprocess.run
-    arm64.storeBaseDispReg.word64 [x22 + 176], x0
-    arm64.movRegReg x0, x22
-    arm64.bl __gt_ready
-    arm64.movRegReg x0, x22
-    arm64.bl __gt_try_await
     arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.storeBaseDispReg.word64 [x21 + 208], x19
+    arm64.leaFuncAddr x0, __gt_release_Subprocess.run
+    arm64.storeBaseDispReg.word64 [x21 + 176], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_ready
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_try_await
+    arm64.movRegReg x19, x0
     arm64.cmp x9, 0
     arm64.b.eq __il_body#12
   tryerr#4:
-    arm64.movImm x21, 2
+    arm64.movImm x19, 2
     arm64.movRegReg x0, x9
     arm64.bl __destruct_SubprocessError
     arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Executable
-    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   __il_body#12:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
   __il_body#14:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
@@ -187,43 +175,33 @@ func @main {
     arm64.eor x0, x0, 1
     arm64.cbz x0, ifcont#6
   check-success:
-    arm64.movImm x22, 3
-    arm64.movRegReg x0, x21
-    arm64.bl __destruct_CollectedOutput
+    arm64.movImm x20, 3
     arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
+    arm64.bl __destruct_CollectedOutput
     arm64.movRegReg x0, x20
-    arm64.bl __destruct_Executable
-    arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont#6:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.leaRdata x1, __str_rec_49  ; "hello"
     arm64.bl String.contains
     arm64.eor x0, x0, 1
     arm64.cbz x0, __il_body#21
   check-stdout:
-    arm64.movImm x22, 4
-    arm64.movRegReg x0, x21
-    arm64.bl __destruct_CollectedOutput
+    arm64.movImm x20, 4
     arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
+    arm64.bl __destruct_CollectedOutput
     arm64.movRegReg x0, x20
-    arm64.bl __destruct_Executable
-    arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   __il_body#21:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
   __il_body#23:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
@@ -240,33 +218,23 @@ func @main {
     arm64.cmp x0, 0
     arm64.b.eq ifcont#10
   check-exit:
-    arm64.movImm x22, 5
-    arm64.movRegReg x0, x21
-    arm64.bl __destruct_CollectedOutput
+    arm64.movImm x20, 5
     arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
+    arm64.bl __destruct_CollectedOutput
     arm64.movRegReg x0, x20
-    arm64.bl __destruct_Executable
-    arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont#10:
-    arm64.movImm x22, 0
-    arm64.movRegReg x0, x21
-    arm64.bl __destruct_CollectedOutput
+    arm64.movImm x20, 0
     arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
+    arm64.bl __destruct_CollectedOutput
     arm64.movRegReg x0, x20
-    arm64.bl __destruct_Executable
-    arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   matchdead#26:

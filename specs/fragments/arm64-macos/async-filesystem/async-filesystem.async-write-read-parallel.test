@@ -13,8 +13,8 @@ function main() returns ExitCode
 		end 'e2'
 
 		// Read both asynchronously in parallel
-		let p1 = async File.readText(path1)
-		let p2 = async File.readText(path2)
+		let p1 = async File.readText(FilePath from "async_par_a.txt")
+		let p2 = async File.readText(FilePath from "async_par_b.txt")
 		let c1 = try await p1 otherwise "err"
 		let c2 = try await p2 otherwise "err"
 
@@ -175,8 +175,8 @@ func @main {
     arm64.epilogue 112
     arm64.ret
   tryok#3:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_own
+    arm64.leaRdata x0, __str_rec_34  ; "async_par_a.txt"
+    arm64.bl FilePath.init
     arm64.movRegReg x21, x0
     arm64.leaFuncAddr x0, File.readText
     arm64.bl __gt_spawn
@@ -186,8 +186,8 @@ func @main {
     arm64.storeBaseDispReg.word64 [x22 + 176], x0
     arm64.movRegReg x0, x22
     arm64.bl __gt_ready
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_own
+    arm64.leaRdata x0, __str_rec_35  ; "async_par_b.txt"
+    arm64.bl FilePath.init
     arm64.movRegReg x21, x0
     arm64.leaFuncAddr x0, File.readText
     arm64.bl __gt_spawn

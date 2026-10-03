@@ -1,0 +1,45 @@
+// Test: error.hidden-generic-alias-in-every-type-position
+// --- file: probe.maxon
+typealias Score = int(0 to 100)
+typealias ScoreArray = Array with Score
+
+export function probeScores() returns ExitCode
+	var held = ScoreArray.create()
+	held.push(3)
+	return 0 if held.isEmpty() else 3
+end 'probeScores'
+
+// --- file: main.maxon
+type Holder
+	var scores as ScoreArray
+
+	static function create() returns Self
+		return Self{scores: ScoreArray.create()}
+	end 'create'
+
+	function isEmpty() returns bool
+		return self.scores.isEmpty()
+	end 'isEmpty'
+end 'Holder'
+
+function kept(scores ScoreArray) returns ScoreArray
+	return scores
+end 'kept'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let k = kept(ScoreArray.create())
+
+	if h.isEmpty() and k.isEmpty() 'bothEmpty'
+		return probeScores()
+	end 'bothEmpty'
+
+	return 1
+end 'main'
+---
+CompilerError:
+error E3008: <fragment>:14:16: typealias 'ScoreArray' is not exported
+error E3008: <fragment>:17:23: typealias 'ScoreArray' is not exported
+error E3008: <fragment>:25:22: typealias 'ScoreArray' is not exported
+error E3008: <fragment>:25:42: typealias 'ScoreArray' is not exported
+error E3008: <fragment>:31:15: typealias 'ScoreArray' is not exported

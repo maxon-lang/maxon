@@ -139,45 +139,60 @@ func @main {
     arm64.storeSlotReg slot5, x21
     arm64.storeSlotReg slot4, x20
     arm64.storeSlotReg slot3, x19
-  __il_body#11:
+  __il_body#12:
     arm64.movImm x19, 1
   __rc_ok:
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mm_decref
     arm64.bl __managed_create
     arm64.movRegReg x20, x0
-    arm64.leaFuncAddr x1, runA$closure_0
+    arm64.leaRdata x1, __fnrec_runA$closure_0
     arm64.movRegReg x0, x20
     arm64.bl __managed_push
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.cmp x0, 0
-    arm64.b.ls __im_slow#23
-  __im_load#24:
+    arm64.b.ls __im_slow#24
+  __im_load#25:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
-    arm64.loadRegBaseDisp.word64 x3, [x0 + 0]
-  tryok#17:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x3, [x20 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#29
+  __im_empty#26:
+    arm64.cmp x2, 0
+    arm64.b.eq __im_slow#24
+  critsplit#30:
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#23
+  critsplit#29:
+    arm64.movRegReg x9, x0
+  __im_cont#23:
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#19
+  tryok#18:
     arm64.movImm x1, 3
-    arm64.movImm x2, 0
+    arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
     arm64.movRegReg x0, x19
     arm64.blr x3
     arm64.movRegReg x19, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-  __il_cont#15:
+  __il_cont#16:
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic
-  __il_cont#10:
+  __il_cont#11:
     arm64.leaRdata x20, __str_rec_7  ; "go"
   __il_body#3:
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mm_decref
     arm64.bl __managed_create
     arm64.movRegReg x21, x0
-    arm64.leaFuncAddr x1, runB$closure_0
+    arm64.leaRdata x1, __fnrec_runB$closure_0
     arm64.movRegReg x0, x21
     arm64.bl __managed_push
     arm64.movImm x1, 0
@@ -187,8 +202,25 @@ func @main {
   __im_load#8:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.movImm x0, 0
+    arm64.loadRegBaseDisp.word64 x3, [x21 + 40]
+    arm64.cmp x3, 0
+    arm64.b.eq critsplit#27
+  __im_empty#9:
+    arm64.cmp x2, 0
+    arm64.b.eq __im_slow#7
+  critsplit#28:
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x9, x0
+    arm64.b __im_cont#6
+  critsplit#27:
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x9, x0
+  __im_cont#6:
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#5
   tryok#4:
-    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.movRegReg x0, x20
     arm64.blr x2
     arm64.movRegReg x20, x0
@@ -251,7 +283,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x27 + 24], x0
     arm64.loadRegSlot x0, slot1
     arm64.bl __mm_decref
-  __il_body#9:
+  __il_body#10:
     arm64.movRegReg x0, x27
     arm64.bl __write_stdout
   __il_cont#1:
@@ -273,12 +305,12 @@ func @main {
     arm64.loadRegSlot x28, slot12
     arm64.epilogue 128
     arm64.ret
-  __im_slow#23:
+  __im_slow#24:
     arm64.movRegReg x0, x20
     arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq critsplit#26
-  tryerr#18:
+    arm64.movRegReg x2, x0
+    arm64.b __im_cont#23
+  tryerr#19:
     arm64.leaRdata x0, __str_blob_4  ; "panic at a.maxon:8: no step\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -294,9 +326,6 @@ func @main {
     arm64.loadRegSlot x28, slot12
     arm64.epilogue 128
     arm64.ret
-  critsplit#26:
-    arm64.movRegReg x3, x0
-    arm64.b tryok#17
   __rc_panic:
     arm64.leaRdata x0, __str_blob_13  ; "panic at a.maxon:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -316,8 +345,8 @@ func @main {
   __im_slow#7:
     arm64.movRegReg x0, x21
     arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.eq critsplit#25
+    arm64.movRegReg x1, x0
+    arm64.b __im_cont#6
   tryerr#5:
     arm64.leaRdata x0, __str_blob_5  ; "panic at b.maxon:7: no step\x0a"
     arm64.bl mrt_panic
@@ -334,7 +363,4 @@ func @main {
     arm64.loadRegSlot x28, slot12
     arm64.epilogue 128
     arm64.ret
-  critsplit#25:
-    arm64.movRegReg x2, x0
-    arm64.b tryok#4
 }

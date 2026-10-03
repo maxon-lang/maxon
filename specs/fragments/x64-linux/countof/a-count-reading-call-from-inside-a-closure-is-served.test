@@ -34,7 +34,7 @@ func @Vector.viaClosure$closure_0 {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rdx + 0]
+    x64.loadRegBaseDisp.word64 r8, [rdx + 8]
   __il_cont:
     x64.popReg rbp
     x64.ret
@@ -48,8 +48,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 32
     x64.leaRegRdata rcx, [rip + __layout_Vector_N3_Int]
     x64.movRegImm32 rdx, 3
     x64.callDirect Vector.create
@@ -60,17 +59,19 @@ func @main {
     x64.movRegReg r12, r8
     x64.movRegImm32 r13, 3
   __il_body:
-    x64.leaRegFunc r14, [rip + Vector.viaClosure$closure_0]
-    x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rcx, 16
     x64.callDirect __mm_alloc
-    x64.movRegReg r15, r8
-    x64.storeBaseDispReg.word64 [r15 + 0], r13
+    x64.movRegReg r14, r8
+    x64.leaRegFunc rax, [rip + Vector.viaClosure$closure_0]
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r15
-    x64.callReg r14
+    x64.movRegReg rdx, r14
+    x64.callReg rax
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, r15
+    x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
   __il_cont:
     x64.cmpRegImm32 r13, 0
@@ -84,8 +85,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -96,8 +96,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-count-reading-call-from-inside-a-closure-is-served.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

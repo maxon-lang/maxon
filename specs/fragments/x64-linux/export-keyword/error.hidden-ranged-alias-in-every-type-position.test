@@ -1,0 +1,40 @@
+// Test: error.hidden-ranged-alias-in-every-type-position
+// --- file: probe.maxon
+typealias Score = int(0 to 100)
+
+export function probeScore() returns ExitCode
+	let s = 3 as Score
+	return s
+end 'probeScore'
+
+// --- file: main.maxon
+type Holder
+	var best as Score
+
+	static function create() returns Self
+		return Self{best: 0}
+	end 'create'
+
+	function isZero() returns bool
+		return self.best == 0
+	end 'isZero'
+end 'Holder'
+
+function kept(s Score) returns Score
+	return s
+end 'kept'
+
+function main() returns ExitCode
+	let h = Holder.create()
+
+	if h.isZero() and kept(4) == 4 'bothHold'
+		return probeScore()
+	end 'bothHold'
+
+	return 1
+end 'main'
+---
+CompilerError:
+error E3008: <fragment>:12:14: typealias 'Score' is not exported
+error E3008: <fragment>:23:17: typealias 'Score' is not exported
+error E3008: <fragment>:23:32: typealias 'Score' is not exported

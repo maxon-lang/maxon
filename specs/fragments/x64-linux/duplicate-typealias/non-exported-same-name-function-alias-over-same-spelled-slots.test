@@ -48,16 +48,27 @@ func @goA$closure_0 {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
     x64.cmpRegImm32 rcx, 1000
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.jcc greater, __rc_panic#2
+  __rc_ok#1:
     x64.leaRegRegImm32 r8, rcx, 1
+  __rc_chk#6:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc greater, __rc_panic#5
+  __rc_ok#4:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_panic:
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at a.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#5:
     x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at a.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -72,16 +83,27 @@ func @goB$closure_0 {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
     x64.cmpRegImm32 rcx, 5
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.jcc greater, __rc_panic#2
+  __rc_ok#1:
     x64.imulRegRegImm32 r8, rcx, 2
+  __rc_chk#6:
+    x64.cmpRegImm32 r8, 5
+    x64.jcc greater, __rc_panic#5
+  __rc_ok#4:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __rc_panic:
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at b.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#5:
     x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at b.maxon:9: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -102,9 +124,9 @@ func @main {
     x64.prologue 88
   __il_body#5:
     x64.movRegImm32 rcx, 7
-    x64.leaRegFunc rax, [rip + goA$closure_0]
-    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rdx, [rip + __fnrec_goA$closure_0]
   __rc_ok#11:
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
     x64.callReg rax
     x64.movRegReg rbx, r8
   __il_cont#9:
@@ -115,9 +137,9 @@ func @main {
     x64.jcc greater, __rc_panic
   __il_body#14:
     x64.movRegImm32 rcx, 2
-    x64.leaRegFunc rax, [rip + goB$closure_0]
-    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rdx, [rip + __fnrec_goB$closure_0]
   __rc_ok#17:
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
     x64.callReg rax
     x64.movRegReg r12, r8
   __il_cont#3:

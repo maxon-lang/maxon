@@ -35,21 +35,24 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 104
-    x64.movRegImm32 rax, 0
-    x64.leaRegRdata rbx, [rip + __str_rec_3]  ; "h\xc3\xa9llo w\xc3\xb6rld"
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rbx, 0
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "h\xc3\xa9llo w\xc3\xb6rld"
+    x64.callDirect __str_retain
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rax, rbx
     x64.jmp forhdr
   each:
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic#8
   __il_body#124:
-    x64.loadRegBaseDisp.word64 r13, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 8]
   __il_cont#123:
-    x64.cmpRegReg r12, r13
+    x64.cmpRegReg r13, rbx
     x64.jcc aboveEqual, __il_cont#13
   ifcont#16:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
     x64.callDirect String.byteAt
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#17
@@ -72,11 +75,11 @@ func @main {
     x64.cmpRegImm32 r8, 13
     x64.jcc notEqual, ifcont#27
   isCR:
-    x64.leaRegRegImm32 rdx, r12, 1
-    x64.cmpRegReg rdx, r13
+    x64.leaRegRegImm32 rdx, r13, 1
+    x64.cmpRegReg rdx, rbx
     x64.jcc aboveEqual, ifcont#27
   hasNext:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect String.byteAt
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#22
@@ -96,14 +99,15 @@ func @main {
     x64.cmpRegImm32 r8, 10
     x64.jcc notEqual, ifcont#27
   isCRLF:
-    x64.leaRegRegImm32 r12, r12, 2
+    x64.leaRegRegImm32 rbx, r13, 2
+    x64.movRegReg r13, rbx
     x64.jmp __il_cont#13
   ifcont#27:
-    x64.leaRegRegImm32 rdx, r12, 1
-    x64.cmpRegReg rdx, r13
+    x64.leaRegRegImm32 rdx, r13, 1
+    x64.cmpRegReg rdx, rbx
     x64.jcc aboveEqual, ifelse#40
   hasNextByte:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect String.byteAt
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#29
@@ -123,8 +127,8 @@ func @main {
     x64.cmpRegImm32 r8, 128
     x64.jcc less, ifelse#38
   nextIsMultibyte:
-    x64.leaRegRegImm32 rdx, r12, 1
-    x64.movRegReg rcx, rbx
+    x64.leaRegRegImm32 rdx, r13, 1
+    x64.movRegReg rcx, r12
     x64.callDirect utf8DecodeAt
     x64.movRegReg rcx, r8
     x64.callDirect graphemeBreakProperty
@@ -148,23 +152,25 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#42
   notCombining:
-    x64.leaRegRegImm32 r12, r12, 1
+    x64.leaRegRegImm32 rbx, r13, 1
+    x64.movRegReg r13, rbx
     x64.jmp __il_cont#13
   ifelse#38:
-    x64.leaRegRegImm32 r12, r12, 1
+    x64.leaRegRegImm32 rbx, r13, 1
+    x64.movRegReg r13, rbx
     x64.jmp __il_cont#13
   ifelse#40:
-    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rdx
     x64.jmp __il_cont#13
   ifcont#42:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
     x64.callDirect utf8DecodeAt
     x64.movRegReg r14, r8
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
     x64.callDirect utf8ByteLengthAt
-    x64.leaRegRegReg r12, r12, r8
+    x64.leaRegRegReg r13, r13, r8
     x64.movRegReg rcx, r14
     x64.callDirect graphemeBreakProperty
     x64.movRegReg r15, r8
@@ -174,11 +180,11 @@ func @main {
     x64.movRegReg rdx, r15
     x64.movRegReg rax, r14
     x64.callDirect graphemeStateUpdate
-    x64.movRegReg rdx, r12
-    x64.movRegReg r12, r8
+    x64.movRegReg rdx, r13
+    x64.movRegReg r13, r8
     x64.jmp whilehdr
   scan:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect utf8DecodeAt
     x64.movRegReg r14, r8
     x64.storeSlotReg slot5, r14
@@ -366,8 +372,8 @@ func @main {
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, ifcont#105
   __il_body#126:
-    x64.movRegReg rax, r12
-    x64.andRegImm32 rax, r12, 1
+    x64.movRegReg rax, r13
+    x64.andRegImm32 rax, r13, 1
     x64.cmpRegImm32 rax, 0
     x64.setccReg notEqual, rax
   __il_cont#125:
@@ -388,8 +394,8 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#111
   __il_body#122:
-    x64.movRegReg rax, r12
-    x64.shrRegImm8 rax, r12, 1
+    x64.movRegReg rax, r13
+    x64.shrRegImm8 rax, r13, 1
     x64.andRegImm32 rax, rax, 1
     x64.cmpRegImm32 rax, 0
     x64.setccReg notEqual, rax
@@ -405,16 +411,17 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#47
   breakFound:
-    x64.loadRegSlot r12, slot3
+    x64.loadRegSlot rbx, slot3
+    x64.movRegReg r13, rbx
     x64.jmp __il_cont#13
   ifcont#47:
     x64.loadRegSlot rax, slot5
     x64.loadRegSlot rdx, slot7
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
     x64.callDirect graphemeStateUpdate
-    x64.movRegReg r12, r8
+    x64.movRegReg r13, r8
     x64.loadRegSlot rdx, slot3
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect utf8ByteLengthAt
     x64.loadRegSlot rax, slot3
     x64.leaRegRegReg rdx, rax, r8
@@ -422,19 +429,20 @@ func @main {
     x64.movRegReg r15, rax
   whilehdr:
     x64.storeSlotReg slot3, rdx
-    x64.cmpRegReg rdx, r13
+    x64.cmpRegReg rdx, rbx
     x64.jcc below, scan
   whileexit:
-    x64.loadRegSlot r12, slot3
+    x64.loadRegSlot rbx, slot3
+    x64.movRegReg r13, rbx
   __il_cont#13:
     x64.loadRegSlot rdx, slot1
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rax, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
     x64.callDirect __char_at
-    x64.movRegReg r13, r8
+    x64.movRegReg rbx, r8
     x64.leaRegRdata rdx, [rip + __str_rec_4]  ; "\xc3\xb6"
   __il_body#12:
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_eq
   __il_cont#11:
     x64.cmpRegImm32 r8, 0
@@ -446,17 +454,19 @@ func @main {
   critsplit#127:
     x64.loadRegSlot r14, slot0
   ifcont#6:
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
   forstep:
     x64.movRegReg rax, r14
   forhdr:
-    x64.storeSlotReg slot1, r12
+    x64.storeSlotReg slot1, r13
     x64.storeSlotReg slot0, rax
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r12, rax
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r13, rax
     x64.jcc less, each
   forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc

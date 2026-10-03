@@ -1,0 +1,21 @@
+// Test: stdlib-user-shadows.error.an-unthrown-clause-names-the-library-type-as-written
+
+enum ParseError implements Error
+	bad
+end 'ParseError'
+
+function parse() returns ExitCode throws stdlib.ParseError
+	return 0
+end 'parse'
+
+function check() throws ParseError
+	throw ParseError.bad
+end 'check'
+
+function main() returns ExitCode
+	try check() otherwise ignore
+	return try parse() otherwise 1
+end 'main'
+---
+CompilerError:
+error E3168: <fragment>:7:10: 'throws stdlib.ParseError' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause

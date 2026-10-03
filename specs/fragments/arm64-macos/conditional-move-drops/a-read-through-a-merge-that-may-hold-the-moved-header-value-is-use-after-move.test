@@ -1,0 +1,27 @@
+// Test: a-read-through-a-merge-that-may-hold-the-moved-header-value-is-use-after-move
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function main() returns ExitCode
+	var s = build(0)
+	var i = 0
+
+	while i < 3 'l'
+		i = i + 1
+
+		if i > 1 'r'
+			s = build(i)
+		end 'r'
+
+		let u = s
+		print("{u}\n")
+	end 'l'
+
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:19:11: use of moved value 's': it was moved in an earlier iteration of this loop

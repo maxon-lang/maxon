@@ -1,0 +1,25 @@
+// Test: borrow.error.a-let-string-read-after-its-awaited-send-is-use-after-move
+type Meter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function measure(s String) returns Integer
+		return s.count() as Integer
+	end 'measure'
+end 'Meter'
+
+function main() returns ExitCode
+	let h = spawn Meter.create()
+	let buf = "hello {1}"
+	let n = try await h.measure(buf) otherwise 0
+	print("service read {n} characters\n")
+	print("sender still reads {buf}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3102: <fragment>:19:29: use of moved value 'buf': its ownership moved to another binding at an earlier bind or assignment

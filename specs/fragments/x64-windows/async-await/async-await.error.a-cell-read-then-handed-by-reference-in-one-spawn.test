@@ -1,0 +1,23 @@
+// Test: async-await.error.a-cell-read-then-handed-by-reference-in-one-spawn
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String, n Integer) returns Integer
+	Scheduler.yield()
+	print("{text} {n}\n")
+	return n
+end 'shout'
+
+function fill(dest String) returns Integer
+	dest = "refilled padded out long enough to heap allocate"
+	return 7
+end 'fill'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {1}"
+	let p = async shout(word, n: fill(word))
+	print("{await p}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:17:22: the value of 'word' handed to `async shout(…)` was read before a later argument handed 'word' by reference to a function that may replace it, so it may no longer be what 'word' holds. Read 'word' into a `let` first and pass that

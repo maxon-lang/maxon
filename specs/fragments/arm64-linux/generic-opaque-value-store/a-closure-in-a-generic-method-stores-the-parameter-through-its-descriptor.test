@@ -171,13 +171,13 @@ func @Registry.copyLater$closure_0 {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.loadRegBaseDisp.word64 x19, [x0 + 24]
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 32]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x20, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.loadRegBaseDisp.word64 x3, [x19 + 72]
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
@@ -212,6 +212,24 @@ func @Registry.copyLater$closure_0 {
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
+    arm64.ret
+}
+
+func @Registry.copyLater$closure_0$drop {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 32]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.bl __destruct_Registry
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.bl __str_decref
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.bl __str_decref
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
     arm64.ret
 }
 
@@ -349,21 +367,64 @@ func @main {
     arm64.leaRdata x21, __str_rec_10  ; "b"
     arm64.leaRdata x22, __layout_Registry_Box
   __il_body#26:
-    arm64.leaFuncAddr x23, Registry.copyLater$closure_0
-    arm64.movImm x0, 32
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_own
+    arm64.movRegReg x23, x0
+    arm64.loadRegBaseDisp.word64 x24, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x21 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x26, x21
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
+    arm64.add x0, x19, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x24, x0
-    arm64.storeBaseDispReg.word64 [x24 + 0], x20
-    arm64.storeBaseDispReg.word64 [x24 + 8], x21
-    arm64.storeBaseDispReg.word64 [x24 + 16], x19
-    arm64.storeBaseDispReg.word64 [x24 + 24], x22
+    arm64.add x26, x24, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x0, x26, x19
+    arm64.storeBaseDispReg.word64 [x24 + 0], x26
+    arm64.storeBaseDispReg.word64 [x24 + 8], x19
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.leaFuncAddr x1, Registry.copyLater$closure_0$drop
+    arm64.movImm x0, 40
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.leaFuncAddr x0, Registry.copyLater$closure_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x23
+    arm64.storeBaseDispReg.word64 [x19 + 16], x25
+    arm64.storeBaseDispReg.word64 [x19 + 24], x24
+    arm64.storeBaseDispReg.word64 [x19 + 32], x22
   __il_body#30:
-    arm64.movRegReg x0, x24
-    arm64.blr x23
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.movRegReg x0, x19
+    arm64.blr x1
   __il_cont#29:
-    arm64.eor x0, x0, 1
-    arm64.cbz x0, ifcont
+    arm64.eor x21, x0, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.cbz x21, __il_cont#25
   uncopied:
     arm64.leaRdata x0, __str_blob_7  ; "panic at a-closure-in-a-generic-method-stores-the-parameter-through-its-descriptor.test:59: copyLater: hold always stores\x0a"
     arm64.bl mrt_panic
@@ -380,9 +441,6 @@ func @main {
     arm64.loadRegSlot x28, slot14
     arm64.epilogue 144
     arm64.ret
-  ifcont:
-    arm64.movRegReg x0, x24
-    arm64.bl __mm_decref
   __il_cont#25:
     arm64.movImm x0, 0
     arm64.b forhdr

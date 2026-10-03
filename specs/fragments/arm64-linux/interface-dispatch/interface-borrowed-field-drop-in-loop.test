@@ -24,12 +24,9 @@ end 'ConcreteQuery'
 // short-lived local dropped at the end of `allocateFor`, and its synthesized
 // destructor decrefs the interface field. The conformer passed in is OWNED by
 // `main` and kept alive across the whole loop, so the field holds only a BORROW —
-// the destructor must NOT release it. Before interface values were refcount-managed
-// consistently (the field is drop-tracked, but the borrowed value stored into it
-// got no store-incref), the destructor over-released the caller's conformer — the
-// `__destruct_FunctionRegAllocator` `regTarget`/`opQuery` over-release that blocked
-// the self-hosted bootstrap. Runs under the suite's leak gate (and `--rc-sanitize`),
-// so an over-release or leak fails it.
+// the destructor must NOT release it: the borrowed value stored into the field takes
+// its own store-incref, so the destructor's decref balances it. Runs under the
+// suite's leak gate, so an over-release or leak fails it.
 type Allocator
 	export var query as Query
 	export var f0 as StrArray
@@ -209,7 +206,7 @@ func @main {
     arm64.epilogue 112
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at interface-borrowed-field-drop-in-loop.test:66: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at interface-borrowed-field-drop-in-loop.test:63: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot2

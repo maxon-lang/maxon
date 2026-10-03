@@ -1,0 +1,17 @@
+// Test: error.an-implements-parent-two-directories-export-is-ambiguous
+// --- file: api/base.maxon
+export typealias Base = int(0 to 100)
+
+// --- file: legacy/base.maxon
+export typealias Base = int(0 to 200)
+
+// --- file: main.maxon
+typealias Kid = int(0 to 10) implements Base
+
+function main() returns ExitCode
+	let k = 4 as Kid
+	return k
+end 'main'
+---
+CompilerError:
+error E3063: <fragment>:9:41: Ambiguous type name 'Base': more than one visible declaration matches it. Qualify it as one of: api.Base, legacy.Base

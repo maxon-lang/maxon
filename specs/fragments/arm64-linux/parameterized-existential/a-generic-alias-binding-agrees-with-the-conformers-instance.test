@@ -1,0 +1,146 @@
+// Test: a-generic-alias-binding-agrees-with-the-conformers-instance
+typealias Measure = int(0 to 1000)
+typealias Items = Array with Measure
+
+interface Source uses Element
+	function first() returns Element
+end 'Source'
+
+type Cell implements Source with Items
+	var n as Items
+
+	static function of(n Items) returns Self
+		return Self{n: n}
+	end 'of'
+
+	function first() returns Items
+		return n
+	end 'first'
+end 'Cell'
+
+typealias ItemsSource = Source with Items
+
+function makeSource() returns ItemsSource
+	return Cell.of([500, 7])
+end 'makeSource'
+
+function firstOf(s ItemsSource) returns ExitCode
+	let v = s.first()
+	let first = try v.get(0) otherwise 0
+	return (first - 400) as ExitCode
+end 'firstOf'
+
+function main() returns ExitCode
+	return firstOf(makeSource())
+end 'main'
+---
+ExitCode: 100
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @Cell.first {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __managed_retain
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @makeSource {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551614
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+  __il_body:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  __il_cont:
+    arm64.leaRdata x9, __witness_Cell.Source
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl makeSource
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x9
+  __il_body:
+    arm64.movRegReg x0, x19
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
+    arm64.blr x16
+    arm64.movRegReg x21, x0
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq trycont
+  tryerr:
+    arm64.movImm x0, 0
+  trycont:
+    arm64.sub x22, x0, 400
+    arm64.cmp x22, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x22, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+  __il_cont:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __drop_existential
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-generic-alias-binding-agrees-with-the-conformers-instance.test:30: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

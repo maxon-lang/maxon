@@ -1,0 +1,26 @@
+// Test: closure-capture.error.a-capture-beside-a-by-reference-argument
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function show(dest Box, m Thunk) returns Integer
+	let seen = dest.n + m()
+	dest = Box.create(5)
+	return seen
+end 'show'
+
+function main() returns ExitCode
+	var b = Box.create(1)
+	print("{show(b, m: function() gives b.n)}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:21:15: use of moved value 'b': its ownership moved to the closure that captures it

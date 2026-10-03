@@ -41,42 +41,45 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegImm32 rbx, 5
-    x64.leaRegFunc r12, [rip + main$closure_0]
-    x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rcx, 16
     x64.callDirect __mm_alloc
-    x64.movRegReg r13, r8
-    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.movRegReg r12, r8
+    x64.leaRegFunc rax, [rip + main$closure_0]
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
     x64.movRegImm32 rcx, 1
-    x64.movRegReg rdx, r13
-    x64.callReg r12
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.movRegReg rdx, r12
+    x64.callReg rax
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 rbx, 0
     x64.jcc lessEqual, critsplit
   taken:
     x64.movRegImm32 rcx, 10
-    x64.movRegReg rdx, r13
-    x64.callReg r12
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.movRegReg rdx, r12
+    x64.callReg rax
     x64.leaRegRegReg rax, rbx, r8
     x64.jmp ifcont
   critsplit:
     x64.movRegReg rax, rbx
   ifcont:
     x64.movRegImm32 rbx, 0
-    x64.movRegReg r14, rbx
+    x64.movRegReg r13, rbx
     x64.movRegReg rbx, rax
     x64.jmp whilehdr
   loop:
     x64.movRegImm32 rcx, 100
-    x64.movRegReg rdx, r13
-    x64.callReg r12
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.movRegReg rdx, r12
+    x64.callReg rax
     x64.leaRegRegReg rbx, rbx, r8
-    x64.leaRegRegImm32 r14, r14, 1
+    x64.leaRegRegImm32 r13, r13, 1
   whilehdr:
-    x64.cmpRegImm32 r14, 2
+    x64.cmpRegImm32 r13, 2
     x64.jcc less, loop
   whileexit:
     x64.cmpRegImm32 rbx, 0
@@ -86,11 +89,10 @@ func @main {
     x64.cmpRegReg rbx, rax
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -100,8 +102,7 @@ func @main {
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at first-class-function.capturing-closure-called-from-nested-block.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -113,7 +114,7 @@ func @main$closure_0 {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rdx + 8]
     x64.leaRegRegReg r8, rcx, rax
     x64.popReg rbp
     x64.ret

@@ -50,8 +50,7 @@ func @countFields {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
+    arm64.prologue 48
     arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
@@ -63,28 +62,28 @@ func @main {
     arm64.movImm x1, 3
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.leaFuncAddr x20, __fnref_countFields
-    arm64.movImm x21, 0
+    arm64.leaRdata x20, __fnrec_countFields
   __il_body#5:
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __mm_decref
     arm64.bl __managed_create
-    arm64.movRegReg x22, x0
-    arm64.movImm x23, 5
+    arm64.movRegReg x21, x0
+    arm64.movImm x22, 5
   __il_body#7:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x23
+    arm64.storeBaseDispReg.word64 [x1 + 0], x22
   __il_cont#6:
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __managed_push
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x21
-    arm64.blr x20
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 0]
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.blr x2
     arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __managed_decref
   __il_cont#4:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -102,8 +101,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at first-class-function.generic-instance-parameter-through-alias-is-identified-by-type-not-by-intern-order.test:31: Range check failed: value outside type"...
@@ -113,7 +111,6 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
 }

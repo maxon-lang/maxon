@@ -1,0 +1,19 @@
+// Test: error.a-set-from-head-another-file-keeps-private-is-refused
+// --- file: probe.maxon
+typealias Counts = Set with ExitCode
+
+export function probeCounts() returns ExitCode
+	let s = Counts from [1, 2]
+	print("{s.count()}")
+	return 0
+end 'probeCounts'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let s = Counts from [3]
+	print("{s.count()}")
+	return probeCounts()
+end 'main'
+---
+CompilerError:
+error E3008: <fragment>:13:10: typealias 'Counts' is not exported

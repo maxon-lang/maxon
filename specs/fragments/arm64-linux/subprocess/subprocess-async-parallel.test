@@ -31,7 +31,7 @@ function main() returns ExitCode
 	let start = Clock.nowMs()
 	var i = 0
 	while i < count 'spawn'
-		promises.push(async Subprocess.run(exe, arguments: pingArgs()))
+		promises.push(async Subprocess.run(exe.clone(), arguments: pingArgs()))
 		i = i + 1
 	end 'spawn'
 	for p in promises 'drain'
@@ -157,7 +157,8 @@ func @pingArgs {
 
 func @main {
   entry:
-    arm64.prologue 64
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
@@ -177,7 +178,8 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   tryok:
     arm64.movImm x0, 16
@@ -196,21 +198,22 @@ func @main {
     arm64.movImm x22, 0
     arm64.b whilehdr
   spawn:
-    arm64.bl pingArgs
-    arm64.movRegReg x23, x0
     arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
+    arm64.bl __clone_Executable
+    arm64.movRegReg x23, x0
+    arm64.bl pingArgs
+    arm64.movRegReg x24, x0
     arm64.leaFuncAddr x0, Subprocess.run
     arm64.bl __gt_spawn
-    arm64.movRegReg x24, x0
-    arm64.storeBaseDispReg.word64 [x24 + 200], x20
-    arm64.storeBaseDispReg.word64 [x24 + 208], x23
+    arm64.movRegReg x25, x0
+    arm64.storeBaseDispReg.word64 [x25 + 200], x23
+    arm64.storeBaseDispReg.word64 [x25 + 208], x24
     arm64.leaFuncAddr x0, __gt_release_Subprocess.run
-    arm64.storeBaseDispReg.word64 [x24 + 176], x0
-    arm64.movRegReg x0, x24
+    arm64.storeBaseDispReg.word64 [x25 + 176], x0
+    arm64.movRegReg x0, x25
     arm64.bl __gt_ready
     arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x24
+    arm64.movRegReg x1, x25
     arm64.bl __managed_push
     arm64.add x22, x22, 1
   whilehdr:
@@ -246,7 +249,8 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   __il_body#22:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
@@ -281,7 +285,8 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   ifcont#13:
     arm64.bl __destruct_CollectedOutput
@@ -301,8 +306,6 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.bl pingArgs
     arm64.movRegReg x23, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_incref
     arm64.leaFuncAddr x0, Subprocess.run
     arm64.bl __gt_spawn
     arm64.movRegReg x24, x0
@@ -314,28 +317,27 @@ func @main {
     arm64.bl __gt_ready
     arm64.movRegReg x0, x24
     arm64.bl __gt_try_await
-    arm64.movRegReg x23, x0
+    arm64.movRegReg x20, x0
     arm64.cmp x9, 0
     arm64.b.eq __il_body#31
   tryerr#15:
-    arm64.movImm x21, 5
+    arm64.movImm x20, 5
     arm64.movRegReg x0, x9
     arm64.bl __destruct_SubprocessError
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.bl __destruct_Executable
-    arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   __il_body#31:
-    arm64.loadRegBaseDisp.word64 x0, [x23 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
   __il_body#33:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 0
@@ -355,12 +357,10 @@ func @main {
     arm64.cbz x0, ifcont#17
   check-solo:
     arm64.movImm x21, 6
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x20
     arm64.bl __destruct_CollectedOutput
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Executable
     arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -368,7 +368,8 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   ifcont#17:
     arm64.movRegReg x0, x22
@@ -378,12 +379,10 @@ func @main {
     arm64.b.lo ifcont#19
   check-parallel:
     arm64.movImm x21, 4
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x20
     arm64.bl __destruct_CollectedOutput
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Executable
     arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -391,16 +390,15 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   ifcont#19:
     arm64.movImm x21, 0
-    arm64.movRegReg x0, x23
+    arm64.movRegReg x0, x20
     arm64.bl __destruct_CollectedOutput
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-    arm64.movRegReg x0, x20
-    arm64.bl __destruct_Executable
     arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -408,7 +406,8 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   matchdead#36:
 }

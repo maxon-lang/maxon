@@ -1,0 +1,46 @@
+// Test: error.a-hidden-types-compare-is-refused-through-an-ordering-operator
+// --- file: lib.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+type Point implements Comparable
+	var x as Integer
+
+	static function make(x Integer) returns Self
+		return Self{x: x}
+	end 'make'
+
+	function compare(other Self) returns Ordering
+		if self.x < other.x 'lower'
+			return Ordering.lessThan
+		end 'lower'
+
+		if self.x > other.x 'higher'
+			return Ordering.greaterThan
+		end 'higher'
+
+		return Ordering.equalTo
+	end 'compare'
+end 'Point'
+
+export type Pair
+	export var first as Point
+	export var second as Point
+
+	export static function make() returns Self
+		return Self{first: Point.make(3), second: Point.make(4)}
+	end 'make'
+end 'Pair'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let pair = Pair.make()
+
+	if pair.first < pair.second 'ordered'
+		return 42
+	end 'ordered'
+
+	return 0
+end 'main'
+---
+CompilerError:
+error E3008: <fragment>:38:16: type 'Point' is not exported

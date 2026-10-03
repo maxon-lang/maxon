@@ -1,0 +1,34 @@
+// Test: error.a-borrowed-field-outlives-a-move-of-its-root-into-a-nested-block
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+
+	if inner.label.byteLength() > 0 'nested'
+		let r = b
+		print("{r.inner.label.byteLength()}\n")
+	end 'nested'
+
+	print("{inner.label.byteLength()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:27:2: cannot drop 'r' at the end of its block while it is borrowed by 'inner' (borrowed at line 22)

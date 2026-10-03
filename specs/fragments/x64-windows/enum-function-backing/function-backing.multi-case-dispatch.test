@@ -55,21 +55,22 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.leaRegFunc rax, [rip + __fnref_doubleFn]
-    x64.leaRegFunc rcx, [rip + __fnref_tripleFn]
+    x64.leaRegRdata rax, [rip + __fnrec_doubleFn]
+    x64.leaRegRdata rcx, [rip + __fnrec_tripleFn]
     x64.imulRegRegImm32 rcx, rcx, 0
-    x64.leaRegRegReg rax, rax, rcx
-    x64.leaRegFunc rcx, [rip + __fnref_doubleFn]
-    x64.imulRegRegImm32 rcx, rcx, 0
-    x64.leaRegFunc rdx, [rip + __fnref_tripleFn]
-    x64.leaRegRegReg rbx, rcx, rdx
+    x64.leaRegRegReg rdx, rax, rcx
+    x64.leaRegRdata rax, [rip + __fnrec_doubleFn]
+    x64.imulRegRegImm32 rax, rax, 0
+    x64.leaRegRdata rcx, [rip + __fnrec_tripleFn]
+    x64.leaRegRegReg rbx, rax, rcx
     x64.movRegImm32 rcx, 5
-    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
     x64.callReg rax
     x64.movRegReg r12, r8
     x64.movRegImm32 rcx, 10
-    x64.movRegImm32 rdx, 0
-    x64.callReg rbx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rdx, rbx
+    x64.callReg rax
     x64.leaRegRegReg r8, r12, r8
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic

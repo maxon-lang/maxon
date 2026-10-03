@@ -63,6 +63,19 @@ func @goA$closure_0 {
     x64.movRegReg rax, r8
   trycont:
     x64.leaRegRegImm32 r8, rax, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a.maxon:12: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -84,6 +97,19 @@ func @goB$closure_0 {
     x64.movRegReg rax, r8
   trycont:
     x64.leaRegRegImm32 r8, rax, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r8, 5
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at b.maxon:12: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -100,21 +126,21 @@ func @main {
     x64.pushReg r15
     x64.prologue 104
   __il_body#5:
-    x64.leaRegFunc rbx, [rip + goA$closure_0]
-    x64.movRegImm32 r12, 0
+    x64.leaRegRdata rbx, [rip + __fnrec_goA$closure_0]
   __il_body#7:
     x64.movRegImm32 rcx, 2
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
-    x64.movRegReg r13, r8
+    x64.movRegReg r12, r8
     x64.movRegImm32 rdx, 700
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_push
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r12
-    x64.callReg rbx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callReg rax
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, r13
+    x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
   __il_cont#6:
     x64.movRegImm32 rcx, 20
@@ -154,21 +180,21 @@ func @main {
     x64.storeSlotReg slot5, rcx
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
   __il_body#8:
-    x64.leaRegFunc r12, [rip + goB$closure_0]
-    x64.movRegImm32 r13, 0
+    x64.leaRegRdata r12, [rip + __fnrec_goB$closure_0]
   __il_body#10:
     x64.movRegImm rcx, 18446744073709551612
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
-    x64.movRegReg r14, r8
+    x64.movRegReg r13, r8
     x64.movRegImm32 rdx, 3
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.callDirect __managed_push
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r13
-    x64.callReg r12
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.callReg rax
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
   __il_cont#9:
     x64.movRegImm32 rcx, 20

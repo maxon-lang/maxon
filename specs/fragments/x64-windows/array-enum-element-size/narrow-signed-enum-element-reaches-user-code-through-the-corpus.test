@@ -125,9 +125,8 @@ func @main {
     x64.movRegImm rdx, 18446744073709551615
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.leaRegFunc r9, [rip + __fnref_bySignal]
-    x64.movRegImm32 rsi, 0
-    x64.leaRegRdata rdi, [rip + __layout_Array_Signal]
+    x64.leaRegRdata r9, [rip + __fnrec_bySignal]
+    x64.leaRegRdata rsi, [rip + __layout_Array_Signal]
   __il_body#20:
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -164,10 +163,8 @@ func @main {
     x64.movRegReg rax, r8
   trycont#6:
     x64.storeSlotReg slot1, rax
-    x64.movRegImm32 rax, 0
-    x64.storeSlotReg slot4, rax
-    x64.leaRegFunc r12, [rip + __fnref_markNegative]
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r12, 0
+    x64.leaRegRdata r13, [rip + __fnrec_markNegative]
     x64.leaRegRdata rax, [rip + __layout_Array_Signal]
   __il_body#24:
     x64.movRegImm32 rcx, 8
@@ -198,8 +195,9 @@ func @main {
     x64.callDirect __managed_get_unchecked
     x64.movRegReg rcx, r8
   __im_cont#29:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.movRegReg rdx, r13
-    x64.callReg r12
+    x64.callReg rax
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
@@ -213,21 +211,20 @@ func @main {
     x64.movRegImm32 rdx, 0
   __us_test:
     x64.loadRegBaseDisp.word64 rbx, [r14 + 8]
-    x64.loadRegBaseDisp.word64 r12, [r14 + 24]
-    x64.loadRegBaseDisp.word64 r13, [r14 + 0]
-    x64.loadRegSlot r15, slot4
+    x64.loadRegBaseDisp.word64 r13, [r14 + 24]
+    x64.loadRegBaseDisp.word64 r15, [r14 + 0]
     x64.jmp forhdr#7
   each:
-    x64.cmpRegImm32 r12, 8
+    x64.cmpRegImm32 r13, 8
     x64.jcc notEqual, __im_stride#18
   __im_word#16:
-    x64.loadRegBaseIndexScale.word64 rax, [r13 + rdx*8 + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [r15 + rdx*8 + 0]
     x64.jmp __im_cont#14
   __im_stride#18:
-    x64.cmpRegImm32 r12, 1
+    x64.cmpRegImm32 r13, 1
     x64.jcc notEqual, __im_slow#15
   __im_byte#17:
-    x64.leaRegRegReg rax, r13, rdx
+    x64.leaRegRegReg rax, r15, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.jmp __im_cont#14
   __im_slow#15:
@@ -237,7 +234,7 @@ func @main {
   __im_cont#14:
     x64.shlRegImm8 rax, rax, 56
     x64.sarRegImm8 rax, rax, 56
-    x64.leaRegRegReg r15, r15, rax
+    x64.leaRegRegReg r12, r12, rax
   forstep#9:
     x64.loadRegSlot rax, slot3
     x64.leaRegRegImm32 rdx, rax, 1
@@ -255,7 +252,7 @@ func @main {
     x64.leaRegRegImm32 rcx, rcx, 2
     x64.imulRegRegImm32 rcx, rcx, 10
     x64.leaRegRegReg rax, rax, rcx
-    x64.leaRegRegReg rbx, rax, r15
+    x64.leaRegRegReg rbx, rax, r12
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#12
   __rc_chk:

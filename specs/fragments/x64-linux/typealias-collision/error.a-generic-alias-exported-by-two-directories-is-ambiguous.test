@@ -1,0 +1,20 @@
+// Test: error.a-generic-alias-exported-by-two-directories-is-ambiguous
+// --- file: lib/t.maxon
+export typealias Bag = Array with ExitCode
+
+// --- file: alt/u.maxon
+export typealias Bag = Array with bool
+
+// --- file: app/main.maxon
+function first(b Bag) returns ExitCode
+	return try b.get(0) otherwise 0
+end 'first'
+
+function main() returns ExitCode
+	var b = lib.Bag.create()
+	b.push(7)
+	return first(b)
+end 'main'
+---
+CompilerError:
+error E3063: app/<fragment>:9:18: Ambiguous type name 'Bag': more than one visible declaration matches it. Qualify it as one of: alt.Bag, lib.Bag

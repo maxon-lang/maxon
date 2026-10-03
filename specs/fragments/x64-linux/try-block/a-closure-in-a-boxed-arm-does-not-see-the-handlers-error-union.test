@@ -225,8 +225,7 @@ func @inArm {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic#14
@@ -255,22 +254,22 @@ func @inArm {
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, matchnext#9
   matcharm#5:
-    x64.leaRegFunc r13, [rip + inArm$closure_0]
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + inArm$closure_0$drop]
+    x64.movRegImm32 rcx, 24
     x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeBaseDispReg.word64 [r14 + 0], rbx
-    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.movRegReg r13, r8
+    x64.leaRegFunc rax, [rip + inArm$closure_0]
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.storeBaseDispReg.word64 [r13 + 8], rbx
+    x64.storeBaseDispReg.word64 [r13 + 16], r12
   __il_body:
-    x64.movRegReg rcx, r14
-    x64.callReg r13
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.movRegReg rcx, r13
+    x64.callReg rax
     x64.movRegReg rbx, r8
   __il_cont:
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_BoxErr
     x64.movRegReg rax, rbx
     x64.jmp matchcont
   matchnext#9:
@@ -297,8 +296,7 @@ func @inArm {
     x64.cmpRegImm32 r8, 1000
     x64.jcc greater, __rc_panic#17
   __rc_ok#16:
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -308,8 +306,7 @@ func @inArm {
     x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at a-closure-in-a-boxed-arm-does-not-see-the-handlers-error-union.test:44: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -319,8 +316,7 @@ func @inArm {
     x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at a-closure-in-a-boxed-arm-does-not-see-the-handlers-error-union.test:63: Range check failed: value outside typealias 'Tally'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg r14
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -336,19 +332,19 @@ func @inArm$closure_0 {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.leaRegRegReg rax, rax, rdx
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.leaRegRegReg rax, rax, rdx
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.leaRegRegReg rax, rax, rdx
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.leaRegRegReg rax, rax, rdx
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.leaRegRegReg rax, rax, rdx
     x64.imulRegRegImm32 rbx, rax, 0
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, matchdead
@@ -371,6 +367,7 @@ func @inArm$closure_0 {
     x64.callDirect __str_decref
   matchcont#6:
     x64.leaRegRegReg r8, rbx, r13
+  __rc_ok:
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
@@ -378,6 +375,19 @@ func @inArm$closure_0 {
     x64.popReg rbp
     x64.ret
   matchdead:
+}
+
+func @inArm$closure_0$drop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.callDirect __destruct_BoxErr
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }
 
 func @main {

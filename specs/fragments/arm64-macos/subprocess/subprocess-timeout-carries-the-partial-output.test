@@ -25,7 +25,8 @@ function main() returns ExitCode
 			executableNotFound or
 				spawnFailed or
 				ioFailed or
-				inputTooLarge gives ""
+				inputTooLarge or
+				endOfStream gives ""
 		end 'kind'
 	end 'handler'
 	if partial.contains("alpha") 'check'
@@ -199,7 +200,11 @@ func @main {
     arm64.b matchcont
   matchnext#9:
     arm64.cmp x0, 4
-    arm64.b.ne matchdead
+    arm64.cset x1, ge
+    arm64.cmp x0, 5
+    arm64.cset x0, le
+    arm64.and x0, x1, x0
+    arm64.cbz x0, matchdead
   matcharm#6:
     arm64.leaRdata x0, __str_rec_53  ; ""
     arm64.bl __str_retain

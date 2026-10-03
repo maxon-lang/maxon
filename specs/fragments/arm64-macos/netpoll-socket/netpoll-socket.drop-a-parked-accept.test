@@ -7,8 +7,7 @@ function stall(listener TcpListener) returns ExitCode throws NetworkError
 	return 0
 end 'stall'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(listener TcpListener) returns ExitCode
 	let port = listener.port()
 
 	let before = __Builtins.schedNetpollBlockCount()
@@ -20,6 +19,11 @@ function main() returns ExitCode
 
 	print("dropped={parked > 0 and stillWaiting} bound={stillBound}\n")
 	return cleanExit as ExitCode
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ---
 ExitCode: 42
@@ -121,13 +125,13 @@ func @main {
     arm64.storeSlotReg slot7, x21
     arm64.storeSlotReg slot6, x20
     arm64.storeSlotReg slot5, x19
-    arm64.leaRdata x0, __str_rec_13  ; "127.0.0.1"
+    arm64.leaRdata x0, __str_rec_16  ; "127.0.0.1"
     arm64.movImm x1, 0
     arm64.bl TcpListener.bind
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
     arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b.eq __il_body#4
   tryerr:
     arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot5
@@ -142,7 +146,7 @@ func @main {
     arm64.loadRegSlot x28, slot14
     arm64.epilogue 144
     arm64.ret
-  tryok:
+  __il_body#4:
     arm64.movRegReg x0, x19
     arm64.bl TcpListener.port
     arm64.movRegReg x20, x0
@@ -161,9 +165,9 @@ func @main {
     arm64.movRegReg x0, x23
     arm64.bl __gt_ready
     arm64.movImm x0, 200
-  __il_body#6:
+  __il_body#8:
     arm64.bl __gt_sleep
-  __il_cont#5:
+  __il_cont#7:
     arm64.bl __sched_netpoll_block_count
     arm64.sub x21, x0, x21
     arm64.movRegReg x0, x23
@@ -174,7 +178,7 @@ func @main {
     arm64.bl TcpListener.port
     arm64.cmp x0, x20
     arm64.cset x19, eq
-    arm64.leaRdata x0, __str_rec_14  ; "dropped="
+    arm64.leaRdata x0, __str_rec_13  ; "dropped="
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
     arm64.cmp x21, 0
@@ -191,7 +195,7 @@ func @main {
     arm64.movRegReg x1, x21
     arm64.bl __bool_to_string
     arm64.movRegReg x22, x0
-    arm64.leaRdata x0, __str_rec_15  ; " bound="
+    arm64.leaRdata x0, __str_rec_14  ; " bound="
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.movImm x0, 5
@@ -202,7 +206,7 @@ func @main {
     arm64.movRegReg x1, x26
     arm64.bl __bool_to_string
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_16  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_15  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.storeSlotReg slot4, x0
@@ -254,15 +258,16 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-  __il_body#8:
+  __il_body#10:
     arm64.loadRegSlot x0, slot3
     arm64.bl __write_stdout
-  __il_cont#7:
+  __il_cont#9:
     arm64.loadRegSlot x0, slot3
     arm64.bl __str_decref
     arm64.movImm x19, 42
     arm64.loadRegSlot x0, slot1
     arm64.bl __gt_promise_drop
+  __il_cont#3:
     arm64.loadRegSlot x0, slot0
     arm64.bl __destruct_TcpListener
     arm64.movRegReg x0, x19

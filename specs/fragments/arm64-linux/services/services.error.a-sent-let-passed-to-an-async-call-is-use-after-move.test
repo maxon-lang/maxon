@@ -1,0 +1,37 @@
+// Test: services.error.a-sent-let-passed-to-an-async-call-is-use-after-move
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function readIt(b Box) returns Integer
+	Scheduler.yield()
+	return b.n
+end 'readIt'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.take(b)
+	let p = async readIt(b)
+	return (await p) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3102: <fragment>:31:23: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment

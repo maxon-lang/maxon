@@ -1,0 +1,19 @@
+// Test: pass-by-reference.a-string-read-after-an-async-spawn-to-a-reassigning-callee-is-use-after-move
+typealias Integer = int(i64.min to i64.max)
+
+function rename(dest String, n Integer) returns Integer
+	Scheduler.yield()
+	dest = "renamed-{n}"
+	return n
+end 'rename'
+
+function main() returns ExitCode
+	var s = "orig-{1}"
+	let p = async rename(s, n: 7)
+	let r = await p
+	print("{r} {s}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:14:14: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment

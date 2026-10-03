@@ -1,0 +1,25 @@
+// Test: two-library-module-aliases-no-reader-can-both-name-coexist
+// --- stdlib-overlay: helpers/string/hash.maxon
+module typealias OverlayLocalWidth = int(0 to 7)
+// --- stdlib-overlay: helpers/hashtable/slotScan.maxon
+module typealias OverlayLocalWidth = int(0 to 9)
+// --- file: main.maxon
+function main() returns ExitCode
+	return 3
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __mrt_program_started@16 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}

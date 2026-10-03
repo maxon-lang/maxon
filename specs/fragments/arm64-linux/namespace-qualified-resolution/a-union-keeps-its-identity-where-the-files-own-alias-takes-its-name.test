@@ -1,0 +1,86 @@
+// Test: a-union-keeps-its-identity-where-the-files-own-alias-takes-its-name
+// --- file: a/s.maxon
+export union Shape
+	dot
+	line(length ExitCode)
+end 'Shape'
+
+export function longest() returns Shape
+	return Shape.line(9)
+end 'longest'
+
+// --- file: app/main.maxon
+typealias Shape = int(0 to 10)
+
+function measure(s a.Shape) returns ExitCode
+	match s 'kind'
+		dot then return 1
+		line(length) then return length
+	end 'kind'
+end 'measure'
+
+function main() returns ExitCode
+	let local = 2 as Shape
+	return measure(a.longest()) + measure(a.Shape.dot) + (local as ExitCode)
+end 'main'
+---
+ExitCode: 12
+---
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_program_started@24 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body#5:
+    arm64.movImm x0, 9
+    arm64.movImm x1, 1
+  __il_body#8:
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext#12
+  matcharm#9:
+    arm64.movImm x0, 1
+    arm64.b __il_cont#7
+  matchnext#12:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead#11
+  __il_cont#7:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+  __il_body#14:
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext#18
+  matcharm#15:
+    arm64.movImm x1, 1
+    arm64.b __il_cont#6
+  matchnext#18:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead#17
+  matcharm#16:
+    arm64.movRegReg x1, x2
+  __il_cont#6:
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, 2
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  matchdead#17:
+  matchdead#11:
+  matchcont#13:
+  matchcont#19:
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at main.maxon:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
