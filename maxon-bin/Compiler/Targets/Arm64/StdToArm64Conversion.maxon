@@ -968,7 +968,7 @@ export type StdToArm64Lowering
 			osFileAttributes(resultId, pathPtrId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostFileAttributesName), args: argsOf(pathPtrId), dstRef: dstRef)
 			osPanicValue(messagePtrId) then self.lowerPanicValue(messagePtrId, dstRef: dstRef)
 
-			// The UNSPLIT command line is a Windows shape: `GetCommandLineA` is a Win32 import, and macOS hands
+			// The UNSPLIT command line is a Windows shape: `GetCommandLineW` is a Win32 import, and macOS hands
 			// argv to `mrt_start` in x0/x1 instead — a pre-split vector, not one string to split — so a lowering
 			// here would have to answer a question this op does not ask. This lane serves argv through the other
 			// Std graph (`CommandLineRuntime.commandLineShape`) and so provides `HostFacility.commandLine`, which
@@ -980,7 +980,7 @@ export type StdToArm64Lowering
 			// subtraction.
 			osStdHandle(resultId, whichId) then self.lowerOsStdHandle(resultId, whichId: whichId, dstRef: dstRef)
 
-			// The platforms disagree about the executable path (`GetModuleFileNameA`, `_NSGetExecutablePath`
+			// The platforms disagree about the executable path (`GetModuleFileNameW`, `_NSGetExecutablePath`
 			// plus `realpath`, `/proc/self/exe`), and the chunk discharges that here, leaving the
 			// target-neutral doubling loop above it untouched.
 			osExecutablePath(resultId, bufLenId, bufPtrId) then self.lowerBufferFill(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, chunkName: HostExePathName, dstRef: dstRef)
@@ -996,7 +996,7 @@ export type StdToArm64Lowering
 			stackRecordAddr(resultId, slot) then self.emit(dstRef, op: TargetOp.leaRegSlot(TargetVReg.virtual(resultId), slot: slot))
 
 			// ⭐⭐ **THE PRODUCER'S ATTACH — READ THE VARIABLE, THEN OPEN WHAT IT NAMES, IN ONE CHUNK.** Win32
-			// fuses `GetEnvironmentVariableA` with `OpenFileMappingA` because the first FILLS a buffer the
+			// fuses `GetEnvironmentVariableW` with `OpenFileMappingW` because the first FILLS a buffer the
 			// second reads, and arm64-Linux keeps that shape; macOS's `getenv` answers a pointer into the
 			// environment block that `shm_open` takes directly, so the buffer and its length have no reader on
 			// THAT route alone. Both operands travel here because the op serves both.
@@ -1045,7 +1045,7 @@ export type StdToArm64Lowering
 
 			// ⭐ The ENVIRONMENT READ sits inside the attached-subprocess band by declaration order and is
 			// not a subprocess op at all — `__sched_init_procs` reads `MAXON_MAX_PROCS` through it on every
-			// green-thread program. `getenv` answers a POINTER where `GetEnvironmentVariableA` fills a buffer,
+			// green-thread program. `getenv` answers a POINTER where `GetEnvironmentVariableW` fills a buffer,
 			// so the copy is the chunk's work; see `buildArm64DarwinEnvReadChunk`.
 			osEnvRead(resultId, namePtrId, bufPtrId, bufLenId) then self.lowerOsEnvRead(resultId, namePtrId: namePtrId, bufPtrId: bufPtrId, bufLenId: bufLenId, dstRef: dstRef)
 			osProcessTerminate(resultId, handleId, exitCodeId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostProcTerminateName), args: twoArgs(handleId, second: exitCodeId), dstRef: dstRef)
@@ -1098,7 +1098,7 @@ export type StdToArm64Lowering
 			osEnterBackgroundPriority(resultId) then self.lowerOsEnterBackgroundPriority(resultId, dstRef: dstRef)
 
 			// `openWriteExecutable` is `openWrite` with the execute bits — the same flags, a different
-			// mode. On Windows the two are one `CreateFileA`; here the mode is the whole difference, which is
+			// mode. On Windows the two are one `CreateFileW`; here the mode is the whole difference, which is
 			// why they are two ops (`StdOp.osFileOpenWriteExecutable`).
 			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, darwinFlags: DarwinOpenCreateTruncateFlags, linuxFlags: LinuxOpenCreateTruncateFlags, mode: PosixCreateExecutableFileMode as MachineWord, dstRef: dstRef)
 			osFileOpenCreateNew(resultId, pathPtrId) then self.lowerOsFileOpen(resultId, pathPtrId: pathPtrId, darwinFlags: DarwinOpenCreateExclusiveFlags, linuxFlags: LinuxOpenCreateExclusiveFlags, mode: PosixCreateFileMode as MachineWord, dstRef: dstRef)
@@ -1118,7 +1118,7 @@ export type StdToArm64Lowering
 			osHandleFileType(resultId, handleId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostHandleFileTypeName), args: argsOf(handleId), dstRef: dstRef)
 			osProcessProbe(resultId, pidId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostProcProbeName), args: argsOf(pidId), dstRef: dstRef)
 			osProcessExitSignal(resultId, handleId) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostProcExitSignalName), args: argsOf(handleId), dstRef: dstRef)
-			osEnvBlockFree then panic("StdToArm64Lowering: `osEnvBlockFree` releases a `GetEnvironmentStringsA` COPY and neither POSIX lane has one — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` for both, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
+			osEnvBlockFree then panic("StdToArm64Lowering: `osEnvBlockFree` releases a `GetEnvironmentStringsW` COPY and neither POSIX lane has one — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` for both, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release. Reaching here means a producer emitted one anyway, which is a compiler bug rather than a user-facing rejection")
 		end 'lower'
 
 		if bracketed 'readTheVerdict'
@@ -2359,7 +2359,7 @@ export type StdToArm64Lowering
 	// ⭐ **THE ATTACH SPLITS ON HOW MANY OPERANDS ITS CHUNK READS, NOT ONLY ON WHICH CHUNK.** macOS's
 	// `getenv` answers a POINTER `shm_open` takes directly, so the scratch buffer and its length go nowhere;
 	// arm64-Linux reads the value into that buffer with `mrt_host_env_read` and then opens the path built
-	// from it, which is `GetEnvironmentVariableA`'s own shape (`StdOp.osOpenNamedSegment`).
+	// from it, which is `GetEnvironmentVariableW`'s own shape (`StdOp.osOpenNamedSegment`).
 	function lowerNamedSegmentAttach(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstRef ElementIndex)
 		match arm64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(DarwinShmOpenName), args: argsOf(namePtrId), dstRef: dstRef)
@@ -2903,7 +2903,7 @@ export type StdToArm64Lowering
 	end 'lowerOsCloseHandle'
 
 	// ⭐⭐ `osEnvBlock(result)` ⇒ this process's `environ`, the POSIX shape of the question
-	// `GetEnvironmentStringsA` answers on Windows. `SubprocessRuntime.environmentSnapshotShape` is what tells
+	// `GetEnvironmentStringsW` answers on Windows. `SubprocessRuntime.environmentSnapshotShape` is what tells
 	// the producer which of the two it is indexing, so nothing below the Std tier has to know.
 	//
 	// ⛔⛔ **BOTH LANES REACH THE VECTOR THROUGH A WORD THAT HOLDS IT, AND THE DEREFERENCE IS THEREFORE

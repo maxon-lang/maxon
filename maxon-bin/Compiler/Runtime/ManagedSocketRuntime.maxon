@@ -18,7 +18,7 @@
 //
 // ⭐⭐ **THE BOX IS ONE-LEVEL, WHICH IS `__ManagedFile`'s SHAPE AND DELIBERATELY NOT `__ManagedDirectory`'s.**
 // A `__ManagedSocket` is an 8-byte box holding the raw OS SOCKET and nothing else. The directory family needs
-// a second allocation because the OS WRITES THROUGH a 320-byte find record for the whole life of a search;
+// a second allocation because the OS WRITES THROUGH a 592-byte find record for the whole life of a search;
 // a socket has no such record — every transfer hands the kernel the CALLER's buffer — so a second level would
 // be an indirection with nothing in it. `specs/managed-socket.md`'s "Type Structure" states the single
 // `_handle` field, and `SignatureIndex.managedSocketLayout` is what holds the front end's declared shape to
@@ -754,9 +754,9 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	let deadlineMs = 2 as ValueId
 
 	// The host arrives as a `__ManagedMemory` record whose buffer carries NO terminator, and `getaddrinfo`
-	// takes an `LPCSTR` — `emitPathToCString`'s whole argument, one family over, and the scratch is this
-	// function's to release.
-	let host = emitPathToCString(module, func: func, cur: entry, join: init, pathRec: hostRec, ids: ids)
+	// takes a narrow `LPCSTR` on every host, a wide one included — `emitBytesToCString`'s whole
+	// argument, one family over, and the scratch is this function's to release.
+	let host = emitPathToText(module, func: func, cur: entry, join: init, pathRec: hostRec, encoding: HostTextEncoding.utf8, ids: ids)
 
 	// The two operations that can block are resolving a name and `connect()`, and each has its own park; the
 	// startup has none for `emitWinsockStartup`'s stated reason.

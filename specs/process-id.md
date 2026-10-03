@@ -41,7 +41,7 @@ properties asserted below are all that cannot vary:
 Nothing a Maxon program can reach reports "the id the OS has for this process" independently of the
 intrinsic itself, so there is no equality to assert against an outside authority. What IS reachable
 is a SECOND live process whose id the OS reports through a different entry point entirely
-(`subprocessGetPid`, off the `CreateProcessA` `PROCESS_INFORMATION`), and two live processes never
+(`subprocessGetPid`, off the `CreateProcessW` `PROCESS_INFORMATION`), and two live processes never
 share an id. That falsifies every wrong answer of the shape "a constant", "the same id for
 everybody" and "the child's id" — which is the whole class a stable, positive, DWORD-sized number
 could otherwise hide in.
@@ -144,7 +144,7 @@ the `subprocess` facility is a separate row from `processInfo` in
 `TargetFacilities.targetProvidesFacility`. The pid half of it runs anywhere; the oracle does not.
 
 The only oracle a program can reach: spawn a child and ask a DIFFERENT entry point
-(`__Builtins.subprocessGetPid`, off `CreateProcessA`'s `PROCESS_INFORMATION`) for ITS id. Two live
+(`__Builtins.subprocessGetPid`, off `CreateProcessW`'s `PROCESS_INFORMATION`) for ITS id. Two live
 processes never share one, so a constant — or an intrinsic that answered the child's id, or the same
 id for every process — cannot pass. The child is waited on and both structs released, so the case is
 leak-clean.

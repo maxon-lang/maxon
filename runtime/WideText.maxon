@@ -1,0 +1,282 @@
+module typealias WideTextWord = int(i64.min to i64.max)
+
+#if os(Windows)
+	let NarrowUnitBytes = 1
+	let WideUnitBytes = 2
+	let ByteBits = 8
+	let ByteMask = 0xFF
+	let AsciiLimit = 0x80
+	let NonAsciiByte = 0xFF
+	let ContinuationFloor = 0x80
+	let ContinuationCeiling = 0xBF
+	let ContinuationPayloadMask = 0x3F
+	let ContinuationPayloadBits = 6
+	let TwoByteLeadFloor = 0xC2
+	let TwoByteLead = 0xC0
+	let ThreeByteLead = 0xE0
+	let FourByteLead = 0xF0
+	let LeadCeiling = 0xF5
+	let TwoByteLeadMask = 0x1F
+	let ThreeByteLeadMask = 0x0F
+	let FourByteLeadMask = 0x07
+	let ThreeByteOverlongSecondFloor = 0xA0
+	let SurrogateRangeLead = 0xED
+	let SurrogateRangeSecondCeiling = 0x9F
+	let FourByteOverlongSecondFloor = 0x90
+	let FourByteLastLead = 0xF4
+	let FourByteLastSecondCeiling = 0x8F
+	let TwoByteCeiling = 0x800
+	let BasicPlaneCeiling = 0x10000
+	let ReplacementCodepoint = 0xFFFD
+	let HighSurrogateFloor = 0xD800
+	let HighSurrogateCeiling = 0xDBFF
+	let LowSurrogateFloor = 0xDC00
+	let LowSurrogateCeiling = 0xDFFF
+	let SurrogatePayloadBits = 10
+	let SurrogatePayloadMask = 0x3FF
+
+	function wideTextByte(src WideTextWord, index WideTextWord) returns WideTextWord
+		return __Raw.loadByte((src + index) as MachineWord, offset: 0) as WideTextWord
+	end 'wideTextByte'
+
+	function wideTextUnit(src WideTextWord, index WideTextWord) returns WideTextWord
+		let address = src + (index * WideUnitBytes)
+
+		return (__Raw.loadByte(address as MachineWord, offset: 0) as WideTextWord) or ((__Raw.loadByte(address as MachineWord, offset: 1) as WideTextWord) shl ByteBits)
+	end 'wideTextUnit'
+
+	function wideTextUnitOfWidth(src WideTextWord, index WideTextWord, unitBytes WideTextWord) returns WideTextWord
+		if unitBytes == NarrowUnitBytes 'narrow'
+			return wideTextByte(src, index: index)
+		end 'narrow'
+
+		return wideTextUnit(src, index: index)
+	end 'wideTextUnitOfWidth'
+
+	function wideTextStoreByte(dst WideTextWord, index WideTextWord, value WideTextWord)
+		if dst != 0 'writing'
+			__Raw.storeByte((dst + index) as MachineWord, offset: 0, value: (value and ByteMask) as MachineWord)
+		end 'writing'
+	end 'wideTextStoreByte'
+
+	function wideTextStoreUnit(dst WideTextWord, index WideTextWord, value WideTextWord)
+		let address = index * WideUnitBytes
+
+		wideTextStoreByte(dst, index: address, value: value)
+		wideTextStoreByte(dst, index: address + 1, value: value shr ByteBits)
+	end 'wideTextStoreUnit'
+
+	function wideTextContinuationAt(src WideTextWord, index WideTextWord, byteLen WideTextWord, lowest WideTextWord, highest WideTextWord) returns bool
+		if index >= byteLen 'truncated'
+			return false
+		end 'truncated'
+
+		let value = wideTextByte(src, index: index)
+
+		return value >= lowest and value <= highest
+	end 'wideTextContinuationAt'
+
+	function wideTextSequenceWidth(src WideTextWord, index WideTextWord, byteLen WideTextWord) returns WideTextWord
+		let lead = wideTextByte(src, index: index)
+
+		if lead < AsciiLimit 'ascii'
+			return 1
+		end 'ascii'
+
+		if lead < TwoByteLeadFloor 'strayOrOverlong'
+			return 0
+		end 'strayOrOverlong'
+
+		if lead < ThreeByteLead 'twoByte'
+			if wideTextContinuationAt(src, index: index + 1, byteLen: byteLen, lowest: ContinuationFloor, highest: ContinuationCeiling) 'complete'
+				return 2
+			end 'complete'
+
+			return 0
+		end 'twoByte'
+
+		if lead < FourByteLead 'threeByte'
+			let secondLowest = ThreeByteOverlongSecondFloor if lead == ThreeByteLead else ContinuationFloor
+			let secondHighest = SurrogateRangeSecondCeiling if lead == SurrogateRangeLead else ContinuationCeiling
+
+			if wideTextContinuationAt(src, index: index + 1, byteLen: byteLen, lowest: secondLowest, highest: secondHighest) and wideTextContinuationAt(src, index: index + 2, byteLen: byteLen, lowest: ContinuationFloor, highest: ContinuationCeiling) 'complete'
+				return 3
+			end 'complete'
+
+			return 0
+		end 'threeByte'
+
+		if lead < LeadCeiling 'fourByte'
+			let secondLowest = FourByteOverlongSecondFloor if lead == FourByteLead else ContinuationFloor
+			let secondHighest = FourByteLastSecondCeiling if lead == FourByteLastLead else ContinuationCeiling
+
+			if wideTextContinuationAt(src, index: index + 1, byteLen: byteLen, lowest: secondLowest, highest: secondHighest) and wideTextContinuationAt(src, index: index + 2, byteLen: byteLen, lowest: ContinuationFloor, highest: ContinuationCeiling) and wideTextContinuationAt(src, index: index + 3, byteLen: byteLen, lowest: ContinuationFloor, highest: ContinuationCeiling) 'complete'
+				return 4
+			end 'complete'
+
+			return 0
+		end 'fourByte'
+
+		return 0
+	end 'wideTextSequenceWidth'
+
+	function wideTextPayload(src WideTextWord, index WideTextWord) returns WideTextWord
+		return wideTextByte(src, index: index) and ContinuationPayloadMask
+	end 'wideTextPayload'
+
+	function wideTextCodepoint(src WideTextWord, index WideTextWord, width WideTextWord) returns WideTextWord
+		let lead = wideTextByte(src, index: index)
+
+		if width == 1 'oneByte'
+			return lead
+		end 'oneByte'
+
+		if width == 2 'twoByte'
+			return ((lead and TwoByteLeadMask) shl ContinuationPayloadBits) or wideTextPayload(src, index: index + 1)
+		end 'twoByte'
+
+		if width == 3 'threeByte'
+			return ((lead and ThreeByteLeadMask) shl (ContinuationPayloadBits * 2)) or (wideTextPayload(src, index: index + 1) shl ContinuationPayloadBits) or wideTextPayload(src, index: index + 2)
+		end 'threeByte'
+
+		return ((lead and FourByteLeadMask) shl (ContinuationPayloadBits * 3)) or (wideTextPayload(src, index: index + 1) shl (ContinuationPayloadBits * 2)) or (wideTextPayload(src, index: index + 2) shl ContinuationPayloadBits) or wideTextPayload(src, index: index + 3)
+	end 'wideTextCodepoint'
+
+	function wideTextStoreCodepointUnits(dst WideTextWord, written WideTextWord, codepoint WideTextWord) returns WideTextWord
+		if codepoint < BasicPlaneCeiling 'basic'
+			wideTextStoreUnit(dst, index: written, value: codepoint)
+
+			return written + 1
+		end 'basic'
+
+		let beyondBasic = codepoint - BasicPlaneCeiling
+
+		wideTextStoreUnit(dst, index: written, value: HighSurrogateFloor + (beyondBasic shr SurrogatePayloadBits))
+		wideTextStoreUnit(dst, index: written + 1, value: LowSurrogateFloor + (beyondBasic and SurrogatePayloadMask))
+
+		return written + 2
+	end 'wideTextStoreCodepointUnits'
+
+	function wideTextStoreCodepointBytes(dst WideTextWord, written WideTextWord, codepoint WideTextWord) returns WideTextWord
+		if codepoint < AsciiLimit 'oneByte'
+			wideTextStoreByte(dst, index: written, value: codepoint)
+
+			return written + 1
+		end 'oneByte'
+
+		if codepoint < TwoByteCeiling 'twoByte'
+			wideTextStoreByte(dst, index: written, value: TwoByteLead or (codepoint shr ContinuationPayloadBits))
+			wideTextStoreByte(dst, index: written + 1, value: ContinuationFloor or (codepoint and ContinuationPayloadMask))
+
+			return written + 2
+		end 'twoByte'
+
+		if codepoint < BasicPlaneCeiling 'threeByte'
+			wideTextStoreByte(dst, index: written, value: ThreeByteLead or (codepoint shr (ContinuationPayloadBits * 2)))
+			wideTextStoreByte(dst, index: written + 1, value: ContinuationFloor or ((codepoint shr ContinuationPayloadBits) and ContinuationPayloadMask))
+			wideTextStoreByte(dst, index: written + 2, value: ContinuationFloor or (codepoint and ContinuationPayloadMask))
+
+			return written + 3
+		end 'threeByte'
+
+		wideTextStoreByte(dst, index: written, value: FourByteLead or (codepoint shr (ContinuationPayloadBits * 3)))
+		wideTextStoreByte(dst, index: written + 1, value: ContinuationFloor or ((codepoint shr (ContinuationPayloadBits * 2)) and ContinuationPayloadMask))
+		wideTextStoreByte(dst, index: written + 2, value: ContinuationFloor or ((codepoint shr ContinuationPayloadBits) and ContinuationPayloadMask))
+		wideTextStoreByte(dst, index: written + 3, value: ContinuationFloor or (codepoint and ContinuationPayloadMask))
+
+		return written + 4
+	end 'wideTextStoreCodepointBytes'
+
+	module function __wt_widen(src WideTextWord, byteLen WideTextWord, dst WideTextWord, refuseNul bool) returns WideTextWord
+		var index = 0 as WideTextWord
+		var written = 0 as WideTextWord
+
+		while index < byteLen 'each'
+			let sequence = wideTextSequenceWidth(src, index: index, byteLen: byteLen)
+			let consumed = 1 if sequence == 0 else sequence
+			let codepoint = ReplacementCodepoint if sequence == 0 else wideTextCodepoint(src, index: index, width: sequence)
+
+			// A path with a NUL inside becomes the empty name, which matches no file; stopping at the NUL
+			// would open the file its prefix names.
+			if codepoint == 0 and refuseNul 'refused'
+				wideTextStoreUnit(dst, index: 0, value: 0)
+
+				return 0
+			end 'refused'
+
+			written = wideTextStoreCodepointUnits(dst, written: written, codepoint: codepoint)
+			index = index + consumed
+		end 'each'
+
+		wideTextStoreUnit(dst, index: written, value: 0)
+
+		return written
+	end '__wt_widen'
+
+	module function __wt_narrow(src WideTextWord, units WideTextWord, dst WideTextWord) returns WideTextWord
+		var index = 0 as WideTextWord
+		var written = 0 as WideTextWord
+
+		while index < units 'each'
+			let unit = wideTextUnit(src, index: index)
+			var codepoint = unit
+			var consumed = 1 as WideTextWord
+
+			if unit >= HighSurrogateFloor and unit <= LowSurrogateCeiling 'surrogate'
+				codepoint = ReplacementCodepoint
+
+				if unit <= HighSurrogateCeiling and index + 1 < units 'canPair'
+					let following = wideTextUnit(src, index: index + 1)
+
+					if following >= LowSurrogateFloor and following <= LowSurrogateCeiling 'paired'
+						codepoint = BasicPlaneCeiling + ((unit - HighSurrogateFloor) shl SurrogatePayloadBits) + (following - LowSurrogateFloor)
+						consumed = 2
+					end 'paired'
+				end 'canPair'
+			end 'surrogate'
+
+			written = wideTextStoreCodepointBytes(dst, written: written, codepoint: codepoint)
+			index = index + consumed
+		end 'each'
+
+		wideTextStoreByte(dst, index: written, value: 0)
+
+		return written
+	end '__wt_narrow'
+
+	// One byte per unit, so the value fits the caller's `capacity`-byte buffer. Its callers parse
+	// ASCII grammars, and 0xFF is a byte none of them accepts.
+	module function __wt_narrow_ascii(src WideTextWord, units WideTextWord, dst WideTextWord, capacity WideTextWord)
+		let count = units if units < capacity else 0
+		var index = 0 as WideTextWord
+
+		while index < count 'each'
+			let unit = wideTextUnit(src, index: index)
+
+			wideTextStoreByte(dst, index: index, value: unit if unit < AsciiLimit else NonAsciiByte)
+			index = index + 1
+		end 'each'
+
+		wideTextStoreByte(dst, index: count, value: 0)
+	end '__wt_narrow_ascii'
+
+	module function __wt_text_length(src WideTextWord, unitBytes WideTextWord) returns WideTextWord
+		var index = 0 as WideTextWord
+
+		while wideTextUnitOfWidth(src, index: index, unitBytes: unitBytes) != 0 'each'
+			index = index + 1
+		end 'each'
+
+		return index
+	end '__wt_text_length'
+
+	module function __wt_block_extent(src WideTextWord) returns WideTextWord
+		var index = 0 as WideTextWord
+
+		while wideTextByte(src, index: index) != 0 'entries'
+			index = index + __wt_text_length(src + index, unitBytes: NarrowUnitBytes) + 1
+		end 'entries'
+
+		return index + 1
+	end '__wt_block_extent'
+#endif

@@ -31,7 +31,7 @@
 // by name.
 //
 // ⚠ The executable-path fill is a Std loop rather than a lowering because the three OS APIs
-// disagree on their own shape. `stdlib/Process.maxon` names all three — `GetModuleFileNameA` on
+// disagree on their own shape. `stdlib/Process.maxon` names all three — `GetModuleFileNameW` on
 // Windows, `_NSGetExecutablePath` on macOS, `/proc/self/exe` on Linux. The first fills a caller's
 // buffer and answers a count; the second takes an in-out size, signals "too small" through a `-1`
 // return plus a rewritten size, leaves that size unchanged on success (so the length must be
@@ -88,13 +88,12 @@ function buildProcessFill(module StdModule, name ByteArray, fill PathFill)
 	let (buffer, _) = emitGrowingPathFill(module, cur: entry, attempt: attempt, fitTest: fitTest, grow: grow, fill: fill, whenRefused: unavailable, whenFits: copyOut, ids: ids)
 
 	// Unavailable: make the buffer the empty string and take the ordinary copy-out.
-	let emptyAt = emitConst(module, block: unavailable, value: 0, ids: ids)
-	let emptyByte = emitConst(module, block: unavailable, value: NulByte, ids: ids)
-	emitStoreByte(module, block: unavailable, base: buffer, index: emptyAt, value: emptyByte, ids: ids)
+	let encoding = pathFillEncoding(module, fill: fill)
+	emitStoreNulUnit(module, block: unavailable, base: buffer, encoding: encoding, ids: ids)
 	module.setTerminator(unavailable, op: StdOp.branch(copyOut.id))
 
 	let record = ids.mint()
-	var built = emitCStringToManaged(module, func: func, cur: copyOut, cstr: buffer, record: record, ids: ids)
+	var built = emitTextToManaged(module, func: func, cur: copyOut, cstr: buffer, record: record, encoding: encoding, ids: ids)
 	emitRawFree(module, block: built, ptr: buffer, ids: ids)
 	module.setTerminator(built, op: StdOp.ret(record))
 

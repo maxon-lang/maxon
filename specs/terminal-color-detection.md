@@ -49,7 +49,7 @@ the result `boolean`, which is `__ManagedDirectory.exists`'s arrangement exactly
 
 ### ⚠ ON WINDOWS, `NO_COLOR` SET TO THE EMPTY STRING READS AS UNSET
 
-`GetEnvironmentVariableA` answers 0 both for a name that is not set and for one whose value is
+`GetEnvironmentVariableW` answers 0 both for a name that is not set and for one whose value is
 empty, and Win32 offers no third answer to tell them apart — `set NO_COLOR=` DELETES the variable
 there, so the two states coincide on the platform as well as in the API. A lane whose `getenv` can
 report a non-NULL empty string owes the sharper test when it lands.

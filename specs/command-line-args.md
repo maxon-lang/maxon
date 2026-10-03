@@ -26,7 +26,7 @@ end 'main'
 ## API
 
 - `CommandLine.args()` - Returns `StringArray` (where `type StringArray implements Array with String`) containing all command line arguments (including argv[0])
-- `Process.executablePath()` - Returns `FilePath` containing the absolute executable path (uses GetModuleFileNameA on Windows, _NSGetExecutablePath on macOS, /proc/self/exe on Linux). Throws `ProcessIntrospectionError.pathUnavailable` if the OS lookup fails.
+- `Process.executablePath()` - Returns `FilePath` containing the absolute executable path (uses GetModuleFileNameW on Windows, _NSGetExecutablePath on macOS, /proc/self/exe on Linux). Throws `ProcessIntrospectionError.pathUnavailable` if the OS lookup fails.
 
 ## Properties
 

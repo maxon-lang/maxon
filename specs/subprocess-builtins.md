@@ -122,7 +122,7 @@ prefix is `os error` rather than `win32 error` because a caller sees one spellin
 
 ### Targets — the Win32 substrate gate
 
-`CreateProcessA` and three overlapped named pipes are a WINDOWS shape, and WASI has no
+`CreateProcessW` and three overlapped named pipes are a WINDOWS shape, and WASI has no
 process-spawn primitive at all. Every one of these intrinsics lowers into the `__gt_subp_` band, which
 `TargetFacilities.calleeHostFacility` maps onto `HostFacility.subprocess`, so a lane that does not provide
 one refuses the call with **E3104** at its own span. ⚠ Outside that gate such a program dies as a BACKEND
@@ -549,10 +549,10 @@ read=0 readErr=0 write=-1 wait=-1 voidsReturned=true
 <!-- test: subprocess-builtins.file-stdio-that-cannot-open-fails-the-spawn -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `InputSource.file(path)` and `OutputDestination.file(path)` are public corpus surface, and
-`CreateFileA` can fail. ⚠ **An unchecked open makes the spawn SUCCEED:** `INVALID_HANDLE_VALUE`
-goes into the STARTUPINFO, `CreateProcessA` does not object, and the spawn answers handle `0` with an
-EMPTY `lastErrorMessage()` for a child whose stdin is a dead handle. The open is checked, and the reason a caller reads is `CreateFileA`'s own — `3` is
-ERROR_PATH_NOT_FOUND — rather than whatever `CreateProcessA` would have said about it afterwards.
+`CreateFileW` can fail. ⚠ **An unchecked open makes the spawn SUCCEED:** `INVALID_HANDLE_VALUE`
+goes into the STARTUPINFO, `CreateProcessW` does not object, and the spawn answers handle `0` with an
+EMPTY `lastErrorMessage()` for a child whose stdin is a dead handle. The open is checked, and the reason a caller reads is `CreateFileW`'s own — `3` is
+ERROR_PATH_NOT_FOUND — rather than whatever `CreateProcessW` would have said about it afterwards.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -1474,7 +1474,7 @@ detached=true newSession=true
 `OutputKind.inherit` hands the child the PARENT's own standard handle, so its text lands in this
 program's stdout with nothing collected; `OutputKind.discard` opens the NUL device, so the second
 child's text goes nowhere at all. ⚠ An inherited handle belongs to the OS, and a spawn that closed
-it after `CreateProcessA` — as it must close a pipe end or a file it opened — would close the
+it after `CreateProcessW` — as it must close a pipe end or a file it opened — would close the
 PARENT's stdout and the tail of the line below would never appear.
 
 ⚠ The children use `set /p` rather than `echo` for one reason: `echo` ends its line with a Windows
@@ -2167,7 +2167,7 @@ grew=true absolute=true missIsNull=0 missEchoed=true
 <!-- test: subprocess-builtins.last-error-is-empty-when-clean -->
 `subprocessLastErrorMessage()` answers the EMPTY buffer while nothing has failed, and the OS
 error NUMBER once something has — here a spawn of an executable that does not exist, which
-`CreateProcessA` refuses with `ERROR_FILE_NOT_FOUND` (2) and a POSIX spawn with `ENOENT`, which
+`CreateProcessW` refuses with `ERROR_FILE_NOT_FOUND` (2) and a POSIX spawn with `ENOENT`, which
 `mrt_host_last_error` translates to the same 2.
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -2218,7 +2218,7 @@ The block is the platform's own shape: NUL-terminated `NAME=VALUE` entries back 
 NUL. `appendToken` writes the first NUL of each entry, and the lone `push(0)` after the last one ends
 the block.
 
-⚠ `cmd` still resolves although the child's environment carries no `PATH`: `CreateProcessA` searches
+⚠ `cmd` still resolves although the child's environment carries no `PATH`: `CreateProcessW` searches
 with the CALLING process's PATH, not the one it is about to hand over.
 ```maxon
 typealias Byte = int(0 to u8.max)

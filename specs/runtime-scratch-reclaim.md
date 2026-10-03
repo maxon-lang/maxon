@@ -10,14 +10,14 @@ category: system
 ## Documentation
 
 The green-thread scheduler, the one-shot read probe and the subprocess runner all need small
-regions the language cannot name: a GT record, a mutable command line, a `STARTUPINFOA`, a
+regions the language cannot name: a GT record, a mutable command line, a `STARTUPINFOW`, a
 `PROCESS_INFORMATION`, an overlapped read buffer. They carry no box header and no refcount, so the
 allocator's TRACKED live column — the one the leak gate reads — cannot see them. The per-call scratch
 comes from `__slab_alloc` directly; a GT record comes from the scheduler's own record arena, carved from
 `osAllocPages` chunks like a green thread's stack, so it moves no raw column either.
 
 ⭐⭐ **THE PER-CALL SCRATCH GOES BACK TO THE ALLOCATOR; THE GT STRUCT DOES NOT.** The subprocess
-runner's command line, `STARTUPINFOA` and `PROCESS_INFORMATION`, and the read probe's ~4.2 KB, each
+runner's command line, `STARTUPINFOW` and `PROCESS_INFORMATION`, and the read probe's ~4.2 KB, each
 belong to one call, and each goes back through the slab's free path (`slab-allocator.md`) the moment
 that call is done with it — so a program that runs N children or reads N pipes holds none of it
 afterwards. A GT struct is the one region that is never given back: a reclaimed struct goes onto
@@ -58,7 +58,7 @@ through probes only x64-windows builds; the GT-struct case runs on every lane wi
 <!-- test: runtime-scratch-reclaim.read-probe-scratch-returns -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 **THE ~4.2 KB-PER-CALL DEBT.** `spawnReadLine` builds a pipe name, a `SECURITY_ATTRIBUTES`, a
-two-handle out-param block, a mutable command line, a `STARTUPINFOA`, a `PROCESS_INFORMATION` and a
+two-handle out-param block, a mutable command line, a `STARTUPINFOW`, a `PROCESS_INFORMATION` and a
 4 KiB read region — seven allocations, per call. Were they not released, a program that read from N
 children would hold N × ~4.2 KB it could never use again. Here three reads follow a warm-up: the allocator sees the traffic (`total`
 moves by at least three regions per read) and gets all of it back (`live` does not move by more than
@@ -146,7 +146,7 @@ places the program cannot see: the stdlib's `PATH` walk (its state, the variable
 candidate path), the request the spawn entry fills (the request record, the argument vector or command
 line, and the environment vector a caller-built environment becomes on POSIX), and the spawn core
 (the inheritable `SECURITY_ATTRIBUTES`, the child-handle scratch, the null-device name, a name and an
-out-param block per pipe, the `STARTUPINFOA` and the `PROCESS_INFORMATION`); the collect adds its own
+out-param block per pipe, the `STARTUPINFOW` and the `PROCESS_INFORMATION`); the collect adds its own
 loop state. Each belongs to one call, so each goes back on the road that call leaves by — a child that
 ran, an executable that is not there, a working directory that is not there — and on the streaming
 door, whose handle outlives the spawn but whose request does not.

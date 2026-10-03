@@ -56,7 +56,7 @@ sleeping still wakes on time while another thread's child is still running.
 `String` command line — borrowed, not consumed; a `float`/`int`/`bool` is refused at compile time. Its result is
 an integer (the exit code), so — unlike `sleep` — it may be used in value position (under `try`).
 
-If the command names no runnable executable (`CreateProcessA` fails outright), it throws its
+If the command names no runnable executable (`CreateProcessW` fails outright), it throws its
 **spawn-failure** error rather than parking on a non-existent child — a deterministic error the caller
 catches, never a hang. How many children may be parked at once is the poller's property and carries no
 ceiling of its own: `sixty-five-concurrent-children-all-complete` holds sixty-five waits open together, one
@@ -77,7 +77,7 @@ what "run this command line" means under POSIX and the same interpreter `system(
 `"exit 3"` is the whole program where the Windows sibling writes `cmd /c exit 3`.
 
 ⛔ **ONE SUBJECT HAS NO SIBLING, FOR A REASON IN THE PLATFORM RATHER THAN IN THE PORT.**
-`spawn-failure-caught` and `spawn-failure-recover-continue` turn on `CreateProcessA` REFUSING a
+`spawn-failure-caught` and `spawn-failure-recover-continue` turn on `CreateProcessW` REFUSING a
 command that names no runnable executable; under the shell shape the spawn of `/bin/sh` always
 succeeds and a missing command is the SHELL's exit **127**, so no command line on this lane can
 reach the spawn-failure throw those cases exist to catch (a bad name answers 127, not the
@@ -513,7 +513,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: async-subprocess.scratch-reuse-loop -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 Fifty children each exit 1, awaited in turn, summing to 50. The value is that `__gt_process_run`'s OS scratch —
-STARTUPINFOA, PROCESS_INFORMATION, the mutable cmdline copy and the exit-code slot — is REUSED across all fifty
+STARTUPINFOW, PROCESS_INFORMATION, the mutable cmdline copy and the exit-code slot — is REUSED across all fifty
 calls: the three fixed buffers are one-time `__gt_init` allocations and the cmdline copy is a
 grow-on-demand global that allocates once for a constant command length, so the loop stays bounded rather than
 bump-leaking ~150 bytes per call. Reuse is only correct because PROCESS_INFORMATION's `hProcess` is re-zeroed
@@ -543,7 +543,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-subprocess.spawn-failure-caught -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-A command that names no runnable executable makes `CreateProcessA` fail outright, leaving a null child handle. The
+A command that names no runnable executable makes `CreateProcessW` fail outright, leaving a null child handle. The
 runtime THROWS its spawn-failure error rather than aborting the process — so the direct
 `try __Builtins.runProcess(bad) otherwise 42` in `main` catches it and returns the fallback 42. The program
 runs to a normal return, proving the spawn failure is recoverable, not fatal.

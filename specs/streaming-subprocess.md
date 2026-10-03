@@ -24,7 +24,7 @@ itself; the POSIX lane makes the read end non-blocking and parks it on the DESCR
 is a measured property with cases pinning it, not an aside.
 
 - `subpSpawn(cmd)` spawns the child named by the command `String` with all three std streams redirected to
-  pipes, and returns the handle (or `-1` on spawn failure). The command reaches `CreateProcessA` on
+  pipes, and returns the handle (or `-1` on spawn failure). The command reaches `CreateProcessW` on
   Windows and `/bin/sh -c` on the POSIX lane, which is why each subject carries a `posix-…` sibling.
 - `subpReadLine(h)` reads one line from the child's stdout, INCLUDING the trailing `\n` (so a caller can
   distinguish a blank line from EOF by length). ⛔ **IT YIELDS ON EVERY LANE AND ONLY THE MECHANISM DIFFERS**,
@@ -68,7 +68,7 @@ statement of it.** The streaming reader parks its green thread, and several case
 
 `TargetFacilities` answers `subprocess gives true` for arm64-macOS, so all seven bare-name `subp*`
 builtins compile and run there. The programs above cannot be widened — they spawn `cmd`, and
-`subpSpawn(cmd)` reaches `/bin/sh -c` on that lane rather than `CreateProcessA` — so each subject
+`subpSpawn(cmd)` reaches `/bin/sh -c` on that lane rather than `CreateProcessW` — so each subject
 this lane can express carries a `posix-…` sibling marked `arm64-macos`, exactly as
 `process-background-priority.md` pairs its two units.
 

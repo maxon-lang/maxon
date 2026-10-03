@@ -280,8 +280,8 @@ export let X64LinuxUContextRspOffset = 160  // 40 + REG_RSP(15)*8 — the faulti
 // body below is that file's chunk with three things changed and nothing else: the SYSCALL NUMBERS (x86-64's
 // table, not AArch64's), the REGISTER ABI (`rdi/rsi/rdx/r10/r8/r9` + `syscall`, where that lane has
 // `x0..x5` + `svc`), and `struct stat`'s LAYOUT. The Win32-shaped facts these bodies produce — the
-// `dwFileAttributes` a `st_mode` becomes, the FILETIME a whole second becomes, the 320-byte
-// `WIN32_FIND_DATAA`, the errno→Win32 mapping, the glob split — are `Targets/Shared/PosixRuntime`'s and are
+// `dwFileAttributes` a `st_mode` becomes, the FILETIME a whole second becomes, the 592-byte
+// `WIN32_FIND_DATAW`, the errno→Win32 mapping, the glob split — are `Targets/Shared/PosixRuntime`'s and are
 // READ from there rather than restated, which is also why the symbols are the shared `mrt_host_*` names:
 // exactly one backend's chunks reach any image, so a shared name can only ever have one body. The Linux
 // facts both arches agree on — `AT_FDCWD`, the generic `open` flags, the search object and
@@ -311,7 +311,7 @@ let X64LinuxSyscallFstat = 5
 let X64LinuxSyscallFsync = 74
 
 // The named section's sizing call — the open only NAMES and `ftruncate` SIZES, which is the two-call shape
-// `CreateFileMappingA` does in one. VERIFIED by invoking 77 on the amd64 guest against a `/dev/shm` file
+// `CreateFileMappingW` does in one. VERIFIED by invoking 77 on the amd64 guest against a `/dev/shm` file
 // whose `st_size` then read back as the requested length.
 let X64LinuxSyscallFtruncate = 77
 let X64LinuxSyscallGetcwd = 79
@@ -732,7 +732,7 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	asm.placeLabel(answered)
 end 'x64LinuxEmitErrnoToWin32'
 
-// Whole SECONDS since the Unix epoch becoming the FILETIME `WIN32_FIND_DATAA` carries. It reads
+// Whole SECONDS since the Unix epoch becoming the FILETIME `WIN32_FIND_DATAW` carries. It reads
 // `ClockRuntime`'s own two constants rather than a producer-side copy, so the record's producer and the Std
 // graph that decodes it (`ManagedFileRuntime.emitFileTimeToUnixSeconds`) are one fact.
 function x64LinuxEmitSecondsToFileTime(asm X64RuntimeAsm, reg X64Register, scratch X64Register)
@@ -871,7 +871,7 @@ end 'x64LinuxThreadCpuStackBytes'
 // ==========================================================================
 
 // ⭐⭐ **ON THIS LANE THE ANSWER IS NOT A CALL BUT A SYMLINK.** The kernel publishes
-// `/proc/self/exe`, whose TARGET is the running image's path (`GetModuleFileNameA` has no Linux
+// `/proc/self/exe`, whose TARGET is the running image's path (`GetModuleFileNameW` has no Linux
 // counterpart), and `/proc/self/ns/pid`, whose target names the pid namespace — so each chunk is
 // one `readlinkat(AT_FDCWD, link, buf, bufLen)`.
 //
@@ -1052,7 +1052,7 @@ end 'buildX64LinuxLastErrorChunk'
 // mrt_host_has_wildcard(rcx = cstr) -> rax = 1 | 0
 // ==========================================================================
 
-// ⭐⭐ **WHY `FindFirstFileA` NEEDS AN EMULATION AT ALL.** It takes a GLOB — `"temp/things/*.txt"` — and
+// ⭐⭐ **WHY `FindFirstFileW` NEEDS AN EMULATION AT ALL.** It takes a GLOB — `"temp/things/*.txt"` — and
 // POSIX has no call that does: a directory is OPENED by name and a name is matched against a pattern one
 // at a time. So the pattern is split at its last `/`, the prefix is opened and the suffix is matched
 // against every entry. The pattern is written in USER SOURCE, so the split is the backend's work.
@@ -1083,7 +1083,7 @@ function buildX64LinuxBaseNameChunk() returns FunctionCodeChunk
 end 'buildX64LinuxBaseNameChunk'
 
 // Does this base name carry a wildcard? A pattern with neither `*` nor `?` names ONE path, and answering
-// it with a single `stat` rather than a directory walk is both faster and MORE FAITHFUL: `FindFirstFileA`
+// it with a single `stat` rather than a directory walk is both faster and MORE FAITHFUL: `FindFirstFileW`
 // matches a literal name the way the FILESYSTEM does, while the pattern matcher below is case-sensitive.
 function buildX64LinuxHasWildcardChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
@@ -1160,7 +1160,7 @@ end 'buildX64LinuxAttrsFromModeChunk'
 // mrt_host_fill_find_data(rcx = findDataPtr, rdx = statBufPtr, r8 = namePtr)
 // ==========================================================================
 
-// ⭐⭐ **SYNTHESIZE THE 320-BYTE `WIN32_FIND_DATAA` FROM A `struct stat` AND A NAME.** Windows fills this
+// ⭐⭐ **SYNTHESIZE THE 592-BYTE `WIN32_FIND_DATAW` FROM A `struct stat` AND A NAME.** Windows fills this
 // record itself; every field here has to be produced, and the offsets come from `ManagedFileRuntime` — the
 // file that READS them back — rather than being transcribed.
 //
@@ -1212,7 +1212,7 @@ end 'buildX64LinuxFillFindDataChunk'
 // How far a 64-bit size rotates to swap its halves — `nFileSizeHigh` precedes `nFileSizeLow` in the record.
 let X64SizeHalfShift = 32 as ShiftCount
 
-// One `struct stat` timestamp into one `WIN32_FIND_DATAA` FILETIME field.
+// One `struct stat` timestamp into one `WIN32_FIND_DATAW` FILETIME field.
 function x64LinuxFillFindDataTime(asm X64RuntimeAsm, statSlot StackSize, findSlot StackSize, statOffset Imm32, findOffset Imm32)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(statSlot), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: statOffset, wide: true)
@@ -1352,8 +1352,8 @@ end 'buildX64LinuxFileSizeChunk'
 // mrt_host_dir_remove(rcx = pathPtr) -> rax = BOOL
 // ==========================================================================
 
-// `DeleteFileA` ⇒ `unlinkat(AT_FDCWD, path, 0)`, `CreateDirectoryA(path, NULL)` ⇒
-// `mkdirat(AT_FDCWD, path, 0777)` and `RemoveDirectoryA(path)` ⇒
+// `DeleteFileW` ⇒ `unlinkat(AT_FDCWD, path, 0)`, `CreateDirectoryW(path, NULL)` ⇒
+// `mkdirat(AT_FDCWD, path, 0777)` and `RemoveDirectoryW(path)` ⇒
 // `unlinkat(AT_FDCWD, path, AT_REMOVEDIR)`. ONE BUILDER: each takes a path and a third word — a flag word
 // for the two unlinks, a permission mask for the mkdir — and answers a verdict the same way.
 //
@@ -1375,7 +1375,7 @@ end 'buildX64LinuxPathOpChunk'
 // mrt_host_file_rename(rcx = oldPathPtr, rdx = newPathPtr) -> rax = BOOL
 // ==========================================================================
 
-// ⭐⭐ **`MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` IS TWO PROMISES AND
+// ⭐⭐ **`MoveFileExW(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` IS TWO PROMISES AND
 // `renameat` KEEPS ONLY ONE.** The REPLACE is free: POSIX `rename` replaces an existing destination
 // atomically. The WRITE-THROUGH is not: POSIX records a rename's durability in the DESTINATION
 // DIRECTORY's metadata, so keeping the second promise means opening that directory and `fsync`ing it.
@@ -1444,7 +1444,7 @@ end 'buildX64LinuxFileRenameChunk'
 // mrt_host_file_attributes(rcx = pathPtr) -> rax = dwFileAttributes
 // ==========================================================================
 
-// `GetFileAttributesA` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a
+// `GetFileAttributesW` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a
 // `stat` and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit
 // `__mf_stat` publishes derived from ONE reading of `st_mode`.
 function buildX64LinuxFileAttributesChunk() returns FunctionCodeChunk
@@ -1478,7 +1478,7 @@ end 'buildX64LinuxFileAttributesChunk'
 // mrt_host_dir_current_path(rcx = bufPtr, rdx = bufLen) -> rax = bytes written
 // ==========================================================================
 
-// `GetCurrentDirectoryA`'s three-way answer. The op's contract
+// `GetCurrentDirectoryW`'s three-way answer. The op's contract
 // (`ManagedDirectoryRuntime.emitFilledBufferVerdict`) reads `0` as failure, `< capacity` as "it
 // fits, NUL included" and anything else as "too small". Linux's `getcwd` syscall answers the byte
 // length including the terminator, or `-errno`, so the fit case is one subtraction and the
@@ -1530,11 +1530,11 @@ end 'buildX64LinuxDirCurrentPathChunk'
 // ==========================================================================
 
 // ⭐⭐ **`fnmatch(pattern, string, 0)`, WRITTEN OUT, BECAUSE A STATIC IMAGE LINKS NO libc.** The classic
-// backtracking matcher over `*` and `?` — the only two wildcards `FindFirstFileA` honours and the only two
+// backtracking matcher over `*` and `?` — the only two wildcards `FindFirstFileW` honours and the only two
 // the corpus writes.
 //
 // ⚠ **IT REPRODUCES `fnmatch`'s FLAG-ZERO BEHAVIOUR, NOT `FNM_PATHNAME`'s.** A `*` matches a leading dot
-// (so `*` yields `.` and `..`, exactly as `FindFirstFileA` does, and the Std tier's dot filter removes
+// (so `*` yields `.` and `..`, exactly as `FindFirstFileW` does, and the Std tier's dot filter removes
 // them) and nothing here treats `/` specially — which costs nothing, because the pattern reaching it is
 // always a BASE NAME.
 //
@@ -1694,7 +1694,7 @@ end 'buildX64LinuxDirPrefixChunk'
 // mrt_host_dir_find_next(rcx = search, rdx = findDataPtr) -> rax = BOOL
 // ==========================================================================
 
-// `FindNextFileA`, and also `FindFirstFileA`'s first entry, which is why `find_first` below calls
+// `FindNextFileW`, and also `FindFirstFileW`'s first entry, which is why `find_first` below calls
 // this rather than carrying a second copy of the walk: Win32's first and subsequent entries come
 // from one enumeration, and so do these.
 //
@@ -1802,7 +1802,7 @@ end 'buildX64LinuxDirFindNextChunk'
 // mrt_host_dir_find_first(rcx = patternPtr, rdx = findDataPtr) -> rax = search | -1
 // ==========================================================================
 
-// `FindFirstFileA` — open the enumeration a glob names and report its first entry, or answer
+// `FindFirstFileW` — open the enumeration a glob names and report its first entry, or answer
 // `INVALID_HANDLE_VALUE` with the errno word telling the caller why.
 //
 // Two routes, chosen by the pattern: a base name with no `*` or `?` names one path and is answered
@@ -2019,7 +2019,7 @@ end 'buildX64LinuxHandleFileTypeChunk'
 // mrt_host_env_read(rcx = namePtr, rdx = bufPtr, r8 = bufLen) -> rax = bytes written
 // ==========================================================================
 
-// `GetEnvironmentVariableA` — copy an environment variable's value into the caller's buffer and answer the
+// `GetEnvironmentVariableW` — copy an environment variable's value into the caller's buffer and answer the
 // byte count, NOT counting the NUL.
 //
 // ⭐⭐ **THERE IS NO `getenv` ON THIS LANE, SO THE VECTOR IS WALKED.** A static image links no libc, and the
@@ -3564,7 +3564,7 @@ end 'buildX64LinuxProcessSignalChunk'
 //                [stack 0] = processInformation, [stack 1] = lpEnvironment)
 // ==========================================================================
 
-// ⭐⭐⭐ `CreateProcessA` ON A LANE WITH NO SPAWN PRIMITIVE AT ALL. ⛔ **THERE IS NO `posix_spawn` SYSCALL ON
+// ⭐⭐⭐ `CreateProcessW` ON A LANE WITH NO SPAWN PRIMITIVE AT ALL. ⛔ **THERE IS NO `posix_spawn` SYSCALL ON
 // LINUX — it is a libc FUNCTION, and this image links no libc.** So the child is built by hand out of
 // `clone`, `pipe2`, `dup3` and `execve`.
 //
@@ -4073,7 +4073,7 @@ end 'x64LinuxEmitShmCloseFd'
 // ⭐⭐ **THE SCRATCH BUFFER THE OP CARRIES IS READ HERE, WHERE THE DARWIN TWIN IGNORES IT.** `getenv`
 // answers a POINTER into the environment block that `shm_open` takes directly; this lane has no `getenv`
 // and reads the value into the caller's buffer with `mrt_host_env_read`, which is the shape
-// `GetEnvironmentVariableA` gave the op in the first place (`StdOp.osOpenNamedSegment`).
+// `GetEnvironmentVariableW` gave the op in the first place (`StdOp.osOpenNamedSegment`).
 //
 // An unset variable answers a zero count, which is "no monitor is listening" — the same answer a refused
 // open gets.
@@ -4134,7 +4134,7 @@ end 'buildX64LinuxShmUnlinkChunk'
 // every write copy-on-write and neither process would ever see the other's.
 //
 // A zero descriptor maps nothing and answers zero, so a failed create or attach flows through here untested
-// — exactly as `OpenFileMappingA`'s NULL flows into `MapViewOfFile` on the other lane.
+// — exactly as `OpenFileMappingW`'s NULL flows into `MapViewOfFile` on the other lane.
 //
 // ⛔ **THE FAILURE TEST IS THE ANSWER'S SIGN AND NOT A COMPARE AGAINST -1.** A raw `syscall` answers
 // `-errno`, a different negative per reason, where libc's wrapper collapses all of them to `MAP_FAILED`.
@@ -4394,7 +4394,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxAttrsFromModeChunk(x64LinuxStatLayout()))
 	end 'attrsFromMode'
 
-	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER AND IT IS NOT A DIRECTORY OP.** `__gt_subp_resolve_path`
+	// ⚠ **`GetFileAttributesW` HAS A SECOND PRODUCER AND IT IS NOT A DIRECTORY OP.** `__gt_subp_resolve_path`
 	// walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the executable lookup needs this
 	// chunk with no `Directory` call anywhere in the program.
 	if usage.usesManagedDirectory or usage.usesChildPipes 'fileAttributes'

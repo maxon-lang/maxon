@@ -1136,7 +1136,7 @@ export function emitFieldAccumulate(module StdModule, block IrBlock, record Valu
 	return prior
 end 'emitFieldAccumulate'
 
-// ⭐ **A NUL-TERMINATED C STRING IN A FRESH SLAB REGION — the shape every Win32 `A` entry point takes.**
+// ⭐ **A NUL-TERMINATED C STRING IN A FRESH SLAB REGION — the shape a narrow OS entry point takes.**
 // One `__slab_alloc` of `len + 1`, one `u8` store per byte, and the terminator is the allocator's own zero
 // (the `+ 1` is what reserves the byte for it). The region is the caller's, and a caller that runs more than
 // once per process gives it back.
@@ -1144,15 +1144,20 @@ end 'emitFieldAccumulate'
 // It lives here rather than with any one runtime family because "a literal as a C string" is a property of
 // the Std tier and of Win32's ABI: the scheduler, the poller and the subprocess runner all spell one.
 export function emitLiteralCString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
-	let sizeConst = emitConst(module, block: block, value: (text.count() + 1) as ParsedInt, ids: ids)
+	return emitLiteralInSlab(module, block: block, ids: ids, text: text, byteCount: (text.count() + 1) as ParsedInt)
+end 'emitLiteralCString'
+
+export function emitLiteralInSlab(module StdModule, block IrBlock, ids ValueMinter, text ByteArray, byteCount ParsedInt) returns ValueId
+	let sizeConst = emitConst(module, block: block, value: byteCount, ids: ids)
 	let buf = ids.mint()
 	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
 	emitStoreLiteralBytes(module, block: block, base: buf, offset: 0, text: text, ids: ids)
 	return buf
-end 'emitLiteralCString'
+end 'emitLiteralInSlab'
 
 // `text` stored byte by byte at `base + offset`. No terminator is written: every caller stores into a
-// zeroed region sized one byte past the text.
+// zeroed region sized one byte past the text, or into one exactly its size when `text` carries its
+// own terminator (`HostTextRuntime.emitLiteralHostString`).
 export function emitStoreLiteralBytes(module StdModule, block IrBlock, base ValueId, offset ByteOffset, text ByteArray, ids ValueMinter)
 	for k in 0 upto text.count() 'each'
 		let ch = try text.get(k) otherwise panic("emitStoreLiteralBytes: text.get OOB at {k}")

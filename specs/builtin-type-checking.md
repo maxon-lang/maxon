@@ -127,7 +127,7 @@ what makes the conversion mandatory at the source level.
 NOT OWN IT.** `buffer[length]` is one PAST the content, and the exactly-full
 record this very section is about does not own it — nor does a VIEW. The
 allocator may have handed that byte to the next request, so a probe would
-accept somebody else's zero and an OS call such as `GetFileAttributesA`
+accept somebody else's zero and an OS call such as `GetFileAttributesW`
 would read on past the string's own end.
 
 For a `String` the conversion has a name of its own: `s.cstr()`. It is the

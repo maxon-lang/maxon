@@ -6,8 +6,8 @@
 // `PosixStatLayout` are `Targets/Shared/PosixRuntime.maxon`, and so is every number of the host-object
 // protocol — the wait object's fields, the handle tag, `poll`'s bits, the wait-status decode — because
 // x64-Linux's host surface reads all of them too; the arch-neutral Linux ones are `Targets/Shared/LinuxRuntime.maxon`. What stays is what an AArch64
-// assembler is needed to express — `FindFirstFileA`'s glob split, the `dwFileAttributes` mask a `st_mode`
-// becomes, the FILETIME a whole second becomes and the 320-byte record all three fill are one shape per
+// assembler is needed to express — `FindFirstFileW`'s glob split, the `dwFileAttributes` mask a `st_mode`
+// becomes, the FILETIME a whole second becomes and the 592-byte record all three fill are one shape per
 // backend, and writing that shape twice for the two arm64 OSes is this project's signature bug in the one
 // place where a drift shows up as a wrong SIZE or a wrong TIMESTAMP rather than as a compile error.
 //
@@ -44,7 +44,7 @@ export function arm64PosixTagObject(asm Arm64RuntimeAsm, reg Arm64Register, scra
 end 'arm64PosixTagObject'
 
 // ==========================================================================
-// `GetEnvironmentVariableA`'s ANSWER, once, for both lanes
+// `GetEnvironmentVariableW`'s ANSWER, once, for both lanes
 // ==========================================================================
 
 // ⭐⭐ **THE HALF OF `osEnvRead` THAT IS NOT THE LOOKUP.** The two lanes find a variable's value in ways with
@@ -295,7 +295,7 @@ export function arm64EmitFileTypeFromStatus(asm Arm64RuntimeAsm, terminalWhen Ar
 	asm.placeLabel(answered)
 end 'arm64EmitFileTypeFromStatus'
 
-// Whole SECONDS since the Unix epoch becoming the FILETIME `WIN32_FIND_DATAA` carries.
+// Whole SECONDS since the Unix epoch becoming the FILETIME `WIN32_FIND_DATAW` carries.
 //
 // ⚠ **IT READS `ClockRuntime`'s OWN TWO CONSTANTS RATHER THAN A PRODUCER-SIDE COPY OF THEM.** The Std graph
 // that DECODES a FILETIME (`emitFileTimeToUnixSeconds`) is built from those, so reading them here makes the
@@ -317,7 +317,7 @@ end 'arm64EmitSecondsToFileTime'
 // mrt_host_has_wildcard(x0 = cstr) -> x0 = 1 | 0
 // ==========================================================================
 
-// ⭐⭐ **WHY `FindFirstFileA` NEEDS AN EMULATION AT ALL, ON EITHER LANE.** It takes a GLOB —
+// ⭐⭐ **WHY `FindFirstFileW` NEEDS AN EMULATION AT ALL, ON EITHER LANE.** It takes a GLOB —
 // `"temp/things/*.txt"` — and POSIX has no call that does: a directory is OPENED by name and a name is
 // matched against a pattern one at a time. So the pattern is split at its last `/`, the prefix is opened and
 // the suffix is matched against every entry.
@@ -357,7 +357,7 @@ end 'buildArm64PosixBaseNameChunk'
 
 // Does this base name carry a wildcard? A pattern with neither `*` nor `?` names ONE path, and answering it
 // with a single `stat` rather than a directory walk is both faster — `__mf_exists` on a file in a large
-// directory would otherwise be linear in that directory — and MORE FAITHFUL: `FindFirstFileA` matches a
+// directory would otherwise be linear in that directory — and MORE FAITHFUL: `FindFirstFileW` matches a
 // literal name the way the FILESYSTEM does, which on a case-insensitive volume is case-insensitively, while
 // both lanes' pattern matchers are case-sensitive. Handing the literal to `stat` lets the filesystem answer.
 export function buildArm64PosixHasWildcardChunk() returns FunctionCodeChunk
@@ -426,7 +426,7 @@ export function buildArm64PosixAttrsFromModeChunk(layout PosixStatLayout) return
 	return asm.finishFunction(HostAttrsFromModeName)
 end 'buildArm64PosixAttrsFromModeChunk'
 
-// ⭐⭐ **SYNTHESIZE THE 320-BYTE `WIN32_FIND_DATAA` FROM A `struct stat` AND A NAME.** Windows fills this
+// ⭐⭐ **SYNTHESIZE THE 592-BYTE `WIN32_FIND_DATAW` FROM A `struct stat` AND A NAME.** Windows fills this
 // record itself; every field here has to be produced, and the offsets come from `ManagedFileRuntime` — the
 // file that READS them back — rather than being transcribed, because a second copy of "cFileName is at 44"
 // is a number nothing checks.
@@ -475,7 +475,7 @@ export function buildArm64PosixFillFindDataChunk(layout PosixStatLayout) returns
 	return asm.finishFunction(HostFillFindDataName)
 end 'buildArm64PosixFillFindDataChunk'
 
-// One `struct stat` timestamp into one `WIN32_FIND_DATAA` FILETIME field. Three fields, one fragment: the
+// One `struct stat` timestamp into one `WIN32_FIND_DATAW` FILETIME field. Three fields, one fragment: the
 // conversion is the same arithmetic each time and the only thing that varies is which pair of offsets.
 function arm64PosixFillFindDataTime(asm Arm64RuntimeAsm, statSlot StackSize, findSlot StackSize, statOffset MachineWord, findOffset MachineWord)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: statSlot)
@@ -490,7 +490,7 @@ end 'arm64PosixFillFindDataTime'
 // ==========================================================================
 
 // ⭐⭐⭐ **THE SUBPROCESS FAMILY IS THE ONE HOST SURFACE WHOSE TWO LANES SHARE THE ALGORITHM AND NOT THE
-// CALLS.** Every other family in this file splits the other way round: `FindFirstFileA`'s glob is one shape
+// CALLS.** Every other family in this file splits the other way round: `FindFirstFileW`'s glob is one shape
 // over two entirely different directory readers. Here the reverse holds — `waitpid` and `wait4` decode the
 // SAME status word, `poll` and `ppoll` fill the SAME `struct pollfd`, and the loops on top (the bounded child
 // await, the exit-code read) contain no OS call of their own at all: they are `bl`s to the two chunks below
@@ -1147,7 +1147,7 @@ end 'buildArm64PosixProcProbeChunk'
 // every write copy-on-write and neither process would ever see the other's.
 //
 // A zero descriptor maps nothing and answers zero, so a failed create or attach flows through here untested
-// — exactly as `OpenFileMappingA`'s NULL flows into `MapViewOfFile` on the other lane.
+// — exactly as `OpenFileMappingW`'s NULL flows into `MapViewOfFile` on the other lane.
 //
 // ⛔ **THE FAILURE TEST IS THE ANSWER'S SIGN AND NOT A COMPARE AGAINST -1, BECAUSE THE TWO ROUTES SPELL THE
 // FAILURE DIFFERENTLY.** libSystem answers `MAP_FAILED`, which is exactly `(void *) -1`; a raw `svc` answers
@@ -1276,7 +1276,7 @@ function arm64PosixEmitShmCloseFd(asm Arm64RuntimeAsm, host PosixShmHost)
 	arm64PosixEmitHostCall(asm, call: host.close)
 end 'arm64PosixEmitShmCloseFd'
 
-// The publish road. `CreateFileMappingA` names and sizes in one call; POSIX takes two, so a segment that
+// The publish road. `CreateFileMappingW` names and sizes in one call; POSIX takes two, so a segment that
 // could not be sized loses its name again. Only `EEXIST` answers `nameTaken`, the one refusal the stdlib
 // answers by adopting; every other failure is `refused`.
 export function buildArm64PosixShmCreateChunk(host PosixShmHost) returns FunctionCodeChunk

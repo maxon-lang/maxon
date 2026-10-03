@@ -41,7 +41,7 @@ properties asserted below are all the machine cannot vary:
 ProcessIntrospectionError.pathUnavailable`. Two things have to line up for it to fire, and on this
 lane neither does:
 
-- neither lane's primitive can fail for the CURRENT image — `GetModuleFileNameA(NULL, …)`'s only
+- neither lane's primitive can fail for the CURRENT image — `GetModuleFileNameW(NULL, …)`'s only
   documented failure is a buffer too small, and `_NSGetExecutablePath`'s is the same, which
   `__proc_exe_path` answers by doubling and retrying rather than by giving up.
   `specs/builtins-type.md` describes the intrinsic's failure answer as an *"empty buffer"*;
@@ -63,7 +63,7 @@ error `specs/builtins-type.md` says it becomes. That is a `stdlib/` fact.
 it on a target that does not is refused with `E3104` at the call's own span, by the `__proc_`
 PREFIX, so an entry added to the band later is gated by construction rather than by memory.
 
-The three platforms genuinely differ (`GetModuleFileNameA`, `_NSGetExecutablePath`,
+The three platforms genuinely differ (`GetModuleFileNameW`, `_NSGetExecutablePath`,
 `/proc/self/exe`), which is why serving another one is more than a lowering — the same
 argument `Runtime/CommandLineRuntime.maxon`'s header makes for argv. Windows FILLS the caller's
 buffer and answers a count; macOS takes an IN-OUT size, signals "too small" with `-1` plus a
@@ -79,7 +79,7 @@ SDK warns that `_NSGetExecutablePath` returns whatever path the image was exec'd
 be a symbolic link and not the real file"*. A
 relative or `PATH`-resolved launch is absolutized by the kernel, but a launch through a symlinked
 directory (`/tmp`, which IS a symlink on macOS) answers the un-resolved `/tmp/…`, and a launch
-through a symlink to the binary answers the symlink's own name. `GetModuleFileNameA` answers a
+through a symlink to the binary answers the symlink's own name. `GetModuleFileNameW` answers a
 resolved path, so the arm64 chunk follows `_NSGetExecutablePath` with `realpath` — which is what
 makes the two lanes answer the same KIND of string rather than two, and what lets
 `names-a-file-that-exists` mean the same thing on both.
@@ -108,7 +108,7 @@ end 'main'
 <!-- test: process-executable-path.names-a-file-that-exists -->
 The strongest property available without a literal: hand the answer straight back to the OS. A
 truncated path, a path with the NUL still in it, or a length taken from the buffer's CAPACITY
-rather than from `GetModuleFileNameA`'s return would all name nothing.
+rather than from `GetModuleFileNameW`'s return would all name nothing.
 ```maxon
 function main() returns ExitCode
 	let exe = try Process.executablePath() otherwise return 2

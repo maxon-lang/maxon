@@ -138,6 +138,16 @@ at the call site, rather than failing at run time:
 E3104 means this compiler has not implemented the facility for the target; E3074 means the platform has
 no process-spawn primitive at all. Guard such calls with `#if not os(Wasi)`.
 
+### Text at the operating-system boundary
+
+Text the operating system hands a program, or takes from it, is UTF-8 on every target: command-line
+arguments, environment variable names and values, file and directory names and the names a directory
+listing answers, the working directory, the executable path and shared-memory section names. On
+`x64-windows` the runtime converts that text to and from UTF-16 at each call, so a name holding any
+Unicode character reaches the OS intact, and a `Subprocess` child receives its arguments, environment
+and working directory as UTF-16. Invalid UTF-8 handed to the OS, and an unpaired UTF-16 surrogate handed
+back, each become U+FFFD.
+
 ### Compiler-managed resources
 
 Files, directory searches and sockets are held by compiler-managed handle types (`__ManagedFile`,
@@ -1158,7 +1168,7 @@ case-insensitive on Windows, byte-exact elsewhere.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `FilePath from "a/b.txt"` | `FilePath` | From a literal; an invalid path panics. |
-| `FilePath.from(path String)` | `FilePath` | Throws `FilePathError.invalidCharacter` on Windows for a control character or one of `< > " \| ? *`, `notFileURL` for a URL whose scheme is other than `file`, or `malformedURL` for text holding `://` that `URL.parse` refuses. |
+| `FilePath.from(path String)` | `FilePath` | Throws `FilePathError.invalidCharacter` on Windows for a control character (NUL included) or one of `< > " \| ? *`, `notFileURL` for a URL whose scheme is other than `file`, or `malformedURL` for text holding `://` that `URL.parse` refuses. |
 | `FilePath.empty()` | `FilePath` | The empty path. |
 | `FilePath.separator()` | `String` | The host separator. |
 | `path` | field, `String` | The normalized text. |
@@ -1626,7 +1636,7 @@ to the child's `workingDirectory` on every OS, and to the parent's working direc
 `name` that carries a directory part (`sub/tool`, `./tool`, or on Windows `C:tool`) is anchored the same
 way and looked for in that one directory.
 
-On POSIX a `name` is searched for on `PATH` alone. On Windows the search follows `CreateProcessA`'s
+On POSIX a `name` is searched for on `PATH` alone. On Windows the search follows `CreateProcessW`'s
 order: the directory the running program was loaded from, this program's working directory while
 `NoDefaultCurrentDirectoryInExePath` is unset, the system directory, the 16-bit system directory, the
 Windows directory, then `PATH`. On Windows a name with an extension is tried as given, and a name without

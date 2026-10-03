@@ -70,7 +70,7 @@ export enum OsImportSlot
 	// --- The `processInfo` facility's six libSystem entries ---
 	//
 	// ⚠ **SIX SLOTS FOR THREE OPS, AND THE ARITHMETIC IS THE POINT.** Windows answers each of these
-	// questions with ONE import (`GetModuleFileNameA`, `GetCurrentProcessId`, `SetPriorityClass` +
+	// questions with ONE import (`GetModuleFileNameW`, `GetCurrentProcessId`, `SetPriorityClass` +
 	// `GetPriorityClass`); Darwin needs a second call for two of them, because `_NSGetExecutablePath`
 	// answers *"a path"* rather than *"the real path"* (its own header says so — see
 	// `Arm64DarwinRuntime.buildArm64DarwinExePathChunk`, which carries the measurement) and `setpriority`
@@ -169,17 +169,17 @@ export enum OsImportSlot
 	// which is where POSIX records a rename's durability.
 	//
 	// `stat`/`fstat`/`fstatat` are the three spellings the find-data record is filled from: by PATH for a
-	// non-glob search and for `GetFileAttributesA`, by DESCRIPTOR for `GetFileSizeEx`, and RELATIVE TO AN
+	// non-glob search and for `GetFileAttributesW`, by DESCRIPTOR for `GetFileSizeEx`, and RELATIVE TO AN
 	// OPEN DIRECTORY for each entry of a walk (which is what `dirfd` exists for — it means the walk never
 	// concatenates a path and never owns a path buffer).
 	//
-	// `opendir`/`readdir`/`closedir` + `fnmatch` are `FindFirstFileA`'s emulation: Win32 takes a GLOB and
+	// `opendir`/`readdir`/`closedir` + `fnmatch` are `FindFirstFileW`'s emulation: Win32 takes a GLOB and
 	// POSIX takes a DIRECTORY, so the pattern is split at its last `/`, the prefix is opened and every entry
 	// is matched against the suffix. `unlink`, `rename`, `mkdir`, `rmdir` and `getcwd` are the five path
 	// operations with a one-to-one Win32 twin.
 	//
 	// ⚠ **`rmdir` IS A SLOT OF ITS OWN BECAUSE `unlink` REFUSES A DIRECTORY.** POSIX splits the removal by
-	// SUBJECT exactly as Win32 splits it between `DeleteFileA` and `RemoveDirectoryA`, so neither call can
+	// SUBJECT exactly as Win32 splits it between `DeleteFileW` and `RemoveDirectoryW`, so neither call can
 	// stand in for the other and neither entry point is reachable through the other's slot.
 	errnoLocation
 	open
@@ -202,8 +202,8 @@ export enum OsImportSlot
 
 	// --- The child-process substrate ---
 	//
-	// ⭐⭐ **THIRTEEN SLOTS BECAUSE `CreateProcessA` IS ONE CALL AND `posix_spawn` IS A BUILDER.** Win32
-	// describes a child with two STRUCTS the caller fills (`STARTUPINFOA`, `SECURITY_ATTRIBUTES`) and one
+	// ⭐⭐ **THIRTEEN SLOTS BECAUSE `CreateProcessW` IS ONE CALL AND `posix_spawn` IS A BUILDER.** Win32
+	// describes a child with two STRUCTS the caller fills (`STARTUPINFOW`, `SECURITY_ATTRIBUTES`) and one
 	// call that reads them; POSIX describes it with an OPAQUE OBJECT built by a sequence of calls — a
 	// `posix_spawn_file_actions_t` told, one call at a time, which descriptor becomes which, and a
 	// `posix_spawnattr_t` told which flags apply. That is the whole reason for the count.
@@ -216,7 +216,7 @@ export enum OsImportSlot
 	// ⭐⭐ **`fcntl` IS A SLOT, BUT NOT FOR INHERITANCE.** The descriptors a child must NOT inherit are closed
 	// by `POSIX_SPAWN_CLOEXEC_DEFAULT` (`Arm64DarwinRuntime.DarwinSpawnCloexecDefault`), which inverts the
 	// POSIX default so that ONLY what the file actions name survives the exec — precisely what Win32's
-	// `bInheritHandles` + `STARTUPINFOA` pair means. What `fcntl` is here for is the PER-DESCRIPTOR
+	// `bInheritHandles` + `STARTUPINFOW` pair means. What `fcntl` is here for is the PER-DESCRIPTOR
 	// `O_NONBLOCK` a polled socket and a polled pipe end each need, and its third argument is a VARARG that
 	// this ABI passes on the STACK — which is why both its callers are chunks with a frame
 	// (`arm64DarwinEmitFcntl`) rather than isel sequences.
@@ -280,7 +280,7 @@ export enum OsImportSlot
 	// --- The NAMED SHARED SECTION both ends of a DebugStream ring map ---
 	//
 	// Three slots because POSIX separates naming a shared object from sizing it, and Win32 does not.
-	// `CreateFileMappingA` takes the name and the length in one call; `shm_open` only names, so the length is
+	// `CreateFileMappingW` takes the name and the length in one call; `shm_open` only names, so the length is
 	// a second call (`ftruncate`) on the descriptor it answers. `shm_unlink` withdraws the name, which only
 	// the publisher does. The mapping needs no slot: `mmap` is already the page source `osAllocPages` calls,
 	// one `MAP_SHARED` flag word over.

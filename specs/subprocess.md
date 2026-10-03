@@ -637,7 +637,7 @@ spawn failed: two names in the environment are the variable 'maxon_spec_env_fold
 <!-- test: subprocess-pathext-shim-a-name-with-no-extension-is-tried-only-with-pathext -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
 ⭐ **ON WINDOWS A NAME WITH NO EXTENSION IS TRIED ONLY WITH EACH `PATHEXT` EXTENSION.** Windows never runs
-an extensionless file by name: `CreateProcessA` appends `.exe` to a name that has no extension, and `cmd`'s
+an extensionless file by name: `CreateProcessW` appends `.exe` to a name that has no extension, and `cmd`'s
 search tries only the `PATHEXT` extensions. Tools such as `npm`, `npx` and `yarn` install an extensionless
 POSIX shell script beside their `.cmd`, and that script is no Windows executable — a spawn of it fails with
 `ERROR_BAD_EXE_FORMAT` (193). So the bare name here reaches the `.cmd` beside the script, which exits 7. A
@@ -707,12 +707,12 @@ name with another extension: executable not found: maxon-spec-pathext-shim.bat
 
 <!-- test: subprocess-a-bare-name-is-searched-in-createprocess-order-on-windows -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⭐⭐ **ON WINDOWS A BARE NAME IS SEARCHED IN `CreateProcessA`'s ORDER, AND THE ANSWER IS AN ABSOLUTE PATH TO
-THE FILE THAT RUNS.** `CreateProcessA` looks for a name with no path in the directory the application
+⭐⭐ **ON WINDOWS A BARE NAME IS SEARCHED IN `CreateProcessW`'s ORDER, AND THE ANSWER IS AN ABSOLUTE PATH TO
+THE FILE THAT RUNS.** `CreateProcessW` looks for a name with no path in the directory the application
 loaded from, then the working directory, the 32-bit system directory, the 16-bit system directory
 (`System` under the Windows directory), the Windows directory, and last each directory of `PATH`. The
 walk behind `Executable.name` searches the same directories in the same order, so the file it resolves is
-the file `CreateProcessA` would find, and it hands the spawn that file's absolute path, which no later
+the file `CreateProcessW` would find, and it hands the spawn that file's absolute path, which no later
 search and no working directory can reinterpret. A name that carries a path — `sub\tool`, `.\tool`,
 `\tool`, `C:\bin\tool`, `C:tool` — is searched for nowhere: it is tried only where it points, and a relative
 one points into the child's working directory, exactly as a relative `Executable.path` does.
@@ -879,7 +879,7 @@ rooted: executable not found: \maxon-spec-order-rooted
 <!-- unsupported-targets: wasm32-wasi -->
 ⭐ **A MISSING BINARY IS `executableNotFound` ON EVERY OS.** POSIX's spawn searches nothing, so a bare name
 the `PATH` walk misses is known not to exist before any spawn. Windows cannot know that from the walk —
-`CreateProcessA` searches further — so it learns it from the OS error code the spawn leaves behind
+`CreateProcessW` searches further — so it learns it from the OS error code the spawn leaves behind
 (`__Builtins.subprocessLastErrorCode`), and a file-not-found code is the same `executableNotFound` rather
 than a generic `spawnFailed`.
 ```maxon
@@ -947,7 +947,7 @@ end 'main'
 spawn opens a `file` redirect before it launches anything, and a missing file fails with the same
 file-not-found code a missing executable does, so only the runtime can say which step failed. The
 executable here is one the spawn really finds — the control line proves it runs — and on Windows it is one
-`CreateProcessA` finds in the application's own directory, where the `PATH` walk never looks, so no check of
+`CreateProcessW` finds in the application's own directory, where the `PATH` walk never looks, so no check of
 the executable's file can stand in for the runtime's answer.
 ```maxon
 function verdictOf(config Configuration) returns String
@@ -1005,7 +1005,7 @@ control=ran stdin=spawnFailed stdout=spawnFailed
 <!-- unsupported-targets: wasm32-wasi -->
 ⭐ **A RELATIVE `Executable.path` IS RELATIVE TO THE CHILD'S `workingDirectory` ON EVERY OS.** Hosts
 disagree on whether a launch path is read before or after the child enters its directory —
-`CreateProcessA` and macOS 15's `posix_spawn` read it first, against the PARENT's directory — so the
+`CreateProcessW` and macOS 15's `posix_spawn` read it first, against the PARENT's directory — so the
 library launches the path joined onto the working directory made absolute, which reads the same either
 way. A file that is only in the parent's directory is `executableNotFound` everywhere, and a RELATIVE
 working directory is anchored once, to the parent's directory, rather than applied twice by a child that

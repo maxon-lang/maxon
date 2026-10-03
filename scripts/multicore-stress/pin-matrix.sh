@@ -225,8 +225,8 @@
 # ⭐⭐ syscall-stack-torture IS THE ONLY ONE THAT PUTS TWO Ms INSIDE THE SYSCALL
 # SHIM AT ONCE, WHICH IS WHY W213-C1 ADDED IT. Every other program here computes;
 # this one has twelve services making ~24,000 real kernel calls between them — the
-# attribute query (`GetFileAttributesA`, no stack args) at high frequency and the
-# widest stack-arg copy in the shim's table (`CreateFileA`, seven arguments, three
+# attribute query (`GetFileAttributesW`, no stack args) at high frequency and the
+# widest stack-arg copy in the shim's table (`CreateFileW`, seven arguments, three
 # copied words) 600 times. The shim parks the green thread's own RSP in the first
 # word of the 64 KB scratch region it switches to, so two Ms on ONE region
 # overwrite each other's parked RSP and the first one out returns onto the other's

@@ -8,7 +8,7 @@
 //
 // ⭐⭐ **IT IS THE OTHER HALF OF `DebugStreamRuntime`'s ATTACH, AND THE TWO CANNOT SHARE A DOOR.** A traced
 // child OPENS a section by a name it reads out of its environment (`osOpenNamedSegment`); the process
-// watching it CREATES that section, publishes the name, and reads what the child wrote. `OpenFileMappingA`
+// watching it CREATES that section, publishes the name, and reads what the child wrote. `OpenFileMappingW`
 // answers NULL for a section that does not exist yet, so no ordering of the two processes lets the producer's
 // op serve the consumer — see `StdOp.osCreateNamedSegment`.
 //
@@ -89,16 +89,24 @@ function buildSharedMemorySegmentCall(module StdModule, call SegmentCall, target
 	let first = 0 as ValueId
 	let bytes = 1 as ValueId
 
+	let operandEncoding = segmentOperandEncoding(module, call: call)
+	let operand = emitHostCString(module, block: entry, cstr: first, encoding: operandEncoding, ids: ids)
 	let answer = ids.mint()
-	module.appendOp(entry, op: segmentCallOp(call, result: answer, first: first, bytes: bytes))
+	module.appendOp(entry, op: segmentCallOp(call, result: answer, first: operand, bytes: bytes))
 
 	if theStdBodyClassifiesTheAnswer(target) 'theStdBodyClassifies'
+		// The last error is read before the wide name is freed, so the classification sees the call's.
+		let lastError = ids.mint()
+		module.appendOp(entry, op: StdOp.osLastError(lastError))
+		emitReleaseHostCopy(module, block: entry, copy: operand, encoding: operandEncoding, ids: ids)
+
 		match call 'classify'
-			create then emitExclusiveCreateAnswer(module, func: func, entry: entry, handle: answer, ids: ids)
-			adopt then emitAdoptAnswer(module, func: func, entry: entry, handle: answer, bytes: bytes, ids: ids)
+			create then emitExclusiveCreateAnswer(module, func: func, entry: entry, handle: answer, lastError: lastError, ids: ids)
+			adopt then emitAdoptAnswer(module, func: func, entry: entry, handle: answer, bytes: bytes, lastError: lastError, ids: ids)
 			map then module.setTerminator(entry, op: StdOp.ret(answer))
 		end 'classify'
 	end 'theStdBodyClassifies' else 'theHostCallClassifies'
+		emitReleaseHostCopy(module, block: entry, copy: operand, encoding: operandEncoding, ids: ids)
 		module.setTerminator(entry, op: StdOp.ret(answer))
 	end 'theHostCallClassifies'
 
@@ -116,9 +124,16 @@ function theStdBodyClassifiesTheAnswer(target Target) returns bool
 	end 'os'
 end 'theStdBodyClassifiesTheAnswer'
 
-function emitLastErrorIs(module StdModule, block IrBlock, error Win32SegmentError, ids ValueMinter) returns ValueId
-	let lastError = ids.mint()
-	module.appendOp(block, op: StdOp.osLastError(lastError))
+// `map`'s operand is a section handle, not a name, so it is never widened.
+function segmentOperandEncoding(module StdModule, call SegmentCall) returns HostTextEncoding
+	return match call 'operand'
+		create or
+			adopt gives module.hostText
+		map gives HostTextEncoding.utf8
+	end 'operand'
+end 'segmentOperandEncoding'
+
+function emitLastErrorIs(module StdModule, block IrBlock, lastError ValueId, error Win32SegmentError, ids ValueMinter) returns ValueId
 	return emitCmp(module, block: block, a: lastError, b: emitConst(module, block: block, value: error.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
 end 'emitLastErrorIs'
 
@@ -129,7 +144,7 @@ end 'emitHandleIsNull'
 // The Win32 adopt. Win32 reports no section's size through its handle, but `MapViewOfFile` refuses a view
 // larger than the section, so a trial view of `bytes` is the size check; it is unmapped at once, and the
 // stdlib maps the section again. A name not yet published is `ERROR_FILE_NOT_FOUND`.
-function emitAdoptAnswer(module StdModule, func IrFunction, entry IrBlock, handle ValueId, bytes ValueId, ids ValueMinter)
+function emitAdoptAnswer(module StdModule, func IrFunction, entry IrBlock, handle ValueId, bytes ValueId, lastError ValueId, ids ValueMinter)
 	var notOpened = module.addBlock(func, label: b"shmnoopen", heat: BlockHeat.cold)
 	var notYetPublished = module.addBlock(func, label: b"shmnotyet", heat: BlockHeat.cold)
 	var opened = module.addBlock(func, label: b"shmopened", heat: BlockHeat.normal)
@@ -138,7 +153,7 @@ function emitAdoptAnswer(module StdModule, func IrFunction, entry IrBlock, handl
 
 	module.setTerminator(entry, op: StdOp.condBranch(emitHandleIsNull(module, block: entry, handle: handle, ids: ids), thenBlockId: notOpened.id, elseBlockId: opened.id))
 
-	module.setTerminator(notOpened, op: StdOp.condBranch(emitLastErrorIs(module, block: notOpened, error: Win32SegmentError.fileNotFound, ids: ids), thenBlockId: notYetPublished.id, elseBlockId: tooSmall.id))
+	module.setTerminator(notOpened, op: StdOp.condBranch(emitLastErrorIs(module, block: notOpened, lastError: lastError, error: Win32SegmentError.fileNotFound, ids: ids), thenBlockId: notYetPublished.id, elseBlockId: tooSmall.id))
 	emitConstReturn(module, block: notYetPublished, value: SharedSegmentAnswer.notYetPublished.rawValue, ids: ids)
 
 	let view = ids.mint()
@@ -152,15 +167,15 @@ function emitAdoptAnswer(module StdModule, func IrFunction, entry IrBlock, handl
 	emitConstReturn(module, block: tooSmall, value: SharedSegmentAnswer.refused.rawValue, ids: ids)
 end 'emitAdoptAnswer'
 
-// `CreateFileMappingA` answers an existing section's handle with `ERROR_ALREADY_EXISTS` rather than failing.
+// `CreateFileMappingW` answers an existing section's handle with `ERROR_ALREADY_EXISTS` rather than failing.
 // That section is the adopt road's to open, so this handle is closed and the answer is `nameTaken`.
-function emitExclusiveCreateAnswer(module StdModule, func IrFunction, entry IrBlock, handle ValueId, ids ValueMinter)
+function emitExclusiveCreateAnswer(module StdModule, func IrFunction, entry IrBlock, handle ValueId, lastError ValueId, ids ValueMinter)
 	var created = module.addBlock(func, label: b"shmmade", heat: BlockHeat.normal)
 	var existed = module.addBlock(func, label: b"shmexisted", heat: BlockHeat.cold)
 	var answered = module.addBlock(func, label: b"shmanswer", heat: BlockHeat.normal)
 
 	module.setTerminator(entry, op: StdOp.condBranch(emitHandleIsNull(module, block: entry, handle: handle, ids: ids), thenBlockId: answered.id, elseBlockId: created.id))
-	module.setTerminator(created, op: StdOp.condBranch(emitLastErrorIs(module, block: created, error: Win32SegmentError.alreadyExists, ids: ids), thenBlockId: existed.id, elseBlockId: answered.id))
+	module.setTerminator(created, op: StdOp.condBranch(emitLastErrorIs(module, block: created, lastError: lastError, error: Win32SegmentError.alreadyExists, ids: ids), thenBlockId: existed.id, elseBlockId: answered.id))
 
 	module.appendOp(existed, op: StdOp.osCloseHandle(handle))
 	emitConstReturn(module, block: existed, value: SharedSegmentAnswer.nameTaken.rawValue, ids: ids)

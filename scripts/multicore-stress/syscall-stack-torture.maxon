@@ -42,15 +42,15 @@
 // ⭐ WHAT THE KERNEL CALLS ARE, AND WHY THESE. The shim's cost and its exposure
 // both scale with the STACK-ARGUMENT COPY (`gtShimStackArgWordsOf`), so the
 // program deliberately mixes the widest entry with the cheapest:
-//   • `File.exists` -> `GetFileAttributesA`, ZERO stack args — the pure stack
+//   • `File.exists` -> `FindFirstFileW`, ZERO stack args — the pure stack
 //     switch, at the highest frequency this program can reach.
-//   • `File.writeText` / `readText` / `delete` -> `CreateFileA` (SEVEN args,
+//   • `File.writeText` / `readText` / `delete` -> `CreateFileW` (SEVEN args,
 //     THREE copied words — the widest copy in the table, tied with
-//     `CreateProcessA` and `CreateNamedPipeW`), plus `WriteFile`/`ReadFile`
+//     `CreateProcessW` and `CreateNamedPipeW`), plus `WriteFile`/`ReadFile`
 //     (one word) and `CloseHandle` (none).
 // ⚠ `Subprocess.run` is deliberately NOT used, and the omission is a choice
-// rather than a gap: `CreateProcessA` copies exactly the same three words as
-// `CreateFileA` above, so it exercises no shim path this program does not, and
+// rather than a gap: `CreateProcessW` copies exactly the same three words as
+// `CreateFileW` above, so it exercises no shim path this program does not, and
 // it would add a per-call cost measured in milliseconds plus a dependency on
 // some external binary existing on the box.
 //
@@ -72,7 +72,7 @@ let serviceCount = 12
 // exist at all (`service-torture`'s `rounds` carries that argument in full).
 let rounds = 2000
 
-// A CreateFileA round every this many — the WIDE-copy path. Rarer than the
+// A CreateFileW round every this many — the WIDE-copy path. Rarer than the
 // attribute query because it is two orders of magnitude more expensive, and one
 // in forty still gives 600 of them per run.
 let fileEvery = 40
@@ -97,7 +97,7 @@ type StackProbe
 		var k = 0
 
 		while k < count 'each'
-			// `GetFileAttributesA` through the shim. The answer is deterministic
+			// `FindFirstFileW` through the shim. The answer is deterministic
 			// (the path is never created), so the checksum is a pure function of
 			// `count` and cannot move with the scheduling.
 			let absent = FilePath from ".w213-absent-{self.id}-{k}"

@@ -2186,7 +2186,7 @@ export let PreemptEnvName = b"MAXON_PREEMPT"
 export let PreemptEnvOffValue = b"off"
 let PreemptEnvOnValue = b"on"
 
-// The first scratch one `GetEnvironmentVariableA` of a scheduler setting gets. A switch value that fills
+// The first scratch one `GetEnvironmentVariableW` of a scheduler setting gets. A switch value that fills
 // it is not a switch value, so `emitResolvePreemptSwitch` refuses it; a processor count may carry any
 // number of leading zeros, so `emitResolveMaxProcs` reads a longer one again at the size the OS reports.
 let SchedEnvValueBufBytes = 32 as ParsedInt
@@ -3252,11 +3252,10 @@ end 'SchedEnvRead'
 // caller frees. The buffer is zeroed (`__slab_alloc`, not the raw door), so a value that fits is
 // NUL-terminated and a byte walk that reads at most `capacity` bytes stays in bounds whatever the OS wrote.
 function emitReadSchedEnvValue(module StdModule, block IrBlock, name ByteArray, capacity ValueId, ids ValueMinter) returns SchedEnvRead
-	let nameBuf = emitLiteralCString(module, block: block, ids: ids, text: name)
+	let nameBuf = emitLiteralHostString(module, block: block, ids: ids, text: name)
 	let buf = ids.mint()
 	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(capacity)))
-	let written = ids.mint()
-	module.appendOp(block, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: buf, bufLenId: capacity))
+	let written = emitHostEnvReadAscii(module, block: block, name: nameBuf, valueBuf: buf, capacity: capacity, ids: ids)
 	emitSlabFree(module, block: block, ptr: nameBuf, ids: ids)
 
 	return SchedEnvRead.create(written, buf: buf, capacity: capacity)

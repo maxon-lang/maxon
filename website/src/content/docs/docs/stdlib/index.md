@@ -143,6 +143,16 @@ at the call site, rather than failing at run time:
 E3104 means this compiler has not implemented the facility for the target; E3074 means the platform has
 no process-spawn primitive at all. Guard such calls with `#if not os(Wasi)`.
 
+### Text at the operating-system boundary
+
+Text the operating system hands a program, or takes from it, is UTF-8 on every target: command-line
+arguments, environment variable names and values, file and directory names and the names a directory
+listing answers, the working directory, the executable path and shared-memory section names. On
+`x64-windows` the runtime converts that text to and from UTF-16 at each call, so a name holding any
+Unicode character reaches the OS intact, and a `Subprocess` child receives its arguments, environment
+and working directory as UTF-16. Invalid UTF-8 handed to the OS, and an unpaired UTF-16 surrogate handed
+back, each become U+FFFD.
+
 ### Compiler-managed resources
 
 Files, directory searches and sockets are held by compiler-managed handle types (`__ManagedFile`,

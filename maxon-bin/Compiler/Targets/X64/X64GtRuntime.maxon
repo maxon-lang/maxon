@@ -341,7 +341,7 @@ end 'buildGtTrampolineChunk'
 // --- The Win32 syscall shim ---
 //
 // A green thread's kernel call runs on its M's 64 KB SYSTEM stack, not the GT's own small stack: heavy
-// Win32 calls (CreateProcessA, WriteFile) use deep stack and probe the Windows TIB, and would overrun a
+// Win32 calls (CreateProcessW, WriteFile) use deep stack and probe the Windows TIB, and would overrun a
 // green thread's seed stack, which nothing grows for a frame the prologue guard never sees. Emitted inline
 // around EVERY `iatCall` of a GT module (the runtime gate makes it a no-op off a GT stack), so a program that
 // never touches the scheduler is unchanged.
@@ -513,13 +513,11 @@ end 'iatSlotOfIndex'
 // reservation cannot disagree.
 function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 	return match slot 'k'
-		CreateProcessA gives CreateProcessStackArgWords
+		CreateProcessW gives CreateProcessStackArgWords
 		WriteFile gives WriteFileStackArgWords
 		CreateNamedPipeW gives CreateNamedPipeStackArgWords
 
-		// The `A` variant takes the same seven arguments as its `W` sibling.
-		CreateFileW or
-			CreateFileA gives CreateFileStackArgWords
+		CreateFileW gives CreateFileStackArgWords
 		CreateThread gives CreateThreadStackArgWords
 		ReadFile gives ReadFileStackArgWords
 		MapViewOfFile gives MapViewOfFileStackArgWords  // 5: hFileMappingObject, dwDesiredAccess, dwFileOffsetHigh, dwFileOffsetLow, dwNumberOfBytesToMap
@@ -548,21 +546,21 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 			CancelIoEx or  // 2: hFile, lpOverlapped
 			GetSystemTimePreciseAsFileTime or  // 1: lpSystemTimeAsFileTime
 			GetFileSizeEx or  // 2: hFile, lpFileSize
-			DeleteFileA or  // 1: lpFileName
-			MoveFileExA or  // 3: lpExistingFileName, lpNewFileName, dwFlags
-			FindFirstFileA or  // 2: lpFileName, lpFindFileData
+			DeleteFileW or  // 1: lpFileName
+			MoveFileExW or  // 3: lpExistingFileName, lpNewFileName, dwFlags
+			FindFirstFileW or  // 2: lpFileName, lpFindFileData
 			FindClose or  // 1: hFindFile
-			FindNextFileA or  // 2: hFindFile, lpFindFileData
-			CreateDirectoryA or  // 2: lpPathName, lpSecurityAttributes
-			RemoveDirectoryA or  // 1: lpPathName
-			GetCurrentDirectoryA or  // 2: nBufferLength, lpBuffer
-			GetFileAttributesA or  // 1: lpFileName
-			GetCommandLineA or  // 0
-			GetModuleFileNameA or  // 3: hModule, lpFilename, nSize
+			FindNextFileW or  // 2: hFindFile, lpFindFileData
+			CreateDirectoryW or  // 2: lpPathName, lpSecurityAttributes
+			RemoveDirectoryW or  // 1: lpPathName
+			GetCurrentDirectoryW or  // 2: nBufferLength, lpBuffer
+			GetFileAttributesW or  // 1: lpFileName
+			GetCommandLineW or  // 0
+			GetModuleFileNameW or  // 3: hModule, lpFilename, nSize
 			GetConsoleMode or  // 2: hConsoleHandle, lpMode
 			SetThreadStackGuarantee or  // 1: StackSizeInBytes
-			GetEnvironmentVariableA or  // 3: lpName, lpBuffer, nSize
-			OpenFileMappingA or  // 3: dwDesiredAccess, bInheritHandle, lpName
+			GetEnvironmentVariableW or  // 3: lpName, lpBuffer, nSize
+			OpenFileMappingW or  // 3: dwDesiredAccess, bInheritHandle, lpName
 			GetTickCount64 or  // 0
 			WSAStartup or  // 2: wVersionRequested, lpWSAData
 			getaddrinfo or  // 4: pNodeName, pServiceName, pHints, ppResult
@@ -587,8 +585,8 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 			TlsSetValue or  // 2: dwTlsIndex, lpTlsValue
 			SetPriorityClass or  // 2: hProcess, dwPriorityClass
 			GetPriorityClass or  // 1: hProcess
-			GetEnvironmentStringsA or  // 0
-			FreeEnvironmentStringsA or  // 1: lpszEnvironmentBlock
+			GetEnvironmentStringsW or  // 0
+			FreeEnvironmentStringsW or  // 1: lpszEnvironmentBlock
 			GetFileType or  // 1: hFile
 			UnmapViewOfFile or  // 1: lpBaseAddress
 			OpenProcess or  // 3: dwDesiredAccess, bInheritHandle, dwProcessId
@@ -616,9 +614,9 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 			FlushInstructionCache or  // 3: hProcess, lpBaseAddress, dwSize
 			VirtualQuery or  // 3: lpAddress, lpBuffer, dwLength
 			Sleep or  // 1: dwMilliseconds
-			GetSystemDirectoryA or  // 2: lpBuffer, uSize
-			GetWindowsDirectoryA or  // 2: lpBuffer, uSize
-			GetFullPathNameA or  // 4: lpFileName, nBufferLength, lpBuffer, lpFilePart
+			GetSystemDirectoryW or  // 2: lpBuffer, uSize
+			GetWindowsDirectoryW or  // 2: lpBuffer, uSize
+			GetFullPathNameW or  // 4: lpFileName, nBufferLength, lpBuffer, lpFilePart
 			WaitForSingleObjectEx or  // 3: hHandle, dwMilliseconds, bAlertable
 			DebugActiveProcess or  // 1: dwProcessId
 			DebugActiveProcessStop or  // 1: dwProcessId
@@ -634,7 +632,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 			WSASend gives SocketOverlappedStackArgWords  // 7: s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine
 		getsockopt gives SocketOptionStackArgWords  // 5: s, level, optname, optval, optlen
 		WSASocketW gives SocketCreateStackArgWords  // 6: af, type, protocol, lpProtocolInfo, g, dwFlags
-		CreateFileMappingA gives CreateFileMappingStackArgWords  // 6: hFile, lpFileMappingAttributes, flProtect, dwMaximumSizeHigh, dwMaximumSizeLow, lpName
+		CreateFileMappingW gives CreateFileMappingStackArgWords  // 6: hFile, lpFileMappingAttributes, flProtect, dwMaximumSizeHigh, dwMaximumSizeLow, lpName
 
 		// The two six-argument sampling services share `osHostProcess`'s reservation, which must hold its
 		// widest member; `ReadProcessMemory` takes five and copies exactly its own count.
@@ -687,25 +685,24 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			ReadFile or
 
 			// The file-system family. Every one can reach a cold disk, a network share or a stalled device.
-			CreateFileA or
 			CreateFileW or
 			CreateNamedPipeW or
 			GetFileSizeEx or
-			DeleteFileA or
-			MoveFileExA or
-			FindFirstFileA or
-			FindNextFileA or
-			CreateDirectoryA or
-			RemoveDirectoryA or
-			GetCurrentDirectoryA or
-			GetFileAttributesA or
+			DeleteFileW or
+			MoveFileExW or
+			FindFirstFileW or
+			FindNextFileW or
+			CreateDirectoryW or
+			RemoveDirectoryW or
+			GetCurrentDirectoryW or
+			GetFileAttributesW or
 
 			// The file-mapping pair, which faults pages in from the same devices.
-			OpenFileMappingA or
+			OpenFileMappingW or
 			MapViewOfFile or
 
 			// Spawning a child image and peeking a child's pipe both wait on another process.
-			CreateProcessA or
+			CreateProcessW or
 			PeekNamedPipe or
 
 			// A child wait (`osWaitChild`) lowers to this slot rather than `WaitForSingleObject` so that
@@ -725,8 +722,8 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			recv or
 
 			// Creating a section reaches the memory manager and can touch the page file, as
-			// `OpenFileMappingA`/`MapViewOfFile` do.
-			CreateFileMappingA or
+			// `OpenFileMappingW`/`MapViewOfFile` do.
+			CreateFileMappingW or
 
 			// A stack window copied out of a suspended thread can touch a paged-out page, and a module walk
 			// reads the target's loader list under its own lock: both are `MapViewOfFile`'s position.
@@ -783,7 +780,7 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			ExitProcess or
 			GetStdHandle or
 
-			// Unlike the path-taking `GetFileAttributesA`, this answers for an already-open handle out of
+			// Unlike the path-taking `GetFileAttributesW`, this answers for an already-open handle out of
 			// the file object the kernel holds.
 			GetFileType or
 			AddVectoredExceptionHandler or
@@ -810,8 +807,8 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			CreateThread or
 			GetLastError or
 			GetCurrentProcessId or
-			GetCommandLineA or
-			GetModuleFileNameA or
+			GetCommandLineW or
+			GetModuleFileNameW or
 
 			// `GetFileType`'s position: it answers out of the file object for a handle this process owns.
 			GetConsoleMode or
@@ -821,9 +818,9 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 
 			// Called once, from `mrt_runtime_init`, before any green thread exists.
 			SetThreadStackGuarantee or
-			GetEnvironmentVariableA or
-			GetEnvironmentStringsA or
-			FreeEnvironmentStringsA or
+			GetEnvironmentVariableW or
+			GetEnvironmentStringsW or
+			FreeEnvironmentStringsW or
 			GetActiveProcessorCount or
 			SetPriorityClass or
 			GetPriorityClass or
@@ -873,9 +870,9 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			FlushInstructionCache or
 			VirtualQuery or
 			Sleep or
-			GetSystemDirectoryA or
-			GetWindowsDirectoryA or
-			GetFullPathNameA or
+			GetSystemDirectoryW or
+			GetWindowsDirectoryW or
+			GetFullPathNameW or
 			ContinueDebugEvent or
 			DebugActiveProcessStop or
 			DebugBreakProcess or
@@ -1005,7 +1002,7 @@ end 'emitGtGatedIatCall'
 
 // The shim itself. RSP is 16-aligned at entry (the compiler's frame invariant at every call), and the switch makes RSP
 // 16-aligned at the `call` INDEPENDENTLY of the caller's alignment (it sets RSP = the page-aligned system-stack
-// top and reserves a frame chosen to land on 16). Disassembly of the CreateProcessA (6 stack args) path:
+// top and reserves a frame chosen to land on 16). Disassembly of the CreateProcessW (6 stack args) path:
 //   lea rax,[rip+__sched_tls_teb_offset] ; mov rax,[rax] ; test rax,rax ; jz direct  (no scheduler → direct)
 //   mov rax,gs:[rax]              ; test rax,rax ; jz direct                   (this OS thread is no M)
 //   mov r11,[rax+0x08]            ; test r11,r11 ; jz direct                   (no current GT)
@@ -1016,11 +1013,11 @@ end 'emitGtGatedIatCall'
 //   push r10 ; sub rsp,0x58                                                    (shadow 0x20 + 6 args 0x30 + pad 8)
 //   (mov r11,[r10+0x28+k*8] ; mov [rsp+0x20+k*8],r11) for k in 0..6            (6 args → [rsp+0x20..0x48])
 //   mov gs:[0x08],rax ; sub rax,0x10000 ; mov gs:[0x10],rax                    (repoint TIB at the system stack)
-//   call [CreateProcessA]
+//   call [CreateProcessW]
 //   lea r11,[rip+__sched_tls_teb_offset] ; mov r11,[r11] ; mov r11,gs:[r11] ; mov r11,[r11+0x08]
 //   mov rcx,[r11+0x90] ; mov gs:[0x08],rcx ; mov rcx,[r11+0x98] ; mov gs:[0x10],rcx   (restore TIB to this GT)
 //   add rsp,0x58 ; pop r10 ; mov rsp,r10 ; pop r10 ; jmp done                  (switch back to the GT stack)
-//   direct: call [CreateProcessA]
+//   direct: call [CreateProcessW]
 //   done:
 // `[m + MOffLocks] += delta` — the shim's bracket over the window where `m` names a machine this thread may
 // stop belonging to. See the call sites for why it is unlocked.

@@ -173,7 +173,8 @@ function buildManagedListenerBind(module StdModule, target Target)
 	let hostRec = 0 as ValueId
 	let port = 1 as ValueId
 
-	let host = emitPathToCString(module, func: func, cur: entry, join: init, pathRec: hostRec, ids: ids)
+	// UTF-8 on every host: `getaddrinfo` takes a narrow name (see `buildManagedSocketTcpConnect`).
+	let host = emitPathToText(module, func: func, cur: entry, join: init, pathRec: hostRec, encoding: HostTextEncoding.utf8, ids: ids)
 
 	emitWinsockStartup(module, func: func, block: init, ready: resolve, notReady: noWinsock, ids: ids)
 

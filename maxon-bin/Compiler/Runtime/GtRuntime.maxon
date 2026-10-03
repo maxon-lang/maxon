@@ -878,14 +878,14 @@ let WaitPollTimeout = 0  // WaitForSingleObject timeout=0 — poll, never block
 // `WaitForSingleObject`'s "wait for ever" is one Win32 constant.
 export let WaitInfinite = 0xFFFFFFFF
 
-// STARTUPINFOA is 0x68 bytes; its first field `cb` must equal that size. Every other field is 0 (slab-zeroed),
+// STARTUPINFOW is 0x68 bytes; its first field `cb` must equal that size. Every other field is 0 (slab-zeroed),
 // so `dwFlags = 0` and the child inherits the parent console — `cmd /c exit N` runs and exits with its code.
 let StartupInfoSize = 0x68
 let StartupInfoCbOffset = 0
 
 // PROCESS_INFORMATION is 0x18 bytes: hProcess@0, hThread@8, dwProcessId@16, dwThreadId@20. The record a spawn is
 // handed is three words longer, for `SpawnFailedPreparationOffset`, `ProcInfoTreeObjectOffset` and
-// `ProcInfoTreeAssignedOffset`, none of which `CreateProcessA` writes.
+// `ProcInfoTreeAssignedOffset`, none of which `CreateProcessW` writes.
 let ProcInfoSize = 0x30
 export let ProcInfoHProcessOffset = 0
 export let ProcInfoHThreadOffset = 8
@@ -931,8 +931,8 @@ export let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL ter
 // `RunProcessError` through the dual-register `errorReturn` ABI, exactly as a throwing array accessor hands
 // back an `ArrayError`: `try runProcess(cmd) otherwise <h>` catches it and the program RECOVERS.
 //
-//   * `RunProcessError.spawnFailed` — `__gt_process_run` when `CreateProcessA` FAILS (a command whose first token
-//     is not a runnable executable). On failure CreateProcessA leaves the PROCESS_INFORMATION untouched, and
+//   * `RunProcessError.spawnFailed` — `__gt_process_run` when `CreateProcessW` FAILS (a command whose first token
+//     is not a runnable executable). On failure CreateProcessW leaves the PROCESS_INFORMATION untouched, and
 //     the call's is a freshly zeroed slot, so `hProcess == 0` detects it — and the runtime MUST NOT park on a
 //     null handle, which nothing could ever make ready, leaving the thread parked for ever.
 //
@@ -1728,14 +1728,14 @@ let IoReadBufferOffset = IoReadBytesOutBytes
 let IoReadBufferBytes = IoReadScratchBytes - IoReadBytesOutBytes
 
 // SECURITY_ATTRIBUTES: nLength=24 @0, lpSecurityDescriptor=0 @8, bInheritHandle=1 @16 — the inheritable SA the
-// child WRITE end (CreateFileW) is opened with, so CreateProcessA(bInheritHandles=TRUE) passes it to the child.
+// child WRITE end (CreateFileW) is opened with, so CreateProcessW(bInheritHandles=TRUE) passes it to the child.
 let SecurityAttributesSize = 24
 let SecurityAttributesNLengthOffset = 0
 let SecurityAttributesLpSdOffset = 8
 let SecurityAttributesBInheritOffset = 16
 let SecurityAttributesInheritable = 1
 
-// STARTUPINFOA fields the read builtin sets so the child's stdout is the pipe write end. `cb`=0x68, `dwFlags`
+// STARTUPINFOW fields the read builtin sets so the child's stdout is the pipe write end. `cb`=0x68, `dwFlags`
 // STARTF_USESTDHANDLES (0x100) @0x3C, hStdInput @0x50, hStdOutput @0x58, hStdError @0x60. Every other field 0.
 let StartfUseStdHandles = 0x100
 let StartupInfoDwFlagsOffset = 0x3C
@@ -1808,7 +1808,7 @@ let IoPipeSeqLabel = b"__io_pipe_seq"
 // one buffer across calls is safe only under an argument about the code — that a call writes and consumes its
 // scratch inside a window with no yield in it — which the probe next door cannot make at all (`__gt_io_read`
 // YIELDS, so a concurrent read must not share scratch). Per-call allocation is the discipline that needs no
-// argument, and with a free path it costs four slab requests against a `CreateProcessA`. It also needs no
+// argument, and with a free path it costs four slab requests against a `CreateProcessW`. It also needs no
 // re-zeroing stores: `hProcess` (the spawn-failure sentinel), the exit-code slot's high DWORD and the
 // cmdline's NUL terminator come zeroed by the allocator's contract, where a reused buffer arrives dirty and
 // each is a place a reader could be handed the previous call's answer.
@@ -6634,7 +6634,7 @@ end 'buildGtPreempt'
 // ⭐ **A THROWING FUNCTION** — its `throws RunProcessError` clause makes the x64/wasm backends give it
 // the dual-register `errorReturn` ABI (exit code in R8, error flag in R10), the same shape a throwing array
 // accessor uses. Every exit is an `errorReturn`: the reap path returns `(code, NoErrorFlag)`, a
-// `CreateProcessA` failure returns `(0, RunProcessSpawnFailedFlag)`. The front end recognizes `__gt_process_run` as a
+// `CreateProcessW` failure returns `(0, RunProcessSpawnFailedFlag)`. The front end recognizes `__gt_process_run` as a
 // throwing runtime callee (`isThrowingGtRuntimeCallee`), so a `runProcess` call must be a `tryCall`.
 function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape)
 	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: runProcessErrorThrows())
@@ -6651,14 +6651,14 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	let cmdlineLen = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(cmdlineLen, addrId: strPtr, offset: StringLengthOffset, valueType: StdType.i64))
 
-	// ⭐ **THE PRE-SPAWN SCRATCH REGIONS, PER CALL.** STARTUPINFOA, PROCESS_INFORMATION, the MUTABLE
-	// NUL-terminated command line (CreateProcessA may write to `lpCommandLine`, and the `.rdata` String blob is
+	// ⭐ **THE PRE-SPAWN SCRATCH REGIONS, PER CALL.** STARTUPINFOW, PROCESS_INFORMATION, the MUTABLE
+	// NUL-terminated command line (CreateProcessW may write to `lpCommandLine`, and the `.rdata` String blob is
 	// neither writable nor NUL-terminated) and, under the vector shape, the command built from it. All are dead
 	// by `afterCopy`, which is where they are released — so nothing here survives the park, and two concurrent
 	// `__gt_process_run` calls share nothing.
 	//
 	// ⭐ **AND NO RE-ZEROING STORES, BECAUSE A FRESH SLOT ARRIVES ZEROED.** `startup.cb` is the only
-	// field CreateProcessA reads that is not zero; `procInfo.hProcess` is the spawn-failure sentinel and must be
+	// field CreateProcessW reads that is not zero; `procInfo.hProcess` is the spawn-failure sentinel and must be
 	// 0 going in; `cmBuf[cmdlineLen]` is the command line's terminator. A REUSED buffer arrives holding the
 	// previous call's bytes and would need each of those written again — a fresh slot does
 	// not.
@@ -6690,7 +6690,7 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	var renounced = module.addBlock(func, label: b"renounced", heat: BlockHeat.normal)
 	var reapExit = module.addBlock(func, label: b"reapexit", heat: BlockHeat.normal)
 
-	// afterCopy: spawn the child. On FAILURE (`hProcess == 0` — CreateProcessA leaves the PROCESS_INFORMATION
+	// afterCopy: spawn the child. On FAILURE (`hProcess == 0` — CreateProcessW leaves the PROCESS_INFORMATION
 	// untouched, and this call's is a fresh, zeroed slot) → `spawnFailed` (throw, never park on a null handle).
 	// On success → `spawnOk`.
 	// `runProcess(cmd)` configures nothing: NULL `lpCurrentDirectory` inherits the parent's working directory
@@ -6699,9 +6699,9 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	let spawnDefaultsConst = emitConst(module, block: afterCopy, value: 0, ids: ids)
 
 	// `cmBuf` is a whole COMMAND LINE the caller wrote, so on a lane whose primitive takes a vector it
-	// becomes `/bin/sh -c <line>` — see `SubprocessRuntime.emitSubpCommandFromLine`, which emits nothing at
-	// all under the command-line shape.
-	let command = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
+	// becomes `/bin/sh -c <line>` — see `SubprocessRuntime.emitSubpCommandFromLine`, which under the
+	// command-line shape only widens it for a wide host.
+	let command = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf, encoding: module.hostText)
 	module.appendOp(afterCopy, op: StdOp.osProcessSpawn(command, cwdPtrId: spawnDefaultsConst, creationFlagsId: spawnDefaultsConst, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: spawnDefaultsConst))
 	let hProcess = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
@@ -6709,14 +6709,14 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
 
 	// ⚠ **BOTH HANDLES COME OUT BEFORE THE RECORD GOES BACK, AND THAT IS WHY THE RELEASE IS HERE RATHER THAN
-	// ON EACH ARM.** CreateProcessA has read the STARTUPINFOA and the command and written the
+	// ON EACH ARM.** CreateProcessW has read the STARTUPINFOW and the command and written the
 	// PROCESS_INFORMATION, so every region is dead at this point on EVERY path below — the throw and the
 	// park alike. Freeing once, before the branch, is what keeps both arms from needing their own copy of it,
 	// and `hThread` is read here for the same reason (on the failure path it is the slot's zero, which that arm
 	// never looks at).
 	let runTreeObject = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(runTreeObject, addrId: procInfoPtr, offset: ProcInfoTreeObjectOffset, valueType: StdType.i64))
-	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: command)
+	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: command, encoding: module.hostText)
 	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
 	emitSubpFreeLaunchRecords(module, block: afterCopy, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
 	afterCopy = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: afterCopy, treeObject: runTreeObject)
@@ -6935,7 +6935,7 @@ end 'buildPipeName'
 // release, N reads would hold N × ~4.2 KB for the process lifetime. The regions split cleanly in two:
 //
 //   • The rest are dead inside straight-line code — the pipe name, the SECURITY_ATTRIBUTES, the two-handle
-//     out-param block, the command line (and the command a vector-shaped lane builds from it), the STARTUPINFOA
+//     out-param block, the command line (and the command a vector-shaped lane builds from it), the STARTUPINFOW
 //     and the PROCESS_INFORMATION. Each is freed at the point its last reader finishes, BEFORE the branch that
 //     could throw the call away, so no arm carries a copy of the release.
 //   • ONE survives the park — the read scratch, which the kernel is writing into while the green thread is
@@ -6975,7 +6975,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	emitSubpFreePipeScratch(module, block: afterName, name: namePtr, scratch: scratch, ids: ids)
 	emitSlabFree(module, block: afterName, ptr: saPtr, ids: ids)
 
-	// The mutable NUL-terminated cmdline copy (CreateProcessA may write to lpCommandLine; the .rdata String blob is
+	// The mutable NUL-terminated cmdline copy (CreateProcessW may write to lpCommandLine; the .rdata String blob is
 	// neither writable nor NUL-terminated).
 	let cmdlinePtr = ids.mint()
 	module.appendOp(afterName, op: StdOp.loadIndirect(cmdlinePtr, addrId: strPtr, offset: StringBufferOffset, valueType: StdType.i64))
@@ -6994,7 +6994,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	var spawnFail = module.addBlock(func, label: b"spawnfail", heat: BlockHeat.normal)
 	var spawnOk = module.addBlock(func, label: b"spawnok", heat: BlockHeat.normal)
 
-	// afterCopy: build STARTUPINFOA (stdout/stderr → pipe write end) and spawn (inherit). The command line
+	// afterCopy: build STARTUPINFOW (stdout/stderr → pipe write end) and spawn (inherit). The command line
 	// needs no explicit NUL store: `cmBuf` is `cmdlineLen + TrailingNulBytes` of a freshly zeroed slot and the
 	// copy loop writes exactly `cmdlineLen` bytes, so the terminator is the allocator's zero.
 	let startupSizeConst = ids.mint()
@@ -7018,20 +7018,20 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	let probeSpawnDefaults = emitConst(module, block: afterCopy, value: 0, ids: ids)
 
 	// The probe's input is a command LINE too — `__gt_process_run`'s twin note carries the reason.
-	let probeCommand = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
+	let probeCommand = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf, encoding: module.hostText)
 	module.appendOp(afterCopy, op: StdOp.osProcessSpawnInherit(probeCommand, cwdPtrId: probeSpawnDefaults, creationFlagsId: probeSpawnDefaults, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: probeSpawnDefaults))
 	let hProcess = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
 	let hThread = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
 
-	// CreateProcessA has read the command and the STARTUPINFOA and written the PROCESS_INFORMATION, so
+	// CreateProcessW has read the command and the STARTUPINFOW and written the PROCESS_INFORMATION, so
 	// every region is dead on BOTH arms below — released once, before the branch, exactly as
 	// `__gt_process_run` does it. On the failure path `hThread` is the fresh slot's zero, which that arm never
 	// reads.
 	let probeTreeObject = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(probeTreeObject, addrId: procInfoPtr, offset: ProcInfoTreeObjectOffset, valueType: StdType.i64))
-	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: probeCommand)
+	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: probeCommand, encoding: module.hostText)
 	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
 	emitSubpFreeLaunchRecords(module, block: afterCopy, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
 	afterCopy = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: afterCopy, treeObject: probeTreeObject)
@@ -7110,7 +7110,7 @@ end 'buildGtIoRead'
 // so two things need a discipline and have one: the lazy CREATION of the region takes `__sched_lock` (a
 // test-then-allocate-then-store that two Ms would both win, losing a whole table and every handle given out of
 // it), and a SLOT is claimed by `CAS(inUse, 0 -> claimed)` at the scan rather than by a test whose write
-// landed after `CreateProcessA`. Everything INSIDE a claimed slot stays lock-free and GT-local, which is 1a's
+// landed after `CreateProcessW`. Everything INSIDE a claimed slot stays lock-free and GT-local, which is 1a's
 // the rule and is what the claim makes true. A slot's OS handles are closed at release; its reusable buffers PERSIST across
 // release+respawn (a spawn reuses a free slot's buffers), so a spawn/read/release loop is memory-bounded.
 //
@@ -7264,10 +7264,13 @@ let SubpPipeScratchSilencedWord = 16 as ParsedInt
 // runtime function must observe (its values are span-less, so a register-pressure E5001 has no user code to blame).
 // ⚠ **SIX WORDS, NOT THREE, AND THE SECOND THREE ARE A CORRECTNESS OBLIGATION.** The first three are the
 // handles the STARTUPINFO names; the second three are the handles this spawn OWNS and must close once
-// `CreateProcessA` has duplicated them into the child. They differ in exactly one case — `inherit`, where the
+// `CreateProcessW` has duplicated them into the child. They differ in exactly one case — `inherit`, where the
 // handle is the PARENT's own standard stream and closing it would close the parent's stdout — and
 // `emitSubpNonPipeChildHandle` writes 0 into the owned half there. See its header.
-let SubpChildScratchBytes = 48
+// The seventh word, used only when the host is wide, holds a failed redirect open's UTF-16 path,
+// which `streamFail` frees after it has recorded the open's error.
+let SubpChildScratchBytes = 56
+let SubpChildFailedPathOff = 48
 let SubpChildStdinReadOff = 0
 let SubpChildStdoutWriteOff = 8
 let SubpChildStderrWriteOff = 16
@@ -7280,7 +7283,7 @@ export let SubpWaitInfinite = 0xFFFFFFFF as ParsedInt
 export let SubpYieldReadName = b"__gt_subp_yield_read"
 export let SubpSpawnName = b"__gt_subp_spawn"
 
-// The ONE `CreateProcessA` path. Every spelling a program can spawn a child with fills a request record and
+// The ONE `CreateProcessW` path. Every spelling a program can spawn a child with fills a request record and
 // calls this; see `SubpReqCmdline` for why there is only one.
 export let SubpSpawnCoreName = b"__gt_subp_spawn_core"
 export let SubpReadLineName = b"__gt_subp_read_line"
@@ -7796,7 +7799,7 @@ function emitSubpSecurityAttributes(module StdModule, block IrBlock, ids ValueMi
 	return saPtr
 end 'emitSubpSecurityAttributes'
 
-// ⭐⭐ **THE SPAWN REQUEST RECORD — ONE `CreateProcessA` PATH, THREE CALLERS.** `__gt_subp_spawn_core` reads
+// ⭐⭐ **THE SPAWN REQUEST RECORD — ONE `CreateProcessW` PATH, THREE CALLERS.** `__gt_subp_spawn_core` reads
 // exactly this and nothing else, so the three spellings a program can spawn a child with — the bare-name
 // `subpSpawn(cmd)` probe, `__Builtins.subprocessSpawnStreaming` and the fourteen-argument
 // `__Builtins.subprocessSpawn`/`subprocessDetach` — differ ONLY in how they FILL it. The pipe-inheritance
@@ -7806,7 +7809,7 @@ end 'emitSubpSecurityAttributes'
 // contract would otherwise arrive as fourteen live values across a spawn that immediately spills them all.
 // Its fields are i64 because every one of them is a machine word: a buffer address, a `cstring`, a Win32
 // flag word or a kind discriminator.
-export let SubpReqCmdline = 0 as ByteOffset  // a MUTABLE NUL-terminated command line; CreateProcessA writes to it
+export let SubpReqCmdline = 0 as ByteOffset  // NUL-terminated; a wide host spawns from `SubpReqWideCmdline`
 export let SubpReqCwd = 8 as ByteOffset  // cstring, or 0 to inherit the parent's working directory
 export let SubpReqFlags = 16 as ByteOffset  // Win32 dwCreationFlags, already translated from the surface bitfield
 export let SubpReqStdinKind = 24 as ByteOffset
@@ -7819,12 +7822,20 @@ export let SubpReqErrData = 72 as ByteOffset
 export let SubpReqErrLimit = 80 as ByteOffset
 export let SubpReqDetach = 88 as ByteOffset  // 1 ⇒ answer the child's PID and let it go, rather than a handle
 
-// The child's whole environment, as the NUL-separated `NAME=VALUE` block CreateProcessA reads, or 0 to
+// The child's whole environment, as a NUL-separated UTF-8 `NAME=VALUE` block, or 0 to
 // inherit this process's. ⚠ ZERO IS THE INHERIT ANSWER AND THE SLAB ZERO-FILLS, so the two entry points that
 // have no environment to pass (`__gt_subp_stream_spawn` and the two `runProcess(cmd)` shapes) say nothing at
 // all and get it — the same arrangement `SubpReqDetach` has.
 export let SubpReqEnv = 96 as ByteOffset
-let SubpReqBytes = 104 as ParsedInt
+
+// UTF-16 copies of the command, the working directory and the environment, used only when the host
+// is wide. `__gt_subp_widen_request` fills them just before the spawn, and
+// `__gt_subp_free_wide_request` releases them on both the launch-failure and the success exit, after
+// the spawn's error is recorded.
+let SubpReqWideCmdline = 104 as ByteOffset
+let SubpReqWideCwd = 112 as ByteOffset
+let SubpReqWideEnv = 120 as ByteOffset
+let SubpReqBytes = 128 as ParsedInt
 
 // ⭐ **THE STDIO KIND DISCRIMINATORS, WHICH ARE `stdlib/Subprocess.maxon`'s OWN ENUM VALUES.** `StdinKind`
 // (`none`/`inherit`/`bytes`/`file`) and `OutputKind` (`discard`/`inherit`/`collect`/`file`) are declared there
@@ -7932,7 +7943,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// allocate-then-store is a read-modify-write: two Ms both observing the null word would both
 	// `__slab_alloc` a 64-slot region and one of the two would be lost, along with every handle a caller had
 	// already been given out of it. The lock is released the moment the pointer is published — the SCAN below
-	// claims its slot with a CAS instead, because a claim is held across `CreateProcessA` and a global lock
+	// claims its slot with a CAS instead, because a claim is held across `CreateProcessW` and a global lock
 	// held for that long would stall every other M for the length of a process spawn.
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let tableAddr = ids.mint()
@@ -7967,7 +7978,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	module.setTerminator(slotHdr, op: StdOp.condBranch(atMax, thenBlockId: noSlot.id, elseBlockId: slotCheck.id))
 
 	// ⛔⛔ **THE CLAIM IS A CAS, NOT A TEST, AND THE WINDOW IT CLOSES IS THE WHOLE SPAWN.** Writing `inUse` at
-	// the END of this function leaves a slot readable as FREE across `CreateProcessA`, so two Ms scanning at
+	// the END of this function leaves a slot readable as FREE across `CreateProcessW`, so two Ms scanning at
 	// once take the same index and then wire two different children's pipe ends into one slot.
 	// `CAS(inUse, 0 -> claimed)` makes the SCAN the claim, so a loser simply walks on to the next index
 	// (`SchedRuntime.POffStatus`'s shape, one table over), and the one path out of here that produces no handle
@@ -8000,7 +8011,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let nulName = emitLiteralCString(module, block: gotSlot, ids: ids, text: subpNullDeviceName(commandShape))
 
 	// ⚠ **THE FAILURE EXITS ARE CREATED BEFORE THE STDIO SETUP BECAUSE THE SETUP CAN REACH THEM.** A `file` or
-	// `discard` stream opens a real file, and `CreateFileA` can fail; see `emitSubpNonPipeChildHandle`. Its exit
+	// `discard` stream opens a real file, and `CreateFileW` can fail; see `emitSubpNonPipeChildHandle`. Its exit
 	// records the failure as the standard streams' so a missing redirect file is never read as a missing
 	// executable; both exits then share the cleanup.
 	var streamFail = module.addBlock(func, label: b"streamfail", heat: BlockHeat.normal)
@@ -8014,6 +8025,11 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	let streamStep = emitConst(module, block: streamFail, value: SpawnPreparation.standardStream.rawValue, ids: ids)
 	emitSubpRecordSpawnError(module, block: streamFail, preparation: streamStep, ids: ids)
+
+	if hostTextIsWide(module) 'wideRedirect'
+		emitSlabFree(module, block: streamFail, ptr: emitLoadField(module, block: streamFail, record: childScratch, offset: SubpChildFailedPathOff, ids: ids), ids: ids)
+	end 'wideRedirect'
+
 	module.setTerminator(streamFail, op: StdOp.branch(spawnFail.id))
 
 	var detached = module.addBlock(func, label: b"detached", heat: BlockHeat.normal)
@@ -8037,10 +8053,11 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let procInfoSizeConst = emitConst(module, block: afterStderr, value: ProcInfoSize as ParsedInt, ids: ids)
 	let procInfoPtr = ids.mint()
 	module.appendOp(afterStderr, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
-	let cmdlinePtr = emitLoadField(module, block: afterStderr, record: req, offset: SubpReqCmdline, ids: ids)
-	let cwdPtr = emitLoadField(module, block: afterStderr, record: req, offset: SubpReqCwd, ids: ids)
+	emitSubpWideRequestStep(module, block: afterStderr, req: req, step: SubpWideRequestStep.widen, ids: ids)
+	let cmdlinePtr = emitLoadField(module, block: afterStderr, record: req, offset: subpSpawnOperandOffset(module, utf8: SubpReqCmdline, wide: SubpReqWideCmdline), ids: ids)
+	let cwdPtr = emitLoadField(module, block: afterStderr, record: req, offset: subpSpawnOperandOffset(module, utf8: SubpReqCwd, wide: SubpReqWideCwd), ids: ids)
 	let creationFlags = emitLoadField(module, block: afterStderr, record: req, offset: SubpReqFlags, ids: ids)
-	let envPtr = emitLoadField(module, block: afterStderr, record: req, offset: SubpReqEnv, ids: ids)
+	let envPtr = emitLoadField(module, block: afterStderr, record: req, offset: subpSpawnOperandOffset(module, utf8: SubpReqEnv, wide: SubpReqWideEnv), ids: ids)
 	module.appendOp(afterStderr, op: StdOp.osProcessSpawnInherit(cmdlinePtr, cwdPtrId: cwdPtr, creationFlagsId: creationFlags, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr, envPtrId: envPtr))
 	let hProcess = emitLoadField(module, block: afterStderr, record: procInfoPtr, offset: ProcInfoHProcessOffset, ids: ids)
 	let zeroA = emitConst(module, block: afterStderr, value: 0, ids: ids)
@@ -8049,12 +8066,13 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	// launchFail: publish the OS's reason with the preparation step the spawn chunk reported, which is `none`
 	// unless a POSIX chunk failed before launching (`SpawnFailedPreparationOffset`). A missing working directory
-	// needs no step on Windows: `CreateProcessA` answers `ERROR_DIRECTORY` for it, a code no missing executable
+	// needs no step on Windows: `CreateProcessW` answers `ERROR_DIRECTORY` for it, a code no missing executable
 	// shares.
 	let launchStep = emitLoadField(module, block: launchFail, record: procInfoPtr, offset: SpawnFailedPreparationOffset, ids: ids)
 	emitSubpRecordSpawnError(module, block: launchFail, preparation: launchStep, ids: ids)
 	let launchTree = emitLoadField(module, block: launchFail, record: procInfoPtr, offset: ProcInfoTreeObjectOffset, ids: ids)
 	var afterLaunchTree = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: launchFail, treeObject: launchTree)
+	emitSubpWideRequestStep(module, block: afterLaunchTree, req: req, step: SubpWideRequestStep.release, ids: ids)
 	emitSubpFreeLaunchRecords(module, block: afterLaunchTree, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
 	module.setTerminator(afterLaunchTree, op: StdOp.branch(spawnFail.id))
 
@@ -8082,6 +8100,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let pid = emitLoadDword(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoDwProcessIdOffset, ids: ids)
 	let treeObject = emitLoadField(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoTreeObjectOffset, ids: ids)
 	let assigned = emitLoadField(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoTreeAssignedOffset, ids: ids)
+	emitSubpWideRequestStep(module, block: spawnOk, req: req, step: SubpWideRequestStep.release, ids: ids)
 	emitSubpFreeLaunchRecords(module, block: spawnOk, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
 	emitSubpFreeSetupScratch(module, block: spawnOk, saPtr: saPtr, childScratch: childScratch, nulName: nulName, ids: ids)
 	let slot = emitSubpSlotAddr(module, block: spawnOk, ids: ids, table: table, slotIdx: slotIdx)
@@ -8166,7 +8185,7 @@ function emitSubpFreeSetupScratch(module StdModule, block IrBlock, saPtr ValueId
 	emitSlabFree(module, block: block, ptr: nulName, ids: ids)
 end 'emitSubpFreeSetupScratch'
 
-// `"NUL"` in a fresh slab buffer, as the NUL-terminated bytes `CreateFileA` reads. Three stores and a
+// `"NUL"` in a fresh slab buffer, as a NUL-terminated UTF-8 path. Three stores and a
 // slab-zeroed terminator — a four-byte `.rdata` blob would need a relocation and a symbol for what is three
 // immediates.
 function subpNullDeviceName(commandShape SubprocessCommandShape) returns ByteArray
@@ -8181,11 +8200,11 @@ end 'subpNullDeviceName'
 // `file`, and the NUL device for `none`/`discard`, which is the same open with a different name.
 //
 // It terminates `cur` and branches to `join` carrying TWO values: the handle the STARTUPINFO names, and the
-// handle this spawn OWNS and must close after `CreateProcessA` returns. They differ in exactly one case and
+// handle this spawn OWNS and must close after `CreateProcessW` returns. They differ in exactly one case and
 // that difference is a correctness obligation, not bookkeeping: an INHERITED handle belongs to the OS, and
 // closing it would close the PARENT's own stdout. The inherit arm therefore passes 0 as the owned half, and
 // `CloseHandle(0)` is the no-op that makes the close path uniform.
-function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, kind ValueId, data ValueId, nulName ValueId, stdSelector ParsedInt, forWrite bool, join IrBlock, whenFailed IrBlock)
+function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, kind ValueId, data ValueId, nulName ValueId, childScratch ValueId, stdSelector ParsedInt, forWrite bool, join IrBlock, whenFailed IrBlock)
 	var stdArm = module.addBlock(func, label: b"sstd", heat: BlockHeat.normal)
 	var pathPick = module.addBlock(func, label: b"spath", heat: BlockHeat.normal)
 	var fileArm = module.addBlock(func, label: b"sfile", heat: BlockHeat.normal)
@@ -8216,25 +8235,39 @@ function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids Value
 	let path = ids.mint()
 	openArm.blockArgs.push(IrBlockArg.create(path, argType: StdType.i64))
 	let opened = ids.mint()
+	let hostPath = emitHostCString(module, block: openArm, cstr: path, encoding: module.hostText, ids: ids)
 
 	if forWrite 'writeEnd'
-		module.appendOp(openArm, op: StdOp.osFileOpenWrite(opened, pathPtrId: path))
+		module.appendOp(openArm, op: StdOp.osFileOpenWrite(opened, pathPtrId: hostPath))
 	end 'writeEnd' else 'readEnd'
-		module.appendOp(openArm, op: StdOp.osFileOpenRead(opened, pathPtrId: path))
+		module.appendOp(openArm, op: StdOp.osFileOpenRead(opened, pathPtrId: hostPath))
 	end 'readEnd'
 
-	// ⚠⚠ **THE OPEN IS CHECKED, BECAUSE AN UNCHECKED FAILED OPEN IS A SILENT SUCCESS.** `CreateFileA`
+	// ⚠⚠ **THE OPEN IS CHECKED, BECAUSE AN UNCHECKED FAILED OPEN IS A SILENT SUCCESS.** `CreateFileW`
 	// answers `INVALID_HANDLE_VALUE` (-1), and -1 in a STARTUPINFO under `bInheritHandles=TRUE` does not stop
-	// `CreateProcessA`: `InputSource.file("Z:/no/such/dir/nope.txt")` would answer `spawn=0` with an EMPTY
+	// `CreateProcessW`: `InputSource.file("Z:/no/such/dir/nope.txt")` would answer `spawn=0` with an EMPTY
 	// `lastErrorMessage()` and launch a child whose stdin was a dead handle. `InputSource.file` and
 	// `OutputDestination.file` are public corpus surface, so `Configuration` alone reaches it. Failing HERE
-	// also means the reason a caller reads is `CreateFileA`'s — "the
-	// file is not there" — rather than whatever `CreateProcessA` would have said about it afterwards.
+	// also means the reason a caller reads is `CreateFileW`'s — "the
+	// file is not there" — rather than whatever `CreateProcessW` would have said about it afterwards.
 	let invalidHandle = emitConst(module, block: openArm, value: -1, ids: ids)
 	let openFailed = emitCmp(module, block: openArm, a: opened, b: invalidHandle, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(openArm, op: StdOp.condBranch(openFailed, thenBlockId: whenFailed.id, elseBlockId: openOk.id))
 
-	// ⚠ `CreateFileA` with a NULL `lpSecurityAttributes` yields a NON-inheritable handle, and a STARTUPINFO
+	if not hostTextIsWide(module) 'narrowOpen'
+		module.setTerminator(openArm, op: StdOp.condBranch(openFailed, thenBlockId: whenFailed.id, elseBlockId: openOk.id))
+	end 'narrowOpen' else 'wideOpen'
+		var keepPath = module.addBlock(func, label: b"swidekeep", heat: BlockHeat.normal)
+		var dropPath = module.addBlock(func, label: b"swidedrop", heat: BlockHeat.normal)
+		module.setTerminator(openArm, op: StdOp.condBranch(openFailed, thenBlockId: keepPath.id, elseBlockId: dropPath.id))
+
+		emitStoreField(module, block: keepPath, record: childScratch, offset: SubpChildFailedPathOff, value: hostPath)
+		module.setTerminator(keepPath, op: StdOp.branch(whenFailed.id))
+
+		emitSlabFree(module, block: dropPath, ptr: hostPath, ids: ids)
+		module.setTerminator(dropPath, op: StdOp.branch(openOk.id))
+	end 'wideOpen'
+
+	// ⚠ `CreateFileW` with a NULL `lpSecurityAttributes` yields a NON-inheritable handle, and a STARTUPINFO
 	// handle a child cannot inherit leaves that stream CLOSED in the child with no error anywhere. See
 	// `osHandleSetInherit`.
 	module.appendOp(openOk, op: StdOp.osHandleSetInherit(opened))
@@ -8319,7 +8352,7 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	module.setTerminator(pipeMake, op: StdOp.branch(join.id))
 	pipeMake.branchEdges.push(BranchEdge.create(join.id, argIds: twoArgs(childRead, second: childRead)))
 
-	emitSubpNonPipeChildHandle(module, func: func, ids: ids, cur: nonPipe, kind: kind, data: data, nulName: nulName, stdSelector: StdInputHandleSelector, forWrite: false, join: join, whenFailed: whenFailed)
+	emitSubpNonPipeChildHandle(module, func: func, ids: ids, cur: nonPipe, kind: kind, data: data, nulName: nulName, childScratch: childScratch, stdSelector: StdInputHandleSelector, forWrite: false, join: join, whenFailed: whenFailed)
 
 	let childHandle = ids.mint()
 	let ownedHandle = ids.mint()
@@ -8374,7 +8407,7 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	module.setTerminator(pipeMake, op: StdOp.branch(join.id))
 	pipeMake.branchEdges.push(BranchEdge.create(join.id, argIds: twoArgs(childWrite, second: childWrite)))
 
-	emitSubpNonPipeChildHandle(module, func: func, ids: ids, cur: nonPipe, kind: kind, data: data, nulName: nulName, stdSelector: stdSelector, forWrite: true, join: join, whenFailed: whenFailed)
+	emitSubpNonPipeChildHandle(module, func: func, ids: ids, cur: nonPipe, kind: kind, data: data, nulName: nulName, childScratch: childScratch, stdSelector: stdSelector, forWrite: true, join: join, whenFailed: whenFailed)
 
 	let childHandle = ids.mint()
 	let ownedHandle = ids.mint()
@@ -8386,7 +8419,7 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 end 'emitSubpOutputSetup'
 
 // ⭐ `__gt_subp_spawn(cmdStrPtr) -> handle` — the bare-name `subpSpawn(cmd)` probe's entry.
-// Copies the BORROWED command String's bytes into a mutable NUL-terminated buffer (CreateProcessA writes to
+// Copies the BORROWED command String's bytes into a mutable NUL-terminated buffer (CreateProcessW writes to
 // its `lpCommandLine`), fills a spawn request asking for three pipes and nothing else, and hands it to the
 // core. It configures no working directory and no creation flags: NULL and 0.
 //
@@ -8441,7 +8474,8 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 
 	// The line the caller wrote becomes `/bin/sh -c <line>` on a lane whose primitive takes a vector, and
 	// stays exactly itself under the command-line shape — the same one call `__gt_process_run` makes.
-	let command = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf)
+	// It stays UTF-8 on a wide host too: the core widens the whole request (`SubpReqWideCmdline`).
+	let command = emitSubpCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, linePtr: cmBuf, encoding: HostTextEncoding.utf8)
 	let req = emitSubpNewRequest(module, block: afterCopy, ids: ids, cmdline: command)
 	let stdinPipe = emitConst(module, block: afterCopy, value: SubpStdinHold, ids: ids)
 	emitStoreField(module, block: afterCopy, record: req, offset: SubpReqStdinKind, value: stdinPipe)
@@ -8453,12 +8487,82 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 
 	// The core has read the request and the command whichever way it answered.
 	emitSlabFree(module, block: afterCopy, ptr: req, ids: ids)
-	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: command)
+	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: command, encoding: HostTextEncoding.utf8)
 	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
 	module.setTerminator(afterCopy, op: StdOp.ret(handle))
 
 	module.functions.push(func)
 end 'buildSubpSpawn'
+
+let SubpWidenRequestName = b"__gt_subp_widen_request"
+let SubpFreeWideRequestName = b"__gt_subp_free_wide_request"
+
+function subpSpawnOperandOffset(module StdModule, utf8 ByteOffset, wide ByteOffset) returns ByteOffset
+	if hostTextIsWide(module) 'wide'
+		return wide
+	end 'wide'
+
+	return utf8
+end 'subpSpawnOperandOffset'
+
+enum SubpWideRequestStep
+	widen
+	release
+end 'SubpWideRequestStep'
+
+function subpWideRequestStepName(step SubpWideRequestStep) returns ByteArray
+	return match step 'name'
+		widen gives SubpWidenRequestName
+		release gives SubpFreeWideRequestName
+	end 'name'
+end 'subpWideRequestStepName'
+
+function emitSubpWideRequestStep(module StdModule, block IrBlock, req ValueId, step SubpWideRequestStep, ids ValueMinter)
+	if hostTextIsWide(module) 'wide'
+		module.appendOp(block, op: StdOp.call(ids.mint(), callee: subpWideRequestStepName(step), args: argsOf(req)))
+	end 'wide'
+end 'emitSubpWideRequestStep'
+
+function buildSubpWideRequestStep(module StdModule, step SubpWideRequestStep)
+	var func = IrFunction.createFromStd(subpWideRequestStepName(step), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let req = 0 as ValueId
+
+	var afterCommand = emitSubpWideOperandStep(module, func: func, cur: entry, req: req, source: SubpReqCmdline, wide: SubpReqWideCmdline, extent: Utf8Extent.cstring, step: step, ids: ids)
+	var afterCwd = emitSubpWideOperandStep(module, func: func, cur: afterCommand, req: req, source: SubpReqCwd, wide: SubpReqWideCwd, extent: Utf8Extent.cstring, step: step, ids: ids)
+	var afterEnv = emitSubpWideOperandStep(module, func: func, cur: afterCwd, req: req, source: SubpReqEnv, wide: SubpReqWideEnv, extent: Utf8Extent.block, step: step, ids: ids)
+	module.setTerminator(afterEnv, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSubpWideRequestStep'
+
+function emitSubpWideOperandStep(module StdModule, func IrFunction, cur IrBlock, req ValueId, source ByteOffset, wide ByteOffset, extent Utf8Extent, step SubpWideRequestStep, ids ValueMinter) returns IrBlock
+	var present = module.addBlock(func, label: b"subpwideoperand", heat: BlockHeat.normal)
+	let joined = module.addBlock(func, label: b"subpwideoperanddone", heat: BlockHeat.normal)
+
+	let operandOffset = match step 'operand'
+		widen gives source
+		release gives wide
+	end 'operand'
+
+	let operand = emitLoadField(module, block: cur, record: req, offset: operandOffset, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let absent = emitCmp(module, block: cur, a: operand, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(absent, thenBlockId: joined.id, elseBlockId: present.id))
+
+	match step 'act'
+		widen then emitStoreField(module, block: present, record: req, offset: wide, value: emitUtf8ToWide(module, block: present, source: operand, extent: extent, ids: ids))
+		release then emitSlabFree(module, block: present, ptr: operand, ids: ids)
+	end 'act'
+
+	module.setTerminator(present, op: StdOp.branch(joined.id))
+
+	return joined
+end 'emitSubpWideOperandStep'
 
 // A zeroed spawn request carrying only the command line — every other field's zero IS its default (inherit the
 // cwd, no creation flags, `StdinKind.none`, `OutputKind.discard`, no capture limit, do not detach), which the
@@ -8485,7 +8589,7 @@ end 'emitSubpCloseOwnedChildEnds'
 
 // Close every OS handle a FAILED spawn attempt opened — the three parent ends stored in the slot (stdin write,
 // stdout read, stderr read) plus the three OWNED child ends parked in `childScratch`. There is no process
-// handle to close: this runs only where `CreateProcessA` left the slab-zeroed PROCESS_INFORMATION untouched.
+// handle to close: this runs only where `CreateProcessW` left the slab-zeroed PROCESS_INFORMATION untouched.
 // Each handle is reloaded from memory so no handle occupies a register here, and a slot field left 0 by a
 // non-pipe stream reaches `CloseHandle(0)`, which is the no-op that keeps this path free of kind tests.
 function emitSubpCloseTreeObject(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, treeObject ValueId) returns IrBlock
@@ -9141,6 +9245,12 @@ end 'buildSubpRelease'
 // `__gt_io_read` in `installGtRuntime`.
 function installSubpRuntime(module StdModule, target Target, streamState EnumLayout)
 	buildSubpStrFromBytes(module)
+
+	if hostTextIsWide(module) 'wideRequest'
+		buildSubpWideRequestStep(module, step: SubpWideRequestStep.widen)
+		buildSubpWideRequestStep(module, step: SubpWideRequestStep.release)
+	end 'wideRequest'
+
 	buildSubpSpawnCore(module, commandShape: subprocessCommandShape(target), streamState: streamState)
 	buildSubpSpawn(module, commandShape: subprocessCommandShape(target))
 	buildSubpReadLine(module, name: SubpReadLineName, streamBase: SubpStdoutBase, streamState: streamState, wait: LineReadWait.untilALineArrives)

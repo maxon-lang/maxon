@@ -1060,13 +1060,13 @@ export enum SocketServeVerb
 end 'SocketServeVerb'
 
 export enum PathQueryVerb
-	// `(buffer, capacity, unused)`. `GetSystemDirectoryA(buffer, capacity)`.
+	// `(buffer, capacity, unused)`. `GetSystemDirectoryW(buffer, capacity)`.
 	systemDirectory
 
-	// `(buffer, capacity, unused)`. `GetWindowsDirectoryA(buffer, capacity)`.
+	// `(buffer, capacity, unused)`. `GetWindowsDirectoryW(buffer, capacity)`.
 	windowsDirectory
 
-	// `(path, capacity, buffer)`. `GetFullPathNameA(path, capacity, buffer, NULL)`.
+	// `(path, capacity, buffer)`. `GetFullPathNameW(path, capacity, buffer, NULL)`.
 	fullPath
 end 'PathQueryVerb'
 
@@ -1484,7 +1484,7 @@ export union StdOp
 	//
 	// All are `system`-band ops for the same two reasons `osAllocPages`/`osReadClock` are: they say
 	// what is wanted (spawn a child, wait on a handle, read an exit code, close a handle) and let each
-	// backend say how (x64-windows: `CreateProcessA`/`WaitForSingleObject`/`GetExitCodeProcess`/
+	// backend say how (x64-windows: `CreateProcessW`/`WaitForSingleObject`/`GetExitCodeProcess`/
 	// `CloseHandle` through the IAT, `Targets/Windows/PeWriter.maxon`), keeping the Win32 import table
 	// out of the target-neutral tier. Full call-barrier metadata: each is an indirect call once
 	// lowered, exactly like `osAllocPages`.
@@ -1494,7 +1494,7 @@ export union StdOp
 	// so they carry no result id and their x64 lowering emits no RAX capture.
 	//
 	// `osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr)` =
-	// `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, FALSE, creationFlags, envPtr, cwdPtr, startupPtr,
+	// `CreateProcessW(NULL, cmdlinePtr, NULL, NULL, FALSE, creationFlags, envPtr, cwdPtr, startupPtr,
 	// procInfoPtr)`. Six value operands (the mutable cmdline buffer, the working directory, the
 	// creation flags, the two out structs and the environment block); ten Win64 arguments, six of them
 	// on the stack (see `win64OutgoingArgDisp`), which is why it reserves outgoing stack-argument
@@ -1679,7 +1679,7 @@ export union StdOp
 	osLastError(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr)` =
-	// `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, TRUE, creationFlags, NULL, cwdPtr, startupPtr, procInfoPtr)` — the
+	// `CreateProcessW(NULL, cmdlinePtr, NULL, NULL, TRUE, creationFlags, NULL, cwdPtr, startupPtr, procInfoPtr)` — the
 	// `osProcessSpawn` twin with bInheritHandles=TRUE, so a child inherits the pipe write end its STARTUPINFO names as
 	// hStdOutput. FIVE VALUE operands, no result.
 	//
@@ -1786,14 +1786,12 @@ export union StdOp
 	//
 	// Its `category: system` places it logically in the system band, independent of this tail position.
 	//
-	// `osFileOpenRead(result, pathPtr)` = `CreateFileA(pathPtr, GENERIC_READ, <every share bit>, NULL,
+	// `osFileOpenRead(result, pathPtr)` = `CreateFileW(pathPtr, GENERIC_READ, <every share bit>, NULL,
 	// OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)`, the raw HANDLE (or `INVALID_HANDLE_VALUE`) in `result`.
 	// One value operand and one def — the direct-return shape `osEventCreate` uses, NOT the
-	// out-param shape `osReadClock` needs, because `CreateFileA` returns its answer in RAX.
+	// out-param shape `osReadClock` needs, because `CreateFileW` returns its answer in RAX.
 	//
-	// ⚠ **THE `A` ENTRY POINT, NEVER THE `W` ONE.** A Maxon path is a UTF-8 BYTE buffer, and the `W`
-	// entry point would read those bytes as UTF-16 code units — broken even for pure ASCII. See
-	// `StdToX64Conversion.lowerOsFileOpenRead` and `IatSlot.CreateFileA`, which carry the argument.
+	// ⚠ On Windows `pathPtr` must already be UTF-16 — see `StdToX64Conversion.lowerOsFileOpenRead`.
 	//
 	// ⭐ **IT DOES NOT CLASSIFY ITS OWN FAILURE, AND THAT IS DELIBERATE.** The op yields the raw handle; the
 	// `notFound`-vs-`openFailed` decision is made in BUILDER-BUILT Std by `ManagedFileRuntime`, reading the
@@ -1836,7 +1834,7 @@ export union StdOp
 	// the BOOL result; the byte count lands in memory at `bytesOutPtr`.
 	osReadFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osFileOpenWrite(result, pathPtr)` = `CreateFileA(pathPtr, GENERIC_WRITE, <every share bit>,
+	// `osFileOpenWrite(result, pathPtr)` = `CreateFileW(pathPtr, GENERIC_WRITE, <every share bit>,
 	// NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)`, the raw HANDLE (or `INVALID_HANDLE_VALUE`)
 	// in `result` — `osFileOpenRead`'s shape with two constants changed.
 	//
@@ -1855,22 +1853,22 @@ export union StdOp
 	// share RAX with a success flag.
 	osFileSize(resultId ValueId, handleId ValueId, sizeOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osFileDelete(result, pathPtr)` = `DeleteFileA(pathPtr)`, the BOOL in `result` (non-zero = deleted).
+	// `osFileDelete(result, pathPtr)` = `DeleteFileW(pathPtr)`, the BOOL in `result` (non-zero = deleted).
 	// The failure CLASSIFICATION is not here — `ManagedFileRuntime` reads `osLastError` and picks the
 	// variant, for the reason `osFileOpenRead` states.
 	osFileDelete(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osFileRename(result, oldPathPtr, newPathPtr)` = `MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING |
+	// `osFileRename(result, oldPathPtr, newPathPtr)` = `MoveFileExW(old, new, MOVEFILE_REPLACE_EXISTING |
 	// MOVEFILE_WRITE_THROUGH)`, the BOOL in `result`. Both flags are load-bearing: the atomic
 	// replace makes publishing the destination torn-read-safe, and write-through
 	// flushes the metadata so a crash straight after cannot lose the new name.
 	osFileRename(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osFileFindFirst(result, pathPtr, findDataPtr)` = `FindFirstFileA(pathPtr, findDataPtr)` — the search
-	// HANDLE (or `INVALID_HANDLE_VALUE`) in `result`, and the 320-byte `WIN32_FIND_DATAA` record written to
+	// `osFileFindFirst(result, pathPtr, findDataPtr)` = `FindFirstFileW(pathPtr, findDataPtr)` — the search
+	// HANDLE (or `INVALID_HANDLE_VALUE`) in `result`, and the 592-byte `WIN32_FIND_DATAW` record written to
 	// `[findDataPtr]`. The caller owns that buffer and MUST `osFileFindClose` the handle.
 	//
-	// ⭐ **IT SERVES BOTH `stat` AND `exists`, WHICH IS WHY THERE IS NO `GetFileAttributesA` HERE.** `stat`
+	// ⭐ **IT SERVES BOTH `stat` AND `exists`, WHICH IS WHY THERE IS NO `GetFileAttributesW` HERE.** `stat`
 	// needs the find record's timestamps and sizes; `exists` needs one bit of the very same
 	// `dwFileAttributes` word (is this a directory?). Importing a second entry point to ask a question this
 	// record already answers would be two ways to ask one thing — and they can disagree.
@@ -1889,10 +1887,10 @@ export union StdOp
 	// bug rather than stubbing an answer nothing checks.
 	//
 	// ⚠ **EVERY COMMENT BELOW NAMES THE ENTRY POINT THE LOWERING ACTUALLY EMITS**, the discipline the
-	// file-IO band above states: all five are the `A` variants, because a Maxon path is UTF-8 bytes.
+	// file-IO band above states.
 	//
-	// `osFileFindNext(result, handle, findDataPtr)` = `FindNextFileA(handle, findDataPtr)` — the Win32 BOOL
-	// in `result` and the next entry written over the caller's 320-byte `WIN32_FIND_DATAA`.
+	// `osFileFindNext(result, handle, findDataPtr)` = `FindNextFileW(handle, findDataPtr)` — the Win32 BOOL
+	// in `result` and the next entry written over the caller's 592-byte `WIN32_FIND_DATAW`.
 	//
 	// ⚠ **A FALSE HERE IS NOT A FAILURE — `GetLastError() == ERROR_NO_MORE_FILES` IS THE ORDINARY END OF AN
 	// ITERATION**, and telling those two apart is `ManagedDirectoryRuntime`'s job, not this op's. The op
@@ -1900,12 +1898,12 @@ export union StdOp
 	// same on every platform even though the CALL is not, so a future POSIX lane supplies only the call.
 	osFileFindNext(resultId ValueId, handleId ValueId, findDataPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osDirCreate(result, pathPtr)` = `CreateDirectoryA(pathPtr, NULL)`, the BOOL in `result` (non-zero =
+	// `osDirCreate(result, pathPtr)` = `CreateDirectoryW(pathPtr, NULL)`, the BOOL in `result` (non-zero =
 	// created). The `lpSecurityAttributes` NULL is the only argument the op does not carry, exactly as
-	// `osFileOpenRead` does not carry its five fixed `CreateFileA` constants.
+	// `osFileOpenRead` does not carry its five fixed `CreateFileW` constants.
 	osDirCreate(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osDirRemove(result, pathPtr)` = `RemoveDirectoryA(pathPtr)`, the BOOL in `result` (non-zero = removed).
+	// `osDirRemove(result, pathPtr)` = `RemoveDirectoryW(pathPtr)`, the BOOL in `result` (non-zero = removed).
 	//
 	// ⚠ **IT REMOVES AN EMPTY DIRECTORY AND NOTHING ELSE.** Every lane's call refuses a directory that still
 	// holds an entry, and the refusal is reported as an ordinary failure with a last-error code — so telling
@@ -1913,7 +1911,7 @@ export union StdOp
 	// this op's, exactly as `osFileFindNext`'s end-of-iteration is.
 	osDirRemove(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osDirCurrentPath(result, bufLen, bufPtr)` = `GetCurrentDirectoryA(bufLen, bufPtr)`.
+	// `osDirCurrentPath(result, bufLen, bufPtr)` = `GetCurrentDirectoryW(bufLen, bufPtr)`.
 	//
 	// ⚠ **ITS RESULT HAS THREE MEANINGS, WHICH IS WHY THE RETRY LOOP IS IN BUILDER-BUILT Std AND NOT HERE.**
 	// Win32 answers `0` for failure, `< bufLen` for "written, NUL included", and `>= bufLen` for "the buffer
@@ -1922,14 +1920,14 @@ export union StdOp
 	// three tiers below the only code that knows what to allocate.
 	osDirCurrentPath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osFileAttributes(result, pathPtr)` = `GetFileAttributesA(pathPtr)` — the raw `dwFileAttributes` mask,
+	// `osFileAttributes(result, pathPtr)` = `GetFileAttributesW(pathPtr)` — the raw `dwFileAttributes` mask,
 	// or `INVALID_FILE_ATTRIBUTES` (`0xFFFFFFFF`) when the path names nothing.
 	//
 	// ⚠ **IT IS THE SECOND ENTRY POINT `osFileFindFirst`'s COMMENT ARGUES AGAINST, AND THE ARGUMENT DOES NOT
-	// COVER THIS CASE.** That one refuses a `GetFileAttributesA` for `__ManagedFile.exists`, because the find
+	// COVER THIS CASE.** That one refuses a `GetFileAttributesW` for `__ManagedFile.exists`, because the find
 	// record `stat` already needs carries the very `dwFileAttributes` word the answer is one bit of — two
 	// ways to ask ONE question. `__ManagedDirectory.exists` asks a question no find record is opened for: it
-	// takes a bare DIRECTORY path, not a search pattern, and `FindFirstFileA` on a bare directory returns a
+	// takes a bare DIRECTORY path, not a search pattern, and `FindFirstFileW` on a bare directory returns a
 	// handle the caller would then have to `FindClose`, so routing it through the find record would COST a
 	// search handle to answer "is this a directory?".
 	osFileAttributes(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
@@ -1954,7 +1952,7 @@ export union StdOp
 	//
 	// `category: system` places it logically beside the file-IO band, independent of this tail position.
 	//
-	// `osCommandLine(result)` = `GetCommandLineA()` — a pointer to the process's ONE NUL-terminated command
+	// `osCommandLine(result)` = `GetCommandLineW()` — a pointer to the process's ONE NUL-terminated command
 	// line, owned by the OS. It is not a copy and must not be freed.
 	//
 	// ⭐⭐ **THE OP HANDS BACK THE UNSPLIT STRING, AND THE SPLIT IS BUILDER-BUILT Std ABOVE IT** — the same
@@ -1963,14 +1961,9 @@ export union StdOp
 	// UTF-16 and returns UTF-16. So the split is CODE either way, and putting it at the Std tier means the
 	// CRT quoting rules are written once, in one readable graph, rather than per backend.
 	//
-	// ⚠ The `A` entry point, and the encoding is the whole argument. The Windows lane is
-	// ANSI end to end — `CreateFileA`, `FindFirstFileA`, `GetCurrentDirectoryA`, `GetFileAttributesA`,
-	// `CreateDirectoryA`, every one of them. A UTF-8 argv would be the single producer disagreeing with all
-	// of them, and the first thing a program does with an argument is hand it to one: `openRead(args.get(1))`
-	// would then take a path whose non-ASCII bytes the OS reads in a different encoding from the one they
-	// were written in. Matching the lane costs one kernel32 import and buys the round trip.
+	// ⚠ On Windows the line is UTF-16; `CommandLineRuntime`'s encoding note says where it becomes UTF-8.
 	//
-	// ⚠ It takes NO operands. `GetCommandLineA` reads the PEB, so there is nothing to pass and nothing that
+	// ⚠ It takes NO operands. `GetCommandLineW` reads the PEB, so there is nothing to pass and nothing that
 	// can differ between two calls in one process.
 	osCommandLine(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
 
@@ -1996,19 +1989,19 @@ export union StdOp
 	osStdHandle(resultId ValueId, whichId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osExecutablePath(result, bufLen, bufPtr)` — the running image's absolute path, written into the caller's
-	// buffer. `GetModuleFileNameA(NULL, bufPtr, bufLen)` on Windows; on arm64-macOS a runtime chunk over
+	// buffer. `GetModuleFileNameW(NULL, bufPtr, bufLen)` on Windows; on arm64-macOS a runtime chunk over
 	// `_NSGetExecutablePath` + `realpath` (`Arm64DarwinRuntime.buildArm64DarwinExePathChunk`, which carries
 	// the measurement for why the second call exists). The result is the byte count written EXCLUDING the
 	// NUL, which is how the caller tells "fits" from "truncated"; `isStore: true` because it writes that
 	// buffer.
 	//
-	// ⭐ **THE COUNT'S CONVENTION IS `GetModuleFileNameA`'s AND EVERY LANE OWES IT.** A `+1` for the NUL would
+	// ⭐ **THE COUNT'S CONVENTION IS `GetModuleFileNameW`'s AND EVERY LANE OWES IT.** A `+1` for the NUL would
 	// both trigger a spurious doubling when a path exactly fills the buffer and carry a trailing NUL into the
 	// copied-out `String`. Darwin's primitive answers no count at all — it leaves `*bufsize` UNCHANGED on
 	// success, contrary to a common misreading — so that lane MEASURES the length rather than reading one.
 	//
 	// ⚠ **THE FIELD ORDER IS `osDirCurrentPath`'s, AND NEITHER LANE'S ARGUMENT ORDER IS.**
-	// `GetCurrentDirectoryA(nBufferLength, lpBuffer)` genuinely takes its length first; `GetModuleFileNameA`
+	// `GetCurrentDirectoryW(nBufferLength, lpBuffer)` genuinely takes its length first; `GetModuleFileNameW`
 	// and `_NSGetExecutablePath` both take the buffer first and the size second. The two ops read alike here
 	// on purpose — one shape for "an OS call that fills a caller's buffer and answers a length" — and the
 	// TRANSPOSITION lives in the one place per lane that knows the ABI (`lowerOsExecutablePath`, in each
@@ -2016,8 +2009,8 @@ export union StdOp
 	// order into the target-neutral tier, where nothing can check it.
 	//
 	// ⭐ **THE RETRY LOOP IS BUILDER-BUILT Std ABOVE IT**, the division `osDirCurrentPath` draws. The imports
-	// do not even signal truncation the same way — `GetCurrentDirectoryA` answers the REQUIRED size,
-	// `GetModuleFileNameA` answers `nSize` itself and sets `ERROR_INSUFFICIENT_BUFFER`, `_NSGetExecutablePath`
+	// do not even signal truncation the same way — `GetCurrentDirectoryW` answers the REQUIRED size,
+	// `GetModuleFileNameW` answers `nSize` itself and sets `ERROR_INSUFFICIENT_BUFFER`, `_NSGetExecutablePath`
 	// answers `-1` and rewrites its in-out size — so a backend that owned the loop would own three different
 	// loops, and the classification would be invisible to every pass between here and the encoder. Each
 	// backend translates its own convention into this op's, and the doubling walk above stays one graph.
@@ -2096,14 +2089,14 @@ export union StdOp
 	// `osReadWallClock`'s arrangement exactly.
 
 	// `osOpenNamedSegment(result, namePtr, bufPtr, bufLen) -> HANDLE (0 when there is no segment to open)`.
-	// `GetEnvironmentVariableA(namePtr, bufPtr, bufLen)` then `OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE,
+	// `GetEnvironmentVariableW(namePtr, bufPtr, bufLen)` then `OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE,
 	// bufPtr)` — the env lookup and the open are ONE op because the buffer between them is pure scratch that
 	// no Std value ever needs to read, and splitting them would put a `.data`-addressed C string into the IR
 	// for no consumer.
 	//
 	// ⭐ **IT IS BRANCH-FREE, AND THAT IS WHY THE ENV VAR BEING UNSET NEEDS NO ARM.** `__slab_alloc` hands
 	// back ZEROED memory (the allocator's zeroing contract), so an absent variable leaves `bufPtr` naming the
-	// EMPTY string — and `OpenFileMappingA("")` fails and returns NULL, which is the same answer "no monitor
+	// EMPTY string — and `OpenFileMappingW("")` fails and returns NULL, which is the same answer "no monitor
 	// is listening" gets by every other route. One value out, one test at the caller.
 	osOpenNamedSegment(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
@@ -2138,7 +2131,7 @@ export union StdOp
 	// `osHandleSetInherit(handle)` = `SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)`.
 	// One VALUE operand, no result — the BOOL is ignored for `osCloseHandle`'s reason.
 	//
-	// ⭐ **WHY IT EXISTS AT ALL: A HANDLE A CHILD MUST INHERIT AND `CreateFileA` DOES NOT MAKE ONE.** Three of
+	// ⭐ **WHY IT EXISTS AT ALL: A HANDLE A CHILD MUST INHERIT AND `CreateFileW` DOES NOT MAKE ONE.** Three of
 	// the stdio kinds — `discard` (the NUL device), `file` in either direction — reach the child as a FILE
 	// handle, and `osFileOpenRead`/`osFileOpenWrite` pass a NULL `lpSecurityAttributes`, which yields a
 	// NON-inheritable handle. Put in a STARTUPINFO under `bInheritHandles=TRUE` such a handle is silently not
@@ -2161,13 +2154,13 @@ export union StdOp
 	// ⚠ It is also what lets a TIMEOUT be honoured: a committed blocking read cannot observe a deadline.
 	osPipePeek(resultId ValueId, handleId ValueId, availPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osEnvRead(result, namePtr, bufPtr, bufLen) -> characters written` = `GetEnvironmentVariableA(namePtr,
+	// `osEnvRead(result, namePtr, bufPtr, bufLen) -> characters written` = `GetEnvironmentVariableW(namePtr,
 	// bufPtr, bufLen)`. Three VALUE operands; DEFINES the count, which is 0 when the variable is unset and
 	// `> bufLen` when the buffer was too small (the size NEEDED, so one retry at exactly that size is provably
 	// enough — `__md_current_path`'s straight-line retry, not `__proc_exe_path`'s doubling loop).
 	//
-	// ⭐ **`osOpenNamedSegment` ALREADY CALLS `GetEnvironmentVariableA` AND IS DELIBERATELY NOT REUSED.** That op
-	// FUSES the env read with an `OpenFileMappingA` because the buffer between them is pure scratch no Std value
+	// ⭐ **`osOpenNamedSegment` ALREADY CALLS `GetEnvironmentVariableW` AND IS DELIBERATELY NOT REUSED.** That op
+	// FUSES the env read with an `OpenFileMappingW` because the buffer between them is pure scratch no Std value
 	// reads. Here the VALUE is the whole point — `PATH` and `PATHEXT` are what `subprocessResolveOnPath` walks —
 	// so the two are the same Win32 entry point serving two different questions, which is one import and two ops.
 	osEnvRead(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
@@ -2707,7 +2700,7 @@ export union StdOp
 
 	//
 	// ⭐⭐ **`osFileOpenWriteExecutable(result, pathPtr)` — `osFileOpenWrite` WITH THE EXECUTE BITS.**
-	// It is `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)` on Windows, byte for byte the same call
+	// It is `CreateFileW(GENERIC_WRITE, CREATE_ALWAYS)` on Windows, byte for byte the same call
 	// `osFileOpenWrite` makes, and `creat(path, 0755)` rather than `creat(path, 0644)` under POSIX.
 	//
 	// ⭐ **THE OP EXISTS BECAUSE THE DIFFERENCE IS REAL WHEREVER PERMISSIONS ARE**, which
@@ -2734,10 +2727,10 @@ export union StdOp
 	// `osEnvBlock(result)` = a pointer to this process's whole environment IN THE PLATFORM'S OWN SHAPE, or 0
 	// when the host could not answer. `osCommandLine`'s shape exactly, and for its reason: the API hands back
 	// a pointer rather than writing through one.
-	//   • x64-windows — `GetEnvironmentStringsA()`: a COPY, NUL-terminated `NAME=VALUE` entries back-to-back
+	//   • x64-windows — `GetEnvironmentStringsW()`: a COPY, NUL-terminated `NAME=VALUE` entries back-to-back
 	//     with one more NUL after the last.
 	//   • arm64-macOS — `*_NSGetEnviron()`: the LIVE `environ`, a NULL-terminated vector of `char *`.
-	// `osEnvBlockFree(blockPtr)` = `FreeEnvironmentStringsA(blockPtr)` — the release a COPY owes, emitted only
+	// `osEnvBlockFree(blockPtr)` = `FreeEnvironmentStringsW(blockPtr)` — the release a COPY owes, emitted only
 	// by the shape that takes one.
 	//
 	// ⚠ **THE OP IS THE QUESTION, NOT THE ANSWER'S LAYOUT**, and `SubprocessRuntime.EnvironmentSnapshotShape`
@@ -2748,9 +2741,9 @@ export union StdOp
 	// ⭐⭐ **`osEnvRead` CANNOT BE ASKED THIS QUESTION, WHICH IS WHY THERE IS A SECOND ENVIRONMENT OP.** It
 	// answers ONE NAME the caller already knows. Building a child's environment means walking the names the
 	// caller does NOT know — that is what `Environment.inheritUpdating` means — and no sequence of
-	// `GetEnvironmentVariableA` calls can enumerate them.
+	// `GetEnvironmentVariableW` calls can enumerate them.
 	//
-	// ⭐ **TWO OPS AND NOT ONE, because a Win32 snapshot is OWNED.** `GetEnvironmentStringsA` returns a copy
+	// ⭐ **TWO OPS AND NOT ONE, because a Win32 snapshot is OWNED.** `GetEnvironmentStringsW` returns a copy
 	// the caller must release, so a single "read the environment" op would either leak one block per spawn or
 	// have to hide the free inside a lowering that cannot know when the walk is finished.
 	//
@@ -2815,7 +2808,7 @@ export union StdOp
 	// that means "a character device", which is what `__tty_stdout_wants_color` tests for.
 	//
 	// ⭐⭐ **IT ANSWERS WIN32'S OWN ENUMERATION AND NOT A BOOL, WHICH IS THIS TIER'S ESTABLISHED
-	// CONVENTION RATHER THAN A CONCESSION.** `osFileAttributes` already hands `GetFileAttributesA`'s DWORD
+	// CONVENTION RATHER THAN A CONCESSION.** `osFileAttributes` already hands `GetFileAttributesW`'s DWORD
 	// to a target-neutral runtime builder that masks it and tests `FILE_ATTRIBUTE_DIRECTORY`
 	// (`ManagedDirectoryRuntime.buildManagedDirectoryExists`), and the POSIX lane translates its `stat`
 	// into that vocabulary rather than the Std tier learning a second one
@@ -2850,19 +2843,19 @@ export union StdOp
 	//
 	// ⭐⭐ **`osOpenNamedSegment` IS THE PRODUCER'S DOOR AND CANNOT SERVE THE CONSUMER.** That op reads a name
 	// out of the environment and OPENS a section someone else already created; a monitor is the party that
-	// creates it, publishes its name to a child, and decodes what the child writes there. `OpenFileMappingA`
+	// creates it, publishes its name to a child, and decodes what the child writes there. `OpenFileMappingW`
 	// on a section that does not exist yet answers NULL, so there is no ordering of the two processes that
 	// lets the existing op stand in.
 	//
 	// `osCreateNamedSegment(result, namePtr, size) -> HANDLE (0 on failure)` =
-	// `CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, size, namePtr)` — a page-file-backed
+	// `CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, size, namePtr)` — a page-file-backed
 	// section of exactly `size` bytes published under the NUL-terminated name at `namePtr`. The MAPPING is
 	// `osMapNamedSegment`, which takes a HANDLE and so serves a created section exactly as it serves an
 	// opened one.
 	osCreateNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osAdoptNamedSegment(result, namePtr, size)` — open a section already published under the name, without
-	// creating one: `OpenFileMappingA` on Win32, whose answer `SharedMemoryRuntime.emitAdoptAnswer` sizes and
+	// creating one: `OpenFileMappingW` on Win32, whose answer `SharedMemoryRuntime.emitAdoptAnswer` sizes and
 	// classifies, and the host adopt chunk on POSIX, which answers a handle or a `SharedSegmentAnswer`.
 	osAdoptNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
@@ -5177,7 +5170,7 @@ function insertUseQuint(referenced StdValueUseSet, a ValueId, b ValueId, c Value
 	referenced.insert(e)
 end 'insertUseQuint'
 
-// The six-operand twin — for the two `CreateProcessA` ops, whose command line, working directory, creation
+// The six-operand twin — for the two `CreateProcessW` ops, whose command line, working directory, creation
 // flags, STARTUPINFO, PROCESS_INFORMATION and environment block are all values, and for `osPipeCreate`'s name
 // + SA + port + three out-pointers.
 function insertUseSextet(referenced StdValueUseSet, a ValueId, b ValueId, c ValueId, d ValueId, e ValueId, f ValueId)

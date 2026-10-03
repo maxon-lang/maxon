@@ -33,7 +33,7 @@ export let LinuxAtFdCwd = 0xFFFFFFFFFFFFFF9C
 // appears in either word below, so both arches read the generic values. `O_DIRECTORY` is per-arch for that
 // reason and is declared beside its arch's syscall table.
 //
-// `O_WRONLY|O_CREAT|O_TRUNC` is `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)`, the same trio the Darwin word
+// `O_WRONLY|O_CREAT|O_TRUNC` is `CreateFileW(GENERIC_WRITE, CREATE_ALWAYS)`, the same trio the Darwin word
 // spells in its own bit values.
 //
 // ⚠ **THE READ-ONLY FLAG WORD IS NOT HERE.** `O_RDONLY` is 0 on Darwin as well, so it is `PosixRuntime`'s
@@ -46,7 +46,7 @@ export let LinuxOpenCreateTruncateFlags = PosixOpenWriteOnly or LinuxOpenCreate 
 
 export let LinuxOpenCreateExclusiveFlags = PosixOpenWriteOnly or LinuxOpenCreate or LinuxOpenExclusive
 
-// `unlinkat`'s flag word: 0 means "remove a FILE". This op is `DeleteFileA`, which refuses a directory.
+// `unlinkat`'s flag word: 0 means "remove a FILE". This op is `DeleteFileW`, which refuses a directory.
 export let LinuxUnlinkFileFlags = 0
 
 export let LinuxGetRandomFlags = 0
@@ -55,8 +55,8 @@ export let LinuxGetRandomFlags = 0
 // forever. It must be nonzero: `__rand_fill` reads 0 as "filled".
 export let LinuxRandomFillNoProgress = 1
 
-// ⭐ **`AT_REMOVEDIR` — THE ONE BIT THAT MAKES THE SAME `unlinkat` AN `rmdir`.** `RemoveDirectoryA` has no
-// file-removing spelling and `DeleteFileA` has no directory-removing one, so the two flag words above and
+// ⭐ **`AT_REMOVEDIR` — THE ONE BIT THAT MAKES THE SAME `unlinkat` AN `rmdir`.** `RemoveDirectoryW` has no
+// file-removing spelling and `DeleteFileW` has no directory-removing one, so the two flag words above and
 // here are what keeps the single syscall answering for both Win32 entry points without either being able to
 // take the other's subject.
 //
@@ -170,7 +170,7 @@ export function linuxReadsFiles(usage RuntimeUsage) returns bool
 end 'linuxReadsFiles'
 
 // ⭐⭐ **THE `.data` WORD HOLDING THE ENVIRONMENT VECTOR, AND ONLY A LIBC-LESS LANE NEEDS ONE.** Windows asks
-// `GetEnvironmentVariableA` and macOS asks `getenv`; a static Linux image has neither, so the kernel's
+// `GetEnvironmentVariableW` and macOS asks `getenv`; a static Linux image has neither, so the kernel's
 // `envp` is reachable exactly once — in the entry stub, where it still sits on the stack — and
 // `mrt_host_env_read` reads it back out of this word. Both Linux lanes capture into the same name because
 // only one lane's runtime ever reaches an image.
@@ -358,8 +358,8 @@ export let LinuxGetPriorityBias = 20
 // construction rather than by measurement: nothing outside these chunks ever reads this page.
 //
 // ⚠ **A NEGATIVE `dirfd` IS THE EXHAUSTED SINGLE-`stat` SEARCH, NOT AN ERROR.** A pattern with no wildcard is
-// answered by one `stat` and has exactly one entry, which `FindFirstFileA` has already reported — so the
-// object it hands back has no directory to walk and the first `FindNextFileA` must report end-of-iteration
+// answered by one `stat` and has exactly one entry, which `FindFirstFileW` has already reported — so the
+// object it hands back has no directory to walk and the first `FindNextFileW` must report end-of-iteration
 // rather than call `getdents64(-1)`. Darwin spells the same fact as a NULL `DIR*`; here 0 is a legal
 // descriptor, so the sentinel is -1.
 //

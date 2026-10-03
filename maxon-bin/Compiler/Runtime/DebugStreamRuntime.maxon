@@ -705,16 +705,16 @@ function dsAllocTallyImage() returns ByteArray
 end 'dsAllocTallyImage'
 
 // The bytes `__ds_init` asks `__slab_alloc` for: the CRITICAL_SECTION (5 words, matching `GtRuntime`'s
-// own reading of the structure) and the scratch buffer `GetEnvironmentVariableA` writes the segment name into.
+// own reading of the structure) and the scratch buffer `GetEnvironmentVariableW` writes the segment name into.
 //
 // ⚠⚠ **THEY ARE NOT THE SAME KIND OF ONE-SHOT:**
 //
 //   • the CRITICAL_SECTION is LIVE for the whole process, because every event site enters and leaves it until
 //     `__ds_shutdown` and there is no later moment at which nothing can be emitting. Never freeing it is not a
 //     leak, it is its lifetime — the same reading `__sched_lock`'s region has.
-//   • the ENV BUFFER is dead the instant `OpenFileMappingA` has resolved the name into a handle, which happens
+//   • the ENV BUFFER is dead the instant `OpenFileMappingW` has resolved the name into a handle, which happens
 //     inside `__ds_init`'s own entry block. It is freed there.
-// The monitor names its segments `maxon_ds_<pid>_<8 hex>`; 512 bytes is two orders of magnitude of head
+// The monitor names its segments `maxon_ds_<pid>_<8 hex>`; 512 characters is two orders of magnitude of head
 // room and one slab bump.
 let DsEnvBufferBytes = 512
 
@@ -775,7 +775,7 @@ end 'buildCarriesDebugStream'
 // scalar program's image (a walked word follows its reader) and read a slot nothing ever initialised.
 // See `emitStoreLogIdentity`.
 export function installDebugStreamRuntime(module StdModule, globalData GlobalDataTable, usesGt bool)
-	let envNameLabel = globalData.registerRdataConstant(DsEnvNameRdataPrefix, bytes: cStringBytes(DsActivationEnvVar), kind: RdataPayloadKind.envName)
+	let envNameLabel = globalData.registerRdataConstant(DsEnvNameRdataPrefix, bytes: hostCStringBytes(module, text: DsActivationEnvVar), kind: RdataPayloadKind.envName)
 
 	// ⚠ **BOTH TABLES, END TO END, IN ONE IMAGE.** The monitor scans the section for each magic rather than
 	// indexing to a known offset, so their ORDER carries nothing and neither needs a label of its own. The
@@ -834,7 +834,7 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 
 	// The two scratch regions. `__slab_alloc` hands back ZEROED memory (the allocator's zeroing contract),
 	// which is what lets the env lookup below need no "was it set?" branch: an absent variable leaves the
-	// buffer naming the EMPTY string, and `OpenFileMappingA("")` fails exactly as a missing segment does. The
+	// buffer naming the EMPTY string, and `OpenFileMappingW("")` fails exactly as a missing segment does. The
 	// lock outlives this function; the env buffer does not — see `OsLockBytes`.
 	let lockSize = emitConst(module, block: entry, value: OsLockBytes, ids: ids)
 	let lock = ids.mint()
@@ -846,7 +846,7 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 
 	let envBufSize = emitConst(module, block: entry, value: DsEnvBufferBytes, ids: ids)
 	let envBuf = ids.mint()
-	module.appendOp(entry, op: StdOp.call(envBuf, callee: SlabAllocName, args: argsOf(envBufSize)))
+	module.appendOp(entry, op: StdOp.call(envBuf, callee: SlabAllocName, args: argsOf(emitByteCountOfUnits(module, block: entry, units: envBufSize, encoding: module.hostText, ids: ids))))
 	let envName = ids.mint()
 	module.appendOp(entry, op: StdOp.rdataAddr(envName, label: envNameLabel))
 	let handle = ids.mint()

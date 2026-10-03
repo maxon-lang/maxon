@@ -29,7 +29,7 @@
 //
 // ---
 //
-// ⭐⭐ **THE SPLIT IS THE CRT's, NOT A SIMPLER ONE, AND THAT IS DELIBERATE.** `GetCommandLineA` yields the
+// ⭐⭐ **THE SPLIT IS THE CRT's, NOT A SIMPLER ONE, AND THAT IS DELIBERATE.** `GetCommandLineW` yields the
 // raw line; every argument boundary, every quote and every backslash run then has to be read the way the
 // rest of the platform reads them, because the SHELL and the SPAWNING PROCESS both encoded the arguments
 // under those rules. A whitespace-only split would be a silent wrong answer for `--note="a b"` — the exact
@@ -50,9 +50,8 @@
 // than discovered: a second scanner for one special case would be a second set of rules to keep in step,
 // for an input that does not arise.
 //
-// ⚠ **ENCODING: ANSI, NOT UTF-8, AND ON PURPOSE** — see `IatSlot.GetCommandLineA` for the whole argument.
-// The short form: the compiler's Windows lane is `A`-entry-point end to end, so argv must be too, or the first
-// `openRead(args.get(1))` misreads its own path.
+// ⚠ **ENCODING.** The UTF-16 line is converted to UTF-8 whole and then split. Every rule above is
+// ASCII, so splitting the UTF-8 bytes finds the same boundaries a split of the UTF-16 units would.
 
 // ⭐⭐ **THE TWO SHAPES A PLATFORM CAN HAND A PROCESS ITS ARGUMENTS IN — the one fact this family forks on.**
 // It is asked ONCE, at install, and each answer builds a complete Std graph; nothing downstream of that ever
@@ -60,7 +59,7 @@
 // one surface.
 //
 // ⚠ It is keyed on the OS and not on the CPU, because it is an ABI fact: every SysV platform hands `_start`
-// a pre-split vector and Windows hands `GetCommandLineA` one string, whatever the ISA.
+// a pre-split vector and Windows hands `GetCommandLineW` one string, whatever the ISA.
 enum CommandLineShape
 	// Windows: ONE unsplit string, split here by the CRT's rules (see the scanner below).
 	unsplitString
@@ -565,9 +564,8 @@ function buildCommandLineCount(module StdModule)
 	var finish = module.addBlock(func, label: b"clcdone", heat: BlockHeat.normal)
 
 	let cmd = ids.mint()
-	module.appendOp(entry, op: StdOp.osCommandLine(cmd))
 	let length = ids.mint()
-	var build = emitCStringLength(module, func: func, cur: entry, cstr: cmd, length: length, ids: ids)
+	var build = emitCommandLineSource(module, func: func, cur: entry, cmd: cmd, length: length, ids: ids)
 	let scratch = emitCommandLineScratch(module, block: build, length: length, ids: ids)
 
 	let pos = ids.mint()
@@ -596,6 +594,7 @@ function buildCommandLineCount(module StdModule)
 	let total = ids.mint()
 	finish.blockArgs.push(IrBlockArg.create(total, argType: StdType.i64))
 	emitRawFree(module, block: finish, ptr: scratch, ids: ids)
+	emitReleaseHostCopy(module, block: finish, copy: cmd, encoding: module.hostText, ids: ids)
 	module.setTerminator(finish, op: StdOp.ret(total))
 
 	module.functions.push(func)
@@ -625,9 +624,8 @@ function buildCommandLineArg(module StdModule)
 	let index = 0 as ValueId
 
 	let cmd = ids.mint()
-	module.appendOp(entry, op: StdOp.osCommandLine(cmd))
 	let length = ids.mint()
-	var build = emitCStringLength(module, func: func, cur: entry, cstr: cmd, length: length, ids: ids)
+	var build = emitCommandLineSource(module, func: func, cur: entry, cmd: cmd, length: length, ids: ids)
 	let scratch = emitCommandLineScratch(module, block: build, length: length, ids: ids)
 
 	let pos = ids.mint()
@@ -657,18 +655,32 @@ function buildCommandLineArg(module StdModule)
 	advance.branchEdges.push(BranchEdge.create(loop.id, argIds: twoArgs(advPos, second: advNextSeen)))
 
 	// Ran off the end: make the scratch the empty string and take the ordinary copy-out.
-	let emptyAt = emitConst(module, block: outOfRange, value: 0, ids: ids)
-	let emptyByte = emitConst(module, block: outOfRange, value: NulByte, ids: ids)
-	emitStoreByte(module, block: outOfRange, base: scratch, index: emptyAt, value: emptyByte, ids: ids)
+	emitStoreNulUnit(module, block: outOfRange, base: scratch, encoding: HostTextEncoding.utf8, ids: ids)
 	module.setTerminator(outOfRange, op: StdOp.branch(copyOut.id))
 
 	let record = ids.mint()
 	var built = emitCStringToManaged(module, func: func, cur: copyOut, cstr: scratch, record: record, ids: ids)
 	emitRawFree(module, block: built, ptr: scratch, ids: ids)
+	emitReleaseHostCopy(module, block: built, copy: cmd, encoding: module.hostText, ids: ids)
 	module.setTerminator(built, op: StdOp.ret(record))
 
 	module.functions.push(func)
 end 'buildCommandLineArg'
+
+function emitCommandLineSource(module StdModule, func IrFunction, cur IrBlock, cmd ValueId, length ValueId, ids ValueMinter) returns IrBlock
+	if not hostTextIsWide(module) 'narrow'
+		module.appendOp(cur, op: StdOp.osCommandLine(cmd))
+
+		return emitCStringLength(module, func: func, cur: cur, cstr: cmd, length: length, ids: ids)
+	end 'narrow'
+
+	let wideLine = ids.mint()
+	module.appendOp(cur, op: StdOp.osCommandLine(wideLine))
+	let units = emitTextLength(module, block: cur, text: wideLine, encoding: HostTextEncoding.utf16, ids: ids)
+	emitHostTextToUtf8(module, block: cur, host: wideLine, units: units, buffer: cmd, byteLength: length, allocation: TextAllocation.slab, ids: ids)
+
+	return cur
+end 'emitCommandLineSource'
 
 // The scratch buffer both walkers allocate: the whole command line plus a NUL. See `NulTerminatorSlackBytes` for
 // why that is a sufficient bound and needs no second scan.

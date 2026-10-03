@@ -1,0 +1,267 @@
+export enum HostTextEncoding
+	utf8
+	utf16
+end 'HostTextEncoding'
+
+export function hostTextEncodingOf(target Target) returns HostTextEncoding
+	return match target.os 'os'
+		windows gives HostTextEncoding.utf16
+		linux or
+			macos or
+			wasi gives HostTextEncoding.utf8
+	end 'os'
+end 'hostTextEncodingOf'
+
+export let WideTextTierFileName = "WideText.maxon"
+
+let WidenName = b"__wt_widen"
+let NarrowName = b"__wt_narrow"
+let NarrowAsciiName = b"__wt_narrow_ascii"
+let TextLengthName = b"__wt_text_length"
+let BlockExtentName = b"__wt_block_extent"
+
+let Utf8UnitBytes = 1 as ParsedInt
+let Utf16UnitBytes = 2 as ParsedInt
+let RefuseNul = 1 as ParsedInt
+let KeepNul = 0 as ParsedInt
+let MeasureOnly = 0 as ParsedInt
+let SurrogateBase = 0x10000 as ParsedInt
+let SurrogateUnitMask = 0x3FF as ParsedInt
+let HighSurrogateFloor = 0xD800 as ParsedInt
+let LowSurrogateFloor = 0xDC00 as ParsedInt
+let SurrogatePayloadBits = 10 as ParsedInt
+let ByteValueMask = 0xFF as ParsedInt
+let ByteValueBits = 8 as ParsedInt
+
+export function hostTextIsWide(module StdModule) returns bool
+	return module.hostText == HostTextEncoding.utf16
+end 'hostTextIsWide'
+
+export function pathFillEncoding(module StdModule, fill PathFill) returns HostTextEncoding
+	return match fill 'fill'
+		processNamespace gives HostTextEncoding.utf8
+		executablePath or
+			currentDirectory or
+			systemDirectory or
+			windowsDirectory or
+			fullPath gives module.hostText
+	end 'fill'
+end 'pathFillEncoding'
+
+export function emitByteCountOfUnits(module StdModule, block IrBlock, units ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
+	if encoding == HostTextEncoding.utf8 'narrow'
+		return units
+	end 'narrow'
+
+	let width = emitConst(module, block: block, value: Utf16UnitBytes, ids: ids)
+
+	return emitBin(module, block: block, a: units, b: width, opcode: StdBinOpcode.mul, ids: ids)
+end 'emitByteCountOfUnits'
+
+export function hostCStringBytes(module StdModule, text String) returns ByteArray
+	if hostTextIsWide(module) 'wide'
+		return utf16CStringBytes(text)
+	end 'wide'
+
+	return cStringBytes(text)
+end 'hostCStringBytes'
+
+function utf16CStringBytes(text String) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for codepoint in text.codepoints() 'eachCodepoint'
+		let value = codepoint as ParsedInt
+
+		if value < SurrogateBase 'basic'
+			appendUtf16Unit(bytes, unit: value)
+		end 'basic' else 'beyondBasic'
+			let offset = value - SurrogateBase
+
+			appendUtf16Unit(bytes, unit: HighSurrogateFloor + (offset shr SurrogatePayloadBits))
+			appendUtf16Unit(bytes, unit: LowSurrogateFloor + (offset and SurrogateUnitMask))
+		end 'beyondBasic'
+	end 'eachCodepoint'
+
+	appendUtf16Unit(bytes, unit: 0)
+
+	return bytes
+end 'utf16CStringBytes'
+
+function appendUtf16Unit(bytes ByteArray, unit ParsedInt)
+	bytes.push((unit and ByteValueMask) as Byte)
+	bytes.push(((unit shr ByteValueBits) and ByteValueMask) as Byte)
+end 'appendUtf16Unit'
+
+export function emitLiteralHostString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
+	if not hostTextIsWide(module) 'narrow'
+		return emitLiteralCString(module, block: block, ids: ids, text: text)
+	end 'narrow'
+
+	let units = utf16CStringBytes(String.from(text))
+
+	return emitLiteralInSlab(module, block: block, ids: ids, text: units, byteCount: units.count() as ParsedInt)
+end 'emitLiteralHostString'
+
+export enum TextAllocation
+	slab
+	raw
+end 'TextAllocation'
+
+export enum Utf8Extent
+	cstring
+	block
+end 'Utf8Extent'
+
+function emitTextAllocInto(module StdModule, block IrBlock, result ValueId, byteCount ValueId, allocation TextAllocation, ids ValueMinter)
+	match allocation 'allocation'
+		slab then module.appendOp(block, op: StdOp.call(result, callee: SlabAllocName, args: argsOf(byteCount)))
+		raw then emitRawAllocInto(module, block: block, result: result, byteCount: byteCount, ids: ids)
+	end 'allocation'
+end 'emitTextAllocInto'
+
+// `byteLength + 1` units is always enough: UTF-16 never needs more units than UTF-8 has bytes, and
+// an invalid byte becomes one U+FFFD unit.
+function emitWidenUtf8(module StdModule, block IrBlock, source ValueId, byteLength ValueId, refuseNul bool, allocation TextAllocation, ids ValueMinter) returns ValueId
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let units = emitBin(module, block: block, a: byteLength, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let size = emitByteCountOfUnits(module, block: block, units: units, encoding: HostTextEncoding.utf16, ids: ids)
+	let wide = ids.mint()
+	emitTextAllocInto(module, block: block, result: wide, byteCount: size, allocation: allocation, ids: ids)
+	let nulPolicy = emitConst(module, block: block, value: RefuseNul if refuseNul else KeepNul, ids: ids)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: WidenName, args: fourArgs(source, second: byteLength, third: wide, fourth: nulPolicy)))
+
+	return wide
+end 'emitWidenUtf8'
+
+export function emitUtf8ToWide(module StdModule, block IrBlock, source ValueId, extent Utf8Extent, ids ValueMinter) returns ValueId
+	let byteLength = match extent 'extent'
+		cstring gives emitTextLength(module, block: block, text: source, encoding: HostTextEncoding.utf8, ids: ids)
+		block gives emitRuntimeCall(module, block: block, callee: BlockExtentName, args: argsOf(source), ids: ids)
+	end 'extent'
+
+	return emitWidenUtf8(module, block: block, source: source, byteLength: byteLength, refuseNul: false, allocation: TextAllocation.slab, ids: ids)
+end 'emitUtf8ToWide'
+
+export function emitHostCString(module StdModule, block IrBlock, cstr ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
+	if encoding == HostTextEncoding.utf8 'narrow'
+		return cstr
+	end 'narrow'
+
+	return emitUtf8ToWide(module, block: block, source: cstr, extent: Utf8Extent.cstring, ids: ids)
+end 'emitHostCString'
+
+export function emitReleaseHostCopy(module StdModule, block IrBlock, copy ValueId, encoding HostTextEncoding, ids ValueMinter)
+	if encoding == HostTextEncoding.utf16 'owned'
+		emitSlabFree(module, block: block, ptr: copy, ids: ids)
+	end 'owned'
+end 'emitReleaseHostCopy'
+
+export function emitPathToText(module StdModule, func IrFunction, cur IrBlock, join IrBlock, pathRec ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
+	let len = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordBufferOffset, ids: ids)
+
+	if encoding == HostTextEncoding.utf8 'narrow'
+		return emitBytesToCString(module, func: func, cur: cur, join: join, buf: buf, len: len, ids: ids)
+	end 'narrow'
+
+	let wide = emitWidenUtf8(module, block: cur, source: buf, byteLength: len, refuseNul: true, allocation: TextAllocation.raw, ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(join.id))
+
+	return wide
+end 'emitPathToText'
+
+export function emitTextToManaged(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, record ValueId, encoding HostTextEncoding, ids ValueMinter) returns IrBlock
+	if encoding == HostTextEncoding.utf8 'narrow'
+		return emitCStringToManaged(module, func: func, cur: cur, cstr: cstr, record: record, ids: ids)
+	end 'narrow'
+
+	let units = emitTextLength(module, block: cur, text: cstr, encoding: HostTextEncoding.utf16, ids: ids)
+
+	return emitUnitsToManaged(module, block: cur, host: cstr, units: units, record: record, ids: ids)
+end 'emitTextToManaged'
+
+function textUnitBytes(encoding HostTextEncoding) returns ParsedInt
+	return match encoding 'width'
+		utf8 gives Utf8UnitBytes
+		utf16 gives Utf16UnitBytes
+	end 'width'
+end 'textUnitBytes'
+
+export function emitTextLength(module StdModule, block IrBlock, text ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
+	let width = emitConst(module, block: block, value: textUnitBytes(encoding), ids: ids)
+
+	return emitRuntimeCall(module, block: block, callee: TextLengthName, args: twoArgs(text, second: width), ids: ids)
+end 'emitTextLength'
+
+// One byte past the measured length: `__wt_narrow` writes a terminator, so room for the text alone
+// is a one-byte heap overflow.
+function emitNarrowedRoom(module StdModule, block IrBlock, host ValueId, units ValueId, byteLength ValueId, ids ValueMinter) returns ValueId
+	let measureOnly = emitConst(module, block: block, value: MeasureOnly, ids: ids)
+	module.appendOp(block, op: StdOp.call(byteLength, callee: NarrowName, args: threeArgs(host, second: units, third: measureOnly)))
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+
+	return emitBin(module, block: block, a: byteLength, b: one, opcode: StdBinOpcode.add, ids: ids)
+end 'emitNarrowedRoom'
+
+function emitUnitsToManaged(module StdModule, block IrBlock, host ValueId, units ValueId, record ValueId, ids ValueMinter) returns IrBlock
+	let bytes = ids.mint()
+	let room = emitNarrowedRoom(module, block: block, host: host, units: units, byteLength: bytes, ids: ids)
+	let buffer = emitManagedByteBuffer(module, block: block, record: record, byteCount: room, ids: ids)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NarrowName, args: threeArgs(host, second: units, third: buffer)))
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordLengthOffset, value: bytes)
+
+	return block
+end 'emitUnitsToManaged'
+
+export function emitStoreNulUnit(module StdModule, block IrBlock, base ValueId, encoding HostTextEncoding, ids ValueMinter)
+	let zeroIndex = emitConst(module, block: block, value: 0, ids: ids)
+	let nul = emitConst(module, block: block, value: NulByte, ids: ids)
+	emitStoreByte(module, block: block, base: base, index: zeroIndex, value: nul, ids: ids)
+
+	if encoding == HostTextEncoding.utf16 'secondByte'
+		let upperIndex = emitConst(module, block: block, value: 1, ids: ids)
+		emitStoreByte(module, block: block, base: base, index: upperIndex, value: nul, ids: ids)
+	end 'secondByte'
+end 'emitStoreNulUnit'
+
+export function emitHostUnit(module StdModule, block IrBlock, base ValueId, unitIndex ValueId, ids ValueMinter) returns ValueId
+	if not hostTextIsWide(module) 'narrow'
+		return emitLoadByte(module, block: block, base: base, index: unitIndex, ids: ids)
+	end 'narrow'
+
+	let width = emitConst(module, block: block, value: Utf16UnitBytes, ids: ids)
+	let low = emitBin(module, block: block, a: unitIndex, b: width, opcode: StdBinOpcode.mul, ids: ids)
+	let lowByte = emitLoadByte(module, block: block, base: base, index: low, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let highIndex = emitBin(module, block: block, a: low, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let highByte = emitLoadByte(module, block: block, base: base, index: highIndex, ids: ids)
+	let shift = emitConst(module, block: block, value: ByteValueBits, ids: ids)
+	let placed = emitBin(module, block: block, a: highByte, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+
+	return emitBin(module, block: block, a: lowByte, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitHostUnit'
+
+export function emitHostEnvReadAscii(module StdModule, block IrBlock, name ValueId, valueBuf ValueId, capacity ValueId, ids ValueMinter) returns ValueId
+	let written = ids.mint()
+
+	if not hostTextIsWide(module) 'narrow'
+		module.appendOp(block, op: StdOp.osEnvRead(written, namePtrId: name, bufPtrId: valueBuf, bufLenId: capacity))
+
+		return written
+	end 'narrow'
+
+	let wideBytes = emitByteCountOfUnits(module, block: block, units: capacity, encoding: module.hostText, ids: ids)
+	let wide = ids.mint()
+	module.appendOp(block, op: StdOp.call(wide, callee: SlabAllocName, args: argsOf(wideBytes)))
+	module.appendOp(block, op: StdOp.osEnvRead(written, namePtrId: name, bufPtrId: wide, bufLenId: capacity))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NarrowAsciiName, args: fourArgs(wide, second: written, third: valueBuf, fourth: capacity)))
+	emitSlabFree(module, block: block, ptr: wide, ids: ids)
+
+	return written
+end 'emitHostEnvReadAscii'
+
+export function emitHostTextToUtf8(module StdModule, block IrBlock, host ValueId, units ValueId, buffer ValueId, byteLength ValueId, allocation TextAllocation, ids ValueMinter)
+	let size = emitNarrowedRoom(module, block: block, host: host, units: units, byteLength: byteLength, ids: ids)
+	emitTextAllocInto(module, block: block, result: buffer, byteCount: size, allocation: allocation, ids: ids)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NarrowName, args: threeArgs(host, second: units, third: buffer)))
+end 'emitHostTextToUtf8'

@@ -26,7 +26,7 @@
 //     this OS thread's own slot when it has one and a `.data` word (`LinuxErrnoLabel`) before it does,
 //     which `arm64LinuxEmitErrnoAddr` decides at every site. That pair is this lane's `*__error()`, and it
 //     is per-thread for the same reason Darwin's is.
-//   • **THERE IS NO `fnmatch`.** `FindFirstFileA`'s glob is matched by `mrt_linux_glob_match`, written out
+//   • **THERE IS NO `fnmatch`.** `FindFirstFileW`'s glob is matched by `mrt_linux_glob_match`, written out
 //     below. It is the one place the Darwin surface's shape could not be reused even in outline.
 //   • **THERE IS NO `malloc`.** The search object `osFileFindFirst` hands back is ONE `mmap`'d page holding
 //     the descriptor, the pattern, the directory-prefix scratch and the `getdents64` buffer, released by one
@@ -35,7 +35,7 @@
 // ⭐ **EVERYTHING ELSE IS SHARED, AND THREE FILES ARE WHERE.** The symbol names and the POSIX constants are
 // `Targets/Shared/PosixRuntime`; the Linux facts both arches agree on are `Targets/Shared/LinuxRuntime`; the
 // AArch64 emit fragments and the chunks whose body is one shape on both arm64 lanes — the errno→Win32
-// mapping, the `dwFileAttributes` a `st_mode` becomes, the `WIN32_FIND_DATAA` fill and the two string walkers
+// mapping, the `dwFileAttributes` a `st_mode` becomes, the `WIN32_FIND_DATAW` fill and the two string walkers
 // behind the glob split — are `Arm64PosixRuntime`. Only `struct stat`'s layout differs, and that is a
 // parameter.
 //
@@ -154,7 +154,7 @@ let Arm64LinuxSyscallUnlinkat = 35
 let Arm64LinuxSyscallRenameat = 38
 
 // The named section's sizing call — the open only NAMES and `ftruncate` SIZES, which is the two-call shape
-// `CreateFileMappingA` does in one. VERIFIED by invoking 46 on an aarch64 guest against a `/dev/shm` file
+// `CreateFileMappingW` does in one. VERIFIED by invoking 46 on an aarch64 guest against a `/dev/shm` file
 // whose `st_size` then read back as the requested length.
 let Arm64LinuxSyscallFtruncate = 46
 let Arm64LinuxSyscallOpenat = 56
@@ -895,8 +895,8 @@ end 'buildArm64LinuxFileSizeChunk'
 // mrt_host_dir_remove(x0 = pathPtr) -> x0 = BOOL
 // ==========================================================================
 
-// `DeleteFileA` ⇒ `unlinkat(AT_FDCWD, path, 0)`, `CreateDirectoryA(path, NULL)` ⇒
-// `mkdirat(AT_FDCWD, path, 0777)` and `RemoveDirectoryA(path)` ⇒
+// `DeleteFileW` ⇒ `unlinkat(AT_FDCWD, path, 0)`, `CreateDirectoryW(path, NULL)` ⇒
+// `mkdirat(AT_FDCWD, path, 0777)` and `RemoveDirectoryW(path)` ⇒
 // `unlinkat(AT_FDCWD, path, AT_REMOVEDIR)`. ONE BUILDER: each takes a path and a third word — a flag word
 // for the two unlinks, a permission mask for the mkdir — and answers a verdict the same way, so the only
 // honest difference is a number and a syscall.
@@ -920,7 +920,7 @@ end 'buildArm64LinuxPathOpChunk'
 // mrt_host_file_rename(x0 = oldPathPtr, x1 = newPathPtr) -> x0 = BOOL
 // ==========================================================================
 
-// ⭐⭐ **`MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` IS TWO PROMISES AND
+// ⭐⭐ **`MoveFileExW(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` IS TWO PROMISES AND
 // `renameat` KEEPS ONLY ONE OF THEM.** The REPLACE is free: POSIX `rename` is defined to replace an existing
 // destination atomically. The WRITE-THROUGH is not: Win32 promises the operation has reached the disk before
 // it returns, and POSIX records a rename's durability in the DESTINATION DIRECTORY's metadata — so keeping
@@ -989,7 +989,7 @@ end 'buildArm64LinuxFileRenameChunk'
 // mrt_host_file_attributes(x0 = pathPtr) -> x0 = dwFileAttributes
 // ==========================================================================
 
-// `GetFileAttributesA` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a `stat`
+// `GetFileAttributesW` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a `stat`
 // and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit `__mf_stat`
 // publishes derived from ONE reading of `st_mode`.
 function buildArm64LinuxFileAttributesChunk() returns FunctionCodeChunk
@@ -1020,7 +1020,7 @@ end 'buildArm64LinuxFileAttributesChunk'
 // mrt_host_dir_current_path(x0 = bufPtr, x1 = bufLen) -> x0 = bytes written
 // ==========================================================================
 
-// ⭐⭐ **`GetCurrentDirectoryA`'s THREE-WAY ANSWER, AND THE RAW SYSCALL IS THE EASIER HALF OF IT.** The op's
+// ⭐⭐ **`GetCurrentDirectoryW`'s THREE-WAY ANSWER, AND THE RAW SYSCALL IS THE EASIER HALF OF IT.** The op's
 // contract (`ManagedDirectoryRuntime.emitFilledBufferVerdict`) reads `0` as failure, `< capacity` as "it fits,
 // NUL included" and anything else as "too small". Linux's `getcwd` SYSCALL — unlike the libc wrapper Darwin's
 // lane calls, which answers a pointer or NULL — answers the byte LENGTH INCLUDING the terminator, or
@@ -1074,10 +1074,10 @@ end 'buildArm64LinuxDirCurrentPathChunk'
 
 // ⭐⭐ **`fnmatch(pattern, string, 0)`, WRITTEN OUT, BECAUSE A STATIC IMAGE LINKS NO libc.** The Darwin lane
 // calls the real thing; this is the classic backtracking matcher over `*` and `?` — the only two wildcards
-// `FindFirstFileA` honours and the only two the corpus writes.
+// `FindFirstFileW` honours and the only two the corpus writes.
 //
 // ⚠ **IT REPRODUCES `fnmatch`'s FLAG-ZERO BEHAVIOUR, NOT `FNM_PATHNAME`'s.** A `*` matches a leading dot (so
-// `*` yields `.` and `..`, exactly as `FindFirstFileA` does, and the Std tier's dot filter removes them) and
+// `*` yields `.` and `..`, exactly as `FindFirstFileW` does, and the Std tier's dot filter removes them) and
 // nothing here treats `/` specially — which costs nothing, because the pattern reaching it is always a BASE
 // NAME (`mrt_host_base_name` split it).
 //
@@ -1245,7 +1245,7 @@ end 'buildArm64LinuxDirPrefixChunk'
 // mrt_host_dir_find_next(x0 = search, x1 = findDataPtr) -> x0 = BOOL
 // ==========================================================================
 
-// ⭐⭐ **`FindNextFileA` — AND ALSO THE WHOLE OF `FindFirstFileA`'s FIRST ENTRY**, which is why `find_first`
+// ⭐⭐ **`FindNextFileW` — AND ALSO THE WHOLE OF `FindFirstFileW`'s FIRST ENTRY**, which is why `find_first`
 // below calls this rather than carrying a second copy of the walk. Win32's first and subsequent entries come
 // from one enumeration; so do these.
 //
@@ -1351,7 +1351,7 @@ end 'buildArm64LinuxDirFindNextChunk'
 // mrt_host_dir_find_first(x0 = patternPtr, x1 = findDataPtr) -> x0 = search | -1
 // ==========================================================================
 
-// `FindFirstFileA` — open the enumeration a glob names and report its first entry, or answer
+// `FindFirstFileW` — open the enumeration a glob names and report its first entry, or answer
 // `INVALID_HANDLE_VALUE` with the errno word telling the caller why.
 //
 // ⭐ **TWO ROUTES, AND WHICH ONE IS TAKEN IS A PROPERTY OF THE PATTERN**: a base name with no `*` or `?` names
@@ -1359,7 +1359,7 @@ end 'buildArm64LinuxDirFindNextChunk'
 // `mrt_host_has_wildcard` for why the fast path is more faithful and not merely faster.
 //
 // ⚠ **AN EMPTY MATCH IS `ERROR_FILE_NOT_FOUND`, WHICH IS Win32's ANSWER AND NOT THIS LANE'S INVENTION.**
-// `FindFirstFileA` on a directory that exists but holds nothing matching fails with exactly that. A walk that
+// `FindFirstFileW` on a directory that exists but holds nothing matching fails with exactly that. A walk that
 // ended because `getdents64` FAILED keeps its own errno instead, so a real IO error is not reported as a
 // missing file.
 //
@@ -2319,7 +2319,7 @@ end 'buildArm64LinuxHandleFileTypeChunk'
 // mrt_host_env_read(x0 = namePtr, x1 = bufPtr, x2 = bufLen) -> x0 = bytes written
 // ==========================================================================
 
-// `GetEnvironmentVariableA` — copy an environment variable's value into the caller's buffer and answer the
+// `GetEnvironmentVariableW` — copy an environment variable's value into the caller's buffer and answer the
 // byte count, NOT counting the NUL.
 //
 // ⭐⭐ **THERE IS NO `getenv` ON THIS LANE, SO THE VECTOR IS WALKED.** A static image links no libc, and the
@@ -2399,7 +2399,7 @@ end 'buildArm64LinuxEnvReadChunk'
 //                     x5 = lpEnvironment)
 // ==========================================================================
 
-// ⭐⭐⭐ `CreateProcessA` ON A LANE WITH NO SPAWN PRIMITIVE AT ALL. The Darwin twin is `posix_spawnp` plus a
+// ⭐⭐⭐ `CreateProcessW` ON A LANE WITH NO SPAWN PRIMITIVE AT ALL. The Darwin twin is `posix_spawnp` plus a
 // file-actions builder; ⛔ **THERE IS NO `posix_spawn` SYSCALL ON LINUX — it is a libc FUNCTION, and this
 // image links no libc.** So the child is built by hand, and AArch64 dropped the legacy spelling of every
 // call it needs: no `fork`, no `pipe`, no `dup2`. It is `clone`, `pipe2` and `dup3`.
@@ -2793,7 +2793,7 @@ end 'arm64LinuxEmitShmUnlinkPath'
 //
 // ⭐⭐ **THE SCRATCH BUFFER THE OP CARRIES IS READ HERE, WHERE THE DARWIN TWIN IGNORES IT.** `getenv` answers
 // a POINTER into the environment block that `shm_open` takes directly; this lane has no `getenv` and reads
-// the value into the caller's buffer with `mrt_host_env_read`, which is the shape `GetEnvironmentVariableA`
+// the value into the caller's buffer with `mrt_host_env_read`, which is the shape `GetEnvironmentVariableW`
 // gave the op in the first place (`StdOp.osOpenNamedSegment`).
 //
 // An unset variable answers a zero count, which is "no monitor is listening" — the same answer a refused
@@ -2844,7 +2844,7 @@ end 'buildArm64LinuxShmUnlinkChunk'
 // ⭐ **THE arm64-LINUX HOST SURFACE, GATED EXACTLY AS THE DARWIN ONE IS.** The bits are the Std-tier
 // installers' own, so a chunk can never be absent for a body that calls it: one bit, two tiers. The gates are
 // DERIVED from which Std bodies emit which ops rather than from which family a chunk's name reads like, which
-// is why two of them are unions — and why the `FindFirstFileA` cluster is gated as ONE UNIT: its members call
+// is why two of them are unions — and why the `FindFirstFileW` cluster is gated as ONE UNIT: its members call
 // each other by `bl`, so a gate that admitted one and not another would be a `CallFixup` naming a symbol
 // nothing laid out.
 //
@@ -3230,7 +3230,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64PosixAttrsFromModeChunk(arm64LinuxStatLayout()))
 	end 'attrsFromMode'
 
-	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER, AND IT IS NOT A DIRECTORY OP.**
+	// ⚠ **`GetFileAttributesW` HAS A SECOND PRODUCER, AND IT IS NOT A DIRECTORY OP.**
 	// `__gt_subp_resolve_path` walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the
 	// executable lookup needs this chunk with no `Directory` call anywhere in the program.
 	if usage.usesManagedDirectory or usage.usesChildPipes 'fileAttributes'

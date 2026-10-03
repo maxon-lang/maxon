@@ -24,7 +24,7 @@
 // `MAXON_MAX_PROCS` for its own purposes, so a host-convention read here is where its neighbours are.
 //
 // ⚠ **CONDITION 2 IS "THE VARIABLE HAS A NON-EMPTY VALUE" ON THIS LANE, AND THAT IS A WIN32 LIMIT RATHER
-// THAN A CHOICE.** `GetEnvironmentVariableA` answers 0 for an unset name and also for one whose value is
+// THAN A CHOICE.** `GetEnvironmentVariableW` answers 0 for an unset name and also for one whose value is
 // empty, and Windows has no third answer to distinguish them — `set NO_COLOR=` DELETES the variable
 // there, so the two states coincide on the platform as well as in the API. A lane whose `getenv` can
 // answer a non-NULL empty string owes the sharper test when it lands.
@@ -115,7 +115,7 @@ export let FileTypeChar = 0x0002 as ParsedInt
 // answer the predicate identically — the distinction is what a reader of the emitted code is told.
 export let FileTypeDisk = 0x0001 as ParsedInt
 
-// ⭐ **THE PROBE BUFFER: `dumb` plus its terminator, and not one byte more.** `GetEnvironmentVariableA`
+// ⭐ **THE PROBE BUFFER: `dumb` plus its terminator, and not one byte more.** `GetEnvironmentVariableW`
 // answers the chars it COPIED when the value fits and the size it NEEDS (including the terminator) when
 // it does not, so a buffer sized exactly to the longest value that could match turns "is `TERM` four
 // characters?" into a single comparison against the returned count — every longer value answers ≥ 6 and
@@ -146,8 +146,8 @@ export function installTerminalRuntime(module StdModule, globalData GlobalDataTa
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	if targetProvidesFacility(target, facility: HostFacility.terminalDetection) 'canAsk'
-		let noColorLabel = globalData.registerRdataConstant(TerminalEnvNameRdataPrefix, bytes: cStringBytes(NoColorEnvVar), kind: RdataPayloadKind.envName)
-		let termLabel = globalData.registerRdataConstant(TerminalEnvNameRdataPrefix, bytes: cStringBytes(TermEnvVar), kind: RdataPayloadKind.envName)
+		let noColorLabel = globalData.registerRdataConstant(TerminalEnvNameRdataPrefix, bytes: hostCStringBytes(module, text: NoColorEnvVar), kind: RdataPayloadKind.envName)
+		let termLabel = globalData.registerRdataConstant(TerminalEnvNameRdataPrefix, bytes: hostCStringBytes(module, text: TermEnvVar), kind: RdataPayloadKind.envName)
 		buildTerminalStdoutWantsColor(module, func: func, entry: entry, ids: ids, noColorLabel: noColorLabel.toByteArray(), termLabel: termLabel.toByteArray())
 	end 'canAsk' else 'noSuchNotion'
 		// ⛔ The whole fallback body, and it must stay 0 — see this file's header for why a guess of 1 is worse
@@ -191,8 +191,7 @@ function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry 
 	let noColorName = ids.mint()
 	module.appendOp(checkNoColor, op: StdOp.rdataAddr(noColorName, label: noColorLabel))
 	let noColorCap = emitConst(module, block: checkNoColor, value: NoColorProbeBytes, ids: ids)
-	let noColorLen = ids.mint()
-	module.appendOp(checkNoColor, op: StdOp.osEnvRead(noColorLen, namePtrId: noColorName, bufPtrId: scratch, bufLenId: noColorCap))
+	let noColorLen = emitHostEnvReadAscii(module, block: checkNoColor, name: noColorName, valueBuf: scratch, capacity: noColorCap, ids: ids)
 	let noColorZero = emitConst(module, block: checkNoColor, value: 0, ids: ids)
 	let noColorSet = emitCmp(module, block: checkNoColor, a: noColorLen, b: noColorZero, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(checkNoColor, op: StdOp.condBranch(noColorSet, thenBlockId: refuse.id, elseBlockId: checkTerm.id))
@@ -202,8 +201,7 @@ function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry 
 	let termName = ids.mint()
 	module.appendOp(checkTerm, op: StdOp.rdataAddr(termName, label: termLabel))
 	let termCap = emitConst(module, block: checkTerm, value: TerminalEnvProbeBytes, ids: ids)
-	let termLen = ids.mint()
-	module.appendOp(checkTerm, op: StdOp.osEnvRead(termLen, namePtrId: termName, bufPtrId: scratch, bufLenId: termCap))
+	let termLen = emitHostEnvReadAscii(module, block: checkTerm, name: termName, valueBuf: scratch, capacity: termCap, ids: ids)
 	let dumbLen = emitConst(module, block: checkTerm, value: DumbTermLength, ids: ids)
 	let couldBeDumb = emitCmp(module, block: checkTerm, a: termLen, b: dumbLen, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(checkTerm, op: StdOp.condBranch(couldBeDumb, thenBlockId: compareDumb.id, elseBlockId: allow.id))

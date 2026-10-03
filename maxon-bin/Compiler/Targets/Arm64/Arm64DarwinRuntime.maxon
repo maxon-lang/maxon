@@ -16,8 +16,8 @@
 // and stores through the reloaded pointer — which is what every chunk below does, and why the whole Darwin
 // surface is shaped this way rather than only the ops that happen to need it today.
 //
-// ⭐ **AND IT IS THE ONLY SHAPE THE HARD FAMILIES COULD TAKE ANYWAY.** A `FindFirstFileA` emulated over
-// `opendir`/`readdir`/`stat` is a loop with three calls and a 320-byte record to fill; there is no inline
+// ⭐ **AND IT IS THE ONLY SHAPE THE HARD FAMILIES COULD TAKE ANYWAY.** A `FindFirstFileW` emulated over
+// `opendir`/`readdir`/`stat` is a loop with three calls and a 592-byte record to fill; there is no inline
 // isel expansion of that, on any backend. Paying for a frame at the clock buys the vehicle for the rest.
 //
 // ⚠ **EVERY CHUNK HERE IS macOS-ONLY AND IS APPENDED ONLY FOR `Os.macos`** (`appendArm64DarwinRuntimeChunks`,
@@ -28,8 +28,8 @@
 //
 // ⭐⭐ **ONLY THE CALLS DIFFER.** The Win32-shaped facts behind them do not — the symbol names the isel
 // branches to and the POSIX constants are `Targets/Shared/PosixRuntime`, and the errno→Win32 mapping, the
-// `dwFileAttributes` a `st_mode` becomes, the `WIN32_FIND_DATAA` fill and the two string walkers
-// `FindFirstFileA`'s glob split is built out of are `Arm64PosixRuntime`, one body for both arm64 lanes once
+// `dwFileAttributes` a `st_mode` becomes, the `WIN32_FIND_DATAW` fill and the two string walkers
+// `FindFirstFileW`'s glob split is built out of are `Arm64PosixRuntime`, one body for both arm64 lanes once
 // `struct stat`'s layout is a parameter. The filesystem chunks below therefore build under the SHARED `mrt_host_*`
 // names, and this file's remaining private symbols (`mrt_darwin_dir_prefix`, `mrt_darwin_dup_cstring`) are
 // the two that `malloc`, which is the thing a static Linux image cannot do from a chunk.
@@ -274,7 +274,7 @@ end 'buildArm64DarwinSleepChunk'
 // ==========================================================================
 
 // Fill the caller's buffer with the running image's CANONICAL absolute path and answer the byte count,
-// NOT counting the NUL — `GetModuleFileNameA`'s convention, which is `StdOp.osExecutablePath`'s contract
+// NOT counting the NUL — `GetModuleFileNameW`'s convention, which is `StdOp.osExecutablePath`'s contract
 // and which `ProcessRuntime.buildProcessExecutablePath` classifies through
 // `ManagedDirectoryRuntime.emitFilledBufferVerdict`: `0` is unavailable, `< capacity` fits, anything else
 // is truncation and the Std loop doubles. So this chunk answers `strlen` on success and `bufLen` on
@@ -295,7 +295,7 @@ end 'buildArm64DarwinSleepChunk'
 //
 // ⇒ the ABSOLUTE half needs no help — the kernel resolves a relative `argv[0]` against the cwd before it
 // stores the path — but the SYMLINK half is real and reproduces on the fourth row, on a host whose `/tmp`
-// is a symlink. Windows's `GetModuleFileNameA` answers the resolved path, so canonicalizing here is what
+// is a symlink. Windows's `GetModuleFileNameW` answers the resolved path, so canonicalizing here is what
 // makes the two lanes answer the same KIND of string rather than two.
 //
 // ⛔ **`realpath(path, buf)` INTO THE CALLER'S BUFFER IS A BUFFER OVERRUN AND IS NOT AVAILABLE.** That form
@@ -1005,7 +1005,7 @@ let DarwinTlsKeyZeroMessage = b"panic: pthread_key_create handed out key 0, whic
 // mrt_host_env_read(x0 = namePtr, x1 = bufPtr, x2 = bufLen) -> x0 = bytes written
 // ==========================================================================
 
-// `GetEnvironmentVariableA` — copy an environment variable's value into the caller's buffer and answer the
+// `GetEnvironmentVariableW` — copy an environment variable's value into the caller's buffer and answer the
 // byte count, NOT counting the NUL. That is `StdOp.osEnvRead`'s contract, and every caller decodes
 // exactly three answers: 0 for "unset", `>= bufLen` for "too small", and anything between for a value
 // that fits.
@@ -1015,7 +1015,7 @@ let DarwinTlsKeyZeroMessage = b"panic: pthread_key_create handed out key 0, whic
 // section up, and the same `strlen`-then-copy answer.
 //
 // ⚠ **AN UNSET VARIABLE IS `0`, WHICH IS ALSO "an empty value"** — exactly as it is on Windows, where
-// `GetEnvironmentVariableA` answers 0 for both. Every caller treats both as "leave the default alone", so the
+// `GetEnvironmentVariableW` answers 0 for both. Every caller treats both as "leave the default alone", so the
 // ambiguity is the op's and not this lowering's.
 function buildArm64DarwinEnvReadChunk() returns FunctionCodeChunk
 	let SlotBufPtr = 0 as StackSize
@@ -1029,7 +1029,7 @@ function buildArm64DarwinEnvReadChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufPtr)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotBufLen)
 
-	// An unset variable answers 0 bytes written — `GetEnvironmentVariableA`'s own answer, and the DEFAULT
+	// An unset variable answers 0 bytes written — `GetEnvironmentVariableW`'s own answer, and the DEFAULT
 	// here so the NULL arm needs no branch of its own.
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixEnvUnset)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotWritten)
@@ -1115,7 +1115,7 @@ let DarwinDupCStringName = b"mrt_darwin_dup_cstring"
 let DarwinDirentNameOffset = 21
 
 // `fnmatch(pattern, string, 0)` — no `FNM_PATHNAME`, no `FNM_PERIOD`. Both defaults are what Win32 does:
-// a `*` matches a leading dot (so `./*` yields `.` and `..`, exactly as `FindFirstFileA` does, and the Std
+// a `*` matches a leading dot (so `./*` yields `.` and `..`, exactly as `FindFirstFileW` does, and the Std
 // tier's dot filter removes them), and the pattern never spans a `/` because it is only ever a BASE NAME.
 let DarwinDefaultGlobFlags = 0
 
@@ -1123,8 +1123,8 @@ let DarwinDefaultGlobFlags = 0
 // and the pattern still to be matched; POSIX splits them, so this pairs them.
 //
 // ⚠ **A NULL `dir` IS THE EXHAUSTED SINGLE-`stat` SEARCH, NOT AN ERROR.** A pattern with no wildcard is
-// answered by one `stat` and has exactly one entry, which `FindFirstFileA` has already reported — so the
-// object it hands back has no directory to walk and the first `FindNextFileA` must report end-of-iteration
+// answered by one `stat` and has exactly one entry, which `FindFirstFileW` has already reported — so the
+// object it hands back has no directory to walk and the first `FindNextFileW` must report end-of-iteration
 // rather than call `readdir(NULL)`.
 let DarwinSearchDirOffset = 0x00 as MachineWord
 let DarwinSearchPatternOffset = 0x08 as MachineWord
@@ -1278,7 +1278,7 @@ end 'buildArm64DarwinFileSizeChunk'
 // mrt_host_dir_remove(x0 = pathPtr) -> x0 = BOOL
 // ==========================================================================
 
-// `DeleteFileA` ⇒ `unlink`. Both take a path and answer a verdict; only the failure encoding
+// `DeleteFileW` ⇒ `unlink`. Both take a path and answer a verdict; only the failure encoding
 // differs, which `arm64EmitWin32BoolFromZeroStatus` owns.
 function buildArm64DarwinFileDeleteChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
@@ -1289,7 +1289,7 @@ function buildArm64DarwinFileDeleteChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostFileDeleteName)
 end 'buildArm64DarwinFileDeleteChunk'
 
-// `CreateDirectoryA(path, NULL)` ⇒ `mkdir(path, 0777)`. The Win32 call carries no permissions at all — a
+// `CreateDirectoryW(path, NULL)` ⇒ `mkdir(path, 0777)`. The Win32 call carries no permissions at all — a
 // new directory inherits its parent's ACL — so the POSIX side hands the widest mask over and lets the
 // process umask narrow it, which is the closest thing to "inherit" POSIX has.
 function buildArm64DarwinDirCreateChunk() returns FunctionCodeChunk
@@ -1302,7 +1302,7 @@ function buildArm64DarwinDirCreateChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostDirCreateName)
 end 'buildArm64DarwinDirCreateChunk'
 
-// `RemoveDirectoryA(path)` ⇒ `rmdir(path)`. It is the file delete's shape with a different import, because
+// `RemoveDirectoryW(path)` ⇒ `rmdir(path)`. It is the file delete's shape with a different import, because
 // POSIX splits the removal by SUBJECT the same way Win32 does — `unlink` refuses a directory and `rmdir`
 // refuses everything else — so the two chunks are one argument and one verdict apart.
 function buildArm64DarwinDirRemoveChunk() returns FunctionCodeChunk
@@ -1318,7 +1318,7 @@ end 'buildArm64DarwinDirRemoveChunk'
 // mrt_darwin_file_rename(x0 = oldPathPtr, x1 = newPathPtr) -> x0 = BOOL
 // ==========================================================================
 
-// ⭐⭐ **`MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` IS TWO PROMISES AND
+// ⭐⭐ **`MoveFileExW(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` IS TWO PROMISES AND
 // `rename(2)` KEEPS ONLY ONE OF THEM.** The REPLACE is free: POSIX `rename` is defined to replace an
 // existing destination atomically, which is exactly `MOVEFILE_REPLACE_EXISTING`. The WRITE-THROUGH is not:
 // Win32 promises the operation has reached the disk before it returns, and POSIX records a rename's
@@ -1450,7 +1450,7 @@ end 'buildArm64DarwinDirPrefixChunk'
 
 // A `malloc`'d copy of a C string, or 0. The search object owns its pattern for the LIFETIME of the search,
 // while the pattern it was opened with is a scratch buffer the Std tier frees as soon as
-// `osFileFindFirst` returns — so the copy is what keeps `FindNextFileA` able to match anything.
+// `osFileFindFirst` returns — so the copy is what keeps `FindNextFileW` able to match anything.
 function buildArm64DarwinDupCStringChunk() returns FunctionCodeChunk
 	let SlotSource = 0 as StackSize
 	let SlotLength = 1 as StackSize
@@ -1487,7 +1487,7 @@ end 'buildArm64DarwinDupCStringChunk'
 // mrt_darwin_file_attributes(x0 = pathPtr) -> x0 = dwFileAttributes
 // ==========================================================================
 
-// `GetFileAttributesA` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a
+// `GetFileAttributesW` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a
 // `stat` and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit
 // `__mf_stat` publishes derived from ONE reading of `st_mode`.
 function buildArm64DarwinFileAttributesChunk() returns FunctionCodeChunk
@@ -1516,7 +1516,7 @@ end 'buildArm64DarwinFileAttributesChunk'
 // mrt_darwin_dir_current_path(x0 = bufPtr, x1 = bufLen) -> x0 = bytes written
 // ==========================================================================
 
-// ⭐⭐ **`GetCurrentDirectoryA`'s THREE-WAY ANSWER OVER A CALL THAT HAS TWO.** The op's contract
+// ⭐⭐ **`GetCurrentDirectoryW`'s THREE-WAY ANSWER OVER A CALL THAT HAS TWO.** The op's contract
 // (`ManagedDirectoryRuntime.emitFilledBufferVerdict`) reads `0` as failure, `< capacity` as "it fits, NUL
 // included" and anything else as "too small". `getcwd` answers the buffer or NULL, and only `errno`
 // separates the two failures — so the classification is a compare against `ERANGE`.
@@ -1565,7 +1565,7 @@ end 'buildArm64DarwinDirCurrentPathChunk'
 // mrt_darwin_dir_find_next(x0 = search, x1 = findDataPtr) -> x0 = BOOL
 // ==========================================================================
 
-// ⭐⭐ **`FindNextFileA` — AND ALSO THE WHOLE OF `FindFirstFileA`'s FIRST ENTRY**, which is why `find_first`
+// ⭐⭐ **`FindNextFileW` — AND ALSO THE WHOLE OF `FindFirstFileW`'s FIRST ENTRY**, which is why `find_first`
 // below calls this rather than carrying a second copy of the walk. Win32's first and subsequent entries
 // come from one enumeration; so do these.
 //
@@ -1576,7 +1576,7 @@ end 'buildArm64DarwinDirCurrentPathChunk'
 // exactly as Win32's does.
 //
 // ⚠ **A SEARCH WITH NO DIRECTORY IS EXHAUSTED, NOT BROKEN.** A pattern with no wildcard was answered by one
-// `stat` and `FindFirstFileA` has already reported its single entry; the guard is INSIDE the loop head, after
+// `stat` and `FindFirstFileW` has already reported its single entry; the guard is INSIDE the loop head, after
 // the errno clear, so that exit reports end-of-iteration rather than a stale failure.
 //
 // ⚠ **`fstatat`'s VERDICT IS DELIBERATELY DISCARDED AND THE BUFFER IS ZEROED FIRST.** A dangling symbolic
@@ -1650,7 +1650,7 @@ end 'arm64DarwinEntryNameAddr'
 // mrt_darwin_dir_find_first(x0 = patternPtr, x1 = findDataPtr) -> x0 = search | -1
 // ==========================================================================
 
-// `FindFirstFileA` — open the enumeration a glob names and report its first entry, or answer
+// `FindFirstFileW` — open the enumeration a glob names and report its first entry, or answer
 // `INVALID_HANDLE_VALUE` with `errno` telling the caller why.
 //
 // ⭐ **TWO ROUTES, AND WHICH ONE IS TAKEN IS A PROPERTY OF THE PATTERN**: a base name with no `*` or `?`
@@ -1658,7 +1658,7 @@ end 'arm64DarwinEntryNameAddr'
 // `mrt_darwin_has_wildcard` for why the fast path is more faithful and not merely faster.
 //
 // ⚠ **AN EMPTY MATCH IS `ERROR_FILE_NOT_FOUND`, WHICH IS Win32's ANSWER AND NOT THIS LANE'S INVENTION.**
-// `FindFirstFileA` on a directory that exists but holds nothing matching fails with exactly that. A walk
+// `FindFirstFileW` on a directory that exists but holds nothing matching fails with exactly that. A walk
 // that ended because `readdir` FAILED keeps its own errno instead, so a real IO error is not reported as a
 // missing file.
 function buildArm64DarwinDirFindFirstChunk(globalData GlobalDataTable) returns FunctionCodeChunk
@@ -1708,7 +1708,7 @@ function buildArm64DarwinDirFindFirstChunk(globalData GlobalDataTable) returns F
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
 	arm64EmitBranchTo(asm, label: answered)
 
-	// A glob: open the directory the pattern names and let `FindNextFileA` take the first match.
+	// A glob: open the directory the pattern names and let `FindNextFileW` take the first match.
 	asm.placeLabel(walk)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPattern)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinDirPrefixName)
@@ -1843,7 +1843,7 @@ end 'buildArm64DarwinDirFindCloseChunk'
 
 // `posix_spawnattr` flags, MEASURED on this host.
 //
-// ⭐⭐ **`POSIX_SPAWN_CLOEXEC_DEFAULT` IS WIN32's `bInheritHandles` + `STARTUPINFOA`, EXACTLY.** It inverts
+// ⭐⭐ **`POSIX_SPAWN_CLOEXEC_DEFAULT` IS WIN32's `bInheritHandles` + `STARTUPINFOW`, EXACTLY.** It inverts
 // the POSIX default so that NOTHING crosses the exec except what the file actions name — which is the whole
 // of what the Windows pair says, and it is why no descriptor on this lane is ever marked `FD_CLOEXEC` by
 // hand. Without it the child would keep a copy of the parent's stdin WRITE end and would never see EOF when
@@ -1880,14 +1880,14 @@ let DarwinOpenCloseOnExec = 0x1000000
 //                x5 = lpEnvironment)
 // ==========================================================================
 
-// ⭐⭐⭐ `CreateProcessA` — and the one op in this family whose two sides are shaped differently enough that
+// ⭐⭐⭐ `CreateProcessW` — and the one op in this family whose two sides are shaped differently enough that
 // the Std tier had to move. Win32 takes a command LINE and splits it itself; POSIX takes an ARGUMENT VECTOR
 // and splits nothing. `SubprocessRuntime.SubprocessCommandShape` is where that fork lives, and by the time
 // the request reaches this chunk `command` is already a NULL-terminated `char *const argv[]` — so nothing
 // here re-splits anything and no quoting rule is applied twice.
 //
 // ⭐⭐ **THE TWO WIN32 STRUCTS ARE READ AND WRITTEN AS THEY ARE, WHICH IS WHY THE Std GRAPH DID NOT HAVE TO
-// FORK A SECOND TIME.** `STARTUPINFOA` is READ for its three standard handles and nothing else; the
+// FORK A SECOND TIME.** `STARTUPINFOW` is READ for its three standard handles and nothing else; the
 // `PROCESS_INFORMATION` this WRITES is a private scratch record the graph immediately decodes, not an ABI
 // obligation — so it is filled with the three facts that record means here: `hProcess` is a wait object of
 // kind `process`, `hThread` is 0 (POSIX has no thread handle to hand back, and `CloseHandle(0)` is the
@@ -1960,7 +1960,7 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotFileActions)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnFileActionsInit)
 
-	// The three standard descriptors, exactly as the STARTUPINFOA names them. `adddup2` is what makes the
+	// The three standard descriptors, exactly as the STARTUPINFOW names them. `adddup2` is what makes the
 	// child's fd 0/1/2 the ends this spawn chose, and — with `POSIX_SPAWN_CLOEXEC_DEFAULT` below — the ONLY
 	// descriptors it gets. A `dup2` also CLEARS the close-on-exec bit on its target, which is why the three
 	// survive the exec while every other end does not.
@@ -2069,7 +2069,7 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 end 'buildArm64DarwinSpawnChunk'
 
 // `posix_spawn_file_actions_adddup2(&fa, startup->handle, childDescriptor)` — one of the three the spawn
-// above emits. Its own function because the three differ only in which STARTUPINFOA field they read and
+// above emits. Its own function because the three differ only in which STARTUPINFOW field they read and
 // which descriptor they become, and because the handle must be UNTAGGED (a pipe end reaches the record as a
 // tagged handle; an inherited standard stream and a redirected file reach it as bare descriptors).
 function emitArm64DarwinChildDup2(asm Arm64RuntimeAsm, startupSlot StackSize, actionsSlot StackSize, handleOffset MachineWord, childDescriptor MachineWord)
@@ -2149,7 +2149,7 @@ end 'arm64DarwinEmitShmUnlinkName'
 // `mrt_darwin_shm_open(x0 = envNamePtr, x1 = bufPtr, x2 = bufLen) -> x0 = fd | 0` — the PRODUCER's attach.
 //
 // ⭐ **THE SCRATCH BUFFER THE OP CARRIES IS UNUSED HERE, AND THAT IS THE DIFFERENCE BETWEEN THE TWO HOSTS.**
-// Windows fuses `GetEnvironmentVariableA` with `OpenFileMappingA` because the first FILLS A BUFFER the
+// Windows fuses `GetEnvironmentVariableW` with `OpenFileMappingW` because the first FILLS A BUFFER the
 // second reads; `getenv` answers a POINTER into the environment block, which `shm_open` takes directly. The
 // operands stay in the op because it serves both lanes — see `StdOp.osOpenNamedSegment`.
 //
@@ -2326,7 +2326,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	// the gates below are DERIVED from which Std bodies emit which ops rather than from which family a
 	// chunk's name reads like — which is why two of them are unions.
 	//
-	// ⚠ **THE `FindFirstFileA` CLUSTER IS ONE UNIT AND MUST BE GATED AS ONE.** Its members call each other
+	// ⚠ **THE `FindFirstFileW` CLUSTER IS ONE UNIT AND MUST BE GATED AS ONE.** Its members call each other
 	// by `bl` (find-first → find-next → fill → attrs, and find-first → base-name / prefix / wildcard / dup),
 	// so a gate that admitted one and not another would be a `CallFixup` naming a symbol nothing laid out.
 	// BOTH families reach it: `__mf_exists`/`__mf_stat` open a search on a bare path exactly as
@@ -2397,7 +2397,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64PosixAttrsFromModeChunk(darwinStatLayout()))
 	end 'attrsFromMode'
 
-	// ⚠ **`GetFileAttributesA` HAS A SECOND PRODUCER, AND IT IS NOT A DIRECTORY OP.**
+	// ⚠ **`GetFileAttributesW` HAS A SECOND PRODUCER, AND IT IS NOT A DIRECTORY OP.**
 	// `__gt_subp_resolve_path` walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the
 	// executable lookup needs this chunk with no `Directory` call anywhere in the program. It is split out of
 	// the directory cluster rather than the cluster widened, because the other two members really are

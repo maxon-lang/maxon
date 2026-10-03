@@ -1395,12 +1395,12 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	pipeline.stdModule.usesEntropy = usage.usesEntropy
 
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
-	// neighbours. `__tty_stdout_wants_color` needs `GetFileType` — and `GetEnvironmentVariableA`, already in
+	// neighbours. `__tty_stdout_wants_color` needs `GetFileType` — and `GetEnvironmentVariableW`, already in
 	// the band — both at the end of kernel32's run.
 	pipeline.stdModule.usesTerminalDetection = usage.usesTerminalDetection
 
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
-	// neighbours. `__shm_create` needs `CreateFileMappingA` and `__shm_close` `UnmapViewOfFile`, both at the
+	// neighbours. `__shm_create` needs `CreateFileMappingW` and `__shm_close` `UnmapViewOfFile`, both at the
 	// end of kernel32's run (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesSharedMemory = usage.usesSharedMemory
 
@@ -1426,7 +1426,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	pipeline.stdModule.usesUptimeClock = usage.usesUptimeClock
 
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same reason as its neighbours.
-	// The scheduler's per-P init reads `MAXON_MAX_PROCS` (`GetEnvironmentVariableA`) and the machine's
+	// The scheduler's per-P init reads `MAXON_MAX_PROCS` (`GetEnvironmentVariableW`) and the machine's
 	// processor count (`GetActiveProcessorCount`), and its `TlsAlloc`/`TlsSetValue` pair sits at the end of
 	// kernel32's run too — three separate reasons a green-thread image needs the whole band. It also answers
 	// for a spawning image: the child-process bodies that import `PeekNamedPipe`, `TerminateProcess` and the
@@ -1444,6 +1444,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// `memory.grow` takes a range and BACKS it, so a reservation there is an allocation; every native lane
 	// reserves address space the OS neither charges nor faults in.
 	pipeline.stdModule.hasPageReservation = targetHasPageReservation(project.target)
+	pipeline.stdModule.hostText = hostTextEncodingOf(project.target)
 
 	// Where the APPENDED band begins. Every install below and every synthesizer under
 	// `synthesizeBodies` pushes onto `functions`, so this index is the boundary between what the

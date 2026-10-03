@@ -114,13 +114,13 @@ reaches `__mf_*` on top of those. Every lane this compiler emits serves the fami
 which is why the marker names that one alone; the refusal is `E3104`, raised by
 `SemanticCheck.requireTargetSupportsCallee`, not by the marker. **Every case in this file reaches one of
 those entries, so every one of them is refused on a lane without the family**, each naming its own entry.
-`__md_delete` removes an EMPTY directory and nothing else — `RemoveDirectoryA` on Windows, `rmdir` on
+`__md_delete` removes an EMPTY directory and nothing else — `RemoveDirectoryW` on Windows, `rmdir` on
 Darwin and `unlinkat(AT_FDCWD, path, AT_REMOVEDIR)` on Linux — so a directory holding anything at all
 survives the call and the caller is told so. The reason
 wasm32-wasi has none of it is written down in `file-io.md` and not repeated here; what would un-gate it is
 the same WASI substrate that un-gates that file, plus its directory-enumeration twin — the one that cost
 the most on every lane, because Win32 takes a GLOB where POSIX takes a directory: arm64-macOS emulates
-`FindFirstFileA` over `opendir`/`readdir`/`fnmatch`, and both Linux lanes do it over
+`FindFirstFileW` over `opendir`/`readdir`/`fnmatch`, and both Linux lanes do it over
 `openat(O_DIRECTORY)`/`getdents64` with the wildcard match HAND-WRITTEN, a raw static image linking no
 `fnmatch` to call.
 

@@ -261,13 +261,13 @@ export let PosixOwnerWriteBit = 0o200
 export let PosixModeMask = 0xFFFF
 
 // The two bytes that make a pattern a GLOB rather than a name, and the byte a path is split at. `*` and `?`
-// are the only two wildcard characters `FindFirstFileA` honours; a pattern with neither is a plain path and
+// are the only two wildcard characters `FindFirstFileW` honours; a pattern with neither is a plain path and
 // takes the single-`stat` route.
 export let PosixGlobStarByte = 0x2A
 export let PosixGlobQuestionByte = 0x3F
 export let PosixPathSeparatorByte = 0x2F
 
-// `fstatat`'s flag word: 0 means FOLLOW a symbolic link, which is what `FindFirstFileA` reports for one and
+// `fstatat`'s flag word: 0 means FOLLOW a symbolic link, which is what `FindFirstFileW` reports for one and
 // what every other `stat` in this surface does.
 export let PosixFollowSymlinks = 0
 
@@ -281,12 +281,12 @@ export let PosixOpenReadWrite = 2
 
 export let PosixOpenWriteOnly = 1
 
-// The permission masks a newly created file is given, before the process umask. 0644 is `CreateFileA`'s
+// The permission masks a newly created file is given, before the process umask. 0644 is `CreateFileW`'s
 // ordinary file; 0755 is what `openWriteExecutable` adds and the whole reason that method has an op of its own.
 export let PosixCreateFileMode = 0o644
 export let PosixCreateExecutableFileMode = 0o755
 
-// `mkdir(path, 0777)` — `CreateDirectoryA`'s "inherit whatever the environment permits", which under POSIX is
+// `mkdir(path, 0777)` — `CreateDirectoryW`'s "inherit whatever the environment permits", which under POSIX is
 // a full mask handed to the process umask to narrow. 0777 leaves the decision with the umask instead of
 // taking it here.
 export let PosixDirectoryMode = 0o777
@@ -310,7 +310,7 @@ export enum PosixErrno
 	notADirectory = 20
 	resultTooLarge = 34
 
-	// End of iteration. `FindNextFileA` reports it by failing with `ERROR_NO_MORE_FILES`; a POSIX
+	// End of iteration. `FindNextFileW` reports it by failing with `ERROR_NO_MORE_FILES`; a POSIX
 	// enumeration sets no errno, so each lane's walk clears errno before every step and the classifier
 	// reads a zero as that end. Sound because `osLastError` is consumed only after a call failed, and
 	// this is the one failure in the surface that sets no errno.
@@ -362,7 +362,7 @@ export function posixNanosPerFileTimeTick() returns MachineWord
 end 'posixNanosPerFileTimeTick'
 
 // ⭐ **HOW MANY BYTES OF A PATH-SHAPED STRING FIT BESIDE ITS TERMINATOR.** Three things are bounded by it and
-// all three are `char[MAX_PATH]` in the Win32 surface being emulated: `WIN32_FIND_DATAA`'s `cFileName`, the
+// all three are `MAX_PATH` long in the Win32 surface being emulated: `WIN32_FIND_DATAW`'s `cFileName`, the
 // copy of the pattern a search owns for its lifetime, and the directory prefix a glob is split into. One
 // name, because they are one number for one reason.
 export let PosixPathStringCapacity = MaxPathBytes - 1
@@ -497,7 +497,7 @@ export let PosixHandleKindBits = (MachineWordBits - PosixHandleKindShift) as Shi
 // multiply the `movz #imm, lsl #48` ladder encodes in one instruction.
 export let PosixHandleKindUnit = 0x0001000000000000
 
-// The byte count an unset variable answers — `GetEnvironmentVariableA`'s own 0, and the value both lanes seed
+// The byte count an unset variable answers — `GetEnvironmentVariableW`'s own 0, and the value both lanes seed
 // `writtenSlot` with before their lookup so the not-found arm needs no branch of its own.
 export let PosixEnvUnset = 0
 

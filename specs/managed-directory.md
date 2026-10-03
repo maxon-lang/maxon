@@ -16,7 +16,7 @@ category: type-system
 ### Type Structure
 
 `__ManagedDirectory` has a single field:
-- `_block` (int) — Pointer to a heap-allocated block containing the search HANDLE and WIN32_FIND_DATAA
+- `_block` (int) — Pointer to a heap-allocated block containing the search HANDLE and WIN32_FIND_DATAW
 
 ### Static Methods (throwing)
 
@@ -31,8 +31,8 @@ category: type-system
 ### ⚠ WHERE THE CASES BELOW PUT THE DIRECTORIES THEY MAKE, AND WHY THEY CANNOT REMOVE THEM
 
 Six cases here CREATE a directory, and **The compiler has no directory-REMOVAL runtime entry at all** — the OS
-operations it lowers are `CreateDirectoryA`, `GetFileAttributesA`, `FindFirstFileA`/`FindNextFileA`,
-`GetCurrentDirectoryA` and `DeleteFileA`, and `DeleteFileA` refuses a directory. So a case can delete every
+operations it lowers are `CreateDirectoryW`, `GetFileAttributesW`, `FindFirstFileW`/`FindNextFileW`,
+`GetCurrentDirectoryW` and `DeleteFileW`, and `DeleteFileW` refuses a directory. So a case can delete every
 FILE it wrote and cannot delete the directory that held them: whatever it makes outlives the suite run.
 
 ⚠⚠ **THE HARNESS KEEPS THE ROOT CLEAN; THE PREFIX BELOW IS REDUNDANT.** The runner spawns every test
@@ -47,7 +47,7 @@ every later build resolves. Without a `__ManagedDirectory.remove`, this is the w
 do.
 
 ⚠ **The scratch root is SHARED** — by these six cases and by every parallel spec worker — so its creation
-must not race. Each case attempts the create and treats a LOSS as ordinary (`CreateDirectoryA` reports
+must not race. Each case attempts the create and treats a LOSS as ordinary (`CreateDirectoryW` reports
 `ERROR_ALREADY_EXISTS`); the `exists` probe in the handler is the only gate. The per-case directory below it
 needs no such care: one case owns each name.
 
@@ -321,7 +321,7 @@ rather than restating a passing one.
 
 <!-- test: managed-directory.next-does-not-skip-the-first-match -->
 
-⭐ **The advance-first PENDING flag.** `FindFirstFileA` does not merely open a
+⭐ **The advance-first PENDING flag.** `FindFirstFileW` does not merely open a
 search, it returns the FIRST entry — so a `next()` that fetches immediately
 loses it. `search-and-list` above cannot catch that: a `dir/*` pattern's first
 two entries are `.` and `..`, which the runtime's dot filter discards anyway.
@@ -470,7 +470,7 @@ end 'main'
 <!-- test: managed-directory.exists-discriminates-file-from-directory -->
 
 `exists()` asks whether the path is a DIRECTORY, so an existing plain file is
-`false` — a `GetFileAttributesA` that merely succeeded is not the answer. The
+`false` — a `GetFileAttributesW` that merely succeeded is not the answer. The
 `not-exists` case above only covers a path that names nothing.
 
 ```maxon
@@ -506,7 +506,7 @@ end 'main'
 
 <!-- test: managed-directory.create-existing-is-create-failed -->
 
-`CreateDirectoryA` on a path that already exists reports
+`CreateDirectoryW` on a path that already exists reports
 `ERROR_ALREADY_EXISTS`, which is neither of the two errno codes the shared
 classification names — so it takes this operation's catch-all. The
 `create-throws` case above reaches the same throw through a missing PARENT,
@@ -678,7 +678,7 @@ end 'main'
 
 Two contracts nothing above states. **EOF is a plain 0 and stays one**: an empty
 directory's very first `next()` is the end of the iteration, and a `next()` past
-it must answer 0 again rather than throw `nextFailed` or replay — `FindNextFileA`
+it must answer 0 again rather than throw `nextFailed` or replay — `FindNextFileW`
 keeps reporting `ERROR_NO_MORE_FILES`, and only the `GetLastError` arm makes that
 an ordinary end. **`close()` is idempotent**: the spec says so, `__md_destruct`
 depends on it (an explicit `close()` followed by the scope-exit drop calls it

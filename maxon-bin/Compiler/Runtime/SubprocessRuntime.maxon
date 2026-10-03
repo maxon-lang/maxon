@@ -8,7 +8,7 @@
 // builds the ones the STREAMING half (`GtRuntime.maxon`) does not already have.
 //
 // ⭐⭐ **IT DOES NOT FORK A SECOND `CreateProcess` PATH, AND THAT IS THE WHOLE DESIGN.** `GtRuntime`'s
-// `__gt_subp_spawn_core` creates the pipes, fills a `STARTUPINFO`, calls `CreateProcessA` with
+// `__gt_subp_spawn_core` creates the pipes, fills a `STARTUPINFO`, calls `CreateProcessW` with
 // `bInheritHandles=TRUE` and claims a slot in the 64-entry handle table — with the register-pressure
 // discipline, the slot GENERATION and the buffer reuse. Every spelling a
 // program can spawn a child with fills a REQUEST RECORD (`SubpReqCommand`) and calls that one core, so both
@@ -382,7 +382,7 @@ end 'emitSubpScratch'
 //
 // ⇒ a target whose primitive takes a VECTOR gets a vector, built from the same blob and quoting nothing.
 export enum SubprocessCommandShape
-	// Windows: `CreateProcessA` takes ONE command line and splits it itself, by the CRT's rules.
+	// Windows: `CreateProcessW` takes ONE command line and splits it itself, by the CRT's rules.
 	commandLine
 
 	// SysV: `posix_spawnp`/`execv` take a NULL-terminated `char *const argv[]` and split nothing.
@@ -414,8 +414,8 @@ end 'subprocessCommandShape'
 // enum for both would tie two independent platform facts to one name, and the first lane that had one
 // without the other could not be expressed.
 enum EnvironmentSnapshotShape
-	// Windows: `GetEnvironmentStringsA` answers ONE BLOCK — NUL-terminated `NAME=VALUE` entries back to
-	// back, ended by one more NUL — and it is a COPY the caller owes `FreeEnvironmentStringsA`.
+	// Windows: `GetEnvironmentStringsW` answers ONE BLOCK — NUL-terminated `NAME=VALUE` entries back to
+	// back, ended by one more NUL — and it is a COPY the caller owes `FreeEnvironmentStringsW`.
 	nulSeparatedBlock
 
 	// POSIX: `environ` is a NULL-terminated vector of `char *`. It is the live table rather than a copy, so
@@ -438,7 +438,7 @@ end 'environmentSnapshotShape'
 // ⭐⭐ **WHAT A SPAWN PRIMITIVE TAKES FOR THE CHILD's ENVIRONMENT — the third fork in this family, and a
 // genuinely independent platform fact from either sibling above.** `SubprocessCommandShape` is what the
 // primitive takes for the COMMAND and `EnvironmentSnapshotShape` is what an environment READ answers;
-// neither implies this one. `CreateProcessA`'s `lpEnvironment` is a NUL-separated BLOCK, while `execve`
+// neither implies this one. `CreateProcessW`'s `lpEnvironment` is a NUL-separated BLOCK, while `execve`
 // and `posix_spawnp` take a NULL-terminated `char *const envp[]` — so a lane can share a sibling's answer
 // and still need the opposite answer here.
 //
@@ -467,7 +467,7 @@ end 'spawnEnvironmentShape'
 //
 //   * `PATH` separates its directories with `;` on Windows and `:` on POSIX;
 //   * a directory joins its file with `\` on Windows and `/` on POSIX;
-//   * Windows searches `CreateProcessA`'s own directories ahead of `PATH` and applies its name
+//   * Windows searches `CreateProcessW`'s own directories ahead of `PATH` and applies its name
 //     rules (`emitSubpWindowsSearchRungs`, `emitSubpWindowsNameRules`);
 //   * POSIX searches `PATH` alone and tries the name as given. It never searches the working
 //     directory, where a file would shadow the real tool.
@@ -506,11 +506,11 @@ end 'pathDirSeparator'
 // this command line" MEANS on POSIX, and it is the same interpreter `system()` names; the shell then applies
 // its own splitting to a string the caller wrote AS a shell command, which is the one place that is correct.
 //
-// Under `commandLine` the line already IS the command, so this emits nothing at all rather than a call that
-// hands a buffer back unchanged.
-export function emitSubpCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, linePtr ValueId) returns ValueId
+// Under `commandLine` the line already IS the command, so this only widens it, and only when
+// `encoding` is UTF-16.
+export function emitSubpCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, linePtr ValueId, encoding HostTextEncoding) returns ValueId
 	return match shape 'shape'
-		commandLine gives linePtr
+		commandLine gives emitHostCString(module, block: block, cstr: linePtr, encoding: encoding, ids: ids)
 		argumentVector gives emitSubpShellVectorCall(module, block: block, ids: ids, linePtr: linePtr)
 	end 'shape'
 end 'emitSubpCommandFromLine'
@@ -522,12 +522,12 @@ function emitSubpShellVectorCall(module StdModule, block IrBlock, ids ValueMinte
 	return command
 end 'emitSubpShellVectorCall'
 
-// The command a `emitSubpCommandFromLine` call built is the caller's once the spawn has read it: nothing under
-// the command-line shape, where the line IS the command, and the one `__gt_subp_shell_command` region under
+// The command a `emitSubpCommandFromLine` call built is the caller's once the spawn has read it: the
+// wide copy, if any, under the command-line shape, and the one `__gt_subp_shell_command` region under
 // the vector shape. The line itself stays the caller's either way.
-export function emitSubpReleaseCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, command ValueId)
+export function emitSubpReleaseCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, command ValueId, encoding HostTextEncoding)
 	match shape 'shape'
-		commandLine then break 'shape'
+		commandLine then emitReleaseHostCopy(module, block: block, copy: command, encoding: encoding, ids: ids)
 		argumentVector then emitSlabFree(module, block: block, ptr: command, ids: ids)
 	end 'shape'
 end 'emitSubpReleaseCommandFromLine'
@@ -539,8 +539,7 @@ let ShellPathBytes = b"/bin/sh"
 let ShellCommandFlagBytes = b"-c"
 
 // ⭐ `__gt_subp_shell_command(linePtr) -> argv` — `{"/bin/sh", "-c", linePtr, NULL}`, four pointer slots.
-// Built ONLY under `SubprocessCommandShape.argumentVector`; under the other shape a command line needs no
-// conversion and `emitSubpCommandFromLine` emits nothing.
+// Built ONLY under `SubprocessCommandShape.argumentVector`; under the other the line is the command.
 //
 // ⭐ **ONE REGION: THE FOUR SLOTS, THEN THE TWO STRINGS THEY POINT AT**, so the caller gives the whole command
 // back with one `emitSubpReleaseCommandFromLine`.
@@ -1024,7 +1023,7 @@ end 'emitSubpQuoteIfNeeded'
 //
 // ⚠ **`CREATE_NO_WINDOW` IS SUPPRESSED WHEN DETACHING, AND THAT IS A WIN32 RULE RATHER THAN A PREFERENCE.**
 // `DETACHED_PROCESS` and `CREATE_NO_WINDOW` are documented as mutually exclusive — passing both makes
-// `CreateProcessA` fail with ERROR_INVALID_PARAMETER — and `stdlib/Subprocess.maxon`'s `runDetachedConfiguration`
+// `CreateProcessW` fail with ERROR_INVALID_PARAMETER — and `stdlib/Subprocess.maxon`'s `runDetachedConfiguration`
 // ORs the detach bit onto whatever `attachedFlagsFor` produced, which for the default `PlatformOptions` on
 // Windows includes hide-window. Without this every `runDetached()` would answer -1.
 function emitSubpCreationFlags(module StdModule, block IrBlock, ids ValueMinter, surfaceFlags ValueId, req ValueId)
@@ -1066,7 +1065,7 @@ end 'emitSubpCreationFlags'
 // ⭐ **AN EMPTY `cstring` MEANS "INHERIT", AND IT HAS TO BE TURNED INTO A NULL HERE.**
 // `stdlib/Subprocess.maxon` spells "inherit the parent's working directory" as an EMPTY `FilePath`
 // (`Configuration.create`: *"empty path is the sentinel for 'inherit cwd'"*), which reaches the boundary as a
-// `cstring` whose first byte is a NUL. `CreateProcessA` reads an empty `lpCurrentDirectory` as a real, and
+// `cstring` whose first byte is a NUL. `CreateProcessW` reads an empty `lpCurrentDirectory` as a real, and
 // invalid, directory name and fails; NULL is what means inherit. One test, at the one place the two
 // conventions meet.
 function emitSubpCwdOrNull(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, cwd ValueId, req ValueId) returns IrBlock
@@ -1195,7 +1194,7 @@ end 'emitSubpEnvVectorCall'
 // ANSWER.** `requireIntrinsicArgs` VALIDATES a `__ManagedMemory` argument's type and passes the record
 // through untouched, so every reader extracts `ManagedRecordBufferOffset` itself — which is why
 // `__gt_subp_argv_command` and `__gt_subp_env_vector` both take a RECORD. Handing the record straight to
-// `lpEnvironment` gives `CreateProcessA` a struct header to read as `NAME=VALUE` text — MEASURED as
+// `lpEnvironment` gives `CreateProcessW` a struct header to read as `NAME=VALUE` text — MEASURED as
 // `os error 87` (ERROR_INVALID_PARAMETER) on every spawn that names an override, while `inherit` goes on
 // working because it never reads the slot.
 function emitSubpEnvPointer(module StdModule, func IrFunction, ids ValueMinter, entry IrBlock, build IrBlock, env ValueId, envInherit ValueId, shape SpawnEnvironmentShape) returns ValueId
@@ -2586,7 +2585,7 @@ end 'emitSubpEnvUnreadable'
 // this one takes and releases, and the two could disagree.
 //
 // ⭐ **THE SNAPSHOT IS TAKEN AND RELEASED PER CALL, WHICH IS O(n) PER ENTRY AND DELIBERATE.**
-// `GetEnvironmentStringsA` hands back a COPY the caller owns; holding one across the whole walk would mean a
+// `GetEnvironmentStringsW` hands back a COPY the caller owns; holding one across the whole walk would mean a
 // runtime-global cache with a lifetime nothing here can bound. An environment is tens of entries and this
 // runs once per spawn that names an override, so the quadratic is over a number that does not grow.
 //
@@ -2651,7 +2650,9 @@ function buildSubpEnvEntryFromVector(module StdModule)
 end 'buildSubpEnvEntryFromVector'
 
 // The Win32 body: a NUL-separated block, walked entry by entry because it is not randomly addressable, and
-// released on BOTH exits because `GetEnvironmentStringsA` handed over a copy.
+// released on BOTH exits because `GetEnvironmentStringsW` handed over a copy. A wide block is walked
+// in UTF-16 units and only the entry answered is narrowed: callers ask once per entry, so narrowing
+// the whole block on every call would multiply the cost of the whole enumeration.
 function buildSubpEnvEntryFromBlock(module StdModule)
 	var func = IrFunction.createFromStd(SubpEnvEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -2676,15 +2677,15 @@ function buildSubpEnvEntryFromBlock(module StdModule)
 	let hostSaidNothing = emitCmp(module, block: entry, a: block, b: zeroBlock, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(hostSaidNothing, thenBlockId: noBlock.id, elseBlockId: scan.id))
 
-	// `GetEnvironmentStringsA` failed, so there is no snapshot to release and no answer to give.
+	// `GetEnvironmentStringsW` failed, so there is no snapshot to release and no answer to give.
 	emitSlabFree(module, block: noBlock, ptr: state, ids: ids)
 	let noneRecord = emitSubpEnvUnreadable(module, block: noBlock, ids: ids)
 	module.setTerminator(noBlock, op: StdOp.ret(noneRecord))
 
-	// The cursor stands on the first byte of an entry, or on the block's own terminator.
+	// The cursor stands on the first unit of an entry, or on the block's own terminator.
 	let cursor = emitLoadField(module, block: scan, record: state, offset: EnvCursor, ids: ids)
 	let zeroIdx = emitConst(module, block: scan, value: 0, ids: ids)
-	let firstByte = emitLoadByte(module, block: scan, base: cursor, index: zeroIdx, ids: ids)
+	let firstByte = emitHostUnit(module, block: scan, base: cursor, unitIndex: zeroIdx, ids: ids)
 	let zeroByte = emitConst(module, block: scan, value: 0, ids: ids)
 	let blockEnded = emitCmp(module, block: scan, a: firstByte, b: zeroByte, pred: StdCmpPred.eq, ids: ids)
 	var stillCounting = module.addBlock(func, label: b"subpenvcount", heat: BlockHeat.normal)
@@ -2702,21 +2703,22 @@ function buildSubpEnvEntryFromBlock(module StdModule)
 	emitStoreField(module, block: stepOn, record: state, offset: EnvRemaining, value: nextRemaining)
 	module.setTerminator(stepOn, op: StdOp.branch(skip.id))
 
-	// Past this entry's bytes and then past its own terminator, which is where the next entry begins.
+	// Past this entry's units and then past its own terminator, which is where the next entry begins.
 	let skipCursor = emitLoadField(module, block: skip, record: state, offset: EnvCursor, ids: ids)
 	let skipIdx = emitConst(module, block: skip, value: 0, ids: ids)
-	let skipByte = emitLoadByte(module, block: skip, base: skipCursor, index: skipIdx, ids: ids)
-	let oneByte = emitConst(module, block: skip, value: 1, ids: ids)
-	let advanced = emitBin(module, block: skip, a: skipCursor, b: oneByte, opcode: StdBinOpcode.add, ids: ids)
+	let skipByte = emitHostUnit(module, block: skip, base: skipCursor, unitIndex: skipIdx, ids: ids)
+	let oneUnit = emitConst(module, block: skip, value: 1, ids: ids)
+	let unitBytes = emitByteCountOfUnits(module, block: skip, units: oneUnit, encoding: module.hostText, ids: ids)
+	let advanced = emitBin(module, block: skip, a: skipCursor, b: unitBytes, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: skip, record: state, offset: EnvCursor, value: advanced)
 	let zeroSkip = emitConst(module, block: skip, value: 0, ids: ids)
 	let entryEnded = emitCmp(module, block: skip, a: skipByte, b: zeroSkip, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(skip, op: StdOp.condBranch(entryEnded, thenBlockId: scan.id, elseBlockId: skip.id))
 
-	// The entry is a plain NUL-terminated cstring, so the shared copy-out measures and publishes it.
+	// The entry is a NUL-terminated host string, so the shared copy-out measures and publishes it.
 	let foundCursor = emitLoadField(module, block: found, record: state, offset: EnvCursor, ids: ids)
 	let record = ids.mint()
-	var afterCopy = emitCStringToManaged(module, func: func, cur: found, cstr: foundCursor, record: record, ids: ids)
+	var afterCopy = emitTextToManaged(module, func: func, cur: found, cstr: foundCursor, record: record, encoding: module.hostText, ids: ids)
 	emitSubpReleaseEnvSnapshot(module, block: afterCopy, state: state, ids: ids)
 	module.setTerminator(afterCopy, op: StdOp.ret(record))
 
@@ -2849,7 +2851,10 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	var attrOk = module.addBlock(func, label: b"rpattr", heat: BlockHeat.normal)
 	let candT = emitLoadField(module, block: testCand, record: state, offset: RpCand, ids: ids)
 	let attrs = ids.mint()
-	module.appendOp(testCand, op: StdOp.osFileAttributes(attrs, pathPtrId: candT))
+	let hostCandidate = emitHostCString(module, block: testCand, cstr: candT, encoding: module.hostText, ids: ids)
+	module.appendOp(testCand, op: StdOp.osFileAttributes(attrs, pathPtrId: hostCandidate))
+	emitReleaseHostCopy(module, block: testCand, copy: hostCandidate, encoding: module.hostText, ids: ids)
+
 	let invalid = emitConst(module, block: testCand, value: InvalidFileAttributes, ids: ids)
 	let nothingThere = emitCmp(module, block: testCand, a: attrs, b: invalid, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(testCand, op: StdOp.condBranch(nothingThere, thenBlockId: extNext.id, elseBlockId: attrOk.id))
@@ -2916,7 +2921,7 @@ function emitSubpAnswerCandidate(module StdModule, func IrFunction, ids ValueMin
 	module.setTerminator(built, op: StdOp.ret(record))
 end 'emitSubpAnswerCandidate'
 
-// A hit is answered absolute: `CreateProcessA` searches a relative name again, from the
+// A hit is answered absolute: `CreateProcessW` searches a relative name again, from the
 // application's directory first, and could run a different file than the one the walk found.
 function emitSubpAnswerFullPath(module StdModule, func IrFunction, ids ValueMinter, hit IrBlock, miss IrBlock, state ValueId)
 	var attempt = module.addBlock(func, label: b"rpfull", heat: BlockHeat.normal)
@@ -2926,15 +2931,18 @@ function emitSubpAnswerFullPath(module StdModule, func IrFunction, ids ValueMint
 	var unresolved = module.addBlock(func, label: b"rpfullnone", heat: BlockHeat.normal)
 
 	let cand = emitLoadField(module, block: hit, record: state, offset: RpCand, ids: ids)
-	let (fullPath, _) = emitGrowingPathFill(module, cur: hit, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.fullPath(cand), whenRefused: unresolved, whenFits: resolved, ids: ids)
+	let fillSource = emitHostCString(module, block: hit, cstr: cand, encoding: module.hostText, ids: ids)
+	let (fullPath, _) = emitGrowingPathFill(module, cur: hit, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.fullPath(fillSource), whenRefused: unresolved, whenFits: resolved, ids: ids)
 
 	let record = ids.mint()
-	var built = emitCStringToManaged(module, func: func, cur: resolved, cstr: fullPath, record: record, ids: ids)
+	var built = emitTextToManaged(module, func: func, cur: resolved, cstr: fullPath, record: record, encoding: module.hostText, ids: ids)
 	emitRawFree(module, block: built, ptr: fullPath, ids: ids)
+	emitReleaseHostCopy(module, block: built, copy: fillSource, encoding: module.hostText, ids: ids)
 	emitSubpReleasePathWalk(module, block: built, state: state, ids: ids, shape: PathSearchShape.windowsPathExt)
 	module.setTerminator(built, op: StdOp.ret(record))
 
 	emitRawFree(module, block: unresolved, ptr: fullPath, ids: ids)
+	emitReleaseHostCopy(module, block: unresolved, copy: fillSource, encoding: module.hostText, ids: ids)
 	module.setTerminator(unresolved, op: StdOp.branch(miss.id))
 end 'emitSubpAnswerFullPath'
 
@@ -2968,7 +2976,7 @@ let EmptyPathFallback = b""
 let CandidateSlackBytes = 4 as ParsedInt
 
 // Read an environment variable into a fresh NUL-terminated slab buffer, falling back to a literal
-// when it is unset. `GetEnvironmentVariableA` answers the size it needs when the buffer is too
+// when it is unset. `GetEnvironmentVariableW` answers the size it needs when the buffer is too
 // small, so one retry at exactly that size is provably enough and a second failure would be the OS
 // contradicting itself.
 //
@@ -2983,10 +2991,18 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 	var useFallback = module.addBlock(func, label: b"rpenvnone", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"rpenvdone", heat: BlockHeat.normal)
 
-	let nameBuf = emitLiteralCString(module, block: cur, ids: ids, text: varName)
+	var readyId = cont.id
+
+	if hostTextIsWide(module) 'wide'
+		var convert = module.addBlock(func, label: b"rpenvutf8", heat: BlockHeat.normal)
+		emitSubpEnvValueToUtf8(module, block: convert, ids: ids, state: state, outOffset: outOffset, cont: cont)
+		readyId = convert.id
+	end 'wide'
+
+	let nameBuf = emitLiteralHostString(module, block: cur, ids: ids, text: varName)
 	let firstSize = emitConst(module, block: cur, value: EnvFirstGuessBytes, ids: ids)
 	let firstBuf = ids.mint()
-	module.appendOp(cur, op: StdOp.call(firstBuf, callee: SlabAllocName, args: argsOf(firstSize)))
+	module.appendOp(cur, op: StdOp.call(firstBuf, callee: SlabAllocName, args: argsOf(emitByteCountOfUnits(module, block: cur, units: firstSize, encoding: module.hostText, ids: ids))))
 	let written = ids.mint()
 	module.appendOp(cur, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: firstBuf, bufLenId: firstSize))
 	emitSlabFree(module, block: cur, ptr: nameBuf, ids: ids)
@@ -3001,19 +3017,19 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 
 	let firstSize2 = emitConst(module, block: fits, value: EnvFirstGuessBytes, ids: ids)
 	let tooSmall = emitCmp(module, block: fits, a: written, b: firstSize2, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(fits, op: StdOp.condBranch(tooSmall, thenBlockId: retry.id, elseBlockId: cont.id))
+	module.setTerminator(fits, op: StdOp.condBranch(tooSmall, thenBlockId: retry.id, elseBlockId: readyId))
 
-	// The size Win32 named INCLUDES the terminator, so it is exactly what to allocate. The first guess is
-	// replaced, so it goes back.
-	let nameBuf2 = emitLiteralCString(module, block: retry, ids: ids, text: varName)
+	// The size Win32 named INCLUDES the terminator, so it is exactly the units to allocate. The first
+	// guess is replaced, so it goes back.
+	let nameBuf2 = emitLiteralHostString(module, block: retry, ids: ids, text: varName)
 	let bigBuf = ids.mint()
-	module.appendOp(retry, op: StdOp.call(bigBuf, callee: SlabAllocName, args: argsOf(written)))
+	module.appendOp(retry, op: StdOp.call(bigBuf, callee: SlabAllocName, args: argsOf(emitByteCountOfUnits(module, block: retry, units: written, encoding: module.hostText, ids: ids))))
 	let written2 = ids.mint()
 	module.appendOp(retry, op: StdOp.osEnvRead(written2, namePtrId: nameBuf2, bufPtrId: bigBuf, bufLenId: written))
 	emitSlabFree(module, block: retry, ptr: nameBuf2, ids: ids)
 	emitSlabFree(module, block: retry, ptr: emitLoadField(module, block: retry, record: state, offset: outOffset, ids: ids), ids: ids)
 	emitStoreField(module, block: retry, record: state, offset: outOffset, value: bigBuf)
-	module.setTerminator(retry, op: StdOp.branch(cont.id))
+	module.setTerminator(retry, op: StdOp.branch(readyId))
 
 	emitSlabFree(module, block: useFallback, ptr: emitLoadField(module, block: useFallback, record: state, offset: outOffset, ids: ids), ids: ids)
 	let fallbackBuf = emitLiteralCString(module, block: useFallback, ids: ids, text: fallback)
@@ -3021,6 +3037,16 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 	module.setTerminator(useFallback, op: StdOp.branch(cont.id))
 	return cont
 end 'emitSubpReadEnvInto'
+
+function emitSubpEnvValueToUtf8(module StdModule, block IrBlock, ids ValueMinter, state ValueId, outOffset ByteOffset, cont IrBlock)
+	let wide = emitLoadField(module, block: block, record: state, offset: outOffset, ids: ids)
+	let units = emitTextLength(module, block: block, text: wide, encoding: HostTextEncoding.utf16, ids: ids)
+	let utf8 = ids.mint()
+	emitHostTextToUtf8(module, block: block, host: wide, units: units, buffer: utf8, byteLength: ids.mint(), allocation: TextAllocation.slab, ids: ids)
+	emitSlabFree(module, block: block, ptr: wide, ids: ids)
+	emitStoreField(module, block: block, record: state, offset: outOffset, value: utf8)
+	module.setTerminator(block, op: StdOp.branch(cont.id))
+end 'emitSubpEnvValueToUtf8'
 
 // The extensions a name without one is tried with. POSIX reads no `PATHEXT`, even when something
 // has set it: the variable is a Windows convention, and honouring a stray one would make `git`
@@ -3050,21 +3076,21 @@ function emitSubpPosixNameRules(module StdModule, block IrBlock, ids ValueMinter
 	return block
 end 'emitSubpPosixNameRules'
 
-// `CreateProcessA`'s name rules, decided once before the walk.
+// `CreateProcessW`'s name rules, decided once before the walk.
 //
 // A name whose final component has an extension is tried as given and only as given; one without is
 // tried with each `PATHEXT` extension only. Windows runs no extensionless file by name
-// (`CreateProcessA` appends `.exe`), and tools such as npm ship an extensionless POSIX shim beside
+// (`CreateProcessW` appends `.exe`), and tools such as npm ship an extensionless POSIX shim beside
 // `npm.cmd` that the walk would otherwise answer and the spawn fail to run (os error 193).
 //
 // A name carrying a path (a separator anywhere, or a drive colon at index 1) is tried in that one
-// place: `CreateProcessA` searches only "if the file name does not contain a directory path".
+// place: `CreateProcessW` searches only "if the file name does not contain a directory path".
 // ⚠ This test and `resolveByName`'s in `stdlib/Subprocess.maxon` must agree. That side anchors a
 // path-carrying name to the child's working directory, so a name it leaves bare and this test calls
 // a path resolves against the parent's working directory.
 //
 // The working directory is searched only while `NoDefaultCurrentDirectoryInExePath` is undefined,
-// which is `CreateProcessA`'s `NeedCurrentDirectoryForExePath` rule.
+// which is `CreateProcessW`'s `NeedCurrentDirectoryForExePath` rule.
 function emitSubpWindowsNameRules(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
 	var scanHdr = module.addBlock(func, label: b"rpnamehdr", heat: BlockHeat.normal)
 	var scanByte = module.addBlock(func, label: b"rpnamebyte", heat: BlockHeat.normal)
@@ -3124,7 +3150,7 @@ function emitSubpWindowsNameRules(module StdModule, func IrFunction, ids ValueMi
 	emitSubpStoreFlag(module, block: markHasPath, ids: ids, state: state, offset: RpNameHasPath, set: true)
 	module.setTerminator(markHasPath, op: StdOp.branch(cont.id))
 
-	let varName = emitLiteralCString(module, block: cwdRule, ids: ids, text: NoCurrentDirectorySearchVarName)
+	let varName = emitLiteralHostString(module, block: cwdRule, ids: ids, text: NoCurrentDirectorySearchVarName)
 	let noBuffer = emitConst(module, block: cwdRule, value: 0, ids: ids)
 	let needed = ids.mint()
 	module.appendOp(cwdRule, op: StdOp.osEnvRead(needed, namePtrId: varName, bufPtrId: noBuffer, bufLenId: noBuffer))
@@ -3166,7 +3192,7 @@ function emitSubpSearchRungsInto(module StdModule, func IrFunction, ids ValueMin
 	end 'shape'
 end 'emitSubpSearchRungsInto'
 
-// The directories `CreateProcessA` searches ahead of `PATH`, in its order, so that the file the
+// The directories `CreateProcessW` searches ahead of `PATH`, in its order, so that the file the
 // walk names is the file that runs. A directory whose query fails is skipped, never pushed empty: a
 // zero-length rung is the working directory's (see `emitSubpBuildCandidate`).
 function emitSubpWindowsSearchRungs(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
@@ -3207,8 +3233,21 @@ function emitSubpFillDirectory(module StdModule, func IrFunction, ids ValueMinte
 	var filled = module.addBlock(func, label: b"rpfilled", heat: BlockHeat.normal)
 
 	let (buffer, written) = emitGrowingPathFill(module, cur: cur, attempt: attempt, fitTest: fitTest, grow: grow, fill: fill, whenRefused: filled, whenFits: filled, ids: ids)
-	emitStoreField(module, block: filled, record: state, offset: bufferOffset, value: buffer)
-	emitStoreField(module, block: filled, record: state, offset: lengthOffset, value: written)
+
+	if not hostTextIsWide(module) 'narrow'
+		emitStoreField(module, block: filled, record: state, offset: bufferOffset, value: buffer)
+		emitStoreField(module, block: filled, record: state, offset: lengthOffset, value: written)
+
+		return filled
+	end 'narrow'
+
+	let utf8 = ids.mint()
+	let byteLength = ids.mint()
+	emitHostTextToUtf8(module, block: filled, host: buffer, units: written, buffer: utf8, byteLength: byteLength, allocation: TextAllocation.raw, ids: ids)
+	emitRawFree(module, block: filled, ptr: buffer, ids: ids)
+	emitStoreField(module, block: filled, record: state, offset: bufferOffset, value: utf8)
+	emitStoreField(module, block: filled, record: state, offset: lengthOffset, value: byteLength)
+
 	return filled
 end 'emitSubpFillDirectory'
 

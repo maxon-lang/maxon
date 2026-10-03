@@ -91,8 +91,8 @@ family a program is in decides what its rows mean**, so it is the first column h
   the time it reports.
 - **`syscall-stack-torture.maxon`** — the only program that puts more than one M inside the **syscall
   shim** at once. Twelve services make ~24,000 real kernel calls: `File.exists`
-  (`GetFileAttributesA`, no stack arguments — the pure stack switch at the highest frequency
-  reachable) and, every fortieth round, a write/read/delete cycle whose `CreateFileA` is the widest
+  (`FindFirstFileW`, no stack arguments — the pure stack switch at the highest frequency
+  reachable) and, every fortieth round, a write/read/delete cycle whose `CreateFileW` is the widest
   stack-argument copy in the shim's table. The shim parks the green thread's own RSP in the first
   word of the 64 KB scratch region it switches to, so two Ms sharing one region overwrite each
   other's parked RSP and the first one out returns onto the other's stack. Its header carries the

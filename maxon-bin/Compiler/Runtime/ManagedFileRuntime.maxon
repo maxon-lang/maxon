@@ -76,7 +76,7 @@ export function emitHandleFromSlot(module StdModule, block IrBlock, slot ValueId
 	return emitBin(module, block: block, a: slot, b: bias, opcode: StdBinOpcode.sub, ids: ids)
 end 'emitHandleFromSlot'
 
-// `CreateFileA` reports failure as `INVALID_HANDLE_VALUE`, which is -1 and NOT the zero a closed box
+// `CreateFileW` reports failure as `INVALID_HANDLE_VALUE`, which is -1 and NOT the zero a closed box
 // carries. Two distinct sentinels for two distinct facts: "the OS refused" vs "this box holds no handle".
 export let InvalidHandleValue = -1 as ParsedInt
 
@@ -136,7 +136,7 @@ let ManagedFileClosedFlag = ManagedFileClosedOrdinal + ErrorFlagOrdinalBias
 let ManagedFileAlreadyExistsFlag = ManagedFileAlreadyExistsOrdinal + ErrorFlagOrdinalBias
 let ManagedFileBusyFlag = ManagedFileBusyOrdinal + ErrorFlagOrdinalBias
 
-// ⭐ **`WIN32_FIND_DATAA` — the 320-byte record `FindFirstFileA` fills**, which `stat` and `exists` read the
+// ⭐ **`WIN32_FIND_DATAW` — the 592-byte record `FindFirstFileW` fills**, which `stat` and `exists` read the
 // filesystem through and which `__ManagedDirectory` iterates over. The offsets are the Win32 struct's,
 // transcribed once. Three of them are NOT 8-aligned (`ftCreationTime` at 4, `ftLastAccessTime` at 12,
 // `ftLastWriteTime` at 20) because the record begins with a DWORD; x64 loads them unaligned without ceremony.
@@ -149,11 +149,12 @@ let ManagedFileBusyFlag = ManagedFileBusyOrdinal + ErrorFlagOrdinalBias
 // FROM HERE RATHER THAN RE-TRANSCRIBED.** A second copy of `cFileName is at 44` is a number nothing
 // checks: get it wrong and `filename()` returns a slice of a timestamp, silently.
 // ⚠ **EXPORTED FOR THE LANE THAT MUST *FILL* THE RECORD.** Win32 fills it through
-// `FindFirstFileA`; a POSIX lane synthesizes it from a `struct stat` and a `dirent`
+// `FindFirstFileW`; a POSIX lane synthesizes it from a `struct stat` and a `dirent`
 // (`Arm64DarwinRuntime.buildArm64DarwinFillFindDataChunk`), which needs the same offsets this file reads
 // them back with. `FindDataSizeLowOffset` stays private: the fill writes the two size DWORDs as ONE
 // unaligned 64-bit store at `FindDataSizeHighOffset`, so the low half has no separate writer.
-export let FindDataBytes = 320 as ParsedInt
+// The size is the wide record's on every lane, because the Std tier owns one record size.
+export let FindDataBytes = 592 as ParsedInt
 export let FindDataAttributesOffset = 0 as ByteOffset
 export let FindDataCreationTimeOffset = 4 as ByteOffset
 export let FindDataLastAccessTimeOffset = 12 as ByteOffset
@@ -161,7 +162,8 @@ export let FindDataLastWriteTimeOffset = 20 as ByteOffset
 export let FindDataSizeHighOffset = 28 as ByteOffset
 let FindDataSizeLowOffset = 32 as ByteOffset
 
-// `cFileName` — a NUL-terminated `char[MAX_PATH]` at the record's tail. Read only by `__ManagedDirectory`
+// `cFileName` — a NUL-terminated `WCHAR[MAX_PATH]` at the record's tail, into which a POSIX fill
+// writes a UTF-8 name. Read only by `__ManagedDirectory`
 // alone: `stat` and `exists` are told the path they asked about, so neither has any use for it.
 export let FindDataFileNameOffset = 44 as ByteOffset
 
@@ -173,7 +175,7 @@ export let FileAttributeReadOnly = 0x1 as ParsedInt
 // `FILE_ATTRIBUTE_NORMAL` — the mask a plain, writable file carries, and the one bit here that only a
 // PRODUCER needs: Win32 sets it and no reader in this file tests it. A POSIX lane synthesizing a find
 // record has to write something for an ordinary file, and writing 0 would be a mask meaning "no attributes
-// at all", which is not what any Win32 `FindFirstFileA` ever answers.
+// at all", which is not what any Win32 `FindFirstFileW` ever answers.
 export let FileAttributeNormal = 0x80 as ParsedInt
 
 // ⭐ **THE 48-BYTE STAT BUFFER — six i64 fields.** `stat` returns this buffer's ADDRESS as a bare `int`,
@@ -205,14 +207,14 @@ let FileSizeHighShift = 32 as ParsedInt
 // `accessWidthFor` carries `byte` and `word64` and panics for everything between, because a narrow
 // load's signedness is a decision it refuses to guess. The mask is right only for an unsigned
 // DWORD, and the full-word load must stay inside the record it reads; this file's four extra bytes
-// always fall inside the 320-byte find record.
+// always fall inside the 592-byte find record.
 export let DwordMask = 0xFFFFFFFF as ParsedInt
 
 // The `__mf_` prefix that identifies EVERY file-IO runtime entry point — the one test `scanRuntimeUsage`
 // reads to set `usesManagedFile` (and `usesHeap`), and the one `SemanticCheck` reads for E3104.
 let ManagedFileRuntimePrefix = b"__mf_"
 
-// The Win32 BOOL a failed call returns. Every file import except the two opens and `FindFirstFileA`
+// The Win32 BOOL a failed call returns. Every file import except the two opens and `FindFirstFileW`
 // answers with one, and the test is always "is it zero?".
 export let Win32False = 0 as ParsedInt
 
@@ -244,7 +246,7 @@ export let Win32OutWordAnswerOffset = 0 as ByteOffset
 // (`SignatureIndex.managedNameDropCallee`), which is the whole of the RAII half of this type.
 //
 // ⭐⭐ **`openWrite` AND `openWriteExecutable` ARE TWO ENTRY POINTS, DIFFERING IN ONE CONSTANT** — the
-// permission mask their `StdOp` carries. On Windows they lower to the identical `CreateFileA`, which is a
+// permission mask their `StdOp` carries. On Windows they lower to the identical `CreateFileW`, which is a
 // fact about NTFS having no execute bit rather than about the two methods meaning the same thing.
 export let ManagedFileOpenReadName = b"__mf_open_read"
 export let ManagedFileOpenWriteName = b"__mf_open_write"
@@ -376,10 +378,10 @@ export function managedFileThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ManagedFileErrorTypeName))
 end 'managedFileThrows'
 
-// ⭐⭐ **THE PATH → NUL-TERMINATED SCRATCH COPY — ONE HOME, SIX CALLERS.**
+// ⭐⭐ **THE PATH → NUL-TERMINATED SCRATCH COPY**, `HostTextRuntime.emitPathToText`'s UTF-8 answer.
 //
-// ⚠ **THE PATH IS COPIED, AND IT HAS TO BE.** Every Win32 path entry point takes an `LPCSTR`, but an
-// Array's buffer carries no terminator: only STRING LITERALS are NUL-terminated (in their rdata blob,
+// ⚠ **THE PATH IS COPIED, AND IT HAS TO BE.** Every path entry point takes a NUL-terminated string,
+// but an Array's buffer carries no terminator: only STRING LITERALS are NUL-terminated (in their rdata blob,
 // `StringRuntime.stringBlobBytes`), and `"…".toByteArray()` MATERIALIZES a fresh array whose buffer is
 // exactly `length` bytes. Writing a NUL at `buffer[length]` in place would be a one-byte heap overflow
 // whenever capacity equals length — which is precisely what a freshly materialized view has.
@@ -390,9 +392,7 @@ end 'managedFileThrows'
 // Emits into `cur`, routes the copy loop's exit into `join`, and writes the terminator in `join` — so the
 // caller carries on from `join` with the pointer this returns. `cur` dominates `join`, which is what lets
 // `len` be read in one and used in the other with no block argument.
-export function emitPathToCString(module StdModule, func IrFunction, cur IrBlock, join IrBlock, pathRec ValueId, ids ValueMinter) returns ValueId
-	let len = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordLengthOffset, ids: ids)
-	let buf = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordBufferOffset, ids: ids)
+export function emitBytesToCString(module StdModule, func IrFunction, cur IrBlock, join IrBlock, buf ValueId, len ValueId, ids ValueMinter) returns ValueId
 	let one = emitConst(module, block: cur, value: 1, ids: ids)
 	let size = emitBin(module, block: cur, a: len, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let scratch = emitRawAlloc(module, block: cur, byteCount: size, ids: ids)
@@ -403,34 +403,37 @@ export function emitPathToCString(module StdModule, func IrFunction, cur IrBlock
 	let nul = emitConst(module, block: join, value: 0, ids: ids)
 	module.appendOp(join, op: StdOp.storeIndirect(nulAddr, offset: 0, valueId: nul, valueType: StdType.u8))
 	return scratch
-end 'emitPathToCString'
+end 'emitBytesToCString'
 
 // ⭐ **THE ONE `__mm_alloc` CALL THIS FILE MAKES.** `__mm_alloc(size, destructor)` takes TWO arguments and
 // the destructor is always `TrivialDestructor` here — none of the three raw blocks this file allocates (a
-// path scratch, a `WIN32_FIND_DATAA`, a stat buffer) owns anything to cascade to.
+// path scratch, a `WIN32_FIND_DATAW`, a stat buffer) owns anything to cascade to.
 //
 // ⚠ **CALLING `__mm_alloc` WITH ONE ARGUMENT LEAVES THE DESTRUCTOR SLOT HOLDING WHATEVER WAS IN THE SECOND
 // ARGUMENT REGISTER**, and `__mm_decref` calls a non-trivial `destructor@0` through `callIndirect`
 // at the last owner, so a box released through it would call through a garbage pointer. Stated once
 // here so the arity cannot be got wrong per call site.
 export function emitRawAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
-	let dtor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let ptr = ids.mint()
-	emitMmAllocCall(module, block: block, result: ptr, size: byteCount, destructor: dtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
+	emitRawAllocInto(module, block: block, result: ptr, byteCount: byteCount, ids: ids)
 	return ptr
 end 'emitRawAlloc'
 
+export function emitRawAllocInto(module StdModule, block IrBlock, result ValueId, byteCount ValueId, ids ValueMinter)
+	let dtor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
+	emitMmAllocCall(module, block: block, result: result, size: byteCount, destructor: dtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
+end 'emitRawAllocInto'
+
 // Release one of this file's raw blocks. A `void` result the caller discards, spelled once so the minted
 // throwaway id is not repeated at a dozen sites.
-// ⭐ **THE NUL-TERMINATED BYTES OF A COMPILE-TIME STRING** — what `GetEnvironmentVariableA` and
-// `OpenFileMappingA` take, and the whole difference from `String.toByteArray()`.
+// ⭐ **THE NUL-TERMINATED BYTES OF A COMPILE-TIME STRING** — `HostTextRuntime.hostCStringBytes`'s
+// narrow answer, and the whole difference from `String.toByteArray()`.
 //
-// ⚠ **IT LIVES HERE, WITH `emitPathToCString`, BECAUSE THIS FILE ALREADY OWNS THE CSTRING QUESTION** —
+// ⚠ **IT LIVES HERE, WITH `emitBytesToCString`, BECAUSE THIS FILE ALREADY OWNS THE CSTRING QUESTION** —
 // that one terminates a RUNTIME value in a scratch buffer, this one terminates a CONSTANT the compiler
 // embeds in `.rdata`, and both exist for the same OS contract. ⚠ **TWO FILE-PRIVATE COPIES OF IT COMPILE**
 // — the flat-namespace check governs cross-file top-level names and a private declaration is not one — so a
-// second spelling in a caller sits there unnoticed. `DebugStreamRuntime` (`MAXON_DEBUGSTREAM`) and
-// `TerminalRuntime` (`NO_COLOR`/`TERM`) both reach this one.
+// second spelling in a caller sits there unnoticed.
 export function cStringBytes(text String) returns ByteArray
 	var bytes = text.toByteArray()
 	bytes.push(0)
@@ -550,7 +553,7 @@ end 'emitThrowOnCode'
 // copy gets silently wrong is which way round the `condBranch` goes, and that the throw block is a SEPARATE
 // block dominated by `entry`: swap the two edges in one copy and the other keeps working, while that
 // family's guard stops firing — on the directory side that is a **0xC0000005 access violation** from
-// `FindNextFileA(NULL)`, not a test that merely returns the wrong number.
+// `FindNextFileW(NULL)`, not a test that merely returns the wrong number.
 //
 // ⚠ The `closed` block's LABEL is deliberately family-neutral and NOT a parameter: labels are diagnostic
 // strings only (identity is `block.id`), and `emitErrnoClassifiedThrow` — shared by both families —
@@ -631,10 +634,10 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0 as ValueId
 
-	let scratch = emitPathToCString(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, ids: ids)
+	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
 
 	// Open, capture the last error, then release the scratch IMMEDIATELY — the OS has copied the path by
-	// the time `CreateFileA` returns, and holding it until the error paths merge would leak on three of
+	// the time `CreateFileW` returns, and holding it until the error paths merge would leak on three of
 	// them. The error is captured BEFORE the free (rather than re-read on the failure branch) so nothing
 	// between the call and the classification can be allowed to disturb it.
 	let handle = ids.mint()
@@ -930,10 +933,10 @@ end 'buildManagedFileWrite'
 
 // `__mf_exists(pathRec) -> 0 | 1` — NON-throwing: "it does not exist" is an answer, not a failure.
 //
-// ⭐ **IT ASKS `FindFirstFileA`, THE OP `stat` NEEDS ANYWAY, AND READS THE DIRECTORY BIT OUT OF THE SAME
+// ⭐ **IT ASKS `FindFirstFileW`, THE OP `stat` NEEDS ANYWAY, AND READS THE DIRECTORY BIT OUT OF THE SAME
 // RECORD.** The spec's answer is "1 if the file exists AND IS NOT A DIRECTORY", so the find record's
 // `dwFileAttributes` is not an accident of the implementation — it is the second half of the question.
-// Importing `GetFileAttributesA` would be a second entry point answering a question this record already
+// Importing `GetFileAttributesW` would be a second entry point answering a question this record already
 // answers, and two can disagree.
 function buildManagedFileExists(module StdModule)
 	var func = IrFunction.createFromStd(ManagedFileExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
@@ -949,7 +952,7 @@ function buildManagedFileExists(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0 as ValueId
 
-	let scratch = emitPathToCString(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, ids: ids)
+	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
 	let dataSize = emitConst(module, block: afterCopy, value: FindDataBytes, ids: ids)
 	let findData = emitRawAlloc(module, block: afterCopy, byteCount: dataSize, ids: ids)
 	let search = ids.mint()
@@ -965,7 +968,7 @@ function buildManagedFileExists(module StdModule)
 	module.setTerminator(missing, op: StdOp.ret(zeroAnswer))
 
 	// Read the attributes BEFORE the record is released; close the search handle either way — a leaked
-	// `FindFirstFileA` handle is the same class of leak this whole family exists to avoid.
+	// `FindFirstFileW` handle is the same class of leak this whole family exists to avoid.
 	let attrs = emitLoadDword(module, block: found, record: findData, offset: FindDataAttributesOffset, ids: ids)
 	module.appendOp(found, op: StdOp.osFileFindClose(search))
 	emitRawFree(module, block: found, ptr: findData, ids: ids)
@@ -1006,7 +1009,7 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramCount)
-	let firstPath = emitPathToCString(module, func: func, cur: entry, join: afterFirst, pathRec: 0, ids: ids)
+	let firstPath = emitPathToText(module, func: func, cur: entry, join: afterFirst, pathRec: 0, encoding: module.hostText, ids: ids)
 
 	// The second path's copy runs from `afterFirst` into `afterSecond`; a one-path operation simply falls
 	// through, so the two blocks stay in the same order and neither builder needs its own skeleton.
@@ -1064,7 +1067,7 @@ function emitOptionalSecondPath(module StdModule, func IrFunction, cur IrBlock, 
 	// Parameter 1 — the SECOND path. `emitParams` numbers a function's parameters from 0, so the id IS the
 	// index and needs no cast.
 	let newPathRec = 1 as ValueId
-	return emitPathToCString(module, func: func, cur: cur, join: join, pathRec: newPathRec, ids: ids)
+	return emitPathToText(module, func: func, cur: cur, join: join, pathRec: newPathRec, encoding: module.hostText, ids: ids)
 end 'emitOptionalSecondPath'
 
 // `__mf_stat(pathRec) -> (buffer, flag)` — the 48-byte metadata buffer, or `statFailed`/an errno variant.
@@ -1084,7 +1087,7 @@ function buildManagedFileStat(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0 as ValueId
 
-	let scratch = emitPathToCString(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, ids: ids)
+	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
 	let dataSize = emitConst(module, block: afterCopy, value: FindDataBytes, ids: ids)
 	let findData = emitRawAlloc(module, block: afterCopy, byteCount: dataSize, ids: ids)
 	let search = ids.mint()

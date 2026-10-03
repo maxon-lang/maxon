@@ -130,7 +130,7 @@ let VirtualAllocLetOsChooseBase = 0x0
 // spelling of the two flags, shared by the Std lowering here and the byte code there, not two copies.
 export let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_RESERVE (0x2000)
 
-// `PAGE_READWRITE` — the memory protection `VirtualAlloc` commits with and `CreateFileMappingA`
+// `PAGE_READWRITE` — the memory protection `VirtualAlloc` commits with and `CreateFileMappingW`
 // publishes a section with. ONE Win32 constant, so one name: it is not `VirtualAlloc`'s.
 export let PageReadWriteProtection = 0x4
 
@@ -192,13 +192,13 @@ function win64StdHandleSelector(stream OsOutputStream) returns MachineWord
 	end 's'
 end 'win64StdHandleSelector'
 
-// `GetModuleFileNameA`'s `hModule` — NULL asks for the path of the RUNNING image, which is the only
+// `GetModuleFileNameW`'s `hModule` — NULL asks for the path of the RUNNING image, which is the only
 // module this op is ever about. Named rather than reusing `NullPointer` below because that one is a
 // POINTER argument this backend passes as absent, a different kind of thing that merely happens to be zero
 // too; folding them would make a future change to either one silently change the other.
 let CurrentModuleHandle = 0x0
 
-// A pointer argument this backend passes as ABSENT — `CreateProcessA`'s attribute and directory pointers,
+// A pointer argument this backend passes as ABSENT — `CreateProcessW`'s attribute and directory pointers,
 // `PeekNamedPipe`'s unread out-params.
 let NullPointer = 0x0
 
@@ -212,7 +212,7 @@ let Win32NullHandle = 0
 let DoNotInheritHandles = 0
 let WaitIsNotAlertable = 0
 
-let InheritHandlesTrue = 1  // CreateProcessA bInheritHandles=TRUE (the child inherits the pipe write end)
+let InheritHandlesTrue = 1  // CreateProcessW bInheritHandles=TRUE (the child inherits the pipe write end)
 
 // ⛔⛔ **`CREATE_SUSPENDED`, AND THE WHOLE PROCESS-TREE KILL RESTS ON IT.** A child assigned to a job object
 // after it has already started is in the job, but the descendants it managed to start first are NOT — so a
@@ -220,6 +220,8 @@ let InheritHandlesTrue = 1  // CreateProcessA bInheritHandles=TRUE (the child in
 // child is therefore created with no thread running, assigned, and only then resumed, which makes "every
 // descendant of this child" a fact rather than a race.
 let CreateSuspended = 0x00000004
+let CreateUnicodeEnvironment = 0x00000400
+let SpawnFixedCreationFlags = CreateSuspended or CreateUnicodeEnvironment
 let PipeReadOpenMode = 0x40080001  // PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE
 let PipeMessageMode = 0x0  // PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT
 let PipeMaxInstances = 1  // one server instance per uniquely-named pipe
@@ -232,11 +234,11 @@ let FileShareNone = 0x0  // dwShareMode (the pipe is not shared)
 
 // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, on every file open, which is what a
 // POSIX open permits. Anything narrower makes another handle's open of the path, or a
-// `DeleteFileA`/`MoveFileExA` of it, fail with a sharing violation while this handle is open.
+// `DeleteFileW`/`MoveFileExW` of it, fail with a sharing violation while this handle is open.
 // `FileShareNone` is right for a pipe end, which must not be shared.
 let FileShareAll = 0x7
 
-// FILE_MAP_ALL_ACCESS — the access both `OpenFileMappingA` and `MapViewOfFile` take for the DebugStream
+// FILE_MAP_ALL_ACCESS — the access both `OpenFileMappingW` and `MapViewOfFile` take for the DebugStream
 // ring. It is SECTION_ALL_ACCESS minus its standard-rights bits (0xF001F), and it must be ALL_ACCESS
 // rather than FILE_MAP_WRITE because the producer READS the segment header (magic, versions, cursors) as
 // well as writing it — a write-only view would fault on the first magic check.
@@ -249,7 +251,7 @@ let OpenExisting = 3  // dwCreationDisposition — connect to the already-create
 let CreateAlways = 2  // dwCreationDisposition — create, truncating an existing file
 let CreateNew = 1  // dwCreationDisposition — create, failing on an existing path
 
-// `MoveFileExA`'s dwFlags. REPLACE_EXISTING makes publishing the destination atomic rather than a
+// `MoveFileExW`'s dwFlags. REPLACE_EXISTING makes publishing the destination atomic rather than a
 // delete-then-rename with a window where neither name exists; WRITE_THROUGH flushes the metadata so a crash
 // straight after the call cannot lose the new name.
 let MoveFileReplaceWriteThrough = 9  // MOVEFILE_REPLACE_EXISTING (1) | MOVEFILE_WRITE_THROUGH (8)
@@ -276,7 +278,7 @@ let HandleFlagClear = 0  // SetHandleInformation dwFlags = 0 (strip inheritance)
 let IocpNoCompletionKey = 0x0  // CreateIoCompletionPort CompletionKey for an associate
 let IocpNoConcurrentThreads = 0x0  // CreateIoCompletionPort NumberOfConcurrentThreads for an associate
 
-// `INVALID_HANDLE_VALUE`. `CreateIoCompletionPort` reads it as "make a new port" and `CreateFileMappingA`
+// `INVALID_HANDLE_VALUE`. `CreateIoCompletionPort` reads it as "make a new port" and `CreateFileMappingW`
 // as "back this section with the page file rather than with a file on disk".
 let InvalidHandleValue = -1
 let FileSkipCompletionPortOnSuccess = 1  // SetFileCompletionNotificationModes — a SYNC read posts no IOCP packet
@@ -291,7 +293,7 @@ let ThreadRunImmediately = 0x0  // CreateThread dwCreationFlags = 0 (not CREATE_
 // difference between reporting the machine and reporting 64 of its 128 processors (see `lowerOsCpuCount`).
 let AllProcessorGroups = 0xFFFF
 
-// `CreateFileMappingA` splits its maximum size across two DWORD arguments. `stdlib/SharedMemory.maxon`'s
+// `CreateFileMappingW` splits its maximum size across two DWORD arguments. `stdlib/SharedMemory.maxon`'s
 // `SegmentByteCount` tops out at `u32.max`, so the high half is always zero and the low half carries the
 // whole size — which is what makes `dwMaximumSizeLow` an ordinary operand store rather than a split.
 let SectionSizeHighDword = 0x0
@@ -318,10 +320,10 @@ export let WriteFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
 export let WriteConsoleStackArgWords = 1 as MachineWord  // arg 5: lpReserved
 export let MultiByteToWideCharStackArgWords = 2 as MachineWord  // args 5-6: lpWideCharStr, cchWideChar
 
-// The six CreateProcessA outgoing stack SLOTS `__gt_process_run`'s frame reserves, past the shadow space.
-// CreateProcessA takes TEN arguments; the first four (lpApplicationName, lpCommandLine, lpProcessAttributes,
+// The six CreateProcessW outgoing stack SLOTS `__gt_process_run`'s frame reserves, past the shadow space.
+// CreateProcessW takes TEN arguments; the first four (lpApplicationName, lpCommandLine, lpProcessAttributes,
 // lpThreadAttributes) go in rcx/rdx/r8/r9, and arguments 5-10 go on the stack. Only the last two are real
-// values (the STARTUPINFOA and PROCESS_INFORMATION pointers); the middle four are FALSE/0/NULL. SLOT INDICES,
+// values (the STARTUPINFOW and PROCESS_INFORMATION pointers); the middle four are FALSE/0/NULL. SLOT INDICES,
 // not byte displacements — `win64OutgoingArgDisp` turns each into `[rsp + shadow + slot*8]` — so the byte
 // layout lives with ShadowSpaceBytes/SpillSlotBytes rather than being respelled as a literal.
 // ⭐ THE STACK-ARGUMENT COUNT, stated ONCE (like WriteFile above). All six of args 5-10 are real stack
@@ -530,7 +532,7 @@ let PipeCreateOutgoingSlots = CreateNamedPipeStackArgWords
 
 // The `[rsp + disp]` displacement of an OUTGOING stack-argument slot — past the 32-byte shadow space,
 // one `SpillSlotBytes`-sized slot per index. The Win64 ABI fact shared by EVERY >4-argument import call the
-// isel lowers (WriteFile's 2 stack slots, CreateProcessA's 6): the 5th-and-later arguments land at
+// isel lowers (WriteFile's 2 stack slots, CreateProcessW's 6): the 5th-and-later arguments land at
 // `[rsp + shadow + slot*8]`. `spillSlotBaseDisp` places every spill slot ABOVE `ShadowSpaceBytes +
 // outgoingArgSize`, so these never overlap a spill. Computed here (not a top-level const) so the two
 // cross-file frame constants are read at runtime — the same reads `computeFrameBytes` makes — rather than
@@ -585,7 +587,7 @@ end 'win64IncomingArgDisp'
 // The frame region an import call reserves for its `slotCount` outgoing stack args — the single source of
 // BOTH the frame reservation (via `stdOpOutgoingArgBytes`, applied to the function by `lowerFunctionBlocks`)
 // and the slot displacements the lowering writes, so the two are ONE fact per call (WriteFile passes
-// `WriteFileStackArgWords`, CreateProcessA passes `CreateProcessOutgoingSlots`). A FUNCTION rather than a
+// `WriteFileStackArgWords`, CreateProcessW passes `CreateProcessOutgoingSlots`). A FUNCTION rather than a
 // const so the `SpillSlotBytes` read is at runtime (see above). NOT exported: this is an x64 frame fact, set
 // here in the x64 isel — the target-neutral runtimes deliberately do not set `outgoingArgSize`.
 function win64OutgoingArgBytes(slotCount MachineWord) returns StackSize
@@ -1214,7 +1216,7 @@ export type StdToX64Lowering
 			// value.
 			osMapNamedSegment gives win64OutgoingArgBytes(MapViewOfFileStackArgWords)
 
-			// CreateProcessA passes its last six of ten arguments on the stack (see `win64OutgoingArgDisp`).
+			// CreateProcessW passes its last six of ten arguments on the stack (see `win64OutgoingArgDisp`).
 			osProcessSpawn or
 				osProcessSpawnInherit gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
 
@@ -1250,13 +1252,13 @@ export type StdToX64Lowering
 				osReadFile gives win64OutgoingArgBytes(ReadFileStackArgWords)
 			osWriteFile gives win64OutgoingArgBytes(WriteFileStackArgWords)
 
-			// CreateFileA takes SEVEN arguments — four in registers, three on the stack.
+			// CreateFileW takes SEVEN arguments — four in registers, three on the stack.
 			osFileOpenRead or
 				osFileOpenWrite or
 				osFileOpenCreateNew or
 				osFileOpenWriteExecutable gives win64OutgoingArgBytes(CreateFileStackArgWords)
 
-			// ⚠ `CreateFileMappingA` takes six, so its last two are real outgoing stack arguments; reserving
+			// ⚠ `CreateFileMappingW` takes six, so its last two are real outgoing stack arguments; reserving
 			// nothing puts a spill slot at their displacement and the store lands on a spilled value.
 			osCreateNamedSegment gives win64OutgoingArgBytes(CreateFileMappingStackArgWords)
 
@@ -1538,7 +1540,7 @@ export type StdToX64Lowering
 			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, disposition: CreateAlways, linuxFlags: LinuxOpenCreateTruncateFlags, mode: PosixCreateFileMode as MachineWord, dstBlock: dstBlock)
 
 			// ⭐ **`openWriteExecutable` REACHES THE SAME LOWERING ON THIS LANE.** POSIX has a permission mask
-			// and Win32 does not, so the two intents are two ops that happen to be ONE `CreateFileA` call here. That
+			// and Win32 does not, so the two intents are two ops that happen to be ONE `CreateFileW` call here. That
 			// coincidence is a fact about Windows — an executable bit is not part of an NTFS file's mode — and
 			// stating it as a shared arm is what keeps it a decision rather than an omission.
 			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, disposition: CreateAlways, linuxFlags: LinuxOpenCreateTruncateFlags, mode: PosixCreateExecutableFileMode as MachineWord, dstBlock: dstBlock)
@@ -2810,7 +2812,7 @@ export type StdToX64Lowering
 	end 'lowerOsReadWallClock'
 
 	// Lower `osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr)` to
-	// `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, FALSE, creationFlags, envPtr, cwdPtr, startupPtr,
+	// `CreateProcessW(NULL, cmdlinePtr, NULL, NULL, FALSE, creationFlags, envPtr, cwdPtr, startupPtr,
 	// procInfoPtr)` through the IAT. Ten Win64 arguments:
 	// the first four in rcx/rdx/r8/r9, arguments 5-10 on the stack past the shadow space (the WriteFile stack-arg
 	// template). Everything goes through the clobber-correct `iatCall`, so `procInfoPtr` — the ONE operand live
@@ -2836,7 +2838,7 @@ export type StdToX64Lowering
 		// `lpCurrentDirectory` means "inherit the parent's cwd" and a 0 `dwCreationFlags` means "no special
 		// creation", so a builder with nothing to say passes 0 and gets the bytes a zeroed slot would.
 		let suspendBit = self.mintVirtual()
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(suspendBit, value: CreateSuspended))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(suspendBit, value: SpawnFixedCreationFlags))
 		let suspendedFlags = self.mintVirtual()
 		self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(suspendedFlags, lhs: TargetVReg.virtual(creationFlagsId), rhs: suspendBit))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessCreationFlagsSlot), src: suspendedFlags, width: X64AccessWidth.word64))
@@ -2846,10 +2848,8 @@ export type StdToX64Lowering
 		// parent's environment", so a builder with nothing to say passes 0 and gets the bytes a zeroed slot
 		// would.
 		//
-		// ⚠ **NO `CREATE_UNICODE_ENVIRONMENT` IN THE CREATION FLAGS, AND THAT IS NOT AN OMISSION.** This lane
-		// is `A`-entry-point end to end (see `IatSlot.GetEnvironmentStringsA`), so a block the caller
-		// assembled out of THIS process's own entries is already in the narrow encoding CreateProcessA reads
-		// without it. Setting the flag would make it read those same bytes two at a time as UTF-16.
+		// ⚠ `SpawnFixedCreationFlags` carries `CREATE_UNICODE_ENVIRONMENT` on every spawn because a
+		// non-NULL block is always UTF-16; without the flag `CreateProcessW` reads the block as ANSI.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessEnvironmentSlot), src: TargetVReg.virtual(envPtrId), width: X64AccessWidth.word64))
 
 		// lpCommandLine (arg 2) -> rdx.
@@ -2857,7 +2857,7 @@ export type StdToX64Lowering
 
 		// The one remaining FALSE middle stack arg (5): a zeroed scratch register (rax, clobbered by the call
 		// anyway) stored into its slot. An 8-byte zero store into a slot the callee reads as a 4-byte BOOL is
-		// correct — CreateProcessA reads only the low bytes and the high bytes are its own slot's padding.
+		// correct — CreateProcessW reads only the low bytes and the high bytes are its own slot's padding.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessInheritHandlesSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 
@@ -2873,7 +2873,7 @@ export type StdToX64Lowering
 			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessInheritHandlesSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 		end 'inherit'
 
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateProcessA)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateProcessW)))
 		self.emitWin64AdoptChildIntoJob(procInfoPtrId, dstBlock: dstBlock)
 	end 'lowerOsProcessSpawnWin64'
 
@@ -2886,7 +2886,7 @@ export type StdToX64Lowering
 	//
 	// The order is the contract: create suspended, assign, resume. See `CreateSuspended`.
 	//
-	// ⚠ The spawn's own `GetLastError` is saved across all of it. A failed `CreateProcessA` leaves the
+	// ⚠ The spawn's own `GetLastError` is saved across all of it. A failed `CreateProcessW` leaves the
 	// record zeroed, so the assign is handed a NULL process handle and fails, publishing
 	// `ERROR_INVALID_HANDLE` over the code the runtime's launch-failure path reads, and
 	// `executableNotFound` would become an invalid handle.
@@ -2963,17 +2963,17 @@ export type StdToX64Lowering
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.PeekNamedPipe, into: TargetVReg.virtual(resultId))
 	end 'lowerOsPipePeekWin64'
 
-	// `GetEnvironmentVariableA(name, buf, len)` — three arguments in the same order on both routes, the
+	// `GetEnvironmentVariableW(name, buf, len)` — three arguments in the same order on both routes, the
 	// character count in RAX. It is a CHUNK on Linux because a static image links no libc: there is no
 	// `getenv`, so the body walks the `envp` vector the entry stub captured.
 	function lowerOsEnvRead(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstBlock IrBlock)
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetEnvironmentVariableA, chunk: HostEnvReadName), args: threeArgs(namePtrId, second: bufPtrId, third: bufLenId), dstBlock: dstBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetEnvironmentVariableW, chunk: HostEnvReadName), args: threeArgs(namePtrId, second: bufPtrId, third: bufLenId), dstBlock: dstBlock)
 	end 'lowerOsEnvRead'
 
 	// `osEnvBlock(result)` ⇒ this process's environment, in whichever shape the target's producer
 	// indexes (`SubprocessRuntime.environmentSnapshotShape`): the NUL-separated block
-	// `GetEnvironmentStringsA` hands back a copy of, or the pointer vector every POSIX lane already
-	// holds. Unlike `GetCommandLineA`'s, the Windows pointer is owned, so every caller pairs it with
+	// `GetEnvironmentStringsW` hands back a copy of, or the pointer vector every POSIX lane already
+	// holds. Unlike `GetCommandLineW`'s, the Windows pointer is owned, so every caller pairs it with
 	// `osEnvBlockFree` (`SubprocessRuntime.buildSubpEnvEntry` frees it on both of its exits).
 	//
 	// A static Linux image has no `environ` and no libc to hold one. The kernel hands `envp` to the
@@ -2983,7 +2983,7 @@ export type StdToX64Lowering
 	// reading this lowering has to agree with.
 	function lowerOsEnvBlock(resultId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetEnvironmentStringsA, into: TargetVReg.virtual(resultId))
+			importCall then self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetEnvironmentStringsW, into: TargetVReg.virtual(resultId))
 			syscall then self.lowerOsEnvBlockLinux(resultId, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsEnvBlock'
@@ -3000,15 +3000,15 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
 	end 'lowerOsEnvBlockLinux'
 
-	// `FreeEnvironmentStringsA(block)`; the BOOL is discarded.
+	// `FreeEnvironmentStringsW(block)`; the BOOL is discarded.
 	//
 	// There is nothing to free on a POSIX lane: `environmentSnapshotShape` answers `pointerVector`
 	// there, whose producer indexes the live table and emits no release, so reaching the syscall arm
 	// is a compiler bug and it panics rather than emitting a silent no-op.
 	function lowerOsEnvBlockFree(blockPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.emitHostCall(dstBlock, callee: HostCallee.import(IatSlot.FreeEnvironmentStringsA), args: argsOf(blockPtrId))
-			syscall then panic("lowerOsEnvBlockFree: `osEnvBlockFree` releases a `GetEnvironmentStringsA` COPY and x64-linux has none — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` there, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release")
+			importCall then self.emitHostCall(dstBlock, callee: HostCallee.import(IatSlot.FreeEnvironmentStringsW), args: argsOf(blockPtrId))
+			syscall then panic("lowerOsEnvBlockFree: `osEnvBlockFree` releases a `GetEnvironmentStringsW` COPY and x64-linux has none — `SubprocessRuntime.environmentSnapshotShape` answers `pointerVector` there, whose `__gt_subp_env_entry` body indexes the live environment vector and emits no release")
 		end 'route'
 	end 'lowerOsEnvBlockFree'
 
@@ -3500,13 +3500,12 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(syncSilencedPtrId), disp: 0, src: syncSilenced, width: X64AccessWidth.word64))
 	end 'lowerOsPipeCreateWin64'
 
-	// ⭐ **`CreateFileA(path, GENERIC_READ, FileShareAll, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+	// ⭐ **`CreateFileW(path, GENERIC_READ, FileShareAll, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
 	// NULL)`** — the file-IO runtime's OPEN primitive, and the first site in this file that opens an actual
 	// FILE rather than the far end of a named pipe.
 	//
-	// ⚠ **THE `A` ENTRY POINT, NOT THE `W` ONE ALREADY IMPORTED FOR THE PIPES — see `IatSlot.CreateFileA`.**
-	// A Maxon path is a UTF-8 BYTE buffer, and `CreateFileW` would read those bytes as UTF-16 code units,
-	// which is wrong even for pure ASCII.
+	// ⚠ The path must already be UTF-16 (`HostTextRuntime.emitPathToText`): `CreateFileW` reads a UTF-8
+	// buffer as UTF-16 code units, which is wrong even for pure ASCII.
 	//
 	// The failure classification is NOT here: this yields the raw handle (or `INVALID_HANDLE_VALUE`) and
 	// `ManagedFileRuntime`'s builder-built Std reads `osLastError` to choose the error variant. See the
@@ -3518,22 +3517,22 @@ export type StdToX64Lowering
 	// are `mrt_host_file_open`'s work, which is why this route branches into a chunk.
 	function lowerOsFileOpenRead(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericRead, disposition: OpenExisting, dstBlock: dstBlock)
+			importCall then self.emitWin64CreateFile(resultId, pathPtrId: pathPtrId, access: GenericRead, disposition: OpenExisting, dstBlock: dstBlock)
 			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: PosixOpenReadOnly, mode: PosixNoFileMode as MachineWord, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsFileOpenRead'
 
-	// ⭐ **`CreateFileA(path, GENERIC_WRITE, FileShareAll, NULL, disposition, FILE_ATTRIBUTE_NORMAL,
+	// ⭐ **`CreateFileW(path, GENERIC_WRITE, FileShareAll, NULL, disposition, FILE_ATTRIBUTE_NORMAL,
 	// NULL)`.** The read open's call with the access and the disposition changed: `CREATE_ALWAYS` for
 	// `openWrite` and `openWriteExecutable` (see `CreateAlways`), and `CREATE_NEW` for
 	// `osFileOpenCreateNew`, which fails on an existing path as the Linux route's `O_EXCL` does.
 	//
 	// ⭐ **THE PERMISSION MASK IS WHAT SPLITS `openWriteExecutable` OFF ON THE LINUX ROUTE, AND ONLY THERE.**
-	// Win32 has no executable bit at all, so both ops are one `CreateFileA` on that route; POSIX has one, so
+	// Win32 has no executable bit at all, so both ops are one `CreateFileW` on that route; POSIX has one, so
 	// the two carry different modes here. That is why the mode is a parameter of the shared emission.
 	function lowerOsFileOpenWrite(resultId ValueId, pathPtrId ValueId, disposition MachineWord, linuxFlags MachineWord, mode MachineWord, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericWrite, disposition: disposition, dstBlock: dstBlock)
+			importCall then self.emitWin64CreateFile(resultId, pathPtrId: pathPtrId, access: GenericWrite, disposition: disposition, dstBlock: dstBlock)
 			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: linuxFlags, mode: mode, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsFileOpenWrite'
@@ -3548,7 +3547,7 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
 	end 'emitLinuxFileOpen'
 
-	// ⭐ **THE ONE `CreateFileA` EMISSION, PARAMETERIZED BY THE TWO CONSTANTS THE OPENS DIFFER IN.**
+	// ⭐ **THE ONE `CreateFileW` EMISSION, PARAMETERIZED BY THE TWO CONSTANTS THE OPENS DIFFER IN.**
 	// The opens differ ONLY in `dwDesiredAccess` and `dwCreationDisposition`; the share mode, the
 	// argument REGISTERS, the three stack slots, the entry point and the RAX capture are one shape,
 	// so they are written once. Two copies is how one of them would quietly acquire a different
@@ -3558,7 +3557,7 @@ export type StdToX64Lowering
 	// args — the ordering `lowerOsPipeCreateWin64` establishes and for its reason. The access mask uses the
 	// 64-bit `movRegImm` because `GENERIC_READ` is `0x80000000`, which reads as a sign bit in an imm32
 	// spelling; one form for both keeps the two opens byte-comparable.
-	function emitWin64CreateFileA(resultId ValueId, pathPtrId ValueId, access MachineWord, disposition MachineWord, dstBlock IrBlock)
+	function emitWin64CreateFile(resultId ValueId, pathPtrId ValueId, access MachineWord, disposition MachineWord, dstBlock IrBlock)
 		self.emitWin64StackArgImm(dstBlock, slot: 0, value: disposition)
 		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
 		self.emitWin64StackArgImm(dstBlock, slot: 2, value: NullPointer)
@@ -3566,8 +3565,8 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rdx), value: access))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: FileShareAll))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateFileA, into: TargetVReg.virtual(resultId))
-	end 'emitWin64CreateFileA'
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateFileW, into: TargetVReg.virtual(resultId))
+	end 'emitWin64CreateFile'
 
 	// --- The socket band: `ws2_32` on Windows, raw syscalls on Linux ---
 	//
@@ -3881,15 +3880,15 @@ export type StdToX64Lowering
 
 	function lowerOsPathQueryWin64(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, dstBlock IrBlock)
 		match verb 'v'
-			systemDirectory then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetSystemDirectoryA), args: twoArgs(a0Id, second: a1Id), dstBlock: dstBlock)
-			windowsDirectory then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetWindowsDirectoryA), args: twoArgs(a0Id, second: a1Id), dstBlock: dstBlock)
+			systemDirectory then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetSystemDirectoryW), args: twoArgs(a0Id, second: a1Id), dstBlock: dstBlock)
+			windowsDirectory then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetWindowsDirectoryW), args: twoArgs(a0Id, second: a1Id), dstBlock: dstBlock)
 			fullPath then self.lowerOsFullPathWin64(resultId, pathPtrId: a0Id, bufLenId: a1Id, bufPtrId: a2Id, dstBlock: dstBlock)
 		end 'v'
 	end 'lowerOsPathQueryWin64'
 
 	function lowerOsFullPathWin64(resultId ValueId, pathPtrId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetFullPathNameA), args: threeArgs(pathPtrId, second: bufLenId, third: bufPtrId), dstBlock: dstBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetFullPathNameW), args: threeArgs(pathPtrId, second: bufLenId, third: bufPtrId), dstBlock: dstBlock)
 	end 'lowerOsFullPathWin64'
 
 	function lowerOsSocketServeWin64(resultId ValueId, verb SocketServeVerb, operands ValueIdArray, dstBlock IrBlock)
@@ -4372,13 +4371,12 @@ export type StdToX64Lowering
 		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetFileSizeEx, chunk: HostFileSizeName), args: twoArgs(handleId, second: sizeOutPtrId), dstBlock: dstBlock)
 	end 'lowerOsFileSize'
 
-	// ⭐ **`DeleteFileA(path)`** — register-only, the BOOL captured. The `A` entry point for the
-	// reason every path-taking import here uses it: a Maxon path is a UTF-8 byte buffer.
+	// ⭐ **`DeleteFileW(path)`** — register-only, the BOOL captured.
 	function lowerOsFileDelete(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.DeleteFileA, chunk: HostFileDeleteName), args: argsOf(pathPtrId), dstBlock: dstBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.DeleteFileW, chunk: HostFileDeleteName), args: argsOf(pathPtrId), dstBlock: dstBlock)
 	end 'lowerOsFileDelete'
 
-	// ⭐ **`MoveFileExA(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`** — three
+	// ⭐ **`MoveFileExW(old, new, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`** — three
 	// register arguments, the BOOL captured. See `MoveFileReplaceWriteThrough` for the flags.
 	function lowerOsFileRename(resultId ValueId, oldPathPtrId ValueId, newPathPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
@@ -4391,14 +4389,14 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(oldPathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(newPathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: MoveFileReplaceWriteThrough))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.MoveFileExA, into: TargetVReg.virtual(resultId))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.MoveFileExW, into: TargetVReg.virtual(resultId))
 	end 'lowerOsFileRenameWin64'
 
-	// ⭐ **`FindFirstFileA(path, findDataPtr)`** — register-only; the search HANDLE (or
-	// `INVALID_HANDLE_VALUE`) is captured and the 320-byte `WIN32_FIND_DATAA` record is written through the
+	// ⭐ **`FindFirstFileW(path, findDataPtr)`** — register-only; the search HANDLE (or
+	// `INVALID_HANDLE_VALUE`) is captured and the 592-byte `WIN32_FIND_DATAW` record is written through the
 	// caller's buffer pointer.
 	function lowerOsFileFindFirst(resultId ValueId, pathPtrId ValueId, findDataPtrId ValueId, dstBlock IrBlock)
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.FindFirstFileA, chunk: HostDirFindFirstName), args: twoArgs(pathPtrId, second: findDataPtrId), dstBlock: dstBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.FindFirstFileW, chunk: HostDirFindFirstName), args: twoArgs(pathPtrId, second: findDataPtrId), dstBlock: dstBlock)
 	end 'lowerOsFileFindFirst'
 
 	// ⭐ **`FindClose(handle)`** — register-only, the BOOL discarded for the reason `osFileClose`
@@ -4407,14 +4405,14 @@ export type StdToX64Lowering
 		self.emitHostCall(dstBlock, callee: self.hostCalleeOn(IatSlot.FindClose, chunk: HostDirFindCloseName), args: argsOf(handleId))
 	end 'lowerOsFileFindClose'
 
-	// ⭐ **`FindNextFileA(handle, findDataPtr)`** — register-only; the BOOL is captured because a FALSE
+	// ⭐ **`FindNextFileW(handle, findDataPtr)`** — register-only; the BOOL is captured because a FALSE
 	// is the only thing that distinguishes end-of-iteration from an OS error, and `ManagedDirectoryRuntime`
 	// makes that distinction from `GetLastError`.
 	function lowerOsFileFindNext(resultId ValueId, handleId ValueId, findDataPtrId ValueId, dstBlock IrBlock)
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.FindNextFileA, chunk: HostDirFindNextName), args: twoArgs(handleId, second: findDataPtrId), dstBlock: dstBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.FindNextFileW, chunk: HostDirFindNextName), args: twoArgs(handleId, second: findDataPtrId), dstBlock: dstBlock)
 	end 'lowerOsFileFindNext'
 
-	// `CreateDirectoryA(path, NULL)`, the BOOL captured. The `lpSecurityAttributes` NULL is an
+	// `CreateDirectoryW(path, NULL)`, the BOOL captured. The `lpSecurityAttributes` NULL is an
 	// immediate with no ValueId to move from, so the Win64 route marshals by hand rather than through
 	// `emitHostArgMoves`.
 	function lowerOsDirCreate(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
@@ -4427,40 +4425,40 @@ export type StdToX64Lowering
 	function lowerOsDirCreateWin64(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(pathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateDirectoryA, into: TargetVReg.virtual(resultId))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateDirectoryW, into: TargetVReg.virtual(resultId))
 	end 'lowerOsDirCreateWin64'
 
-	// `RemoveDirectoryA(path)`, the BOOL captured.
+	// `RemoveDirectoryW(path)`, the BOOL captured.
 	function lowerOsDirRemove(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.RemoveDirectoryA, chunk: HostDirRemoveName), args: argsOf(pathPtrId), dstBlock: dstBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.RemoveDirectoryW, chunk: HostDirRemoveName), args: argsOf(pathPtrId), dstBlock: dstBlock)
 	end 'lowerOsDirRemove'
 
-	// ⭐ **`GetCurrentDirectoryA(bufLen, bufPtr)`** — register-only, and note that the LENGTH is the
+	// ⭐ **`GetCurrentDirectoryW(bufLen, bufPtr)`** — register-only, and note that the LENGTH is the
 	// first argument and the buffer the second, which is the reverse of every other path-taking import in
 	// this file. The three-way answer (0 / fits / required size) is classified in builder-built Std.
 	//
 	// ⚠ **THE TWO ROUTES TAKE THE OPERANDS IN OPPOSITE ORDERS**, which is why the transposition is spelled
-	// here rather than at the op: `GetCurrentDirectoryA` takes the length first and `getcwd` the buffer.
+	// here rather than at the op: `GetCurrentDirectoryW` takes the length first and `getcwd` the buffer.
 	function lowerOsDirCurrentPath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetCurrentDirectoryA), args: twoArgs(bufLenId, second: bufPtrId), dstBlock: dstBlock)
+			importCall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.import(IatSlot.GetCurrentDirectoryW), args: twoArgs(bufLenId, second: bufPtrId), dstBlock: dstBlock)
 			syscall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostDirCurrentPathName), args: twoArgs(bufPtrId, second: bufLenId), dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsDirCurrentPath'
 
-	// ⭐ **`GetFileAttributesA(path)`** — register-only, the raw attribute mask captured. See the op's
-	// own comment in `StdDialect` for why this import exists beside `FindFirstFileA` rather than being
+	// ⭐ **`GetFileAttributesW(path)`** — register-only, the raw attribute mask captured. See the op's
+	// own comment in `StdDialect` for why this import exists beside `FindFirstFileW` rather than being
 	// folded into it.
 	function lowerOsFileAttributes(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetFileAttributesA, chunk: HostFileAttributesName), args: argsOf(pathPtrId), dstBlock: dstBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetFileAttributesW, chunk: HostFileAttributesName), args: argsOf(pathPtrId), dstBlock: dstBlock)
 	end 'lowerOsFileAttributes'
 
-	// `GetCommandLineA()`. The returned pointer is into the PEB and is owned by the OS: never freed,
+	// `GetCommandLineW()`. The returned pointer is into the PEB and is owned by the OS: never freed,
 	// and the same address on every call. `CommandLineRuntime` copies out of it and frees only its own
 	// scratch.
 	function lowerOsCommandLine(resultId ValueId, dstBlock IrBlock)
 		self.requireWin64Import("osCommandLine")
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetCommandLineA, into: TargetVReg.virtual(resultId))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetCommandLineW, into: TargetVReg.virtual(resultId))
 	end 'lowerOsCommandLine'
 
 	// `GetStdHandle(which)`. The selector arrives as a value, not an immediate:
@@ -4507,19 +4505,19 @@ export type StdToX64Lowering
 		end 'route'
 	end 'lowerOsOpenNamedSegment'
 
-	// `GetEnvironmentVariableA(name, buf, len)` then `OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, buf)`.
+	// `GetEnvironmentVariableW(name, buf, len)` then `OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, buf)`.
 	// Its own function rather than an inline arm because a `match` arm is one expression and this is seven.
 	//
 	// ⭐ **IT IS BRANCH-FREE, AND THE UNSET CASE FALLS OUT.** `__slab_alloc` hands back ZEROED memory, so a
-	// variable that is not set leaves `buf` naming the EMPTY string — and `OpenFileMappingA("")` fails and
+	// variable that is not set leaves `buf` naming the EMPTY string — and `OpenFileMappingW("")` fails and
 	// returns NULL, which is the same answer "no monitor is listening" gets by every other route. One value
-	// out, one test at the caller. (`GetEnvironmentVariableA`'s own return, the character count, is
+	// out, one test at the caller. (`GetEnvironmentVariableW`'s own return, the character count, is
 	// therefore discarded: it can say nothing the empty buffer does not.)
 	//
 	// ⚠ `bufPtr` is live ACROSS the first `iatCall` and needs no hand-holding: it is a VIRTUAL operand of
-	// this op, so the allocator forces it callee-saved exactly as `CreateProcessA`'s `procInfoPtr` is.
+	// this op, so the allocator forces it callee-saved exactly as `CreateProcessW`'s `procInfoPtr` is.
 	function lowerOsOpenNamedSegmentWin64(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstBlock IrBlock)
-		self.emitHostCall(dstBlock, callee: HostCallee.import(IatSlot.GetEnvironmentVariableA), args: threeArgs(namePtrId, second: bufPtrId, third: bufLenId))
+		self.emitHostCall(dstBlock, callee: HostCallee.import(IatSlot.GetEnvironmentVariableW), args: threeArgs(namePtrId, second: bufPtrId, third: bufLenId))
 		self.emitWin64OpenFileMapping(bufPtrId, resultId: resultId, dstBlock: dstBlock)
 	end 'lowerOsOpenNamedSegmentWin64'
 
@@ -4527,7 +4525,7 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: FileMapAllAccess))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(namePtrId)))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.OpenFileMappingA, into: TargetVReg.virtual(resultId))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.OpenFileMappingW, into: TargetVReg.virtual(resultId))
 	end 'emitWin64OpenFileMapping'
 
 	// ⭐ **THE MAPPING TAKES THE DESCRIPTOR WHICHEVER CALL MINTED IT** — `MapViewOfFile` and `mmap` alike
@@ -4544,7 +4542,7 @@ export type StdToX64Lowering
 	end 'lowerOsMapNamedSegment'
 
 	// `MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size)` — five arguments, four in registers and the
-	// byte count on the stack past the shadow space (the `CreateFileA` stack-arg template). Its own function
+	// byte count on the stack past the shadow space (the `CreateFileW` stack-arg template). Its own function
 	// rather than an inline arm because a `match` arm is one expression and this is six.
 	function lowerOsMapNamedSegmentWin64(resultId ValueId, handleId ValueId, sizeId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(0), src: TargetVReg.virtual(sizeId), width: X64AccessWidth.word64))
@@ -4555,7 +4553,7 @@ export type StdToX64Lowering
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.MapViewOfFile, into: TargetVReg.virtual(resultId))
 	end 'lowerOsMapNamedSegmentWin64'
 
-	// The consumer's half: name a section and size it. The Win32 answer is `CreateFileMappingA`'s own, which
+	// The consumer's half: name a section and size it. The Win32 answer is `CreateFileMappingW`'s own, which
 	// `SharedMemoryRuntime.emitExclusiveCreateAnswer` classifies; the POSIX chunk answers a
 	// `SharedSegmentAnswer` itself.
 	function lowerOsCreateNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId, dstBlock IrBlock)
@@ -4568,7 +4566,7 @@ export type StdToX64Lowering
 		end 'route'
 	end 'lowerOsCreateNamedSegment'
 
-	// `CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, size, namePtr)` — six arguments,
+	// `CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, size, namePtr)` — six arguments,
 	// four in registers and the size and the name on the stack past the shadow space
 	// (`lowerOsMapNamedSegmentWin64`'s template, one slot wider). Its own function rather than an inline arm
 	// because a `match` arm is one expression and this is seven.
@@ -4582,7 +4580,7 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: PageReadWriteProtection))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: SectionSizeHighDword))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateFileMappingA, into: TargetVReg.virtual(resultId))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateFileMappingW, into: TargetVReg.virtual(resultId))
 	end 'lowerOsCreateNamedSegmentWin64'
 
 	function lowerOsAdoptNamedSegment(resultId ValueId, namePtrId ValueId, sizeId ValueId, dstBlock IrBlock)
@@ -4627,7 +4625,7 @@ export type StdToX64Lowering
 		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetTickCount64, chunk: HostTickMsName), args: ValueIdArray.create(), dstBlock: dstBlock)
 	end 'lowerOsTickCountMs'
 
-	// `GetModuleFileNameA(NULL, bufPtr, bufLen)`, the character count captured, which tells the
+	// `GetModuleFileNameW(NULL, bufPtr, bufLen)`, the character count captured, which tells the
 	// builder's retry loop "fits" from "truncated".
 	//
 	// The op reads `(result, bufLen, bufPtr)`, `osDirCurrentPath`'s shape, and both routes take the
@@ -4673,7 +4671,7 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: CurrentModuleHandle))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(bufLenId)))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetModuleFileNameA, into: TargetVReg.virtual(resultId))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetModuleFileNameW, into: TargetVReg.virtual(resultId))
 	end 'lowerOsExecutablePathWin64'
 
 	// Lower `osEventCreate` to `CreateEventA(NULL, FALSE, FALSE, NULL)` — an AUTO-reset, initially-unsignaled event.

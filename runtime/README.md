@@ -29,6 +29,7 @@ self-compiles `maxon-bin/AGENTS.md` describes.
 | `ManagedGeometry.maxon` | `__mg_element_bits`, `__mg_bits_to_bytes`, `__mg_element_byte_len` | calls the managed-memory, file and buffer builders mint (`ManagedMemoryRuntime.emitElementBits`, `emitBitsToBytes`, `emitElementByteLen`) — compiler-called roster |
 | `SlabArena.maxon` | `__slab_assert_os_alloc`, `__slab_arena_new`, `__slab_arena_alloc_chunks`, `__slab_arena_free_chunks`, `__slab_arena_of`, `__slab_arena_scavenge`, `__slab_arena_committed_bytes`, `__slab_arena_map_ensure`, `__slab_arena_map_set` | calls `installSlabRuntime`'s builders mint, and calls from the two slab tier files — compiler-called roster |
 | `SlabRuntime.maxon` | `__slab_os_direct_alloc`, `__slab_os_direct_free`, `__slab_state_base`, `__slab_meta_alloc`, `__slab_meta_free`, `__slab_census`, `__slab_census_tally_walk`, `__slab_census_bucket_count`, `__slab_census_bucket_bytes` | calls `installSlabRuntime`'s builders mint (the census entries from the locked `__slab_live_bytes`-family wrappers) — compiler-called roster |
+| `WideText.maxon` | `__wt_widen`, `__wt_narrow`, `__wt_narrow_ascii`, `__wt_text_length`, `__wt_block_extent` (Windows only) | calls `HostTextRuntime`'s builders mint at every UTF-8⇄UTF-16 boundary of x64-windows — compiler-called roster |
 | `Word.maxon` | none: the shared `module typealias`es `MachineWord`, `NonZeroWord`, `BufferCoordinate`, `ElementStride`, `RefCountDelta` | — |
 
 A `__Builtins` row is lowered by the parser to a call naming the entry, from whatever file wrote the
@@ -185,7 +186,7 @@ filed unreached.
 ### The compiler-called roster
 
 `StdlibSource.runtimeTierFileIsCompilerCalled` names the tier files the compiler calls into through minted
-`StdOp.call`s: `SlabArena.maxon`, `SlabRuntime.maxon` and `ManagedGeometry.maxon`. No walk over source sees
+`StdOp.call`s: `SlabArena.maxon`, `SlabRuntime.maxon`, `ManagedGeometry.maxon` and `WideText.maxon`. No walk over source sees
 those calls, so every name in those files is declared reached (`LibraryFunctionRoster.compilerReached`).
 
 - **By file, not by name**, because a minted call lands on an entry point whose body reaches the file's
