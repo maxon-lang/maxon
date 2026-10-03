@@ -2867,9 +2867,41 @@ end 'main'
 error E3063: calc/<fragment>:20:65: Ambiguous type name 'Fault': more than one visible declaration matches it. Qualify it as one of: calc.Fault, faults.Fault
 ```
 
+<!-- test: error.a-name-whose-declarations-coexist-in-part-is-blamed-in-path-order -->
+Collision is not transitive. Here `d1/a.maxon`'s `enum Box` and `d2/b.maxon`'s `enum Box` collide as two
+nominals, `d2/b.maxon` and `d2/c.maxon` collide as two nameable declarations in one directory, and
+`d1/a.maxon`'s enum and `d2/c.maxon`'s alias coexist. Which one is refused must not depend on the order
+the files arrive in: declarations are admitted path-earliest first, so `d1/a.maxon` is admitted, then
+`d2/b.maxon` is refused against it, and `d2/c.maxon`, which collides with nothing admitted, stands. The
+files are declared here in the reverse of that order.
+```maxon
+// --- file: d2/c.maxon
+export typealias Box = int(0 to 9)
+
+// --- file: d2/b.maxon
+export enum Box
+	large
+end 'Box'
+
+// --- file: d1/a.maxon
+export enum Box
+	small
+end 'Box'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: d2/<fragment>:6:13: duplicate definition of 'Box' — already declared as `enum Box`
+```
+
+
 <!-- test: error.two-nominal-declarations-in-two-directories-collide -->
 Two author NOMINAL declarations of one name collide wherever they sit: a `type`, `enum`, `union` or
-`interface` name is whole-program, so a second directory does not make room for it.
+`interface` name is whole-program, so a second directory does not make room for it. The refusal lands on
+`shapes/box.maxon`'s declaration, because `crates/box.maxon` precedes it in path byte order.
 ```maxon
 // --- file: shapes/box.maxon
 export type Box
@@ -2888,7 +2920,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: crates/<fragment>:8:13: duplicate definition of 'Box' — already declared as `type Box`
+error E3006: shapes/<fragment>:3:13: duplicate definition of 'Box' — already declared as `enum Box`
 ```
 
 <!-- test: error.extension-alias-pair-compiling-to-one-name -->

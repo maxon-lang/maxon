@@ -226,6 +226,36 @@ error E3061: <fragment>:10:18: Duplicate typealias 'Measure'
 ```
 
 
+<!-- test: error.crossfile-alias-conflict-is-reported-in-name-byte-order -->
+Which declaration is the newcomer is decided by the files' names compared byte by byte, on every host —
+never by the order the filesystem lists them. `B.maxon` precedes `a.maxon` (`B` is 0x42, `a` 0x61), so
+E3061 lands on `a.maxon`'s declaration, although NTFS, which folds case, lists `a.maxon` first and ext4
+lists in hash order.
+```maxon
+// --- file: a.maxon
+export typealias Measure = int(0 to 100)
+
+export function useInt(x Measure) returns Measure
+	return x + 1
+end 'useInt'
+
+// --- file: B.maxon
+export typealias Measure = float(0.0 to 1.0)
+
+export function useFloat(x Measure) returns Measure
+	return x
+end 'useFloat'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return trunc(useInt(41))
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:3:18: Duplicate typealias 'Measure'
+```
+
+
 <!-- test: crossfile-alias-same-underlying-different-range-still-legal -->
 The guard the rule must not overreach into: two files of one directory, one name, two RANGES, both
 file-private. Each file's cast is checked against its own range, so both compile.

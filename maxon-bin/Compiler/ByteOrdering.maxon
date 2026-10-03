@@ -1,9 +1,9 @@
 // Compiler/ByteOrdering.maxon — the ordinal byte ordering every table this compiler sorts by shares.
 
-// ⭐ **ONE ORDERING, THREE TABLES, AND THAT IS THE REASON IT LIVES ALONE.** The formatter's file walk, the
-// test report's path column and the debug-info name tables must all order by the same rule; three copies
-// of "compare the shared prefix, shorter name first" agree today, and a divergence between them would be
-// a wrong ORDER at one of the three rather than an error at any of them.
+// ⭐ **ONE ORDERING, AND THAT IS THE REASON IT LIVES ALONE.** The formatter's file walk, the test report's
+// path column and the debug-info name tables must all order by the same rule; separate copies of "compare
+// the shared prefix, shorter name first" would be free to diverge, and a divergence would be a wrong ORDER
+// at one of them rather than an error at any of them.
 //
 // ⚠ **THE MEASURE IS BYTES.** The orders these tables need are filesystem- and locale-neutral, and the
 // reference implementations they are compared against compare units rather than collating text.
@@ -21,3 +21,43 @@ export function compareBytesOrdinally(left ByteArray, right ByteArray) returns O
 
 	return left.count().compare(right.count())
 end 'compareBytesOrdinally'
+
+// Order two discovered paths by their spelling. A `FilePath` is not `Comparable`, and the ordering wanted
+// here is the filesystem-neutral one — the bytes, not a locale's idea of them (`compareBytesOrdinally`).
+module function comparePathSpelling(left FilePath, right FilePath) returns Ordering
+	return compareBytesOrdinally(left.toString().toByteArray(), right: right.toString().toByteArray())
+end 'comparePathSpelling'
+
+let PortablePathSeparator = "/"
+
+module function precedesInPathOrder(path FilePath, other FilePath) returns bool
+	let workingDirectory = Directory.currentPath()
+	return compareBytesOrdinally(pathIdentity(path, workingDirectory: workingDirectory), right: pathIdentity(other, workingDirectory: workingDirectory)) == Ordering.lessThan
+end 'precedesInPathOrder'
+
+// Identity, not spelling, because it decides which duplicate declaration is blamed: a relative user path
+// beside an absolute stdlib path, `maxon build a.maxon` beside `maxon build .`, `\` (0x5C, between the
+// uppercase letters and `_`) where `/` (0x2F) sorts before both, and the `c:` the MCP server hands beside
+// a `C:` would each otherwise change the answer.
+module function pathIdentity(path FilePath, workingDirectory FilePath) returns ByteArray
+	var spelled = path.resolve(workingDirectory).toString().replace(FilePath.separator(), with: PortablePathSeparator).toByteArray()
+
+	if spelled.count() < DrivePrefixLength 'noDrivePrefix'
+		return spelled
+	end 'noDrivePrefix'
+
+	let letter = try spelled.get(0) otherwise panic("pathIdentity: get OOB at 0 below the {DrivePrefixLength}-byte drive prefix")
+	let colon = try spelled.get(1) otherwise panic("pathIdentity: get OOB at 1 below the {DrivePrefixLength}-byte drive prefix")
+
+	if colon == DriveColonByte and letter >= LowercaseAsciiFirst and letter <= LowercaseAsciiLast 'aLowercaseDriveLetter'
+		try spelled.set(0, value: letter - AsciiCaseDistance) otherwise panic("pathIdentity: set OOB at 0 below the {DrivePrefixLength}-byte drive prefix")
+	end 'aLowercaseDriveLetter'
+
+	return spelled
+end 'pathIdentity'
+
+let DrivePrefixLength = 2
+let DriveColonByte = 0x3A
+let LowercaseAsciiFirst = 0x61
+let LowercaseAsciiLast = 0x7A
+let AsciiCaseDistance = 0x20

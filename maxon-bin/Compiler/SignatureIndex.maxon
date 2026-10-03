@@ -11598,7 +11598,7 @@ export type ProgramSignatures
 	// Empty for every single-file program.
 	var crossFileConstantReads as NameInFileArray
 
-	// Storage key -> its index in `decls`. FIRST-WINS on a duplicate key (see `recordDecl`).
+	// Storage key -> its index in `decls`. One declaration per key (see `recordDecl`).
 	var declIndex as TopLevelDeclIndexMap
 
 	// ⭐ Function name -> its per-parameter CONSUME bits — what `consumeOf(callee)` answers a call site
@@ -12671,51 +12671,55 @@ export type ProgramSignatures
 	end 'declaresDefaultFor'
 
 	export function winningDefaultOf(key ByteArray) returns DefaultDeclaration throws MapError
-		var fromTheLibrary = false
-		var libraryIndex = 0 as ElementIndex
+		if let programs = try self.firstDefaultAtTheLevel(key, isStdlibSource: false) 'theProgramsOwn'
+			return programs
+		end 'theProgramsOwn'
 
-		for i in 0 upto self.defaultDeclarationList.count() 'eachDeclaration'
-			let declaration = try self.defaultDeclarationList.get(i) otherwise panic("winningDefaultOf: defaultDeclarationList.get OOB at {i} below its own count")
+		return try self.firstDefaultAtTheLevel(key, isStdlibSource: true)
+	end 'winningDefaultOf'
 
-			if not declaration.key.equals(key) 'anotherKey'
+	// The one decider of which `default` is built (`winningDefaultOf`) and which E3169 blames
+	// (`keptDefaultBeside`), so the declaration built is never the one refused.
+	function firstDefaultAtTheLevel(key ByteArray, isStdlibSource bool) returns DefaultDeclaration throws MapError
+		var seenOne = false
+		var firstIndex = 0 as ElementIndex
+
+		for (iter, declaration) in self.defaultDeclarationList.withIterator() 'eachDeclaration'
+			if not declaration.key.equals(key) or declaration.isStdlibSource != isStdlibSource 'anotherLevelOrKey'
 				continue
-			end 'anotherKey'
+			end 'anotherLevelOrKey'
 
-			if not declaration.isStdlibSource 'theProgramsOwn'
-				return declaration
-			end 'theProgramsOwn'
-
-			if not fromTheLibrary 'theFirstFromTheLibrary'
-				fromTheLibrary = true
-				libraryIndex = i
-			end 'theFirstFromTheLibrary'
+			if not seenOne or precedesInPathOrder(declaration.declFilePath, other: self.notedDefaultAt(firstIndex).declFilePath) 'firstInPathOrderSoFar'
+				firstIndex = iter.index()
+				seenOne = true
+			end 'firstInPathOrderSoFar'
 		end 'eachDeclaration'
 
-		if not fromTheLibrary 'noDeclaration'
+		if not seenOne 'noDeclaration'
 			throw MapError.keyNotFound
 		end 'noDeclaration'
 
-		return try self.defaultDeclarationList.get(libraryIndex) otherwise panic("winningDefaultOf: the library declaration at {libraryIndex} was just read")
-	end 'winningDefaultOf'
+		return self.notedDefaultAt(firstIndex)
+	end 'firstDefaultAtTheLevel'
+
+	function notedDefaultAt(index ElementIndex) returns DefaultDeclaration
+		return try self.defaultDeclarationList.get(index) otherwise panic("ProgramSignatures.notedDefaultAt: defaultDeclarationList.get OOB at {index} below count {self.defaultDeclarationList.count()}")
+	end 'notedDefaultAt'
 
 	export function defaultDeclarationWins(declaration DefaultDeclaration) returns bool
 		let winner = try self.winningDefaultOf(declaration.key) otherwise panic("defaultDeclarationWins: `{String.from(declaration.key)}` has a declaration, so it has a winner")
 		return winner.isTheSameDeclaration(declaration)
 	end 'defaultDeclarationWins'
 
-	export function earlierDefaultAtTheSameLevel(declaration DefaultDeclaration) returns DefaultDeclaration throws MapError
-		for noted in self.defaultDeclarationList 'eachDeclaration'
-			if noted.isTheSameDeclaration(declaration) 'reachedItself'
-				throw MapError.keyNotFound
-			end 'reachedItself'
+	export function keptDefaultBeside(declaration DefaultDeclaration) returns DefaultDeclaration throws MapError
+		let first = try self.firstDefaultAtTheLevel(declaration.key, isStdlibSource: declaration.isStdlibSource)
 
-			if noted.key.equals(declaration.key) and noted.isStdlibSource == declaration.isStdlibSource 'anEarlierOne'
-				return noted
-			end 'anEarlierOne'
-		end 'eachDeclaration'
+		if first.isTheSameDeclaration(declaration) 'declaredFirst'
+			throw MapError.keyNotFound
+		end 'declaredFirst'
 
-		throw MapError.keyNotFound
-	end 'earlierDefaultAtTheSameLevel'
+		return first
+	end 'keptDefaultBeside'
 
 	export function adoptLiveDefaultKeys(filed LiveDefaultKeys)
 		if filed.sameKeysAs(self.liveDefaultKeyNames) 'alreadyAdopted'
@@ -16917,13 +16921,19 @@ export type ProgramSignatures
 	// Add one top-level DECLARATION (a `let` or a `var`) to the arena. No value yet:
 	// `evaluateInitializers` supplies that once every file has been folded in.
 	//
-	// FIRST-WINS on a duplicate storage key. A file that declares the same name twice — `let A = 1` then
-	// `let A = 2`, or a `let`/`var` collision — keeps the FIRST here and is diagnosed E3006 by the real
-	// parse (`isRedeclaredBinding` → `Parser.raiseBindingFailure`), the top-level twin of the positioned
-	// duplicate-FUNCTION check `commitFuncSignatures` makes. It is NOT the cross-file same-name case,
-	// which is legal and which `topLevelStorageKey` handles by giving the two decls different keys.
+	// On a duplicate storage key the declaration whose file's path identity sorts earliest is held, so the
+	// kept binding does not depend on the order files are folded in. A file that declares the same name
+	// twice — `let A = 1` then `let A = 2`, or a `let`/`var` collision — keeps the FIRST here and is
+	// diagnosed E3006 by the real parse (`isRedeclaredBinding` → `Parser.raiseBindingFailure`), the
+	// top-level twin of the positioned duplicate-FUNCTION check `commitFuncSignatures` makes. A
+	// file-private name declared in two files is legal, and `topLevelStorageKey` gives those two decls
+	// different keys.
 	function recordDecl(decl TopLevelDecl)
-		if self.declIndex.contains(decl.storageKey) 'duplicate'
+		if let held = try self.declIndex.get(decl.storageKey) 'duplicate'
+			if precedesInPathOrder(decl.declFilePath, other: self.declAt(held).declFilePath) 'declaredFirstInPathOrder'
+				try self.decls.set(held, value: decl) otherwise panic("ProgramSignatures.recordDecl: decls.set OOB at {held} — every index declIndex holds is one this arena minted")
+			end 'declaredFirstInPathOrder'
+
 			return
 		end 'duplicate'
 
@@ -19834,27 +19844,8 @@ export type ProgramSignatures
 		return self.recordedDeclFor(decl).outcome
 	end 'declaredOutcome'
 
-	// ⭐ **IS `decl` A REDECLARATION — a top-level name the sweep already recorded under the same storage
-	// key from a DIFFERENT source position?** `recordDecl` is first-wins, so the winner is the earliest
-	// declaration and every later `let`/`var` of that name is a duplicate. The real parse asks this for
-	// each top-level binding statement (`raiseBindingFailure`) and reports E3006 at the later one — the
-	// top-level twin of the duplicate-FUNCTION check `commitFuncSignatures` makes, positioned the same
-	// way (at the offending later declaration).
-	//
-	// ⚠ SCOPED TO ONE FILE, and — for an EXPORTED name — BOUNDED BY THE GLOBAL WINNER. Same storage key
-	// means same name; for a FILE-PRIVATE name the key includes the path, so the winner is THIS file's
-	// first declaration and same-file detection is complete. For an EXPORTED name the key is the bare
-	// name (`topLevelStorageKey`), so the winner is the globally-first `export let A` across ALL files:
-	// when it lives in another file the `crossFileExported` guard returns false — correctly for the pure
-	// cross-file collision (which belongs to cross-file name resolution, see `commitStructTypes`), but it
-	// ALSO misses a genuine SAME-FILE exported duplicate whenever another file's export wins the key
-	// (order-dependent on file sort). That completeness rides with the same deferred cross-file rung; it
-	// never falsely rejects a legal program and adds no wrong runtime answer. Re-deriving each side's
-	// file-qualified key makes the guard a pure FILE comparison (equal names). Two distinct declarations
-	// in one file cannot share a source position, so a differing `(line, column)` is exactly a
-	// redeclaration.
-	// ⭐⭐ **IS THIS THE SECOND DECLARATION OF A TOP-LEVEL NAME? — asked of the WHOLE PROGRAM, not of one
-	// file.**
+	// ⭐⭐ **IS THIS A DECLARATION OF A TOP-LEVEL NAME OTHER THAN THE ONE ITS KEY HOLDS? — asked of the WHOLE
+	// PROGRAM, not of one file.**
 	//
 	// **A GLOBAL'S NAME IS FLAT AND PROJECT-WIDE, and that is the ruling rather than an implementation
 	// detail.** Namespacing scopes typealiases (E3063) and free functions (E3095); it deliberately does NOT
@@ -19864,7 +19855,7 @@ export type ProgramSignatures
 	// ⛔ **EXEMPTING THAT CASE IS A SILENT WRONG ANSWER.** An arm
 	// labelled `crossFileExported` returning `false` whenever the winner's file differs from this
 	// declaration's lets `alpha/` and `beta/` each export `LIMIT`, compile clean, and hand every reader in
-	// the program ALPHA's value — `recordDecl` being first-wins — with `beta`'s unreachable.
+	// the program the held declaration's value, with the other unreachable.
 	//
 	// ⚠ **AND REFUSING IT COSTS THE FILE-PRIVATE RULE NOTHING, which is why no exemption is needed.**
 	// A file-private binding is filed under a FILE-SCOPED storage key (`topLevelStorageKey`), so two files'
@@ -19872,9 +19863,9 @@ export type ProgramSignatures
 	// file its own. Such an exemption can only fire for declarations that DO share a key, which is precisely
 	// the collision it lets through. `file-private-same-name-cross-file-var` is the control.
 	//
-	// The position comparison is what tells a SECOND declaration from the winner itself: `recordedDeclFor`
-	// answers with the first declaration of the key, so a decl that is not at the winner's position is a
-	// later one.
+	// The position comparison is what tells another declaration from the winner itself: `recordedDeclFor`
+	// answers with the declaration the key holds, so a decl that is not at the winner's position is one of
+	// the others.
 	export function isRedeclaredBinding(decl TopLevelDecl) returns bool
 		let winner = self.recordedDeclFor(decl)
 
@@ -20114,13 +20105,8 @@ export type ProgramSignatures
 		// `Undefined constant 'LIMIT'`, which `module-keyword/error.module-let-different-directory` pins.
 		//
 		// ⚠ **THAT ANSWER IS ONLY TRUE WHILE THE NAME HAS ONE NON-FILE-PRIVATE DECLARATION, AND THE BARE KEY
-		// CANNOT HOLD TWO.** `recordDecl` is first-wins, so two files declaring `LIMIT` at any tier wider than
-		// `file` put ONE of them in this index and drop the other — MEASURED, and wrong in two ways: two
-		// `export let LIMIT` in different directories silently resolve BOTH readers to the first (a wrong
-		// VALUE), and two `module let LIMIT` make the loser's OWN FILE fail to see its own declaration.
-		// The cure is a namespace-scoped key plus a precedence rule, which functions and types have — the
-		// same collision is refused or disambiguated for them, so top-level bindings are the one kind
-		// where it is silent.
+		// CANNOT HOLD TWO.** `recordDecl` holds one declaration per key, and `isRedeclaredBinding` refuses
+		// every other declaration of that key (E3006).
 		if let exported = try self.declIndex.get(name) 'exported'
 			let decl = self.declAt(exported)
 

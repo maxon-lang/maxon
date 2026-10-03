@@ -1550,8 +1550,8 @@ end 'noteDefaultKeysNamedBy'
 // something the whole program disagrees with is filed the whole program's answer and the round is folded again,
 // its parse now keyed on that answer (`ProgramSignatures.rowSetAnswersThatMoved`).
 //
-// `merge` is probed around `mergeArtifact` ALONE: the parses run before it, so the fold's cost never absorbs
-// the parse's.
+// `merge` is probed around `mergeArtifact`, the path order and the type-name commit ALONE: the parses run
+// before them, so the fold's cost never absorbs the parse's.
 function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns MaxonModule throws CompileError
 	// ⭐ **THIS TERMINATES WITH NO BOUND OF ITS OWN.** A fold that is not the last either files or drops a generic
 	// type in `InstantiatedByAParse` — each name at most once (`noteMoved`) — which settles a new index and drops
@@ -1563,8 +1563,12 @@ function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns Ma
 	var folds = 1 as FoldCount
 	var merged = MaxonModule.create()
 
+	let pathOrderProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
+	let pathOrder = sourceFilesInPathOrder(project.db.sourcePaths)
+	recordPhase(project, phase: CompilePhase.merge, probe: pathOrderProbe)
+
 	while true 'untilTheFoldStands'
-		match try foldVerdict(project, pool: pool, signatures: signatures, into: merged, moved: moved) 'verdict'
+		match try foldVerdict(project, pool: pool, signatures: signatures, into: merged, moved: moved, pathOrder: pathOrder) 'verdict'
 			stands then break 'untilTheFoldStands'
 			answersMoved or
 				indexMoved then folds = folds + 1
@@ -1600,7 +1604,7 @@ end 'FoldVerdict'
 // the next fold does not run, and a refusal may be one a store without its descriptor earned; the fold's own
 // diagnostics are withdrawn with it, and the next fold reports afresh. A row a merge holds is an instance the
 // program really mints whether or not every file merged, so the type is filed either way.
-function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, moved InstantiatedTypeNameSet) returns FoldVerdict throws CompileError
+function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, moved InstantiatedTypeNameSet, pathOrder SourceFileInPathOrderArray) returns FoldVerdict throws CompileError
 	let diagnosticsBeforeTheFold = project.diagnostics.count()
 	resetMergeTargets(project, signatures: signatures)
 	signatures.restoreBaseline()
@@ -1615,6 +1619,10 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 		mergeArtifact(project, target: into, artifact: artifact, signatures: signatures)
 		recordPhase(project, phase: CompilePhase.merge, probe: mergeProbe)
 	end 'eachArtifact'
+
+	let typeNameProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
+	commitTypeNameDeclsInPathOrder(project, artifacts: artifacts, pathOrder: pathOrder, signatures: signatures)
+	recordPhase(project, phase: CompilePhase.merge, probe: typeNameProbe)
 
 	let newlyInstantiated = signatures.typesNewlyInstantiatedByAParse()
 
@@ -2141,6 +2149,7 @@ end 'buildsBodiesFor'
 function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.funcReturnTypes = FuncReturnTypeMap.create()
 	project.funcSignatures = FuncSignatureMap.create()
+	project.funcSignatureFloors = FuncSignatureFloorMap.create()
 
 	// `commitOverloadSets` ACCUMULATES members across files, so a set carried over a warm rebuild
 	// would keep a member the edited sources no longer declare.

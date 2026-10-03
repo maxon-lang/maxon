@@ -141,9 +141,8 @@ export union ParseMints
 	minted(mints LocalInstanceMints)
 end 'ParseMints'
 
-// One `funcReturnTypes` registry contribution: a function's name and its
-// declared return type, recorded by the parser. Ordered in an array so the
-// merge order is the declaration order.
+// One function's name and declared return type, recorded by the declaration sweep and applied by
+// `ProgramSignatures.record`.
 //
 // ⭐ **`declaredSurface` IS THE PRE-ERASURE `__ManagedMemory` SPELLING OF THAT RETURN TYPE** —
 // where the source named the alias, which `parseTypeReference` folds into `genericInstance(Array with Byte)`
@@ -164,28 +163,22 @@ end 'ParseMints'
 // can reach them, and knowing one EXISTS is not enough to call it — a `static` handed a receiver fails an
 // arity check on a parameter nobody wrote, and an instance method denied one is called on nothing.
 //
-// ⚠ **IT DEFAULTS, AND THE DEFAULTS ARE FOR THE `Project.funcReturnTypes` REGISTRY'S THREE PRODUCERS ONLY.**
-// This record serves two registries: the pre-parse SWEEP (which folds into `ProgramSignatures` and is the
-// only reader of these fields) and the real parse's per-file contribution (`ParseArtifact.recordFuncReturnType`
-// — a declared function, a parameter-default helper and a lifted closure shim). The latter three never reach
-// `ProgramSignatures.record`, and two of them are functions no file wrote, so there is no author tier for
-// them to state; `file` is the narrowest one and states nothing wider than the truth. The two SYNTHESIZED
-// helpers the sweep itself publishes (a parameter default's, a field default's) take the receiverless
-// default and mean it: each is a plain function the emitter calls with no instance.
+// The two SYNTHESIZED helpers the sweep publishes (a parameter default's, a field default's) take the
+// receiverless default and mean it: each is a plain function the emitter calls with no instance.
 // ⭐⭐ **`opaqueParams` IS WHICH OF THE DECLARATION'S PARAMETERS TAKE A BARE TYPE PARAMETER, AND IT RIDES
 // HERE FOR `takesReceiver`'S REASON** — a fourth fact about the SAME declaration, applied by
 // `ProgramSignatures.record` in the same act. It is what lets a CALL SITE build the range guard a shared
 // generic body cannot hold for itself (`OpaqueParamInfo`), and it can only come from the sweep: the callee
 // may be declared in another file, and `resolveTypes` has erased the parameter's alias long before any
-// caller asks. It DEFAULTS to `sharedNoOpaqueParams` for the three `Project.funcReturnTypes` producers named
-// above and for every declaration outside a generic type, which is the overwhelming majority.
+// caller asks. It DEFAULTS to `sharedNoOpaqueParams` for the synthesized helpers named above and for every
+// declaration outside a generic type, which is the overwhelming majority.
 // ⭐⭐ **`paramNames`/`paramTypes` ARE THE DECLARATION'S OWN SOURCE PARAMETER LIST — THE RECEIVER EXCLUDED —
 // AND THEY RIDE HERE FOR `opaqueParams`' REASON: a fifth fact about the SAME declaration, applied by
 // `ProgramSignatures.record` in the same act.** They are what lets a CALL SITE tell one member of an overload
 // set from another while its own file is being parsed, which is the one moment a call's result type is
 // decided and a whole pass before `SemanticCheck.resolveOverloadedCalls` picks a member. See
-// `ProgramSignatures.overloadedDeclsOf`. Both default EMPTY for the three `Project.funcReturnTypes` producers
-// named above — a synthesized helper is never overloaded, so there is nothing to tell apart.
+// `ProgramSignatures.overloadedDeclsOf`. Both default EMPTY for the synthesized helpers named above — a
+// synthesized helper is never overloaded, so there is nothing to tell apart.
 export type FuncReturnTypeEntry
 	export var name as ByteArray
 	export var returnType as MaxonReturnType
@@ -211,7 +204,7 @@ export type FuncReturnTypeEntry
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS.** A default naming a module-level `let`
 	// makes that anchor an export nothing calls, which `checkUnusedExports` reports as E3092. An empty
 	// container costs a record; the anchor costs a build.
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = ByteArrayArray.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0) returns FuncReturnTypeEntry
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = ByteArrayArray.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0) returns FuncReturnTypeEntry
 		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
 end 'FuncReturnTypeEntry'
@@ -219,11 +212,11 @@ end 'FuncReturnTypeEntry'
 export typealias FuncReturnTypeEntryArray = Array with FuncReturnTypeEntry
 
 // One `funcSignatures` registry contribution: a function's name paired with its
-// parameter signature (names + types). Recorded by the parser alongside the return
-// type. Ordered in an array (not a map) so the merge order is the declaration order
-// — exactly the discipline `FuncReturnTypeEntry` follows. Carries the NAME's source
-// position so `commitFuncSignatures` can anchor a duplicate-definition diagnostic
-// (E3006) on the offending declaration.
+// parameter signature (names + types) and its return type, which travel together so the
+// declaration kept for a name supplies both. Recorded by the parser. Ordered in an array (not
+// a map) so the merge order is the declaration order. Carries the NAME's source position so
+// `commitFuncSignatures` can anchor a duplicate-definition diagnostic (E3006) on the blamed
+// declaration.
 export type FuncSignatureEntry
 	export var name as ByteArray
 	export var signature as FuncSignature
@@ -244,13 +237,22 @@ export type FuncSignatureEntry
 	// merge, for the reason this file keeps: a minted name is a thing to be RECORDED, never a thing to be
 	// read back apart.
 	export var synthesized as bool
+	export var role as FunctionDeclarationRole
+	export var returnType as MaxonReturnType
 
-	export static function create(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool) returns FuncSignatureEntry
-		return Self{name: name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized}
+	export static function create(name ByteArray, signature FuncSignature, returnType MaxonReturnType, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool, role FunctionDeclarationRole) returns FuncSignatureEntry
+		return Self{name: name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized, role: role, returnType: returnType}
 	end 'create'
 end 'FuncSignatureEntry'
 
 export typealias FuncSignatureEntryArray = Array with FuncSignatureEntry
+
+export enum FunctionDeclarationRole
+	ordinary
+	contestedFreeFunction
+end 'FunctionDeclarationRole'
+
+module typealias FuncSignatureFloorMap = Map with (ByteArray, FuncSignatureEntry)
 
 // One function's range-check contribution: its name paired with the sites the parser
 // recorded (see FunctionRangeChecks). Keyed by name, folded into `project.rangeChecks` by
@@ -355,9 +357,6 @@ export type FileParseArtifact
 	// E5001 map a Target ValueId back to its source span.
 	export var valueOrigins as ValueOriginTable
 	export var deferralSources as DeferralSourceTable
-
-	// This file's `funcReturnTypes` registry contributions, in declaration order.
-	export var funcReturnTypes as FuncReturnTypeEntryArray
 
 	// This file's `funcSignatures` registry contributions, in declaration order.
 	export var funcSignatures as FuncSignatureEntryArray
@@ -538,7 +537,6 @@ export type FileParseArtifact
 			immortalConstArraySites: ImmortalConstArraySiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			deferralSources: DeferralSourceTable.create(),
-			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
 			overloadSets: noOverloadSets,
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
@@ -746,20 +744,13 @@ export type FileParseArtifact
 		self.currentFuncIndex = index
 	end 'setCurrentFuncIndex'
 
-	// Record a function's return type as this file's contribution to the
-	// project-wide `funcReturnTypes` registry. Called by the parser after it
-	// builds a function — NEVER touching `Project`.
-	export function recordFuncReturnType(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface)
-		self.funcReturnTypes.push(FuncReturnTypeEntry.create(name.clone(), returnType: returnType.clone(), declaredSurface: declaredSurface))
-	end 'recordFuncReturnType'
-
-	// Record a function's parameter signature as this file's contribution to the
-	// project-wide `funcSignatures` registry. Called by the parser after it builds
-	// a function — NEVER touching `Project` (mirrors `recordFuncReturnType`). The
-	// name's source position travels with the entry so a merge-time duplicate can be
-	// positioned on the offending declaration.
-	export function recordFuncSignature(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool)
-		self.funcSignatures.push(FuncSignatureEntry.create(name.clone(), signature: signature.clone(), nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized))
+	// Record a function's parameter signature and return type as this file's contribution to
+	// the project-wide `funcSignatures` and `funcReturnTypes` registries. Called by the parser
+	// after it builds a function — NEVER touching `Project`. The name's source position
+	// travels with the entry so a merge-time duplicate can be positioned on the blamed
+	// declaration.
+	export function recordFuncSignature(name ByteArray, signature FuncSignature, returnType MaxonReturnType, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool, role FunctionDeclarationRole)
+		self.funcSignatures.push(FuncSignatureEntry.create(name.clone(), signature: signature.clone(), returnType: returnType.clone(), nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized, role: role))
 	end 'recordFuncSignature'
 
 	// Record the whole current member list of one overloaded bare name. REPLACES rather than appends:
@@ -819,7 +810,7 @@ export type FileParseArtifact
 
 	// Record a ranged-typealias declaration as this file's contribution to the
 	// project-wide `typeAliases` registry — the same NEVER-touch-Project discipline
-	// `recordFuncReturnType` / `recordFuncSignature` follow.
+	// `recordFuncSignature` follows.
 	// The typealias arrays (`typeAliases` / `functionTypeAliases`) are PUSHED INTO DIRECTLY by
 	// `Parser.readTypeAliasDeclaration`, which is handed the target array — the real parse passes the
 	// artifact's, the declaration sweep passes its own — so one reader files a ranged alias in one array
@@ -1032,11 +1023,12 @@ end 'ownedBlames'
 //   1. reconcile the artifact's local type-name ids into the project interner,
 //   2. offset-merge the artifact's MaxonModule fragment into `target`,
 //   3. fold its op source spans onto `project.opRanges`, in lockstep with (2),
-//   4. commit the artifact's registry contributions into `Project`.
+//   4. commit the artifact's registry contributions into `Project` — all but its type-name
+//      declarations, which `commitTypeNameDeclsInPathOrder` commits once every file has merged.
 // `target` is the accumulator module `queryAllModule` builds (and caches); the
-// registries land on `Project`. This is the ONLY writer of `project.typeNames`,
-// `project.funcReturnTypes`, and `project.opRanges`, and it needs no rollback
-// because nothing is ever written to `Project` speculatively.
+// registries land on `Project`. This is the ONLY writer of `project.typeNames` and
+// `project.opRanges`, and it needs no rollback because nothing is ever written to
+// `Project` speculatively.
 export function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact, signatures ProgramSignatures)
 	signatures.beginMerge()
 	renumberArtifact(project, artifact: artifact, signatures: signatures)
@@ -1085,18 +1077,12 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitImmortalConstArraySites(project, artifact: artifact, opOffset: opOffset)
 	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
 	project.deferralSources.appendFrom(artifact.deferralSources, funcOffset: funcOffset)
-	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
 	commitOverloadSets(project, artifact: artifact)
 	commitPendingFnMergeChecks(project, artifact: artifact)
 	commitPendingFunctionTypeDoors(project, artifact: artifact)
 	commitPendingDiscardedResults(project, artifact: artifact)
 	commitRangeChecks(project, artifact: artifact)
-
-	// BEFORE the five per-kind commits below, because it is the one that can REFUSE a declaration: a
-	// name reported here is one whose meaning the registries beneath cannot agree on, and reporting it
-	// first keeps a program's diagnostics in the order a reader meets the declarations.
-	commitTypeNameDecls(project, artifact: artifact, signatures: signatures)
 	commitTypeAliases(project, artifact: artifact, signatures: signatures)
 	commitFunctionTypeAliases(project, artifact: artifact, signatures: signatures)
 	commitStructTypes(project, artifact: artifact)
@@ -1214,8 +1200,8 @@ end 'commitDiagnostics'
 // top-level `let`/`var` (`specs/static-variables.md`, where the kind of keyword is likewise
 // irrelevant).
 //
-// Both arms blame the DECLARATION THE AUTHOR JUST WROTE — its own file, its own name token — and name
-// the incumbent's KEYWORD, which is the half that is invisible from the line being reported. The
+// Both arms blame the newcomer — its own file, its own name token — and name the incumbent's KEYWORD,
+// which is the half that is invisible from the line being reported. The
 // incumbent's PATH is deliberately not in the text: a second absolute path inside a message is
 // machine-dependent and unmatchable in a spec golden.
 function commitTypeNameDecls(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
@@ -1226,6 +1212,41 @@ function commitTypeNameDecls(project Project, artifact FileParseArtifact, signat
 		end 'collision'
 	end 'each'
 end 'commitTypeNameDecls'
+
+// Type-name collision is not transitive — d1's `enum Box` collides with d2's, d2's collides with an alias
+// `Box` in d2, yet d1's enum and d2's alias coexist — so which declarations are admitted depends on the
+// order they are committed. Committing the file whose path identity sorts earliest first makes that order,
+// and so the blame, the same on every host and for every spelling of the invocation. `entry.position`
+// indexes `artifacts` because `parseEveryFile` returns one artifact per source path, in source-path order.
+module function commitTypeNameDeclsInPathOrder(project Project, artifacts FileParseArtifactArray, pathOrder SourceFileInPathOrderArray, signatures ProgramSignatures)
+	for entry in pathOrder 'eachInPathOrder'
+		let artifact = try artifacts.get(entry.position) otherwise panic("commitTypeNameDeclsInPathOrder: artifacts.get OOB at {entry.position} below count {artifacts.count()}")
+		commitTypeNameDecls(project, artifact: artifact, signatures: signatures)
+	end 'eachInPathOrder'
+end 'commitTypeNameDeclsInPathOrder'
+
+module function sourceFilesInPathOrder(paths FilePathArray) returns SourceFileInPathOrderArray
+	var ordered = SourceFileInPathOrderArray.create()
+	let workingDirectory = Directory.currentPath()
+
+	for (iter, path) in paths.withIterator() 'eachSourcePath'
+		ordered.push(SourceFileInPathOrder.create(pathIdentity(path, workingDirectory: workingDirectory), position: iter.index()))
+	end 'eachSourcePath'
+
+	ordered.sort(function(left SourceFileInPathOrder, right SourceFileInPathOrder) gives compareBytesOrdinally(left.identity, right: right.identity))
+	return ordered
+end 'sourceFilesInPathOrder'
+
+module type SourceFileInPathOrder
+	export let identity as ByteArray
+	export let position as ElementIndex
+
+	static function create(identity ByteArray, position ElementIndex) returns SourceFileInPathOrder
+		return Self{identity: identity, position: position}
+	end 'create'
+end 'SourceFileInPathOrder'
+
+module typealias SourceFileInPathOrderArray = Array with SourceFileInPathOrder
 
 // The two texts a collision can have, kept together because the CHOICE between them is the thing
 // worth reading in one place.
@@ -1429,8 +1450,7 @@ function reportInstantiationPairCollision(project Project, signatures ProgramSig
 end 'reportInstantiationPairCollision'
 
 // The site a pair collision is reported at: the NEWCOMER's `typealias` if one names it, else the
-// INCUMBENT's, else none. Preferring the newcomer mirrors `reportTypeNameCollision`, which blames the
-// declaration the author wrote last.
+// INCUMBENT's, else none.
 //
 // ⚠ **A LINEAR SCAN OF THE SITE LIST, DELIBERATELY.** It is asked only once a collision has already
 // been found — never on a program that compiles — so a gid⇒site index would cost every build to serve
@@ -1489,8 +1509,7 @@ end 'renderInstantiation'
 // `structRef` against.
 //
 // A plain upsert, and it stays one: a second `type` of the same name is refused by
-// `commitTypeNameDecls` above, which runs first and fails the build, so the overwrite is never
-// observed. That is the same relationship `commitFuncReturnTypes` has with `commitFuncSignatures`.
+// `commitTypeNameDecls`, which fails the build, so the overwrite is never observed.
 //
 // ⚠ **AND IT DOES NOT ASK `Project.declarationContestsACompilerOwnedName` WHILE `commitEnumTypes`
 // DIRECTLY BELOW DOES — THE ASYMMETRY IS PROVED, NOT OVERLOOKED.** That rule drops a
@@ -1685,15 +1704,10 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 		try artifact.module.ops.set(position, value: renumberedOp(op, remap: remap)) otherwise panic("rewriteTypeIds: ops.set OOB at {position}")
 	end 'eachOp'
 
-	for j in 0 upto artifact.funcReturnTypes.count() 'eachReturnEntry'
-		var entry = try artifact.funcReturnTypes.get(j) otherwise panic("rewriteTypeIds: funcReturnTypes.get OOB at {j}")
-		entry.returnType = remapMaxonReturnType(entry.returnType, remap: remap)
-		entry.paramTypes = remapMaxonTypes(entry.paramTypes, remap: remap)
-	end 'eachReturnEntry'
-
 	for j in 0 upto artifact.funcSignatures.count() 'eachSignatureEntry'
 		var entry = try artifact.funcSignatures.get(j) otherwise panic("rewriteTypeIds: funcSignatures.get OOB at {j}")
 		entry.signature.renumberTypeIds(remap)
+		entry.returnType = remapMaxonReturnType(entry.returnType, remap: remap)
 	end 'eachSignatureEntry'
 
 	var aliases = FunctionTypeAliasArray.create()
@@ -1764,24 +1778,13 @@ function renumberedOp(op MaxonOp, remap TypeIdRemap) returns MaxonOp
 	end 'op'
 end 'renumberedOp'
 
-// Commit the artifact's `funcReturnTypes` contributions into the project registry.
-// A plain upsert: whole-program duplicate-function detection lives in the parallel
-// `commitFuncSignatures` (every function records BOTH a return type and a signature, so
-// one detection site covers all functions — see there). A duplicate reported there fails
-// the build, so a last-wins overwrite of a return type here is never observed.
-function commitFuncReturnTypes(project Project, artifact FileParseArtifact)
-	for entry in artifact.funcReturnTypes 'each'
-		project.funcReturnTypes.upsert(entry.name, value: entry.returnType)
-	end 'each'
-end 'commitFuncReturnTypes'
-
 // Commit the artifact's `funcSignatures` contributions into the project registry,
 // detecting DUPLICATE FUNCTION DEFINITIONS. A name already in the registry — from an
 // earlier file, or an earlier declaration in THIS file (both entries sit in this array in
 // declaration order) — is a duplicate: a plain `upsert` would SILENTLY overwrite the first
-// entry, and a call would then validate against (and lower to) the WRONG signature. So the
-// collision is reported positioned at the offending (later) declaration (E3006), and the
-// first definition is kept. This is the single whole-program duplicate check: every
+// entry, and a call would then validate against (and lower to) the WRONG signature. So one
+// declaration is kept and each other is reported at its own name (E3006);
+// `newcomerDisplacesTheFloor` decides which. This is the single whole-program duplicate check: every
 // function the parser builds records exactly one signature entry here.
 function commitFuncSignatures(project Project, artifact FileParseArtifact)
 	for entry in artifact.funcSignatures 'each'
@@ -1789,19 +1792,52 @@ function commitFuncSignatures(project Project, artifact FileParseArtifact)
 			// ⚠ **A SYNTHESIZED FUNCTION'S DUPLICATE IS THE SHADOW OF ONE THE AUTHOR CAN SEE, AND IS NOT
 			// REPORTED TWICE.** See `FuncSignatureEntry.synthesized` for why the two always arrive
 			// together. Reporting it would add, beside the correct `Duplicate function 'f'`, a second E3006
-			// naming `__paramDefault#f#0` — a symbol absent from the source. The first entry is still kept,
+			// naming `__paramDefault#f#0` — a symbol absent from the source. The kept entry is still chosen
 			// exactly as for a reported duplicate: the two paths differ in what they SAY, never in what the
 			// registry holds.
-			if not entry.synthesized 'theAuthorWroteThisName'
-				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: entry.name, declFilePath: entry.sourceFilePath), line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
+			let blamed = blamedFunctionDeclaration(project, newcomer: entry)
+
+			if not blamed.synthesized 'theAuthorWroteThisName'
+				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: blamed.name, declFilePath: blamed.sourceFilePath), line: blamed.nameLine, column: blamed.nameColumn, filePath: blamed.sourceFilePath)
 			end 'theAuthorWroteThisName'
 
 			continue
 		end 'duplicate'
 
-		project.funcSignatures.upsert(entry.name, value: entry.signature)
+		holdFunctionFloor(project, entry: entry)
 	end 'each'
 end 'commitFuncSignatures'
+
+// The merge's one writer of these three registries, so the kept declaration's signature and return type
+// always come from the same declaration.
+function holdFunctionFloor(project Project, entry FuncSignatureEntry)
+	project.funcSignatures.upsert(entry.name, value: entry.signature)
+	project.funcReturnTypes.upsert(entry.name, value: entry.returnType)
+	project.funcSignatureFloors.upsert(entry.name, value: entry)
+end 'holdFunctionFloor'
+
+function blamedFunctionDeclaration(project Project, newcomer FuncSignatureEntry) returns FuncSignatureEntry
+	let floor = try project.funcSignatureFloors.get(newcomer.name) otherwise panic("blamedFunctionDeclaration: '{String.from(newcomer.name)}' is in funcSignatures, and every name committed there has its floor committed beside it")
+
+	if newcomerDisplacesTheFloor(newcomer, floor: floor) 'theFloorIsBlamed'
+		holdFunctionFloor(project, entry: newcomer)
+		return floor
+	end 'theFloorIsBlamed'
+
+	return newcomer
+end 'blamedFunctionDeclaration'
+
+// Role decides before path: a contested free function's `<directory>.<name>` key colliding with a
+// method's always blames the free function, because that E3006 text tells its author to rename the
+// directory or the function. Otherwise the file whose path identity sorts earliest keeps the name, so the
+// blame is the same on every host and for every spelling of the invocation.
+function newcomerDisplacesTheFloor(newcomer FuncSignatureEntry, floor FuncSignatureEntry) returns bool
+	if newcomer.role != floor.role 'twoRoles'
+		return floor.role == FunctionDeclarationRole.contestedFreeFunction
+	end 'twoRoles'
+
+	return precedesInPathOrder(newcomer.sourceFilePath, other: floor.sourceFilePath)
+end 'newcomerDisplacesTheFloor'
 
 // ⭐⭐ **WHY ONE NAME HAS TWO DECLARATIONS — and the CONTESTED case earns its own sentence because the name
 // the message quotes is one NEITHER declaration wrote.**

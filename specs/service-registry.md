@@ -2181,6 +2181,33 @@ error E3169: <fragment>:15:9: two `default` declarations for `Config` in one pro
 note: <fragment>:13:9: the other `default` for `Config`
 ```
 
+<!-- test: error.two-defaults-for-one-key-are-blamed-in-path-order -->
+The blamed `default` is the one in the file whose path sorts later byte for byte, not the one declared later.
+```maxon
+// --- file: b.maxon
+module typealias Integer = int(i64.min to i64.max)
+
+module type Config
+	export let n as Integer
+
+	module static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+// --- file: a.maxon
+default Config = Config.create(2)
+
+function main() returns ExitCode
+	return Config.current().n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3169: <fragment>:13:9: two `default` declarations for `Config` in one program — delete one of them
+note: <fragment>:15:9: the other `default` for `Config`
+```
+
 <!-- test: error.a-default-whose-service-does-not-implement-its-key -->
 <!-- unsupported-targets: wasm32-wasi -->
 `Stranger` has a `greet` of the right shape, but it does not declare `implements Greeter`.

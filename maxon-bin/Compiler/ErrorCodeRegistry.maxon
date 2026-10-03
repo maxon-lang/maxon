@@ -392,23 +392,22 @@ export enum ErrorCode
 	// (`expected 'int', got 'bool'`).
 	typeMismatch = "E3005"
 
-	// A name is declared twice where exactly one binding is legal: two functions with the same signature, a top-level `let`/`var` declared twice in a file, a TYPE name claimed by two declarations, or a local shadowing a 'self' field.
-	// a duplicate definition or a local-vs-self-field shadow. Two
-	// shapes share the code: (a) two function definitions with the same
-	// name and signature -- fires from `reportDuplicateFunction` in the
-	// parser for same-file duplicates and from the project-level main
-	// registration for cross-file `main` collisions; (b) a local
+	// A name is declared twice where exactly one binding is legal: two functions with the same signature, a top-level `let`/`var` declared twice, a TYPE name claimed by two declarations, or a local shadowing a 'self' field.
+	// Four shapes share the code: (a) two function definitions with the same
+	// name and signature -- fires from `commitFuncSignatures` at the merge,
+	// in one file or across files; (b) a local
 	// declaration inside an instance method whose name collides with a
 	// `self.field` (the local would silently shadow the field);
-	// (c) two top-level `let`/`var` declarations of one name in a file --
-	// fires from `isRedeclaredBinding` at the real parse;
+	// (c) two top-level `let`/`var` declarations of one name, in one file or
+	// in two files when neither is file-private -- fires from
+	// `isRedeclaredBinding` at the real parse;
 	// a `let` and a `var` share one storage key, so kind is irrelevant. The
 	// top-level twin of (a); (d) a TYPE name claimed by two declarations --
 	// `type` / `enum` / `union` / `interface` / `typealias` all file one name
 	// in one whole-program namespace, where a fixed resolution cascade would
 	// otherwise pick the winner silently. Fires from `commitTypeNameDecls` in the compiler at the
-	// merge. Kind-independent exactly as (c) is: what is refused is the SECOND
-	// declaration of the name, whichever keyword introduced either of them --
+	// merge. Kind-independent exactly as (c) is: what is refused is every
+	// declaration of the name but the one kept, whichever keyword introduced either of them --
 	// UNLESS A QUALIFIED SPELLING TELLS THE TWO APART, which is the whole
 	// rule (`typeNamePairMayCoexist` in the compiler). What collides is one FILE
 	// declaring a name twice, two NOMINAL declarations, and a nominal declaration
@@ -426,6 +425,10 @@ export enum ErrorCode
 	// name as well, `_` being a legal name character and the join therefore
 	// not injective. A `typealias` is not a claimant here: it mints no symbol
 	// of its own.
+	// For (a), (c) and (d) the declaration kept is the earlier one within a file, and across files the one
+	// in the file whose absolute path, with `/` separators, sorts first byte by byte; each other one is
+	// reported at its name. A free function registered under its directory-qualified spelling is reported
+	// in place of the method that spelling collides with.
 	duplicateDefinition = "E3006"
 
 	// A call cannot pick a unique overload: two or more candidates match it indistinguishably.
@@ -573,7 +576,9 @@ export enum ErrorCode
 	// reachable from its own file alone and collides with nothing outside it. Aliases in different
 	// directories are legal whatever their forms; an ambiguity between two an author could both name is a
 	// property of the USE -- E3063 at the reference. A colliding pair involving a
-	// `type`/`enum`/`union`/`interface` is E3006 instead. Rename one declaration, or make it file-private.
+	// `type`/`enum`/`union`/`interface` is E3006 instead. The alias kept is the earlier one within a file,
+	// and across files the one in the file whose absolute path, with `/` separators, sorts first byte by
+	// byte; the other is reported at its name. Rename one declaration, or make it file-private.
 	semanticDuplicateTypeAlias = "E3061"
 
 	// A typealias is declared and never used.
@@ -1975,8 +1980,9 @@ export enum ErrorCode
 
 	// Two `default` declarations name one key at the same level: two in the program's own files, or
 	// two in the standard library. A program's `default` replaces the standard library's for the same
-	// key, so only a pair on one side is ambiguous. Reported at the second key; the note is the first.
-	// Delete one of them.
+	// key, so only a pair on one side is ambiguous. The `default` kept is the earlier one within a file, and
+	// across files the one in the file whose absolute path, with `/` separators, sorts first byte by byte;
+	// each other one is reported at its key, with a note at the kept one. Delete one of them.
 	registryDuplicateDefault = "E3169"
 
 	// A `default` whose key is an interface does not build a service that implements it. An interface

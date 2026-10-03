@@ -1489,11 +1489,11 @@ field-access refusal. The refile declines a key another declaration owns
 (`ProgramSignatures.refileContestedFreeFunction`), so the call types correctly and this is the only
 diagnostic any variant produces.
 
-⚠ **`app/main.maxon` IS DECLARED FIRST, AND THAT IS THE ASSERTION, NOT A LAYOUT PREFERENCE.**
-`commitFuncSignatures` reports the SECOND declaration to claim a key, so which of the two colliders the
-refusal points at is decided by the order the files are compiled in. Blaming the METHOD would tell its
-author to rename a directory the method knows nothing about. Declaring the type's file first states the order that makes the refusal name the declaration its advice
-is about.
+⚠ **THE REFUSAL NAMES THE CONTESTED FREE FUNCTION, WHATEVER THE FILE ORDER.** Its advice — rename the
+directory or the function — is about that declaration, and blaming the METHOD would tell its author to
+rename a directory the method knows nothing about. So this collision is blamed by role, never by which
+file is compiled first or sorts first: `Point/` precedes `app/` in path byte order, and the method in
+`app/main.maxon` is still not the one named.
 ```maxon
 // --- file: app/main.maxon
 typealias Integer = int(0 to 125)
@@ -1530,6 +1530,46 @@ error E3006: Point/specs/fragments/namespace-qualified-resolution/error.conteste
 ```
 
 
+<!-- test: error.contested-free-function-is-named-when-its-file-is-compiled-first -->
+The case above with the files in the other order: the contested free function's file is compiled first,
+so the method is the second declaration to claim `Point.create`. The refusal still names the free
+function.
+```maxon
+// --- file: Point/p.maxon
+export typealias Integer = int(0 to 125)
+
+export function create() returns Integer
+	return 3
+end 'create'
+
+// --- file: app/main.maxon
+typealias Integer = int(0 to 125)
+
+export type Point
+	export var x as Integer
+
+	export static function create() returns Self
+		return Self{x: 9}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create()
+	return p.x
+end 'main'
+
+// --- file: other/o.maxon
+export typealias Integer = int(0 to 125)
+
+export function create() returns Integer
+	return 5
+end 'create'
+```
+```maxoncstderr
+error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-is-named-when-its-file-is-compiled-first.test:5:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+```
+
+
 <!-- test: error.contested-free-function-collides-with-a-fieldless-method -->
 **THE VARIANT WITH NO WITNESS.** The case above produces a visible symptom only because the
 caller touches a FIELD. Here the method returns a plain `Integer`, so nothing downstream would ever
@@ -1538,11 +1578,8 @@ silent wrong answer if the duplicate check were the thing at fault. It is not: `
 sees both declarations claim one key whatever they return, and refuses. Pinned so that the claim
 "nothing downstream notices" is tested rather than assumed.
 
-⚠ **`app/main.maxon` IS DECLARED FIRST, AND THAT IS THE ASSERTION, NOT A LAYOUT PREFERENCE.**
-`commitFuncSignatures` reports the SECOND declaration to claim a key, so which of the two colliders the
-refusal points at is decided by the order the files are compiled in. Blaming the METHOD would tell its
-author to rename a directory the method knows nothing about. Declaring the type's file first states the order that makes the refusal name the declaration its advice
-is about.
+⚠ **THE REFUSAL NAMES THE CONTESTED FREE FUNCTION, WHATEVER THE FILE ORDER**, for the reason the case
+above gives.
 ```maxon
 // --- file: app/main.maxon
 export typealias Integer = int(0 to 125)

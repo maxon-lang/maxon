@@ -819,14 +819,15 @@ export union SourceParseError implements Error
 	byteStringCodepointRange(message String, line LineNumber, column ColumnNumber)
 
 	// A top-level name DECLARED more than once in the PROGRAM — `let A = 1` then `let A = 2` in one file, a
-	// `let`/`var` collision on one name, or (since N1c) two files that each `export let LIMIT`. A global's
+	// `let`/`var` collision on one name, or two files that each `export let LIMIT`. A global's
 	// name is flat and project-wide: namespacing scopes typealiases and functions, never bindings, because
 	// neither reference gives a binding a directory-qualified spelling. Unlike the constant-evaluator arms below (raised during the
 	// sweep, recorded on the decl, re-thrown), this is raised DIRECTLY by the real parse when it reaches
-	// the later declaration (`raiseBindingFailure` via `ProgramSignatures.isRedeclaredBinding`). Renders
-	// as E3006, positioned at the LATER declaration's name — the top-level twin of the duplicate-FUNCTION
-	// check `commitFuncSignatures` makes. `recordDecl` is first-wins, so the first declaration keeps the
-	// name and this names the redeclaration the author should remove.
+	// a declaration its storage key does not hold (`raiseBindingFailure` via
+	// `ProgramSignatures.isRedeclaredBinding`). Renders as E3006, positioned at that declaration's name — the
+	// top-level twin of the duplicate-FUNCTION check `commitFuncSignatures` makes. `recordDecl` holds the
+	// declaration from the file whose path identity sorts earliest, and the first within one file, so this
+	// names every other one.
 	duplicateTopLevelDeclaration(name String, line LineNumber, column ColumnNumber)
 
 	// --- The top-level constant arms (P1.0d.5a) ---
@@ -18442,11 +18443,9 @@ export type Parser
 	// (`queryProgramSignatures` does this once per file, in source-path order); nothing else calls
 	// it, and a Parser used for a sweep parses no body.
 	//
-	// It records `FuncReturnTypeEntry`s — the SAME record the real parse contributes to the
-	// `funcReturnTypes` registry (ParseStaging) — and reads the return type through the SAME
-	// `parseOptionalReturnType` the real parse reads it with. That shared routine is what keeps the
-	// sweep and the parse from drifting into two opinions of what `returns X` means, which is the
-	// standing hazard of having a pre-scan at all.
+	// It reads the return type through the SAME `parseOptionalReturnType` the real parse reads it
+	// with. That shared routine is what keeps the sweep and the parse from drifting into two
+	// opinions of what `returns X` means, which is the standing hazard of having a pre-scan at all.
 	//
 	// The FOLD happens here, not in the caller, because the ids the sweep interns are file-local —
 	// they live in this Parser's own artifact interner, which is private and stays private. Handing
@@ -24357,12 +24356,20 @@ export type Parser
 			return qualifiedMethodName(typeName, methodName: nameTok.value)
 		end 'method'
 
-		if self.signatures.allFilesFolded and self.signatures.isContestedFreeFunction(nameTok.value) 'contestedAcrossDirectories'
+		if self.declarationRoleOf(nameTok) == FunctionDeclarationRole.contestedFreeFunction 'contestedAcrossDirectories'
 			return self.signatures.freeFunctionRegistrationName(nameTok.value, moduleDirectory: self.signatures.moduleDirectoryOf(self.filePath))
 		end 'contestedAcrossDirectories'
 
 		return nameTok.value
 	end 'declaredMethodName'
+
+	function declarationRoleOf(nameTok Token) returns FunctionDeclarationRole
+		if self.enclosingType.isType() or not self.signatures.allFilesFolded or not self.signatures.isContestedFreeFunction(nameTok.value) 'notAContestedFreeFunction'
+			return FunctionDeclarationRole.ordinary
+		end 'notAContestedFreeFunction'
+
+		return FunctionDeclarationRole.contestedFreeFunction
+	end 'declarationRoleOf'
 
 	// ⭐⭐ **THE REGISTRATION NAME A DECLARATION CLAIMS — bare for the first of its name, MANGLED for a
 	// later overload of it** (D7). Every registry this function's declaration reaches is keyed by what this
@@ -27081,10 +27088,10 @@ export type Parser
 	function raiseBindingFailure(decl TopLevelDecl) throws SourceParseError
 		try self.requireInitializerNamesNoRegistry(decl)
 
-		// A REDECLARATION is reported HERE, at the later declaration — the top-level twin of the
-		// duplicate-FUNCTION E3006 `commitFuncSignatures` raises. Checked BEFORE the outcome match
-		// because a duplicate is an error independent of whether the first declaration's initializer
-		// also failed: that failure reports at the FIRST declaration's own statement, this at the later.
+		// A REDECLARATION is reported HERE, at the declaration its key does not hold — the top-level twin
+		// of the duplicate-FUNCTION E3006 `commitFuncSignatures` raises. Checked BEFORE the outcome match
+		// because a duplicate is an error independent of whether the held declaration's initializer
+		// also failed: that failure reports at the held declaration's own statement, this at the other.
 		if self.signatures.isRedeclaredBinding(decl) 'redeclared'
 			throw SourceParseError.duplicateTopLevelDeclaration(String.from(decl.name), line: decl.nameLine, column: decl.nameColumn)
 		end 'redeclared'
@@ -27154,8 +27161,8 @@ export type Parser
 		let declaration = defaultDeclarationFrom(self.tokens, index: self.pos, path: self.filePath, isStdlibSource: self.isStdlibSource)
 		let keyTok = self.tokenAt(self.pos + 1)
 
-		if let earlier = try self.signatures.earlierDefaultAtTheSameLevel(declaration) 'declaredTwice'
-			throw SourceParseError.registryRefused(ErrorCode.registryDuplicateDefault, explanation: "two `default` declarations for `{String.from(declaration.key)}` in one program — delete one of them", line: keyTok.line, column: keyTok.column, note: DiagnosticNote.at("the other `default` for `{String.from(declaration.key)}`", line: earlier.keyLine, column: earlier.keyColumn, filePath: earlier.declFilePath))
+		if let kept = try self.signatures.keptDefaultBeside(declaration) 'declaredTwice'
+			throw SourceParseError.registryRefused(ErrorCode.registryDuplicateDefault, explanation: "two `default` declarations for `{String.from(declaration.key)}` in one program — delete one of them", line: keyTok.line, column: keyTok.column, note: DiagnosticNote.at("the other `default` for `{String.from(declaration.key)}`", line: kept.keyLine, column: kept.keyColumn, filePath: kept.declFilePath))
 		end 'declaredTwice'
 
 		let returnType = try self.defaultKeyValueType(declaration, keyTok: keyTok)
@@ -27275,11 +27282,10 @@ export type Parser
 			throw SourceParseError.unexpectedToken("end of default value", got: tokenDisplayText(stray), line: stray.line, column: stray.column)
 		end 'trailingTokens'
 
-		self.artifact.recordFuncReturnType(name, returnType: declaredReturn, declaredSurface: sharedEmptyDeclaredSurface)
 		self.publishExistentialInstances(initializer)
 		self.fileDeferredProvenance(initializer)
 		self.publishDebugLocals(initializer)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(declaredReturn), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(declaredReturn), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), returnType: declaredReturn, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true, role: FunctionDeclarationRole.ordinary)
 		self.commitRangeChecks(name)
 	end 'parseDefaultInitializer'
 
@@ -32193,11 +32199,6 @@ export type Parser
 		// signature, and `parseReturnStatement`'s declared-type check all then see a struct as a struct.
 		paramTypes = self.resolveNamedStructAll(paramTypes)
 
-		// The return type's pre-erasure spelling (A2j), read through the same one reader the SWEEP reads it
-		// through, so the two passes cannot form two opinions of what `returns __ManagedMemory` means — the
-		// property `parseOptionalReturnType` is shared for. This copy reaches `project.funcReturnTypes`.
-		let declaredReturnSurface = self.returnDeclaredSurface()
-
 		// Captured BEFORE the clause is consumed, for `paramTypeStarts`' reason one column over (W57/W58): the
 		// resolved type is exactly where the `with` arguments stop existing, so the token is what survives.
 		let returnTypeStart = self.returnTypeTokenIndex()
@@ -32561,8 +32562,7 @@ export type Parser
 		self.publishExistentialInstances(func)
 		self.fileDeferredProvenance(func)
 		self.publishDebugLocals(func)
-		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath, synthesized: false)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints), returnType: returnType, nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath, synthesized: false, role: self.declarationRoleOf(nameTok))
 		self.commitRangeChecks(name)
 	end 'parseFunction'
 
@@ -34118,8 +34118,6 @@ export type Parser
 			throw SourceParseError.unexpectedToken("end of default value", got: tokenDisplayText(stray), line: stray.line, column: stray.column)
 		end 'trailingTokens'
 
-		self.artifact.recordFuncReturnType(helperName, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
-
 		// A default-value helper takes NO parameters and its return type is the parameter's own already-resolved
 		// declared type (`pending.declaredType`), not a spelling this parse is standing on — so neither
 		// existential column has a token to read and both stay shared-empty. A parameter declared at a
@@ -34128,7 +34126,7 @@ export type Parser
 		self.publishExistentialInstances(helper)
 		self.fileDeferredProvenance(helper)
 		self.publishDebugLocals(helper)
-		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true)
+		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), returnType: returnType, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true, role: FunctionDeclarationRole.ordinary)
 		self.commitRangeChecks(helperName)
 	end 'parseDefaultHelperBody'
 
@@ -70535,7 +70533,7 @@ export type Parser
 	// two encodings of "which door claims this name", and the failure mode is silent — one door claiming
 	// the shape and the other resolving it differently.
 	//
-	// One storage key holds ONE declaration (`recordDecl` is first-wins on it), so the two doors are
+	// One storage key holds ONE declaration (`recordDecl`), so the two doors are
 	// disjoint by construction and the order below is a cost preference, not a precedence: the constant is
 	// asked first because a managed `let` is the commoner declaration.
 	//
@@ -85611,12 +85609,6 @@ export type Parser
 		return starts
 	end 'tupleElementStartsAt'
 
-	// The RETURN clause's spelling, asked with the cursor ON `returns` — so the type token is the next one.
-	// ⚠ **ONE reader, because BOTH passes ask it**: the tolerant declaration sweep (`recordScannedSignature`,
-	// whose answer reaches every call site through the whole-program index) and the real parse
-	// (`parseFunction`). That is exactly why `parseOptionalReturnType` is shared, and a second hand-written
-	// peek beside it would be free to disagree the moment a return clause grows a second shape — silently,
-	// since a wrong SURFACE is a wrong answer and not a compile error.
 	// ⭐⭐ **THE BARE NAME THE `returns` CLAUSE WROTE — the CALL RESULT's half of P1.6-C's provenance.**
 	// `returns DenseColumn` gives `DenseColumn`; `returns Array with Integer`, a primitive, or no clause at
 	// all gives EMPTY, because none of those names an alias. Read at the same moment as
@@ -85660,8 +85652,8 @@ export type Parser
 			return sharedEmptyDeclaredSurface
 		end 'noReturnClause'
 
-		// `slotElementsFromAliases: false` — BOTH passes ask this and the SWEEP's copy is the one the
-		// whole-program index stores, so a SLOT's element bit read here would be how far the sweep had got,
+		// `slotElementsFromAliases: false` — the SWEEP asks this and the whole-program index stores its
+		// answer, so a SLOT's element bit read here would be how far the sweep had got,
 		// and a call's member roster would depend on file order. The ROOT's is safe and is left asking; see
 		// `declaredSurfaceAt`'s two ⚠⚠ blocks for why the two positions differ.
 		return self.declaredSurfaceAt(self.returnTypeTokenIndex(), slotElementsFromAliases: false)
@@ -86255,10 +86247,9 @@ export type Parser
 	end 'pushLiftedFunction'
 
 	function publishLiftedBody(lifted IrFunction, returnType MaxonReturnType, signature FuncSignature, anchor Token, synthesized bool)
-		self.artifact.recordFuncReturnType(lifted.name, returnType: returnType, declaredSurface: sharedEmptyDeclaredSurface)
 		self.publishExistentialInstances(lifted)
 		self.publishDebugLocals(lifted)
-		self.artifact.recordFuncSignature(lifted.name, signature: signature, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: synthesized)
+		self.artifact.recordFuncSignature(lifted.name, signature: signature, returnType: returnType, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: synthesized, role: FunctionDeclarationRole.ordinary)
 		self.commitRangeChecks(lifted.name)
 	end 'publishLiftedBody'
 

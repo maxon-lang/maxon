@@ -133,7 +133,9 @@ end 'contributed'
 <!-- test: error.an-unmarked-directory-is-compiled -->
 ⚠ THE NEGATIVE CONTROL, and the reason the four cases above are not vacuous. It is
 `prunes-a-marked-directory` with the marker deleted and nothing else changed: the second `main` joins
-the program and the build is refused. Every green above is attributable to the marker alone.
+the program and the build is refused. Every green above is attributable to the marker alone. The refusal
+lands on `main.maxon`'s `main`, because `fixtures/second-program.maxon` precedes `main.maxon` in path
+byte order.
 ```maxon
 // --- file: main.maxon
 function main() returns ExitCode
@@ -146,5 +148,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: fixtures/<fragment>:8:10: Duplicate function 'main'
+error E3006: <fragment>:3:10: Duplicate function 'main'
 ```

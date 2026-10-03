@@ -4253,8 +4253,9 @@ enum case (`plain = api.format`) all accept the qualified form.
 
 **Every candidate is nameable.** Two type declarations of one name that can both be named from outside
 their files may not share a directory: two typealiases are **E3061** and a pair involving a type, enum,
-union or interface is **E3006**, reported at the declaration. Two typealiases of one name in one file are
-**E3061** too. Declarations in different directories coexist — a typealias in one and a type in another
+union or interface is **E3006**. Two typealiases of one name in one file are **E3061** too. The declaration
+kept is the earlier one in a file, and across files the one in the file whose absolute path, with `/`
+separators, sorts first byte by byte; each other one is reported at its name. Declarations in different directories coexist — a typealias in one and a type in another
 included — and a file-private declaration coexists with anything, since only its own file can name it.
 
 Every typealias a `public` standard-library signature names is itself `public`, so a value can always be cast
