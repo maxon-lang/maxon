@@ -27,12 +27,12 @@ end 'Array'
 All three are callable on an `Array`: `arr.contains(3)`, `arr.contains(other)` and
 `arr.contains(function(x) gives x > 3)` each pick a different one.
 
-### Why the FILE boundary used to decide this, and no longer does
+### Why the FILE boundary cannot decide this
 
 A declaration's **registration name** is minted where the declaration is parsed, and a parser is a pure
 function of its own file. So a later overload of a name the same file already claimed registers as
-`pick#bool`, while a later overload of a name **another** file claimed had no way to know it was later
-at all — both registered the bare name and collided at the merge (`E3006`).
+`pick#bool`, while a later overload of a name **another** file claimed has no way to know it is later
+at all — a per-file rule would register both under the bare name and collide them at the merge (`E3006`).
 
 The whole-program extension fold is what closes it: it walks every `extension` declaration in the
 program before any file is parsed, so it — and only it — can say *"this `<Conformer>.<method>` is
@@ -41,7 +41,7 @@ back rather than re-deriving it.
 
 ### When the name is contested, NOBODY keeps the bare spelling
 
-An uncontested declaration registers under its own name, as it always did. A **contested** one registers
+An uncontested declaration registers under its own name. A **contested** one registers
 under its parameter-type suffix — and so does the first of them, which is the whole point:
 
 - two declarations whose parameters differ mint **different** suffixes and are two live overloads;
@@ -104,10 +104,9 @@ end 'main'
 ```
 
 <!-- test: two-extensions-in-two-files-are-one-overload-set -->
-The headline case. `Five.pick` is declared by an `extension Tagged` in each file; before this rule both
-registered the bare name and the program was refused `E3006 duplicate definition of function
-'Five.pick'`, naming two declarations that are not duplicates of each other. Both are now live and the
-argument picks between them: `7 + 105`.
+The headline case. `Five.pick` is declared by an `extension Tagged` in each file, and the two
+declarations are not duplicates of each other. Both are live and the argument picks between them:
+`7 + 105`.
 ```maxon
 // --- file: a.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -457,14 +456,11 @@ error E3006: <fragment>:27:18: duplicate definition of function 'Five.pick#bool'
 ```
 
 <!-- test: an-overload-set-on-a-generic-types-extension-resolves-at-the-instance -->
-The control above is a NON-generic conformer, and that is the only shape the resolver could handle (W58). A
-shared generic body spells its receiver at the base `Holder with <T>`, and the overload scorer read the raw
-signature — so scoring `h.rank(40)` on a `Holder with Integer` compared `Holder_T<gid>` against
-`Holder_Integer` at position 0, called EVERY candidate incompatible, and fell back to the first member:
-**`E3036: 'Holder.rank' expects 1 argument(s) but 2 were provided`**, the arity of the overload the call was
-not written against. It was order-dependent and silent — swapping the two `extension` blocks moved the error
-to `expects 2 argument(s) but 1 were provided`. The scorer now resolves each parameter through the call's
-instance, which is what `checkArgTypes` has always done one pass later.
+The control above is a NON-generic conformer. A shared generic body spells its receiver at the base
+`Holder with <T>`, so the overload scorer cannot read the raw signature: scoring `h.rank(40)` on a
+`Holder with Integer` would compare `Holder_T<gid>` against `Holder_Integer` at position 0 and call EVERY
+candidate incompatible. The scorer resolves each parameter through the call's instance, as `checkArgTypes`
+does one pass later.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -505,10 +501,8 @@ built that way: `extension Array where Element is Comparable` declares `sort()` 
 `extension Array` declares `sort(cmp)`.
 
 ⛔ **The conditional-extension gate is keyed on the NAME, and a call is dispatched before its arguments are
-read** — so it refused the UNCONSTRAINED overload with the constrained one's clause:
-`E4006: Type 'Holder' has no field named 'beats' ('beats' is available as a conditional extension where
-Element is Comparable, but 'Opaque' does not implement 'Comparable')`, about a call to an overload that has
-no clause at all. The parse-time gate now DEFERS when an unconditional declaration of the name exists, and
+read** — so deciding at parse time would refuse the UNCONSTRAINED overload with the constrained one's
+clause. The parse-time gate DEFERS when an unconditional declaration of the name exists, and
 `SemanticCheck.checkResolvedExtensionConstraints` decides on the member overload resolution picked — which is
 the earliest point at which the question has an answer. Both readings are exercised here: the CONFORMING
 instance still reaches the conditional overload, and the non-conforming one reaches the unconstrained one.

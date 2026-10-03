@@ -230,9 +230,10 @@ the DEFINING OP's span, which does not exist yet at the mint and is resolved fro
 `valueOrigins`/`opRanges` at the refusal. `declareInitializedBinding` and `bindParameters` still ask
 first, for a sharper sentence naming the binding — never for cover.
 ⭐ **THE ONE MANAGED THING THE TYPE COLUMNS CANNOT SEE IS A CAPTURING CLOSURE**, because
-`valueIsManagedHeap` declines a `function` tag — correctly, a non-capturing closure owns nothing — while a
-capturing one carries a refcounted env block and the PBR-2 cells live inside it. That is its own fact with
-its own single door, `markCapturingClosure`, and the refusal is asked there.
+`noteManagedValueInRuntimeSource` declines a `function` tag — a plain function value is an immortal static
+record that owns nothing — while a capturing one is a refcounted record holding its captures. That is its own
+fact with its own single door, `noteClosureRecordInRuntimeSource`, asked where `buildClosureEnv` builds the
+record.
 ⇒ **A NEW WAY FOR A VALUE TO ACQUIRE HEAP THAT IS NOT A TYPE-COLUMN WRITE OWES THE SAME TREATMENT**: one
 door that records the fact, and a note on it.
 
@@ -719,7 +720,7 @@ and it is silently reformatted. The marker is a FLAG whose contents are never re
 honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
 
 ⚠ **THE FORMATTER ENGINE'S GATE IS `tests/fmt/engine-cases.maxtest`, NOT `spec-test`.** It formats
-the 29 sources in `tests/fmt/engine-cases/` (4 of them unlexable) with the real `maxon fmt`, twice, and
+the 30 sources in `tests/fmt/engine-cases/` (4 of them unlexable) with the real `maxon fmt`, twice, and
 goes red if an answer differs from its `.expected`, a comment is lost or duplicated, a lexer-error
 sentinel is written into a file, or a second run moves anything. `UrlInPlainString`,
 `NoMultilineLiteral` and `PlainStringNoInterpolation` are negative controls that must stay GREEN.

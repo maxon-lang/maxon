@@ -121,6 +121,10 @@ export enum HostFacility
 
 	processLiveness
 
+	processNamespace
+
+	entropy
+
 	// How many processors the machine has (`__cpu_count`).
 	cpuCount
 
@@ -367,9 +371,8 @@ end 'CalleeFacility'
 // NARROW gate rather than a family-wide one.
 // ⭐⭐ **THE SELECT (`__Builtins.awaitAny` ⇒ `__gt_await_any`) JOINS INDIVIDUALLY, LIKE ITS THREE
 // SCHEDULER BAND-MATES ABOVE.** It is the whole green-thread substrate — a `TlsAlloc`'d current-P
-// slot, a context switch, a poller — so on any other backend the program dies in a deliberate x64-windows
-// gate that knows it is one (`StdToWasm: the P1.5 IOCP ops are x64-windows only`;
-// `StdToX64Conversion: lowerTlsAlloc: TlsAlloc is x64-windows only`) rather than at its own span. That is
+// slot, a context switch, a poller — so on a backend without it the program dies in a backend panic
+// (`StdToWasm.emitBodyOp`'s IOCP arm) rather than at its own span. That is
 // exactly the shape the `async`/`await` band still has, whose entry points are NOT here; no further such
 // door may be opened while it stands, so this intrinsic is named and the E3104 lands at the call.
 // MEASURED on `--target=wasm32-wasi`: `error E3104: … it lowers to the runtime entry '__gt_await_any',
@@ -513,6 +516,14 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 		return CalleeFacility.needs(HostFacility.processLiveness)
 	end 'liveness'
 
+	if callee.equals(ProcessNamespaceName) 'namespace'
+		return CalleeFacility.needs(HostFacility.processNamespace)
+	end 'namespace'
+
+	if callee.equals(RandomFillName) 'entropy'
+		return CalleeFacility.needs(HostFacility.entropy)
+	end 'entropy'
+
 	if isProcessRuntimeCallee(callee) 'processBand'
 		return CalleeFacility.needs(HostFacility.processInfo)
 	end 'processBand'
@@ -569,15 +580,16 @@ end 'calleeHasHostFacility'
 // macOS, raw syscalls on the two static Linux images. A premature `true` is worse than a `false`;
 // this file's header says why.
 //
-// ⚠ **wasm32-wasi PROVIDES ONLY `pageMemory` AND `hostMutex`, AND SOME OF ITS `false`s ARE PERMANENT.** WASI
+// ⚠ **wasm32-wasi PROVIDES ONLY `pageMemory`, `hostMutex` AND `entropy`, AND SOME OF ITS `false`s
+// ARE PERMANENT.** WASI
 // has no process-spawn primitive and no per-thread CPU clock at all, so `subprocess` and `threadCpuClock`
 // there are refusals of a different KIND from "not yet" — that distinction is carried by
 // `SemanticCheck.targetCanHostSubprocess` and its E3074, which reads this table's subject and not its
 // answer. One table, two consumers, no second copy.
 export function targetProvidesFacility(target Target, facility HostFacility) returns bool
-	if target.cpu == CpuArch.x64 and target.os == Os.windows 'theFullRow'
+	if target.cpu == CpuArch.x64 and target.os == Os.windows 'windowsX64'
 		return true
-	end 'theFullRow'
+	end 'windowsX64'
 
 	if target.cpu == CpuArch.arm64 and target.os == Os.macos 'darwinArm64'
 		return match facility 'f'
@@ -616,6 +628,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				processInfo or
 				processPriority or
 				processLiveness or
+				processNamespace or
+				entropy or
 				cpuCount or
 				pageMemory or
 				hostMutex or
@@ -688,6 +702,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				processInfo or
 				processPriority or
 				processLiveness or
+				processNamespace or
+				entropy or
 				cpuCount or
 				pageMemory or
 				hostMutex or
@@ -748,6 +764,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				subprocess or
 				processPriority or
 				processLiveness or
+				processNamespace or
+				entropy or
 				managedSocket or
 				terminalDetection or
 				sharedMemory or
@@ -761,11 +779,12 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 
 	if target.cpu == CpuArch.wasm32 and target.os == Os.wasi 'wasmWasi'
 		return match facility 'f'
-			// Every op of both facilities has an arm in `StdToWasm.emitBodyOp`, which is what a `true`
+			// Every op of these facilities has an arm in `StdToWasm.emitBodyOp`, which is what a `true`
 			// promises. `hostMutex`'s arms emit nothing, because one thread makes exclusion total; see its
 			// `HostFacility` row for what a threaded wasm lane would owe.
 			pageMemory or
-				hostMutex gives true
+				hostMutex or
+				entropy gives true
 
 			// ⛔ **THE REST ARE ABSENT, AND FOR TWO DIFFERENT KINDS OF REASON THIS COLUMN DOES NOT RECORD.**
 			// A WASI component has one thread and no process-spawn primitive, so the green-thread floor,
@@ -793,6 +812,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				processInfo or
 				processPriority or
 				processLiveness or
+				processNamespace or
 				cpuCount or
 				threadLocalSlot or
 				terminalDetection or
@@ -833,19 +853,6 @@ end 'targetCanProduceDebugStream'
 export function targetCanMeasureCoverage(target Target) returns bool
 	return targetProvidesFacility(target, facility: HostFacility.managedFile)
 end 'targetCanMeasureCoverage'
-
-// Whether the target's backend emits the inline frame records a panic backtrace names a spliced callee
-// by (`BacktraceFormat`'s `__inlframes`, read by the two native frame printers). On wasm the frames are
-// the engine's — there is no frame chain to walk and no printer of ours — so a trace raised inside a
-// spliced body would lose the callee's frame with no record to restore it; the inliner refuses the
-// splices whose trace could change there.
-module function targetEmitsInlineFrameRecords(target Target) returns bool
-	return match target.cpu 'cpu'
-		x64 or
-			arm64 gives true
-		wasm32 gives false
-	end 'cpu'
-end 'targetEmitsInlineFrameRecords'
 
 // How many OS threads a target can run inside one process, which is what the allocator's sharding
 // reads: on `singleMachine` there is no thread-local slot to read and no second thread to serialise

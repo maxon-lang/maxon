@@ -246,7 +246,9 @@ Both params are required (otherwise `-32602`). The result:
 ```
 
 `ir` is the text `maxon build --emit-ir` writes, and is empty when the compile fails. `errors` lists
-every diagnostic with a **1-based** `line` and `column`.
+every diagnostic with a **1-based** `line` and `column`. A diagnostic located in another file is placed at
+line 1, column 1 of the source, and its message is prefixed with where it is: `<path>:<line>:<column>: `,
+or `<path>: ` for one that names a file and no position.
 
 **`maxon/listProjects`** is a Maxon-specific request, not advertised in the capabilities, that lists the
 projects the server holds. It is what the VS Code status bar shows. It takes no params. The open documents

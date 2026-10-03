@@ -373,8 +373,7 @@ end 'main'
 ### A method call on a `Self{…}` LOCAL forwards the layout descriptor
 
 `stdlib/Map.maxon:58-68` builds `var result = Self{…}` inside a static and then calls a
-descriptor-reading method on it. The receiver is a value of the enclosing type that is not `self`,
-which used to be refused outright.
+descriptor-reading method on it. The receiver is a value of the enclosing type that is not `self`.
 
 <!-- test: field-defaults.descriptor-forwards-from-a-self-literal-local -->
 ```maxon
@@ -464,7 +463,7 @@ end 'main'
 
 ### …and with the MANAGED column second
 
-The mirror image, so the fix cannot be "always use the first column's destructor" wearing a pass.
+The mirror image, so the implementation cannot be "always use the first column's destructor" wearing a pass.
 
 <!-- test: field-defaults.two-type-params-with-the-managed-column-second -->
 ```maxon

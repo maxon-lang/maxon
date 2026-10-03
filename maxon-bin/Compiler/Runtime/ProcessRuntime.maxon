@@ -51,6 +51,7 @@ let ProcessRuntimePrefix = b"__proc_"
 // ⭐ **THE THREE ENTRY POINTS.** Only the first is built below; the other two are declared in
 // `runtime/Process.maxon` and reached by a call the parser emits from the `__Builtins` spelling.
 export let ProcessExecutablePathName = b"__proc_exe_path"
+export let ProcessNamespaceName = b"__proc_namespace"
 export let ProcessCurrentPidName = b"__proc_pid"
 
 // ⭐ **THE ONE THE PREFIX DOES NOT ANSWER FOR.** It is refused by E3104 on a target that cannot lower
@@ -73,8 +74,8 @@ export let ProcessAliveName = b"__proc_alive"
 //
 // The raw buffer is a scratch allocation this function owns end to end: it is freed on the one
 // exit, and what the caller receives is the independent `__ManagedMemory` copy.
-function buildProcessExecutablePath(module StdModule)
-	var func = IrFunction.createFromStd(ProcessExecutablePathName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+function buildProcessFill(module StdModule, name ByteArray, fill PathFill)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -84,7 +85,7 @@ function buildProcessExecutablePath(module StdModule)
 	var unavailable = module.addBlock(func, label: b"pxnone", heat: BlockHeat.normal)
 	var copyOut = module.addBlock(func, label: b"pxcopy", heat: BlockHeat.normal)
 
-	let (buffer, _) = emitGrowingPathFill(module, cur: entry, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.executablePath, whenRefused: unavailable, whenFits: copyOut, ids: ids)
+	let (buffer, _) = emitGrowingPathFill(module, cur: entry, attempt: attempt, fitTest: fitTest, grow: grow, fill: fill, whenRefused: unavailable, whenFits: copyOut, ids: ids)
 
 	// Unavailable: make the buffer the empty string and take the ordinary copy-out.
 	let emptyAt = emitConst(module, block: unavailable, value: 0, ids: ids)
@@ -98,7 +99,7 @@ function buildProcessExecutablePath(module StdModule)
 	module.setTerminator(built, op: StdOp.ret(record))
 
 	module.functions.push(func)
-end 'buildProcessExecutablePath'
+end 'buildProcessFill'
 
 // ⚠ **THE GUARD IS PER ENTRY, NOT PER FILE**, and one entry is left to guard: the path walk drags in
 // `usesHeap` AND `usesManagedMemory`, i.e. the whole managed-memory runtime installed as one closure, so a
@@ -106,8 +107,12 @@ end 'buildProcessExecutablePath'
 // all — their bodies are tier source, and dead-function elimination decides whether each survives.
 export function installProcessRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesExecutablePath 'executablePath'
-		buildProcessExecutablePath(module)
+		buildProcessFill(module, name: ProcessExecutablePathName, fill: PathFill.executablePath)
 	end 'executablePath'
+
+	if usage.usesProcessNamespace 'processNamespace'
+		buildProcessFill(module, name: ProcessNamespaceName, fill: PathFill.processNamespace)
+	end 'processNamespace'
 end 'installProcessRuntime'
 
 // ⭐ **THE FAMILY'S BAND, AND IT ANSWERS FOR THE `processInfo` HALF.** `calleeHostFacility` reads it AFTER

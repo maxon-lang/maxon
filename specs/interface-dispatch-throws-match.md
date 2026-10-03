@@ -9,13 +9,10 @@ category: type-system
 
 ## Documentation
 
-When a function that takes an interface-typed parameter also declares `throws`,
-calling it via `return try` inside a match arm previously triggered an ICE
-(E9001: key not found in dictionary) during MaxonToStandard conversion.
-
-The crash occurred because the monomorphized specialization of the throwing
-helper was not correctly wired up when invoked from inside a match arm with
-`return try`.
+A function that takes an interface-typed parameter and also declares `throws`
+can be called via `return try` inside a match arm. The monomorphized
+specialization of the throwing helper is wired up during MaxonToStandard
+conversion when invoked from there, as from anywhere else.
 
 ## Tests
 

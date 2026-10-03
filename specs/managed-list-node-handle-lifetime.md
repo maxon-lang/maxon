@@ -10,7 +10,7 @@ category: ownership
 ## Documentation
 
 A `__ManagedList with Element` hands out `__ManagedListNode with Element` handles, and **a handle is a
-second OWNER of the node it names**, exactly as `/specs/managed-list.md` states in its own first
+second OWNER of the node it names**, exactly as `specs/managed-list.md` states in its own first
 paragraph: *"__ManagedList owns its nodes via reference counting. Nodes are accessed through
 `__ManagedListNode` handles with refcount-based lifetime."* That is what lets a handle leave the
 statement that minted it — into a `return`, a struct **field**, a **parameter** — and outlive the chain
@@ -28,45 +28,43 @@ nothing at all:
 
 `remove`, `detach`, `clear` and the chain's own teardown all drop the LIST's reference to a node and
 leave it at that. A node with a surviving handle survives them all, still holding its element — which is
-what makes `detach` expressible at all, and what `core.detach` has always asserted.
+what makes `detach` expressible at all, and what `core.detach` asserts.
 
-### The element belongs to the NODE, and that is a deliberate divergence from v1
+### The element belongs to the NODE
 
 A node carries its own `element_drop`, copied at allocation from the chain's single stamp, and its
 **last owner** is the only thing that ever releases the element. No unlink path touches the value, so a
 double drop is not prevented by a rule to remember — it is unrepresentable.
 
-v1 chose the opposite: its walks drop the element off a per-LIST `elem_managed` flag, so a **detached
-node's element is released by nobody and leaks** (`runtime.std:5605-5623` against its teardown walk at
-`:4867-4871`). It goes unnoticed there because v1's only `detach` coverage is int-valued;
+The opposite design — the chain's walks dropping the element off a per-LIST flag — would leave a
+**detached node's element released by nobody**, a leak an int-valued `detach` case cannot see;
 `a-detached-node-releases-a-managed-element-when-its-last-handle-dies` below is that case with a
 `String`.
 
-### ⛔ Two earlier designs were measured wrong here, and the second is the instructive one
+### ⛔ Two designs that are wrong here, and the second is the instructive one
 
-A handle was first a statement-scoped BORROW that could not escape at all (the drop router panicked on
-one in a return or a field). It was then an owned box **retaining the LIST** — and that was not merely
-incomplete, it was a wrong answer: `clear` frees nodes, so retaining the chain kept nothing alive, and a
-handle stored in a struct field then read `4557430888798830399` = `0x3F3F3F3F3F3F3F3F` at **exit 0**,
-with no diagnostic anywhere. E3070 could not reach it — `mintPendingBorrow` files a borrow against the
-source NAME the mint saw, and the escape is precisely a handle leaving that name.
+A handle cannot be a statement-scoped BORROW: a borrow cannot escape at all, into a return or a field.
+Nor can it be an owned box **retaining the LIST** — that is not merely incomplete, it is a wrong answer:
+`clear` frees nodes, so retaining the chain keeps nothing alive, and a handle stored in a struct field
+reads `4557430888798830399` = `0x3F3F3F3F3F3F3F3F` at **exit 0**, with no diagnostic anywhere. E3070
+cannot reach it — `mintPendingBorrow` files a borrow against the source NAME the mint saw, and the escape
+is precisely a handle leaving that name.
 
-⭐ **A precedent is a whole mechanism, not its most quotable half.** That box was argued from
-`__ManagedMemoryCursor`, which is safe under the same escapes — because a cursor pays with the retain
-**and** a live re-read of its source on every use. Only the retain was ported, and a node has nothing
-live to re-read. The three cases that measured it are now ordinary running cases below: under a
-refcounted node they need no refusal, because there is nothing left to refuse.
+⭐ **A precedent is a whole mechanism, not its most quotable half.** `__ManagedMemoryCursor` is safe
+under the same escapes because a cursor pays with the retain **and** a live re-read of its source on
+every use. A node has nothing live to re-read, so the retain alone does not carry over. The three escape
+shapes are ordinary running cases below: under a refcounted node they need no refusal, because there is
+nothing left to refuse.
 
 ### Where the demand comes from
 
-None of `/specs/managed-list.md`'s canonical cases puts a handle in a field, a return or a parameter —
-canonical assumes a refcounted node. The demand is `stdlib/List.maxon`'s, and every case below is a
+None of `specs/managed-list.md`'s cases puts a handle in a field, a return or a parameter. The demand is `stdlib/List.maxon`'s, and every case below is a
 minimal reproduction of one of that module's own shapes, cited in its prose.
 
 ## Tests
 
 <!-- test: a-handle-returned-out-of-the-function-that-made-the-chain -->
-`stdlib/List.maxon:60-70` — `walkTo` **returns** an `ENode` out of a chain that the returning function
+`stdlib/List.maxon`'s `walkTo` **returns** an `ENode` out of a chain that the returning function
 is the only namer of. The chain binding dies at that `return`; only the handle leaves. Reading the
 element in the caller therefore reads through the retain, and nothing else.
 ```maxon
@@ -122,7 +120,7 @@ end 'main'
 ```
 
 <!-- test: a-handle-stored-in-a-struct-field -->
-`stdlib/List.maxon:161-165` — `ListIterator` declares `var node as ENode` and `create` returns
+`stdlib/List.maxon`'s `ListIterator` declares `var node as ENode` and `create` returns
 `Self{node: head}`. Reproduced here in all three escape positions at once: the handle arrives as a
 **parameter**, is stored in a **field**, and the box is **returned** to a caller that outlives the
 chain binding entirely.
@@ -158,13 +156,13 @@ end 'main'
 ```
 
 <!-- test: a-handle-field-reassigned-releases-the-one-it-replaced -->
-`stdlib/List.maxon:173` — `ListIterator.advance` **reassigns** its own handle field. A reassignment
+`stdlib/List.maxon`'s `ListIterator.advance` **reassigns** its own handle field. A reassignment
 owes both halves: the replacement's list must be retained and the replaced box's list must be
 released. Keeping only the retain leaks (**101**); keeping only the release frees a chain the field
 still points into, and the read below then reports poison.
 
-⚠ The canonical shape derives the new handle from the **old** one (`node.next()`), which `W137`
-supplies; until then the same reassignment is driven by a second insertion into the same chain. What
+⚠ `advance` derives the new handle from the **old** one (`node.next()`); this
+case drives the same reassignment by a second insertion into the same chain. What
 this case pins is the reassignment's balance, not the derivation.
 ```maxon
 typealias Small = int(0 to 255)
@@ -260,7 +258,7 @@ end 'main'
 ```
 
 <!-- test: a-chain-passed-as-a-parameter-hands-a-handle-back -->
-`stdlib/List.maxon:163` — `ListIterator.create(chain EManagedList)` takes the chain **as a parameter**
+`stdlib/List.maxon`'s `ListIterator.create(chain EManagedList)` takes the chain **as a parameter**
 and mints a handle from it. The handle outlives the call, so the retain is taken against a list the
 callee never owned. Its own binding in `main` is still what finally releases it.
 ```maxon
@@ -283,15 +281,15 @@ end 'main'
 ```
 
 <!-- test: a-returned-handle-survives-a-clear -->
-⭐⭐ **THE CASE THE SECOND RULING WAS TAKEN FOR.** `a-chain-passed-as-a-parameter-hands-a-handle-back`
+⭐⭐ **THE CASE THE REFCOUNTED-NODE RULING IS FOR.** `a-chain-passed-as-a-parameter-hands-a-handle-back`
 with one line added: the chain is CLEARED while a handle into it is still live, in a different function
 from the one that minted it. Under a refcounted node this needs no refusal at all — `clear` drops the
 LIST's reference and the handle's own reference keeps the node alive, so the read below is a legitimate
 read of a legitimate value. It is `core.detach`'s *"detached node still holds its value"*, reached
 through `clear` instead.
 
-⚠ Under the superseded ruling (a handle retained its LIST, nodes stayed unrefcounted) this compiled
-clean and printed `4557430888798830399` = `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s poison, at exit 0 — a
+⚠ Were a handle to retain its LIST instead, with nodes unrefcounted, this would compile
+clean and print `4557430888798830399` = `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s poison, at exit 0 — a
 wrong answer in every channel. E3070 could not reach it: `mintPendingBorrow` files the borrow against
 the source NAME the mint saw, and a returned handle carries no such record into its caller.
 ```maxon
@@ -320,9 +318,9 @@ end 'main'
 
 <!-- test: a-handle-in-a-field-survives-a-clear -->
 The harder half of the pair, and the one no function boundary explains: `a-handle-stored-in-a-struct-field`
-with one line added, with the mint, the `clear` and the read all in `main`. What lost the borrow under the
-superseded ruling was the store into a struct FIELD, which no binding then claims — same poison, same
-exit 0. Under a refcounted node the field is simply a second owner and the read is correct.
+with one line added, with the mint, the `clear` and the read all in `main`. Under a handle that retains its
+LIST, what loses the borrow is the store into a struct FIELD, which no binding then claims — same poison,
+same exit 0. Under a refcounted node the field is simply a second owner and the read is correct.
 ```maxon
 typealias Small = int(0 to 255)
 typealias IntChain = __ManagedList with Small
@@ -356,16 +354,15 @@ end 'main'
 ```
 
 <!-- test: reading-a-handle-after-its-element-is-removed-is-refused -->
-⭐⭐ **THE CASE THIS RUNG SHIPPED A SEGFAULT OVER, AND THE REASON `remove` KEPT A REFUSAL WHEN `clear` LOST
-ONE.** Nothing on this surface FREES a node any more, so `managedListMethodFreesANode` was deleted — but
-`remove` still MOVES the element out and empties the node's `value@16`, so the argument's own handle is
-left naming a node whose value is gone. MEASURED without this refusal: **exit 139**, a segfault, after
-printing the moved string. ⚠ The `int` twin merely prints `0`, which is exactly how it survived a pass —
-so this case carries a `String` on purpose.
+⭐⭐ **THE REASON `remove` CARRIES A REFUSAL WHEN `clear` DOES NOT.** Nothing on this surface FREES a
+node — but `remove` MOVES the element out and empties the node's `value@16`, so the argument's own handle
+is left naming a node whose value is gone. Without this refusal the program prints the moved string and
+then segfaults, **exit 139**. ⚠ The `int` twin merely prints `0`, which hides the defect — so this case
+carries a `String` on purpose.
 
 It is refused per-BINDING (`partiallyMoved`, the bit a binding-`match` sets when it empties a union payload
 slot), never per-storage: `core.remove` reads two SIBLING handles after removing a third and stays green.
-That is the whole difference from the E3070 this replaces.
+That is the whole difference from a per-storage E3070.
 ```maxon
 typealias StrChain = __ManagedList with String
 
@@ -383,10 +380,8 @@ error E3102: <fragment>:9:11: use of moved value 'n': its ownership moved to ano
 ```
 
 <!-- test: removing-through-a-handle-twice-is-refused -->
-The same rule reaching the second `remove` rather than a `value()`. Under the superseded model this
-FAULTED with `0xC0000005` (the second call unlinked and `__mm_free`d an already-freed node); it then
-compiled and answered `7 0 0` once nodes were refcounted; and it is a compile error now, because the first
-`remove` took the element and the handle may not be read again to ask for it twice.
+The same rule reaching the second `remove` rather than a `value()`. It is a compile error, because the
+first `remove` took the element and the handle may not be read again to ask for it twice.
 ```maxon
 typealias Small = int(0 to 255)
 typealias IntChain = __ManagedList with Small
@@ -410,12 +405,11 @@ error E3102: <fragment>:14:23: use of moved value 'n': its ownership moved to an
 ```
 
 <!-- test: removing-a-handle-no-binding-owns-is-refused -->
-⭐⭐ **THE ESCAPE THE PER-BINDING MARK COULD NOT REACH, FOUND AT REVIEW AND MEASURED AT EXIT 139.** The
-refusal above is filed against the BINDING that owns the handle, so it is silently INERT on a handle read
-back out of a struct FIELD — and a field is exactly where `stdlib/List.maxon`'s iterator keeps one. With
-the mark missing, `chain.remove(k.node)` then `k.read()` printed the moved string and then **segfaulted**,
-where the pre-rung compiler refused the same program at the drop router. It is the same shape the E3070
-half had: a mark filed against a name the value has since left.
+⭐⭐ **THE ESCAPE THE PER-BINDING MARK CANNOT REACH.** The refusal above is filed against the BINDING
+that owns the handle, so it is silently INERT on a handle read back out of a struct FIELD — and a field is
+exactly where `stdlib/List.maxon`'s iterator keeps one. With the mark missing, `chain.remove(k.node)` then
+`k.read()` prints the moved string and then **segfaults** (exit 139). It is the same shape E3070 has: a
+mark filed against a name the value has since left.
 
 ⇒ `remove` refuses a handle this statement cannot mark. An unnamed temporary is admitted, because nothing
 can name it a second time — `removing-a-handle-minted-in-the-same-statement` below is that control, and
@@ -475,13 +469,11 @@ end 'main'
 ```
 
 <!-- test: removing-a-handle-a-call-hands-back-is-refused -->
-⭐⭐ **THE ESCAPE THAT GOT THROUGH THE FIRST CUT OF THE REFUSAL ABOVE, AND THE REASON THE EXEMPTION IS NOW
-KEYED BY IDENTITY.** That guard admitted any unnamed owned temporary (`pendingTempsContain`) — which a
-METHOD RETU\nING A FIELD'S HANDLE is, exactly as much as an insertion is. MEASURED with the guard as first
-written: `chain.remove(k.held())` then `k.read()` printed the moved string and exited **139**. The predicate
-was wider than the sentence it was defending, which is this rung's own recurring defect one level up. The
-exemption now asks `nodeHandleMintedFrom` — the stamp the ONE mint door writes — so a call result is
-refused however it is spelled.
+⭐⭐ **A CALL RESULT IS AN UNNAMED TEMPORARY TOO, AND THE REASON THE EXEMPTION IS KEYED BY IDENTITY.** A
+guard admitting any unnamed owned temporary (`pendingTempsContain`) admits a METHOD RETURNING A FIELD'S
+HANDLE, exactly as much as an insertion: `chain.remove(k.held())` then `k.read()` prints the moved string
+and exits **139**. The exemption asks `nodeHandleMintedFrom` — the stamp the ONE mint door writes — so a
+call result is refused however it is spelled.
 ```maxon
 typealias StrChain = __ManagedList with String
 typealias StrNode = __ManagedListNode with String
@@ -520,7 +512,7 @@ error E2015: <fragment>:25:18: Unsupported: `__ManagedList.remove` takes the ele
 ⭐⭐ **A BORROWED PARAMETER IS REFUSED, AND THIS IS THE ONE WHERE THE REFUSAL IS NOT MERELY CONSERVATIVE —
 THE MARK COULD NOT POSSIBLY REACH THE BINDING THAT MATTERS.** The handle belongs to the CALLER; the callee
 holds a borrow of it, so marking anything inside the callee leaves `main`'s own `n` readable over a node
-whose `value@16` the call emptied. MEASURED with the guard off: exit **139** on the caller's read.
+whose `value@16` the call emptied. Without the guard the caller's read exits **139**.
 ⚠ Rebinding it in the callee (`let held = node`) does not help and is refused too — a borrow rebinds to a
 borrow — which is why the diagnostic offers `detach` rather than only *"bind it to a name"*.
 ```maxon
@@ -545,7 +537,7 @@ error E2015: <fragment>:6:15: Unsupported: `__ManagedList.remove` takes the elem
 
 <!-- test: removing-a-handle-out-of-an-array-element-is-refused -->
 A container ELEMENT is the field case with a different storage: `bag.get(0)` yields a borrow no binding
-owns, and the same index reads it again afterwards. MEASURED with the guard off: exit **139**.
+owns, and the same index reads it again afterwards. Without the guard: exit **139**.
 ```maxon
 typealias StrChain = __ManagedList with String
 typealias StrNode = __ManagedListNode with String
@@ -570,7 +562,7 @@ error E2015: <fragment>:11:18: Unsupported: `__ManagedList.remove` takes the ele
 insertion's own result and is unnamable, so the *"nothing can name it twice"* half holds — but the node it
 mints belongs to `b`, and `a.remove(…)` would unlink it out of `b`'s links while repairing `a`'s header. The
 stamp records the chain, so this is a compile error; it is also the one refused spelling caught twice, by
-`RuntimeAbort.managedListNodeNotInThisChain` below (MEASURED at exit **77** with the guard off).
+`RuntimeAbort.managedListNodeNotInThisChain` below (exit **77** with the guard off).
 ```maxon
 typealias StrChain = __ManagedList with String
 
@@ -589,13 +581,10 @@ error E2015: <fragment>:7:14: Unsupported: `__ManagedList.remove` takes the elem
 <!-- test: removing-a-handle-out-of-a-merge-is-refused -->
 A ternary's result is a phi, which no binding owns — marking it would mark neither arm.
 
-⚠ **THIS GUARD USED TO BE CONSERVATIVE AND IS NOT ANY MORE — the second refusal behind it is GONE.** It
-read *"with the guard off the program is still refused, by E3102, because building the phi MOVES both arms
-into it"*, and that sentence stopped being true when a merge arm reading an IMMUTABLE binding began to
-CO-OWN rather than move (⚖ 2026-08-04, `Parser.settleArmGive`). `a` and `b` are `let` bindings holding
-owned handles, so MEASURED on this tree both arms now incref and neither is poisoned: with the guard off
-this program would COMPILE. What happens after that is not measured here — the guard is what stops it —
-but the E3102 backstop this note rested on no longer exists, so the guard is the only thing standing.
+⚠ **THIS GUARD IS NOT CONSERVATIVE — there is no second refusal behind it.** A merge arm reading an
+IMMUTABLE binding CO-OWNS rather than moves (`Parser.settleArmGive`), so building the phi does not trip
+E3102. `a` and `b` are `let` bindings holding owned handles, so both arms incref and neither is poisoned:
+with the guard off this program would COMPILE. The guard is the only thing that stops it.
 ```maxon
 typealias StrChain = __ManagedList with String
 
@@ -617,7 +606,7 @@ error E2015: <fragment>:9:18: Unsupported: `__ManagedList.remove` takes the elem
 ⭐ **AN ADMITTED SPELLING THAT IS NOT A PLAIN NAME.** A `match` arm binding a managed payload out of a union
 IS a live owned binding, so the mark lands on it and a later read in the arm is refused per-binding like any
 other name. The route AROUND it — re-matching the box for a fresh binding over the same node — is closed by
-the union machinery rather than by this rung: moving the payload out consumes the scrutinee, so a second
+the union machinery rather than by this refusal: moving the payload out consumes the scrutinee, so a second
 `match s` is E3102. Two producers of `partiallyMoved`, and the union's own consume rule is what keeps the
 composition honest.
 ```maxon
@@ -650,9 +639,8 @@ end 'main'
 ```
 
 <!-- test: removing-a-handle-a-navigator-hands-back-is-refused -->
-⭐⭐ **THE ROSTER RE-RUN AGAINST A SURFACE FOUR TIMES ITS SIZE (`BATCH37`).** The refusal above was
-written when TWO doors minted a handle; there are eight now, and *"an insertion on this same chain, handed
-in inline"* is a sentence about the two that existed. `n.next()` mints from a NODE — no chain value is in
+⭐⭐ **THE ROSTER AGAINST ALL EIGHT MINT DOORS.** *"An insertion on this same chain, handed in inline"*
+names only the doors that mint from a chain value. `n.next()` mints from a NODE — no chain value is in
 scope at that door to stamp — so the identity test cannot admit it and it is refused. That is the SAFE
 direction and it is also an over-refusal: this particular handle is as unnameable as an inline insertion's.
 It is cased rather than quietly relaxed, because relaxing it means teaching the mint door to guess a chain,
@@ -678,8 +666,8 @@ error E2015: <fragment>:8:18: Unsupported: `__ManagedList.remove` takes the elem
 <!-- test: removing-a-handle-this-chains-own-navigator-hands-back-inline -->
 The other half of the row above, and the reason the test is IDENTITY rather than "which door minted it".
 `chain.tail()` and `chain.insertAfter(…)` both mint from THIS chain, so both carry its stamp and both are
-admitted — the handle exists only as this argument and no second expression can name it. Two new mint
-doors joining the one exemption, measured rather than assumed.
+admitted — the handle exists only as this argument and no second expression can name it. Two more mint
+doors under the one exemption, each cased.
 ```maxon
 typealias StrChain = __ManagedList with String
 
@@ -818,10 +806,10 @@ the element the handle keeps alive, on the heap
 ```
 
 <!-- test: a-navigators-handle-in-a-field-walks-the-chain -->
-⭐ **`stdlib/List.maxon:158-175`'s `ListIterator`, whole.** A handle from `head()` stored in a FIELD, a
+⭐ **`stdlib/List.maxon`'s `ListIterator`, whole.** A handle from `head()` stored in a FIELD, a
 `next()` handle REASSIGNED over it on every step, and a read through the field after the chain has been
 cleared. Each of the three is a separate obligation — the mint's reference, the reassignment releasing the
-one it replaced, and the surviving node outliving the chain — and a rung can satisfy any two of them and
+one it replaced, and the surviving node outliving the chain — and a lowering can satisfy any two of them and
 report the right answer.
 ```maxon
 typealias StrChain = __ManagedList with String
@@ -872,7 +860,7 @@ three, long enough to be a real heap allocation 0
 ```
 
 <!-- test: a-navigator-that-throws-mints-nothing -->
-The error edge of all four navigators, two hundred times over. A mint whose `+1` landed BEFORE the `try`
+The error edge of all four navigators, two hundred times over. A mint whose `+1` sat BEFORE the `try`
 fork would incref a result that is not a node on every one of these trips — and would also displace the
 call as the op the `try` rewrite targets, which is a compile-time E3055 rather than a wrong answer. Once
 per trip is invisible; two hundred is not.
@@ -926,15 +914,13 @@ end 'main'
 <!-- test: removing-a-node-of-another-chain-aborts -->
 ⭐⭐ **THE LAST NET, AND THE ONE THE FRONT END CANNOT STAND IN FRONT OF.** Two chains of one element type
 share a `__ManagedListNode` type, so a handle carried between two NAMED chains type-checks at the call and
-no compile-time rule this rung has can see it. `owner@32` already names the chain a node belongs to, and the
-unlink used to gate on it merely being NON-ZERO: `b.remove(nodeOfA)` therefore repaired `b`'s `head`/`tail`
-from `a`'s links. MEASURED before the gate read the name: a live `b` reading `count = -1` and then exit
-**139** on a `String` element — and, on the `int` twin, exit **0** with two silently wrong counts, which is
-how it had been surviving.
+no compile-time rule can see it. `owner@32` names the chain a node belongs to, and the unlink gates on that
+NAME, not merely on it being NON-ZERO: a non-zero gate lets `b.remove(nodeOfA)` repair `b`'s `head`/`tail`
+from `a`'s links — a live `b` reading `count = -1` and then exit **139** on a `String` element, and, on the
+`int` twin, exit **0** with two silently wrong counts.
 
 ⚖ **THE ABORT DECIDES NOTHING ABOUT WHAT THE PROGRAM MEANT.** Whether `list.remove(nodeOfAnother)` should
-refuse earlier or deliberately retarget is a semantic question `/specs/managed-list.md` does not answer and
-is filed separately. This case pins only that the corruption is over.
+refuse earlier or deliberately retarget is a semantic question `specs/managed-list.md` does not answer. This case pins only that the corruption is over.
 ```maxon
 typealias StrChain = __ManagedList with String
 
@@ -956,15 +942,15 @@ fatal error: runtime abort 77 (managedListNodeNotInThisChain)
 ```
 
 <!-- test: removing-a-node-the-chain-has-already-let-go -->
-⭐ **THE `owner@32` GATE ON THE ROUTE THE REFUSAL DOES NOT COVER, AND A SECOND MEASURED SEGFAULT.** The
+⭐ **THE `owner@32` GATE ON THE ROUTE THE REFUSAL DOES NOT COVER.** The
 refusal above stops a handle being read after ITS OWN `remove`; it says nothing about a node the chain let
 go some other way. `clear()` unlinks every node without touching any handle, so `remove(n)` afterwards is
 an ordinary compiling program that reaches a DETACHED node — which is what `owner@32` is for: no links to
 repair, no `count` to decrement, no reference for the chain to drop.
 
 ⚠ It must still hand the element out, and getting that half wrong is not a wrong answer but a DOUBLE FREE:
-the move-out originally sat on the linked arm only, so this path returned an element the node still
-claimed and the run ended **139**. The move-out is in the block both arms dominate now.
+a move-out on the linked arm only would return, on this path, an element the node still claims, and the
+run would end **139**. The move-out is in the block both arms dominate.
 ```maxon
 typealias StrChain = __ManagedList with String
 
@@ -987,9 +973,9 @@ end 'main'
 ```
 
 <!-- test: a-detached-node-releases-a-managed-element-when-its-last-handle-dies -->
-⭐⭐ **THE CASE v1 GETS WRONG, AND THE ONE THE ELEMENT-DESTRUCTOR DECISION EXISTS FOR.** `detach` unlinks
+⭐⭐ **THE CASE A PER-LIST ELEMENT DROP GETS WRONG, AND THE ONE THE ELEMENT-DESTRUCTOR DECISION EXISTS FOR.** `detach` unlinks
 a node and leaves its element in place; the chain will never walk that node again. If the element's drop
-lived on the LIST — v1's design, gated by a per-list `elem_managed` flag — nobody would ever release this
+lived on the LIST, gated by a per-list flag, nobody would ever release this
 `String` and the run would end **101**. The node carrying its own `element_drop` is what makes its last
 owner the one site that can, and the exit code is the whole assertion. The `int` twin is
 `a-handle-into-a-chain-of-trivial-elements` above, where the same path must release nothing.
@@ -1087,18 +1073,17 @@ error E4014: <fragment>:22:6: type 'Holder' contains a reference cycle (via Hold
 ```
 
 <!-- test: reading-a-node-a-remove-emptied-aborts -->
-⭐⭐ **THE ROSTER ROW THE SURFACE'S GROWTH ADDED, AND IT IS ON THE READ SIDE RATHER THAN THE ARGUMENT
-SIDE.** Every row above asks *"which handles may ARRIVE at `remove`"*; this one asks *"which handles
+⭐⭐ **THE ROSTER ROW ON THE READ SIDE RATHER THAN THE ARGUMENT SIDE.** Every row above asks *"which handles may ARRIVE at `remove`"*; this one asks *"which handles
 SURVIVE it"*, and the answer is *"all of them but the one it marked"*. `remove` empties `value@16` so the
 element it hands out is not dropped twice, and it defends that hole with a per-BINDING move mark on its
 argument. `head`/`tail`/`next`/`prev` mint a SECOND, independently named handle on the same node, so the
-mark defends one name out of however many the program cares to make — MEASURED as **exit 139** before the
-guard, in eight lines with no struct in them.
+mark defends one name out of however many the program cares to make — without the guard, **exit 139** in
+eight lines with no struct in them.
 
 Which handles alias one node is a run-time fact, so the refusal is a run-time one:
 `__list_node_value` aborts (**81**) on an empty slot whose element is MANAGED. ⚠ It is the CORRUPTION
 that is stopped, not the semantics that are settled — what `n.value()` on an emptied node should mean is
-`/specs/managed-list.md`'s to say.
+`specs/managed-list.md`'s to say.
 ```maxon
 typealias StrChain = __ManagedList with String
 
@@ -1165,7 +1150,7 @@ relinked count=1
 <!-- test: an-empty-managed-element-is-not-an-emptied-slot -->
 ⭐ **THE POSITIVE CONTROL THE GUARD IS EXACTLY AS TRUSTWORTHY AS.** The test is *"the slot is 0"*, and it
 would be worth nothing — a false abort on ordinary programs — if a managed element could legitimately BE
-0. An empty `String` is a real record, so it is not; measured here rather than assumed, because a guard
+0. An empty `String` is a real record, so it is not; this case shows it rather than assumes it, because a guard
 whose predicate is never shown to be quiet is a guard nobody can tell from a bug.
 ```maxon
 typealias StrChain = __ManagedList with String

@@ -524,7 +524,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:46:12: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
+error E2015: <fragment>:46:12: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported.
 note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above
 ```
 
@@ -1489,11 +1489,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:18: Unsupported: a `static function` that needs the enclosing instance's dictionary — it constructs an opaque type-parameter `Array` (`ElementArray.create()`), reads `sizeof` of the type parameter, or reads `countof` of the sized container's own `Self` — must return `Self` so the caller can source it from the instance the static builds; a static returning any other type has no source (build the array, read the size or read the count through an instance method on `self`, or return `Self`). Threading a dictionary from a static call site's alias is a later slice
+error E2015: <fragment>:15:18: Unsupported: a `static function` that needs the enclosing instance's dictionary — it constructs an opaque type-parameter `Array` (`ElementArray.create()`), reads `sizeof` of the type parameter, or reads `countof` of the sized container's own `Self` — must return `Self` so the caller can source it from the instance the static builds; a static returning any other type has no source (build the array, read the size or read the count through an instance method on `self`, or return `Self`)
 ```
 
-<!-- test: error.a-call-reaching-a-generic-and-a-concrete-declaration-where-one-takes-a-parameter-by-reference-is-refused -->
-A call whose name reaches both a generic function that reassigns its parameter and a concrete function of the same name is refused, because which one it binds is decided only after its arguments have been read.
+<!-- test: a-call-reaching-a-generic-and-a-concrete-declaration-binds-each-by-its-own-convention -->
+A name reaches both a generic function that reassigns its parameter and a concrete function of the same name; each call binds the declaration its arguments select and passes each argument by that declaration's convention.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -1516,8 +1516,40 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:2: Unsupported: a call to 'settle' can reach 2 declarations, and one of them takes a parameter by reference — which declaration a call binds is chosen from the arguments' types, after the arguments are read, while a by-reference parameter changes how an argument is read (as the caller's storage rather than its value); give the declaration that reassigns its parameter a name of its own
+```exitcode
+0
+```
+```stdout
+source 3
+```
+
+<!-- test: a-call-reaching-a-concrete-declaration-that-reassigns-and-a-generic-one-that-does-not -->
+A name reaches both a concrete function that reassigns its parameter and a generic function of the same name that does not; the concrete call is handed the caller's storage and the generic call its argument's value.
+```maxon
+typealias Count = int(0 to 1000)
+
+function bump(dest Count)
+	dest = dest + 1
+end 'bump'
+
+function bump(dest T) uses T returns T
+	return dest
+end 'bump'
+
+function main() returns ExitCode
+	var n = 5 as Count
+	bump(n)
+	var s = "word"
+	print("{bump(s)} {n}\n")
+	s = "done"
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+word 6
 ```
 
 <!-- test: error.a-static-dropping-an-opaque-value-it-reads-is-refused -->
@@ -2262,6 +2294,31 @@ rvalue payload long enough to allocate
 first payload long enough to allocate second payload long enough to allocate
 ```
 
+<!-- test: error.a-let-handed-to-a-reassigned-parameter-inside-a-generic-function-is-reported-once-under-its-own-name -->
+A generic function instantiated twice hands a `let` to a generic function that reassigns its parameter, and the refusal is reported once, naming the generic function.
+```maxon
+typealias Count = int(0 to 1000)
+
+function overwrite(dest T, with T) uses T
+	dest = with
+end 'overwrite'
+
+function swapIn(v T) uses T returns T
+	let x = v
+	overwrite(x, with: v)
+	return x
+end 'swapIn'
+
+function main() returns ExitCode
+	let t = "text"
+	print("{swapIn(t)} {swapIn(4 as Count)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:10:2: cannot pass 'x' to function that mutates parameter 'dest' (in swapIn)
+```
+
 <!-- test: two-files-private-generic-functions-of-one-name-each-keep-their-own-by-reference-parameter -->
 Two files each declare a private generic function of the same name, and each reassigns a different parameter; each call hands over the parameter its own file's function reassigns.
 ```maxon
@@ -2646,6 +2703,35 @@ end 'main'
 once 10
 ```
 
+<!-- test: error.an-out-of-range-literal-at-a-generic-byref-param-is-a-compile-error -->
+A method that reassigns its type-parameter parameter, instantiated at a ranged `int`, is handed a literal outside that range, and the literal is refused where it is written, as at a by-value parameter.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function setOnce(dest T)
+		dest = self.v
+	end 'setOnce'
+end 'Box'
+
+typealias CountBox = Box with Count
+
+function main() returns ExitCode
+	let b = CountBox.make(10)
+	b.setOnce(2000)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:4: Value 2000 is outside the range of 'Count' (int(0 to 1000))
+```
+
 <!-- test: a-generic-type-that-is-never-instantiated-may-reassign-its-parameter -->
 A generic type the program never instantiates declares a method that reassigns its type-parameter parameter; the program still compiles and runs.
 ```maxon
@@ -2808,9 +2894,9 @@ end 'main'
 
 The retain word is a fact about the type ARGUMENT and the release must be the same fact. A base that
 declares no `Array with T` and no bare `T` — only an `Integer` — can still take a borrowed `T` into a tuple
-it builds, and if that tuple is dropped HERE the reference has to go with it. While `destroyFunc@40` was
-gated on the base's FIELD LIST instead, this exact shape retained through a live `retainFunc@64` and
-released through a zero: exit 101 with the right answer printed.
+it builds, and if that tuple is dropped HERE the reference has to go with it. Were `destroyFunc@40`
+gated on the base's FIELD LIST instead, this exact shape would retain through a live `retainFunc@64` and
+release through a zero: exit 101 with the right answer printed.
 
 <!-- test: a-record-in-a-fieldless-generic-releases-what-it-took -->
 ```maxon
@@ -3446,19 +3532,18 @@ end 'main'
 
 ### The same record with NO CONTAINER ANYWHERE — a plain field, and it ROUND-TRIPS
 
-⭐⭐ **THE ARRIVAL THAT WAS A REFUSAL AND IS NOW AN ANSWER.** `var one as EBox` filled by
+⭐⭐ **A RECORD AT REST IN A PLAIN FIELD.** `var one as EBox` filled by
 `Self{one: EBox.create(x, tag: tag)}`: no container is created, no element is pushed, and the record comes
-to rest in a slot that outlives the borrow. Both halves it needs now exist, and they are different halves
+to rest in a slot that outlives the borrow. It needs two halves, and they are different halves
 in different places:
 
 * the **reference** is taken at the constructor feed, because the `x` handed to `EBox.create` is a borrowed
   opaque `T` and a body compiled once takes its reference through the descriptor's `retainFunc@64`;
 * the **release** is `__destruct_Bag_String`'s substituted cascade reaching `__destruct_Box_String`, which
-  it has always been able to do — the enclosing instantiation is CONCRETE wherever the bag is freed, so
+  it can do — the enclosing instantiation is CONCRETE wherever the bag is freed, so
   nothing here needs the dictionary destructor at all.
 
-**MEASURED at the BATCH41 review's merge: compiled, and segfaulted** — the release existed and the
-reference did not. The `String` is built in `fill`, whose `StringBuilder` result dies at that frame's exit,
+The `String` is built in `fill`, whose `StringBuilder` result dies at that frame's exit,
 so a missing reference is a read of freed memory and a surplus one is a leak the gate exits 101 on.
 
 <!-- test: a-record-over-the-enclosing-parameter-in-a-plain-field-round-trips -->
@@ -3519,7 +3604,7 @@ hello heap world
 The other side of PROVENANCE, and the case that keeps the refusal from being a rule about the TYPE. The
 identical `EBox.create(<a borrowed opaque T>)` builds a record whose slot holds a borrow nobody referenced —
 and it is a LOCAL that dies before the borrow's owner does, so nothing releases the slot and nothing reads it
-afterwards. **MEASURED: exit 0.** A refusal that fired here would be refusing a program that is whole.
+afterwards, and the program exits 0. A refusal that fired here would be refusing a program that is whole.
 
 <!-- test: a-record-built-from-a-borrow-may-die-in-the-frame -->
 ```maxon
@@ -3581,7 +3666,7 @@ concrete instantiation (`the-concrete-spelling-of-the-same-constructor-feed`). T
 than at `Box`'s own parameter. The column's element destructor is then a fact the shared body CAN name, the
 store is an ordinary concrete move-in, and the heap payload outlives the helper that made it.
 
-⚠ **THE `Box` IS STILL GENERIC AND `EBox` IS STILL AN INSTANCE OVER THE ENCLOSING PARAMETER** — what changed
+⚠ **THE `Box` IS GENERIC AND `EBox` IS AN INSTANCE OVER THE ENCLOSING PARAMETER HERE TOO** — what differs
 is only that no slot of it stands at a parameter this body cannot name. That is exactly the boundary the
 refusal reads, so this case is what shows the boundary is the SLOT and not the instantiation.
 
@@ -3647,21 +3732,20 @@ hello heap world
 
 ## A shared body RETURNS the record it built out of a borrow
 
-⭐⭐⭐ **THE SHAPE THE WHOLE MECHANISM EXISTS FOR, AND THE ONE THAT SEGFAULTED ON `main`.**
+⭐⭐⭐ **THE SHAPE THE WHOLE MECHANISM EXISTS FOR.**
 `Bag.wrap(x Element) returns EBox` builds a `Box with Element` out of a borrowed opaque `Element` and hands
 it back. Every other arrival in this file is a value coming to REST; this one leaves the frame entirely, and
 the caller that receives it is CONCRETE — `makeOne` holds a `Box with String`, drops it through
 `__destruct_Box_String`, and that destructor releases the payload.
 
-⛔⛔ **THE RELEASE WAS ALREADY RIGHT AND THE REFERENCE WAS MISSING, WHICH IS WHY IT FAULTED RATHER THAN
-LEAKED.** `makeOne`'s `StringBuilder` result dies at that frame's exit, so the box was left holding a pointer
-into freed memory and `main`'s read of it took the fault; the concrete destructor then released a record
-nobody had referenced. **MEASURED on the merge base and on `main`, twice: `0xC0000005`, exit 139.** The
-constructor feed now takes the reference through the descriptor's `retainFunc@64`
+⛔⛔ **THE CONCRETE DESTRUCTOR RELEASES THE PAYLOAD, SO THE CONSTRUCTOR FEED MUST TAKE THE REFERENCE.**
+`makeOne`'s `StringBuilder` result dies at that frame's exit, so without that reference the box would hold a
+pointer into freed memory, `main`'s read of it would fault, and the concrete destructor would release a
+record nobody had referenced. The constructor feed takes the reference through the descriptor's `retainFunc@64`
 (`Parser.referenceOrMarkOpaqueFeed`), and the pair balances.
 
 ⚠ **A `static` SPELLING OF `wrap` IS ADMITTED TOO — provided it returns the enclosing type**, which is the
-gate `staticLayoutNeedsSelfReturn` draws and which the descriptor-need seed now asks (see
+gate `staticLayoutNeedsSelfReturn` draws and which the descriptor-need seed asks (see
 `a-record-over-the-enclosing-parameter-in-a-plain-field-round-trips`, whose feeding `create` is exactly that).
 
 <!-- test: a-returned-record-outlives-the-borrows-source -->
@@ -4476,4 +4560,37 @@ mapped 3
 ```
 ```exitcode
 4
+```
+
+<!-- test: a-closure-in-a-generic-method-handing-back-its-parameter-reserves-the-descriptor -->
+```maxon
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function touch() returns ExitCode
+		let e = function(x T) gives x
+		_ = e(self.v)
+		return 7
+	end 'touch'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function main() returns ExitCode
+	var seed = 0
+
+	while seed < 3 'grow'
+		seed = seed + 1
+	end 'grow'
+
+	let c = StrCell.make("kept through a closure number {seed} long enough to live on the heap")
+	return c.touch()
+end 'main'
+```
+```exitcode
+7
 ```

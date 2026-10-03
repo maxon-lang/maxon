@@ -281,7 +281,7 @@ error E3015: <fragment>:2:6: type 'Step' implements unknown interface 'Nonexiste
 ```
 
 <!-- test: an-enum-declaring-a-granted-protocol-is-satisfied-by-the-grant -->
-The REGRESSION GUARD, and it is expected to pass today. A payload-free enum is granted `Hashable` by the
+The REGRESSION GUARD. A payload-free enum is granted `Hashable` by the
 compiler, so naming it explicitly must be satisfied by the grant rather than demanding a hand-written
 `hash()` — an `implements` clause that files a conformance must not un-file the one already there.
 ```maxon

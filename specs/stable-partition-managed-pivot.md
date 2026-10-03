@@ -8,8 +8,8 @@ category: memory
 
 ## Documentation
 
-`stdlib/helpers/sort/driftQuicksort.maxon`'s `stablePartition` read its pivot straight out of the
-range it was about to rearrange:
+`stdlib/helpers/sort/driftQuicksort.maxon`'s `stablePartition` must not read its pivot straight out of
+the range it is about to rearrange:
 
 ```maxon
 let pv = try managed.get(pivotIndex) otherwise panic("…")   // a BORROW of managed[pivotIndex]
@@ -25,27 +25,23 @@ it: the store takes its own reference through `retainFunc@64`, which for a byte 
 record and the borrowed one drops to zero.
 
 `smallSort.maxon:24-32` names this exact hazard as the reason `swap` routes through the raw
-`managed.swap` builtin rather than get + set. `stablePartition` was written without that shield.
+`managed.swap` builtin rather than get + set.
 
-**It is a silent WRONG ANSWER, not a crash.** MEASURED on the tree that shipped it, with the suite
-green over it — the freed record reads back as poison, its length comes out huge, and every later
-element is misclassified:
+**It is a silent WRONG ANSWER, not a crash.** The freed record reads back as poison, its length comes
+out huge, and every later element is misclassified:
 
-| branch | correct | measured before the repair |
+| branch | correct | with the pivot borrowed |
 |---|---|---|
 | `bufferGe`, lens `[1,2,10,3,20,30]`, pivot slot 2 | `p=3 lens= 1 2 3 10 20 30` | `p=5` — two elements misfiled |
 | `bufferLess`, lens `[20,1,10,30,40,50]`, pivot slot 2 | `p=1 lens= 1 20 10 30 40 50` | `p=1 lens= 1 20 10 30 30 40` — `40` and `50` LOST, `30` duplicated |
 
-The repair parks the pivot in a one-slot storage of its own before the pass begins. No store in the
+`stablePartition` parks the pivot in a one-slot storage of its own before the pass begins. No store in the
 pass names that storage, so no store can reach the pivot — the soundness argument is one sentence
 instead of a per-index case analysis, which is what a borrow this long-lived needs.
 
-**Why these programs are transcriptions.** When they were written, the compiler did not load
-`stdlib/helpers/sort/` at all — the loader's whitelist listed neither it nor `stdlib/Array.maxon`, and
-`Array` was synthesized and did not serve `sort`. ⚠ **That half of the reason has expired: the filter is
-gone and every file under `stdlib/` now loads.** The bodies below are still
+**Why these programs are transcriptions.** The bodies below are
 copied from `driftQuicksort.maxon` rather than called into, so that the algorithm runs here under the
-refcount model the defect lives in. Keep them in step with it.
+refcount model the hazard lives in. Keep them in step with it.
 
 ## Tests
 

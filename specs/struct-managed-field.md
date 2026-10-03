@@ -5,27 +5,23 @@ keywords: [struct, field, String, ownership, consume, move, drop, destructor, ca
 category: ownership
 ---
 
-# Struct Managed Fields (P1.4a wave 2)
+# Struct Managed Fields
 
 ## Documentation
 
-A `type` (struct) field may now be **managed** — a `String`, another `struct`, or
+A `type` (struct) field may be **managed** — a `String`, another `struct`, or
 a payload-bearing `union`. Such a field holds an owned heap pointer, and the
 struct box takes ownership of it:
 
-- **Construct gives the field its OWN reference (⚖ user ruling, 2026-08-12).**
+- **Construct gives the field its OWN reference.**
   `Self{name: value}` leaves the field slot holding exactly one reference, and
   which act supplies it depends on what `value` is: a borrowed `String` literal
   is promoted to an owned heap copy; an owned TEMPORARY (`Inner.create(5)`) has
   no other owner, so the slot ADOPTS the `+1` it already carries; and a bare
   reference to a live owned BINDING is CO-OWNED — the slot increfs, the binding
-  stays readable, and each releases the one reference it took.
-
-  > This bullet used to read *"transfers ownership … no incref, no copy … a bare
-  > reference to an owned binding is moved-from (a later read is `E3102`)"*. That
-  > was the move-only rule, retracted because two sinks for one value each need a
-  > reference of their own. `consume-then-reuse-co-owns` and
-  > `managed-double-store-co-owns` below are the two cases that were flipped.
+  stays readable, and each releases the one reference it took. Two sinks for
+  one value each need a reference of their own; `consume-then-reuse-co-owns` and
+  `managed-double-store-co-owns` below pin it.
 - **The struct drops each managed field.** A struct with at least one managed
   field gets a synthesized `__destruct_<Struct>` that drops every managed field
   through its own type's destructor — a `String` via `__str_decref`, a nested
@@ -41,12 +37,11 @@ struct box takes ownership of it:
 - **A parameter stored into a durable field is CONSUMED, and the call site
   CO-OWNS.** A constructor `create(inner Inner) returns Self` whose body stores
   `inner` into a field consumes its parameter — so the CALLER hands over a
-  reference. Since the 2026-08-12 ruling that reference is a fresh one the caller
-  increfs rather than the one its own binding holds, so the caller's argument
-  stays readable (`consume-then-reuse-co-owns`) and the struct's destructor
-  releases exactly the reference the call took. A BORROWED argument at a
-  consuming position is co-owned by the same rule (the transitive-consume ruling
-  of 2026-08-04), not refused.
+  reference. That reference is a fresh one the caller increfs rather than the
+  one its own binding holds, so the caller's argument stays readable
+  (`consume-then-reuse-co-owns`) and the struct's destructor releases exactly the
+  reference the call took. A BORROWED argument at a consuming position is
+  co-owned by the same rule, not refused.
 
 ## Tests
 
@@ -159,11 +154,11 @@ hi
 
 <!-- test: nested-managed-field-ranged-create-param -->
 The inner struct's `create` takes a RANGED-INT-ALIAS parameter. That alias adds a name
-to the project interner, shifting its ids relative to the signatures interner's. The
-destructor-needs closure re-fetched the inner struct layout from `signatures` (ids in
+to the project interner, shifting its ids relative to the signatures interner's. A
+destructor-needs closure that fetched the inner struct layout from `signatures` (ids in
 the signatures interner) but resolved its managed field's type id against
-`project.typeNames` — so it misread the field's name and panicked on this VALID program.
-The closure now takes the project layout the caller already holds, like the destructor
+`project.typeNames` would misread the field's name and panic on this VALID program.
+The closure takes the project layout the caller already holds, like the destructor
 body synthesis does, so the id and the interner that resolves it always agree.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -321,9 +316,9 @@ end 'main'
 
 <!-- test: consume-then-reuse-co-owns -->
 Reusing an argument after it was consumed into a struct field is LEGAL: a consuming position is a durable
-sink, so `Outer.create(i)` gives the field its own reference (⚖ 2026-08-12) rather than stealing `i`'s.
+sink, so `Outer.create(i)` gives the field its own reference rather than stealing `i`'s.
 `i` stays live and drops its own reference at scope exit, so `Inner`'s box is released exactly the two
-times it was referenced. (It used to be E3102 at `i.x`.)
+times it was referenced.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -365,10 +360,9 @@ fields plus the consumed parameter `v`) and is released three times — twice by
 once by `v`'s scope-exit drop. Reading both fields back is what makes the aliasing observable rather
 than merely tolerated.
 
-⛔ **This was E3102, justified as *"the compiler is move-only (no incref), so a single String cannot be owned by
-two fields"* — a premise the durable-store ruling (⚖ 2026-08-12) retracted.** The repeated-owning-move
-guard survives only for an OPAQUE `T` field, whose shared body has no descriptor to take a reference
-through; `generic-types/error.generic-double-store-managed` is that surviving case.
+⛔ **This is not E3102: a durable store co-owns.** The repeated-owning-move guard applies only to an
+OPAQUE `T` field, whose shared body has no descriptor to take a reference
+through; `generic-types/error.generic-double-store-managed` is that case.
 ```maxon
 type Pair
 	export var a as String
@@ -428,7 +422,7 @@ end 'main'
 
 <!-- test: boxed-union-field-construct-match -->
 A struct field that is a payload-bearing (boxed) `union` is constructed by moving the
-box into the field slot (P1.4b wave 2c), read back through the box, and matched — the
+box into the field slot, read back through the box, and matched — the
 scalar payloads bind and the container is dropped at scope exit through its cascade,
 no leak.
 ```maxon

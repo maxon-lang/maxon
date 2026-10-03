@@ -2,8 +2,6 @@
 /// @category Build
 /// Build configuration type for customizing compilation
 public type BuildConfig
-	typealias StringArray = Array with String
-
 	public var output as String
 	public var sources as StringArray
 	public var debug_info as bool
@@ -48,9 +46,12 @@ let DescribedBuildSeparator = ",\n"
 // request silently, since an absent key reads as `false`.
 let RebuildWithOutputKey = "rebuild_with_output"
 
-public type Build
-	typealias StringArray = Array with String
+// `Main.ManifestDirectoryKey` and `Main.ManifestDelegateTargetKey` spell these too; a mismatch
+// reads as unstated, silently.
+let DirectoryKey = "directory"
+let DelegateTargetKey = "target"
 
+public type Build
 	/// Build one source path. A target or task describes one build, so call this once per run. source:
 	/// the file or directory to compile. output: where the executable goes, extension omitted (the
 	/// compiler appends `.exe` on Windows, `.wasm` on wasm32-wasi and nothing elsewhere); empty means
@@ -86,8 +87,8 @@ public type Build
 	static function renderBuildConfig(config BuildConfig) returns String
 		var text = "\{\n"
 		text.append("  \"output\": {Json.quote(config.output)},\n")
-		text.append("  \"directory\": {Json.quote(config.directory)},\n")
-		text.append("  \"target\": {Json.quote(config.delegateTarget)},\n")
+		Build.appendStatedField(text, key: DirectoryKey, value: config.directory)
+		Build.appendStatedField(text, key: DelegateTargetKey, value: config.delegateTarget)
 		text.append("  \"sources\": [{Build.renderStringList(config.sources)}],\n")
 		text.append("  \"debug_info\": {"true" if config.debug_info else "false"},\n")
 		text.append("  \"version\": {Json.quote(config.version)},\n")
@@ -100,6 +101,16 @@ public type Build
 		text.append("\n\}")
 		return text
 	end 'renderBuildConfig'
+
+	// The compiler refuses a stated empty value (`Main.manifestStatedText`), so an empty one is
+	// left out.
+	static function appendStatedField(text String, key String, value String)
+		if value.isEmpty() 'unstated'
+			return
+		end 'unstated'
+
+		text.append("  \"{key}\": {Json.quote(value)},\n")
+	end 'appendStatedField'
 
 	static function renderStringList(items StringArray) returns String
 		var text = ""

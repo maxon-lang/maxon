@@ -117,6 +117,125 @@ end 'LiteralCast'
 
 export typealias LiteralCastMap = Map with (ValueId, LiteralCast)
 
+export union DeferredStorage
+	none
+	cell(storage ValueId)
+end 'DeferredStorage'
+
+export union DeferredTransfer
+	none
+	transferred(value ValueId)
+end 'DeferredTransfer'
+
+export type DeferredArgumentBinding
+	export let callResult as ValueId
+	export let column as ParamCount
+	export let label as ByteArray
+	export let storage as DeferredStorage
+	export let transfer as DeferredTransfer
+	export let takingSites as ByteArrayArray
+	export let blame as WriteBlame
+
+	export static function create(callResult ValueId, column ParamCount, label ByteArray, storage DeferredStorage, transfer DeferredTransfer, takingSites ByteArrayArray, blame WriteBlame) returns Self
+		return Self{callResult: callResult, column: column, label: label, storage: storage, transfer: transfer, takingSites: takingSites, blame: blame}
+	end 'create'
+end 'DeferredArgumentBinding'
+
+export typealias DeferredArgumentBindingArray = Array with DeferredArgumentBinding
+
+export type ArgumentHandoff
+	export let call as ValueId
+	export let column as ParamCount
+
+	export static function create(call ValueId, column ParamCount) returns Self
+		return Self{call: call, column: column}
+	end 'create'
+
+	export function names(other ArgumentHandoff) returns bool
+		return self.call == other.call and self.column == other.column
+	end 'names'
+end 'ArgumentHandoff'
+
+export typealias ArgumentHandoffArray = Array with ArgumentHandoff
+
+export function handoffsInclude(handoffs ArgumentHandoffArray, handoff ArgumentHandoff) returns bool
+	for listed in handoffs 'eachHandoff'
+		if listed.names(handoff) 'found'
+			return true
+		end 'found'
+	end 'eachHandoff'
+
+	return false
+end 'handoffsInclude'
+
+export typealias TakenColumnMap = Map with (ValueId, ParamPositionMask)
+
+export type TakenHandoffs
+	var byCall as TakenColumnMap
+
+	export static function create() returns Self
+		return Self{byCall: TakenColumnMap.create()}
+	end 'create'
+
+	export function take(handoff ArgumentHandoff)
+		self.byCall.upsert(handoff.call, value: maskWithParam(try self.byCall.get(handoff.call) otherwise NoParamPositions, param: handoff.column))
+	end 'take'
+
+	export function includes(handoff ArgumentHandoff) returns bool
+		return maskHasParam(try self.byCall.get(handoff.call) otherwise return false, param: handoff.column)
+	end 'includes'
+
+	export function anyOf(handoffs ArgumentHandoffArray) returns bool
+		for handoff in handoffs 'eachHandoff'
+			if self.includes(handoff) 'taken'
+				return true
+			end 'taken'
+		end 'eachHandoff'
+
+		return false
+	end 'anyOf'
+end 'TakenHandoffs'
+
+// Ops the parser emits before overload resolution knows which callee takes which argument; they
+// stand in the body until `SemanticCheck.settleConditionalArguments` withdraws the ones the
+// resolved calls rule out.
+export type ConditionalOp
+	export let results as ValueIdArray
+	export let keptWhileNoneTaken as ArgumentHandoffArray
+	export let keptOnlyIfAnyTaken as ArgumentHandoffArray
+
+	export static function create(results ValueIdArray, keptWhileNoneTaken ArgumentHandoffArray, keptOnlyIfAnyTaken ArgumentHandoffArray) returns Self
+		return Self{results: results, keptWhileNoneTaken: keptWhileNoneTaken, keptOnlyIfAnyTaken: keptOnlyIfAnyTaken}
+	end 'create'
+
+	export function isKept(taken TakenHandoffs) returns bool
+		if taken.anyOf(self.keptWhileNoneTaken) 'aHandoffItWaitedOnWasTaken'
+			return false
+		end 'aHandoffItWaitedOnWasTaken'
+
+		return self.keptOnlyIfAnyTaken.isEmpty() or taken.anyOf(self.keptOnlyIfAnyTaken)
+	end 'isKept'
+end 'ConditionalOp'
+
+export typealias ConditionalOpArray = Array with ConditionalOp
+
+export type ConditionalRefusal
+	export let error as SourceParseError
+	export let whenAnyTaken as ArgumentHandoffArray
+
+	export static function create(error SourceParseError, whenAnyTaken ArgumentHandoffArray) returns Self
+		return Self{error: error, whenAnyTaken: whenAnyTaken}
+	end 'create'
+end 'ConditionalRefusal'
+
+export typealias ConditionalRefusalArray = Array with ConditionalRefusal
+
+export function moveLiteralCastEntry(casts LiteralCastMap, from ValueId, to ValueId)
+	let cast = try casts.get(from) otherwise return
+	_ = casts.remove(from)
+	casts.upsert(to, value: cast)
+end 'moveLiteralCastEntry'
+
 // ⭐⭐ **ONE STORE INTO AN INTERFACE-TYPED FIELD, AS THE WHOLE-PROGRAM WIDENING CHECK READS IT.** A field store
 // widens like a call argument, and whether `value` conforms is not the parser's to decide — a conformer's
 // `implements` clause is recorded when its own file is parsed — so the store is recorded here and
@@ -280,6 +399,42 @@ end 'DebugLocalDecl'
 
 export typealias DebugLocalDeclArray = Array with DebugLocalDecl
 
+export type ClosureEnvField
+	export let name as ByteArray
+	export let slot as ElementIndex
+	export let declaredType as MaxonType
+
+	export static function create(name ByteArray, slot ElementIndex, declaredType MaxonType) returns ClosureEnvField
+		return Self{name: name, slot: slot, declaredType: declaredType}
+	end 'create'
+end 'ClosureEnvField'
+
+export typealias ClosureEnvFieldArray = Array with ClosureEnvField
+
+export union ClosureStoreDestination
+	field(box ValueId, base ClosureStoreBase)
+	element
+end 'ClosureStoreDestination'
+
+// The binding a field store was written through — the name E3183 gives the record it writes.
+export union ClosureStoreBase
+	spelled(record ValueId, name ByteArray)
+	unspelled
+end 'ClosureStoreBase'
+
+export type ClosureStoreSite
+	export let destination as ClosureStoreDestination
+	export let value as ValueId
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function create(destination ClosureStoreDestination, value ValueId, line LineNumber, column ColumnNumber) returns ClosureStoreSite
+		return Self{destination: destination, value: value, line: line, column: column}
+	end 'create'
+end 'ClosureStoreSite'
+
+export typealias ClosureStoreSiteArray = Array with ClosureStoreSite
+
 // ⭐⭐ **WHERE ONE NAMED VALUE ENDED UP, AS THE REGISTER ALLOCATOR ANSWERS IT.** Those are the only three
 // answers a location has, and `nowhere` is a real one: a value the colouring never placed is `optimizedOut`
 // in the sidecar, never a guessed slot number.
@@ -382,153 +537,23 @@ end 'StorageSite'
 
 export typealias StorageSiteArray = Array with StorageSite
 
-// ⭐ **WHERE A DOOR OR A SEND STANDS IN ITS BODY'S CONTROL FLOW** — the block, and the position in it the value
-// passes: every op of the block below `at` runs first. Which doors a send's freeze reaches is asked of the blocks
-// (`ProvenanceTracer.doorFollowsLend`), so a door on another arm of the same `if` or `match` is not one.
-//
-// ⚠ **A SITE IS NOTED WITH AN OP STREAM MARK AND PLACED AT THE BODY'S `end`** (`Parser.placeFreezeSites`), because
-// a ternary's arms move ops between blocks while a body is parsed and an op keeps its index through the move — so
-// a block recorded as the ops were emitted can be the wrong one, and the op cannot be.
-export type FlowPoint
-	export var block as BlockId
-	export var at as ElementIndex
-
-	export static function create(block BlockId, at ElementIndex) returns FlowPoint
-		return Self{block: block, at: at}
-	end 'create'
-
-	// A point of a body that is still being parsed; every site is placed before anything reads one.
-	export static function unplaced() returns FlowPoint
-		return Self{block: 0, at: 0}
-	end 'unplaced'
-
-	export function place(blockId BlockId, position ElementIndex)
-		self.block = blockId
-		self.at = position
-	end 'place'
-end 'FlowPoint'
-
-// A container method that writes its receiver, at the method's own token; `place` is the receiver as written and
-// `method` the method. `blameable` is false on the buffer surface, whose members are declared on a plain `self` and
-// so write a `let`-bound buffer legally. `opMark` and `point` are the write's place in the body's control flow,
-// which the freeze on a lent graph asks about (`FlowPoint`).
+// A container method that writes its receiver, at the method's own token; `place` is the receiver
+// as written. `blameable` is false on the buffer surface, whose members are declared on a plain
+// `self` and so write a `let`-bound buffer legally.
 export type ReceiverWriteSite
 	export let receiver as ValueId
 	export let place as ByteArray
-	export let method as ByteArray
 	export let line as LineNumber
 	export let column as ColumnNumber
 	export let blameable as bool
 	export let token as ElementIndex
-	export let opMark as ElementIndex
-	export var point as FlowPoint
 
-	export static function create(receiver ValueId, place ByteArray, method ByteArray, line LineNumber, column ColumnNumber, blameable bool, token ElementIndex, opMark ElementIndex) returns ReceiverWriteSite
-		return Self{receiver: receiver, place: place, method: method, line: line, column: column, blameable: blameable, token: token, opMark: opMark, point: FlowPoint.unplaced()}
+	export static function create(receiver ValueId, place ByteArray, line LineNumber, column ColumnNumber, blameable bool, token ElementIndex) returns ReceiverWriteSite
+		return Self{receiver: receiver, place: place, line: line, column: column, blameable: blameable, token: token}
 	end 'create'
 end 'ReceiverWriteSite'
 
 export typealias ReceiverWriteSiteArray = Array with ReceiverWriteSite
-
-// ⭐ **THE WAYS A VALUE COMES TO BE WRITTEN THROUGH, WHICH A LENT GRAPH MAY NOT TAKE (E3160).** The parser files the
-// first six where the value is written (`FreezeDoorSite`); the last three are a callee's, read off each call once
-// every body is summarised.
-export enum FreezeDoor
-	bindToVar
-	assignToVar
-	storeInFieldOrPayload
-	storeInContainer
-	returned
-	capturedByClosure
-	keptByCallee
-	writtenAsReceiver
-	writtenByCallee
-end 'FreezeDoor'
-
-// One door a value passed, at the value's own position; `point` is where the door stands in the body's control
-// flow, which a send's is compared against, and `token` orders two that stand at one point.
-export type FreezeDoorSite
-	export let value as ValueId
-	export let door as FreezeDoor
-	export let line as LineNumber
-	export let column as ColumnNumber
-	export let token as ElementIndex
-	export let opMark as ElementIndex
-	export var point as FlowPoint
-
-	export static function create(value ValueId, door FreezeDoor, line LineNumber, column ColumnNumber, token ElementIndex, opMark ElementIndex) returns FreezeDoorSite
-		return Self{value: value, door: door, line: line, column: column, token: token, opMark: opMark, point: FlowPoint.unplaced()}
-	end 'create'
-end 'FreezeDoorSite'
-
-export typealias FreezeDoorSiteArray = Array with FreezeDoorSite
-
-// ⭐ **ONE `let` LENT TO A MESSAGE.** `value` is the lent record and `root` the name of the binding that owns it; the
-// handler is `<serviceType>.<message>` at its parameter `param`. `line`/`column` is the argument and `token` its
-// token, where the freeze starts; `sendLine`/`sendColumn` is the send, where a handler that writes the parameter
-// is refused (E3019). `point` is where the send stands in the body's control flow, from which the doors it freezes
-// are the ones reachable (`FlowPoint`).
-export type LendSite
-	export let value as ValueId
-	export let root as ByteArray
-	export let serviceType as ByteArray
-	export let message as ByteArray
-	export let param as ByteArray
-	export let line as LineNumber
-	export let column as ColumnNumber
-	export let sendLine as LineNumber
-	export let sendColumn as ColumnNumber
-	export let token as ElementIndex
-	export let opMark as ElementIndex
-	export var point as FlowPoint
-
-	export static function create(value ValueId, root ByteArray, serviceType ByteArray, message ByteArray, param ByteArray, line LineNumber, column ColumnNumber, sendLine LineNumber, sendColumn ColumnNumber, token ElementIndex, opMark ElementIndex) returns LendSite
-		return Self{value: value, root: root, serviceType: serviceType, message: message, param: param, line: line, column: column, sendLine: sendLine, sendColumn: sendColumn, token: token, opMark: opMark, point: FlowPoint.unplaced()}
-	end 'create'
-end 'LendSite'
-
-export typealias LendSiteArray = Array with LendSite
-
-// Where each LABELLED call argument's value starts, by its label's position: a call's `argRanges` point at the label,
-// and a refusal about the value points at the value.
-export type LabelledArgumentValues
-	export var labels as PositionKeyArray
-	export var lines as LineNumberArray
-	export var columns as ColumnNumberArray
-
-	export static function create() returns LabelledArgumentValues
-		return Self{labels: PositionKeyArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create()}
-	end 'create'
-
-	export function record(label PositionKey, line LineNumber, column ColumnNumber)
-		self.labels.push(label)
-		self.lines.push(line)
-		self.columns.push(column)
-	end 'record'
-
-	export function clear()
-		self.labels.clear()
-		self.lines.clear()
-		self.columns.clear()
-	end 'clear'
-
-	// The row each label's value was recorded at. The FIRST row wins, as a scan looking for the label would find.
-	export function byPosition() returns LabelledValueRowByPosition
-		var byPosition = LabelledValueRowByPosition.create()
-
-		for i in 0 upto self.labels.count() 'eachArgument'
-			let label = try self.labels.get(i) otherwise panic("LabelledArgumentValues.byPosition: labels.get OOB at {i}")
-
-			if not byPosition.contains(label) 'theFirstThere'
-				byPosition.upsert(label, value: i)
-			end 'theFirstThere'
-		end 'eachArgument'
-
-		return byPosition
-	end 'byPosition'
-end 'LabelledArgumentValues'
-
-export typealias LabelledValueRowByPosition = Map with (PositionKey, ElementIndex)
 
 // ⭐ **A NAME BOUND OR ASSIGNED WHOLE TO A MUTABLE NAME, AND THE FIRST READ OF IT AFTER.** Filed where a `let` — or
 // a `var`, whose E3077 verdict needs the same fact — is bound or assigned to a mutable name (`destination`). Whether
@@ -544,13 +569,13 @@ export type MoveSite
 	export let line as LineNumber
 	export let column as ColumnNumber
 	export let token as ElementIndex
-	export let escapesLoop as bool
 	export var readAfter as bool = false
+	export var readInALaterIteration as bool = false
 	export var readLine as LineNumber = 0
 	export var readColumn as ColumnNumber = 0
 
-	export static function create(value ValueId, source ByteArray, sourceValue ValueId, sourceIsMutable bool, destination ByteArray, line LineNumber, column ColumnNumber, token ElementIndex, escapesLoop bool) returns MoveSite
-		return Self{value: value, source: source, sourceValue: sourceValue, sourceIsMutable: sourceIsMutable, destination: destination, line: line, column: column, token: token, escapesLoop: escapesLoop}
+	export static function create(value ValueId, source ByteArray, sourceValue ValueId, sourceIsMutable bool, destination ByteArray, line LineNumber, column ColumnNumber, token ElementIndex) returns MoveSite
+		return Self{value: value, source: source, sourceValue: sourceValue, sourceIsMutable: sourceIsMutable, destination: destination, line: line, column: column, token: token}
 	end 'create'
 
 	// The first read of the source after this door, and no later one.
@@ -563,6 +588,15 @@ export type MoveSite
 		self.readLine = atLine
 		self.readColumn = atColumn
 	end 'noteRead'
+
+	export function noteReadInALaterIteration(atLine LineNumber, atColumn ColumnNumber)
+		if self.readAfter 'alreadyRead'
+			return
+		end 'alreadyRead'
+
+		self.noteRead(atLine, atColumn: atColumn)
+		self.readInALaterIteration = true
+	end 'noteReadInALaterIteration'
 end 'MoveSite'
 
 export typealias MoveSiteArray = Array with MoveSite
@@ -572,22 +606,22 @@ export typealias MoveSiteArray = Array with MoveSite
 // for that verdict; `reported` is the diagnostic the parser filed for the first of them, which is replaced when
 // that one is withheld.
 export type VarShouldBeLetCandidates
-	export var values as ValueIdArray
-	export var names as ByteArrayArray
-	export var ranges as SourceRangeArray
-	export var infos as VarInfoArray
-	export var declTokens as TokenIndexArray
-	export var reported as Diagnostic
+	export let values as ValueIdArray
+	export let names as ByteArrayArray
+	export let ranges as SourceRangeArray
+	export let infos as VarInfoArray
+	export let declTokens as TokenIndexArray
+	export let reported as Diagnostic
 
-	export static function create(reported Diagnostic) returns VarShouldBeLetCandidates
-		return Self{values: ValueIdArray.create(), names: ByteArrayArray.create(), ranges: SourceRangeArray.create(), infos: VarInfoArray.create(), declTokens: TokenIndexArray.create(), reported: reported}
+	export static function create(values ValueIdArray, names ByteArrayArray, ranges SourceRangeArray, infos VarInfoArray, declTokens TokenIndexArray, reported Diagnostic) returns VarShouldBeLetCandidates
+		return Self{values: values, names: names, ranges: ranges, infos: infos, declTokens: declTokens, reported: reported}
 	end 'create'
-
-	// None yet, and no diagnostic reported for them.
-	export static function unreported() returns VarShouldBeLetCandidates
-		return Self.create(Diagnostic.create(ErrorCode.semanticVarShouldBeLet, message: ""))
-	end 'unreported'
 end 'VarShouldBeLetCandidates'
+
+export union FiledVarCandidates
+	none
+	filed(candidates VarShouldBeLetCandidates)
+end 'FiledVarCandidates'
 
 // Token spans of a body, each `[start, finish)`: its loops, from header to `end`, and the two arms of each `if`
 // with an `else`, recorded as consecutive spans.
@@ -721,30 +755,26 @@ export type DeferredWriteThroughs
 end 'DeferredWriteThroughs'
 
 // Container methods that write their receiver (`Parser.noteReceiverWrite`), each by its method's token, from which
-// the place, the position and the token the call ends at are all read when it is filed. `opMarks` is where each
-// write stands in the op stream, which the freeze on a lent graph turns into a `FlowPoint`.
+// the place, the position and the token the call ends at are all read when it is filed.
 export type DeferredReceiverWrites
 	export var receivers as ValueIdArray
 	export var methodIndices as TokenIndexArray
 	export var blameable as BoolArray
-	export var opMarks as OpIndexArray
 
 	export static function create() returns DeferredReceiverWrites
-		return Self{receivers: ValueIdArray.create(), methodIndices: TokenIndexArray.create(), blameable: BoolArray.create(), opMarks: OpIndexArray.create()}
+		return Self{receivers: ValueIdArray.create(), methodIndices: TokenIndexArray.create(), blameable: BoolArray.create()}
 	end 'create'
 
-	export function record(receiver ValueId, methodIndex ElementIndex, blames bool, opMark ElementIndex)
+	export function record(receiver ValueId, methodIndex ElementIndex, blames bool)
 		self.receivers.push(receiver)
 		self.methodIndices.push(methodIndex)
 		self.blameable.push(blames)
-		self.opMarks.push(opMark)
 	end 'record'
 
 	export function clear()
 		self.receivers.clear()
 		self.methodIndices.clear()
 		self.blameable.clear()
-		self.opMarks.clear()
 	end 'clear'
 end 'DeferredReceiverWrites'
 
@@ -778,17 +808,11 @@ export type DeferredProvenance
 	// The two arms of each `if` with an `else`, as consecutive spans: the `then` arm, then the `else` arm.
 	export var exclusiveArms as TokenSpans
 
-	// The doors a lent graph may not pass (E3160), the sends that lent one, and where the value of each labelled call
-	// argument starts, which a callee's door is refused at.
-	export var freezeDoors as FreezeDoorSiteArray
-	export var lendSites as LendSiteArray
-	export var labelledArguments as LabelledArgumentValues
-
 	// The empties every column above starts from and is emptied back to.
 	export var empty as ProvenanceColumns
 
 	export static function create(empty ProvenanceColumns) returns DeferredProvenance
-		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, calls: empty.calls, moduleLets: empty.moduleLets, loops: empty.tokenSpans, fieldWrites: empty.values, writableValues: empty.values, moveSites: empty.moveSites, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughs: empty.writeThroughs, receiverWrites: empty.deferredReceiverWrites, freezeDoors: empty.freezeDoors, lendSites: empty.lendSites, labelledArguments: empty.labelledArguments, handsARecordToACall: false, empty: empty}
+		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, calls: empty.calls, moduleLets: empty.moduleLets, loops: empty.tokenSpans, fieldWrites: empty.values, writableValues: empty.values, moveSites: empty.moveSites, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughs: empty.writeThroughs, receiverWrites: empty.deferredReceiverWrites, handsARecordToACall: false, empty: empty}
 	end 'create'
 
 	// Empty for the next body, keeping what each column this parser owns has grown to. A shared empty one is left
@@ -846,62 +870,8 @@ export type DeferredProvenance
 			self.exclusiveArms.clear()
 		end 'ownsArms'
 
-		if self.freezeDoors is not self.empty.freezeDoors 'ownsFreezeDoors'
-			self.freezeDoors.clear()
-		end 'ownsFreezeDoors'
-
-		if self.lendSites is not self.empty.lendSites 'ownsLendSites'
-			self.lendSites.clear()
-		end 'ownsLendSites'
-
 		self.handsARecordToACall = false
-
-		if self.labelledArguments is not self.empty.labelledArguments 'ownsLabelledArguments'
-			self.labelledArguments.clear()
-		end 'ownsLabelledArguments'
 	end 'clear'
-
-	export function noteLabelledArgument(label PositionKey, line LineNumber, column ColumnNumber)
-		if self.labelledArguments is self.empty.labelledArguments 'firstArgument'
-			self.labelledArguments = LabelledArgumentValues.create()
-		end 'firstArgument'
-
-		self.labelledArguments.record(label, line: line, column: column)
-	end 'noteLabelledArgument'
-
-	export function noteFreezeDoor(site FreezeDoorSite)
-		if self.freezeDoors is self.empty.freezeDoors 'firstDoor'
-			self.freezeDoors = FreezeDoorSiteArray.create()
-		end 'firstDoor'
-
-		self.freezeDoors.push(site)
-	end 'noteFreezeDoor'
-
-	export function noteLendSite(site LendSite)
-		if self.lendSites is self.empty.lendSites 'firstLend'
-			self.lendSites = LendSiteArray.create()
-		end 'firstLend'
-
-		self.lendSites.push(site)
-	end 'noteLendSite'
-
-	// The freeze's doors and lends, into the `sites` of a body that lent a graph or may be lent one.
-	export function fileFreezeInto(sites ProvenanceSites)
-		if self.freezeDoors.count() > 0 'someDoor'
-			sites.freezeDoors = self.freezeDoors
-			self.freezeDoors = self.empty.freezeDoors
-		end 'someDoor'
-
-		if self.lendSites.count() > 0 'someLend'
-			sites.lendSites = self.lendSites
-			self.lendSites = self.empty.lendSites
-		end 'someLend'
-
-		if self.labelledArguments.labels.count() > 0 'someLabelledArgument'
-			sites.labelledArguments = self.labelledArguments
-			self.labelledArguments = self.empty.labelledArguments
-		end 'someLabelledArgument'
-	end 'fileFreezeInto'
 
 	export function noteLetRead(value ValueId, token ElementIndex)
 		if self.letReads is self.empty.letReads 'firstRead'
@@ -1001,12 +971,12 @@ export type DeferredProvenance
 		self.writeThroughs.record(target, placeStart: placeStart, placeEnd: placeEnd, line: line, column: column, token: token)
 	end 'noteWriteThrough'
 
-	export function noteReceiverWrite(receiver ValueId, methodIndex ElementIndex, blameable bool, opMark ElementIndex)
+	export function noteReceiverWrite(receiver ValueId, methodIndex ElementIndex, blameable bool)
 		if self.receiverWrites is self.empty.deferredReceiverWrites 'firstWrite'
 			self.receiverWrites = DeferredReceiverWrites.create()
 		end 'firstWrite'
 
-		self.receiverWrites.record(receiver, methodIndex: methodIndex, blames: blameable, opMark: opMark)
+		self.receiverWrites.record(receiver, methodIndex: methodIndex, blames: blameable)
 	end 'noteReceiverWrite'
 
 	// What a summary is traced from, into `sites`: the receiver writes as the parser spelled them, and the name binds.
@@ -1089,15 +1059,11 @@ export type ProvenanceSites
 	export var letReads as LetReads
 	export var letCaptures as LetReads
 	export var exclusiveArms as TokenSpans
-	export var varCandidates as VarShouldBeLetCandidates
-	export var hasVarCandidates as bool
-	export var freezeDoors as FreezeDoorSiteArray
-	export var lendSites as LendSiteArray
-	export var labelledArguments as LabelledArgumentValues
+	export var varCandidates as FiledVarCandidates
 	export var empty as ProvenanceColumns
 
 	export static function create(empty ProvenanceColumns) returns ProvenanceSites
-		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, immutableBindings: empty.immutableBindings, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughSites: empty.storageSites, receiverWrites: empty.receiverWrites, fieldWrites: empty.values, moveSites: empty.moveSites, writableValues: empty.values, loops: empty.tokenSpans, calls: empty.calls, varCandidates: empty.varCandidates, hasVarCandidates: false, freezeDoors: empty.freezeDoors, lendSites: empty.lendSites, labelledArguments: empty.labelledArguments, empty: empty}
+		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, immutableBindings: empty.immutableBindings, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughSites: empty.storageSites, receiverWrites: empty.receiverWrites, fieldWrites: empty.values, moveSites: empty.moveSites, writableValues: empty.values, loops: empty.tokenSpans, calls: empty.calls, varCandidates: FiledVarCandidates.none, empty: empty}
 	end 'create'
 
 	export function recordImmutableName(value ValueId, name ByteArray, moduleLet bool, image bool, borrowsIt bool, declToken ElementIndex, info VarInfo)
@@ -1113,11 +1079,18 @@ export type ProvenanceSites
 			info.renumberTypeIds(remap, epoch: epoch)
 		end 'eachImmutable'
 
-		for info in self.varCandidates.infos 'eachCandidate'
-			info.renumberTypeIds(remap, epoch: epoch)
-		end 'eachCandidate'
+		match self.varCandidates 'candidates'
+			none then return
+			filed(candidates) then renumberCandidateTypeIds(candidates, remap: remap, epoch: epoch)
+		end 'candidates'
 	end 'renumberBindingTypeIds'
 end 'ProvenanceSites'
+
+function renumberCandidateTypeIds(candidates VarShouldBeLetCandidates, remap TypeIdRemap, epoch RenumberingEpoch)
+	for info in candidates.infos 'eachCandidate'
+		info.renumberTypeIds(remap, epoch: epoch)
+	end 'eachCandidate'
+end 'renumberCandidateTypeIds'
 
 // ⭐ **WHAT THE PARSER FILED FOR `StorageProvenance`, OR NOTHING** — a union rather than a shared empty record, so
 // `createFromStd`, off the parser's thread, holds one small box of its own and reaches for no singleton.
@@ -1138,17 +1111,13 @@ export type ProvenanceColumns
 	export var moveSites as MoveSiteArray
 	export var tokenSpans as TokenSpans
 	export var letReads as LetReads
-	export var varCandidates as VarShouldBeLetCandidates
 	export var calls as CallTokenColumns
 	export var moduleLets as ModuleLetReads
 	export var writeThroughs as DeferredWriteThroughs
 	export var deferredReceiverWrites as DeferredReceiverWrites
-	export var freezeDoors as FreezeDoorSiteArray
-	export var lendSites as LendSiteArray
-	export var labelledArguments as LabelledArgumentValues
 
 	export static function create() returns ProvenanceColumns
-		return Self{immutableBindings: ImmutableBindings.create(), storageSites: StorageSiteArray.create(), receiverWrites: ReceiverWriteSiteArray.create(), values: ValueIdArray.create(), moveSites: MoveSiteArray.create(), tokenSpans: TokenSpans.create(), letReads: LetReads.create(), varCandidates: VarShouldBeLetCandidates.unreported(), calls: CallTokenColumns.create(), moduleLets: ModuleLetReads.create(), writeThroughs: DeferredWriteThroughs.create(), deferredReceiverWrites: DeferredReceiverWrites.create(), freezeDoors: FreezeDoorSiteArray.create(), lendSites: LendSiteArray.create(), labelledArguments: LabelledArgumentValues.create()}
+		return Self{immutableBindings: ImmutableBindings.create(), storageSites: StorageSiteArray.create(), receiverWrites: ReceiverWriteSiteArray.create(), values: ValueIdArray.create(), moveSites: MoveSiteArray.create(), tokenSpans: TokenSpans.create(), letReads: LetReads.create(), calls: CallTokenColumns.create(), moduleLets: ModuleLetReads.create(), writeThroughs: DeferredWriteThroughs.create(), deferredReceiverWrites: DeferredReceiverWrites.create()}
 	end 'create'
 end 'ProvenanceColumns'
 
@@ -1188,6 +1157,8 @@ end 'FunctionPlaceholders'
 // fresh function retains it on whichever OS thread the scheduler picked. See its header for the full
 // argument; this is the half of it written where the next singleton will be reached for.
 let sharedEmptyDebugLocals = DebugLocalDeclArray.create()
+let sharedEmptyClosureEnvFields = ClosureEnvFieldArray.create()
+let sharedEmptyClosureStoreSites = ClosureStoreSiteArray.create()
 let sharedEmptyDebugValueLocations = DebugValueLocationArray.create()
 let sharedEmptyDebugValueRanges = DebugValueRangeArray.create()
 
@@ -1206,6 +1177,9 @@ let sharedReleasedValueFlags = BoolArray.create()
 let sharedReleasedValueIds = ValueIdArray.create()
 let sharedReleasedExistentialInstances = ValueExistentialInstanceMap.create()
 let sharedReleasedLiteralCastArguments = LiteralCastMap.create()
+let sharedNoDeferredArgumentBindings = DeferredArgumentBindingArray.create()
+let sharedNoConditionalOps = ConditionalOpArray.create()
+let sharedNoConditionalRefusals = ConditionalRefusalArray.create()
 
 // `stores` ready to be pushed into: itself, or a fresh column in place of the shared empty.
 export function writableExistentialFieldStores(stores ExistentialFieldStoreArray) returns ExistentialFieldStoreArray
@@ -1216,19 +1190,19 @@ export function writableExistentialFieldStores(stores ExistentialFieldStoreArray
 	return stores
 end 'writableExistentialFieldStores'
 
-// The per-function counter that names lifted NON-CAPTURING closure literals. A count with
+// The per-function counter that names lifted closure literals. A count with
 // no meaningful upper bound (a function may hold arbitrarily many closures), so the range is wide by
 // the ranged-type convention rather than pinned to a false ceiling.
 export typealias ClosureSubIndex = int(0 to u64.max)
 
 // ⭐ **A SET OF PARAMETER POSITIONS — one bit per position, 0 for the overwhelming majority that name
-// none.** It carries three facts of one shape, and the vocabulary is deliberately neutral because a
-// name that said "mutated" would be wrong at two of the three: `IrFunction.writtenParamMask` (which
-// parameters a body WRITES, the E3019 seed), `IrFunction.storageWrittenParamMask` (the E3070 seed), and
-// `SemanticCheck.buildEscapeSummary`'s masks (which parameters a body lets ESCAPE, the E3099 seed).
-// All three close over the SAME call graph through the SAME fixpoint — see
-// `SemanticCheck.propagateParamMasks` — so a second mask vocabulary would be one concept with two
-// spellings free to disagree about which bit is which.
+// none.** It carries many facts of one shape, and the vocabulary is deliberately neutral because a
+// name that said "mutated" would be wrong at most of them: `IrFunction.writtenParamMask` (which
+// parameters a body WRITES, the E3019 seed) and `IrFunction.storageWrittenParamMask` (the E3070
+// seed) close over the SAME call graph through the SAME fixpoint — see
+// `SemanticCheck.propagateParamMasks` — and a by-reference mask or an escape mask is the same
+// shape, so a second mask vocabulary would be one concept with two spellings free to disagree about
+// which bit is which.
 //
 // A BITMASK and not a `BoolArray`, for the reason `ArgFloatMask` is one: two of these are fields on
 // EVERY `IrFunction` in the program, and a per-function array would be one live heap object each for a
@@ -1238,7 +1212,7 @@ export typealias ClosureSubIndex = int(0 to u64.max)
 export typealias ParamPositionMask = bits(64)
 
 // One mask per function of the module, indexed by function INDEX — the working state of a per-parameter
-// fixpoint (`SemanticCheck.buildParamMutationSummary`, `SemanticCheck.buildEscapeSummary`), before it is
+// fixpoint (`SemanticCheck.buildParamMutationSummary`), before it is
 // published as the name-keyed summary a call site reads.
 export typealias ParamPositionMaskArray = Array with ParamPositionMask
 
@@ -1278,9 +1252,8 @@ export type IrFunction
 	// is `ProgramSignatures.fileModuleDirectories`, keyed by the path every asker already holds, and unlike
 	// a per-function mirror it is the INVERTIBLE `/`-joined form a visibility question may actually be
 	// asked of.
-	// ⭐ **THE VISIBILITY TIER THE DECLARATION WROTE — READ, since N1a, by the call door**
-	// (`SemanticCheck.calleeVisibleFrom` ⇒ E3008 / E3088). It was written at three sites and consulted at
-	// none for the whole of P1: any file could call any other file's non-exported function.
+	// ⭐ **THE VISIBILITY TIER THE DECLARATION WROTE — READ by the call door**
+	// (`SemanticCheck.calleeVisibleFrom` ⇒ E3008 / E3088).
 	export var visibility as Visibility
 
 	// Absolute / virtual path of the declaring file — the visibility anchor for
@@ -1289,7 +1262,6 @@ export type IrFunction
 	export var paramCount as ParamCount
 	export var blockRefs as BlockRefArray
 	export var nextBlockId as BlockId
-	export var returnLine as LineNumber
 
 	// Line and column of the function-name token; zero for synthesized functions.
 	export var nameLine as LineNumber
@@ -1352,6 +1324,8 @@ export type IrFunction
 	export var mustBeSplicedAtEverySite as bool
 	export var closureLayout as ClosureCaptureSource
 	export var closureFixedElementCount as ClosureCaptureSource
+	export var closureEnvFields as ClosureEnvFieldArray
+	export var closureStoreSites as ClosureStoreSiteArray
 
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType as MaxonReturnType
@@ -1412,29 +1386,8 @@ export type IrFunction
 
 	export var filedProvenance as FiledProvenance
 
-	// ⭐ **THE PER-VALUE CLOSURE-ENVIRONMENT COLUMN, DENSE by ValueId in lockstep with
-	// `valueTags`.** The environment a function VALUE carries, or 0 when it carries none. A real environment
-	// is always a minted value id (`>= 1` — a heap env block, a companion-env parameter, or a const-0 op is
-	// never id 0, the first parameter), so a stored 0 unambiguously means "no environment". PUBLISHED here
-	// (like `valueTags`/`valueNameIds`), and for the same reason a call-argument rule cannot live wholly in the
-	// parser: threading a function-value ARGUMENT's environment to a callee is done at LOWERING
-	// (`LowerMaxonToStd.appendCalleeEnvArgs`), the first tier that holds the callee's ALIAS-RESOLVED parameter
-	// types (a function-typed parameter may be declared in another file). The parser cannot know there which
-	// arguments land at function-typed parameters, so it publishes each value's environment here and the
-	// lowering reads it. Empty on a Std-phase function (`createFromStd`).
-	export var valueClosureEnv as ValueIdArray
-
-	// ⭐ **THE CAPTURING-CLOSURE-LITERAL MARK, DENSE by ValueId in lockstep with `valueTags`.**
-	// True iff a value is a capturing closure LITERAL born in this function (its env is this frame's — see
-	// `Parser.markCapturingClosure`). PUBLISHED (like `valueClosureEnv`) because the INTERPROCEDURAL escape
-	// check runs at SemanticCheck (`buildEscapeSummary`/`checkArgTypes`), the first whole-program point that
-	// holds every callee's body: a capturing closure passed to a callee that PERSISTS the parameter (stores or
-	// returns it) would keep only the fn-ptr, so its captured env dangles once the frame dies — refused there.
-	// It marks the LITERAL, not a function-typed parameter (which also carries an env): a param passed onward is
-	// not refused, because the refusal lands at the site that passes the literal. Empty on a Std-phase function.
-	export var valueIsCapturingClosure as BoolArray
-
-	// Whether the six dense value columns above are this function's alone (`makeValueColumnsPrivate`).
+	// Whether the four dense value columns above are this function's alone
+	// (`makeValueColumnsPrivate`).
 	var valueColumnsArePrivate = false
 
 	// ⭐⭐ **THE PER-VALUE WITNESS-PAIRING COLUMN, DENSE by ValueId.** For a
@@ -1444,7 +1397,7 @@ export type IrFunction
 	// values and this is what says WHICH two.
 	//
 	// A real witness is always a minted id or a hidden parameter past the first (`>= 1`), so a stored 0
-	// unambiguously means "not an existential", exactly as `valueClosureEnv`'s does — and it is read only on
+	// unambiguously means "not an existential" — and it is read only on
 	// the `interfaceRef` arm, where a 0 is a compiler invariant break rather than an answer.
 	//
 	// ⚠ **UNLIKE ITS SIBLINGS IT IS NOT IN LOCKSTEP WITH `valueTags`: it is GROWN ON DEMAND and stops at its
@@ -1452,7 +1405,7 @@ export type IrFunction
 	// end reads exactly as a 0 within it — unpaired — which is why the shortfall needs no separate answer.
 	// See `Parser.valueWitnessIds` for the ladder measurement that made it lazy.
 	//
-	// PUBLISHED here for `valueClosureEnv`'s reason, one mechanism over: threading an existential ARGUMENT's
+	// PUBLISHED here because threading an existential ARGUMENT's
 	// witness to a callee is done at LOWERING (`LowerMaxonToStd.appendExistentialWitnessArgs`), the first tier
 	// holding the callee's resolved parameter types — the parser cannot know there which arguments land at
 	// interface-typed parameters, so it publishes each value's witness here and the lowering reads it.
@@ -1488,6 +1441,9 @@ export type IrFunction
 	// call's parameter is not known until overload resolution. Handed over like
 	// `valueExistentialInstances`.
 	export var literalCastArguments as LiteralCastMap
+	export var deferredArgumentBindings as DeferredArgumentBindingArray
+	export var conditionalOps as ConditionalOpArray
+	export var conditionalRefusals as ConditionalRefusalArray
 
 	// Every store this function makes into an interface-typed field — see `ExistentialFieldStore`. Handed over
 	// at the function's end by the parser (`Parser.publishExistentialInstances`) and appended to by
@@ -1519,7 +1475,7 @@ export type IrFunction
 	// overflow the register file.
 	export var outgoingArgSize as StackSize
 
-	// ⭐ **THE PER-FUNCTION CLOSURE COUNTER.** The k-th non-capturing closure literal in this
+	// ⭐ **THE PER-FUNCTION CLOSURE COUNTER.** The k-th closure literal in this
 	// function's body lifts to a top-level function named `<name>$closure_<k>`; `parseClosureExpression`
 	// reads this value for `k` and post-increments it. Source-deterministic — the same source mints the
 	// same closure names regardless of how many sibling functions parsed before it. Zero for a function
@@ -1628,13 +1584,12 @@ export type IrFunction
 	// answer "does handing this borrowed container — as an argument or as a RECEIVER — reach a write of it?".
 	// Zero for a Std-phase function.
 	//
-	// ⚠⚠ **IT IS CLOSED OVER A WIDER EDGE SET THAN THE MASK ABOVE, AND THIS COMMENT SAID "THE SAME EDGES"
-	// UNTIL ARR4 MEASURED A USE-AFTER-FREE THROUGH THE DIFFERENCE.** The two doors above are the roster's;
-	// a member served from `stdlib/Array.maxon` reaches neither, and `SemanticCheck.collectCallParamEdges`
-	// records an edge only for an argument that IS a parameter — which `self.items` is not. `wipe()` whose
-	// body is `items.truncate(0)` was therefore summarised as writing nothing. `BorrowCheck.StorageReachEdge`
-	// is the third route the parser records and the fourth row of the table above in edge form; every member
-	// the `Array` retirement chain strikes moves onto it.
+	// ⚠⚠ **IT IS CLOSED OVER A WIDER EDGE SET THAN THE MASK ABOVE, AND TREATING THEM AS THE SAME EDGES
+	// IS A USE-AFTER-FREE.** The two doors above are the roster's; a member served from
+	// `stdlib/Array.maxon` reaches neither, and `SemanticCheck.collectCallParamEdges` records an edge
+	// only for an argument that IS a parameter — which `self.items` is not, so over those edges alone
+	// `wipe()` whose body is `items.truncate(0)` writes nothing. `BorrowCheck.StorageReachEdge` is the
+	// third route the parser records and the fourth row of the table above in edge form.
 	export var storageWrittenParamMask as ParamPositionMask
 
 	// ⭐⭐ **THE PARAMETERS THIS BODY WRITES THROUGH BY *ANY* MEANS — A FOURTH QUESTION OVER THE SAME
@@ -1749,10 +1704,10 @@ export type IrFunction
 	// module does not validate.
 	export var usesValueTupleReturn as bool
 
-	// ⭐⭐ **THE PARAMETERS THIS FUNCTION TAKES BY REFERENCE (PBR-2) — an ABI fact, and the ONE of the three
+	// ⭐⭐ **THE PARAMETERS THIS FUNCTION TAKES BY REFERENCE — an ABI fact, and the ONE of the three
 	// masks on this record that is not a diagnostic's seed.**
 	//
-	// Bit `i` set iff parameter `i` arrives as the address of an 8-byte cell rather than as a value: the
+	// Bit `i` set iff parameter `i` arrives as the address of a cell rather than as a value: the
 	// callee's reads of it are `loadIndirect`s and its `x = 99` a `storeIndirect`, so the write lands in the
 	// caller's frame. Every caller of this function must agree, which is why — unlike the two masks above —
 	// it is NOT closed over the call graph here and NOT derived from this body's ops at all.
@@ -1854,20 +1809,21 @@ export type IrFunction
 	//
 	// The name and the signature types are the function's own copies: a function rides its file's artifact, and both
 	// are often records the signature index holds (`ParseStaging.artifactOwnedOp`).
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueMintedSole BoolArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, placeholders FunctionPlaceholders, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueBrandIds TypeNameIdArray, valueMintedSole BoolArray, valueWitnessIds ValueIdArray, declaredAt SourcePosition, placeholders FunctionPlaceholders, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		return Self{
 			name: name.clone(),
 			visibility: Visibility.file,
 			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
 			closureLayout: ClosureCaptureSource.none,
 			closureFixedElementCount: ClosureCaptureSource.none,
+			closureEnvFields: sharedEmptyClosureEnvFields,
+			closureStoreSites: sharedEmptyClosureStoreSites,
 			keepsItsOwnFrame: false,
 			mustBeSplicedAtEverySite: false,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
 			nextBlockId: 0,
-			returnLine: returnLine,
 			nameLine: declaredAt.line,
 			nameColumn: declaredAt.column,
 			maxonReturnType: maxonReturnType.clone(),
@@ -1877,11 +1833,12 @@ export type IrFunction
 			valueBrandIds: valueBrandIds,
 			valueMintedSole: valueMintedSole,
 			filedProvenance: placeholders.noFiledProvenance,
-			valueClosureEnv: valueClosureEnv,
-			valueIsCapturingClosure: valueIsCapturingClosure,
 			valueWitnessIds: valueWitnessIds,
 			valueExistentialInstances: ValueExistentialInstanceMap.create(),
 			literalCastArguments: placeholders.noLiteralCastArguments,
+			deferredArgumentBindings: sharedNoDeferredArgumentBindings,
+			conditionalOps: sharedNoConditionalOps,
+			conditionalRefusals: sharedNoConditionalRefusals,
 			existentialFieldStores: sharedEmptyExistentialFieldStores,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
@@ -1931,7 +1888,7 @@ export type IrFunction
 	// load/add/store precisely because one green thread owns it — so sixteen workers retaining and releasing ONE
 	// singleton is a lost update. Small empties per call, on a door the parser never takes (`create` is the
 	// parser's, and it shares its own `FunctionPlaceholders` across its thousands of functions).
-	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
+	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		let declaredAt = SourcePosition.synthesized()
 		return Self{
 			name: name,
@@ -1939,13 +1896,14 @@ export type IrFunction
 			needsGreenThreadStackGuard: needsGreenThreadStackGuard,
 			closureLayout: ClosureCaptureSource.none,
 			closureFixedElementCount: ClosureCaptureSource.none,
+			closureEnvFields: ClosureEnvFieldArray.create(),
+			closureStoreSites: ClosureStoreSiteArray.create(),
 			keepsItsOwnFrame: false,
 			mustBeSplicedAtEverySite: false,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
 			nextBlockId: 0,
-			returnLine: returnLine,
 			nameLine: declaredAt.line,
 			nameColumn: declaredAt.column,
 			maxonReturnType: MaxonReturnType.void,
@@ -1955,11 +1913,12 @@ export type IrFunction
 			valueBrandIds: TypeNameIdArray.create(),
 			valueMintedSole: BoolArray.create(),
 			filedProvenance: FiledProvenance.none,
-			valueClosureEnv: ValueIdArray.create(),
-			valueIsCapturingClosure: BoolArray.create(),
 			valueWitnessIds: ValueIdArray.create(),
 			valueExistentialInstances: ValueExistentialInstanceMap.create(),
 			literalCastArguments: LiteralCastMap.create(),
+			deferredArgumentBindings: DeferredArgumentBindingArray.create(),
+			conditionalOps: ConditionalOpArray.create(),
+			conditionalRefusals: ConditionalRefusalArray.create(),
 			existentialFieldStores: ExistentialFieldStoreArray.create(),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
@@ -2005,13 +1964,14 @@ export type IrFunction
 			needsGreenThreadStackGuard: src.needsGreenThreadStackGuard,
 			closureLayout: src.closureLayout,
 			closureFixedElementCount: src.closureFixedElementCount,
+			closureEnvFields: src.closureEnvFields,
+			closureStoreSites: src.closureStoreSites,
 			keepsItsOwnFrame: src.keepsItsOwnFrame,
 			mustBeSplicedAtEverySite: src.mustBeSplicedAtEverySite,
 			sourceFilePath: src.sourceFilePath,
 			paramCount: src.paramCount,
 			blockRefs: BlockRefArray.create(),
 			nextBlockId: src.nextBlockId,
-			returnLine: src.returnLine,
 			nameLine: src.nameLine,
 			nameColumn: src.nameColumn,
 			maxonReturnType: src.maxonReturnType,
@@ -2024,11 +1984,12 @@ export type IrFunction
 			valueBrandIds: src.valueBrandIds,
 			valueMintedSole: src.valueMintedSole,
 			filedProvenance: src.filedProvenance,
-			valueClosureEnv: src.valueClosureEnv,
-			valueIsCapturingClosure: src.valueIsCapturingClosure,
 			valueWitnessIds: src.valueWitnessIds,
 			valueExistentialInstances: src.valueExistentialInstances,
 			literalCastArguments: src.literalCastArguments,
+			deferredArgumentBindings: src.deferredArgumentBindings,
+			conditionalOps: src.conditionalOps,
+			conditionalRefusals: src.conditionalRefusals,
 			existentialFieldStores: src.existentialFieldStores,
 			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
@@ -2074,8 +2035,6 @@ export type IrFunction
 		self.valueNameIds = self.valueNameIds.clone()
 		self.valueBrandIds = self.valueBrandIds.clone()
 		self.valueMintedSole = self.valueMintedSole.clone()
-		self.valueClosureEnv = self.valueClosureEnv.clone()
-		self.valueIsCapturingClosure = self.valueIsCapturingClosure.clone()
 		self.valueColumnsArePrivate = true
 	end 'makeValueColumnsPrivate'
 
@@ -2164,6 +2123,10 @@ export type IrFunction
 	// value columns are and for their reason: the overwhelming majority of functions declare no narrowed
 	// parameter and must not pay an allocation to say so. Keyed on EMPTINESS rather than on one anchor's
 	// identity, because the column may be any owner's shared empty and a column this writes is never empty.
+	export function declarationSite() returns ByteArray
+		return declarationSiteKey(self.sourceFilePath, line: self.nameLine, column: self.nameColumn)
+	end 'declarationSite'
+
 	export function recordParamGuard(index ParamCount, alias RangedTypeAlias, headBlockId BlockId, okBlockId BlockId, ownedBlockIds BlockIdArray)
 		if self.paramGuards.isEmpty() 'stillShared'
 			self.paramGuards = RangeCheckParamGuardArray.create()
@@ -2218,8 +2181,7 @@ export type IrFunction
 	// Every E3077 candidate of the body, the first of which the parser reported as `reported`.
 	export function recordVarShouldBeLetCandidates(candidates VarShouldBeLetCandidates, empty ProvenanceColumns)
 		var sites = self.provenanceSitesForWrite(empty)
-		sites.varCandidates = candidates
-		sites.hasVarCandidates = true
+		sites.varCandidates = FiledVarCandidates.filed(candidates)
 	end 'recordVarShouldBeLetCandidates'
 
 	// Did the parser file anything for this function — an immutable name, or an E3077 candidate?
@@ -2259,11 +2221,13 @@ export type IrFunction
 		deferred.fileGuardedInto(sites)
 	end 'fileGuardedProvenance'
 
-	// The freeze's doors and lends (`DeferredProvenance.fileFreezeInto`).
-	export function fileFreezeProvenance(deferred DeferredProvenance)
-		var sites = self.provenanceSitesForWrite(deferred.empty)
-		deferred.fileFreezeInto(sites)
-	end 'fileFreezeProvenance'
+	export function noteClosureStoreSite(site ClosureStoreSite)
+		if self.closureStoreSites.isEmpty() 'firstSite'
+			self.closureStoreSites = ClosureStoreSiteArray.create()
+		end 'firstSite'
+
+		self.closureStoreSites.push(site)
+	end 'noteClosureStoreSite'
 
 	export function fileWriteThroughSites(writeThroughSites StorageSiteArray, empty ProvenanceColumns)
 		var sites = self.provenanceSitesForWrite(empty)
@@ -2301,16 +2265,21 @@ export type IrFunction
 		self.valueNameIds = sharedReleasedTypeNameIds
 		self.valueBrandIds = sharedReleasedTypeNameIds
 		self.valueMintedSole = sharedReleasedValueFlags
-		self.valueIsCapturingClosure = sharedReleasedValueFlags
-		self.valueClosureEnv = sharedReleasedValueIds
 		self.valueWitnessIds = sharedReleasedValueIds
 		self.valueExistentialInstances = sharedReleasedExistentialInstances
 		self.literalCastArguments = sharedReleasedLiteralCastArguments
+		self.deferredArgumentBindings = sharedNoDeferredArgumentBindings
+		self.conditionalOps = sharedNoConditionalOps
+		self.conditionalRefusals = sharedNoConditionalRefusals
 		self.existentialFieldStores = sharedEmptyExistentialFieldStores
 		self.filedProvenance = FiledProvenance.none
 		self.valueColumnsArePrivate = false
 		self.releaseScope()
 	end 'releaseMaxonTierData'
+
+	export function isCompilerBuilt() returns bool
+		return self.sourceFilePath.isEmpty()
+	end 'isCompilerBuilt'
 end 'IrFunction'
 
 export typealias IrFunctionArray = Array with IrFunction

@@ -38,10 +38,10 @@ this file exists for, because the two sides earn two different diagnostics:
   `ParseStaging.duplicateFunctionMessage` already applies to a contested free function and a contested
   `extension` method, whose names are synthesized for their own reasons.
 
-⚠ **The second sentence was first gated on the CONTEST rather than on the property, and it fired on the
-first case below** — telling an author whose statics are fine to *"give the statics distinct parameter
+⚠ **The second sentence is gated on the property, not on the CONTEST.** Gated on the contest it would fire
+on the first case below — telling an author whose statics are fine to *"give the statics distinct parameter
 types"*, about `Box.getValue`, which is exactly what they wrote. Every sentence that names a synthesized
-spelling now sits inside the "this name is not what a declaration wrote" band, so it cannot reach a name
+spelling sits inside the "this name is not what a declaration wrote" band, so it cannot reach a name
 the author can grep for. These cases are what hold that shut.
 
 ## Tests

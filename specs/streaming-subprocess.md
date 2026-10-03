@@ -5,12 +5,12 @@ keywords: [subprocess, streaming, stdio, pipe, readLine, writeLine, handle-table
 category: concurrency
 ---
 
-# Streaming subprocess — the long-lived child with caller-driven stdio (P1.5 dogfood slice 1b)
+# Streaming subprocess — the long-lived child with caller-driven stdio
 
 ## Documentation
 
 The streaming subprocess builtins expose a long-lived child whose stdin / stdout / stderr the caller
-drives by hand, one line at a time. They generalize the one-shot `spawnReadLine` probe (slice 1a) into a
+drives by hand, one line at a time. They generalize the one-shot `spawnReadLine` probe into a
 real handle-table API: a spawn creates THREE pipes — one outbound for stdin that the parent writes, two
 inbound that the parent reads — hands back a non-negative integer handle that packs a runtime table slot
 with the slot's GENERATION (the slot index in the low part, the generation above it; `-1` is the
@@ -39,7 +39,7 @@ is a measured property with cases pinning it, not an aside.
 - `subpWait(h)` blocks until the child exits and returns its exit code.
 - `subpRelease(h)` closes every OS handle the child owns and marks the table slot free for reuse. The
   slot's reusable line buffers persist across spawn/release cycles, so a spawn+read+release loop is
-  memory-bounded rather than leaking a fresh buffer per iteration (slice 1a's measured debt).
+  memory-bounded rather than leaking a fresh buffer per iteration.
 
 **Releasing a handle out from under a parked reader is SAFE.** Each table slot carries a GENERATION that
 `subpSpawn` bumps when it claims the slot, and the handle it returns packs that generation above the slot
@@ -52,8 +52,8 @@ reader passes the entry check, sleeps, and the slot may be released and reused w
 reader also captures the generation at park time and re-reads it on resume: if a `subpRelease(h)` freed
 the slot and a later `subpSpawn` reused that index while the reader slept, the generations differ, so
 the stale reader returns its own empty/EOF result (correct — its handle is gone) and writes NO slot
-state back, leaving the new handle's stream untouched. Without it the resumed reader stamped its EOF
-into whatever handle now owned the slot, silently making the NEW handle read EOF — memory-safe, but a
+state back, leaving the new handle's stream untouched. Without it the resumed reader would stamp its EOF
+into whatever handle now owns the slot, silently making the NEW handle read EOF — memory-safe, but a
 cross-handle wrong answer.
 
 The read line-buffers per handle: each stdout/stderr stream carries a growable byte buffer that a read
@@ -78,11 +78,11 @@ reports the descriptor ready. `posix-a-parked-line-read-needs-no-rescue` measure
 retake delta across one `subpReadLine` whose child delays a second is ZERO, so the machine was
 released deliberately rather than rescued out of a blocking call.
 
-⛔ **THREE OF THE NINE CASES ABOVE STILL HAVE NO SIBLING, AND THAT IS NOW A GAP RATHER THAN A LANE
-FACT.** `interleave-with-sleep`, `drop-reader-then-reread` and `release-while-parked-then-reuse-slot`
+⛔ **THREE WINDOWS CASES BELOW HAVE NO SIBLING, AND THAT IS A GAP RATHER THAN A LANE FACT.**
+`interleave-with-sleep`, `drop-reader-then-reread` and `release-while-parked-then-reuse-slot`
 each assert something about a reader that is PARKED — a concurrent sleeper making progress, a drop
 cancelling a read in flight, a generation guard catching a resume after the slot was reused. Their
-subject exists on these lanes now; the ports are simply unwritten.
+subject exists on these lanes; the ports are unwritten.
 
 ## Tests
 
@@ -115,15 +115,13 @@ end 'main'
 here at all. `main` spawns `echo hello`, reads its one stdout line, waits, and releases; the line's byte
 length (`hello\n`, SIX — an LF where `cmd /c echo` writes CRLF) is returned.
 
-⛔⛔ **THIS ENTIRE FAMILY SEGFAULTED ON THIS LANE UNTIL THE CASE EXISTED, AND NOTHING REFUSED IT.**
-`subpSpawn(cmd)` is the third door that takes a whole command LINE, and it was the one that did not ask
-`SubprocessCommandShape`: it stored the raw bytes into the spawn request's command field and handed them to
-a core that, under `argumentVector`, reads that field as a `char *const argv[]`. The first eight ASCII
-bytes of `"echo hello"` were dereferenced as `argv[0]`. MEASURED: **exit 139 (SIGSEGV) at the spawn
-itself**, in a program that compiled clean — the facility table already said `subprocess gives true` here,
-so the E3104 gate that covers a target with no substrate correctly did not fire. Its two siblings
-`__gt_process_run` and `__gt_io_read` had routed their line through `emitSubpCommandFromLine` since MAC8;
-this one now does too.
+⛔⛔ **A SEGFAULT HERE IS SOMETHING NOTHING ELSE REFUSES.** `subpSpawn(cmd)` is one of three doors that
+take a whole command LINE, and each routes it through `emitSubpCommandFromLine` (`SubprocessCommandShape`),
+because the core, under `argumentVector`, reads the spawn request's command field as a
+`char *const argv[]`. Raw bytes stored there would have the first eight ASCII bytes of `"echo hello"`
+dereferenced as `argv[0]`: **exit 139 (SIGSEGV) at the spawn itself**, in a program that compiles clean —
+the facility table says `subprocess gives true` here, so the E3104 gate that covers a target with no
+substrate correctly does not fire. `__gt_process_run` and `__gt_io_read` are the other two doors.
 
 ⚠ **THE READ YIELDS ON THIS LANE, ON A POLL DESCRIPTOR RATHER THAN AN OVERLAPPED — BUT NOT MEASURABLY
 HERE.** `echo hello` races the parent to the pipe, so whether this read finds its line already waiting or
@@ -165,8 +163,8 @@ of other work. `rescued=false` then says the reader went onto its poll descripto
 deliberately, rather than sitting inside `read(2)` for `__sysmon` to rescue. The line's byte length is the
 exit code (`hello\n`, SIX), so a read that returned nothing cannot pass the case.
 
-⚠ **BEFORE THE PIPE CARRIED A POLL DESCRIPTOR THE DELTA WAS AT LEAST ONE.** `subpReadLine` blocked its
-machine in the read, `__sysmon` observed the same bracketed call twice and took the processor back. The
+⚠ **A READ THAT BLOCKED ITS MACHINE WOULD MAKE THE DELTA AT LEAST ONE.** Blocked inside `read(2)`,
+`subpReadLine` would be observed by `__sysmon` twice in the same bracketed call and the processor taken back. The
 witness is EXACTLY ZERO for the reason `netpoll-socket`'s `stuck=` witness is: a tolerance would admit
 precisely the arrangement the case exists to refuse.
 ```maxon
@@ -219,11 +217,9 @@ sibling first so the victim has run and armed its timer (the `gtIsComplete` peek
 thread saying it is still parked). That cancel walks a heap of nine, so the counter is live, and the `0`
 above is a measurement rather than a silence.
 
-⛔ **THIS CASE WAS WRITTEN GREEN AND IS A GUARD, NOT A REPRODUCTION.** The pre-guard number was never
-observed and is not claimed here: seeing it would need a compiler carrying this counter and NOT the guard,
-which is a build made to fail, and no such build was made. What it pins is the shape — with a guarded cancel
-the delta is 0 for any heap length and any number of wakes, so it is a regression re-routing undeadlined
-traffic back through the scan that this catches, at a cost of one heap length per wake.
+⛔ **THIS CASE IS A GUARD, NOT A REPRODUCTION.** No unguarded number is claimed here. What it pins is the
+shape — with a guarded cancel the delta is 0 for any heap length and any number of wakes, so what it
+catches is undeadlined traffic routed back through the scan, at a cost of one heap length per wake.
 ```maxon
 function sleeper() returns Integer
 	sleep(2000)
@@ -482,8 +478,8 @@ facts the Windows sibling asserts, for the same reason: `1\n` / `22\n` here and 
 there both satisfy `first < second`.
 
 ⚠ **`subpCloseStdin` IS LOAD-BEARING AND ITS ABSENCE IS A HANG, NOT A WRONG ANSWER.** `sort` cannot emit
-its first byte until it has read EOF, and this lane's read blocks its M — so a close that closed the wrong
-descriptor, or closed nothing, parks this program for ever rather than failing it.
+its first byte until it has read EOF, so a close that closed the wrong descriptor, or closed nothing, parks
+this program for ever rather than failing it.
 ```maxon
 function main() returns ExitCode
 	let h = subpSpawn("sort")
@@ -517,8 +513,8 @@ A streaming reader is DROPPED mid-read, then the SAME handle is re-read and must
 the overlapped read with no data. `dropIt` sleeps 200 ms (the reader is parked) then returns, DROPPING the
 un-awaited promise. Because the read pipe is TABLE-owned (not the GT's), the drop cancels the READ and must
 NOT close the pipe — so the follow-up `subpReadLine(h)` on the same handle re-issues a fresh read and gets
-`hi\r\n` (4 bytes), and `subpRelease` is the sole pipe-closer (no double-close). Before the ownership marker,
-the drop closed the shared pipe and this returned 0 (EOF forever).
+`hi\r\n` (4 bytes), and `subpRelease` is the sole pipe-closer (no double-close). A drop that closed the shared
+pipe would make this return 0 (EOF forever).
 ```maxon
 function reader(h Integer) returns Integer
 	let line = subpReadLine(h)
@@ -553,8 +549,8 @@ reused by a new `subpSpawn` — the new handle must read correctly. The reader p
 (`ping -n 3` then `echo hi`); `subpRelease(h)` frees the slot out from under it; `subpSpawn` reuses that index
 for `h2` and BUMPS the slot generation. When the stale reader resumes it sees the generation changed, returns an
 empty line (0) and writes NOTHING back — so `h2` still reads `second\r\n` (8 bytes). Returns `n2*10 + rn` =
-8×10 + 0 = 80. Without the generation guard the stale reader stamped its EOF into `h2`'s stream and this
-returned 0.
+8×10 + 0 = 80. Without the generation guard the stale reader would stamp its EOF into `h2`'s stream and
+this would return 0.
 ```maxon
 function reader(h Integer) returns Integer
 	let line = subpReadLine(h)
@@ -651,8 +647,8 @@ generation re-read never enters — and released; child B (`echo second&exit 7`)
 slot. The STALE `h1` is driven first: `subpWait(h1)` answers `-1` and `subpReadLine(h1)` an empty
 string, exactly the dead-handle answers `subprocess-builtins.handle-guards-streaming` pins. Only then
 does the fresh `h2` collect B's `second\r\n` (8 bytes) and its exit code 7 — read BEFORE the wait, as
-`spawn-release-loop` does. Before this change the handle was the bare slot index, so the stale wait
-reaped B and answered 7 and the stale read stole `second`, leaving the fresh handle with nothing.
+`spawn-release-loop` does. Were the handle the bare slot index, the stale wait would reap B and answer 7
+and the stale read would steal `second`, leaving the fresh handle with nothing.
 ```maxon
 function main() returns ExitCode
 	let h1 = subpSpawn("cmd /c echo first&exit 3")
@@ -682,8 +678,8 @@ first=3 firstLine=7 stale=-1 staleLine=0 fresh=7 freshLine=8
 `/bin/sh -c` and the lines end in a bare LF (`first\n` = 6 bytes, `second\n` = 7). The handle is the
 same packed `(slot, generation)` integer on every lane, so a released `h1` answers `-1` from the wait
 and an empty string from the read no matter that child B now owns its slot, and B's line and exit code
-7 reach only the fresh `h2`. Before this change the stale wait reaped B and answered 7 and the stale read
-stole `second`.
+7 reach only the fresh `h2` — the stale wait cannot reap B and answer 7, and the stale read cannot steal
+`second`.
 ```maxon
 function main() returns ExitCode
 	let h1 = subpSpawn("echo first; exit 3")

@@ -62,12 +62,9 @@ sanitize alike are refused, naming both.
 
 ## Tests
 
-⚠ **PORT NOTE.** The `/specs` original carries two `RequiredIR:<target>` blocks on
-`survives-dead-function-elimination`, in v1's three-section dump format. Neither survives the
-port: the compiler's spec parser has no `RequiredIR` arm, so both would be read by nobody while reading
-as coverage, and `SpecParser.isUnimplementedFenceOpen` refuses the fence rather than walking past
-it. What pins the emitted code here is each case's MINTED FRAGMENT GOLDEN, which records what
-THIS compiler emits rather than what v1 did. The `/specs` copy keeps its blocks.
+⚠ **WHAT PINS THE EMITTED CODE HERE IS EACH CASE'S MINTED FRAGMENT GOLDEN.** The spec parser has no
+`RequiredIR` arm, so such a block would be read by nobody while reading as coverage, and
+`SpecParser.isUnimplementedFenceOpen` refuses the fence rather than walking past it.
 
 <!-- test: basic -->
 ```maxon
@@ -299,7 +296,7 @@ Nothing in the program calls a test, so dead-function elimination would drop it.
 roots instead.
 
 ⚠⚠ **THE GOLDEN CANNOT MINT ITSELF HONEST — READ IT WHEN YOU MINT IT.** The pin here is the
-fragment golden (see the PORT NOTE above), which renders this program's own functions and must
+fragment golden (see the note above), which renders this program's own functions and must
 therefore name `__test_is_kept_alive` under its mangled name. But a golden minted while the
 symbol was being DROPPED would record its absence and then compare equal for ever — a pin of the
 bug rather than of the rule. Nothing in the runner can catch that, because a mint has nothing to
@@ -310,8 +307,8 @@ whether the test survived or not.
 the program's signature part of the assertion, and the stdlib's `ExitCode` is host-width —
 `u32` under `int(0 to u32.max)` on Windows, `u8` under `int(0 to 255)` on Linux, macOS and
 wasi (`stdlib/Process.maxon`). A golden naming one of them is a HOST fact recorded on every
-lane that mints one, so the reference read `-> u32` and failed on arm64-macos against an
-identical compiler. A fixed range makes every lane's golden say the same thing. Do not
+lane that mints one, so a golden minted on Windows would read `-> u32` and fail on arm64-macos
+against an identical compiler. A fixed range makes every lane's golden say the same thing. Do not
 "simplify" this back to the stdlib alias.
 ```maxon
 // --- file: kept.maxtest

@@ -32,20 +32,17 @@ return ...
 `get` is a `tryCall`; its SUCCESS edge is the cache-**hit** block. Because the
 copy was minted (the key is live past `get`, re-consumed by `insert` on the
 miss edge), the caller keeps the original `+1`. On the hit edge the key dies
-without reaching `insert`, so its retained `+1` must be released there. The
-edge-death planner's TRYCALL-CONSUMED-ARG success-edge guard, however,
-suppressed **every** consumed-arg release on the success edge — it did not
-check whether a copy was minted — so the retained original leaked on every
-cache hit (the `qualifyCalleeCacheKey` String / `__ManagedMemory` leak family
-that dominated the self-hosted self-compile census).
+without reaching `insert`, so its retained `+1` must be released there. A
+success-edge guard that suppressed **every** consumed-arg release, without
+checking whether a copy was minted, would leak the retained original on every
+cache hit.
 
-The fix routes that guard through `tryCallArgConsumedReachingSuccess`, which
-carries the copy-minted escape (`consumedArgRetainedPastOp`) already used by
-the term-drop / into-block guard (`valueConsumedByTryCallOnSuccessEdgeInto`).
-Only a PURE MOVE (no copy — a transparent-wrapper factory transferring its
-sole `+1`) still suppresses; a copy-retained original now releases on the hit
-edge. This is the live-out-of-block leg of ownership-audit gap P0#1; the
-term-drop leg was closed by the sibling guard earlier.
+The edge-death planner's TRYCALL-CONSUMED-ARG success-edge guard routes through
+`tryCallArgConsumedReachingSuccess`, which carries the copy-minted escape
+(`consumedArgRetainedPastOp`) also used by the term-drop / into-block guard
+(`valueConsumedByTryCallOnSuccessEdgeInto`). Only a PURE MOVE (no copy — a
+transparent-wrapper factory transferring its sole `+1`) suppresses; a
+copy-retained original releases on the hit edge.
 
 ## Tests
 

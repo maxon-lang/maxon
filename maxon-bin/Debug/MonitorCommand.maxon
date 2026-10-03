@@ -61,7 +61,7 @@ typealias ArgumentIndex = int(0 to u32.max)
 /// command line this could not act on from a schema it could not decode (3) and from the child's own
 /// answer (anything else).
 export function runMonitor(args MaxonArgs) returns ExitCode
-	var filterSpelling = ""
+	var filter = FamilyFilter.all
 	var exeIndex = 0 as ArgumentIndex
 
 	for argument in args.paths 'eachLeadingOption'
@@ -69,7 +69,7 @@ export function runMonitor(args MaxonArgs) returns ExitCode
 			break
 		end 'theExecutable'
 
-		filterSpelling = try CommandLine.optionValue(argument) otherwise ""
+		filter = parseFamilyFilter(optionValueOf(argument))
 		exeIndex = exeIndex + 1
 	end 'eachLeadingOption'
 
@@ -80,8 +80,6 @@ export function runMonitor(args MaxonArgs) returns ExitCode
 
 	// Validated here rather than in the decode loop, whose only choices would be to throw or to show
 	// every event, the opposite of what was asked for.
-	let filter = parseFamilyFilter(filterSpelling)
-
 	match filter 'chosen'
 		all or
 			only then break 'chosen'

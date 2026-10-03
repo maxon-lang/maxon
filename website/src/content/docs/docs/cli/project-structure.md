@@ -120,8 +120,8 @@ without its extension (for a task, the `.maxtasks` file's). The keys the driver 
 |-----|------|---------|
 | `output` | string, required unless `directory` | Where the executable goes, without the extension. The compiler adds `.exe` for Windows, `.wasm` for `wasm32-wasi`, and nothing for Linux and macOS. Relative to the current directory. Empty means `.maxon/<name>`. |
 | `sources` | list of strings, required unless `directory` | The files and directories to compile, in order. An empty list is refused. |
-| `directory` | string | A directory whose own `.maxproj` file describes this build. Stating it alongside `sources` or `rebuild_with_output` is refused. |
-| `target` | string | With `directory`, which of the delegated project's targets to build, as `maxon build` spells it; empty means its sole one. |
+| `directory` | string | A directory whose own `.maxproj` file describes this build. Stating it alongside `sources` or `rebuild_with_output` is refused, and so is an empty string. |
+| `target` | string | With `directory`, which of the delegated project's targets to build, as `maxon build` spells it; without it, its sole one. An empty string is refused. |
 | `debug_info` | `true` or `false` | Whether to write the `.mxdbg` sidecar (default `true`). |
 | `version` | string | A dotted version stamped into the binary: a `VS_VERSIONINFO` resource on Windows and `LC_SOURCE_VERSION` on macOS. Linux and `wasm32-wasi` binaries carry no product version. Without it, the binary reports `0.0.0.0`, and a missing component is 0. A component that is not a number is refused on every target, and one the target's field cannot hold is refused too: each Windows component holds 0 to 65535 (four at most); on macOS the first holds 0 to 16777215 and the next four 0 to 1023. |
 | `defines` | list of `name=value` strings | The same as [`--define=`](/docs/cli/#defines) on the command line. |
@@ -277,11 +277,45 @@ takes no lock.
 The lock is the file `.maxon-tree.lock` at that root. It is taken by `spec-test`, `scale-test`, and by a
 `build` of a directory without `--output=`. `run`, `test`, `fmt` and builds with `--output=` take none.
 
-A command that finds the lock held prints what holds it and exits **2** without doing anything:
+The lock file is a record of `key=value` lines: the holder's `pid`, a `token`, `sinceUnix`, `heldSeconds`,
+its command line as `argv`, and `host`, an identity of the machine and process namespace it runs in. Every
+change to the record is made under a second file, `.maxon-tree.lock.claim`, which one command at a time
+creates: a command creates the claim, waits a random 10–40 ms, and proceeds only if the claim still holds
+its own token. The record is written to a `.maxon-tree.lock.staged-*` file and renamed over the lock, so a
+reader sees a whole record or none.
+
+A command that finds the lock held prints the record it found, how long ago the holder last made progress,
+and whether its process is still running, then exits **2** without doing anything:
 
 ```text
 error: this checkout is BUSY — another maxon command holds its tree lock, and two of them in one tree corrupt each other's output directories. Nothing was run.
+  lock:  C:\work\maxon\.maxon-tree.lock
+  held by:
+    pid=21480
+    ...
+  last progress: 3 s ago (a live holder refreshes the record every 5000 ms)
+  is it still alive? yes — process 21480 is running
+  Wait for it to finish, or end that process. A holder that refreshes nothing for 60 s, or a holder on this machine whose process has ended, is taken over automatically, with a line saying so.
 ```
 
-A live holder refreshes the lock every 5 seconds. A lock untouched for 60 seconds is treated as
-abandoned: the next command breaks it with a warning and proceeds.
+The same headline, ending `is claiming its tree lock` or `is using its tree lock's claim file`, means another
+command held the claim file for the whole 2 s this one waits for it, backing off a random 20–120 ms between
+attempts. That refusal also exits **2**, and so does `error: the tree lock could not be taken — <reason>`,
+which a command prints when it cannot write the lock's files, for example in a checkout root it may not
+write.
+
+A command takes the lock over, printing a `warning: taking over …` line that quotes the old record, when:
+
+- the record names a process on this machine (the same `host`) that has ended;
+- the record names this command's own process id, which the operating system has reused; or
+- nothing has refreshed the record for 60 seconds. A live holder refreshes it every 5 seconds, and warns once
+  when it has gone 30 seconds without a refresh.
+
+Ages are measured against the filesystem's own clock, read from a `.maxon-tree.lock.claim.probe-*` file the
+command writes beside the lock, the same clock that stamps the files' modification times. A claim file untouched for
+10 seconds belongs to a command that ended mid-claim and is removed, with a warning. The same applies to the
+leftover `.maxon-tree.lock.claim.probe-*`, `.maxon-tree.lock.claim.removing-*` and
+`.maxon-tree.lock.staged-*` files of a command that ended before cleaning up.
+
+A holder that finds its lock taken over by another command says so, stops refreshing the lock, and leaves
+it to the new holder.

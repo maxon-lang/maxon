@@ -1,0 +1,75 @@
+export let RandomFillName = b"__rand_fill"
+
+// `getentropy` refuses a request over 256 bytes, so every target fills in pieces no larger.
+let RandomFillPieceBytes = 256 as ParsedInt
+
+function buildRandomFill(module StdModule)
+	var func = IrFunction.createFromStd(RandomFillName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var notOwned = module.addBlock(func, label: b"rfnotown", heat: BlockHeat.cold)
+	var measure = module.addBlock(func, label: b"rfmeasure", heat: BlockHeat.normal)
+	var piece = module.addBlock(func, label: b"rfpiece", heat: BlockHeat.normal)
+	var sizePiece = module.addBlock(func, label: b"rfsize", heat: BlockHeat.normal)
+	var wholePiece = module.addBlock(func, label: b"rfwhole", heat: BlockHeat.normal)
+	var lastPiece = module.addBlock(func, label: b"rflast", heat: BlockHeat.normal)
+	var fill = module.addBlock(func, label: b"rffill", heat: BlockHeat.normal)
+	var filled = module.addBlock(func, label: b"rffilled", heat: BlockHeat.normal)
+	var refused = module.addBlock(func, label: b"rfrefused", heat: BlockHeat.cold)
+	var done = module.addBlock(func, label: b"rfdone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let arrRec = 0 as ValueId
+
+	emitRefuseNonOwnedFillTarget(module, block: entry, record: arrRec, refuse: notOwned, fill: measure, ids: ids)
+	emitRuntimeAbort(module, func: func, block: notOwned, abort: RuntimeAbort.randomFillTargetNotOwned, ids: ids)
+
+	let buffer = emitLoadField(module, block: measure, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
+	let byteLength = emitArrayByteExtent(module, block: measure, arrRec: arrRec, offset: ManagedRecordLengthOffset, ids: ids)
+	let start = emitConst(module, block: measure, value: 0, ids: ids)
+	module.setTerminator(measure, op: StdOp.branch(piece.id))
+	measure.branchEdges.push(BranchEdge.create(piece.id, argIds: argsOf(start)))
+
+	let offset = ids.mint()
+	pushI64BlockArgs(piece, values: argsOf(offset))
+	let remaining = emitBin(module, block: piece, a: byteLength, b: offset, opcode: StdBinOpcode.sub, ids: ids)
+	let noneLeft = emitConst(module, block: piece, value: 0, ids: ids)
+	let finished = emitCmp(module, block: piece, a: remaining, b: noneLeft, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(piece, op: StdOp.condBranch(finished, thenBlockId: done.id, elseBlockId: sizePiece.id))
+
+	let pieceLimit = emitConst(module, block: sizePiece, value: RandomFillPieceBytes, ids: ids)
+	let overLimit = emitCmp(module, block: sizePiece, a: remaining, b: pieceLimit, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(sizePiece, op: StdOp.condBranch(overLimit, thenBlockId: wholePiece.id, elseBlockId: lastPiece.id))
+
+	let wholeSize = emitConst(module, block: wholePiece, value: RandomFillPieceBytes, ids: ids)
+	module.setTerminator(wholePiece, op: StdOp.branch(fill.id))
+	wholePiece.branchEdges.push(BranchEdge.create(fill.id, argIds: argsOf(wholeSize)))
+
+	module.setTerminator(lastPiece, op: StdOp.branch(fill.id))
+	lastPiece.branchEdges.push(BranchEdge.create(fill.id, argIds: argsOf(remaining)))
+
+	let size = ids.mint()
+	pushI64BlockArgs(fill, values: argsOf(size))
+	let at = emitBin(module, block: fill, a: buffer, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	let status = ids.mint()
+	module.appendOp(fill, op: StdOp.osRandomFill(status, bufPtrId: at, lenId: size))
+	let succeeded = emitConst(module, block: fill, value: 0, ids: ids)
+	let failed = emitCmp(module, block: fill, a: status, b: succeeded, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(fill, op: StdOp.condBranch(failed, thenBlockId: refused.id, elseBlockId: filled.id))
+
+	let next = emitBin(module, block: filled, a: offset, b: size, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(filled, op: StdOp.branch(piece.id))
+	filled.branchEdges.push(BranchEdge.create(piece.id, argIds: argsOf(next)))
+
+	module.setTerminator(refused, op: StdOp.ret(status))
+	emitConstReturn(module, block: done, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildRandomFill'
+
+export function installRandomRuntime(module StdModule, usage RuntimeUsage)
+	if usage.usesEntropy 'entropy'
+		buildRandomFill(module)
+	end 'entropy'
+end 'installRandomRuntime'

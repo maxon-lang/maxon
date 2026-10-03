@@ -1,4 +1,4 @@
-// Runtime/DebugStreamRuntime.maxon — the DebugStream PRODUCER (Workstream O3).
+// Runtime/DebugStreamRuntime.maxon — the DebugStream PRODUCER.
 //
 // ⭐⭐ **THE SPLIT IS THE WHOLE DESIGN.** A monitor is the CONSUMER: it creates the shared segment,
 // spawns the target with `MAXON_DEBUGSTREAM` naming it, and decodes and prints every event. This file
@@ -17,7 +17,7 @@
 // that. A `StringBuilder` that pays one `ByteArray` per `append` computes exactly the right answer, and
 // the only instrument that can see the regression is a trace of the memory manager itself.
 //
-// ⭐ **THE GATING RULE, FROM COMMIT 1 (PLAN.md's O3 box).** Two levels, and both are load-bearing:
+// ⭐ **THE GATING RULE.** Two levels, and both are load-bearing:
 //   • **COMPILE TIME — `--debugstream` off implies ZERO INSTRUCTIONS.** Not a branch that is never
 //     taken: no call, no store, no header word. A normal build's emitted code is byte-identical to that
 //     of a compiler carrying no instrument at all, which is what keeps the suite's committed `.test` fragment
@@ -335,23 +335,9 @@ export let DsLogUnitIdShift = 32
 // that would not fit — but a CONSUMER shifting back down has the neighbouring bits to clear.
 export let DsLogUnitIdMask = 0xFFFFFFFF
 
-// The ring keeps every entry 8-byte aligned, so a LOG_TEXT's tail is rounded UP to this. The SHIFT is what
-// the round is emitted as (`>> 3 << 3`) and the bias is what makes it round up rather than down.
-//
-// ⛔⛔ **THE REASON THAT USED TO BE GIVEN FOR THE SHIFT PAIR — *"the mask form would need a bitwise
-// complement this tier has no op for"* — IS FALSE, and was found by W215's review.** The mask is a
-// COMPILE-TIME constant, so nothing has to be complemented at run time: `MmRuntime.emitAlignUp` emits
-// exactly `(value + width - 1) and -width` over two `emitConst`s, and this very file already reaches for
-// `StdBinOpcode.bitAnd` twice (`emitRingPos`, `emitMaskedField`). What the tier genuinely lacks is a
-// complement of a RUNTIME value, which is why `SlabArena.emitBitRunUpdate` spells `not bit` as `bit xor -1`
-// — a different situation that this comment had borrowed the excuse from.
-//
-// ⇒ **KNOWN DEBT, FILED RATHER THAN RIDDEN ALONG: this is a THIRD hand-spelling of the align-up idiom
-// `emitAlignUp` was made the single owner of**, and one op more than it (add + shr + shl against add + and).
-// Collapsing it moves EMITTED code in a runtime W215 does not own, so it wants its own gate over the
-// debug-stream specs rather than a reviewer's commit.
+// The ring keeps every entry 8-byte aligned, so a LOG_TEXT's tail is rounded UP to this
+// (`MmRuntime.emitAlignUp`).
 let DsEntryAlign = 8
-let DsEntryAlignShift = 3
 let DsEntryAlignBias = DsEntryAlign - 1
 
 // The entry header's `entry_size` is a u16, so no single entry can exceed what that field holds. Derived
@@ -721,9 +707,7 @@ end 'dsAllocTallyImage'
 // The bytes `__ds_init` asks `__slab_alloc` for: the CRITICAL_SECTION (5 words, matching `GtRuntime`'s
 // own reading of the structure) and the scratch buffer `GetEnvironmentVariableA` writes the segment name into.
 //
-// ⚠⚠ **THEY ARE NOT THE SAME KIND OF ONE-SHOT, AND THIS NOTE USED TO SAY THEY WERE (S3).** It read *"both
-// are one-shot and never reclaimed — the bump allocator has no free list to return them to"*, which is now
-// false about the allocator and was always false about one of the two:
+// ⚠⚠ **THEY ARE NOT THE SAME KIND OF ONE-SHOT:**
 //
 //   • the CRITICAL_SECTION is LIVE for the whole process, because every event site enters and leaves it until
 //     `__ds_shutdown` and there is no later moment at which nothing can be emitting. Never freeing it is not a
@@ -839,7 +823,7 @@ end 'installDebugStreamRuntime'
 // the exact torn read the commit bit closes. An empty trace is a visibly missing instrument; a wrong one
 // is not.
 function buildDsInit(module StdModule, envNameLabel ByteArray)
-	var func = IrFunction.createFromStd(DsInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(DsInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -921,7 +905,7 @@ end 'buildDsInit'
 // still needs to know how to parse what it left. The view is dropped by process exit, which is the only
 // thing that happens after this call.
 function buildDsShutdown(module StdModule)
-	var func = IrFunction.createFromStd(DsShutdownName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(DsShutdownName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1021,7 +1005,7 @@ end 'emitSpaceCheck'
 // absence is survivable here: the whole function runs under the ring lock, so the header word cannot
 // change underneath it, and a re-read and a thread are the same value by construction.
 function buildDsReserve(module StdModule)
-	var func = IrFunction.createFromStd(DsReserveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(DsReserveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1124,7 +1108,7 @@ end 'buildDsReserve'
 // What it DOES need is release ordering, so the payload writes are visible to the monitor before the bit
 // that claims they are there.
 function buildDsCommit(module StdModule)
-	var func = IrFunction.createFromStd(DsCommitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(DsCommitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1151,7 +1135,7 @@ end 'buildDsCommit'
 // ⭐ **IT ALWAYS COMMITS.** A missed commit does not lose one event — an uncommitted entry is never skipped
 // while its producer lives, so the monitor STALLS ON IT FOREVER.
 function buildDsEmitMm(module StdModule)
-	var func = IrFunction.createFromStd(DsEmitMmName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(DsEmitMmName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1192,7 +1176,7 @@ end 'buildDsEmitMm'
 // All six transitions are one 16-byte shape, the header and the green thread's trace id, so they share a
 // body the way the four mm events do. The sites are `GtRuntime`'s (`emitSchedEventOf`).
 function buildDsEmitSched(module StdModule)
-	var func = IrFunction.createFromStd(DsEmitSchedName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(DsEmitSchedName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1257,9 +1241,9 @@ end 'emitReserveEntry'
 //
 // ⭐ **AND IT COSTS NOTHING THE `gt` READ WAS NOT ALREADY PAYING.** The walk to the green thread goes
 // THROUGH the P, so `emitLoadCurrentGtAndProcIdOrZero` returns both from the one guarded TLS read it always
-// did — one extra field load on the arm that already holds the pointer, no second branch. That is why this
-// is a stamp and not a rung. It also fills the `gt` and `p_id` fields the wire format
-// (docs/internals/debug-stream.md) gives every log entry.
+// did — one extra field load on the arm that already holds the pointer, no second branch. It also
+// fills the `gt` and `p_id` fields the wire format (docs/internals/debug-stream.md) gives every log
+// entry.
 //
 // ⭐⭐ **SEEN MOVE, WITH ITS CONTROL — because a field that reads 0 everywhere and a field nobody looks at
 // are indistinguishable in a golden.** A `--debugstream` program that spawns eight services and logs one
@@ -1366,7 +1350,7 @@ end 'emitCommitAndFinish'
 // The word is `phase_id(2) rsvd(2) unit_id(4)`, and `rsvd` stays zero for free — the masked `phase_id`
 // occupies only bits [0:15] and the unit's shift discards anything above bit 31.
 function buildDsEmitLogPhase(module StdModule, usesGt bool)
-	var func = IrFunction.createFromStd(DsEmitLogPhaseName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(DsEmitLogPhaseName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1400,7 +1384,7 @@ end 'buildDsEmitLogPhase'
 // The structured, ZERO-ALLOC tier a compiler pass uses. Its two argument slots are deliberately opaque:
 // what they mean is the emitting site's business, and the monitor prints them as numbers.
 function buildDsEmitLogEvent(module StdModule, usesGt bool)
-	var func = IrFunction.createFromStd(DsEmitLogEventName, returnType: StdReturnType.void, paramCount: 6, paramTypes: sixI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(DsEmitLogEventName, returnType: StdReturnType.void, paramCount: 6, paramTypes: sixI64Params())
 	var ids = ValueMinter.create(6)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1451,7 +1435,7 @@ end 'buildDsEmitLogEvent'
 // ⚠ **THE SAME CLAMPED LENGTH FEEDS BOTH THE HEADER'S `len` FIELD AND THE ENTRY SIZE.** Computing one from
 // the raw length and the other from the clamped one is how a reader walks off the end of an entry.
 function buildDsEmitLogText(module StdModule, usesGt bool)
-	var func = IrFunction.createFromStd(DsEmitLogTextName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(DsEmitLogTextName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
 	var ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1476,14 +1460,7 @@ function buildDsEmitLogText(module StdModule, usesGt bool)
 	let trimmed = emitBin(module, block: entry, a: over, b: excess, opcode: StdBinOpcode.mul, ids: ids)
 	let length = emitBin(module, block: entry, a: rawLength, b: trimmed, opcode: StdBinOpcode.sub, ids: ids)
 
-	// `align8(len)` — the bias is what makes the shift pair round UP. ⚠ It is a shift pair for no reason that
-	// survives inspection: `DsEntryAlign`'s header records what W215's review found, which is that
-	// `MmRuntime.emitAlignUp` says this in one op fewer and the excuse for not calling it was never true.
-	let bias = emitConst(module, block: entry, value: DsEntryAlignBias, ids: ids)
-	let biased = emitBin(module, block: entry, a: length, b: bias, opcode: StdBinOpcode.add, ids: ids)
-	let alignShift = emitConst(module, block: entry, value: DsEntryAlignShift, ids: ids)
-	let units = emitBin(module, block: entry, a: biased, b: alignShift, opcode: StdBinOpcode.shrLogical, ids: ids)
-	let tail = emitBin(module, block: entry, a: units, b: alignShift, opcode: StdBinOpcode.shl, ids: ids)
+	let tail = emitAlignUp(module, block: entry, value: length, width: DsEntryAlign, ids: ids)
 	let fixedBytes = emitConst(module, block: entry, value: DsLogTextFixedBytes, ids: ids)
 	let entryBytes = emitBin(module, block: entry, a: fixedBytes, b: tail, opcode: StdBinOpcode.add, ids: ids)
 

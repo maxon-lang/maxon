@@ -47,11 +47,10 @@ stated by nothing stronger than the ORDER OF CHECKS in `Parser.parseFieldAssignm
 exactly the kind of rule the next edit reorders without noticing, which is why it is pinned
 here rather than left to a comment: the ordering is not derivable, so it gets a CHECK.
 
-Both cases are COMPILER-AUTHORED. `/specs` covers each half of rank 2 alone — `structs.md`'s
-`error.let-struct-field-assign` (a `let` instance, a `var` field) and `error.let-field-assign`
-(a `var` instance, a `let` field) — and never makes them fail together, so no ported case can
-tell the two orderings apart. For rank 1 the corpus has no case at all: it never writes a
-field on a non-struct through an immutable binding.
+`structs.md` covers each half of rank 2 alone — `error.let-struct-field-assign` (a `let` instance,
+a `var` field) and `error.let-field-assign` (a `var` instance, a `let` field) — and never makes them
+fail together, so neither can tell the two orderings apart. Rank 1 needs a write to a field on a
+non-struct through an immutable binding, which only this file writes.
 
 ## Tests
 

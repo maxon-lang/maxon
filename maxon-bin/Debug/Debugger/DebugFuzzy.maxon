@@ -3,7 +3,7 @@ typealias FuzzyDistance = int(0 to u32.max)
 export union FuzzyMatch
 	one(name String)
 	several(candidates StringArray)
-	none(suggestion String)
+	none(suggestion StatedText)
 end 'FuzzyMatch'
 
 let NameSeparator = "."
@@ -55,8 +55,8 @@ export function completionsFor(partial String, pool StringArray) returns StringA
 	return offered
 end 'completionsFor'
 
-export function nearestName(spelling String, pool StringArray) returns String
-	var best = ""
+export function nearestName(spelling String, pool StringArray) returns StatedText
+	var best = StatedText.unstated
 	var bestDistance = MaxSuggestionDistance + 1
 
 	for name in pool 'eachName'
@@ -65,7 +65,7 @@ export function nearestName(spelling String, pool StringArray) returns String
 
 			if distance < bestDistance and distance <= suggestionBudget(candidate) 'closer'
 				bestDistance = distance
-				best = name
+				best = StatedText.stated(name)
 			end 'closer'
 		end 'eachSpelling'
 	end 'eachName'

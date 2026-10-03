@@ -762,7 +762,7 @@ specifier are separate facts, so neither case's failure can hide the other's.
 <!-- test: stringable-and-formatted-interp-selects-the-zero-arg-overload -->
 Plain `{c}` on a type implementing **both** protocols must select `toString()`, not `toString(format)`.
 
-⚠ **THE FORMATTED OVERLOAD IS DECLARED FIRST, AND THAT ORDER IS THE ASSERTION (R10d review).** The first
+⚠ **THE FORMATTED OVERLOAD IS DECLARED FIRST, AND THAT ORDER IS THE ASSERTION.** The first
 declaration of a name keeps the BARE registration key (`Parser.overloadRegistrationNameFor`), and a call
 whose overload resolution finds nothing is left holding that bare key — `SemanticCheck.selectOverload`'s
 `noMatch` arm says so in as many words. So with `toString()` written first this program prints `42` whether
@@ -1026,8 +1026,8 @@ Priorities: 1 and 3
 ### Float-Backed Enum Interpolation
 
 A float-backed enum's tag IS the f64's IEEE-754 bit pattern (`Project.EnumLayout`), so the hole must
-DECODE it rather than hand the integer renderer an encoding. Before A4o this printed
-`4612811918334230528` — the bits of 2.5 read as a decimal integer — where the oracle printed `2.5`.
+DECODE it rather than hand the integer renderer an encoding. Read as an integer it would print
+`4612811918334230528` — the bits of 2.5 read as a decimal integer — instead of `2.5`.
 
 <!-- test: float-enum-interpolation -->
 ```maxon
@@ -1051,10 +1051,10 @@ Weight: 2.5
 
 ### Float-Backed Enum Interpolation - Negative and Signed Zero
 
-The spellings where reading the encoding is most obviously wrong. Before A4o `down` printed
+The spellings where reading the encoding is most obviously wrong. Read as an integer, `down` would print
 `-4611235658464650854` — a NEGATIVE integer, because a negative double's sign bit is the i64's — and
-`zero` printed `0`, which is the one value the two readings agree on and therefore the one that could
-never have found this.
+`zero` would print `0`, which is the one value the two readings agree on and therefore the one that
+cannot tell them apart.
 
 <!-- test: float-enum-interpolation-extremes -->
 ```maxon
@@ -1184,9 +1184,9 @@ ffff
 
 Zero-padding shifts the converted digits right and fills the gap, and it starts the fill
 after a `-` sign when there is one. An unsigned base never writes a sign, so it must say
-so: arm64 left its `is_negative` slot holding the hex letter base ('a'), the fill read
-that as "negative", started at index 1, and overwrote the digit it had just shifted —
-`{255:08x}` printed `f000000f`. Width alone did not catch it (`{high:016x}` is already 16
+so: an `is_negative` slot left holding the hex letter base ('a') would read as "negative",
+and the fill would start at index 1 and overwrite the digit it had just shifted —
+`{255:08x}` would print `f000000f`. Width alone does not reach it (`{high:016x}` is already 16
 chars wide, so it never pads); only a value SHORTER than its field reaches the fill loop.
 
 <!-- test: int-format-zero-padded-unsigned -->
@@ -1286,13 +1286,12 @@ end 'main'
 
 ### Integer Format Specifier - A Field Wider Than Any Buffer
 
-⭐ **A WIDTH IS A NUMBER THE PROGRAM ASKED FOR, NOT A BUDGET THE RUNTIME SET.** The formatted
-integer converter used to write into a fixed 72-byte scratch and take the field width from the
-spec with nothing checking it against that size, so `"{n:200}"` wrote 200 bytes into 72. It
-neither crashed nor reported anything: the NEXT part's block was carved inside the overrun and
-the first part then read those bytes back as its own padding, so `"A<{a:200}>B<{b:X}>"` printed
-`DEADBEEF` in the middle of the spaces and lost every character after it. A field is built in
-`stdlib` over a String that grows, so a width has no ceiling left to breach.
+⭐ **A WIDTH IS A NUMBER THE PROGRAM ASKED FOR, NOT A BUDGET THE RUNTIME SET.** A converter that
+wrote into a fixed 72-byte scratch and took the field width from the spec unchecked would write
+200 bytes into 72 for `"{n:200}"`, and neither crash nor report anything: the NEXT part's block is
+carved inside the overrun and the first part reads those bytes back as its own padding, so
+`"A<{a:200}>B<{b:X}>"` would print `DEADBEEF` in the middle of the spaces and lose every character
+after it. A field is built in `stdlib` over a String that grows, so a width has no ceiling to breach.
 
 <!-- test: int-format-wide-field -->
 ```maxon
@@ -1315,9 +1314,8 @@ A<                                                                              
 ### Integer Format Specifier - Int-Backed Enum
 
 A bare `"{e}"` on an enum with explicit integer backing values renders that value, so a format
-specifier on one has exactly the meaning it has on any other integer. It used to be dropped in
-silence — `"{code:08}"` printed `404` rather than `00000404`, and `"{code:x}"` printed `404`
-rather than `194` — because the enum arm of interpolation took no format specifier at all.
+specifier on one has exactly the meaning it has on any other integer. Dropped in silence, it would
+print `404` for `"{code:08}"` rather than `00000404`, and `404` for `"{code:x}"` rather than `194`.
 
 <!-- test: int-format-enum-backing -->
 ```maxon
@@ -1351,9 +1349,9 @@ end 'main'
 `int-format-enum-backing` above pins the raw-number arm, where the specifier APPLIES. These are the
 other two arms, and they are the ones that break SILENTLY: an enum declaring no raw values renders
 its CASE NAME and a string-backed one renders its DECLARED TEXT, and neither is a number to pad or
-to re-base. Nothing pinned them before — `enum-rawvalue-format` writes `.rawValue` explicitly, so it
-never reaches the enum arm at all — which is exactly how a shared integer-rendering path can start
-padding a case name without a single test noticing. Oracle-agreed on this source.
+to re-base. `enum-rawvalue-format` does not pin them — it writes `.rawValue` explicitly, so it
+never reaches the enum arm at all — and without these cases a shared integer-rendering path could start
+padding a case name without a single test noticing.
 
 <!-- test: format-spec-on-a-text-rendering-enum-is-ignored -->
 ```maxon
@@ -1388,10 +1386,10 @@ end 'main'
 
 ⭐ **A FORMAT SPECIFIER NEVER CHANGES WHICH NUMBER IS BEING PRINTED.** A `bits(64)` value with
 bit 63 set is a large positive number, and `"{u}"`, `"{u:d}"` and `"{u:25}"` must all
-say so. The formatted converter used to re-derive signedness from the sign BIT instead of taking
-it from the type the compiler already knew, so `"{u:d}"` read `u64.max` as `-1` — the same value
-the unformatted spelling printed as `18446744073709551615`. Signedness is decided once, by the
-compiler, and handed to the renderer.
+say so. A converter that re-derived signedness from the sign BIT instead of taking it from the
+type the compiler knows would read `u64.max` as `-1` in `"{u:d}"` — the same value the unformatted
+spelling prints as `18446744073709551615`. Signedness is decided once, by the compiler, and handed
+to the renderer.
 
 <!-- test: int-format-unsigned-decimal -->
 ```maxon
@@ -1421,9 +1419,8 @@ end 'main'
 
 ### Unsigned Decimal Interpolation - the specifier-free half
 
-The three specifier-bearing thirds of the case above arrive with the format-specifier rung; this is
-its first third, which needs no specifier and therefore runs today. It is the rule that case states,
-asked of the ONE rendering the compiler has: **signedness is a property of the value's DECLARED type, read
+This is the case above's specifier-free third. It is the rule that case states, asked of the plain
+rendering: **signedness is a property of the value's DECLARED type, read
 once by the compiler and handed to the renderer**, so a value whose type admits no negative is
 rendered by a converter that does no sign handling at all.
 
@@ -1487,8 +1484,8 @@ end 'main'
 
 ### A value that admits a negative still renders signed
 
-The control the rule above cannot do without: a rung that only proves the new answer cannot see that
-it broke the old one. Neither of these values DECLARES a non-negative range — one has no ranged type
+The control the rule above cannot do without: a case that only proves the unsigned answer cannot see a
+broken signed one. Neither of these values DECLARES a non-negative range — one has no ranged type
 at all (which means the whole of `i64`, not "no constraint"), and one declares a range that spans
 zero — so both keep the signed renderer and both still print `-1`.
 
@@ -1638,8 +1635,8 @@ Regression: each `{...}` fragment is parsed into the block control flow
 currently lands in, not the string's original entry block. A fragment whose
 expression opens blocks (a `try ... otherwise` here) leaves control in its
 merge block; the next fragment and the trailing literal parts must chain off
-that merge block. Resetting to the entry block per fragment orphaned the first
-fragment's `try` merge block — leaving it without a terminator, which tripped
+that merge block. Resetting to the entry block per fragment would orphan the first
+fragment's `try` merge block — leaving it without a terminator, which trips
 `assertAllBlocksTerminated` (a parser-internal panic) before any user
 diagnostic could be reported.
 
@@ -1680,15 +1677,15 @@ error E1006: specs/fragments/string-interpolation/error.unescaped-brace.test:3:1
 
 ### Error: An unclosed format specifier stops at the line, and does not eat the next statement
 
-⛔⛔ **A MISSING `}` AFTER A FORMAT SPECIFIER SILENTLY DELETED THE FOLLOWING STATEMENT.** compiler-authored
-regression, and the worst answer a compiler can give: this exact program **compiled clean, exited 0 and
-printed `a1`** — line 5's entire `print` was gone, with no diagnostic from the lexer or the parser. The
-specifier's scanner had no newline bound while every other quoted body in the lexer has one, so it ate
-`")`, the newline and `print("b{y`, stopped at the NEXT line's `}`, and the `"` after that closed the
-string tidily. The garbage in between then read as a legal specifier (width 0, decimal), because nothing
-in it is a digit or a base letter.
+⛔⛔ **A MISSING `}` AFTER A FORMAT SPECIFIER MUST NOT SILENTLY DELETE THE FOLLOWING STATEMENT**, the
+worst answer a compiler can give. The specifier's scanner stops at a newline, as every other quoted body
+in the lexer does. Without that bound it would eat `")`, the newline and `print("b{y`, stop at the NEXT
+line's `}`, and let the `"` after that close the string tidily; the garbage in between reads as a legal
+specifier (width 0, decimal), because nothing in it is a digit or a base letter. This exact program would
+then **compile clean, exit 0 and print `a1`** — line 5's entire `print` gone, with no diagnostic from the
+lexer or the parser.
 
-⚠ **The control is the same program with the `:` removed**, which has always been refused at the same
+⚠ **The control is the same program with the `:` removed**, which is refused at the same
 code, position and message (it reaches `scanInterp`'s own newline handling instead). The two must agree:
 a format specifier is not a place where a missing brace becomes invisible.
 
@@ -1731,7 +1728,7 @@ error E3005: specs/fragments/string-interpolation/error.plus-on-string.test:5:12
 An unbound interpolation result (`print("{i}")`) is an owned heap String owned by the STATEMENT that
 produced it. In a loop body each iteration allocates a fresh one, and the statement-scoped drop must free
 it inside the body, every iteration — not once at scope exit. A single scope-exit drop would leak every
-iteration but the last; a wrong drop of an already-freed value would be worse. This authored regression
+iteration but the last; a wrong drop of an already-freed value would be worse. This case
 runs the loop long enough that any per-iteration leak leaves the allocator's tracked live column above zero
 and the leak gate reports exit 101 instead of 0.
 
@@ -1764,9 +1761,9 @@ iter 7
 
 A temporary owned interpolation result created inside an `if` block is dropped at the end of its own
 statement — which is INSIDE the block — so it is leak-free even though the block emits no scope-exit drop.
-This is the case the deferred `closeBlock` gap does NOT cover: a nested-block temporary works (the drop
+This is the case the `closeBlock` gap does NOT cover: a nested-block temporary works (the drop
 rides the statement), where a nested-block BOUND value would leak (its drop would have to ride the block's
-`end`, which is P1.4). Authored to pin that distinction.
+`end`). Authored to pin that distinction.
 
 <!-- test: interp-temporary-in-nested-block -->
 ```maxon

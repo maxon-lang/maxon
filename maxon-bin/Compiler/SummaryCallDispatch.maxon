@@ -1,0 +1,557 @@
+// The call walk storage provenance and the closure-cycle check share. A named call reaches its callee's
+// summary or, for a body no summary describes, the store shape of the runtime entry it is; a witness dispatch
+// or a call through a function value reaches every body it may land on.
+
+typealias WitnessSlotKey = int(0 to u64.max)
+typealias WitnessImplsMemo = Map with (WitnessSlotKey, CallLandingBodies)
+typealias FunctionValueBodiesMemo = Map with (ParamCount, CallLandingBodies)
+typealias InstanceRecordMemo = Map with (GenericInstanceId, bool)
+
+let WitnessSlotKeyShift = 16 as WitnessSlotKey
+
+module interface SummaryCallWalker
+	function callSiteCursor() returns CallSiteCursor
+	function tracksValue(value ValueId) returns bool
+	function applyCalleeSummary(func IrFunction, calleeIndex ElementIndex, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, argRanges SourceRangeArray)
+	function storeHandedValue(func IrFunction, receiver ValueId, stored ValueId, sharesItsElements bool, opIdx ElementIndex)
+	function resultFromOperands(func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId)
+	function resultOfRuntimeCall(func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, site ElementIndex)
+end 'SummaryCallWalker'
+
+module interface SummarizedBodies
+	function tracesFirst(index ElementIndex) returns bool
+	function traceAndWiden(index ElementIndex) returns bool
+end 'SummarizedBodies'
+
+module function dispatchNamedCall(walker SummaryCallWalker, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray)
+	var cursor = walker.callSiteCursor()
+	let site = cursor.nextCallSite(func, callee: callee, args: args, argLabels: argLabels)
+
+	if not cursor.resolution.sites.rowIsDescribed(site) 'noSummary'
+		storeThroughRuntimeShape(walker, func: func, args: args, shape: cursor.resolution.sites.shapeAt(site), opIdx: opIdx)
+		walker.resultOfRuntimeCall(func, op: op, opIdx: opIdx, result: result, args: args, site: site)
+		return
+	end 'noSummary'
+
+	let calleeIndex = cursor.resolution.sites.calleeAt(site)
+	cursor.dependencies.note(calleeIndex)
+	cursor.slotCallSiteArgs(site, argCount: args.count() as ParamCount)
+	walker.applyCalleeSummary(func, calleeIndex: calleeIndex, op: op, opIdx: opIdx, result: result, args: args, argRanges: argRanges)
+end 'dispatchNamedCall'
+
+module function dispatchLandingCall(walker SummaryCallWalker, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, bodies CallLandingBodies)
+	var cursor = walker.callSiteCursor()
+	let noRanges = SourceRangeArray.create()
+
+	if bodies.unresolvedMayStore 'aBodyMayStoreAnything'
+		storeThroughRuntimeShape(walker, func: func, args: args, shape: RuntimeStoreShape.intoAnyOperand, opIdx: opIdx)
+	end 'aBodyMayStoreAnything'
+
+	if bodies.unresolved 'aBodyNoSummaryDescribes'
+		walker.resultFromOperands(func, op: op, opIdx: opIdx, result: result)
+	end 'aBodyNoSummaryDescribes'
+
+	for impl in bodies.impls 'eachImpl'
+		if cursor.resolution.implWasSkippedAsUnreached(impl) 'notInThisProgram'
+			continue
+		end 'notInThisProgram'
+
+		if not cursor.resolution.implHasSummary(impl) 'noSummary'
+			storeThroughRuntimeShape(walker, func: func, args: args, shape: RuntimeStoreShape.intoAnyOperand, opIdx: opIdx)
+			walker.resultFromOperands(func, op: op, opIdx: opIdx, result: result)
+			continue
+		end 'noSummary'
+
+		cursor.dependencies.note(impl)
+		cursor.slotPositionalArgs(args.count() as ParamCount)
+		walker.applyCalleeSummary(func, calleeIndex: impl, op: op, opIdx: opIdx, result: result, args: args, argRanges: noRanges)
+	end 'eachImpl'
+end 'dispatchLandingCall'
+
+function storeThroughRuntimeShape(walker SummaryCallWalker, func IrFunction, args ValueIdArray, shape RuntimeStoreShape, opIdx ElementIndex)
+	if shape == RuntimeStoreShape.nothing 'storesNothing'
+		return
+	end 'storesNothing'
+
+	let resolution = walker.callSiteCursor().resolution
+
+	for receiverIndex in 0 upto args.count() 'eachReceiver'
+		let receiver = try args.get(receiverIndex) otherwise panic("storeThroughRuntimeShape: args.get OOB at receiver {receiverIndex}")
+
+		if not shapeStoresInto(shape, receiverIndex: receiverIndex as ParamCount) or not walker.tracksValue(receiver) or not resolution.mayHoldARecord(func, value: receiver) 'cannotHoldARecord'
+			continue
+		end 'cannotHoldARecord'
+
+		for storedIndex in 0 upto args.count() 'eachStored'
+			if storedIndex != receiverIndex and shapeStoresOperand(shape, storedIndex: storedIndex as ParamCount) 'another'
+				let stored = try args.get(storedIndex) otherwise panic("storeThroughRuntimeShape: args.get OOB at operand {storedIndex}")
+				walker.storeHandedValue(func, receiver: receiver, stored: stored, sharesItsElements: shape == RuntimeStoreShape.theSourcesElementsIntoTheReceiver, opIdx: opIdx)
+			end 'another'
+		end 'eachStored'
+	end 'eachReceiver'
+end 'storeThroughRuntimeShape'
+
+// A least fixpoint: every body is traced once, then the callers of each body whose summary grew are traced
+// again until nothing grows.
+module function settleSummaries(project Project, order CsrColumn, bodies SummarizedBodies, dependencies CallDependencies) throws CompileError
+	let funcCount = order.count()
+	let ranks = ranksOf(order)
+	var worklist = FuncIndexArray.create()
+	var queued = BoolArray.create()
+	queued.refill(funcCount, value: false)
+
+	for i in order 'firstTrace'
+		try requireStillWanted(project)
+
+		if not bodies.tracesFirst(i) 'nothingToHandOn'
+			continue
+		end 'nothingToHandOn'
+
+		dependencies.recordFor(i)
+		let grew = bodies.traceAndWiden(i)
+		dependencies.stopRecording()
+
+		if grew 'grew'
+			worklist.push(i)
+			try queued.set(i, value: true) otherwise panic("settleSummaries: queued.set OOB at {i} — one mark per function")
+		end 'grew'
+	end 'firstTrace'
+
+	let callersByCallee = buildCsr(dependencies.callees, to: dependencies.callers, nodeCount: funcCount as CsrIndex)
+	var stale = BoolArray.create()
+	stale.refill(funcCount, value: false)
+
+	for calleeIndex in worklist 'eachFirstPassGrowth'
+		markCallersStale(callersByCallee, calleeIndex: calleeIndex, through: rankAt(ranks, index: calleeIndex), stale: stale, ranks: ranks)
+	end 'eachFirstPassGrowth'
+
+	var head = 0 as CsrIndex
+
+	while head < worklist.count() as CsrIndex 'drain'
+		try requireStillWanted(project)
+		let calleeIndex = try worklist.get(head as ElementIndex) otherwise panic("settleSummaries: worklist.get OOB at {head}")
+		head = head + 1
+		try queued.set(calleeIndex, value: false) otherwise panic("settleSummaries: queued.set OOB at {calleeIndex}")
+
+		for k in 0 upto callersByCallee.degree(calleeIndex as CsrIndex) 'eachCaller'
+			let callerIndex = callersByCallee.neighbour(calleeIndex as CsrIndex, k: k)
+
+			if not (try stale.get(callerIndex) otherwise panic("settleSummaries: stale.get OOB at {callerIndex}")) 'readsNothingNew'
+				continue
+			end 'readsNothingNew'
+
+			try stale.set(callerIndex, value: false) otherwise panic("settleSummaries: stale.set OOB at {callerIndex}")
+
+			if not bodies.traceAndWiden(callerIndex) 'nothingGrew'
+				continue
+			end 'nothingGrew'
+
+			markCallersStale(callersByCallee, calleeIndex: callerIndex, through: funcCount, stale: stale, ranks: ranks)
+
+			if not (try queued.get(callerIndex) otherwise panic("settleSummaries: queued.get OOB at {callerIndex}")) 'callersMustLookAgain'
+				worklist.push(callerIndex)
+				try queued.set(callerIndex, value: true) otherwise panic("settleSummaries: queued.set OOB at {callerIndex}")
+			end 'callersMustLookAgain'
+		end 'eachCaller'
+	end 'drain'
+end 'settleSummaries'
+
+// `through` is a rank in the first pass's `order`: a caller ranked past it traced after the growth
+// and read the grown summary already.
+function markCallersStale(callersByCallee CsrGraph, calleeIndex ElementIndex, through ElementIndex, stale BoolArray, ranks CsrColumn)
+	for k in 0 upto callersByCallee.degree(calleeIndex as CsrIndex) 'eachCaller'
+		let callerIndex = callersByCallee.neighbour(calleeIndex as CsrIndex, k: k)
+
+		if rankAt(ranks, index: callerIndex) <= through 'tracedBeforeTheGrowth'
+			try stale.set(callerIndex, value: true) otherwise panic("markCallersStale: stale.set OOB at {callerIndex}")
+		end 'tracedBeforeTheGrowth'
+	end 'eachCaller'
+end 'markCallersStale'
+
+function ranksOf(order CsrColumn) returns CsrColumn
+	var ranks = CsrColumn.create()
+	ranks.resize(order.count())
+
+	for (iter, index) in order.withIterator() 'eachPosition'
+		try ranks.set(index, value: iter.index()) otherwise panic("ranksOf: function index {index} is outside the {order.count()} the order spans")
+	end 'eachPosition'
+
+	return ranks
+end 'ranksOf'
+
+function rankAt(ranks CsrColumn, index ElementIndex) returns CsrIndex
+	return try ranks.get(index) otherwise panic("rankAt: function index {index} is outside the {ranks.count()} ranked")
+end 'rankAt'
+
+// A postorder of the call graph, so the first pass traces a callee before its callers and leaves a
+// caller stale only across a call cycle's back edge.
+module function calleesFirstOrder(module MaxonModule, funcNames FunctionNameIndex) returns CsrColumn
+	var callers = CsrColumn.create()
+	var callees = CsrColumn.create()
+
+	for (iter, func) in module.functions.withIterator() 'eachFunction'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("calleesFirstOrder: blockRef {blockRef} of '{String.from(func.name)}' is not in module.blocks")
+
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("calleesFirstOrder: opIdx {opIdx} is not in module.ops")
+
+				if maxonOpCalleeKind(op) != MaxonCalleeKind.direct 'notANamedCall'
+					continue
+				end 'notANamedCall'
+
+				if let callee = try funcNames.byName.get(maxonOpCalleeName(op)) 'aFunctionOfThisModule'
+					callers.push(iter.index())
+					callees.push(callee)
+				end 'aFunctionOfThisModule'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunction'
+
+	return postorderOf(buildCsr(callers, to: callees, nodeCount: module.functions.count() as CsrIndex))
+end 'calleesFirstOrder'
+
+module type CallDependencies
+	var recording as bool
+	var caller as ElementIndex
+	export var callees as CsrColumn
+	export var callers as CsrColumn
+
+	module static function create() returns CallDependencies
+		return Self{recording: false, caller: 0, callees: CsrColumn.create(), callers: CsrColumn.create()}
+	end 'create'
+
+	module function recordFor(callerIndex ElementIndex)
+		self.recording = true
+		self.caller = callerIndex
+	end 'recordFor'
+
+	module function stopRecording()
+		self.recording = false
+	end 'stopRecording'
+
+	module function note(callee ElementIndex)
+		if self.recording 'firstPass'
+			self.callees.push(callee)
+			self.callers.push(self.caller)
+		end 'firstPass'
+	end 'note'
+end 'CallDependencies'
+
+module type CallSummaryIndex
+	var project as Project
+	var module as MaxonModule
+	var signatures as ProgramSignatures
+	var funcIndexByName as FuncIndexByName
+	export var sites as CallSites
+	var conformers as ConformersByInterface
+	var witnessSlots as WitnessSlotsByDeclIndex
+	var witnessImpls as WitnessImplsMemo
+	var functionRefBodies as CallLandingBodies
+	var functionRefBodiesGathered as bool
+	var functionValueBodies as FunctionValueBodiesMemo
+	var instanceHoldsARecord as InstanceRecordMemo
+	var instanceSharesFunctions as InstanceRecordMemo
+
+	module static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcIndexByName FuncIndexByName, funcCount ElementIndex) returns CallSummaryIndex
+		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, sites: CallSites.create(funcCount), conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), instanceHoldsARecord: InstanceRecordMemo.create(), instanceSharesFunctions: InstanceRecordMemo.create()}
+	end 'create'
+
+	module function summarizedCalleeIndex(callee ByteArray) returns ElementIndex throws AbsentError
+		let index = try self.funcIndexByName.get(callee) otherwise throw AbsentError.absent
+
+		if not self.project.funcSignatures.contains(callee) or not self.implHasSummary(index) 'noSummaryDescribesIt'
+			throw AbsentError.absent
+		end 'noSummaryDescribesIt'
+
+		return index
+	end 'summarizedCalleeIndex'
+
+	module function implHasSummary(index ElementIndex) returns bool
+		return not bodyIsUnreadable(self.functionAt(index))
+	end 'implHasSummary'
+
+	module function implWasSkippedAsUnreached(index ElementIndex) returns bool
+		return self.functionAt(index).bodyWasSkippedAsUnreached
+	end 'implWasSkippedAsUnreached'
+
+	function functionAt(index ElementIndex) returns IrFunction
+		return try self.module.functions.get(index) otherwise panic("CallSummaryIndex.functionAt: function index {index} is past the module's functions")
+	end 'functionAt'
+
+	module function declaresFunction(name ByteArray) returns bool
+		return self.funcIndexByName.contains(name)
+	end 'declaresFunction'
+
+	module function functionIndexNamed(name ByteArray) returns ElementIndex throws MapError
+		return try self.funcIndexByName.get(name)
+	end 'functionIndexNamed'
+
+	module function functionIndexOf(name ByteArray) returns ElementIndex
+		return try self.funcIndexByName.get(name) otherwise panic("CallSummaryIndex.functionIndexOf: '{String.from(name)}' is no function of this module")
+	end 'functionIndexOf'
+
+	module function signatureOf(callee ByteArray) returns FuncSignature
+		return try self.project.funcSignatures.get(callee) otherwise panic("CallSummaryIndex.signatureOf: '{String.from(callee)}' is no declared function — the caller asked `summarizedCalleeIndex` first")
+	end 'signatureOf'
+
+	module function witnessMethodName(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns String
+		let slot = witnessSlotAt(self.signatures, witnessSlots: self.witnessSlots, dispatched: dispatchedInterfaceAt(self.signatures, interfaceDeclIndex: interfaceDeclIndex), interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
+		return String.from(slot.method.name)
+	end 'witnessMethodName'
+
+	module function implsOf(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns CallLandingBodies
+		let key = ((interfaceDeclIndex as WitnessSlotKey) shl WitnessSlotKeyShift) or (methodIndex as WitnessSlotKey)
+
+		if let memoized = try self.witnessImpls.get(key) 'asked'
+			return memoized
+		end 'asked'
+
+		let found = witnessDispatchImpls(self.project, signatures: self.signatures, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: self.funcIndexByName, conformers: self.conformers, witnessSlots: self.witnessSlots)
+		self.witnessImpls.upsert(key, value: found)
+		return found
+	end 'implsOf'
+
+	// A call through a function value lands only on a body that takes exactly its arguments: the value's type
+	// fixes its parameter count, so a body of any other arity cannot be the one called.
+	module function functionValueBodiesFor(argCount ParamCount) returns CallLandingBodies
+		if let memoized = try self.functionValueBodies.get(argCount) 'asked'
+			return memoized
+		end 'asked'
+
+		self.gatherFunctionRefBodies()
+		var found = CallLandingBodies.create()
+		found.unresolved = self.functionRefBodies.unresolved
+		found.unresolvedMayStore = self.functionRefBodies.unresolvedMayStore
+
+		for index in self.functionRefBodies.impls 'eachBody'
+			let body = self.functionAt(index)
+
+			if body.paramCount == paramCountALandingBodyTakes(body.name, argCount: argCount) 'takesExactlyTheArguments'
+				found.impls.push(index)
+			end 'takesExactlyTheArguments'
+		end 'eachBody'
+
+		self.functionValueBodies.upsert(argCount, value: found)
+		return found
+	end 'functionValueBodiesFor'
+
+	function gatherFunctionRefBodies()
+		if self.functionRefBodiesGathered 'gathered'
+			return
+		end 'gathered'
+
+		self.functionRefBodiesGathered = true
+		var bodies = CallLandingBodies.create()
+		var named = BoolArray.create()
+		named.refill(self.module.functions.count(), value: false)
+
+		for op in self.module.ops 'eachOp'
+			if maxonOpCalleeKind(op) == MaxonCalleeKind.functionValue 'aFunctionRef'
+				noteFunctionRefBody(maxonOpCalleeName(op), byName: self.funcIndexByName, named: named, into: bodies)
+			end 'aFunctionRef'
+		end 'eachOp'
+
+		self.functionRefBodies = bodies
+	end 'gatherFunctionRefBodies'
+
+	module function mayHoldARecord(func IrFunction, value ValueId) returns bool
+		let tag = valueTagOf(func, value: value)
+
+		if tagIsOpaqueRecord(tag) 'mayBeAContainer'
+			return true
+		end 'mayBeAContainer'
+
+		if tag != ValueTypeTag.genericInstance 'notAContainer'
+			return false
+		end 'notAContainer'
+
+		let gid = instanceIdOfValue(func, value: value)
+
+		if let memoized = try self.instanceHoldsARecord.get(gid) 'asked'
+			return memoized
+		end 'asked'
+
+		let holds = self.signatures.instanceArgsMayHoldARecord(gid)
+		self.instanceHoldsARecord.upsert(gid, value: holds)
+		return holds
+	end 'mayHoldARecord'
+
+	// An append clones records it can classify, but a function value is shared when copied, so an append whose
+	// elements may be functions stores the source's elements into its receiver.
+	module function runtimeShapeOf(func IrFunction, callee ByteArray, args ValueIdArray) returns RuntimeStoreShape
+		if copiesItsSourceCallee(callee) and args.count() > 0 and self.appendSharesFunctions(func, receiver: try args.get(0) otherwise panic("CallSummaryIndex.runtimeShapeOf: an append has a receiver")) 'sharesTheSourcesFunctions'
+			return RuntimeStoreShape.theSourcesElementsIntoTheReceiver
+		end 'sharesTheSourcesFunctions'
+
+		return runtimeCalleeStoreShape(callee)
+	end 'runtimeShapeOf'
+
+	function appendSharesFunctions(func IrFunction, receiver ValueId) returns bool
+		let tag = valueTagOf(func, value: receiver)
+
+		if tagIsOpaqueRecord(tag) 'anyElement'
+			return true
+		end 'anyElement'
+
+		if tag != ValueTypeTag.genericInstance 'notAContainer'
+			return false
+		end 'notAContainer'
+
+		let gid = instanceIdOfValue(func, value: receiver)
+
+		if let memoized = try self.instanceSharesFunctions.get(gid) 'asked'
+			return memoized
+		end 'asked'
+
+		let shares = self.signatures.containerElementMayHoldAFunction(gid)
+		self.instanceSharesFunctions.upsert(gid, value: shares)
+		return shares
+	end 'appendSharesFunctions'
+end 'CallSummaryIndex'
+
+module type CallSiteCursor
+	export var resolution as CallSummaryIndex
+	export var dependencies as CallDependencies
+	var firstRow as ElementIndex
+	var cursor as ElementIndex
+	var resolving as bool
+	var argPositions as ParamCountArray
+	var argFills as BoolArray
+
+	module static function create(resolution CallSummaryIndex) returns CallSiteCursor
+		return Self{resolution: resolution, dependencies: CallDependencies.create(), firstRow: 0, cursor: 0, resolving: false, argPositions: ParamCountArray.create(), argFills: BoolArray.create()}
+	end 'create'
+
+	module function beginWalk(index ElementIndex)
+		if let filed = try self.resolution.sites.ranges.firstRowOf(index) 'callsAlreadyResolved'
+			self.resolving = false
+			self.firstRow = filed
+		end 'callsAlreadyResolved' else 'theFirstWalkOfThisBody'
+			self.resolving = true
+			self.firstRow = self.resolution.sites.nextRow()
+		end 'theFirstWalkOfThisBody'
+	end 'beginWalk'
+
+	module function startPass()
+		self.cursor = self.firstRow
+	end 'startPass'
+
+	module function finishPass(index ElementIndex)
+		if self.resolving 'filedThisPass'
+			self.resolution.sites.closeRows(index, firstRow: self.firstRow)
+			self.resolving = false
+			return
+		end 'filedThisPass'
+
+		self.requireMetEveryCallSite(index)
+	end 'finishPass'
+
+	module function replay(index ElementIndex)
+		self.resolving = false
+		self.cursor = try self.resolution.sites.ranges.firstRowOf(index) otherwise panic("CallSiteCursor.replay: function {index} has filed no calls — a body is replayed only after a walk of it")
+	end 'replay'
+
+	module function requireMetEveryCallSite(index ElementIndex)
+		if self.cursor != self.resolution.sites.ranges.stopRowOf(index) 'outOfStep'
+			panic("CallSiteCursor.requireMetEveryCallSite: function {index} stopped at call-site row {self.cursor}, not the {self.resolution.sites.ranges.stopRowOf(index)} its first walk filed")
+		end 'outOfStep'
+	end 'requireMetEveryCallSite'
+
+	module function takeCallSite() returns ElementIndex
+		let site = self.cursor
+		self.cursor = site + 1
+		return site
+	end 'takeCallSite'
+
+	module function nextCallSite(func IrFunction, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray) returns ElementIndex
+		let site = self.takeCallSite()
+
+		if not self.resolving 'filed'
+			return site
+		end 'filed'
+
+		var sites = self.resolution.sites
+
+		if site != sites.nextRow() 'outOfStep'
+			panic("CallSiteCursor.nextCallSite: call {site} of a body being resolved is not the next row ({sites.nextRow()})")
+		end 'outOfStep'
+
+		if let calleeIndex = try self.resolution.summarizedCalleeIndex(callee) 'described'
+			self.slotNamedArgs(self.resolution.signatureOf(callee), args: args, argLabels: argLabels)
+			sites.fileDescribedRow(calleeIndex, slottedArgs: self.argPositions, fills: self.argFills)
+			return site
+		end 'described'
+
+		sites.fileRuntimeRow(self.resolution.runtimeShapeOf(func, callee: callee, args: args), isBookkeeping: ownershipBookkeepingCallee(callee), forksAnImage: forksImageData(callee), linksANode: linksANewNodeCallee(callee))
+		return site
+	end 'nextCallSite'
+
+	module function slotCallSiteArgs(row ElementIndex, argCount ParamCount)
+		self.argPositions.clear()
+		self.argFills.clear()
+
+		for i in 0 upto argCount 'eachArg'
+			if let slot = try self.resolution.sites.argPositionAt(row, argIndex: i) 'fillsAParameter'
+				self.pushFilledArg(slot)
+			end 'fillsAParameter' else 'fillsNone'
+				self.pushUnfilledArg(i)
+			end 'fillsNone'
+		end 'eachArg'
+	end 'slotCallSiteArgs'
+
+	module function slotNamedArgs(sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray)
+		self.argPositions.clear()
+		self.argFills.clear()
+
+		for i in 0 upto args.count() 'eachArg'
+			let label = try argLabels.get(i) otherwise panic("CallSiteCursor.slotNamedArgs: argLabels.get OOB at {i} — a call's argument columns are parallel by construction")
+
+			if let slot = try argSlotPosition(sig.paramNames, argIndex: i, label: label) 'fillsAParameter'
+				self.pushFilledArg(slot)
+			end 'fillsAParameter' else 'fillsNone'
+				self.pushUnfilledArg(i)
+			end 'fillsNone'
+		end 'eachArg'
+	end 'slotNamedArgs'
+
+	module function slotPositionalArgs(argCount ParamCount)
+		self.argPositions.clear()
+		self.argFills.clear()
+
+		for i in 0 upto argCount 'eachArg'
+			self.pushFilledArg(i)
+		end 'eachArg'
+	end 'slotPositionalArgs'
+
+	function pushFilledArg(slot ParamCount)
+		self.argPositions.push(slot)
+		self.argFills.push(true)
+	end 'pushFilledArg'
+
+	function pushUnfilledArg(argIndex ParamCount)
+		self.argPositions.push(argIndex)
+		self.argFills.push(false)
+	end 'pushUnfilledArg'
+
+	module function argPositionAt(i ParamCount) returns ParamCount throws MapError
+		if not (try self.argFills.get(i) otherwise panic("CallSiteCursor.argPositionAt: argument {i} is past the {self.argFills.count()} slotted")) 'fillsNoParameter'
+			throw MapError.keyNotFound
+		end 'fillsNoParameter'
+
+		return try self.argPositions.get(i) otherwise panic("CallSiteCursor.argPositionAt: argument {i} is past the {self.argPositions.count()} slotted")
+	end 'argPositionAt'
+end 'CallSiteCursor'
+
+// A function value's record is passed last; only a lifted closure declares it as a parameter.
+function paramCountALandingBodyTakes(name ByteArray, argCount ParamCount) returns ParamCount
+	if isLiftedClosureName(name) 'takesItsOwnRecord'
+		return argCount
+	end 'takesItsOwnRecord'
+
+	return argCount - FunctionRecordArgCount
+end 'paramCountALandingBodyTakes'
+
+function instanceIdOfValue(func IrFunction, value ValueId) returns GenericInstanceId
+	return (try func.valueNameIds.get(value) otherwise panic("instanceIdOfValue: v{value} of '{String.from(func.name)}' has no type name — the type columns are minted in lockstep")) as GenericInstanceId
+end 'instanceIdOfValue'

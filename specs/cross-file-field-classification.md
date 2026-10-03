@@ -31,34 +31,31 @@ type handed back to the parser has been **re-interned into the parser's own file
 its id is a *different number* from the one the whole-program index files that name under.
 
 In a **single-file** program the two tables are folded in the same order, so every id coincides and
-a query that resolved a file-local id against the program-wide table happened to be right. Across
-files they diverge, and the resolution then answers about **whatever unrelated type name happens to
-hold that number** — so the classification followed the interning order rather than the type.
+a query that resolves a file-local id against the program-wide table happens to be right. Across
+files they diverge, and such a resolution answers about **whatever unrelated type name happens to
+hold that number** — a classification that follows the interning order rather than the type.
 
-Both directions were measured, and both are wrong answers rather than mere over-rejection:
+Both directions are wrong answers:
 
-- a **scalar** cross-file alias field (and a payload-free `enum` field) classified MANAGED, so a
-  legal read off a temporary was refused with `E2015`;
-- a **boxed-union** field classified SCALAR, so the read was **admitted** onto a box nothing kept
-  alive. The accepted program hung.
+- a **scalar** cross-file alias field (or a payload-free `enum` field) classified MANAGED;
+- a **boxed-union** field classified SCALAR, which **admits** the read onto a box nothing keeps
+  alive, and the program hangs.
 
-⚠ **THE OBSERVABLE MOVED WHEN A3h LANDED, AND THE FACT UNDER TEST DID NOT.** These cases were
-written against the `E2015` refusal a managed field read out of a temporary used to earn. ⚖ The user
-ruling of 2026-08-01 replaced that refusal with the LIFETIME EXTENSION (`temporary-borrow-lifetime.md`),
-so the managed arm now COMPILES and RUNS — and it runs correctly only if the classifier says
-"managed", because that answer is what decides whether the box is held. Each case below therefore
-reads its field back and returns it: a misclassification is `0x3F3F…` or a hang, exactly as before,
-and the direction each one pins is unchanged.
+⚠ **THE OBSERVABLE IS A RUNNING PROGRAM.** ⚖ A managed field read out of a temporary is served by
+the LIFETIME EXTENSION (`temporary-borrow-lifetime.md`, a user ruling), so the managed arm COMPILES
+and RUNS — and it runs correctly only if the classifier says "managed", because that answer is what
+decides whether the box is held. Each case below therefore reads its field back and returns it: a
+misclassification is `0x3F3F…` or a hang.
 
-The cases pin both directions, and pin the controls that prove the fix reaches the classification
-rather than the door that asks it.
+The cases pin both directions, and pin the controls that prove the rule holds at the classification
+rather than at the door that asks it.
 
 ## Tests
 
 <!-- test: crossfile-alias-scalar-field-off-a-temporary -->
 ⭐ **THE HEADLINE.** `n` is `int(0 to 1000)`, declared in the sibling file that declares `Gate`. A
 scalar field is COPIED, not borrowed, so reading it off a temporary is legal — and the same program
-in one file (below) has always run.
+in one file (below) runs.
 ```maxon
 // --- file: gate.maxon
 export typealias Num = int(0 to 1000)
@@ -85,8 +82,8 @@ end 'main'
 ```
 
 <!-- test: same-file-alias-scalar-field-off-a-temporary -->
-⚠ **CONTROL (b).** The identical program in ONE file. It already ran, which is what localised the
-defect to the file boundary rather than to the alias or to the temporary.
+⚠ **CONTROL (b).** The identical program in ONE file. It is what localises a defect to the file
+boundary rather than to the alias or to the temporary.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -203,8 +200,8 @@ end 'main'
 
 <!-- test: crossfile-payload-free-enum-field-off-a-temporary -->
 A payload-free `enum` field is a SCALAR — its value IS its i64 tag, it owns no heap, and the drop
-cascade skips it. Declared in a sibling file it was refused exactly as the alias was; the same
-program in one file (below) ran.
+cascade skips it. Declared in a sibling file it classifies exactly as the same program in one file
+(below) does.
 ```maxon
 // --- file: color.maxon
 public enum Color
@@ -273,8 +270,6 @@ export function double(v Num) returns Num
 end 'double'
 
 // --- file: gate.maxon
-export typealias Num = int(0 to 1000)
-
 export type Gate
 	export var n as Num
 
@@ -293,8 +288,9 @@ end 'main'
 ```
 
 <!-- test: crossfile-same-alias-name-declared-in-two-files -->
-A `typealias` is FILE-SCOPED, so two files may each declare `Num`. The field's type is the one
-visible where the STRUCT was declared, and a temporary read still copies it.
+A file-private `typealias` and an exported one of one name coexist in one directory, so two files may
+each declare `Num`. The field's type is the one the STRUCT's own file declares, and a temporary read still
+copies it.
 ```maxon
 // --- file: gate.maxon
 export typealias Num = int(0 to 1000)
@@ -403,8 +399,8 @@ end 'main'
 ```
 
 <!-- test: crossfile-struct-field-read-out-of-a-temporary -->
-⭐ **THE CLASSIFIER MUST STILL SAY MANAGED**, for the shape that returned the freed-memory fill byte
-`0x3F3F3F3F` as the program's answer when the box was not held.
+⭐ **THE CLASSIFIER MUST STILL SAY MANAGED**, for the shape that returns the freed-memory fill byte
+`0x3F3F3F3F` as the program's answer when the box is not held.
 ```maxon
 // --- file: inner.maxon
 export typealias Wide = int(i64.min to i64.max)
@@ -441,12 +437,12 @@ end 'main'
 ```
 
 <!-- test: crossfile-boxed-union-field-read-out-of-a-temporary -->
-⭐⭐ **THE CASE THAT WAS ADMITTED ONTO A DEAD BOX, and the reason this is a use-after-free rung and
-not a false-rejection one.** A payload-bearing `union` field is a managed heap box, and across files
-it classified SCALAR — so this program compiled with the box unheld and hung on it. The four padding
-aliases are what land the reading file's `Shape` id on a scalar name in the program-wide table:
-measured, the classification held at 0–3 padding aliases and flipped from 4 upwards. A
-classification that changes at the fourth unrelated `typealias` is the defect stated as a test.
+⭐⭐ **THE CASE A MISCLASSIFICATION ADMITS ONTO A DEAD BOX, and the reason this is a use-after-free
+case and not a false-rejection one.** A payload-bearing `union` field is a managed heap box; classified
+SCALAR across files, this program compiles with the box unheld and hangs on it. The four padding
+aliases are what land the reading file's `Shape` id on a scalar name in the program-wide table: a
+file-local id resolved program-wide classifies correctly at 0–3 padding aliases and flips from 4
+upwards. A classification that changes at the fourth unrelated `typealias` is the defect stated as a test.
 ```maxon
 // --- file: shape.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -558,15 +554,15 @@ end 'main'
 ```
 
 <!-- test: crossfile-ranged-alias-union-payload-drop-cascade -->
-⭐⭐ **A SECOND MISPAIRING, ONE DOOR FURTHER IN — and this one PANICKED THE COMPILER on a program
+⭐⭐ **A SECOND PAIRING, ONE DOOR FURTHER IN — and a mispairing here PANICS THE COMPILER on a program
 with no error in it.** `Bag` owns a boxed-union field whose payload is typed by a ranged alias.
-"Does this union own managed heap?" was asked twice with two different pairings: the DROP ROUTING
-(`managedNameDropCallee`) resolved a **signatures** layout against **`project.typeNames`** and read
-the alias payload MANAGED, demanding a `__destruct_Payloaded`; `installUnionDestructors` asked over
-the correctly-paired **project** layout, read it SCALAR, and synthesized nothing. The two answers
-linked against each other — `bl to unknown function '__destruct_Payloaded'`. In ONE file the two
+"Does this union own managed heap?" is asked at two doors: the DROP ROUTING (`managedNameDropCallee`)
+and `installUnionDestructors`. A **signatures** layout resolved against **`project.typeNames`** reads
+the alias payload MANAGED and demands a `__destruct_Payloaded`, while the correctly-paired **project**
+layout reads it SCALAR and synthesizes nothing; two doors answering from those two pairings link
+against each other — `bl to unknown function '__destruct_Payloaded'`. In ONE file the two
 tables fold in the same order and every id coincides, so it is cross-file only, and it needs no
-padding: the divergence is structural, not order-sensitive. Both doors now ask
+padding: the divergence is structural, not order-sensitive. Both doors ask
 `unionBoxDropCallee(name)`, which answers over the index's own layout and interner.
 ```maxon
 // --- file: bag.maxon
@@ -596,10 +592,10 @@ end 'main'
 ```
 
 <!-- test: crossfile-ranged-alias-union-payload-off-a-bound-name -->
-⚠ **CONTROL for the case above, and the proof it was reachable WITHOUT the temporary door at all.**
-The same two files read through a BOUND receiver, which the managed-field guard never inspects. It
-panicked identically, so the mispairing is the drop routing's and not the guard's — which is why
-fixing the guard alone would have left it live.
+⚠ **CONTROL for the case above, and the proof it is reachable WITHOUT the temporary door at all.**
+The same two files read through a BOUND receiver, which the managed-field guard never inspects. A
+mispairing panics it identically, so the pairing is the drop routing's and not the guard's — a cure
+at the guard alone leaves this case red.
 ```maxon
 // --- file: bag.maxon
 typealias Num = int(0 to 1000)
@@ -690,9 +686,8 @@ end 'main'
 
 <!-- test: crossfile-generic-instance-managed-field-off-a-temporary -->
 ⭐ **THE CLASSIFIER'S OTHER ARM.** `Holder with String`'s `item` is a managed heap pointer the box
-frees at drop, so the box is held exactly as the struct arm's is. Measured stable at 0–7 padding
-aliases in the reading file, which is what shows the instance arm never depended on the interning
-order the struct arm did.
+frees at drop, so the box is held exactly as the struct arm's is. The instance arm does not depend
+on the interning order: its answer is the same at 0–7 padding aliases in the reading file.
 ```maxon
 // --- file: holder.maxon
 export type Holder uses T

@@ -187,7 +187,7 @@ end 'main'
 
 ### Trivial-element forward is inert
 
-The SAME forwarding shape on a TRIVIAL element (`Container with SmallInt`) generates no consume traffic — the element owns no heap, so the concrete call borrows it exactly as before the fixpoint. This pins that the transitive feed is inert for a trivial instantiation.
+The SAME forwarding shape on a TRIVIAL element (`Container with SmallInt`) generates no consume traffic — the element owns no heap, so the concrete call borrows it exactly as it would without the fixpoint. This pins that the transitive feed is inert for a trivial instantiation.
 
 <!-- test: trivial-element-forward -->
 ```maxon
@@ -445,11 +445,9 @@ drops through the descriptor-gated `__drop_type_param` whether the receiver is t
 bound to it. `drainViaLocal` pops one of two Strings through the local and drops it; the container drops the
 survivor — each freed once.
 
-⚠ The alias must be a `var`. This case was written `let arr = self.items`, which is **not legal Maxon**:
-`pop` mutates its receiver, and a mutating method on a `let` binding is E3019 in the reference compiler
-(measured on the equivalent non-generic program) — the compiler simply did not enforce the rule until the
-top-level-managed-`let` rung needed it. The property under test is unchanged: the move-out still goes
-through a LOCAL bound to the field rather than through the field directly.
+⚠ The alias must be a `var`. `let arr = self.items` is **not legal Maxon**:
+`pop` mutates its receiver, and a mutating method on a `let` binding is E3019. The property under test is
+that the move-out goes through a LOCAL bound to the field rather than through the field directly.
 
 <!-- test: pop-via-local-binding -->
 ```maxon
@@ -498,7 +496,7 @@ to free it again — a double-free the exit-0 run rules out.
 
 The read is a bare `try` STATEMENT rather than `_ = try …`. A container read is a PURE call, so `_ =` does not
 license dropping its result (`discarded-results.md`, E3064) — a statement `try` is the spelling that reads an
-element for its side effects on nothing and keeps none of it, and it is what the reference accepts. The
+element for its side effects on nothing and keeps none of it. The
 property under test is unchanged: element 0 is still read and its borrow still dropped by nobody.
 
 <!-- test: get-borrows-opaque-element -->
@@ -851,7 +849,7 @@ DIVERGING `otherwise` (`return`/`throw`/`panic`), which never merges a value at 
 `otherwise <expr>` DOES merge, and reconciling ownership there (incref the borrowed element, or move/incref the
 fallback) is a descriptor-gated operation the shared body cannot pick statically — the element is a raw scalar
 for a trivial instantiation (a plain incref would fault) and a managed pointer for another. So a value
-`otherwise` on an opaque accessor is a clean E2015 until a descriptor-gated reconciliation lands; here `pop`
+`otherwise` on an opaque accessor is a clean E2015; here `pop`
 supplies the owned fallback that the following `get` merges. (The concrete-element `try items.get(0) otherwise
 Item.create(…)` is unaffected — its element type is known, so the incref-on-get already resolves it.)
 
@@ -889,16 +887,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:19:11: Unsupported: a `try` on an opaque type-parameter array accessor (`get`/`first`/`last`/`pop`/`remove` on an `Array with <type parameter>` field) with a VALUE `otherwise <expr>` — reconciling the borrowed/moved-out element with the fallback at the `try` continuation needs a descriptor-gated incref/copy the shared body cannot pick statically (the element is a raw scalar for a trivial instantiation and a managed pointer for another), a distinct future slice. Use a DIVERGING `otherwise` (`otherwise return`/`throw`/`panic`) instead — the plain borrow (`get`/`first`/`last`) and move-out (`pop`/`remove`) are supported that way (P1.7 slice 3b-vi-a).
+error E2015: <fragment>:19:11: Unsupported: a `try` on an opaque type-parameter array accessor (`get`/`first`/`last`/`pop`/`remove` on an `Array with <type parameter>` field) with a VALUE `otherwise <expr>` — reconciling the borrowed/moved-out element with the fallback at the `try` continuation needs an incref or a copy the shared body cannot pick statically (the element is a raw scalar for a trivial instantiation and a managed pointer for another). Use a DIVERGING `otherwise` (`otherwise return`/`throw`/`panic`) instead — the plain borrow (`get`/`first`/`last`) and move-out (`pop`/`remove`) are supported that way.
 ```
 
 ### Returning an OWNED moved-out opaque element transfers it to the caller
 
 `pop`/`remove` hand back an OWNED opaque element. RETURNING it out of the generic method makes the CALLER its
 owner, which is the same `+1` hand-off a `returns String` method makes: the body moves the element out of its
-own drop sets and the caller's binding releases it at scope exit. This was a clean `E2015` until P1.7 slice
-3b-vi-a, on the premise that a caller cannot resolve an opaque `T` return — it resolved it perfectly well and
-then took a SECOND reference to it, which is the leak the refusal was standing in front of. The exit-0 run says
+own drop sets and the caller's binding releases it at scope exit. The caller resolves the opaque `T` return
+and takes no SECOND reference to it, which would leak. The exit-0 run says
 the element is released exactly once: a missed release is exit 101 and a doubled one faults on the poison.
 
 <!-- test: return-owned-opaque-element-transfers-to-the-caller -->
@@ -944,11 +941,11 @@ alpha string long enough to force a heap allocation
 ### Clone a managed opaque array field (deep, source freed)
 
 `.clone()` on an opaque `Array with <type parameter>` field DEEP-CLONES each element through the enclosing
-instance's descriptor `copyFunc@32` (P1.7 slice 3b-vi-b-β): the shared body compiles once and reads the
+instance's descriptor `copyFunc@32`: the shared body compiles once and reads the
 element cloner at run time, so the ONE compiled `duplicate` serves every managed instantiation. `makeDuplicate`
 builds a `StringContainer`, pushes two heap Strings, clones the field into a FRESH container and returns it; the
 source container `a` drops at `makeDuplicate` exit, freeing ITS two Strings. If the clone were shallow (a shared
-buffer or shared String pointers), the returned container's Strings would now be freed — reading its count and
+buffer or shared String pointers), the returned container's Strings would already be freed — reading its count and
 then dropping it would double-free (exit 101 / a poison fault). The exit-0 run proves the clone is an
 independent deep copy that outlives its source.
 
@@ -1300,11 +1297,10 @@ end 'main'
 
 ### Copying an opaque array of a NESTED-CONTAINER instantiation
 
-⭐⭐ **G18 — THE OPAQUE HALF, AND THE ROUTE THE CONCRETE CASES CANNOT REACH.** `Container`'s shared body
+⭐⭐ **THE OPAQUE HALF, AND THE ROUTE THE CONCRETE CASES CANNOT REACH.** `Container`'s shared body
 compiles once against an opaque `Element` and copies each element through the enclosing instance's descriptor
 `copyFunc@32`, which holds a SINGLE `(box) -> newBox`. A managed-element container element
-(`Array with String`) has a 2-argument copy, so until G18 it had no `copyFunc` and the whole method was
-refused; it now stamps the element's per-instance one-argument thunk
+(`Array with String`) has a 2-argument copy, so the descriptor stamps the element's per-instance one-argument thunk
 (`ProgramSignatures.managedOpaqueArrayElementCloneCallee` → `__clone_<mangled>`), whose body makes that
 2-argument call. This is a DIFFERENT stamp from the concrete one
 (`Parser.arrayElementCloneValue`, exercised by `array-clone-managed-elements`), which is why the case exists
@@ -1312,7 +1308,7 @@ here and not only there.
 
 ⚠ **THE EXIT CODE IS THE WHOLE ASSERTION, AND IT DISCRIMINATES BOTH WAYS.** The source container, its inner
 array and both Strings are freed before the duplicate is read, so a byte-blitted copy double-frees them
-(MEASURED as `0xC0000005` / 139 before the cloner existed) and a copy that never happened leaks (exit 101).
+(`0xC0000005` / 139) and a copy that never happened leaks (exit 101).
 Only a real deep clone exits 0 — the inner row cannot be read from outside the shared body, so the answer has
 to come from the memory manager rather than from a value.
 <!-- test: opaque-copy-of-a-nested-container-instantiation -->
@@ -1377,19 +1373,19 @@ an opaque array in the shared body would byte-blit a managed pointer and double-
 generic type's copy method is rejected with a positioned E2015 when SOME instantiation is not cloneable.
 (A DROP-only instantiation of the same shape is fine — it needs no `copyFunc` — and is covered below.)
 
-⛔ **THIS CASE'S ELEMENT WAS `Array with String` UNTIL G18 AND HAD TO CHANGE, WHICH IS THE POINT OF THE CASE
-ABOVE.** A managed-element container is cloneable now, so the old program is the POSITIVE case and this one
-needs an element the gate still refuses. The refusal has to be blamed at the `NestedContainer` line, so the
+⛔ **THIS CASE'S ELEMENT CANNOT BE `Array with String`, WHICH IS THE POINT OF THE CASE
+ABOVE.** A managed-element container is cloneable, so that program is the POSITIVE case and this one
+needs an element the gate refuses. The refusal has to be blamed at the `NestedContainer` line, so the
 uncopyable thing must be an instance the program never WROTE (`Array with Handle`, minted by `Container`'s
 inner `typealias ElementArray = Array with Element`) — a bare `typealias HandleArray = Array with
 __ManagedFile` would be refused at its OWN line instead. One user struct around the handle buys both.
 
-⚠ **THE REFUSAL IS THE LIBRARY'S SINCE ARRH STRUCK `clone` FROM THE `Array` ROSTER, AND BLAME GIVES IT
-THE USER'S SPAN BACK** — `arr.clone()` is the library's own declaration now, so this program is refused by the
+⚠ **THE REFUSAL IS THE LIBRARY'S, BECAUSE `clone` IS NOT ON THE `Array` ROSTER, AND BLAME GIVES IT
+THE USER'S SPAN BACK** — `arr.clone()` is the library's own declaration, so this program is refused by the
 OPAQUE copy gate inside that body rather than by the concrete gate at the call, and the sentence printed is
 the opaque one. What the refusal is POSITIONED at is the user's own instantiation, with `stdlib/Array.maxon`'s
 line kept as a `note:`; `specs/array-conditional-conformance-withheld.md` explains that relocation and
-the blame edge once, for all four cases ARRH touched.
+the blame edge once, for all four such cases.
 
 <!-- test: opaque-copy-uncopyable-instantiation-rejected -->
 ```maxon
@@ -1431,7 +1427,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:30:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
+error E2015: <fragment>:30:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported.
 note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above
 ```
 
@@ -1727,9 +1723,8 @@ end 'main'
 
 ### Pushing a BORROWED opaque element back into the SAME array
 
-⛔⛔ **THIS CASE WAS A REFUSAL UNTIL W60, AND THE SENTENCE IT PINNED WAS TOO WIDE BY ONE WORD.** It read
-*"an element moved into an opaque array must be a value this frame OWNS"*, and the half that is true is that
-the CONTAINER must end up owning one: `self.items.get(0)` is a BORROW, so the store cannot give a reference
+⛔⛔ **AN ELEMENT MOVED INTO AN OPAQUE ARRAY NEED NOT BE A VALUE THIS FRAME OWNS.** What must hold is that
+the CONTAINER ends up owning one: `self.items.get(0)` is a BORROW, so the store cannot give a reference
 up and TAKES one instead, through the enclosing instance's `retainFunc@64`
 (`referenceBorrowedOpaqueElement`). See `specs/generic-opaque-borrowed-element-store.md`, which owns
 that rule.
@@ -1789,7 +1784,7 @@ a string long enough to force a heap allocation
 
 ### A CONDITIONAL implicit-self feed is dropped on the un-pushed path, not leaked
 
-The half of the fix a wrong answer cannot show: recording the feed without ENROLLING it leaves the caller
+The half of the rule a wrong answer cannot show: recording the feed without ENROLLING it leaves the caller
 transferring a `+1` that nobody releases — a LEAK, which the process-exit gate reports as 101 rather than as a
 fault. `addMaybe` pushes on one branch only, so the enrolled opaque parameter is live at the merge on the other
 and the join drops it once through the descriptor-gated `__drop_type_param`. Two hundred heap elements are
@@ -1893,13 +1888,13 @@ array it takes a reference of its own, so the two arrays hold two references to 
 the one it holds — the third spelling of the borrow (`get`, an opaque field read, a `for` element), served by
 the same `retainFunc@64`.
 
-⛔⛔ **THE BODY IS SOUND AND `main` CALLS IT.** Under W60 the body is sound rather than unreachable, and `main`
+⛔⛔ **THE BODY IS SOUND AND `main` CALLS IT.** The body is sound rather than unreachable, and `main`
 CALLS `copyInto`: without a per-element retain the two element walks free one record twice, and with an unpaired
 one the copy leaks.
 
 ⭐ The destination is a second container's own `items`, because the parameter is declared
-`Container.ElementArray` and an external `StringArray` is `E3005` at the call site (board row `W25`) — the
-gap that made the old case uncallable, and it is a TYPE gap rather than an ownership one.
+`Container.ElementArray` and an external `StringArray` is `E3005` at the call site — a TYPE gap
+rather than an ownership one.
 
 <!-- test: push-for-element-into-second-opaque-array -->
 ```maxon
@@ -1965,21 +1960,17 @@ move-in does. The parameter is then enrolled owned and nothing moves it, so it i
 through the descriptor-gated `__drop_type_param`. The two bodies are the same token shape one receiver TYPE
 apart, so no pre-scan can separate them.
 
-⭐⭐ **THIS CASE WAS A REFUSAL, AND IT WAS PINNING A MISSING RESERVATION RATHER THAN AN UNSOUND BODY (W58).**
-The release above is perfectly well-defined; what `add` lacked was the descriptor to read the destructor out
-of, because the reservation was seeded only for a method whose feed can be left LIVE and this straight-line
-body's cannot. Its receiver `Sink.push(x S) returns S` is a bare type-parameter return, so `add` ADOPTS the
-`+1` that hand-off owes (`specs/generic-opaque-call-result.md`) — and the seed for THAT is what now gives
-`add` a descriptor. The adopted `kept` and the enrolled `item` are then released once each at the method's
-exit, through the same descriptor.
+⭐⭐ **THE BODY IS SOUND; WHAT IT NEEDS IS A DESCRIPTOR RESERVATION.**
+The release above is perfectly well-defined; it needs the descriptor to read the destructor out
+of, and the reservation's first seed is only for a method whose feed can be left LIVE, which this
+straight-line body's cannot. Its receiver `Sink.push(x S) returns S` is a bare type-parameter return, so
+`add` ADOPTS the `+1` that hand-off owes (`specs/generic-opaque-call-result.md`) — and the seed for THAT is
+what gives `add` a descriptor. The adopted `kept` and the enrolled `item` are then released once each at the
+method's exit, through the same descriptor.
 
-⛔ **THE PREDICTION THIS CONTRADICTS IS RECORDED IN `referenceBorrowedOpaqueElement`'s HEADER, AND IT WAS TRUE WHEN
-IT WAS WRITTEN.** *"Reserving the descriptor such a co-own needs turns `feed-into-borrowing-user-push-rejected`
-from a clean REFUSAL into a compiling program that LEAKS (exit 101) — the descriptor it gains has a ZERO
-`destroyFunc@40`."* That zero was the `destroyFunc@40`/`retainFunc@64` asymmetry, and it has since been closed
-at its source (`ProgramSignatures.typeParamOwnershipProtocol` — both words off ONE protocol answer). MEASURED
-on this tip: 100 adds of a heap-built element print and exit **0**, not 101. A blocker note ages faster than
-the code it is about.
+⛔ **THE DESCRIPTOR `add` GAINS HAS A NONZERO `destroyFunc@40`**, because `destroyFunc@40` and
+`retainFunc@64` are both read off ONE protocol answer (`ProgramSignatures.typeParamOwnershipProtocol`) —
+so 100 adds of a heap-built element print and exit **0**, not 101.
 
 <!-- test: feed-into-a-borrowing-user-push-releases-what-it-took -->
 ```maxon
@@ -2037,21 +2028,18 @@ added
 ### A TYPE EXTENSION's array mutator feeds the opaque element exactly as the type's own body does
 
 An `extension Container` on a generic type is inside that type's parameter scope, so `items.push(item)`
-written there is the same store, marks the same feed and must emit the same program. It did not: the
-extension body's mutator went unrecognized for the same reason the type body's implicit spelling did, and the
-concrete call site handed the array a String it had not transferred (**measured: exit 139**;
-the `self.`-spelled twin in the same body exits 0, which is how narrow the hole was).
+written there is the same store, marks the same feed and must emit the same program. An unrecognized
+extension-body mutator would leave the concrete call site handing the array a String it had not transferred
+(exit 139), while the `self.`-spelled twin in the same body exits 0.
 
 ⚠ **THE ELEMENTS ARE BUILT AT RUN TIME AND NOT WRITTEN AS LITERALS, DELIBERATELY.** A literal String can live
 in `.rdata` and never be freed at all, so a missed transfer over one is silent — a case spelled that way would
 pass for the wrong reason. Interpolating a loop-carried `var` gives a genuinely heap-owned record, so a missed
 transfer is a double free (SIGSEGV) or an unbalanced drop (exit 101), and the run says which.
 
-⚠ Extension scope is only pinned here for a DIRECT feed. A forwarder in an extension body
-(`add(item)` → `store(item)`) still segfaults — the transitive feed
-fixpoint (`recordTransitiveArrayFeeds`) is run for a `type` declaration's body and never for an extension's —
-and so is a conditional one, which is refused because `computeTypeDescriptorNeeds` is likewise never run
-there. Both are filed, not closed here.
+⚠ Extension scope is pinned here for a DIRECT feed; the CONDITIONAL form is
+`conditional-feed-inside-a-type-extension` below, and a forwarder in an extension body
+(`add(item)` → `stash(item)`) is `extension-body-forwarder-feeds-opaque-element`.
 
 <!-- test: extension-body-push-feeds-opaque-element -->
 ```maxon
@@ -2103,13 +2091,13 @@ end 'main'
 
 ### A static that GAINS a forwarded feed keeps the constructor feed it already had
 
-The transitive fixpoint republishes a method's whole consume record, and W10 made a receiverless function
-reachable there for the first time — a `static` is the one kind of function scanned with
+The transitive fixpoint republishes a method's whole consume record, and a receiverless function
+reaches it — a `static` is the one kind of function scanned with
 `detectFieldStores: true`, so it is the one kind carrying facts the fixpoint never computes: its plain consume
 bits, and its `Self{f: p}` CONSTRUCTOR feeds. Rebuilt from the solved nodes alone, `single`'s constructor feed
-vanished the moment `first` made the method a gainer, and the concrete call site then borrowed a String the
-box destroys (**measured: exit 139**). Its direct-feed twin — `xs.push(first)` in place of the forward, so the
-method never enters the fixpoint's publish path at all — was correct throughout, which is the giveaway: one
+would vanish the moment `first` made the method a gainer, and the concrete call site would then borrow a
+String the box destroys (exit 139). Its direct-feed twin — `xs.push(first)` in place of the forward, so the
+method never enters the fixpoint's publish path at all — is the control: one
 spelling of the same store cannot cost another parameter its ownership. The fixpoint may only turn feeds ON.
 
 <!-- test: static-forward-keeps-its-constructor-feed -->
@@ -2206,20 +2194,17 @@ end 'main'
 
 ### An UNCONDITIONAL extension on a `where`-constrained generic type carries the type's witnesses
 
-⭐⭐ **THE EXTENSION BODY RESERVES ONE WITNESS LIST AND THE CALL SITE SUPPLIES ANOTHER, AND THAT IS A
-SEGFAULT ON A LEGAL PROGRAM (W23).** `Parser.openTypeExtensionBodyScope` opened the body with the
-EXTENSION's own `where` clause, which for an unconditional `extension Pair` is EMPTY — so `bothAre`
-reserved **0** hidden witness parameters — while `ProgramSignatures.witnessConstraintsOfMethod` fell back
-to the TYPE's `where A is Equatable, B is Equatable` and every caller duly passed **2**. A witness-slot
-count is ABI, so the two disagreeing is an argument-register mismatch, not a type error: **MEASURED on the
-merge base, this program compiled clean (no diagnostic, 2,646 bytes of code) and the binary SEGFAULTED
-after printing `a=true`.** The oracle prints all three lines and exits 0.
+⭐⭐ **THE EXTENSION BODY RESERVES THE WITNESS LIST THE CALL SITE SUPPLIES, OR A LEGAL PROGRAM
+SEGFAULTS.** An unconditional `extension Pair` has an EMPTY `where` clause of its own, while every caller
+of `bothAre` passes the TYPE's `where A is Equatable, B is Equatable` — **2** hidden witness parameters. A
+witness-slot count is ABI, so a body that reserved its own clause's **0** would disagree with its callers as
+an argument-register mismatch, not a type error: the program would compile clean and the binary segfault
+after printing `a=true`. The program is legal: it prints all three lines and exits 0.
 
-⚠ **THE BODY HAS TWO DOORS TO A WITNESS AND ONLY ONE WAS GUARDED.** A bare `self.first == x` written in
-the same body is a clean refusal (`E3005`, "requires type parameter 'A' to be constrained"); routing the
-identical dispatch through `self.firstIs(x)` — a call, not an operator — compiled and crashed. The cure is
-that BOTH the reservation and the supply read one derived list (`witnessConstraintsOfMethod`, the type's
-constraints then the extension's extras), not that a third check is added at the method-call door.
+⚠ **THE BODY HAS TWO DOORS TO A WITNESS** — an operator such as `self.first == x`, and a call such as
+`self.firstIs(x)`. BOTH the reservation and the supply read one derived list
+(`ProgramSignatures.witnessConstraintsOfMethod`, the type's constraints then the extension's extras), so
+the method-call door needs no check of its own.
 
 <!-- test: unconditional-extension-on-constrained-type-dispatches-a-witness -->
 ```maxon
@@ -2268,10 +2253,9 @@ done
 ### The same, with TWO witnesses actually dereferenced through the unconditional extension
 
 The case above proves the slot COUNT; this one proves the ORDER, because both hidden witnesses are
-followed to a real `equals` impl. With the extension's empty clause chosen, `bothAre` reserved nothing and
-read its two forwarded slots off whatever the argument registers happened to hold — **MEASURED: exit 139
-after `a=true`**, the same shape as the single-witness case, which is what says the count and the order are
-one defect and not two.
+followed to a real `equals` impl. With the extension's empty clause chosen, `bothAre` would reserve nothing
+and read its two forwarded slots off whatever the argument registers happen to hold — the same shape as the
+single-witness case, which is what says the count and the order are one rule and not two.
 
 <!-- test: unconditional-extension-forwards-two-witnesses-in-order -->
 ```maxon
@@ -2325,12 +2309,11 @@ done
 
 ### An extension clause DISJOINT from the type's own is a UNION, not a replacement
 
-⛔ **THE REPLACE-RULE'S WORST FORM: the extension's `where A is Comparable` DISPLACED the type's
-`where A is Equatable, B is Equatable` entirely, so the body reserved ONE witness where its callee wanted
-TWO — and the compiler did not survive its own IR.** MEASURED on the merge base: **`panic at
-RegisterAllocator.maxon:1906: colorOpForward: use of value 3 before it was colored`**, which is not the
-allocator's defect at all. The one-variable control is the SUPERSET case below, which differs in the
-extension's clause ALONE and compiled clean on the same binary.
+⛔ **A REPLACE-RULE'S WORST FORM: were the extension's `where A is Comparable` to DISPLACE the type's
+`where A is Equatable, B is Equatable` entirely, the body would reserve ONE witness where its callee wants
+TWO — and the compiler would not survive its own IR** (a `colorOpForward: use of value … before it was
+colored` panic in the register allocator, which is not the allocator's defect at all). The one-variable
+control is the SUPERSET case below, which differs in the extension's clause ALONE.
 
 Under the union the body carries `[A is Equatable, B is Equatable, A is Comparable]` — the type's list
 FIRST, in declaration order, then the extension's extras — so `self.firstIs(x)`, whose own list is exactly
@@ -2435,9 +2418,8 @@ done
 
 ### CONTROL — an extension clause EQUAL to the type's own
 
-The one shape the replace-rule was accidentally right for, kept as a control so the union cannot regress
-it: replacing a list with a copy of itself is the identity, and so is unioning it with itself. It was green
-on the merge base and it stays green.
+The one shape a replace-rule would be right for, kept as a control on the union: replacing a list with a
+copy of itself is the identity, and so is unioning it with itself.
 
 <!-- test: extension-clause-equal-to-the-types-own -->
 ```maxon
@@ -2485,12 +2467,12 @@ done
 
 ### CONTROL — an extension clause that is a SUPERSET of the type's own
 
-⚠ **THIS ONE WAS GREEN BY LUCK, AND THE UNION IS WHAT MAKES IT GREEN BY CONSTRUCTION.** Under the
-replace-rule the body carried `[A is Equatable, A is Comparable, B is Equatable]` — the clause's own source
-order — while `firstIs` carried the type's `[A is Equatable, B is Equatable]`, so the forward of slot 1
-handed `firstIs` the `A is Comparable` table where the `B is Equatable` one belonged. The program only ever
-dereferences slot 0, so the wrong table at slot 1 was never followed and the run said nothing. Under the
-union the body carries `[A is Equatable, B is Equatable, A is Comparable]` and every prefix aligns.
+⚠ **UNDER A REPLACE-RULE THIS ONE WOULD BE GREEN BY LUCK; THE UNION MAKES IT GREEN BY CONSTRUCTION.** Under
+a replace-rule the body would carry `[A is Equatable, A is Comparable, B is Equatable]` — the clause's own
+source order — while `firstIs` carries the type's `[A is Equatable, B is Equatable]`, so the forward of slot 1
+would hand `firstIs` the `A is Comparable` table where the `B is Equatable` one belongs. The program only ever
+dereferences slot 0, so the wrong table at slot 1 would never be followed and the run would say nothing. Under
+the union the body carries `[A is Equatable, B is Equatable, A is Comparable]` and every prefix aligns.
 
 <!-- test: extension-clause-superset-of-the-types-own -->
 ```maxon
@@ -2539,8 +2521,7 @@ done
 ### CONTROL — an unconditional extension whose body dispatches NO witness
 
 The other half of the trigger: a body that reserves the wrong number of witness slots is harmless while it
-never forwards one. Green on the merge base, and it stays green — which is what pins that the union changed
-the ABI of the methods that need it and of no others.
+never forwards one. It pins that the union reaches the ABI of the methods that need it and of no others.
 
 <!-- test: unconditional-extension-body-that-dispatches-no-witness -->
 ```maxon
@@ -2588,20 +2569,18 @@ done
 
 ### An INTERFACE extension's body self-calling a descriptor-needing method of a GENERIC conformer
 
-⭐⭐ **THE THIRD FACE OF THE RESERVE/SUPPLY DRIFT, AND THE ONE THAT ABORTS THE COMPILER (W23c).** The
-layout-descriptor need was a fixpoint over ONE type declaration's own body — `computeTypeDescriptorNeeds`
-ran from `parseTypeDeclaration` and from nowhere else — so no method contributed by an `extension` could
-ever reserve the slot. `Bag.absorb` copies an opaque array and reserves a descriptor; `Bag.absorbTwice`,
-declared in an `extension Appendable`, calls it on `self` and reserves nothing. **MEASURED on the merge
-base: `panic at LowerMaxonToStd.maxon:1577: forwardCallerLayout: caller 'Bag.absorbTwice' has no layout
-descriptor to forward to 'Bag.absorb'`**, no position, no `error E….` — on a program the oracle compiles
-and runs to exit 0.
+⭐⭐ **THE THIRD FACE OF THE RESERVE/SUPPLY DRIFT, AND THE ONE THAT WOULD ABORT THE COMPILER.** A
+layout-descriptor need computed over ONE type declaration's own body would never let a method contributed
+by an `extension` reserve the slot. `Bag.absorb` copies an opaque array and reserves a descriptor;
+`Bag.absorbTwice`, declared in an `extension Appendable`, calls it on `self`. Were its need not computed,
+the compiler would panic — `forwardCallerLayout: caller 'Bag.absorbTwice' has no layout descriptor to
+forward to 'Bag.absorb'`, no position, no `error E….` — on a legal program that runs to exit 0.
 
 ⚠ An INTERFACE extension is the sharpest form of it: its body is monomorphized per conformer, and
 `openExtensionBodyScope` deliberately leaves `enclosingTypeParams` EMPTY there (its own header argues why —
 an associated type is bound concretely per conformer and must not resolve as the conformer's type
-parameter). So the reservation gate, which tested exactly that field, could not even ask the question. The
-need is now a WHOLE-PROGRAM fixpoint keyed by qualified method name, and `Bag.absorbTwice`'s self-call edge
+parameter). So a reservation gate testing exactly that field could not even ask the question. The
+need is a WHOLE-PROGRAM fixpoint keyed by qualified method name, and `Bag.absorbTwice`'s self-call edge
 to `Bag.absorb` is an edge like any other.
 
 <!-- test: interface-extension-body-forwards-a-descriptor -->
@@ -2654,17 +2633,17 @@ end 'main'
 0
 ```
 
-### A CONDITIONAL feed inside a TYPE extension — the regression the W10 note recorded and could not close
+### A CONDITIONAL feed inside a TYPE extension
 
 ⛔ **A CONDITIONAL `items.push(item)` INSIDE AN `extension Container` ON A GENERIC TYPE COMPILES ONLY
-BECAUSE THE DESCRIPTOR NEED IS COMPUTED WHOLE-PROGRAM.** W10's residual check fires correctly when a body
+BECAUSE THE DESCRIPTOR NEED IS COMPUTED WHOLE-PROGRAM.** The residual check fires correctly when a body
 drops an opaque feed at a guarded exit and the function has no descriptor to drop it through — but the half
 that matters here is the RESERVATION, and an extension method can reserve the slot only off a whole-program
 need. With that need computed, `Container.stashIf` reserves it and the program compiles.
 
 ⚠ It is deliberately the CONDITIONAL form. The straight-line twin
-(`extension-body-push-feeds-opaque-element`, above) always consumes its feed and needs no descriptor, which
-is why that one was green throughout and this one was not — the guard is the whole difference.
+(`extension-body-push-feeds-opaque-element`, above) always consumes its feed and needs no descriptor, so
+only this one reaches the guard — the guard is the whole difference.
 
 <!-- test: conditional-feed-inside-a-type-extension -->
 ```maxon
@@ -2717,10 +2696,10 @@ end 'main'
 ### The extension declared BEFORE the type it extends, IN ANOTHER FILE — the descriptor's order proof
 
 ⭐⭐ **A DESCRIPTOR PARAMETER IS ABI, SO IT MAY NOT BE DECIDED BY WHICH DECLARATION THE COMPILER MET
-FIRST** — the same demand the witness union answers one mechanism over, and a sharper one here, because the
-old fixpoint was *structurally* order-bound: it ran at the moment `parseTypeDeclaration` opened a body, from
-that body's own tokens, so a method declared anywhere else could not be in it whatever the order. The need
-is now solved once, after `ProgramSignatures.allFilesFolded`, over every generic type body AND every
+FIRST** — the same demand the witness union answers one mechanism over, and a sharper one here, because a
+fixpoint run at the moment `parseTypeDeclaration` opens a body, from that body's own tokens, is
+*structurally* order-bound: a method declared anywhere else could not be in it whatever the order. The need
+is solved once, after `ProgramSignatures.allFilesFolded`, over every generic type body AND every
 extension body in the program — so this case, whose extension precedes its type and sits in a file the
 sweep reaches first, reserves exactly what the same program written the other way round reserves.
 
@@ -2774,16 +2753,14 @@ end 'main'
 
 ### A CONDITIONAL extension WITHHELD from a conformer contributes NOTHING to the descriptor fixpoint
 
-⛔⛔ **THE WHOLE-PROGRAM FIXPOINT SCANNED EXTENSION BODIES THE CONFORMER NEVER RECEIVES, AND ONE OF THEIR
-GHOST METHOD NAMES ERASED A REAL METHOD'S ABI SLOT (found at review).** `foldExtensionDeclarationInto`
-recorded a `DescriptorScanSite` for every generic conformer *before* `extensionConformerVerdict` was taken,
-so a `where Item is Comparable` extension withheld from `Bag` was still walked in `Bag`'s scope and still
-filed a `Bag.slotSize` seed — for a method `Bag` does not have. The fixpoint's columns are keyed by that
-name alone, so the ghost's `false` replaced the real `Bag.slotSize`'s `true`, the method reserved no layout
-descriptor, and its own `sizeof(T)` had nothing to read: **MEASURED on this rung's tip, `panic at
-LowerMaxonToStd.maxon:1634: lowerSizeofType: sizeof(T) in 'Bag.slotSize' but the function carries no layout
-descriptor parameter`**, with no position and no `error E….`, on a program the MERGE BASE and the oracle
-both compile and run (printing `1`).
+⛔⛔ **THE WHOLE-PROGRAM FIXPOINT SCANS ONLY THE EXTENSION BODIES A CONFORMER RECEIVES, OR A GHOST METHOD
+NAME ERASES A REAL METHOD'S ABI SLOT.** Were `foldExtensionDeclarationInto` to record a `DescriptorScanSite`
+for a generic conformer *before* `extensionConformerVerdict` is taken, a `where Item is Comparable` extension
+withheld from `Bag` would be walked in `Bag`'s scope and file a `Bag.slotSize` seed — for a method `Bag`
+does not have. The fixpoint's columns are keyed by that name alone, so the ghost's `false` would replace the
+real `Bag.slotSize`'s `true`, the method would reserve no layout descriptor, and its own `sizeof(T)` would
+have nothing to read: a `lowerSizeofType: sizeof(T) in 'Bag.slotSize' but the function carries no layout
+descriptor parameter` panic, with no position and no `error E….`, on a legal program that prints `1`.
 
 ⚠ **IT CANNOT BE CAUGHT AS A DUPLICATE DECLARATION.** A withheld method publishes no signature at all —
 `foldWithheldExtensionMethod` files a `ConditionalExtensionSkip` instead — so E3006 never sees two `Bag.slotSize`
@@ -2846,19 +2823,18 @@ end 'main'
 
 ### TWO METHOD DECLARATIONS WEARING ONE NAME MERGE THEIR SEEDS — the last one in is not the answer
 
-⛔ **THE FIXPOINT'S COLUMNS ARE KEYED BY `Type.method` AND `upsert` MADE THE LAST WRITER THE WHOLE ANSWER**
-(found at review; PRE-EXISTING — the merge base panics identically, with the key merely spelled bare).
+⛔ **THE FIXPOINT'S COLUMNS ARE KEYED BY `Type.method`, SO A LAST-WRITER-WINS `upsert` WOULD MAKE ONE
+DECLARATION THE WHOLE ANSWER.**
 `Bag` declares `slotSize()` twice; The compiler keeps the FIRST signature and resolves `b.slotSize()` to it, so the
-body that runs is the one reading `sizeof(T)` — while the seed recorded for `Bag.slotSize` was the SECOND
-declaration's `false`. **MEASURED: `panic at LowerMaxonToStd.maxon:1634: lowerSizeofType: sizeof(T) in
-'Bag.slotSize' but the function carries no layout descriptor parameter`**, on a program the oracle compiles
-and runs (printing `8`).
+body that runs is the one reading `sizeof(T)` — while the seed the SECOND declaration records for `Bag.slotSize`
+is `false`. Taken alone, it aborts the compiler (`lowerSizeofType: sizeof(T) in 'Bag.slotSize' but the
+function carries no layout descriptor parameter`), on a program the oracle compiles and runs (printing `8`).
 
 ⭐ **THE MERGE IS A UNION, AND THE DIRECTION IS FORCED BY THE ASYMMETRY OF BEING WRONG.** Reserving a
 descriptor no body reads costs one ignored parameter and the supply side still agrees, because it reads the
 reservation itself (`LowerMaxonToStd.buildLayoutNeedingFuncs` counts emitted params). NOT reserving one a
 body does read has no error path — it aborts the compiler. So `solveDescriptorNeeds`' claim that same-named
-methods "share one answer" is now MADE true where the columns are filled, rather than assumed.
+methods "share one answer" is MADE true where the columns are filled, rather than assumed.
 
 <!-- test: two-method-declarations-of-one-name-merge-their-descriptor-seeds -->
 ```maxon
@@ -2906,18 +2882,14 @@ container it was read out of.
 The caller is the only frame that can see the borrow, so that is where the reference is taken
 (`handleEscapingBorrowFeed`), through the enclosing instance's layout descriptor.
 
-⭐⭐ **THIS CASE WAS A REFUSAL, AND WHAT IT WAS REALLY PINNING WAS A MISSING RESERVATION (W58).** `relay`
-reserved no descriptor, so the reference it owed had nothing to be taken through and the body was refused
-with a position. Its own paragraph said what was missing — *"a descriptor seed for 'forwards a borrowed
-opaque value to a storing sibling'"* — and named the reason no seed could exist: the forwarded value is an
-EXPRESSION, so no feed scan records it. The seed that closes it does not look at the forward at all. It
-looks at the CALL the expression is: `items.get(i)` names a method some declaration in the program returns
+⭐⭐ **`relay` NEEDS A DESCRIPTOR RESERVATION TO TAKE THE REFERENCE THROUGH.** No feed scan can seed one
+for *"forwards a borrowed opaque value to a storing sibling"*: the forwarded value is an EXPRESSION, so no
+feed scan records it. The seed does not look at the forward at all. It looks at the CALL the expression is: `items.get(i)` names a method some declaration in the program returns
 a bare type parameter from, and a body that calls one ADOPTS the `+1` it hands back
 (`ProgramSignatures.methodNameEverReturnsBareTypeParameter`). `relay` therefore carries a descriptor for
 its own adopted result, and the reference it owes the forward is taken through the same one.
 
-⚠ **MEASURED**, because a refusal traded for a leak would be strictly
-worse than the refusal: 100 relays of one element print `spare 100` and exit **0**.
+⚠ **A LEAK WOULD BE WORSE THAN A REFUSAL**, so the case reads the balance: 100 relays of one element print `spare 100` and exit **0**.
 The loop is what makes that reading worth having — a per-call leak would be a hundred
 records rather than one, and a doubled release faults on the poison byte.
 
@@ -2972,4 +2944,58 @@ end 'main'
 ```
 ```stdout
 spare 100
+```
+
+<!-- test: extension-body-forwarder-feeds-opaque-element -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	function count() returns Count
+		return items.count()
+	end 'count'
+end 'Container'
+
+extension Container
+	function stash(item Element)
+		items.push(item)
+	end 'stash'
+
+	function add(item Element)
+		stash(item)
+	end 'add'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var seed = 0
+
+	while seed < 3 'grow'
+		seed = seed + 1
+	end 'grow'
+
+	var sc = StringContainer.create()
+	let owned = "heap-built element number {seed} long enough to escape any small-string envelope"
+	sc.add(owned)
+	let second = "heap-built element number {seed + 1} long enough to escape any small-string envelope"
+	sc.add(second)
+
+	if sc.count() == 2 'check'
+		return 0
+	end 'check'
+
+	return 1
+end 'main'
+```
+```exitcode
+0
 ```

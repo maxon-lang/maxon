@@ -5,13 +5,13 @@ keywords: [spawnReadLine, async, await, green-threads, scheduler, iocp, overlapp
 category: concurrency
 ---
 
-# spawnReadLine — the overlapped-read substrate (P1.5 dogfood slice 1a)
+# spawnReadLine — the overlapped-read substrate
 
 ## Documentation
 
-`spawnReadLine(cmd)` spawns the Windows child named by the command String with its **stdout redirected to a
-fresh overlapped pipe**, issues a **yielding** overlapped `ReadFile` of that pipe, and returns the number of
-bytes read once the read completes. It is the risky core of async-subprocess-stdio: the read PARKS the green
+`spawnReadLine(cmd)` spawns the child named by the command String with its **stdout redirected to a
+fresh pipe**, issues a **yielding** read of that pipe (an overlapped `ReadFile` on x64-windows), and returns
+the number of bytes read once the read completes. It is the risky core of async-subprocess-stdio: the read PARKS the green
 thread and is resumed — by the scheduler's own **poller**, which is what the completion is delivered to —
 when the read finishes, so the M is free to run other green threads while the read is in flight.
 
@@ -22,13 +22,14 @@ function main() returns ExitCode
 end 'main'
 ```
 
-`spawnReadLine` is a **temporary probe surface** for the substrate — the full async-subprocess-stdio API and
-its stdlib arrive in a later slice. It requires exactly one `String` argument (the command line; a non-String
+`spawnReadLine` is a **temporary probe surface** for the substrate, not the full async-subprocess-stdio API
+and its stdlib. It requires exactly one `String` argument (the command line; a non-String
 is refused) and returns an `int` (the byte count), so its result is usable in value position. It is
-**x64-windows only** (the whole overlapped-read substrate is x64-windows-gated at this rung).
+served on every lane that provides the `subprocess` facility (`TargetFacilities.targetProvidesFacility`):
+x64-windows, x64-linux, arm64-macos and arm64-linux.
 
-Mechanically: an overlapped named pipe joins the scheduler's ONE poller, which on this lane is a completion
-port. The read gets a poll source of its own — the source is the OPERATION rather than the handle, because a
+Mechanically, on x64-windows: an overlapped named pipe joins the scheduler's ONE poller, which there is a
+completion port. The read gets a poll source of its own — the source is the OPERATION rather than the handle, because a
 completion key is fixed per handle and two reads may be in flight on one pipe — and the green thread parks on
 it exactly as a socket reader parks on a descriptor. Whichever machine drains the poller recovers the reading
 thread from the packet's `lpOverlapped`, stores the transfer and the status onto it, and readies it through
@@ -40,21 +41,17 @@ lost-wakeup race.
 statement of it.** Reading a line from a spawned child parks the calling green thread,
 and the interleaving cases additionally reach `__gt_sleep` — neither of which wasm32-wasi lowers.
 
-### ⭐ arm64-macOS RUNS THE PROBE, BUT NOT THE PART OF IT THAT PARKS
+### ⭐ The POSIX lanes
 
-`TargetFacilities` answers `subprocess gives true` for arm64-macOS, so `spawnReadLine` compiles and
-runs there; the command line reaches the child through `/bin/sh -c`. The two cases this lane can
-express carry `posix-…` siblings marked `arm64-macos`, following `process-background-priority.md`'s
-pattern — the programs could not be widened, because they spawn `cmd`.
+On x64-linux, arm64-macos and arm64-linux the command line reaches the child through `/bin/sh -c`, and a
+read completes in its caller (`GtRuntime.IoCompletionShape`): the pipe's read end is non-blocking, a read
+that cannot be served answers `EAGAIN`, and the green thread parks on the descriptor's poll record and
+re-issues the read when it is readable. The Windows cases spawn `cmd`, so each POSIX-expressible one has a
+`posix-…` sibling, following `process-background-priority.md`'s pattern.
 
 ⛔ **`interleave-with-sleep` AND `drop-in-flight` HAVE NO SIBLING, AND BOTH ARE ABOUT A READ THAT IS
-IN FLIGHT.** This lane builds no completion port, no wake event and no drain thread at all
-(`GtRuntime.IoCompletionShape`), and the read completes in its caller — so there is no overlapped
-operation to run a sleeper against and none to cancel. MEASURED with `interleave-with-sleep`'s own
-shape, recording completion ORDER rather than a sum: this lane answers **12** (the reader finishes
-first) where Windows answers **21**. What the siblings below pin is that the probe reads a child's
-bytes and answers the count, from `main` and from an `async` coroutine; the yielding half waits on a
-kqueue this lane does not have.
+IN FLIGHT.** On a POSIX lane no read is outstanding across a park, so there is no overlapped operation to
+cancel. That the read yields to a sleeper there is pinned by `posix-a-parked-line-read-yields-to-a-sleeper`.
 
 ## Tests
 
@@ -120,9 +117,11 @@ typealias Integer = int(i64.min to i64.max)
 The read runs inside an `async` coroutine rather than in `main`, so its result travels back through the
 promise rather than through a plain return. `main` awaits it and returns the byte count.
 
-⚠ On this lane the resume is NOT cross-thread — the read completes in the reading GT itself — so what this
-case adds over `posix-top-level` is the coroutine path, not the cross-thread ready its Windows sibling
-exercises. It is worth its own case for the reason `async-subprocess.posix-multi-concurrent` is: a probe
+⚠ When the read parks, the resume reaches the coroutine as it does on Windows — whichever machine drains
+the poller readies it through `__gt_subp_yield_read`'s descriptor wait — but the bytes are read by the
+reading green thread itself when it re-issues the read (`GtRuntime.IoCompletionShape`). What this case adds
+over `posix-top-level` is the coroutine path: a reader that is not its strand's owner, whose result travels
+back through the promise. It is worth its own case for the reason `async-subprocess.posix-multi-concurrent` is: a probe
 that only ever ran in `main` would not notice a reader that answered correctly there and clobbered a
 coroutine's frame.
 ```maxon
@@ -157,7 +156,7 @@ CALL.** A retake witness would say where the thread went rather than only that s
 there is nowhere to open a bracket around the read alone here, and a bracket around the whole program
 counts the SPAWN: `osProcessSpawn` is `SyscallClass.blocking`, and `__sched_retake` spares a bracketed call
 only while `(nmspinning + npidle) > 0`. At ONE processor the machine inside `clone`+`execve` holds the only
-P, so that term is zero and the retake always fires — MEASURED as exactly one retake per spawn, and that
+P, so that term is zero and the retake always fires — exactly one retake per spawn, and that
 retake is CORRECT: it is what lets the sleeper run at all while a child is being spawned.
 `streaming-subprocess.posix-a-parked-line-read-needs-no-rescue` is the case that pins the retake property,
 because its two-call surface (`subpSpawn` then `subpReadLine`) CAN bracket the read by itself.

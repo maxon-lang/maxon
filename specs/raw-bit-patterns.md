@@ -18,9 +18,9 @@ differ in exactly one thing — **what a door does with a value that arrived fro
 - A pattern's door **admits** it, because at 64 bits there is nothing to test. An address, a hash, a
   mask and a wrapped relocation displacement all legitimately set bit 63.
 
-⭐ **THAT IS THE WHOLE REASON `bits(n)` EXISTS.** Before it, one spelling meant both things and the
-unguarded reading won, so a quantity typed `int(0 to u64.max)` silently absorbed an underflow. The
-spellings are now separate and each says which it is.
+⭐ **THAT IS THE WHOLE REASON `bits(n)` EXISTS.** Without it, one spelling would mean both things and the
+unguarded reading would win, so a quantity typed `int(0 to u64.max)` would silently absorb an underflow. The
+two spellings are separate and each says which it is.
 
 ### The legal widths are 1, 2, 4, 8, 16, 32 and 64 — and they are not an arbitrary list
 
@@ -466,8 +466,8 @@ ordinary program and does not call it.
 
 ⚠ **WHAT THIS CASE CAN AND CANNOT SAY.** Nothing reaches `probeLoadedCount`, so dead-function elimination
 drops it and no instruction of it survives into the binary. The case therefore measures that the program
-PARSES and LOWERS — that the cast is accepted at all — and it passes both before the guard is removed and
-after. It is not the evidence for the guard's absence. **The committed golden fragment is**: the emitted
+PARSES and LOWERS — that the cast is accepted at all — and it passes whether or not the guard is
+emitted. It is not the evidence for the guard's absence. **The committed golden fragment is**: the emitted
 sequence for this probe is where a sign-bit test and an `__rc_panic` are either present or gone, and a
 diff of that fragment is what reports the change.
 ```maxon
@@ -864,7 +864,6 @@ end 'main'
 panic at a-signed-counter-through-a-function-value-to-an-unsigned-quantity-parameter-panics.test:4: Range check failed: value outside typealias 'Count'
 Stack trace:
   in show
-  in __fnref_show
   in main
   in mrt_start
 ```

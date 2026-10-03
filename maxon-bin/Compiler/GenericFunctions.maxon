@@ -75,7 +75,7 @@ export type GenericFunctionTemplate
 	end 'create'
 
 	export function siteKey() returns ByteArray
-		return "{self.declFilePath.toString()}:{self.line}:{self.column}".toByteArray()
+		return declarationSiteKey(self.declFilePath, line: self.line, column: self.column)
 	end 'siteKey'
 
 	// A private template's key is shared by every file declaring that name, and two files can hold it
@@ -101,6 +101,10 @@ export typealias GenericFunctionTemplateArray = Array with GenericFunctionTempla
 export typealias GenericFunctionTemplateMap = Map with (ByteArray, GenericFunctionTemplateArray)
 
 let GenericInstanceSuffixHead = "__with"
+
+export function declarationSiteKey(declFilePath FilePath, line LineNumber, column ColumnNumber) returns ByteArray
+	return "{declFilePath.toString()}:{line}:{column}".toByteArray()
+end 'declarationSiteKey'
 
 export function genericInstanceNameMarker() returns ByteArray
 	return overloadRegistrationName(b"", suffix: GenericInstanceSuffixHead.toByteArray())

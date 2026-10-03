@@ -16,9 +16,37 @@
 // only the `.ir` sidecar write. There is deliberately no second
 // `loadProject → compileToCodeResult → writeExecutable` sequence anywhere.
 
+export union TargetIrText
+	notRendered
+	rendered(text String)
+end 'TargetIrText'
+
+export enum AbsentError implements Error
+	absent
+end 'AbsentError'
+
+export union StatedText
+	unstated
+	stated(text String)
+
+	export function isStated() returns bool
+		return match self 'stated'
+			unstated gives false
+			stated gives true
+		end 'stated'
+	end 'isStated'
+
+	export function text() returns String throws AbsentError
+		match self 'stated'
+			unstated then throw AbsentError.absent
+			stated(text) then return text
+		end 'stated'
+	end 'text'
+end 'StatedText'
+
 // Compile the files and/or directories `inputPaths` for `target`, returning the path of
-// the produced executable. `outputOverride` (the `--output=` value, empty
-// when unset) wins over the derived output name. `emitIr` (the `--emit-ir` flag)
+// the produced executable. `outputOverride` (the `--output=` value) wins over the
+// derived output name. `emitIr` (the `--emit-ir` flag)
 // additionally writes the lowered Target IR beside the exe as `<output>.ir`, and
 // `runtimeIrNames` (the `--emit-ir-runtime=` list) names the WITHHELD functions —
 // the compiler's emitted runtime, or a `stdlib/` body — that IR must also render,
@@ -30,17 +58,14 @@
 // — happens once, inside the core, so both callers read bytes from ONE renderer; only the WRITE is
 // the command line's, and it is the whole of this side of the seam.
 //
-// ⚠ **THE SIGNATURE IS UNCHANGED BY THAT SPLIT, AND THAT IS WHY THE SPLIT IS HERE**:
-// `Main.compileAndReport` calls this exactly as it always did, so nothing about the command line
-// moved when the compiler grew a second caller.
-//
 // A file/IO error (`fileNotFound` / `noSourceFiles` / `readError`) propagates from here UNCHANGED —
 // `compileToProduct`'s drain owns that reason.
-export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create(), session CompileSession = CompileSession.printing()) returns FilePath throws CompileError
-	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, productVersion: productVersion, defines: defines, session: session)
+export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride StatedText = StatedText.unstated, emitIr bool = false, metrics StatedText = StatedText.unstated, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create(), session CompileSession = CompileSession.printing()) returns FilePath throws CompileError
+	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metrics: metrics, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, productVersion: productVersion, defines: defines, session: session)
 
-	if emitIr 'emitIr'
-		writeTargetIr(product.irText, outputPath: product.outputPath)
+	match product.irText 'emitIr'
+		notRendered then break 'emitIr'
+		rendered(text) then writeTargetIr(text, outputPath: product.outputPath)
 	end 'emitIr'
 
 	return product.outputPath
@@ -56,11 +81,8 @@ end 'compile'
 export type CompileProduct
 	export let outputPath as FilePath
 
-	// The rendered Target IR, or EMPTY when this build did not ask for one. Empty is not a sentinel
-	// standing in for a value that could not be produced: `emitIr` is the CALLER's own argument, so
-	// "no IR" is a thing the caller asked for and already knows. A union arm would cost a heap box on
-	// every compile to tell it something it decided one line earlier.
-	export let irText as String
+	// The rendered Target IR, `notRendered` when this build did not ask for one.
+	export let irText as TargetIrText
 
 	// What `--metrics` reports as this build's emitted code size, and what the `Wrote N bytes` line
 	// names — read off the same `CodeResult`, so a caller cannot get a second answer.
@@ -73,7 +95,7 @@ export type CompileProduct
 	export let totalNanos as DurationNanos
 	export let totalCpuTicks as CpuTicks
 
-	export static function create(outputPath FilePath, irText String, codeBytes CodeByteCount, totalNanos DurationNanos, totalCpuTicks CpuTicks) returns CompileProduct
+	export static function create(outputPath FilePath, irText TargetIrText, codeBytes CodeByteCount, totalNanos DurationNanos, totalCpuTicks CpuTicks) returns CompileProduct
 		return Self{outputPath: outputPath, irText: irText, codeBytes: codeBytes, totalNanos: totalNanos, totalCpuTicks: totalCpuTicks}
 	end 'create'
 end 'CompileProduct'
@@ -90,11 +112,11 @@ end 'CompileProduct'
 // build (load, clear the output, write the executable, render the IR) are here, once.
 //
 // `stdlibDirOverride` names the `stdlib/` this compile reads instead of the one above the compiler's
-// own executable; empty ⇒ the walk-up, byte-for-byte unchanged (see `loadProject`). `runtimeDirOverride`
-// is its sibling for the RUNTIME tier; empty ⇒ the directory beside the `stdlib/` this compile resolved
-// (see `runtimeDirFor`).
+// own executable; `unstated` ⇒ the walk-up (see `stdlibDirFor`). `runtimeDirOverride` is its sibling
+// for the RUNTIME tier; `unstated` ⇒ the directory beside the `stdlib/` this compile resolved (see
+// `runtimeDirFor`).
 //
-// The last three arguments are `maxon test`'s, and their defaults are every other build's answer.
+// The next three arguments are `maxon test`'s, and their defaults are every other build's answer.
 // `entryFunction` is where this build begins (`Project.entryFunctionName`),
 // `compilerWrittenSources` names the inputs this compiler wrote, each with the reserved names it
 // minted there (`Project.compilerWrittenSources`), and `sourceSelection` says whether a directory
@@ -112,7 +134,7 @@ end 'CompileProduct'
 // diagnostics (semantic/lexer) are printed inside `compileToCodeResult` — through
 // `session`'s `DiagnosticSink`, so a caller may CAPTURE them instead — and
 // re-signaled as a FRESH `compileError`.
-export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create(), session CompileSession = CompileSession.printing()) returns CompileProduct throws CompileError
+export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride StatedText = StatedText.unstated, emitIr bool = false, metrics StatedText = StatedText.unstated, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create(), session CompileSession = CompileSession.printing()) returns CompileProduct throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
 	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
@@ -136,7 +158,7 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
 	// (`fileNotFound`/`noSourceFiles`/`readError`) from a reported `compileError` and prints a different
 	// message for each, so a fresh `compileError` here would replace three specific messages with one wrong
 	// one.
-	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, unit: unit, spans: spans, session: session) otherwise (e) 'compileFailed'
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metrics: metrics, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, unit: unit, spans: spans, session: session) otherwise (e) 'compileFailed'
 		closeOpenPhaseSpans(spans, unit: unit)
 		throw e
 	end 'compileFailed'
@@ -145,7 +167,7 @@ end 'compileToProduct'
 // The build itself, from the whole-compile probe to the timing report — everything `compileToProduct`
 // measures. It is a separate function for the single reason its caller states: one failure path to hang
 // the trace-span drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, censusByTag bool, censusPhase TagCensusPhases, allocationsByTag bool, allocationsPhase TagCensusPhases, stdlibDirOverride String, runtimeDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion VersionComponentArray, defines DefineArray, unit TraceUnit, spans TraceNameArray, session CompileSession) returns CompileProduct throws CompileError
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride StatedText, emitIr bool, metrics StatedText, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, censusByTag bool, censusPhase TagCensusPhases, allocationsByTag bool, allocationsPhase TagCensusPhases, stdlibDirOverride StatedText, runtimeDirOverride StatedText, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion VersionComponentArray, defines DefineArray, unit TraceUnit, spans TraceNameArray, session CompileSession) returns CompileProduct throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit, spans: spans)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
@@ -232,7 +254,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// does inside itself, past the point where it read the `.data` image it serializes. So the first pass
 	// settles the code, the stamp writes the real id into the counter image, and the second publishes it.
 	//
-	// ⚠ MEASURED without it: a `.mxcov` carrying a fold of the UNPATCHED code, which every report refuses as
+	// ⚠ Without it the `.mxcov` carries a fold of the UNPATCHED code, which every report refuses as
 	// belonging to a different build. Repeating the write is safe because every patch is an absolute
 	// overwrite at a fixed offset and the stamp does not resize a section, so the second pass reproduces the
 	// first byte for byte apart from those eight.
@@ -280,11 +302,11 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// hand-assembled runtime piece has no `IrFunction` to print, so `printTargetModule` renders its
 	// assembled bytes instead, and this is the only place holding both the module and the chunks it was
 	// encoded into. See `printTargetModule`.
-	var irText = ""
+	var irText = TargetIrText.notRendered
 
 	if emitIr 'emitIr'
 		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
-		irText = renderTargetIr(project, codeResult: codeResult)
+		irText = TargetIrText.rendered(renderTargetIr(project, codeResult: codeResult))
 		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
 	end 'emitIr'
 
@@ -308,8 +330,9 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	// `--metrics=<path>`: the machine-readable twin of those two tables. Written last, so
 	// it can report the code size the degeneracy self-check needs (see MetricsEmit).
-	if not metricsPath.isEmpty() 'metrics'
-		writeMetrics(project, metricsPath: metricsPath, codeBytes: codeBytes)
+	match metrics 'metrics'
+		unstated then break 'metrics'
+		stated(path) then writeMetrics(project, metricsPath: path, codeBytes: codeBytes)
 	end 'metrics'
 
 	compilerLogger(CompilerLogGroup.compiler).info("Wrote {codeBytes} bytes of code to {outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
@@ -538,7 +561,7 @@ end 'discardPreviousOutput'
 // ⚠ EVERY E6002 SAYS THE STALE BINARY SURVIVED. A build refused here leaves the previous binary at
 // `outputPath`, so a `;`-chained `build; suite` runs it and reports a false red or a false green.
 function refuseUnreplaceableOutput(project Project, outputPath FilePath, reason String, likelyCause String) throws CompileError
-	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotReplaceable, message: "could not replace the build output at {outputPath} — {reason}, so the PREVIOUS build's binary is still in place and will answer anything you run next. {likelyCause}"))
+	reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.binaryOutputNotReplaceable, message: "could not replace the build output at {outputPath} — {reason}, so the PREVIOUS build's binary is still in place and will answer anything you run next. {likelyCause}"))
 	try refuseCompile(project)
 end 'refuseUnreplaceableOutput'
 
@@ -563,7 +586,7 @@ function ensureOutputDirectory(project Project, outputPath FilePath) throws Comp
 		return
 	end 'created'
 
-	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputDirectoryNotCreated, message: "could not create the directory for the output at {outputPath} — nothing was compiled. Check that {parent} is writable and that no file of that name is in the way."))
+	reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.binaryOutputDirectoryNotCreated, message: "could not create the directory for the output at {outputPath} — nothing was compiled. Check that {parent} is writable and that no file of that name is in the way."))
 	try refuseCompile(project)
 end 'ensureOutputDirectory'
 
@@ -585,7 +608,7 @@ function writeExecutableOrRefuse(project Project, codeResult CodeResult, outputP
 end 'writeExecutableOrRefuse'
 
 function wasmComponentDiagnostic(error WasmComponentError) returns Diagnostic
-	return Diagnostic.create(ErrorCode.binaryWasmComponentNotProduced, message: wasmComponentProblem(error))
+	return Diagnostic.programWide(ErrorCode.binaryWasmComponentNotProduced, message: wasmComponentProblem(error))
 end 'wasmComponentDiagnostic'
 
 function requireOutputWritten(project Project, outputPath FilePath) throws CompileError
@@ -593,7 +616,7 @@ function requireOutputWritten(project Project, outputPath FilePath) throws Compi
 		return
 	end 'written'
 
-	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotWritten, message: "the backend produced no file at {outputPath} — the write failed (the writer logged the reason above)"))
+	reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.binaryOutputNotWritten, message: "the backend produced no file at {outputPath} — the write failed (the writer logged the reason above)"))
 	try refuseCompile(project)
 end 'requireOutputWritten'
 
@@ -647,8 +670,8 @@ end 'renderTargetIr'
 // read back a file this one just wrote. What the IR CONTAINS is stated at the render, in
 // `compileMeasured`.
 //
-// This is a diagnostic side output that runs ONLY on the opt-in flag, so a plain `build` emits
-// exactly what it did before. A write failure is logged and swallowed — mirroring `writePe`, which
+// This is a diagnostic side output that runs ONLY on the opt-in flag, so a plain `build` writes no
+// sidecar. A write failure is logged and swallowed — mirroring `writePe`, which
 // treats the executable write the same way — because the IR sidecar is diagnostic, never a build
 // gate.
 function writeTargetIr(irText String, outputPath FilePath)
@@ -667,7 +690,7 @@ end 'writeTargetIr'
 //
 // File and IO errors (`fileNotFound`, `noSourceFiles`, `readError`, raised by `loadSourceFiles`)
 // carry no diagnostics and propagate straight to the caller, which prints a specific message.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false, session CompileSession = CompileSession.printing()) returns Project throws CompileError
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false, session CompileSession = CompileSession.printing()) returns Project throws CompileError
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
 	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), debugStream: debugStream, session: session)
 
@@ -698,9 +721,9 @@ end 'loadProject'
 
 // ⭐ **WHICH `stdlib/` THIS COMPILE READS — the walk-up, or a directory the CALLER names.**
 //
-// Empty is the command line's answer and every build's answer until now: walk up from the compiler's
-// own executable (`locateStdlibDir`, whose header owns why it is the executable and not the working
-// directory). A non-empty override is a caller that STAGED a stdlib of its own and knows exactly
+// `unstated` is the command line's answer: walk up from the compiler's own executable
+// (`locateStdlibDir`, whose header owns why it is the executable and not the working directory). A
+// stated override is a caller that STAGED a stdlib of its own and knows exactly
 // where it put it — which is what lets a `// --- stdlib-overlay:` case be compiled by this process,
 // instead of by a COPY OF THE COMPILER BINARY planted beside the overlay so that the walk-up would
 // land on it.
@@ -718,17 +741,15 @@ end 'loadProject'
 // directory the caller just created, so a bad one is a caller bug — and a silent fall-back would
 // compile the overlay case against the CHECKOUT's stdlib and report a confident wrong verdict, which
 // is the exact failure the override exists to remove.
-function stdlibDirFor(stdlibDirOverride String) returns FilePath throws CompileError
-	if stdlibDirOverride.isEmpty() 'walkUpFromTheCompiler'
-		return try locateStdlibDir()
-	end 'walkUpFromTheCompiler'
-
-	let staged = try FilePath.from(stdlibDirOverride) otherwise panic("stdlibDirFor: invalid stdlib directory '{stdlibDirOverride}' — the override names a directory the CALLER staged, so a path no FilePath can hold is a caller bug and not a user error")
-	return staged.resolve(Directory.currentPath())
+function stdlibDirFor(stdlibDirOverride StatedText) returns FilePath throws CompileError
+	match stdlibDirOverride 'override'
+		unstated then return try locateStdlibDir()
+		stated(path) then return stagedOverrideDirectory(path, asker: "stdlibDirFor", tier: "stdlib")
+	end 'override'
 end 'stdlibDirFor'
 
 // ⭐ **WHICH `runtime/` THIS COMPILE READS — the twin of `stdlibDirFor`, with one difference that is the
-// whole design.** An empty override does NOT walk: the runtime root is DERIVED from the `stdlib/` this
+// whole design.** An unstated override does NOT walk: the runtime root is DERIVED from the `stdlib/` this
 // same compile resolved (`StdlibSource.runtimeDirBeside`), so the two tiers a compile reads always come
 // out of one tree. A walk of its own could pair a released `stdlib/` with a checkout's `runtime/`, and a
 // compile built from two halves of two installs is wrong in a way nothing downstream could detect —
@@ -740,14 +761,17 @@ end 'stdlibDirFor'
 // unspellable override PANICS rather than falling back to the derivation: the path comes from a directory
 // the caller just created, so a bad one is a caller bug, and a silent fall-back would compile the case
 // against the CHECKOUT's runtime and report a confident wrong verdict.
-function runtimeDirFor(runtimeDirOverride String, stdlibDir FilePath) returns FilePath throws CompileError
-	if runtimeDirOverride.isEmpty() 'besideTheStdlibThisCompileRead'
-		return try runtimeDirBeside(stdlibDir)
-	end 'besideTheStdlibThisCompileRead'
-
-	let staged = try FilePath.from(runtimeDirOverride) otherwise panic("runtimeDirFor: invalid runtime directory '{runtimeDirOverride}' — the override names a directory the CALLER staged, so a path no FilePath can hold is a caller bug and not a user error")
-	return staged.resolve(Directory.currentPath())
+function runtimeDirFor(runtimeDirOverride StatedText, stdlibDir FilePath) returns FilePath throws CompileError
+	match runtimeDirOverride 'override'
+		unstated then return try runtimeDirBeside(stdlibDir)
+		stated(path) then return stagedOverrideDirectory(path, asker: "runtimeDirFor", tier: "runtime")
+	end 'override'
 end 'runtimeDirFor'
+
+function stagedOverrideDirectory(path String, asker String, tier String) returns FilePath
+	let staged = try FilePath.from(path) otherwise panic("{asker}: invalid {tier} directory '{path}' — the override names a directory the CALLER staged, so a path no FilePath can hold is a caller bug and not a user error")
+	return staged.resolve(Directory.currentPath())
+end 'stagedOverrideDirectory'
 
 // Refuse this compile's `--define`s that could not bind, once per compile — whether the index was settled for it
 // or served from the memo.
@@ -759,7 +783,7 @@ end 'runtimeDirFor'
 // declarations it reached are, which is the part a reader cannot look up.
 function reportDefineProblems(project Project)
 	for problem in programSignaturesIn(project, asker: "reportDefineProblems").defineProblems 'eachProblem'
-		reportDiagnostic(project, diagnostic: Diagnostic.create(problem.code, message: problem.message))
+		reportDiagnostic(project, diagnostic: Diagnostic.programWide(problem.code, message: problem.message))
 	end 'eachProblem'
 end 'reportDefineProblems'
 
@@ -781,10 +805,9 @@ function requireNoUnresolvedTagsSurvivedTheMaxonTier(module MaxonModule)
 end 'requireNoUnresolvedTagsSurvivedTheMaxonTier'
 
 function lowerTheProgram(project Project, passes PassKindArray) returns LoweredProgram throws CompileError
-	// ⭐ **THE DIAGNOSTICS OF *THIS* COMPILE, NOT OF EVERY COMPILE THIS PROJECT HAS EVER RUN.** Nothing
-	// cleared this sink, which no `maxon build` could notice (a build gets a fresh `Project` and runs one
-	// compile) and which an editor notices immediately: re-check a file whose error you have just FIXED and
-	// the error is still standing, because it is still in the array. Safe to clear because everything that
+	// ⭐ **THE DIAGNOSTICS OF *THIS* COMPILE, NOT OF EVERY COMPILE THIS PROJECT HAS EVER RUN.** A warm
+	// project compiles again on every editor re-check, and an uncleared sink would keep reporting an error
+	// the author has already fixed. Safe to clear because everything that
 	// should be reported is RE-DERIVED — a parse that reported a diagnostic is never cached
 	// (`queryParseOps`, "only cache a clean parse"), and every later check re-runs over the re-folded
 	// module below.
@@ -794,21 +817,20 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// whose results outlive a compile, writes it.
 	project.globalData = GlobalDataTable.create()
 
-	// ⚠ `var`, not `let`: `installManagedGlobalInit` below APPENDS to this module (P1.7 slice 2a), and
+	// ⚠ `var`, not `let`: `installManagedGlobalInit` below APPENDS to this module, and
 	// `resolveTypes` rewrites its signatures in place.
-	var module = try queryAllModule(project)
+	var module = try queryAllModule(project, directories: NamespaceDirectoryCheck.refuseUnnameable)
 
 	// ⭐⭐ **AND BECAUSE THIS COMPILE IS ABOUT TO MUTATE THAT MODULE, THE MEMO MAY NOT SERVE IT AGAIN.**
 	// The bytes have not moved, so the content hash still matches and the memo would answer VALID with a
-	// module the pipeline had edited — measured as 5 invented E3016s on a 3-line program and a panic on a
-	// 71-file one. Dropped HERE, immediately after the read and before the first mutation, so a compile
-	// that throws part way through leaves no more behind than one that completes. The full argument, the
-	// measurements, and why this rather than a clone, are in `invalidateAllModuleCache`.
+	// module the pipeline had edited. Dropped HERE, immediately after the read and before the first
+	// mutation, so a compile that throws part way through leaves no more behind than one that completes.
+	// The full argument, and why this rather than a clone, are in `invalidateAllModuleCache`.
 	try requireStillWanted(project)
 	invalidateAllModuleCache(project)
 	reportDefineProblems(project)
 
-	// ⭐ **FUNCTION-VALUE MERGE SIGNATURE AGREEMENT (P1.5 #81) — HERE, before the pipeline.** Every
+	// ⭐ **FUNCTION-VALUE MERGE SIGNATURE AGREEMENT — HERE, before the pipeline.** Every
 	// function-value ternary/match recorded its arms' names at parse; now that `queryAllModule` has merged
 	// every file's `funcSignatures`, the arms are compared whole-program — catching a forward-referenced or
 	// cross-file mismatch a same-file check could not. It runs BEFORE the pipeline's `resolveTypes` so the
@@ -824,7 +846,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	checkValueMergeSignatures(project)
 	recordPhase(project, phase: CompilePhase.checkDeclarations, probe: mergeCheckProbe)
 
-	// ⭐ **`implements`-CONFORMANCE CHECKING (P1.7a slice 1) — HERE, before the pipeline.** It reads the
+	// ⭐ **`implements`-CONFORMANCE CHECKING — HERE, before the pipeline.** It reads the
 	// still-UNRESOLVED merged signatures so its E3016 message can print the source type spellings
 	// (`Integer`, `Float`, `void`) that `resolveTypes` erases — the same reason `checkValueMergeSignatures`
 	// runs here. Any E3015/E3016 it records is caught by the pipeline's error gate after `resolveTypes`.
@@ -886,7 +908,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	let ordinalProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.verifyOrdinals)
 
 	// ⭐⭐ **THE BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT SCATTERED ACROSS THE
-	// RUNTIME INSTALLERS THAT TRANSCRIBE THEM (A1s).**
+	// RUNTIME INSTALLERS THAT TRANSCRIBE THEM.**
 	//
 	// ⛔⛔ **THERE IS NO COUNT IN THIS HEADER.** A count of the calls directly beneath it is a fact written
 	// twice, and it goes stale the moment a family is added or retired.
@@ -903,19 +925,19 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// left to fail against. Here they have both: `queryAllModule` has merged every declaration, and the
 	// pipeline's error gate below turns an E4016 into a failed build with no binary written.
 	//
-	// ⚠ **NOT ON A PROGRAM THAT IS ALREADY FAILING (A1s wave 2).** A file whose parse failed merged none of
+	// ⚠ **NOT ON A PROGRAM THAT IS ALREADY FAILING.** A file whose parse failed merged none of
 	// its declarations, so `stdlib/Builtins.maxon` failing to parse leaves the three DECLARED families
 	// absent — and each would then report an E4016 saying the module was not loaded, on top of the real
-	// diagnostic that says why. MEASURED while sabotaging the shadow guard with a deliberately malformed
-	// addition to that module: one E3058 followed by two E4016s about a module the compile plainly HAD.
-	// It is the refusal `checkTypeSymbolNamespace` and `checkGenericAliasCycles` above make, for the same
-	// reason: a check whose inputs are half-built cannot produce a verdict worth reading.
+	// diagnostic that says why. It is the refusal `checkTypeSymbolNamespace` and
+	// `checkGenericAliasCycles` above make, for the same reason: a check whose inputs are half-built
+	// cannot produce a verdict worth reading.
 	if not projectHasErrors(project) 'wellFormedSoFar'
 		verifyManagedFileOrdinals(project)
 		verifyManagedDirectoryOrdinals(project)
 		verifyManagedSocketOrdinals(project)
 		verifyManagedListenerOrdinals(project)
 		verifyManagedMemoryRuntimeOrdinals(project)
+		verifyRunProcessErrorOrdinals(project)
 		verifyDivisionByZeroOrdinals(project)
 
 		// ⚠ **`StringError` IS NOT CHECKED HERE, BECAUSE NOTHING TRANSCRIBES ITS ORDINALS.** A check here
@@ -938,10 +960,10 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 		// exactly while a throwing runtime graph transcribes its ordinals, and leaves when the corpus is the
 		// only producer. `__char_ascii` is such a graph (`GraphemeRuntime.buildCharAscii` returns
 		// `CharacterNotAsciiFlag` on its failure edge), while `stdlib/Character.maxon` declares the case order
-		// that flag encodes. MEASURED: a case inserted ahead of `notAscii` moves the declared ordinal to 1,
-		// `buildCharAscii` goes on emitting 0, and the compile exits 0 with no diagnostic. Nothing can read
-		// the drift yet — `match e` over this enum is E2015 — which makes it a wire format waiting for a
-		// reader rather than a family that needs no guard.
+		// that flag encodes. A case inserted ahead of `notAscii` moves the declared ordinal to 1 while
+		// `buildCharAscii` goes on emitting 0, and without this check the compile succeeds with no
+		// diagnostic. Nothing can read the drift yet — `match e` over this enum is E2015 — which makes it a
+		// wire format waiting for a reader rather than a family that needs no guard.
 		verifyCharacterErrorOrdinals(project)
 	end 'wellFormedSoFar'
 
@@ -969,8 +991,8 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// changes. See StdlibSource for why the reachability is exact here (a stdlib function is reached
 	// only by a direct call or a taken address, never by a witness or `.rdata` edge).
 	//
-	// ⚠ **ITS OWN GATE, BECAUSE IT IS THE FIRST SITE THAT CAN REFUSE AND THE PIPELINE'S IS STILL BELOW
-	// (A1w).** `deriveLibraryFacts` reads every stdlib file's parse artifact back and builds a
+	// ⚠ **ITS OWN GATE, BECAUSE IT IS THE FIRST SITE THAT CAN REFUSE AND THE PIPELINE'S IS STILL
+	// BELOW.** `deriveLibraryFacts` reads every stdlib file's parse artifact back and builds a
 	// `FunctionNameIndex` over this module, either of which can throw. Without a gate here that throw would
 	// leave `compileToCodeResult` having passed both gates below, and the diagnostic would never be printed:
 	// exit 1 with nothing said.
@@ -990,8 +1012,8 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'libraryFactsRefused'
 
-	// ⭐ **WHICH GLOBALS CAN THE PROGRAM STILL NAME — ASKED BEFORE ANYTHING IS BUILT FROM THEM** (P1.7
-	// slice 3, see `DeadGlobalElimination`). A binding nothing reads or writes costs an 8-byte slot, an
+	// ⭐ **WHICH GLOBALS CAN THE PROGRAM STILL NAME — ASKED BEFORE ANYTHING IS BUILT FROM THEM**
+	// (see `DeadGlobalElimination`). A binding nothing reads or writes costs an 8-byte slot, an
 	// init run and a cleanup drop, and the three are dropped TOGETHER because all three are produced from
 	// this one filtered arena — `managedGlobals` below and `declaredGlobals` further down apply the SAME
 	// test, so there is nothing to remove afterwards and no ordering between three edits to get right.
@@ -1003,7 +1025,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount, libraryFacts: project.libraryFacts)
 
 	// ⭐ **SYNTHESIZE `__module_init` / `__maxon_global_cleanup` — HERE, and the position is the whole
-	// wiring** (P1.7 slice 2a, see `ModuleInit`). They are Maxon-tier functions appended to the merged
+	// wiring** (see `ModuleInit`). They are Maxon-tier functions appended to the merged
 	// module, so everything below this line treats them as ordinary program code: `scanRuntimeUsage` sees
 	// their `__str_clone`/`__str_decref`/`__managed_decref` calls and installs the runtime floor they need,
 	// `declaredGlobals` (below) reserves the pointer slots they write, and the pipeline lowers them through
@@ -1032,7 +1054,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: orderedGlobals, sharedLets: letShareWalksOf(orderedGlobals, spawnsAService: serviceTypeRoster(signatures).count() > 0).marked, defaults: orderedDefaults)
 
 	// ⭐⭐ **SYNTHESIZE `<T>.__loop` FOR EVERY SERVICE — HERE, AND FOR `installManagedGlobalInit`'s REASON ONE
-	// LINE UP (SV1 wave 3, see `Runtime/ServiceLoop`).** It is a Maxon-tier function appended to the merged
+	// LINE UP (see `Runtime/ServiceLoop`).** It is a Maxon-tier function appended to the merged
 	// module, so everything below this line treats it as ordinary program code: `SemanticCheck` type-checks
 	// the handler calls it makes, `scanRuntimeUsage` sees its `__mbox_recv` / `__mm_decref` / `__destruct_<T>`
 	// calls and installs the floor they need, and the pipeline lowers it through the same `lowerMaxonToStd`
@@ -1040,16 +1062,20 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// `declareAsyncReleaserNeeds`-shaped obligation a Std-tier synthesis would have owed.
 	//
 	// A program that spawns nothing builds nothing here.
-	installServiceLoops(module, project: project, signatures: signatures)
+	if not projectHasErrors(project) 'handlersWereBuilt'
+		try installServiceLoops(module, project: project, signatures: signatures) otherwise (failure) 'serviceLoopsRefused'
+			try refuseUnlessAbandoned(project, failure: failure)
+		end 'serviceLoopsRefused'
+	end 'handlersWereBuilt'
 
 	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: needsProbe)
 
-	// ⭐⭐ **THE PIPELINE RUNS IN TWO STAGES, AND WHAT SITS BETWEEN THEM IS THIS RUNG (the writable-record
-	// rung).** The Maxon-tier stage ends at `semanticCheck`, which is where
+	// ⭐⭐ **THE PIPELINE RUNS IN TWO STAGES, AND WHAT SITS BETWEEN THEM IS THE WRITABLE-RECORD
+	// PROMOTION.** The Maxon-tier stage ends at `semanticCheck`, which is where
 	// `promoteArgsNeedingAWritableRecord` inserts the `__str_clone` / `__str_retain` / `__str_decref` calls
 	// that give a byte record handed to a writing parameter one the write may land in. The runtime-needs
 	// scan below then walks the FINAL Maxon module, and the lowering stage runs after it. Both neighbours
-	// are forced, and both were measured — see `buildMaxonTierPasses`.
+	// are forced — see `buildMaxonTierPasses`.
 	var pipeline = try PassPipeline.create(project, maxonModule: module, signatures: signatures) otherwise (failure) 'duplicateFunctionName'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'duplicateFunctionName'
@@ -1130,32 +1156,28 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	usage.usesManagedGlobals = usesManagedGlobals
 	usage.releasesRegistry = orderedDefaults.count() > 0
 
-	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
-	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
+	// A managed-payload union's `__destruct_<U>` and a managed-field struct's
+	// `__destruct_<Struct>` call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
 	// SYNTHESIZED Std bodies the Maxon-module scan above cannot see. Close the needed-destructor set over that
 	// nesting and declare its transitive needs now — before `.data` layout reads `usesHeap` and before
 	// `installStringRuntime` reads `usesStrDecref`.
-	// ⭐ **A2: an `async` spawn's per-callee releaser is synthesized after the pipeline too**, so the scan
+	// ⭐ **An `async` spawn's per-callee releaser is synthesized after the pipeline too**, so the scan
 	// above cannot see the `__str_decref` / `__destruct_<T>` calls its body will make. Collect the spawned
 	// callees from the MAXON module (which the pipeline leaves intact) and declare each plan's drop callees
 	// BEFORE `noteDestructorUsage` runs, so the destructors a releaser names are rooted in time for the
 	// cascade fixpoint to close over them — the same obligation, and the same ordering, the cascades have.
-	let asyncSpawnTargets = collectAsyncSpawnTargets(module)
+	let asyncSpawnTargets = collectAsyncSpawnTargets(module, funcNames: pipeline.funcNames)
 	declareAsyncReleaserNeeds(usage, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
 
-	// ⭐ **SV2: a REPLY CELL's releaser is the same obligation over a different plan** — it frees the managed
+	// ⭐ **A REPLY CELL's releaser is the same obligation over a different plan** — it frees the managed
 	// result of a reply nobody took, so the drop callee its body will name has to be rooted here for the same
 	// reason and at the same moment. `serviceReplyReleasePlanFor` states what the two plans differ in.
 	let serviceReplyTargets = collectServiceReplyTargets(module)
 	declareServiceReplyReleaserNeeds(usage, targets: serviceReplyTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
 
-	// ⚠ **`declareCharacterSetRuntimeNeeds` STOOD HERE AND WENT WITH THE `__cs_*` RUNTIME (W129).** It rooted the
-	// `__destruct_Set_Character` cascade `__cs_decref`'s body would name, which is the obligation any FUTURE
-	// synthesized body owning a declared generic's instance still carries — see `declareAsyncReleaserNeeds`
-	// above, which states it for the one family that still has one.
 	noteDestructorUsage(usage, project: project, signatures: signatures)
 
-	// A managed-element array/struct/union DEEP-CLONE (P1.7 slice 3b-vi-b) synthesizes `__clone_<T>` cascades
+	// A managed-element array/struct/union DEEP-CLONE synthesizes `__clone_<T>` cascades
 	// that call `__str_clone`/`__managed_clone`/nested `__clone_<T>` inside bodies this scan cannot see. Close the
 	// needed-cloner set over that nesting and declare its transitive `usesStrClone`/`usesManagedMemory`/`usesHeap` needs
 	// now — before `.data` layout reads `usesHeap` and `installStringRuntime` reads `usesStrClone` — exactly as
@@ -1183,10 +1205,11 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// walk. A reader that ran before them would miss exactly those programs.
 	//
 	// Every plain function used as a first-class value (`let f = triple`, `apply(triple, …)`) is called
-	// through the uniform `(userargs, env)` indirect ABI, whose signature its own `(userargs) -> R` shape does
-	// not match. Its `__fnref_` env-thunk targets are collected from the MAXON module — which the pipeline
-	// leaves intact — and the thunks are installed already-lowered below, like the destructor cascades
-	// (P1.5-A2b-2). Held on the project because the inliner's called-once census reads it mid-pipeline.
+	// through the uniform `(userargs, record)` indirect ABI — the trailing argument is the function record the
+	// call went through — whose signature its own `(userargs) -> R` shape does not match. Its `__fnref_`
+	// thunk targets are collected from the MAXON module — which the pipeline leaves intact — and the
+	// thunks are installed already-lowered below, like the destructor cascades. Held on the project because
+	// the inliner's called-once census reads it mid-pipeline.
 	project.functionValueTargets = collectFnRefThunkTargets(module, funcSignatures: project.funcSignatures)
 	recordPhase(project, phase: CompilePhase.deriveRuntimeNeeds, probe: scanProbe)
 
@@ -1249,12 +1272,12 @@ type LoweredProgram
 	module var pipeline as PassPipeline
 	module var usage as RuntimeUsage
 	module var signatures as ProgramSignatures
-	module let asyncSpawnTargets as ByteArrayArray
+	module let asyncSpawnTargets as AsyncSpawnTargetArray
 	module let serviceReplyTargets as ByteArrayArray
 	module let userGlobals as DataSectionEntryArray
 	module let parksOnIo as bool
 
-	static function create(pipeline PassPipeline, usage RuntimeUsage, signatures ProgramSignatures, asyncSpawnTargets ByteArrayArray, serviceReplyTargets ByteArrayArray, userGlobals DataSectionEntryArray, parksOnIo bool) returns LoweredProgram
+	static function create(pipeline PassPipeline, usage RuntimeUsage, signatures ProgramSignatures, asyncSpawnTargets AsyncSpawnTargetArray, serviceReplyTargets ByteArrayArray, userGlobals DataSectionEntryArray, parksOnIo bool) returns LoweredProgram
 		return Self{pipeline: pipeline, usage: usage, signatures: signatures, asyncSpawnTargets: asyncSpawnTargets, serviceReplyTargets: serviceReplyTargets, userGlobals: userGlobals, parksOnIo: parksOnIo}
 	end 'create'
 end 'LoweredProgram'
@@ -1308,7 +1331,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	pipeline.releaseMaxonTier()
 	recordPhase(project, phase: CompilePhase.releaseIr, probe: maxonReleaseProbe)
 
-	// ⭐ **`Ordering`'s DECLARATION, READ ONCE FOR THE WHOLE BACK END (W3).** The two runtime installs below
+	// ⭐ **`Ordering`'s DECLARATION, READ ONCE FOR THE WHOLE BACK END.** The two runtime installs below
 	// that emit a `compare` — the builtin-conformance impls and the grapheme runtime's `__char_cmp` — turn
 	// its case names into TAGS, and the parser turned the same names into the tags those results are TESTED
 	// against. It is fetched here, at the one point both installs are reached from, so there is a single
@@ -1318,10 +1341,10 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// ⚠⚠ **BELOW THE ERROR GATE, AND THAT POSITION IS PAID FOR.** `requireCorpusDeclaredEnum` PANICS on an
 	// absent entry, and there is one way to be absent in a checkout that lists the declaring module: a stdlib
 	// file whose parse FAILED, since a failed parse is never cached and so never merged
-	// (`deriveLibraryFacts`' header records the same rule for the same reason). MEASURED with this line above
-	// the gate: any user program declaring `implements Iterable` — which expands `stdlib/Interfaces.maxon`'s
-	// `extension Iterable` onto the conformer and so can fail inside that file — died with this panic INSTEAD
-	// of the diagnostic naming the real fault. Below the gate, that compile has already refused and said why.
+	// (`deriveLibraryFacts`' header records the same rule for the same reason). Above the gate, any user
+	// program declaring `implements Iterable` — which expands `stdlib/Interfaces.maxon`'s `extension
+	// Iterable` onto the conformer and so can fail inside that file — would die with this panic INSTEAD of
+	// the diagnostic naming the real fault. Below the gate, that compile has already refused and said why.
 	let orderingEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: OrderingTypeName, reader: "the `Comparable` compare impls")
 
 	// ⭐ **`__SubprocessStreamState`'s DECLARATION, FOR THE SAME REASON AND AT THE SAME POINT.** A streaming
@@ -1330,8 +1353,8 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// check to hold.
 	let subprocessStreamStateEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: SubprocessStreamStateTypeName, reader: "the streaming subprocess runtime's per-stream state word")
 
-	// ⭐ **THE `.rdata` SLOTS ARE FILLED NOW, AND WHAT THEY NAME MUST BE INSTALLED (P1.7a-existentials slice
-	// 2).** Lowering is what decides which witness tables and layout descriptors a program gets, so the
+	// ⭐ **THE `.rdata` SLOTS ARE FILLED NOW, AND WHAT THEY NAME MUST BE INSTALLED.**
+	// Lowering is what decides which witness tables and layout descriptors a program gets, so the
 	// destructors those tables' `destroyFunc` words point at cannot be known before this line — and every
 	// install below reads the bits this sets. It sits after `pipeline.run()` and before the first install for
 	// exactly that reason; see `noteRelocatedFunctionUsage` for why the `.data` layout above is nonetheless
@@ -1368,6 +1391,8 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// the end of kernel32's run.
 	pipeline.stdModule.usesBackgroundPriority = usage.usesBackgroundPriority
 	pipeline.stdModule.usesProcessLiveness = usage.usesProcessLiveness
+	pipeline.stdModule.usesProcessNamespace = usage.usesProcessNamespace
+	pipeline.stdModule.usesEntropy = usage.usesEntropy
 
 	// ⭐ **AND ANOTHER PRODUCER OF THAT BAND**, on the same seam and for the same measured reason as its
 	// neighbours. `__tty_stdout_wants_color` needs `GetFileType` — and `GetEnvironmentVariableA`, already in
@@ -1455,9 +1480,8 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	//     boundary between the two halves of the runtime: a builder-emitted body's call into a `runtime/`
 	//     tier body is a pair the pipeline's run structurally could not hold an opinion about, because the
 	//     caller did not exist when it took its census — so a tier entry point whose only caller is a
-	//     builder body could never be spliced at any size, where the builder that used to emit the same
-	//     credit emitted it INLINE. Scoped to the band's callers, every (caller, callee) pair in the module
-	//     is offered to the inliner exactly once.
+	//     builder body could never be spliced at any size. Scoped to the band's callers, every
+	//     (caller, callee) pair in the module is offered to the inliner exactly once.
 	//   • then the per-function schedule `PassPipeline.buildEmittedBandPasses` lists, which owns the
 	//     pass-by-pass argument for what is in it and what is not.
 	//
@@ -1506,13 +1530,13 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
 	// reason — already-lowered Std, appended after the pipeline, see this block's header — but it is
-	// keyed on its OWN usage bits, not on `usesHeap`: a Wave-A literal is immortal rdata, so a
+	// keyed on its OWN usage bits, not on `usesHeap`: a string literal is immortal rdata, so a
 	// print-only or string-`==`-only program pulls in NEITHER the allocator NOR the leak check.
 	// `installStringRuntime` installs only the referenced functions (a no-op when neither is used).
 	installStringRuntime(pipeline.stdModule, usage: usage)
 
-	// The GRAPHEME runtime (`__gbp`/`__ext_pict`/`__utf8_*`/`__gr_*`/`__char_at`/`__str_to_bytes`, P1.8
-	// slice B) — installed the same already-lowered way, keyed on its OWN per-entry-point bits so a
+	// The GRAPHEME runtime (`__gbp`/`__ext_pict`/`__utf8_*`/`__gr_*`/`__char_at`/`__str_to_bytes`)
+	// — installed the same already-lowered way, keyed on its OWN per-entry-point bits so a
 	// program that never segments a String carries none of it. It sits BEFORE the array install because
 	// `__str_to_bytes` sets `usesManagedMemory` transitively (`closeGraphemeNeeds`) — but that bit was already
 	// settled by `scanRuntimeUsage`, which runs before any install, so the order is readability, not a
@@ -1520,30 +1544,25 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// functions are appended to one module and the backend resolves calls by name.
 	installGraphemeRuntime(pipeline.stdModule, usage: usage, ordering: orderingEnum)
 
-	// The two RAW Unicode table loads (`__ucd_bmp_at`/`__ucd_supp_at`, P1.8 Slice D / R2 / W64) — installed the
+	// The two RAW Unicode table loads (`__ucd_bmp_at`/`__ucd_supp_at`) — installed the
 	// same already-lowered way, on their own `usesUcdCategory` bit. Unlike every install above it, this one also
 	// REGISTERS `.rdata`: the two checked-in tables they read are ordinary read-only constants rather than a
 	// dedicated section (see `UnicodeCategoryRuntime`'s header), so they must be in `globalData` before the
 	// backend lays the section out. It needs `project.stdlibDir` because the tables are checked into
 	// `stdlib/helpers/string/` and are read at COMPILE time.
 	//
-	// ⚠ **THE WHOLE `General_Category` LOOKUP (`__ucd_cat`) WAS INSTALLED HERE TOO, AND WENT AT W129** with its
-	// one caller, `__cs_contains`. `stdlib/helpers/string/unicodeCategory.maxon` writes the same algorithm out
-	// of these two raw reads, so what the corpus reaches is the pair — never a third synthesized entry point.
+	// ⚠ The `General_Category` lookup is not installed: `stdlib/helpers/string/unicodeCategory.maxon` writes
+	// it out of these two raw reads, so what the corpus reaches is the pair — never a third synthesized entry
+	// point.
 	try installUnicodeCategoryRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, stdlibDir: project.stdlibDir)
 
-	// ⚠ **THE `CharacterSet` RUNTIME (`__cs_make`/`__cs_decref`/`__cs_contains`) WAS INSTALLED HERE AND IS
-	// DELETED (W129).** `W115` listed `stdlib/CharacterSet.maxon`, which declares the eleven presets, `from` and
-	// `contains` as ordinary Maxon; with the parser's interceptions gone nothing could emit any of the three
-	// callees, so all three bits were unsettable and this install could only ever install nothing.
-
-	// The file-IO runtime (`__mf_open_read`, R4.1) — installed the same already-lowered way, on its own
+	// The file-IO runtime (`__mf_open_read`) — installed the same already-lowered way, on its own
 	// `usesManagedFile` bit. It must come AFTER the array install is decided but has no ordering dependency
 	// on it: it calls `__mm_alloc`/`__mm_free` (carried by the `usesHeap` bit it sets alongside its own) and
 	// `ManagedMemoryRuntime.emitForwardCopy`, which is a BUILDER it inlines rather than a callee it references.
 	installManagedFileRuntime(pipeline.stdModule, usage: usage)
 
-	// The directory runtime (`__md_open_search`/`__md_next`/…, R4.3) — installed the same already-lowered
+	// The directory runtime (`__md_open_search`/`__md_next`/…) — installed the same already-lowered
 	// way, on its own `usesManagedDirectory` bit. It sits beside the file install because the two share this
 	// family's helpers (the path scratch copy, the errno classification, the raw alloc/free); it needs no
 	// ordering against the ARRAY install below even though `__md_filename` CALLS `__managed_create`, because the
@@ -1594,6 +1613,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// installed by nothing here.
 	installConsoleRuntime(pipeline.stdModule, usage: usage)
 	installProcessRuntime(pipeline.stdModule, usage: usage)
+	installRandomRuntime(pipeline.stdModule, usage: usage)
 
 	// The terminal question (`__tty_stdout_wants_color`), on its own bit beside them. It is the one install
 	// in this block that needs `globalData`: its two environment names are `.rdata` constants, registered
@@ -1608,33 +1628,24 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// its own `usesManagedMemory` bit (any `__managed_*` reference), which also implied `usesHeap` above (the helpers
 	// `__mm_alloc`/`__mm_free` the record and its element buffer). It installs the WHOLE managed-memory runtime as
 	// one closure — the helpers call each other, and `__`-prefixed functions are excluded from the goldens,
-	// so an all-or-nothing install is golden-neutral and needs no per-helper dependency tracking (P1.7).
+	// so an all-or-nothing install is golden-neutral and needs no per-helper dependency tracking.
 	installManagedMemoryRuntime(pipeline.stdModule, usage: usage)
 
-	// ⚠ **THE `Set` AND `Map` RUNTIMES STOOD HERE AND ARE DELETED (W105).** `__set_*` and `__map_*` were one
-	// shared hash-table graph under two names; `W41` made a corpus `Map` retire the synthesized one and `W90`
-	// did the same for `Set`, which took the last live reader — `CharacterSet`'s member probe — with it. Both
-	// containers are ordinary declared generics now, so their `create`/`insert`/`contains`/`remove`/`count`
-	// are compiled Maxon bodies the reachability walk finds for itself, exactly as `StringIndexRuntime`'s
-	// were after W49. The `usesSet`/`usesMap` bits went with them, and the `CharacterSet` install that was the
-	// last thing still declaring the `usesHeap` those two arms carried alongside went at W129.
-	//
 	// The List runtime (`__list_create`/`__list_append`/`__list_get`/…) — installed the same already-lowered
-	// way, keyed on its own `usesList` bit. It shares no graph with the two above (a chain is not a table), so
-	// it is a plain third container install; the order is readability for their reason.
+	// way, keyed on its own `usesList` bit.
 	installListRuntime(pipeline.stdModule, usage: usage)
 
-	// The single-value descriptor-gated drop (`__drop_type_param`, P1.7 slice 3b-v / Finding A) — installed on
+	// The single-value descriptor-gated drop (`__drop_type_param`) — installed on
 	// its OWN `usesDropTypeParam` bit, DECOUPLED from `usesManagedMemory`, so a bare opaque `T` field reassignment in an
 	// array-free generic struct links its drop. An opaque-array program sets the bit too, so this installs the
 	// one `__drop_type_param` for either case, exactly once (its sole install site).
 	installDropTypeParamRuntime(pipeline.stdModule, usage: usage)
 
-	// Its co-ownership twin (`__retain_type_param`, W41-opaque), on its own bit for the same reason: a shared
+	// Its co-ownership twin (`__retain_type_param`), on its own bit for the same reason: a shared
 	// body that only STORES a borrowed opaque `T` never drops one.
 	installRetainTypeParamRuntime(pipeline.stdModule, usage: usage)
 
-	// The existential's drop (`__drop_existential`, P1.7a-existentials slice 2) — its sibling above's exact
+	// The existential's drop (`__drop_existential`) — its sibling above's exact
 	// arrangement: the same emitter, its own bit, so a program with an interface-typed field but no generic
 	// instantiation links its drop and a program with neither carries neither.
 	installDropExistentialRuntime(pipeline.stdModule, usage: usage)
@@ -1655,12 +1666,12 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// environment names are.
 	installCoverageRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, dataPath: project.coverageDataPath, pointCount: project.covPoints.count() as MxcovPointIndex)
 
-	// The synthesized builtin-type conformance impls (P1.7a slices 2b/2b-ii/2b-iii + P1.7b) — installed the
+	// The synthesized builtin-type conformance impls — installed the
 	// same already-lowered-Std way, but keyed on neither a `usage` bit nor a pre-pipeline scan: BOTH ways of
 	// naming one are created too late for either.
 	// A witness slot's `funcAbs64` reloc is stamped DURING lowering (`ensureWitnessTable`), and a direct
-	// `i.compare(j)` on a concrete value is an ordinary `call int.compare` the parser emits (P1.7a direct
-	// dispatch). So the install reads the FINISHED module — every pending rdata reloc and every op that spells
+	// `i.compare(j)` on a concrete value is an ordinary `call int.compare` the parser emits.
+	// So the install reads the FINISHED module — every pending rdata reloc and every op that spells
 	// a function name — and builds an impl iff the program NAMES it and does not already DEFINE it.
 	// **REFERENCED-but-undefined ⟺ INSTALLED**; see `installBuiltinConformanceRuntime`'s own header, which
 	// owns this rule, for why the "does not already define" half is load-bearing and why the walk is the wide
@@ -1682,28 +1693,28 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// TYPES, and a single row over both would move for two unrelated reasons.
 	let synthesizeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.synthesizeBodies)
 
-	// The per-union (P1.3 slice 2) and per-struct (P1.4a wave 2) destructor cascades, installed the same way
+	// The per-union and per-struct destructor cascades, installed the same way
 	// and for the same reason: already-lowered Std, appended after the pipeline so they are never
 	// re-optimized. Only the destructors the module actually CALLS — directly or through a nested cascade
 	// `noteDestructorUsage` closed the set over — are built (`usage.neededDestructors`).
 	installUnionDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
 	installStructDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
 
-	// The per-instance destructor cascade (P1.6-B2) — the same already-lowered append as the struct/union
+	// The per-instance destructor cascade — the same already-lowered append as the struct/union
 	// ones. A managed generic instance OWNS its type arguments, so its `__destruct_<mangled>` drops each
 	// substituted managed field; only the REFERENCED instances (directly, or through a nested cascade
 	// `noteDestructorUsage` closed the set over) are built. It reads the instance registry, which lives on
 	// `signatures`, so it needs no `project`.
 	installGenericInstanceDestructors(pipeline.stdModule, signatures: signatures, needed: usage.neededDestructors)
 
-	// The DICTIONARY destructor cascade (BATCH41) — the same append, for the instance a SHARED generic body
+	// The DICTIONARY destructor cascade — the same append, for the instance a SHARED generic body
 	// holds rather than the one a concrete call site names. A declaration view's slot standing at a bare
 	// parameter has no callee to drop through, so its cascade takes the enclosing instantiation's layout
 	// descriptor as a second parameter and releases that slot through `__drop_type_param`. Only the REFERENCED
 	// ones are built, exactly as above.
 	installGenericInstanceDictionaryDestructors(pipeline.stdModule, signatures: signatures, needed: usage.neededDestructors)
 
-	// Its DECLARED-RECORD twin (W183) — the same cascade for a record that is a `structRef` rather than an
+	// Its DECLARED-RECORD twin — the same cascade for a record that is a `structRef` rather than an
 	// instance, which is what a TUPLE of the enclosing generic's own parameters is (`stdlib/Map.maxon`'s
 	// `Entry`, a `typealias Pair = (K, V)`). Only the REFERENCED ones are built, exactly as above.
 	installStructDictionaryDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
@@ -1718,18 +1729,18 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	installCascades(pipeline.stdModule, project: project, signatures: signatures, usage: usage, action: CascadeAction.soleWalk)
 	installCascades(pipeline.stdModule, project: project, signatures: signatures, usage: usage, action: CascadeAction.shareWalk)
 
-	// The `__fnref_` env-thunks for plain functions used as first-class values — collected before the pipeline
+	// The `__fnref_` thunks for plain functions used as first-class values — collected before the pipeline
 	// (`Project.functionValueTargets`), installed here already-lowered so they flow through the whole backend
-	// and (on wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).
+	// and (on wasm) receive a funcref-table slot at their funcIdx.
 	installFnRefThunks(pipeline.stdModule, project: project, targets: project.functionValueTargets)
 
 	// The `__gt_release_<callee>` helpers that give back the reference an `async` spawn took to each managed
-	// argument, and release the result-or-error of a promise nobody awaited (A2). Collected before the
+	// argument, and release the result-or-error of a promise nobody awaited. Collected before the
 	// pipeline (see `asyncSpawnTargets`), installed here already-lowered like the cascades above; a callee
 	// with nothing managed to release gets none, which is why a scalar async program is unchanged.
 	installAsyncReleasers(pipeline.stdModule, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
 
-	// The `__gt_reply_release_<message>` twins, for the managed RESULT of a reply cell nobody awaited (SV2).
+	// The `__gt_reply_release_<message>` twins, for the managed RESULT of a reply cell nobody awaited.
 	installServiceReplyReleasers(pipeline.stdModule, targets: serviceReplyTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
 
 	// The per-enum `<Enum>.fromRawValue` lookups — the same already-lowered append, and only the helpers the
@@ -1774,12 +1785,12 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 
 	runStdPassesOverTheBand(project, module: pipeline.stdModule, members: buildEmittedBandPasses(), firstFuncIndex: firstEmittedFuncIndex)
 
-	// The backend owns its own error gate now, and TWO of its stages use it: the register allocator
+	// The backend owns its own error gate, and TWO of its stages use it: the register allocator
 	// reports E5001 (register pressure) onto `project.diagnostics` and throws when a loop genuinely
 	// overflows the register file, and the reachability prune reports E4015 and throws when a
 	// declaration takes a name the compiler owns — at its `FunctionNameIndex`, whose Std-tier site is the
 	// first point in the compile where BOTH sides of such a pair are present and hence the first that can tell
-	// them apart (A1t), and at its root set, for the half of that rule with no pair to count (A1w). Passing
+	// them apart, and at its root set, for the half of that rule with no pair to count. Passing
 	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it
 	// maps a Target ValueId back to its source span through.
 	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage, dataSection: dataSection, userGlobalCount: userGlobals.count()) otherwise 'backendFailed'
@@ -2335,18 +2346,6 @@ export let IgnoreMarkerName = ".maxonignore"
 // Paths of Maxon source files, in the order a walk found them — what `collectMaxonSources`
 // produces and what `Project.librarySourcePaths` keeps. The ORDER is the fact this name carries and
 // `FilePathArray` does not, which is why it is its own alias and not a second spelling of that one.
-//
-// ⛔ **IT IS NOT *"a name that collides with a member typealias inside stdlib's `type Directory`"*, AND
-// THAT READING IS MEASURED FALSE.** There is no collision to have: a nested `typealias` is keyed
-// `Directory.FilePathArray` and under nothing else, so it cannot contest a bare name at all — and the
-// shape the claim describes (one file exporting `typealias FilePathArray = Array with FilePath`, a
-// second naming it bare, a third calling `Directory.list`) COMPILES AND RUNS. `flat-namespace check`
-// reads the two as OK for the same reason: they are
-// declared in different projects, and only one of them is top-level. What a member DOES need is a
-// FILE-SCOPE spelling — without one, `FilePathArray` resolves only where `QueryDatabase`'s own
-// export is in the program, which is every compiler file and no other, including the
-// extracted spec harness. `Parser.publishNestedGenericAlias` gives such a member its bare key; the name
-// here stays for the ordering fact above.
 export typealias MaxonSourcePathArray = Array with FilePath
 
 // ⭐⭐ **ONE STAGED SOURCE THIS COMPILE ITSELF WROTE, AND THE RESERVED NAMES IT MINTED INTO IT.** A
@@ -2515,17 +2514,13 @@ let IrFileExtension = ".ir"
 //
 // ⚠ An override that already carries the target's extension is used as it is, so `--output=stage2.exe`
 // and `--output=stage2` name one file rather than `stage2.exe.exe`.
-function resolveOutputPath(project Project, inputPaths MaxonSourcePathArray, outputOverride String) returns FilePath throws CompileError
+function resolveOutputPath(project Project, inputPaths MaxonSourcePathArray, outputOverride StatedText) returns FilePath throws CompileError
 	let ext = executableExtension(project.target.os)
 
-	if not outputOverride.isEmpty() 'hasOverride'
-		var outputPath = "{outputOverride}{ext}"
+	if let stated = try outputOverride.text() 'hasOverride'
+		let outputPath = stated if stated.endsWith(ext) else "{stated}{ext}"
 
-		if outputOverride.endsWith(ext) 'overrideCarriesExt'
-			outputPath = outputOverride
-		end 'overrideCarriesExt'
-
-		return try FilePath.from(outputPath) otherwise throw CompileError.invalidOutputPath(outputOverride)
+		return try FilePath.from(outputPath) otherwise throw CompileError.invalidOutputPath(stated)
 	end 'hasOverride'
 
 	let named = try inputPaths.get(0) otherwise panic("resolveOutputPath: `loadProject` has already refused an empty path list")

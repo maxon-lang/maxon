@@ -240,11 +240,11 @@ deadline only expires early when the call lands LATE within a tick — the deadl
 anchored to the tick edge already behind you, so the later in the tick you call, the
 more of the requested duration is eaten. Sleeps naturally synchronise to the tick edge
 and then stay in phase, so a single `sleep(30)`, or a fixed-cadence loop of them,
-samples essentially ONE phase: measured against the buggy runtime, a lone `sleep(30)`
-returned early only about two times in three, and a 40-iteration fixed-cadence loop
-came back fully green on its second run. A test that passes a third of the time on a
-broken compiler is not a gate. Busy-spinning a growing amount before each sleep walks
-the call site across the whole tick period, and the buggy runtime then fails 44 of 64.
+samples essentially ONE phase: against a tick-derived deadline, a lone `sleep(30)` or
+a fixed-cadence loop of them returns early only some of the time, and a test that
+passes some of the time on a broken compiler is not a gate. Busy-spinning a growing
+amount before each sleep walks the call site across the whole tick period, so a
+tick-derived deadline returns early on most of the iterations.
 
 ```maxon
 function main() returns ExitCode

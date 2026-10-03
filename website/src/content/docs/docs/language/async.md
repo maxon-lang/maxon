@@ -14,7 +14,7 @@ Maxon has two concurrency tools:
 
 Both run on the runtime's scheduler, which maps green threads onto a pool of OS threads. There are no
 locks or atomics in user code: a value is only ever reachable from one green thread at a time, except
-where it is shared read-only — lent by a service send, held by a module-level `let`, or published through a
+where it is shared read-only — held by a module-level `let`, or published through a
 [`default`](#program-wide-defaults--default) or a [`SharedValue`](#sharedvalue--a-live-value-made-at-run-time)
 (below).
 
@@ -52,7 +52,24 @@ not 80.
 
 - `sleep(milliseconds)` parks the current green thread; it takes a `Milliseconds` value.
 - `async` applies to a direct call of a function or a static method. It cannot start a closure, an
-  indirect call or an instance method (**E2015**).
+  indirect call or an instance method (**E2015**). A generic function is started at the instance its
+  arguments infer, as a call would be.
+- An argument travels as one integer word: an integer, a `bool`, or a managed value's reference. A `float`
+  or a value held at an interface type is **E2015**, unless the callee reassigns that parameter — then the
+  argument rides a cell the coroutine owns.
+- A callee may keep an argument it is handed (move it into a record it returns, for one); a coroutine
+  dropped before it runs releases what it was handed instead.
+- **The arguments move into the coroutine**, because it can outlive the caller's frame. A local `let` or
+  `var` passed to `async` is consumed: reading it afterwards is **E3102**, and so is handing one binding twice
+  to one call. A scalar is copied. A parameter the callee reassigns writes storage the coroutine owns, and
+  nothing is written back to the caller, so a coroutine may write an argument it was given as a `let`.
+  Clone a value the caller still needs (`async work(data.clone())`).
+- **A parameter or a field of `self` is shared, not moved**: the coroutine takes its own reference and the
+  function goes on using it. Passing a handle through a parameter is how a socket or a server is shared with
+  a coroutine. A module-level `let` is shared too.
+- A value the caller can also read through a second name that holds no reference of its own is **E3138**;
+  pass a `.clone()`. A value something still borrows — a field read out of it is read after the call — is
+  **E3070**, and a match payload of a `let` union handed to a parameter the coroutine writes is **E3019**.
 - The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, or perform file, socket or
   process I/O, directly or through its callees. A function that never yields is **E3073** (`function never
   yields; 'async' is for I/O-concurrent work only`): there is nothing to overlap.
@@ -265,21 +282,17 @@ end 'main'
 **What crosses a message.** A value sent to a service must not stay reachable from the sender in a way
 either side could write, because the two green threads may run at the same time on different processors:
 
-- A `var`, a temporary or a literal argument is **moved** into the service; reading the sender's variable
-  afterwards is **E3102**. Factory arguments and replies are moved too.
-- A `let` argument that owns its value outright is **lent**: the sender keeps reading it, and from the send
-  onwards neither side may store it anywhere writable, return it, capture it or pass it to anything that
-  writes it (**E3160**). A handler that writes its parameter's graph at any depth — a method that writes its
-  own receiver, called on a record within the parameter, included — refuses every send that lends to it
-  (**E3019**).
-- A value the sender does not solely own — captured by a closure, held in a container, borrowed from a
-  parameter — is **E3138**; send a `.clone()`.
+- A `let` or `var`, a temporary or a literal argument is **moved** into the service; reading the sender's
+  variable afterwards is **E3102**. Factory arguments and replies are moved too. The handler owns what it was
+  sent, so it may keep it or write it.
+- A value the sender does not solely own — held in a container, borrowed from a parameter — is **E3138**;
+  send a `.clone()`.
 - A parameter type that cannot cross at all — a promise, a function value, an opaque type parameter — is
   **E3135**. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
   service the reply is judged at the `spawn` that fixes `T`, and a `returns T` message that hands back the
   state is **E3137** there whenever `T` resolves to a managed type; a scalar `T` crosses.
 - A value held at an interface type crosses as a message argument, in a service's state and as a reply,
-  moved or lent like any other value. A conformer sent at its own type whose graph the runtime cannot walk
+  moved like any other value. A conformer sent at its own type whose graph the runtime cannot walk
   (an OS handle) is **E3138**; once it is held at the interface type it is checked through its witness at
   the send, and such a conformer aborts with exit code **96**.
 - Before a send, the runtime also checks the value's whole object graph. The graph may reach one record

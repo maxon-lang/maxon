@@ -55,11 +55,9 @@ bracket needs, because the difference of two readings is then never negative.
 ⚠ **THE SIX ABOVE CANNOT GIVE A BRACKET THAT PROPERTY.** Four of them are differences — a live figure is a
 total less its frees, and a raw figure is the raw column less the tracked one, which a box steps at two
 different instants. Read while another thread allocates, a sum or difference of them can stand below an
-earlier reading. MEASURED while `PhaseProbe` bracketed a main-thread phase with the six, deriving its frees
-as *(total − live)* over four such walks: a `spec-test --target=wasm32-wasi` worker died compiling
-`register-allocator/int-six-vars-alive` with `Range check failed: value outside typealias 'AllocCount'` in
-`PhaseProbe.elapsedInto` — the phase's closing reading stood below its opening one while other threads
-allocated — while the same file passed 60/60 alone.
+earlier reading. A bracket over a main-thread phase that derives its frees as *(total − live)* from the six
+can close below its opening reading while other threads allocate, and `PhaseProbe.elapsedInto` then dies
+with `Range check failed: value outside typealias 'AllocCount'`.
 
 ⚠ **THE BYTE TOTAL COUNTS A BOX's HEADER WITH ITS PAYLOAD**, which is what `threadAllocBytes()` counts too,
 so the process-wide and per-thread byte figures measure one quantity. The header-free volume
@@ -295,9 +293,9 @@ sum reads exactly double. Here a program allocates 512 array elements and nothin
 the TRACKED column moves and the RAW column does not, because the raw reader subtracts the boxes the
 slab counted on `__mm_alloc`'s behalf.
 
-✅ **SABOTAGE-VERIFIED, and it is the only case in this file that catches it.** With the raw readers
-answering the raw column without the tracked subtraction, this case goes RED (exit **2** against the
-pinned 7 — the `tracked > 0` half holds and `raw == 0` does not) while `total-is-monotonic-and-moves`,
+✅ **It is the only case in this file that catches it.** With the raw readers answering the raw
+column without the tracked subtraction, this case goes RED (exit **2** against the pinned 7 — the
+`tracked > 0` half holds and `raw == 0` does not) while `total-is-monotonic-and-moves`,
 `live-returns-to-its-floor`, `bytes-scale-with-the-request` and `total-is-never-below-live` stay
 GREEN. A suite without this case would report a compiler whose layer sum reads exactly double as
 fully passing.
@@ -384,7 +382,7 @@ unless one of the two intrinsics is wired to the other's slot.
 record comes from the scheduler's record arena and its stack from `osAllocPages` (see *The two LAYERS*
 above). An `async` spawn and await in this window would read `after == before`.
 
-✅ **SABOTAGE-VERIFIED.** With the raw columns' maintenance removed from `__slab_alloc`, this case exits
+✅ **THE CASE DISCRIMINATES.** With the raw columns' maintenance removed from `__slab_alloc`, this case exits
 **2** against 8 — both delta halves go RED, and so does the first, because a column nothing maintains
 reads 0 at `main`'s first line — and `raw-live-falls-below-raw-total` exits **6** against 7, while every
 tracked-layer case stays GREEN.
@@ -444,9 +442,9 @@ It is asserted only where there is something to compare — after the send, so t
 because `0 < 0` is false and `0 == 0` was true, and neither says anything about a runtime that
 maintains no raw counter at all.
 
-✅ **RED BEFORE GREEN, MEASURED.** With `__slab_free` not debiting the live column this program reads
-`live == total` (30 and 30 at a 16-processor default) and answers **3**; with the debit it reads
-`live == total - 1` at one, two and four processors and at the machine's count. ⚠ Under the sabotage that removes the raw columns' maintenance entirely, the `total > 0` half
+✅ **THE CASE DISCRIMINATES.** With `__slab_free` not debiting the live column this program reads
+`live == total` and answers **3**; with the debit it reads `live == total - 1` at every processor count.
+⚠ With the raw columns' maintenance removed entirely, the `total > 0` half
 fails instead, so the two halves fail for opposite reasons and neither can carry the case alone.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -533,10 +531,7 @@ end 'main'
 ⭐⭐⭐ **THE CASE THE POOL NEEDS, AND THE ONE THE SIX ABOVE STRUCTURALLY CANNOT BE.** Every column above is
 summed over every row, so each answers for the whole PROCESS — exact while ONE thread allocates and
 worthless the moment several do: a bracket opened inside a worker counts every other worker's traffic for
-the whole of its span. MEASURED on
-a stage-2 self-compile, `regalloc:splitting` reported **1,207,232,853** allocations at sixteen processors
-against **77,890,562** at one — the identical compile, and the sub-phase rows went into `--metrics`,
-`--log=compiler:debug`, `scale-test` and `docs/optimization-log.md` saying so.
+the whole of its span.
 
 The three per-thread columns answer the same question of the CALLING GREEN THREAD. Both halves below are
 necessary and neither alone is enough:
@@ -737,7 +732,7 @@ on another thread, and counts every reading that came in below the one before it
 the free total must have moved by at least the service's frees, so the watched traffic really was counted.
 
 ⚠ **NO RUN CAN MAKE A REGRESSION HERE GO RED ON DEMAND.** A figure derived by subtracting two walks — the
-shape of the MEASURED crash under *AND THREE THAT ASK IT OF THE WHOLE PROCESS* above — goes backwards
+shape of the crash described under *AND THREE THAT ASK IT OF THE WHOLE PROCESS* above — goes backwards
 only when an allocation lands between its walks, which is timing. This case can catch that by chance and
 can never pass it by design; the deterministic definitions are pinned by the two cases above.
 ```maxon

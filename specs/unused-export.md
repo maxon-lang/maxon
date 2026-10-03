@@ -428,7 +428,7 @@ end 'main'
 <!-- test: cross-file-constant-chain-is-a-reference -->
 ⚠ **AND AN INITIALIZER IS A SECOND DOOR.** `FINAL` reads `MIDDLE` from inside a constant initializer,
 which resolves through the const EVALUATOR rather than through a use site. Hooking only the use site
-reported every link of a cross-file chain as unreferenced.
+would report every link of a cross-file chain as unreferenced.
 ```maxon
 // --- file: app/main.maxon
 let FINAL = MIDDLE + 2
@@ -557,11 +557,11 @@ end 'main'
 ```
 
 <!-- test: cross-file-element-member-access-is-a-reference -->
-⚠⚠ **`app/main.maxon` NEVER WRITES `Item` — IT REACHES IT, AND THE TWO DIAGNOSTICS USED TO CONTRADICT
-EACH OTHER OVER THAT.** The element type is behind a generic-instance alias, so the transitive walk over
-`Holder`'s field type stops at `ItemArray`; E3092 therefore said to drop the `export`, and dropping it made
-E4006 refuse `it.n` — leaving the program no legal spelling at all. The reference now comes from the one
-line that DECIDES that visibility (`Parser.requireFieldAccessible`), so the audit cannot disagree with the
+⚠⚠ **`app/main.maxon` NEVER WRITES `Item` — IT REACHES IT, AND THE TWO DIAGNOSTICS MUST NOT CONTRADICT
+EACH OTHER OVER THAT.** The element type is behind a generic-instance alias, so a transitive walk over
+`Holder`'s field type stops at `ItemArray`; counted that way, E3092 would say to drop the `export`, and
+dropping it makes E4006 refuse `it.n` — leaving the program no legal spelling at all. The reference comes
+from the one line that DECIDES that visibility (`Parser.requireFieldAccessible`), so the audit cannot disagree with the
 resolver about it.
 ```maxon
 // --- file: api/store.maxon
@@ -612,8 +612,8 @@ end 'main'
 
 <!-- test: cross-file-inferred-value-member-access-is-a-reference -->
 The same defect one route over: `a`'s type is INFERRED from a callee's declared return, so `app/main.maxon`
-needs `Rec` visible for `a.n` and never writes the name. E3092 reported it and E4006 refused the access once
-the advice was taken.
+needs `Rec` visible for `a.n` and never writes the name. Counting written names, E3092 would report it
+and E4006 would refuse the access once the advice was taken.
 ```maxon
 // --- file: api/project.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -642,11 +642,11 @@ end 'main'
 
 <!-- test: cross-file-union-match-is-a-reference -->
 ⚠⚠ **`app/main.maxon` NEVER WRITES `Answer` — A `match` ARM NAMES ITS *CASES*, NOT ITS TYPE.** That is
-the same contradiction `cross-file-element-member-access-is-a-reference` records, arriving through the one
+the same contradiction `cross-file-element-member-access-is-a-reference` guards, arriving through the one
 door a written name cannot reach: the scrutinee's type is INFERRED from `classify`'s declared return, and
-the arms spell `small` / `big(n)`. E3092 therefore said to drop the `export` — and with it dropped the
-bootstrap crashed on the very same program, so the advice led to a spelling NEITHER compiler accepts. The
-reference now comes from `Parser.emitEnumTagOf`, the one line that reads into a value of a declared
+the arms spell `small` / `big(n)`. Counting written names alone, E3092 would say to drop the `export` —
+and the program cannot compile without it, so the advice would lead to a
+spelling the compiler does not accept. The reference comes from `Parser.emitEnumTagOf`, the one line that reads into a value of a declared
 enum/union.
 ```maxon
 // --- file: api/answer.maxon
@@ -678,7 +678,7 @@ end 'main'
 
 <!-- test: cross-file-enum-match-is-a-reference -->
 The payload-free half of the case above: a plain `enum` matched cross-file reaches the same layout through
-the same door, and was reported the same way. The two are kept apart because a bare enum's value IS its tag
+the same door, and a written-names count would report it the same way. The two are kept apart because a bare enum's value IS its tag
 — `emitEnumTagOf` emits nothing for it — so a cure that only credited the BOXED load would pass the union
 case and still report this one.
 ```maxon
@@ -878,10 +878,11 @@ error E3093: pkg/<fragment>:5:17: exported function 'pkg.subtreeOnly' is only re
 ```
 
 <!-- test: subtree-only-is-not-a-finding-when-an-outside-file-reaches-a-member -->
-⭐⭐ **E3093 HAD ITS SIBLING'S HOLE, AND IT IS CLOSED BY THE SAME REFERENCE.** `pkg/sub/user.maxon` is the
-only file that NAMES `Item` and it is strictly nested, so the subtree rule fired — while `main.maxon`, which
-is outside the subtree entirely, reaches INTO an `Item` through `h.items`. Narrowing `Item` to `module` on
-that advice makes E4006 refuse the access, so the advice was wrong in exactly the way E3092's was.
+⭐⭐ **E3093 HAS ITS SIBLING'S HOLE, AND IT IS CLOSED BY THE SAME REFERENCE.** `pkg/sub/user.maxon` is the
+only file that NAMES `Item` and it is strictly nested, so a subtree rule counting names would fire — while
+`main.maxon`, which is outside the subtree entirely, reaches INTO an `Item` through `h.items`. Narrowing
+`Item` to `module` on that advice makes E4006 refuse the access, so the advice would be wrong in exactly
+the way E3092's would.
 ```maxon
 // --- file: pkg/store.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -939,8 +940,8 @@ end 'main'
 ## A finding may not depend on WHICH INTERNER an id is resolved in
 
 <!-- test: error.unused-exported-type-when-the-two-interners-disagree -->
-⛔⛔ **THE PROGRAM'S VERDICT MOVED WHEN AN UNRELATED FILE WAS ADDED, AND THIS IS THE SMALLEST PROGRAM
-THAT SHOWS WHY.** A merged function's `maxonParamTypes` carry ids minted against the PROJECT interner
+⛔⛔ **A PROGRAM'S VERDICT MUST NOT MOVE WHEN AN UNRELATED FILE IS ADDED, AND THIS IS THE SMALLEST PROGRAM
+THAT SHOWS HOW IT COULD.** A merged function's `maxonParamTypes` carry ids minted against the PROJECT interner
 (`ParseStaging.remapArtifact`, then `TypeResolution.resolveNamedType`); the whole-program signature index
 folds a SECOND, independent per-file interner of its own. Resolving a signature's id against the index's
 table is right only while two insertion orders coincide.
@@ -949,12 +950,12 @@ table is right only while two insertion orders coincide.
 in a BODY cast, so the real parse interns it (`parseTypeReference`) and the declaration sweep — which reads
 declarations and not bodies — does not. Every name interned after it therefore sits one id lower in the
 index's table than in the project's, and `read`'s `Holder` parameter resolves, in the index's table, to
-`Victim`: the very declaration nothing outside `records/` names. The finding was SUPPRESSED by a credit no
-file earned.
+`Victim`: the very declaration nothing outside `records/` names. Resolved there, the finding would be
+SUPPRESSED by a credit no file earned.
 
 ⚠ **The order of the two declarations in `records/types.maxon` is load-bearing** — an off-by-one names the
-NEXT interned type, so `Victim` must be the one declared after `Holder`. Delete `aliases/casts.maxon` and the
-two tables agree again and the diagnostic returns, which is the control that identified the mechanism.
+NEXT interned type, so `Victim` must be the one declared after `Holder`. Without `aliases/casts.maxon` the
+two tables agree and even that resolution reports the diagnostic, so that file is what makes the case discriminating.
 ```maxon
 // --- file: aliases/casts.maxon
 export typealias Wide = int(i64.min to i64.max)
@@ -1003,7 +1004,7 @@ error E3092: records/<fragment>:22:13: exported type 'Victim' is never reference
 
 <!-- test: error.a-single-file-program-is-audited -->
 ⭐⭐ **A ONE-FILE PROGRAM IS AUDITED LIKE ANY OTHER.** `neverCalled` is `export` and nothing — inside the
-file or out — names it, which is exactly the fact E3092 reports; the file count was never part of the
+file or out — names it, which is exactly the fact E3092 reports; the file count is not part of the
 question. The declaration is at the fragment's root, so the diagnostic spells the name unqualified
 (`SignatureIndex.diagnosticNameInFile` returns the bare name where the namespace is empty).
 ```maxon

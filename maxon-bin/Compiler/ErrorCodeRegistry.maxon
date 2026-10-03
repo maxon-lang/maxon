@@ -30,12 +30,9 @@ export enum ErrorCode
 	parserUnexpectedToken = "E2001"
 
 	// A type was required here and the token stream had something else.
-	// The compiler emits it for the two shapes where a name IS present but is not a
-	// usable type: a bare sized type as a typealias RHS (`typealias I = i64`),
-	// and an `as` cast target that names a typealias the reading file cannot
-	// see. A cast target no declaration binds ANYWHERE is E3011 instead, which
-	// is sharper than a blanket E2003 -- see
-	// specs/cast-target-type-resolution.md.
+	// The compiler emits it where a name IS present but is not a usable type: a bare sized type as a
+	// typealias RHS (`typealias I = i64`). A type name the reading file cannot see is E3008 or E3088
+	// at every position it is written in.
 	// It also covers the shape where NO name is present and none can be
 	// inferred: an untyped closure parameter past the arity of the function
 	// type its call argument is declared with (`nums.map(function(a, b) gives
@@ -172,7 +169,7 @@ export enum ErrorCode
 	genericBaseNotGeneric = "E2055"
 
 	// A generic instantiation supplies the wrong number of type arguments -- 'Pair with Integer'
-	// where 'type Pair uses A, B' expects two (P1.6-A).
+	// where 'type Pair uses A, B' expects two.
 	genericArityMismatch = "E2056"
 
 	// A `test` declaration appears in a file whose name does not end in `.maxtest`. Tests belong
@@ -412,18 +409,14 @@ export enum ErrorCode
 	// otherwise pick the winner silently. Fires from `commitTypeNameDecls` in the compiler at the
 	// merge. Kind-independent exactly as (c) is: what is refused is the SECOND
 	// declaration of the name, whichever keyword introduced either of them --
-	// UNLESS THE TWO DECLARATIONS CANNOT SEE EACH OTHER, which is the whole
-	// rule (`typeNamePairMayCoexist` in the compiler). Three ways that holds: two
-	// `typealias` declarations in different files, whatever their FORMS (each
-	// alias form is scoped, and an ambiguity between two an author could both
-	// name is E3063 at the reference rather than a refusal of the
-	// declarations); a nominal declaration against a FILE-PRIVATE alias in
-	// another file; and a pair drawn from two LAYERS -- a `stdlib/`
-	// declaration and a user one are never both in scope. What still collides
-	// is one FILE declaring a name twice, two NOMINAL declarations, and a
-	// nominal declaration against an alias that is exported or `module`-visible
-	// from another file in the same layer. A pair of typealiases that does
-	// collide is E3061 rather than this code; (e) a name claimed
+	// UNLESS A QUALIFIED SPELLING TELLS THE TWO APART, which is the whole
+	// rule (`typeNamePairMayCoexist` in the compiler). What collides is one FILE
+	// declaring a name twice, two NOMINAL declarations, and a nominal declaration
+	// against an alias another file may name declared in the SAME directory. A
+	// nominal declaration and an alias in different directories coexist (an
+	// ambiguous bare use is E3063), and so does one against a FILE-PRIVATE alias
+	// in another file, or a `stdlib/` declaration against a user one. A pair of
+	// typealiases that collides is E3061 rather than this code; (e) a name claimed
 	// twice in the COMPILED type namespace -- a generic instantiation has no
 	// source name, so the compiler joins its base to its arguments (`Box with
 	// String` -> `Box_String`) and derives every per-type symbol from that
@@ -444,6 +437,16 @@ export enum ErrorCode
 	semanticAmbiguousOverload = "E3007"
 
 	// A symbol is referenced from another file but is not declared 'export'.
+	// It covers a function, a static member, a type and a typealias, at every position a name can be
+	// written in: a type annotation, a cast target, a construction or static call head, an `implements`,
+	// `extends`, `where` or `throws` clause, a `from` head, and a top-level initializer. A type the reading
+	// file may not name hides its members too: its fields, methods, extension methods, accessors and
+	// statics are refused through a value of it that reached the file, and so are the calls the compiler
+	// makes on that value's behalf -- interpolation, `==` and ordering operators, `for` iteration, and a
+	// `match` over a hidden enum or union. A value of a hidden interface type exposes none of its
+	// requirements. A value held at an exported interface answers that interface's requirements whatever
+	// type stands behind it, and so does a library witness dispatch such as a sort's comparison. Export the
+	// declaration, or reach it through an exported function or interface.
 	symbolNotExported = "E3008"
 
 	// A conversion that cannot be proven safe: an explicit cast whose source range does
@@ -452,9 +455,6 @@ export enum ErrorCode
 	// IMPLICITLY, where a value meets a declared type it cannot reach without loss
 	// (`takeInt(3.7)`, `return 3.7` from a `returns int`). One code, because it is one
 	// fact: the answer to every one of them is an explicit `trunc`/`round`/`floor`/`ceil`.
-	// The implicit half was a WRONG ANSWER until P1.0d.4 -- specs/type-casting.md
-	// rejected `5.0 as int` while specs/implicit-type-conversion.md silently truncated
-	// the identical conversion at a call argument.
 	semanticUnsafeCast = "E3009"
 
 	// A cast converts nothing: it names the value's own typealias (`b as Byte` on a `Byte`), or it
@@ -506,8 +506,9 @@ export enum ErrorCode
 	// `var` holds included — is refused while an immutable binding is read after the call whose record it may be
 	// (`grow(pass(a))`, `pass(a).push(9)`), that borrows it out of the same mutable storage, or that may be the same
 	// record by another road. Make the binding a `var`, or pass a `clone()`. Asked by name by the Maxon-tier mutation
-	// check and, of a value, by `StorageProvenance`. A `let` LENT to a message whose handler writes that parameter is
-	// refused at the send the same way: the handler would write the sender's graph from another green thread.
+	// check and, of a value, by `StorageProvenance`. Inside a closure, a captured name the closure holds as its
+	// own copy is refused at a parameter the callee writes too: the write could not reach the binding the author
+	// named.
 	semanticImmutableRefToMutatingParam = "E3019"
 
 	// An enum declares the same case name twice.
@@ -565,15 +566,14 @@ export enum ErrorCode
 	errorTypeMismatch = "E3059"
 
 	// Two typealiases in scope declare the same name.
-	// Two `typealias` declarations of one name in DIFFERENT files are legal,
-	// whatever their forms: every alias form is scoped, a non-exported one is
-	// file-local (specs/duplicate-typealias.md), and an ambiguity between two
-	// an author could both name is a property of the USE -- E3063 at the
-	// reference -- rather than a refusal of the declarations. What this code
-	// refuses is ONE FILE declaring the name twice, which no qualification
-	// could disambiguate. The compiler raises it from `commitTypeNameDecls` when BOTH
-	// declarations are typealiases; a colliding pair involving a
-	// `type`/`enum`/`union`/`interface` is E3006 instead.
+	// Two `typealias` declarations of one name collide when no qualification could tell them apart: ONE
+	// FILE declaring the name twice, or two files of ONE DIRECTORY each declaring it at a tier another file
+	// may name (`module`, `export` or `public`), since both share one qualified spelling. Two library
+	// aliases of one name that a single reader could name both collide too. A file-private alias is
+	// reachable from its own file alone and collides with nothing outside it. Aliases in different
+	// directories are legal whatever their forms; an ambiguity between two an author could both name is a
+	// property of the USE -- E3063 at the reference. A colliding pair involving a
+	// `type`/`enum`/`union`/`interface` is E3006 instead. Rename one declaration, or make it file-private.
 	semanticDuplicateTypeAlias = "E3061"
 
 	// A typealias is declared and never used.
@@ -587,10 +587,12 @@ export enum ErrorCode
 	// is not a use.
 	semanticUnusedTypeAlias = "E3062"
 
-	// a bare-name type reference has more than one reachable
-	// typealias definition under directory-as-module rules. The user must
-	// write the directory-qualified form (`dir.Name`) to disambiguate.
-	// Mirrors E3095 (functions) but operates on the typealias registry.
+	// A bare type name has more than one declaration this file may name -- typealiases, types, enums,
+	// unions or interfaces in different directories, or one of them and a standard-library declaration of
+	// the same name. A declaration in the reading file itself wins its bare name and is never ambiguous.
+	// It is refused at every position a type name can be written in, and the message lists the qualified
+	// spellings that remove the ambiguity: `dir.Name` for a directory, `export.Name` for the project root,
+	// `stdlib.Name` for the standard library. Mirrors E3095, which is the same rule for functions.
 	semanticAmbiguousTypeAlias = "E3063"
 
 	// a pure-function call's result was discarded. Pure callees must
@@ -696,7 +698,14 @@ export enum ErrorCode
 	// function that reassigns its parameter counts as such a mutation: the
 	// reassignment drops the record the caller's storage held, from another
 	// frame, which frees exactly what the outstanding reference points into.
-	// Emitted by the Maxon-tier `runMaxonBorrowCheck` pass.
+	// A borrow is any binding read out of a record -- an element or a field. The record it was read from may
+	// not be MOVED while the borrow is still read: into a message argument, an `async` call, or the value a
+	// `match` or ternary branch gives. Nor may the binding it moved into be dropped at the end of its block
+	// while the borrow is read after it. Each message names the write, the borrower and the line it borrowed
+	// at.
+	// A second message shares the code: an argument read from a binding that a later argument of the same
+	// call hands by reference to a function that may replace it. The value read may no longer be what the
+	// binding holds. Read it into a `let` first and pass that.
 	semanticBorrowConflict = "E3070"
 
 	// a statement appears in the same straight-line block body
@@ -815,7 +824,8 @@ export enum ErrorCode
 
 	// A 'module'-visible symbol is accessed from outside its declaring directory subtree.
 	// Symbol declared with the `module` keyword (visible to the declaring directory
-	// subtree only) but accessed from outside that subtree.
+	// subtree only) but accessed from outside that subtree. It is refused at the same positions, and hides
+	// the same members, as E3008. Make the declaration `export`, or reach it from inside its subtree.
 	symbolNotInModuleScope = "E3088"
 
 	// A typealias refers back to itself, through a chain of aliases or of `implements` clauses.
@@ -894,45 +904,6 @@ export enum ErrorCode
 	// The fix a diagnostic can name is the point: it says which two-parameter type to write.
 	promiseErrorTypeMismatch = "E3098"
 
-	// A closure that CAPTURES, ESCAPING the frame its captures point into.
-	// THE RULE: a closure that captures may not escape its defining frame.
-	// A closure captures BY REFERENCE: LowerClosureCreate allocates an environment and
-	// fills it with the ADDRESSES of the enclosing frame's stack slots, so that reads
-	// through a capture see later mutations of the captured variable. The environment is
-	// therefore only meaningful while that frame is alive. Let the closure outlive the
-	// frame and every captured read dereferences a dead frame -- the classic upward-funarg
-	// problem. It compiles clean and dies at runtime, so it is refused where the mistake
-	// is still legible rather than left to fault inside emitted code the author never wrote.
-	// The routes refused are every store the parser can see WITHOUT interprocedural
-	// analysis:
-	// - RETURNING one out of the frame that built it (`makeAdder` -- the common idiom, and
-	// the reason this exists). Returning a closure an OUTER frame built is fine and is
-	// allowed: that environment points into a frame that is still alive.
-	// - storing one in a struct FIELD, a GLOBAL/static, a CONTAINER (array/map literal)
-	// element, a union's associated-value PAYLOAD, or through a PAYLOAD BINDING (which
-	// looks like a plain local but is an alias INTO the enum's heap box, so assigning
-	// through it writes back). Each is one 8-byte slot holding the code pointer alone,
-	// and each is heap memory outliving every frame, so the store drops the environment;
-	// the call then passes env=0 and the first captured read dereferences null.
-	// DELIBERATELY NOT REFUSED -- the interprocedural route: a capturing closure passed as a
-	// CALL ARGUMENT to a callee that then stores it (`Handler.create(function(n) gives n +
-	// bump)`), and symmetrically a capturing closure arriving as a call's RETURN value. At
-	// that store the value is a *parameter*, and whether it carries an environment is a fact
-	// about the CALLER -- deciding it needs a per-parameter escape summary propagated over
-	// the call graph, i.e. escape analysis proper. That is out of scope and stays a runtime
-	// nil-deref. Passing a capturing closure DOWN to a callee that only
-	// CALLS it is perfectly safe and must keep working.
-	// A NON-capturing closure is unaffected and must keep working -- it lowers to a plain
-	// MaxonFunctionRefOp, has no environment to lose, and passes every check above BY
-	// CONSTRUCTION rather than by an exception carved for it. It is what a table of handlers
-	// or passes keyed by a struct field is built from.
-	// What would MAKE the refused routes work is escape analysis plus by-value (or boxed)
-	// capture, so a closure's environment outlives the frame that built it. That is a real
-	// language mechanism and it is DELIBERATELY DEFERRED here: adopting it would change the
-	// by-reference capture semantics the closure specs currently pin. The compiler schedules it at
-	// P1.5, where it co-lands with `async` -- a green-thread capture IS an escape.
-	capturingClosureEscapes = "E3099"
-
 	// A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
 	// The thunk owns its result and HANDS IT OVER at the await -- that is the ownership model the
 	// language already has everywhere else. A second await would take a second +1 on a payload the
@@ -962,9 +933,12 @@ export enum ErrorCode
 	// single-owner model an owned value (an owned String, a struct box) has exactly one owner; a
 	// `let u = t` / `s = t` whose RHS is a bare `var` TRANSFERS ownership to the destination, and so does
 	// `var u = t` / `s = t` from a `let` that is its record's sole reference (`StorageProvenance.checkMoveSites`);
-	// the source is left moved-from. A later read of the source is refused -- it would read a value another
-	// binding now owns and will drop, and dropping it twice is a double-free. A WRITE to a moved-from `var` is
-	// legal (it revives the binding).
+	// the source is left moved-from. A `let` or `var` handed to a service message, to a `spawn` or to an
+	// `async` call moves the same way, a binding a closure captures moves into the closure, and one binding
+	// handed twice to one call is moved by the first. A later read of the source is refused -- it would read
+	// a value another owner now holds and will drop, and dropping it twice is a double-free. A value moved
+	// inside a loop is refused at its read on the next trip. A WRITE to a moved-from `var` is legal (it
+	// revives the binding). Read a `.clone()` instead, or move the value only after its last read.
 	// A PROMISE moves the same way and is refused here too: storing one into a container slot, a struct field
 	// or a union case, or passing it to a call by value, gives its green thread to that new owner, and a
 	// later use of the name it was stored from would name a thread this frame no longer holds. Awaiting or
@@ -991,14 +965,6 @@ export enum ErrorCode
 	// Before it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file
 	// and no line -- a compiler crash where a diagnostic was owed.
 	targetUnsupportedConstruct = "E3104"
-
-	// Two FILES declare the same `export`ed or `public` ranged typealias name over DIFFERENT underlying
-	// primitives -- one `int`, the other `float`. A name every file may reach has to mean one primitive
-	// to every reader, so it is refused at the SECOND file's declaration.
-	// A private (file-scoped) typealias belongs to its own file: two files may declare one private name
-	// over different ranges or different primitives (`specs/duplicate-typealias.md`).
-	// Rename one declaration, or make it private to its file.
-	semanticTypeAliasUnderlyingConflict = "E3105"
 
 	// `Array.resize` is called on an array whose ELEMENT TYPE IS MANAGED -- a struct, a `String`,
 	// a nested container, a boxed union. Such an element lives in the buffer as a refcounted
@@ -1552,10 +1518,10 @@ export enum ErrorCode
 	semanticServiceNotASpawnTarget = "E3134"
 
 	// A message of a service declares a parameter whose value cannot cross to another green thread.
-	// A send moves an argument or lends it, and either way the receiving green thread must reach, count and
+	// A send moves an argument, and the receiving green thread must reach, count and
 	// release what it is handed through the request union's payload cascade. Three shapes cannot be reached that
-	// way. A `Promise` is a green-thread handle its awaiter owns. A function value reaches
-	// a captured environment block, which is a box with a second referent by construction. An
+	// way. A `Promise` is a green-thread handle its awaiter owns. A function value is a closure record
+	// that owns what it captures, and it does not cross to another thread. An
 	// opaque type parameter has no layout at the send, so the sender cannot know what it is handing over.
 	// A value held at an interface type does cross: the request carries its witness half beside it.
 	// The diagnostic fires at the `spawn` that made the type a service, which may be in a different file
@@ -1611,15 +1577,14 @@ export enum ErrorCode
 
 	// A value handed to another green thread cannot be proven to have exactly one owner, so it may not
 	// cross. It is asked of a message argument, of a `spawn`'s state, and of a service handler's reply.
-	// A MOVE -- a `spawn`'s state, a reply, and a message argument that is a `var`, a temporary or a literal --
-	// makes the service the value's one owner, and the sending frame gives up the reference it held. A box one
-	// green thread holds steps its count with a plain load/add/store, so a value this frame still shares with
-	// something else would put one box in two green threads' hands without saying so, which corrupts the heap.
-	// A `let` local that solely owns its graph is LENT instead: its graph is marked shared and counted
-	// atomically, and E3160 keeps it unwritten.
+	// Each of them MOVES -- a `let` or `var` binding, a temporary or a literal alike -- and makes the service
+	// the value's one owner, and the sending frame gives up the reference it held; a later read of the binding
+	// is E3102. A box one green thread holds steps its count with a plain load/add/store, so a value this frame
+	// still shares with something else would put one box in two green threads' hands without saying so, which
+	// corrupts the heap.
 	// Three shapes fail it, and E3135 is the neighbouring rule about the argument's TYPE rather than its
-	// ownership. The first is an OWNED value this frame has already taken a second reference to -- a value a
-	// closure captured, one pushed into a container, one handed to another consuming call. The second is a
+	// ownership. The first is an OWNED value this frame has already taken a second reference to -- a value
+	// pushed into a container, or handed to another consuming call. The second is a
 	// BORROWED value this frame does not own at all -- a struct or a `String` read out of a field, an element, or
 	// a parameter. Only a string LITERAL this frame wrote is promoted to a fresh owned copy at the send.
 	// The cure for those two is `.clone()`, which is explicit precisely because it is O(n) and the language
@@ -1631,8 +1596,7 @@ export enum ErrorCode
 	// behind on this green thread, stepping a count the service steps too. No compile-time tier can settle
 	// it: the retain can happen inside a callee the site cannot see, and `push(cell)` and
 	// `push(Cell.create())` build the same TYPE. So the graph is walked where the counts are -- at run time,
-	// immediately before the hand-off, by a synthesized per-type walk, which for a lend also marks every
-	// record it reaches shared. The graph may reach one record several times when each of those references is
+	// immediately before the hand-off, by a synthesized per-type walk. The graph may reach one record several times when each of those references is
 	// one of its owners; a reachable record with an owner OUTSIDE the graph ABORTS the process (exit 96) on
 	// the sending green thread, before anything is enqueued. An immortal `.rdata` literal passes with no count
 	// to check; a shared copy-on-write BUFFER is detached, exactly as a write to it would detach it.
@@ -1645,6 +1609,10 @@ export enum ErrorCode
 	// run time, so a conformer no walk can be built for aborts the same way (exit 96) instead.
 	// A service reply whose type an instantiation still fixes is asked at the `spawn`, over the substituted
 	// type, rather than at the `return` -- so the diagnostic fires at the `spawn`.
+	// An `async` call's argument moves too, into a coroutine that stays on this green thread, so only one
+	// shape fails there: a value this frame also reads through a name that holds no reference of its own. The
+	// coroutine releases the value when it ends, and that name would go on reading it. A co-owner holding its
+	// own count moves like any other binding. Pass a `.clone()`, or build the value at the call.
 	semanticServiceArgumentNotUnique = "E3138"
 
 	// Two or more services can await replies from each other, so a message of each could be blocked waiting
@@ -1880,7 +1848,7 @@ export enum ErrorCode
 	reservedNameAsFunctionValue = "E3155"
 
 	// A named function whose PARAMETER is held at an interface type was used as a function VALUE. A function
-	// value is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per
+	// value is called through one uniform indirect ABI, which carries one machine word per
 	// argument, and an interface-typed parameter reserves an adjacent witness word beside its value half — a
 	// word the indirect call has no slot for, so the callee would dispatch through whatever the register held.
 	// The DECLARATION is not what is refused: a direct call reserves that slot and fills it, which is why this
@@ -1916,22 +1884,6 @@ export enum ErrorCode
 	// first, or write an independent copy made with `clone()`. Decided by `StorageProvenance.checkWriteThroughSites`
 	// and `checkReceiverWrites`.
 	semanticWriteThroughImmutableRecord = "E3159"
-
-	// A value lent to another green thread would reach storage through which it could be written. A message
-	// argument that is a `let` local is LENT: the sender keeps reading it and the service reads the same graph,
-	// so from the send on that graph is frozen. Neither the lent binding nor any value read out of it -- a field,
-	// an element, a payload, a `let` alias, a `for` or `match` binding -- may be bound or assigned to a `var`,
-	// stored in a field, a union payload or a container, returned, captured by a closure, passed to a parameter
-	// its callee keeps, or handed to a method or a parameter that writes it. Reads, interpolation, `let`
-	// bindings, parameters that neither write nor keep, and a second send stay legal. A value whose type holds
-	// nothing a statement can write -- a service handle, or a struct whose fields are all `let` over such types --
-	// is exempt. "From the send on" is the control flow rather than the text: a door the send cannot reach -- one
-	// on the other arm of the `if` or `match` whose arm sent -- is not frozen, and a door the next trip of a loop
-	// reaches is. The receiving side answers to the same rule, whole-program: a handler whose parameter, or
-	// anything read out of it, escapes through one of those doors refuses every send that lends to it, reported
-	// at the send and naming the escape; a handler that writes its parameter is E3019. Send a `.clone()`, or bind
-	// the value with `var` so the send moves it.
-	semanticLentGraphEscapes = "E3160"
 
 	// A handler over a combined error -- a block-form `try` whose calls throw several error types, at least one
 	// of them a union with payloads -- does not match its `(e)` exactly once on every path. Such an error may
@@ -2101,6 +2053,23 @@ export enum ErrorCode
 	// enum; a function value, an `Array` or other generic instance, an interface value or a `cstring`
 	// is none of those. Reported at the call.
 	genericArgumentKindUnsupported = "E3181"
+
+	// A directory holding the program's source cannot be spelled as a namespace. Each directory is a
+	// namespace written with its path's pieces joined by dots (`app.ui.Button`), so every piece must lex as
+	// one name, and the first must not be a keyword or a qualifier the language already owns: `export`
+	// qualifies the project root, `stdlib` names the standard library and `runtime` the runtime tier.
+	// Reported when the program is loaded, naming the directory and the piece. Rename the directory.
+	namespaceDirectoryNotNameable = "E3182"
+
+	// A closure, or a value holding one, is stored into a record the closure captures or a record that
+	// record reaches. A closure holds a counted reference to every record it captures, so the record would
+	// hold the closure and the closure the record, and neither would ever be released. The store is
+	// followed through fields, array elements, union payloads, tuples, struct literals, module variables,
+	// clones, returned values and the callees a closure is handed to, in the order the stores run, and each
+	// cycle is reported once, at the store that closes it. Store
+	// the closure somewhere the captured record does not reach, or capture the value the closure needs
+	// rather than the record holding it.
+	closureStoredIntoWhatItCaptures = "E3183"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

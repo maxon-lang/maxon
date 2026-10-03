@@ -33,41 +33,31 @@ Two consequences follow from "bytes and ASCII only", and they are what these tes
 `toLower`/`toUpper`/`replace` return a NEW `String` and `split` a NEW `Array with String` whose elements
 are new `String`s; the receiver is never modified and never aliased by a result.
 
-⚠ **ALL SEVEN ARE SERVED BY `stdlib/String.maxon`, NONE OF THEM IS THE COMPILER'S OWN ANY MORE, AND EVERY ANSWER
-BELOW IS THE SAME AS IT WAS ON THE OTHER SIDE OF THAT LINE.** `startsWith`/`endsWith` went first (W49
-wave 1), then `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2), then `contains` (wave 4), and `split`
-last (wave 5). Each was struck from `Parser.stringSurfaceMemberNames`, which is the whole of what moved it:
-an unrostered member of a byte record is put to the corpus, and the corpus already declared every one. This
-file is where that is checked to have changed NOTHING a program can observe — which is the only claim a
-retirement is allowed to make.
+⚠ **ALL SEVEN ARE SERVED BY `stdlib/String.maxon`, AND NONE OF THEM IS THE COMPILER'S OWN.** None is on
+`Parser.stringSurfaceMemberNames`: an unrostered member of a byte record is put to the corpus, and the
+corpus declares every one.
 
-⚠ **`split` WAS HELD BACK THREE WAVES FOR ONE MEASUREMENT, AND THE CASES BELOW ARE WHERE IT WAS TAKEN.** It
-is the only member of the seven that CONSTRUCTS a container: its synthesized arm decided an
-`Array with String`'s element size and its `element_destroy@40` stamp through the compiler's own
-array-creation door, and the open question was whether the corpus's `typealias StringArray = Array with
-String` decides them the same way. It does — measured on the emitted x64, the same element size and the
-same `__str_decref` stamp, from one interned instance rather than two — so `split-many-segments` (which
-grows the result well past its initial capacity) and `unbound-results-do-not-leak` (which drops one
-unnamed) are the two cases that would have caught a wrong stamp, in the two directions a wrong one fails:
-a leak and a double free.
+⚠ **`split` IS THE ONLY MEMBER OF THE SEVEN THAT CONSTRUCTS A CONTAINER.** The corpus's `typealias
+StringArray = Array with String` decides the result's element size and its `element_destroy@40` stamp
+(`__str_decref`), from one interned instance, so `split-many-segments` (which grows the result well past
+its initial capacity) and `unbound-results-do-not-leak` (which drops one unnamed) are the two cases that
+catch a wrong stamp, in the two directions a wrong one fails: a leak and a double free.
 
-The one thing it genuinely does change is the OWNERSHIP ROUTE. A synthesized arm emits an inline runtime
-call and borrows its argument; a corpus call goes through the ordinary call door, which is where a result
-is minted, an owned temporary is enrolled and a consumed parameter is applied. Both end up borrowing
-here — the caller drops the temporary after the call returns — but they arrive there by different code,
-so the last four cases pin the shapes that could tell them apart: an argument that is an owned TEMPORARY
+Each is an ordinary corpus call, so it goes through the ordinary call door, which is where a result is
+minted, an owned temporary is enrolled and a consumed parameter is applied. It borrows its argument —
+the caller drops the temporary after the call returns — so the last four cases pin the shapes that
+exercise that route: an argument that is an owned TEMPORARY
 with nobody else to free it, an argument that is a live BINDING the caller uses again afterwards, and —
 for the two-argument replacements, whose corpus bodies hold a live view of the receiver's bytes across an
 append of the replacement — an argument that IS the receiver.
 
-⚠⚠ **WAVE 2 IS ALSO WHERE A RETIREMENT FIRST REACHED A DOOR NOTHING HAD EVER WALKED THROUGH.** The corpus
-`toLower`/`toUpper` are `mapAsciiCase`, which maps a private copy through `String.byteAt` and
-`String.setByte`, and `setByte` had no other caller in the whole corpus. The compiler served it by writing through
-`__str_bytes_view(self)` — a NON-OWNING view record — so the write copy-on-write-detached into a private
-buffer that died with the temporary, and every case conversion in this file returned its receiver verbatim
-the moment the retirement landed. The arm now hands the write the String's OWN record. That is the reason
-`case-conversion-does-not-mutate-receiver` and `case-conversion-on-let-binding` (in `string-type-2.md`)
-are not redundant with the cases here: they ask about the RECEIVER, and these ask about the RESULT.
+⚠⚠ **`toLower`/`toUpper` ARE `mapAsciiCase`, WHICH MAPS A PRIVATE COPY THROUGH `String.byteAt` AND
+`String.setByte`**, and `setByte` has no other caller in the whole corpus. The write goes to the String's
+OWN record; a write through a NON-OWNING view record would copy-on-write-detach into a private buffer that
+dies with the temporary, and every case conversion in this file would return its receiver verbatim. That
+is the reason `case-conversion-does-not-mutate-receiver` and `case-conversion-on-let-binding` (in
+`string-type-2.md`) are not redundant with the cases here: they ask about the RECEIVER, and these ask
+about the RESULT.
 
 ## Tests
 
@@ -230,8 +220,8 @@ allocation, the other re-walks them and writes. Both advance the cursor PAST the
 `"aaaa".replace("aa", …)` is two matches and not three. ⚠ **Nothing but this agreement bounds the write** —
 if the counting pass ever stepped differently from the building pass the result would be sized for one
 number of matches and filled for another, which is a heap overrun or an under-filled buffer, not a crash.
-MEASURED: stepping the count pass by 1 instead of by the needle's length wrote 2 bytes into a 1-byte
-allocation and surfaced only as a one-character stdout diff. A replacement LONGER than the needle is what
+Stepping the count pass by 1 instead of by the needle's length writes 2 bytes into a 1-byte
+allocation and surfaces only as a one-character stdout diff. A replacement LONGER than the needle is what
 makes the divergence unmistakable here, because the two passes then disagree about the SIZE and not only
 about the count. `split` walks the same matches by the same rule, so `"aaa".split("aa")` is two parts.
 ```maxon

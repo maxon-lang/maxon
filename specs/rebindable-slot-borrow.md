@@ -46,10 +46,6 @@ value came out of being rebound underneath it.
 write can replace its occupant and the structural argument holds for the original reason. The mark
 is about REBINDABILITY, not about being a slot.
 
-Every exit code and every printed line below REPRODUCED as a defect before the fix: the array case
-exited **0xC0000005**, the global case exited **0xC0000005**, and the String case was worse than
-either — it silently printed `len 4557430888798830399` where the answer is `len 11`.
-
 ## Tests
 
 <!-- test: managed-field-read-survives-the-field-being-replaced -->
@@ -99,10 +95,9 @@ end 'main'
 ```
 
 <!-- test: the-var-spelling-was-always-correct -->
-**THE CONTROL, and it is what makes the fix a widening rather than an invention.** One keyword
-apart from the case above. This spelling already promoted (`mutable and valueIsManagedHeap and not
-valueIsOwnedHeap`) and already ran; a cure that changed its answer would have been fixing the wrong
-thing.
+**THE CONTROL.** One keyword apart from the case above. This spelling promotes (`mutable and
+valueIsManagedHeap and not valueIsOwnedHeap`) and runs; a change that altered its answer would be
+fixing the wrong thing.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -138,11 +133,11 @@ end 'main'
 ```
 
 <!-- test: string-field-read-survives-the-field-being-replaced -->
-⭐⭐ **THE SPELLING THAT DID NOT CRASH, WHICH IS WHY IT IS HERE.** A `String` field is the same
-defect with a quieter symptom: the store's `__str_decref` frees the record and the read comes back
-with whatever the allocator left behind. MEASURED without the acquire: `len
-4557430888798830399`. A garbage length is a WRONG ANSWER a green suite would never have noticed,
-where the array case at least announced itself with an access violation.
+⭐⭐ **THE SPELLING THAT DOES NOT CRASH, WHICH IS WHY IT IS HERE.** A `String` field is the same
+hazard with a quieter symptom: without the acquire, the store's `__str_decref` frees the record and
+the read comes back with whatever the allocator left behind — a garbage length, a WRONG ANSWER a
+green suite would not notice, where the array case at least announces itself with an access
+violation.
 
 The promotion here is the `binding` door (`let old = name`), and that door still COPIES:
 `promoteBorrowedToOwned` routes it to `promoteToOwnedString`, the `__mm_alloc` + `__str_copy` pair
@@ -157,7 +152,7 @@ unconditional copy to stay off read-only memory.
 ⚠ **THE `binding` DOOR IS NOT THE ONLY ONE STILL COPYING, AND A LIST OF WHAT RETAINS IS NOT A
 LIST OF EVERY DOOR.** A CONSUMED ARGUMENT — a borrowed `String` handed to a callee that STORES
 it — takes `transferConsumedArg`'s byte-record arm, which is `promoteToOwnedString` as well.
-MEASURED: `relay(s String) returns Rec` whose whole body is `return Rec.create(s)` emits
+`relay(s String) returns Rec` whose whole body is `return Rec.create(s)` emits
 `__mm_alloc` + `__str_copy` on `s` BEFORE the call, and `let r = relay(v)` followed by
 `v.append("XY")` prints `v=abXY name=ab` — where the direct store of the same shape,
 `dst.name = src.name`, emits `__str_retain` and the two names share one record. So the answer a
@@ -197,9 +192,8 @@ len 11
 
 <!-- test: mutable-global-read-survives-the-global-being-replaced -->
 **THE SECOND SLOT KIND.** A top-level `var` is rebindable storage exactly as a field is, and
-`emitCheckedGlobalStore` decrefs the old occupant on the way past — so the immutable arm of
-`recordGlobalReadValue` marking and the writable arm not marking was the whole of the gap. Before
-the fix this exited **0xC0000005**; the oracle prints `sum 3`.
+`emitCheckedGlobalStore` decrefs the old occupant on the way past — so the writable arm of
+`recordGlobalReadValue` marks exactly as the immutable arm does.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -266,12 +260,12 @@ end 'main'
 ```
 
 <!-- test: the-promoted-name-keeps-its-declared-surface -->
-⭐ **THE REGRESSION THE PROMOTION WOKE, PINNED WHERE THE PROMOTION IS.** `__ManagedMemory` and the
+⭐ **THE SURFACE A PROMOTION MUST CARRY, PINNED WHERE THE PROMOTION IS.** `__ManagedMemory` and the
 `Array` around it are one record told apart by PROVENANCE, and that provenance is keyed by ValueId
 — so a promotion, which mints a FRESH id, must carry it or `m.length()` becomes
 `E2015: Array member 'length'`. `let (m, n) = pair()` binds `m` to a field load off the hidden tuple
-temp, which is a rebindable-slot read, so this is the first program to take the promotion with a
-surface to lose.
+temp, which is a rebindable-slot read, so this program takes the promotion with a surface to
+lose.
 
 ⛔ The carry belongs to `promoteBorrowedToOwned` and NOT to `retainBorrowedAggregate` one level
 down: the ADOPTION door (`array-init.md`'s `the-surface-flips`) shares that retain and depends on

@@ -2,10 +2,9 @@
 /// @category System
 ///
 /// `Console.stdin()` returns a `Stdin` reader that buffers OS reads. Successive
-/// `readLine()` calls return one line each (terminator stripped). `readBytes(n)`
-/// drains exactly n bytes (or fewer, on EOF). The reader is stateful — keep a
-/// single instance for the lifetime of the program; constructing a new one
-/// silently drops anything already buffered from a prior read syscall.
+/// `readLine()` calls return one line each (terminator stripped). The reader is
+/// stateful — keep a single instance for the lifetime of the program; constructing
+/// a new one silently drops anything already buffered from a prior read syscall.
 /// Errors emitted by buffered stdin reads
 public enum ConsoleError implements Error
 	endOfFile
@@ -18,17 +17,10 @@ enum NotFound implements Error
 	notFound
 end 'NotFound'
 
-typealias ByteArray = Array with Byte
-
 // Chunk size for each underlying __Builtins.readStdin call. 4 KiB balances
 // syscall overhead against memory footprint for typical line-oriented input.
 let chunkSize = 4096
 
-// `Console.stdin()` constructs a Stdin via Stdin.create(), so the static
-// factory stays visibility-marked (`public`). The instance methods need none —
-// Maxon resolves method calls through inferred receiver types regardless of
-// the type's own visibility. `Stdin` itself is file-private; callers bind
-// it through inference (`let stdin = Console.stdin()`).
 public type Stdin
 	var pending as ByteArray
 	var eofSeen as bool

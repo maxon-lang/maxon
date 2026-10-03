@@ -11,7 +11,7 @@ category: generics
 
 `countof(T)` is `sizeof(T)`'s twin one axis over: `sizeof` answers in BYTES PER VALUE,
 `countof` in ELEMENTS PER INSTANCE. It is defined for exactly the types whose element count
-is part of their identity — today the fixed-size container, `Vector with N Element` (see
+is part of their identity — the fixed-size container, `Vector with N Element` (see
 [vector](vector.md)). A growable `Array`'s length is a runtime field of the record rather than
 a coordinate of its type, so `countof` of one is refused; ask the value for its `count()`.
 
@@ -37,8 +37,7 @@ in them describes the argument, and the run makes the argument identical on both
 A count word in that blob would be read through the forward and answer the CALLER's count.
 `Vector with 4 Element` inside `type Holder uses Element` states 4 whatever `Element` turns
 out to be, while `Holder`'s own blob states no count at all — so the shared body would read
-0. (Measured, when the count was a tenth descriptor word: the case below returned 0 where 4
-is the answer.) Nor can the forward simply be refused in favour of minting: the forward fires
+0 where 4 is the answer. Nor can the forward simply be refused in favour of minting: the forward fires
 only when the instance's first type argument IS a type parameter, and minting a blob for such
 an instance is impossible — the blob would have to carry that parameter's SIZE, which is
 itself a descriptor read.
@@ -129,20 +128,17 @@ no `__self` in scope — and it reads its own instance's count once per element.
 two different sizes it walks 3 trips and then 5, which is what the global counter shows: the
 count reached a receiverless body, and it was the right one both times.
 
-⚠ **`rebuild()` USED TO READ `try fresh.get(0) otherwise 0`, AND THAT SPELLING STOPPED BEING WELL
-TYPED WHEN `get` RETIRED (W190).** The compiler-served accessor typed a vector element `integer`
-whatever the instance said, because `requireVectorElementType` guarantees a scalar; the corpus body is
-honestly typed `Element`, which inside `extension Vector` is a TYPE PARAMETER — so the `otherwise` had
-no `Element` to offer (`E3059 … 'int' does not match expected type 'type parameter'`) and the `Int`
-return had none either. That is the shared-body thesis and not a loss: The compiler compiles ONE body for every
-size, so an element read there is opaque exactly as `sizeof(Element)` is. What the case needs of the
-static's RESULT is that it be the receiver's own instance.
+⚠ **`rebuild()` DOES NOT READ AN ELEMENT.** The corpus `get` is typed `Element`, which inside
+`extension Vector` is a TYPE PARAMETER — so `try fresh.get(0) otherwise 0` has no `Element` to offer
+(`E3059 … 'int' does not match expected type 'type parameter'`) and the `Int` return has none either.
+That is the shared-body thesis and not a loss: the compiler compiles ONE body for every size, so an
+element read there is opaque exactly as `sizeof(Element)` is. What the case needs of the static's RESULT
+is that it be the receiver's own instance.
 
-⚠⚠ **AND IT MUST NOT ASK `count()` FOR THAT, WHICH IS WHAT IT DID UNTIL `count()` RETIRED TO
-`countof(Self)` IN THE SAME RUNG.** The assertion was `fresh.count() == countof(Self)`, and once the
-corpus `count()` body IS `countof(Self)` both sides are one expression: the `if` cannot be false, the
-`panic` is unreachable, and the half of this case that watches the static's result stopped being able
-to FAIL while still reading as coverage. It counts the record's SLOTS instead — a `for … in` walk is the
+⚠⚠ **AND IT MUST NOT ASK `count()` FOR THAT.** The corpus `count()` body IS `countof(Self)`, so
+`fresh.count() == countof(Self)` is one expression on both sides: the `if` cannot be false, the `panic` is
+unreachable, and the half of this case that watches the static's result could not FAIL while still
+reading as coverage. It counts the record's SLOTS instead — a `for … in` walk is the
 one observation that goes through the record rather than through the type — so the comparison is
 record-against-type again, which is the thing being pinned.
 ```maxon
@@ -188,7 +184,7 @@ end 'main'
 <!-- test: error.sizeof-of-a-type-parameter-in-a-static-is-still-refused -->
 The door `countof` deliberately does NOT copy. In the very position the case above serves,
 `sizeof` of the type parameter is refused — its answer arrives through the layout descriptor,
-which B1 threads from the instance a method is called on, and a static has no such receiver.
+which is threaded from the instance a method is called on, and a static has no such receiver.
 The two are not the same question and must not share a gate: a count has a second source (the
 instance the static RETURNS) and a size, today, does not.
 ```maxon
@@ -218,20 +214,20 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:6: Unsupported: sizeof of a type parameter with no instance receiver in scope — a `static function`, and a closure written inside one, are receiverless, and B1 threads the layout descriptor from the instance a method is called on; read the size through an instance method on `self`, or a concrete instance, instead
+error E2015: <fragment>:7:6: Unsupported: sizeof of a type parameter with no instance receiver in scope — a `static function`, and a closure written inside one, are receiverless, and the layout descriptor is threaded from the instance a method is called on; read the size through an instance method on `self`, or a concrete instance, instead
 ```
 
 <!-- test: a-sized-field-of-another-generic-answers-its-own-count -->
 ⭐⭐ **THE CASE THAT DECIDES WHERE THE COUNT TRAVELS.** `Holder`'s field is a
 `Vector with 4 Element` — a sized instance written over the ENCLOSING generic's own type
 parameter, which is the one shape whose layout descriptor is FORWARDED rather than minted. A
-count carried in that descriptor is read out of `Holder`'s blob, which states none: **measured
-at 0 where 4 is the answer.** Carried in its own parameter it is filled in from the instance
+count carried in that descriptor would be read out of `Holder`'s blob, which states none, and
+answer **0 where 4 is the answer.** Carried in its own parameter it is filled in from the instance
 the call site actually holds, and answers 4.
 
-⚠ It also compiles at all, which the descriptor route could not manage here: `Holder.size()`
+⚠ It also compiles at all, which a descriptor route could not manage here: `Holder.size()`
 carries NO layout descriptor — no edge in the descriptor-need fixpoint gives a `Vector` method
-call one — so a `capacity()` that reserved a descriptor aborted the compiler in
+call one — so a `capacity()` that reserved a descriptor would abort the compiler in
 `emitInstanceDescriptorAddr`. A count-only body reserves nothing to forward.
 ```maxon
 typealias Int = int(i64.min to i64.max)
@@ -452,13 +448,13 @@ end 'main'
 ⭐ **AN UNNAMED RECEIVER.** `self.dup()` hands back a value of the enclosing type with no
 binding to hold it, so neither of the fixpoint's precise self-call columns can see the
 `.capacity()` that chains onto it — one keys on `self`, the other on a local bound to a
-`Self{…}`. A missing edge in that fixpoint is not a wrong answer but a COMPILER ABORT: measured,
+`Self{…}`. A missing edge in that fixpoint is not a wrong answer but a COMPILER ABORT:
 `caller 'Vector.chained' has no fixed-element-count parameter to forward to 'Vector.capacity'`.
 
-⛔ **THE RECORDED SHAPE IS `) . <member> (`, NOT EVERY `.<member>(`, and that difference is
-MEASURED rather than stylistic.** A receiver-blind arm read `VectorIter.create(managed)` inside
-`createIterator` as a call to `Vector.create`, whose `Self{}` seeds a DESCRIPTOR need, and every
-`for … in` over a vector grew a `lea` of its `__layout_*` blob — four drifting goldens. A
+⛔ **THE RECORDED SHAPE IS `) . <member> (`, NOT EVERY `.<member>(`, and that difference is not
+stylistic.** A receiver-blind arm would read `VectorIter.create(managed)` inside `createIterator` as a
+call to `Vector.create`, whose `Self{}` seeds a DESCRIPTOR need, and every `for … in` over a vector would
+grow a `lea` of its `__layout_*` blob. A
 receiver spelled as a NAME is already covered by a precise column; the only receiver they cannot
 see is a call's RESULT, and a call's result is what the `)` identifies.
 ```maxon
@@ -490,21 +486,17 @@ end 'main'
 
 
 <!-- test: a-local-bound-to-a-Self-returning-call-reaches-the-count -->
-⭐⭐ **THIS WAS A REFUSAL FOR ONE RUNG, AND `W190` RETIRED IT BY WIDENING THE SEED RATHER THAN BY
-ADDING A TOKEN SHAPE.** The pre-scan still cannot see that `dup()` returns `Self` —
-`selfTypedLocalBoundAt` admits `= Self{…}` and `= Self.<static>(` because those two spellings NAME
-the type, while `= self.dup()` names a METHOD — so nothing about `var other = self.dup()` changed.
-What changed is `dup`'s own body: `Self{}` inside the sized container BUILDS a record whose slots are
-published, so that literal now reserves the count slot itself
+⭐⭐ **THE SEED REACHES THIS CALLER THROUGH THE CALLEE'S BODY, NOT THROUGH A TOKEN SHAPE.** The
+pre-scan cannot see that `dup()` returns `Self` — `selfTypedLocalBoundAt` admits `= Self{…}` and
+`= Self.<static>(` because those two spellings NAME the type, while `= self.dup()` names a METHOD.
+What serves `var other = self.dup()` is `dup`'s own body: `Self{}` inside the sized container BUILDS a
+record whose slots are published, so that literal reserves the count slot itself
 (`Parser.ownRecordLiteralOfTheSizedContainerAt`). `dup` is therefore count-needing, `self.dup()` is an
 ordinary self-call edge, and the fixpoint gives `twice` the slot it had nothing to forward from.
 
-⚠ **THE REFUSAL IT REPLACED WAS REAL AND IS STILL REACHABLE** — the two cases below pin it, and
-before the door existed this exact program was *`panic at forwardCallerFixedElementCount: caller
-'Vector.twice' has no fixed-element-count parameter to forward`*. A shape the fixpoint CAN reach is
-served; one it cannot is refused with a line. That difference is the whole design, and it is why the
-door was not narrowed to make this case pass: the seed reaches the caller because the callee genuinely
-needs the count, not because a spelling was whitelisted.
+⚠ **THE REFUSAL NEXT TO IT IS REAL** — the two cases below pin it. A shape the fixpoint CAN reach is
+served; one it cannot is refused with a line. That difference is the whole design: the seed reaches the
+caller because the callee genuinely needs the count, not because a spelling was whitelisted.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -536,8 +528,8 @@ end 'main'
 <!-- test: error.an-alias-of-a-Self-typed-parameter-is-refused -->
 The same gap one alias further out. `other Self` IS a shape the pre-scan reads
 (`selfTypedParamDeclaredAt`), so `other.capacity()` is served — but a plain `var same = other`
-re-binds the value under a name nothing recorded, and the edge stops there. Measured as the same
-abort before this door existed; a positioned refusal now, naming the reach that works.
+re-binds the value under a name nothing recorded, and the edge stops there. It is refused at its
+position, naming the reach that works.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int

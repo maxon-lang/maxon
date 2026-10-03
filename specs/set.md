@@ -15,9 +15,8 @@ hash-table CORE for INT scalar keys: `insert`, `contains`, `remove`, `count`, an
 type's `Hashable` / `Equatable` witness tables (dictionary-passing), so the runtime is key-type-agnostic.
 
 A set is constructed either with `Set from [1, 2, 3]` — an array literal whose element type (int) is
-inferred — or with `IntSet.create()` for an empty typed set. `Set from` with managed/String keys and
-iteration are later slices. The witness tables ride the funcAbs64 relocation, which every target now
-fills: a `.text` VA on the fixed-base x64 and arm64 writers, a funcref-table index on wasm, and a dyld
+inferred — or with `IntSet.create()` for an empty typed set. The witness tables ride the funcAbs64
+relocation, which every target fills: a `.text` VA on the fixed-base x64 and arm64 writers, a funcref-table index on wasm, and a dyld
 chained-fixup REBASE on the always-PIE arm64-macOS. So these tests carry no target marker.
 
 ## Tests
@@ -356,4 +355,27 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: error.a-set-from-head-another-file-keeps-private-is-refused -->
+A `Set` instance alias at the head of `from […]` is a type name, and another file's file-private one is refused.
+```maxon
+// --- file: probe.maxon
+typealias Counts = Set with ExitCode
+
+export function probeCounts() returns ExitCode
+	let s = Counts from [1, 2]
+	print("{s.count()}")
+	return 0
+end 'probeCounts'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let s = Counts from [3]
+	print("{s.count()}")
+	return probeCounts()
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:13:10: typealias 'Counts' is not exported
 ```

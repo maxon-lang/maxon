@@ -44,11 +44,11 @@ end 'main'
   - `pow(x, 0.0)` returns 1.0 for any x
   - `pow(0.0, y)` returns 0.0 for positive y
   - `pow(1.0, y)` returns 1.0 for any y
-- ⭐ **Those three are still true and are no longer the whole story.** By user ruling `pow` now answers
-  as IEEE 754 defines it across every argument class, which changed one case from a WRONG ANSWER and
-  several from sentinels. The full table is pinned at the bottom of this file; the headlines:
+- ⭐ **Those three are not the whole story.** By user ruling `pow` answers
+  as IEEE 754 defines it across every argument class. The full table is pinned at the bottom of this
+  file; the headlines:
   - a **negative base with an integer exponent** is an ordinary computation — `pow(-2.0, 3.0)` is
-    `-8.0`. It used to return `0.0`.
+    `-8.0`.
   - a **negative base with a non-integer exponent** is `nan`; there is no real answer to ask for.
   - `pow(0.0, y)` for **negative** y is an infinity, not `0.0` — it is a division by zero, and the
     sign of the zero comes back out when y is an odd integer: `pow(-0.0, -1.0)` is `-inf`.
@@ -141,14 +141,12 @@ end 'main'
 ```
 
 
-⭐⭐ **compiler-authored, and the pin on the user ruling that took `Math.pow` to IEEE 754.** The case below
-is the one that makes the ruling more than a tidy-up: **`Math.pow(-2.0, exponent: 3.0)` used to return
-`0.0`.** `stdlib/Math.maxon` carried the line `return 0.0  // Simplified: return 0 for negative base`,
-which reads like a sentinel for a rejected input and is nothing of the kind — a negative base raised to
-an INTEGER power is an ordinary, completely well-defined computation, and `-8.0` is its answer. It was
-a wrong answer to a valid question, not a refusal.
+⭐⭐ **The pin on the user ruling that makes `Math.pow` IEEE 754.** The case below
+is the one that makes the ruling more than a tidy-up: a negative base raised to an INTEGER power is an
+ordinary, completely well-defined computation, and **`Math.pow(-2.0, exponent: 3.0)` is `-8.0`** —
+answering `0.0` would be a wrong answer to a valid question, not a refusal.
 
-The sign is now the exponent's parity and the magnitude comes from the SAME positive-base path every
+The sign is the exponent's parity and the magnitude comes from the SAME positive-base path every
 other call uses, so there is one numerical implementation here and one sign rule, rather than a second
 series written out for the negative half of the domain.
 
@@ -174,9 +172,8 @@ pow(-2,0.5)   nan
 pow(-2,0)     1.0
 ```
 
-⭐ **The zero base, which is where the other sentinel was.** `pow(0.0, y)` for a NEGATIVE y is a
-division by zero, so IEEE 754 answers an infinity; the old code returned `0.0` for every y, positive or
-negative, from two arms that both said `return 0.0`. The sign of the zero survives into the answer
+⭐ **The zero base.** `pow(0.0, y)` for a NEGATIVE y is a division by zero, so IEEE 754 answers an
+infinity, not a `0.0` sentinel. The sign of the zero survives into the answer
 exactly when the exponent is an odd integer — which is why `-0.0` has to be told apart from `0.0`, and
 that cannot be done with a comparison (`-0.0 < 0.0` is false). `stdlib/Math.maxon` reads the sign bit.
 
@@ -215,13 +212,12 @@ only two here reachable without naming an infinity. `Math.pow` computes the gene
 is `-inf`, so both land in `Math.exp` as infinities that no argument of `pow` ever was.
 
 `exp` reduces by halving until its argument is <= 1.0, and `inf / 2.0` is `inf`, so **each infinity
-needs its OWN guard and each guard needs its own case here.** MEASURED, one at a time: remove the
-`+inf` guard and `pow(10,1e308)` runs until it is killed; remove the `-inf` guard and `pow(10,-1e308)`
-does, from `exp`'s `val = -val` on the negative path. Neither prints a wrong number — both hang.
+needs its OWN guard and each guard needs its own case here.** Without the `+inf` guard `pow(10,1e308)`
+runs until it is killed; without the `-inf` guard `pow(10,-1e308)` does, from `exp`'s `val = -val` on the
+negative path. Neither prints a wrong number — both hang.
 
-⚠ `pow(10,-1e308)` was added because the `-inf` guard had NO pin: every other non-finite line here is
-answered by `powOfInfiniteExponent` or `powOfExtremeBase` before `exp` is ever called, so the guard
-could have been deleted with the whole suite still green. A `neg_exp` of `1e308` is far past the
+⚠ `pow(10,-1e308)` is the `-inf` guard's only pin: every other non-finite line here is
+answered by `powOfInfiniteExponent` or `powOfExtremeBase` before `exp` is ever called. A `neg_exp` of `1e308` is far past the
 repeated-multiplication threshold, which is what drops it into the general path in the first place.
 
 ⚠ The infinities here are constructed from `Math.log(0.0)`, which is `-inf` by the companion ruling in

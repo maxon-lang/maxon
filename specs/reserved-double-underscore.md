@@ -214,24 +214,23 @@ error E2051: specs/fragments/reserved-double-underscore/union-name.test:2:7: ide
 <!-- test: user-file-named-builtins-is-not-exempt -->
 `stdlib/Builtins.maxon` is the ONE file whose declarations may carry the reserved prefix — it DECLARES
 the reserved space (the error enums a builtin throws, the parse helpers `int.fromString` rewrites to)
-rather than merely using it, and the compiler exempts it at `requireUnreservedName` (D6).
+rather than merely using it, and the compiler exempts it at `requireUnreservedName`.
 
 This is the NEGATIVE CONTROL on that exemption, and it is the half that matters: the exemption is keyed
 on the FILE'S IDENTITY (`<stdlibDir>/Builtins.maxon`, both sides resolved), not on its basename. Keyed on
 the basename, any program could opt out of the reservation for a whole file by naming it `Builtins.maxon`
 — and every guarantee that leans on "no user `__` name can be declared" would leak through it.
 
-⚠ The POSITIVE direction used to be unpinnable, and A1s is what changed that. A test compiles a throwaway
-project, so it can never CONTAIN the checkout's own `stdlib/Builtins.maxon` — but it no longer has to:
-that module is now LISTED by the stdlib loader, so it is loaded into every compile, and a fragment can
+⚠ The POSITIVE direction is pinnable because the stdlib loader LISTS that module. A test compiles a
+throwaway project, so it can never CONTAIN the checkout's own `stdlib/Builtins.maxon` — but it does not
+have to: that module is loaded into every compile, and a fragment can
 simply NAME one of the `__`-prefixed types it declares. `reserved-space-module-declarations-reach-a-user-program`
 below is that pin, and it deliberately names `__ManagedListError` — a type the compiler synthesizes
 nowhere, so nothing but the module's own declaration can be answering.
 
-⚠⚠ **AND THAT UNPINNABILITY HAS ALREADY COST ONE DEFECT, SO IT IS A STANDING INSTRUCTION, NOT A FOOTNOTE.**
-Every reader that used to read *"`__`-prefixed"* as *"the compiler emitted this"* is wrong for a name this
-module declares. A1r converted five such readers and left three; the A1r review found one of the three
-reachably wrong, and only wasm could see it:
+⚠⚠ **A STANDING INSTRUCTION, NOT A FOOTNOTE.**
+Every reader that reads *"`__`-prefixed"* as *"the compiler emitted this"* is wrong for a name this
+module declares, and such a reader can be reachably wrong where only wasm can see it:
 
 ```
 # append `export function __probeSub(a int, b int) returns int` + a `main` doing
@@ -241,24 +240,22 @@ vendor/wasmtime/wasmtime run -S cli-exit-with-code=y out.wasm
 ```
 
 `wasm trap: indirect call type mismatch`, exit **3** — against **42** for the identical program with the
-`__` dropped from the name. `lowerFunctionRef` took the target's BARE address instead of its `__fnref_`
-env-thunk, so an `(a, b) -> R` function was called through the uniform `(a, b, env) -> R` signature. **x64
-answered 42 either way**: the extra `env` word lands in an argument register the callee never reads, so the
-wrong-shaped call returned the right number. ⇒ **When you touch this exemption, sweep every reader of
+`__` dropped from the name — is what a `lowerFunctionRef` that takes the target's BARE address instead of
+its `__fnref_` env-thunk answers, because an `(a, b) -> R` function is then called through the uniform
+`(a, b, env) -> R` signature. **x64 answers 42 either way**: the extra `env` word lands in an argument
+register the callee never reads, so the wrong-shaped call returns the right number. ⇒ **When you touch this exemption, sweep every reader of
 `isCompilerInternalCallee` and run the sweep's result on `--target=wasm32-wasi`, which is the only local
-target that type-checks an indirect call.** The three fixed readers now share ONE predicate
-(`MmRuntime.isSignaturelessCompilerCallee`) with the five, so a future edit cannot move one reader's answer
-without moving all of them.
+target that type-checks an indirect call.** The readers share ONE predicate
+(`MmRuntime.isSignaturelessCompilerCallee`), so an edit cannot move one reader's answer without moving all
+of them.
 
-⚠ **THAT TRANSCRIPT IS STILL A TRANSCRIPT, AND IT NO LONGER HAS TO BE.** The `// --- stdlib-overlay:`
-fixture at the end of this file can stage exactly that program — a `__`-named function taken as a VALUE —
-and `--target=wasm32-wasi` is where a wrong answer shows. No case is written for it yet; the fixture is
-what a case would be written with.
+⚠ **THAT TRANSCRIPT HAS NO CASE.** The `// --- stdlib-overlay:` fixture at the end of this file can stage
+exactly that program — a `__`-named function taken as a VALUE — and `--target=wasm32-wasi` is where a wrong
+answer shows; the fixture is what a case would be written with.
 
-**A1t IS THE THIRD SUCH FINDING, AND IT IS THE ONE THE PREFIX EXEMPTION MAKES POSSIBLE RATHER THAN MERELY
-MISREADS.** A name this module declares may be a name the compiler *itself emits* — and then the program
-holds two functions of one name, which no linker and no name index can resolve. Reachable only through the
-real module, which is why it was first found by hand:
+**A COLLISION IS THE HAZARD THE PREFIX EXEMPTION MAKES POSSIBLE RATHER THAN MERELY MISREADS.** A name this
+module declares may be a name the compiler *itself emits* — and then the program holds two functions of one
+name, which no linker and no name index can resolve. Reachable only through the real module:
 
 ```
 # append `export function __print_string(value String)` (empty body) + a `main` that CALLS it
@@ -266,39 +263,39 @@ real module, which is why it was first found by hand:
 maxon build stdlib/Builtins.maxon --output=out
 ```
 
-⇒ **THE TRANSCRIPT IS NOW A CASE** — `error.stdlib-overlay-print-string-collides-at-the-std-tier`, and its
-twin `stdlib-overlay-print-string-alone-is-legal` for the half of the rule the transcript states in the
-paragraph below. The `// --- stdlib-overlay:` fixture at the end of this file is what closed the gap: the
-findings recorded here were reproducible but not RE-RUNNABLE, which is a check that cannot fail. (The empty
-body in the transcript no longer compiles on its own — an unused parameter is E3012 — so the case gives
-`value` a use; the collision is on the NAME and does not care.)
+⇒ **THE CASE** is `error.stdlib-overlay-write-stdout-collides-at-the-std-tier` — the same door through the
+same gate, with a symbol the compiler emits — and its twin `stdlib-overlay-write-stdout-alone-is-legal` is
+the half of the rule stated in the paragraph below. The `// --- stdlib-overlay:` fixture at the end of this
+file is what makes them RE-RUNNABLE rather than merely reproducible. (An empty body does not compile on its
+own — an unused parameter is E3012 — so the case gives `value` a use; the collision is on the NAME and does
+not care.)
 
-Before A1t: `panic at DeadFunctionElimination.maxon:108: indexFunctionsByName: two functions are named
-'__print_string'` — no file, no line, and **both of the causes the message named were false here** (it is
-not E3006 at merge, which only ever compares two *parsed* declarations, and no installer ran twice). After:
-`error E4015: stdlib\Builtins.maxon:337:17: declaration of '__print_string' collides with a symbol the
+Unrefused, the collision is `panic at DeadFunctionElimination.maxon:108: indexFunctionsByName: two functions
+are named '__print_string'` — no file, no line, and **both of the causes the message names are false here**
+(it is not E3006 at merge, which only ever compares two *parsed* declarations, and no installer runs twice).
+Refused: `error E4015: stdlib\Builtins.maxon:337:17: declaration of '__print_string' collides with a symbol the
 compiler EMITS into this program …`.
 
 ⚠ **WHAT CREATES THE PAIR DEPENDS ON THE RUNTIME, so "just don't call it" is not the rule it looks like.**
 For a USAGE-GATED symbol the CALL is what installs the compiler's own copy, so the declaration alone is
-clean (`__print_string`, above — the door A1r opened). But `__module_init` / `__maxon_global_cleanup` are
+clean (`stdlib-overlay-write-stdout-alone-is-legal`, below). But `__module_init` / `__maxon_global_cleanup` are
 installed on `globals.count() != 0` alone, so declaring one of THOSE collides with **no call anywhere** —
-measured, same E4015, from a `Builtins.maxon` carrying one managed global and an uncalled
-`export function __module_init()`, and now pinned by
+the same E4015, from a `Builtins.maxon` carrying one managed global and an uncalled
+`export function __module_init()`, pinned by
 `error.stdlib-overlay-module-init-collides-with-the-compilers-own`. ⇒ **Do NOT cure this by gating the call or steering it to the surviving definition** — that trades
 a loud refusal for a silent miscompile, since `print("x")` would then bind to the author's declaration
 instead of the runtime's, which is the one that knows the String record's layout. The refusal is at the
-DUPLICATE, and it is total (no binary is written either way). ⇒ **And the panic did not go away, it got a
+DUPLICATE, and it is total (no binary is written either way). ⇒ **And the panic stays, behind a
 DISCRIMINATOR**: only a pair with MIXED provenance (one parsed, one synthesized) is a user error; a pair
-that is both-synthesized or both-parsed is a compiler bug and still panics, naming its own cause. Keep that
+that is both-synthesized or both-parsed is a compiler bug and panics, naming its own cause. Keep that
 split if you touch `FunctionNameIndex.refuseDuplicateFunctionName` — a fix that made every duplicate a user
 diagnostic would hide an installer that ran twice, and would pass any test written only against the collision.
 
-**A1w IS THE FOURTH, AND IT IS THE SAME RULE THROUGH A DOOR WITH NO PAIR TO COUNT.** A1t's refusal notices
+**THE SAME RULE THROUGH A DOOR WITH NO PAIR TO COUNT.** The collision refusal notices
 TWO functions of one name, so it is blind to a declaration of a name the compiler owns but does not EMIT
 into this particular program — and `DeadFunctionElimination.seedRoots` roots four such names
 (`__module_init`, `__maxon_global_cleanup`, `__mm_leak_check`, `__gt_enqueue`) into *every* program's
-reachability set. Found by hand for the same reason as the three above, and now pinned by
+reachability set. Pinned by
 `error.stdlib-overlay-mm-leak-check-takes-a-rooted-name`:
 
 ```
@@ -307,9 +304,9 @@ reachability set. Found by hand for the same reason as the three above, and now 
 maxon build main.maxon
 ```
 
-Before A1w: `panic at DeadFunctionElimination.maxon:109: requireUnreachableStdlibStayedDead:
-'__mm_leak_check' is in StdlibFacts.unreachable …` — no file, no line, and the message offered two causes of
-which only one was the compiler's fault. MEASURED identically for `__module_init` and `__gt_enqueue`. After:
+Unrefused, it is `panic at DeadFunctionElimination.maxon:109: requireUnreachableStdlibStayedDead:
+'__mm_leak_check' is in StdlibFacts.unreachable …` — no file, no line, and the message offers two causes of
+which only one is the compiler's fault; `__module_init` and `__gt_enqueue` answer identically. Refused:
 `error E4015: stdlib\Builtins.maxon:337:17: declaration of '__mm_leak_check' takes a name the compiler
 owns …`, positioned at the declaration.
 
@@ -337,10 +334,9 @@ error E2051: <fragment>:3:13: identifier '__ParseError' is reserved: declaration
 ```
 
 <!-- test: user-file-cannot-call-a-reserved-name -->
-**THE CALL SIDE OF THE SAME EXEMPTION (A1r).** D6 opened the DECLARATION door for `stdlib/Builtins.maxon`
-and left the CALL door shut for every file including that one, so the module could declare
-`__int_fromString` and then not call it. A1r opens the call door for exactly the file that declares the
-name — and this is the pin that it opened no wider.
+**THE CALL SIDE OF THE SAME EXEMPTION.** Beside the DECLARATION door, the CALL door is open for exactly
+the file that declares the name, so `stdlib/Builtins.maxon` can both declare `__int_fromString` and call
+it — and this is the pin that the call door is open no wider.
 
 `__int_fromString` is a name the real `stdlib/Builtins.maxon` genuinely DOES declare, which is what makes
 this case distinct from `builtins-clock.unknown-internal-callee`'s `__whatever`: the refusal here is not
@@ -450,7 +446,7 @@ error E3155: <fragment>:3:2: reference to undefined function '__parallel_boundar
 ⭐ **THE POSITIVE CONTROL ON THE VALUE DOOR'S EXEMPTION — the branch the three refusals above never
 reach.** `Parser.requireFunctionValueNameIsNotReserved` admits a reserved name in value position on
 `fileMayUseReservedNames() and declaresCallee`, and this is the only program that exercises it: the
-compiler's OWN function addresses (`__destruct_<T>`, `__str_decref`) are minted at `emitRuntimeFuncAddr`
+compiler's OWN function addresses (`__destruct_<T>`, `__str_decref`) are minted at `emitCodeAddress`
 and emit their op directly, so they pass no door at all. Without this case the admit branch could be
 deleted or inverted and every case in this file would stay green while `stdlib/Builtins.maxon` lost the
 right to name what it declares.
@@ -487,7 +483,7 @@ prefilter, never the answer. Keyed on the basename, any program could reach ever
 `__mm_free`, `__gt_spawn` — by naming one of its own files `Builtins.maxon`.
 
 Both sides of one rule are therefore pinned the same way, because a rule pinned on one side is a rule that
-can lapse on the other: that asymmetry is what D6 shipped.
+can lapse on the other.
 ```maxon
 // --- file: Builtins.maxon
 function main() returns ExitCode
@@ -538,19 +534,16 @@ error E3004: <fragment>:4:16: call to undefined function '__int_fromString': the
 ```
 
 <!-- test: reserved-space-module-declarations-reach-a-user-program -->
-**THE POSITIVE CONTROL ON THE DECLARATION-SIDE EXEMPTION (A1s), and it is the half every negative case
+**THE POSITIVE CONTROL ON THE DECLARATION-SIDE EXEMPTION, and it is the half every negative case
 above assumes.** The four cases before this one prove the exemption is not WIDER than one file. None of
 them proves it is not EMPTY: a compiler that refused `stdlib/Builtins.maxon`'s own declarations too would
 pass every one of them.
 
-It became pinnable when the stdlib loader listed that module. The fragment cannot contain the checkout's
-`Builtins.maxon` — it never could — but it no longer needs to, because that file is loaded into this
-compile like any other stdlib source, and its `__`-prefixed declarations are therefore in scope here.
+The fragment cannot contain the checkout's `Builtins.maxon`, and does not need to: the stdlib loader
+lists that module, so it is loaded into this compile like any other stdlib source, and its `__`-prefixed declarations are therefore in scope here.
 
 ⚠ **IT NAMES `__ManagedListError` ON PURPOSE.** Its `__Managed{Memory,File,Directory}Error` siblings would
-prove less: those three USED to be built by the compiler as well as declared in that file, and A1s deleted
-the compiler's copies precisely because two spellings of one wire format is the shape that drifts silently.
-`__ManagedListError` was only ever declared, by `stdlib/Builtins.maxon:144`, and no line of the compiler
+prove less. `__ManagedListError` is declared only by `stdlib/Builtins.maxon:144`, and no line of the compiler
 mentions it — so a `match` that names its four cases exhaustively can be answered by nothing else. The
 `nodeNotInList` arm is third, which is also a reading of the declaration's ORDER and not merely its
 membership.
@@ -632,16 +625,16 @@ end 'main'
 error E3004: <fragment>:5:10: call to undefined function '__float_textFromBits': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
 ```
 
-### The `// --- stdlib-overlay:` fixture — the four E4015 doors that used to be reachable only by hand
+### The `// --- stdlib-overlay:` fixture — the four E4015 doors
 
-⭐⭐ **THREE OF THIS FILE'S OWN FINDINGS WERE RECORDED AS SHELL TRANSCRIPTS BECAUSE NOTHING IN THE SUITE
-COULD REACH THEM, AND A CHECK THAT CANNOT FAIL IS NOT A CHECK.** Every route to E4015 through
+⭐⭐ **WITHOUT THIS FIXTURE NOTHING IN THE SUITE CAN REACH THESE DOORS, AND A CHECK THAT CANNOT FAIL IS
+NOT A CHECK.** Every route to E4015 through
 `FunctionNameIndex` or through `DeadFunctionElimination.seedRoots` needs a DECLARATION carrying the
 reserved prefix, and exactly one file may write one — `<stdlibDir>/Builtins.maxon`, by IDENTITY. A spec
 fragment is a throwaway file in a scratch directory, so it can never BE that file, and the negative
 controls above are what prove it cannot fake it.
 
-⇒ the harness now stages a private stdlib for the case that asks for one. A
+⇒ the harness stages a private stdlib for the case that asks for one. A
 `// --- stdlib-overlay: <path under stdlib/>` section names a stdlib file; the runner copies the compiler
 under test and the whole of ITS `stdlib/` into a directory of the case's own, writes the section's text at
 the TOP of the named copy, and compiles with the copied binary — which locates `stdlib/` by walking up
@@ -659,7 +652,7 @@ about a stdlib module depends on where in the file a declaration sits.
 
 ⭐ **THE POSITIVE CONTROL ON THE FIXTURE ITSELF, and every case below is worthless without it.** A runner
 that staged the overlay and then compiled with the ORIGINAL binary — or that dropped the section on the
-floor, which is precisely what it did before the marker existed — would leave the three refusals below
+floor — would leave the three refusals below
 passing for a reason that has nothing to do with an overlay: an unknown type refuses a program too. This
 case can only be answered by the overlay actually being the `Builtins.maxon` this compile loaded, and it
 answers 42 rather than merely compiling.
@@ -687,7 +680,7 @@ end 'main'
 
 <!-- test: error.stdlib-overlay-module-init-collides-with-the-compilers-own -->
 
-⭐⭐ **THE MAXON-TIER `FunctionNameIndex` DOOR (A1t), AND IT NEEDS NO CALL ANYWHERE.** `__module_init` is
+⭐⭐ **THE MAXON-TIER `FunctionNameIndex` DOOR, AND IT NEEDS NO CALL ANYWHERE.** `__module_init` is
 installed on `globals.count() != 0` alone (`ModuleInit`), so a program with ONE managed global holds the
 compiler's copy and this declaration both — a pair with MIXED provenance, which is the one shape
 `refuseDuplicateFunctionName` reports rather than panics. The index that meets it first is a Maxon-tier
@@ -711,29 +704,26 @@ error E4015: <fragment>:3:17: declaration of '__module_init' collides with a sym
 
 <!-- test: error.stdlib-overlay-write-stdout-collides-at-the-std-tier -->
 
-⭐ **THE STD-TIER `FunctionNameIndex` DOOR — the one A1t was written for, and the only one no earlier
+⭐ **THE STD-TIER `FunctionNameIndex` DOOR — the only one no earlier
 index can reach.** `__write_stdout` is USAGE-GATED: the compiler installs its own copy because the program
 calls `print` (whose corpus body's only floor is `__Builtins.writeStdout`), and that installer runs after
 the whole Maxon tier, so the pair first exists at `DeadFunctionElimination`'s index.
 
-⚠ **THE EXEMPLAR WAS `__print_string` UNTIL W35, AND IT HAD TO MOVE BECAUSE THE SYMBOL DID.** That entry
-point existed only to serve a bare-name `print` builtin; retiring the builtin retired it, and a case naming
-a symbol nothing emits would pin nothing while still passing — which is the failure mode this whole file is
-about. `__write_stdout` is its successor at the same tier through the same gate, so the case is the same
-statement about the same door. (The empty body in the A1t transcript no longer compiles on its own — an
-unused parameter is E3012 — so the case gives `value` a use.)
+⚠ **THE EXEMPLAR MUST BE A SYMBOL THE COMPILER EMITS.** A case naming a symbol nothing emits would pin
+nothing while still passing — which is the failure mode this whole file is about. `__write_stdout` is
+emitted at this tier through this gate. (An empty body does not compile on its own — an unused parameter is
+E3012 — so the case gives `value` a use.)
 
 ⚠⚠ **THE DECLARATION MUST CARRY THE SIGNATURE THE COMPILER'S OWN EMITTED CALL PASSES, and getting that
-wrong moves the answer to a DIFFERENT DOOR** — the sentence the retired version of this case made about
-arity, MEASURED again here about types. A declaration exists, so `SemanticCheck` stops skipping the
+wrong moves the answer to a DIFFERENT DOOR.** A declaration exists, so `SemanticCheck` stops skipping the
 parser-emitted `__write_stdout` call inside `stdlib/Print.maxon` and type-checks it; a signature that does
 not match is `E3005` at `stdlib/Print.maxon:10` and never reaches the tier this case is about.
 
 ⇒ **SO THIS CASE ALSO PINS THE BYTE-VIEW FOLD, from the one angle a spec can see it.** The emitted call
 passes the `String` ITSELF, because `foldByteViewIntoStreamWrite` rewrites `__str_bytes_view`'s call into
-the write rather than letting the view be built — so `(value String)` is what type-checks here. Before the
-fold the argument was the view and this declaration had to be `(value __ManagedMemory)`; MEASURED, with the
-buffer signature it is now `E3005 … expected 'ByteArray', got 'String'`. Undo the fold and this case fails.
+the write rather than letting the view be built — so `(value String)` is what type-checks here. Without
+the fold the argument would be the view; a buffer signature on this declaration is
+`E3005 … expected 'ByteArray', got 'String'`. Undo the fold and this case fails.
 ```maxon
 // --- stdlib-overlay: Builtins.maxon
 export typealias WrittenByteCount = int(0 to u64.max)
@@ -756,11 +746,11 @@ error E4015: <fragment>:5:17: declaration of '__write_stdout' collides with a sy
 ⭐ **THE OTHER HALF OF THE USAGE GATE, and it is what makes the case above a statement about the PAIR
 rather than about the prefix.** The same `__write_stdout` declaration, in a program that never prints: no
 installer runs, there is no second `__write_stdout`, the declaration is unreachable and is pruned. A rule
-that refused the NAME would refuse this too — and that is exactly the rule A1w applies to the four ROOTED names, which is
+that refused the NAME would refuse this too — and that is exactly the rule applied to the four ROOTED names, which is
 why the next case's message is a different sentence about a different thing.
 
-⚠ It is also the pin that `stdlib/Print.maxon` being LISTED (W35) did not quietly widen the runtime floor:
-the corpus module is loaded into this program like every other, and `__write_stdout` is STILL not installed,
+⚠ It is also the pin that `stdlib/Print.maxon` being LISTED does not widen the runtime floor:
+the corpus module is loaded into this program like every other, and `__write_stdout` is not installed,
 because `scanRuntimeUsage` skips a stdlib body no path from `main` reaches (`LibraryFacts.unreachable`).
 
 ⚠ The exit code is routed through a SECOND declaration in the same overlay, and that is deliberate: a
@@ -791,7 +781,7 @@ end 'main'
 
 <!-- test: error.stdlib-overlay-mm-leak-check-takes-a-rooted-name -->
 
-⭐ **THE A1w DOOR — the same rule where there is NO PAIR TO COUNT.** `__mm_leak_check` is one of the four
+⭐ **THE ROOTED-NAME DOOR — the same rule where there is NO PAIR TO COUNT.** `__mm_leak_check` is one of the four
 names `DeadFunctionElimination.seedRoots` roots into EVERY program's reachability set, so a heap-free
 program that installs no memory runtime still roots it — at the declaration, whose body the earlier passes
 were told was unreachable and never lowered. Refused for the NAME, and the message says so: the legality

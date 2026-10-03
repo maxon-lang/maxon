@@ -27,27 +27,22 @@ String.from(bytes Array with Byte) returns String
 
 Four properties are what these tests pin, and each is a decision rather than an accident:
 
-- **⚠⚠ THE THREE VIEWS ARE LAZY, AND UNTIL W49 WAVE 6 THEY WERE NOT.** This section read *"A VIEW
-  MATERIALIZES … the compiler has no `Iterable`, no associated types and no cursor protocol, so each view copies
-  into the one collection the compiler does have"*, and every one of `bytes()`/`codepoints()`/`utf16()` handed
-  back an `Array`. **That premise was MEASURED FALSE before a line was deleted**: `for b in
-  ByteView.create(s)` already walked the corpus's own `createIterator`/`current`/`advance` and printed
-  `97,98,99`. The three retired onto `stdlib/helpers/string/views.maxon`, whose views hold the `String`
-  itself and read one unit per `advance()`. `.count()` and `for u in <view>` answer exactly what they
-  answered before — which is what the cases below pin — but a view is **not** an `Array`, so it is
-  refused at a declared `Array with Byte` position (`bytearray-element-size` holds that shut).
-- **⚠ `bytes()` AND `toByteArray()` ARE NO LONGER ONE ANSWER, AND THE REFERENCE'S DISTINCTION IS THE
-  REASON.** This section used to say they were, because the compiler had no lazy view and both spellings reached
-  one emitter. The reference distinguishes them by laziness and by nothing else: `bytes()` is a view over
-  the receiver's buffer and `toByteArray()` must COPY, because a plain view onto an OWNED buffer is a
+- **⚠⚠ THE THREE VIEWS ARE LAZY.** `bytes()`/`codepoints()`/`utf16()` are served by
+  `stdlib/helpers/string/views.maxon`, whose views hold the `String` itself and read one unit per
+  `advance()` through the corpus's own `createIterator`/`current`/`advance`. `.count()` and `for u in
+  <view>` answer what a materialized `Array` would — which is what the cases below pin — but a view is
+  **not** an `Array`, so it is refused at a declared `Array with Byte` position (`bytearray-element-size`
+  holds that shut).
+- **⚠ `bytes()` AND `toByteArray()` ARE TWO ANSWERS, DISTINGUISHED BY LAZINESS AND BY NOTHING ELSE.**
+  `bytes()` is a view over the receiver's buffer and `toByteArray()` must COPY, because a plain view onto an OWNED buffer is a
   read-after-free the moment the owner appends (`stdlib/String.maxon:146-161`, whose `managed.slice` is
-  that copy). Both are now the corpus's, each with the body its own doc describes.
+  that copy). Both are the corpus's, each with the body its own doc describes.
 - **A copy is INDEPENDENT, and that is the CONTRACT.** `clone()` may not be `return self`: the receiver's
   record would gain a second owner and the caller's drop would take the receiver's bytes with it.
   `replaceFirst`'s two no-op cases — an empty needle, and a needle that is absent — answer with a clone
   for exactly that reason. `toByteArray()` makes the same promise about its array, and
   `clone-outlives-a-growing-source` is the shape that would catch either breaking it.
-- **`String.from` COPIES the array's bytes** where the reference shares the array's `__ManagedMemory`.
+- **`String.from` COPIES the array's bytes** rather than sharing the array's `__ManagedMemory`:
   the compiler has no shared-ownership relationship between an `Array` record and a `String` record: each box's
   drop reclaims its own allocation, so a view would be a second reclaimer of one block.
 
@@ -201,11 +196,10 @@ HELLOWORLDLONGENOUGHTAIL HELLOWORLDLONGENOUGH
 An `Array with integer` strides EIGHT bytes per element, so reading it as bytes would hand back every
 eighth byte of a slot's worth of padding — a silent wrong answer, refused at the argument instead.
 
-⭐ **THE SENTENCE IS THE ORDINARY PARAMETER CHECK'S SINCE W55, AND THAT IS THE POINT.** `String.from`
-had a bespoke parse door with a bespoke argument test; retiring it (`Parser.parseStringStaticCall`) left
-`stdlib/String.maxon`'s own `from(bytes ByteArray)` to be met by `SemanticCheck.checkArgTypes`, the check
-every other call's argument already answers to. What moved is the wording and the column — the anchor is
-now the CALL rather than the argument — and what did not move is the refusal.
+⭐ **THE SENTENCE IS THE ORDINARY PARAMETER CHECK'S, AND THAT IS THE POINT.** `String.from` has no
+bespoke parse door: `stdlib/String.maxon`'s own `from(bytes ByteArray)` is met by
+`SemanticCheck.checkArgTypes`, the check every other call's argument answers to, and the anchor is the
+CALL rather than the argument.
 
 ⚠⚠ **THE ARRAY IS BUILT AND NOT WRITTEN AS A `[…]`, AND THE DIFFERENCE IS THIS CASE'S WHOLE SUBJECT.** The
 refusal is about a STRIDE, and a bare literal has no stride of its own to be wrong about: it is BUILT at
@@ -232,7 +226,7 @@ error E3005: <fragment>:8:17: argument type mismatch for 'bytes': expected 'Byte
 ### …and a bare `[…]` written at that parameter IS an `Array with Byte`
 The elements are laid down one byte apart because the parameter is what states their type, so `byteLength`
 counts the three bytes the source wrote rather than the twenty-four an inferred `Array with integer` would
-have occupied. The runnable oracle answers 3 on this program.
+have occupied.
 ```maxon
 function main() returns ExitCode
 	let s = String.from([1, 2, 3])
@@ -257,31 +251,25 @@ error E3005: <fragment>:3:17: argument type mismatch for 'bytes': expected 'Byte
 
 <!-- test: error.string-unknown-static-is-named-where-it-is-written -->
 ### An unknown `String` static is named where it is written
-`fromOwnedBytes` is deliberately not exported by the reference ("take these bytes and trust me about
+`fromOwnedBytes` is deliberately not exported by `stdlib/String.maxon` ("take these bytes and trust me about
 them" is not a promise the stdlib can let arbitrary code make), and there is no `String.from(codepoints)`.
 
-⚠ **This case was named `error.string-has-exactly-one-static` until R4.2, and the rename is the point.**
-The exported set became TWO when R4.2 added `init(managed)` (`stdlib/String.maxon:117`) beside
-`from(bytes)` (`:119`), so a name asserting the COUNT was made false by the very rung that changed it —
-while what the case actually pins never moved: an unknown static is refused **at its own span** rather
-than mangled into a `String.create` callee no file declares. A test whose NAME claims one fact and whose
-BODY pins another is this project's signature bug wearing a filename, and the count is the half that is
-not load-bearing. ⇒ the name now says what the body checks, and it will survive the next static too.
+⚠ **The case NAME says what the body checks, not how many statics there are**: an unknown static is
+refused **at its own span** rather than mangled into a `String.create` callee no file declares. A test
+whose NAME claims one fact and whose BODY pins another is this project's signature bug wearing a
+filename, and a count of the exported statics is not load-bearing.
 
-⭐⭐ **THE SENTENCE NO LONGER NAMES A ROSTER, BECAUSE THERE IS NO LONGER A ROSTER TO NAME (W55).** It read
-*"the reference provides from/init; that list IS the surface"*, rendered from the two constants the
-parser's own static arms matched on — and W55 retired those arms, so `String`'s statics are now whatever
-`stdlib/String.maxon` declares plus whatever an `extension String` adds. A message quoting a two-name list
-would have been a copy of a surface the compiler stopped holding. What the case pins is unchanged and is
-the whole of why it exists: the refusal lands on `create`, **where the author wrote it**, and names both
-the type and the member.
+⭐⭐ **THE SENTENCE NAMES NO ROSTER, BECAUSE THERE IS NO ROSTER TO NAME.** `String`'s statics are whatever
+`stdlib/String.maxon` declares plus whatever an `extension String` adds, so a message quoting a list
+would be a copy of a surface the compiler does not hold. What the case pins is the whole of why it
+exists: the refusal lands on `create`, **where the author wrote it**, and names both the type and the
+member.
 
-⚠ **AND IT WENT RED WHEN THE DOOR WENT, WHICH IS WHAT MADE IT WORTH KEEPING.** With no static door the
-callee mangles to `String.create`, whose result is typed `unknown` — and the parser then refuses the USE
-one line later (`E2015 :4:11: a member access 'byteLength' on a 'unknown' value`), ending the file before
-`SemanticCheck`'s E3004 could name the call at all. `Parser.requireCompilerOwnedStaticIsResolvable` is
-the door that replaced the roster: it speaks for a base no file may declare and a member no file does,
-and leaves a USER type's unknown static to SemanticCheck exactly as before.
+⚠ **`Parser.requireCompilerOwnedStaticIsResolvable` IS THE DOOR THAT ANSWERS.** Without it the callee
+mangles to `String.create`, whose result is typed `unknown` — and the parser then refuses the USE one
+line later (`E2015 :4:11: a member access 'byteLength' on a 'unknown' value`), ending the file before
+`SemanticCheck`'s E3004 could name the call at all. The door speaks for a base no file may declare and a
+member no file does, and leaves a USER type's unknown static to SemanticCheck.
 ```maxon
 function main() returns ExitCode
 	let s = String.create()
@@ -296,7 +284,7 @@ error E2015: <fragment>:3:17: Unsupported: 'String' has no static method named '
 ### A declaration may not bind `Codepoint` to a nominal identity
 `Codepoint` is the compiler's own synthesized ranged int alias — `stdlib/Character.maxon` declares it
 and the compiler cannot load that module — so a user `type Codepoint` would mean one thing to the parser and
-another to type resolution, which is the disagreement `HashValue` was measured to cause.
+another to type resolution, the same disagreement a user `HashValue` would cause.
 ```maxon
 type Codepoint
 	export var value as Integer
@@ -311,40 +299,22 @@ typealias Integer = int(i64.min to i64.max)
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Codepoint', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one
 ```
 
-⚠ **THE TWO RANGE-GUARD CASES BELOW WERE FOUR, IN PAIRS THAT PARTITIONED THE TARGETS, AND THE PARTITION
-IS GONE BECAUSE ITS CAUSE IS (rung W3).** A range violation EXITS 1 on every target — that is the guard
-FIRING — but the message and the backtrace existed only where there was a panic runtime to print them.
-So each guard was pinned TWICE: once on `wasm32-wasi`, where the assertion was the exit code and stderr
-had to be silent, and once on `x64-windows, x64-linux`, where the message was pinned in full. Two cases
-over one program, differing in nothing but which half of the answer they could see.
+⚠ **THE TWO RANGE-GUARD CASES BELOW RUN ON EVERY TARGET AND PIN BOTH HALVES OF THE ANSWER.** A range
+violation EXITS 1 on every target — that is the guard FIRING — and every target has a panic runtime that
+prints the message and the backtrace. wasm32-wasi has no saved-frame-pointer chain, so every function
+records itself on a frame stack in linear memory, and its panic runtime writes the message, walks that
+stack for the frames and exits with the panic exit code (`StdToWasm.appendPanicRuntime`). `7` is what an
+UNGUARDED build returns, so the exit code separates a fired guard from a silent wrong answer, and the
+message is pinned everywhere as well.
 
-⚠ **A TARGET CROSSED THAT LINE TWICE, AND BOTH TIMES THE PARTITION WAS THE THING THAT WAS WRONG.**
-x64-linux moved to the message side in rung A1j (2026-07-31): it was measured silent when these cases
-were written, and the reason was never the ELF lane — `mrt_panic` simply was not appended to it, while
-every primitive it assembles was. wasm32-wasi moved in rung W3 for the same shape of reason: it had no
-`mrt_panic` at all, and *"wasm cannot print a backtrace"* had been read as a property of the target when
-it was a property of the backend. It has no saved-frame-pointer chain, so every function records itself on a
-frame stack in linear memory, and its panic runtime writes the message, walks that stack for the
-frames and exits with the panic exit code (`StdToWasm.appendPanicRuntime`).
+⚠ **A `stderr` BLOCK CANNOT BE OMITTED**: an absent block asserts the program printed NOTHING
+(`SpecTestRunner.checkRunStderr`, whose `unpinned` arm says so in as many words).
 
-⇒ **The silent halves are DELETED rather than given a `stderr` block of their own**, which would have
-made them byte-for-byte duplicates of their twins under a different `unsupported-targets:` line. Nothing they
-asserted is lost: each surviving case runs the same program, pins the same `exitcode 1` — `7` is what an
-UNGUARDED build returns in both, so the exit code still separates a fired guard from a silent wrong
-answer — and now pins the message everywhere as well.
-
-⚠ **A `stderr` BLOCK STILL CANNOT BE OMITTED**: an absent block asserts the program printed NOTHING
-(`SpecTestRunner.checkRunStderr`, whose `unpinned` arm says so in as many words). That is exactly how
-this rung found these two cases — they went red the moment the wasm lane started speaking, which is a
-gate reporting a stale premise rather than a regression.
-
-MEASURED, and it is why these carried a target marker at all: the two guards were first written as
-message-only cases with no marker, and the cross-target gate went red on x64-linux and wasm with an
-EMPTY `actual` — which READS exactly like "the guard is missing on this target" and was not. The
-identical program over a USER-declared `typealias Percent = int(0 to 100)`, touching neither
-stdlib nor `Codepoint`, exited 1 with empty stderr on wasm and 1 with the full message on x64.
-Both cases now run on every lane: the guard is target-neutral and wasm's panic runtime prints the same
-message and trace as the native ones, so there is no lane left that cannot answer them.
+⚠ An EMPTY `actual` READS exactly like "the guard is missing on this target", and it is not: a lane
+without a panic runtime exits 1 with empty stderr for the identical program over a USER-declared
+`typealias Percent = int(0 to 100)`, touching neither stdlib nor `Codepoint`. The guard is
+target-neutral and wasm's panic runtime prints the same message and trace as the native ones, so every
+lane answers these cases.
 
 <!-- test: stdlib-range-panic-names-the-alias -->
 ### A REACHABLE stdlib function still gets its range guard, and the panic names the alias
@@ -365,15 +335,13 @@ folds to — and one carrying no typealias, since an alias-typed value reaches `
 `as`, whose guard would fire at the call site instead of at the callee's door. A counted loop's variable
 is both.
 
-⭐⭐ **A1f CHANGED WHICH ALIAS THIS NAMES, AND THE NEW ANSWER IS THE VIOLATION THAT ACTUALLY HAPPENED.**
+⭐⭐ **THE MESSAGE NAMES THE VIOLATION THAT ACTUALLY HAPPENS.**
 `utf16LeadSurrogate(codepoint Codepoint) returns CodeUnit16` is handed `1,000,000,000`. That is outside
-`Codepoint` (`int(0 to 1114111)`) on the way IN — but the argument door owed only the compile-time half,
-and the argument is a call result nothing folds, so nothing checked it. The value ran the whole body and
-was caught on the way OUT by the `return`'s guard, which named `CodeUnit16` at `utf16.maxon:51`.
-**The old message named the SECOND violation because the first was never checked.** The entry guard now
-refuses it at `utf16.maxon:49`, naming `Codepoint` — the premise the caller actually broke, one door
-earlier, before `codepoint - 65536` underflows on a value the type said could not occur. Nothing about
-the program changed; the compiler simply stopped reporting the consequence in place of the cause.
+`Codepoint` (`int(0 to 1114111)`) on the way IN, and the argument is a call result nothing folds, so the
+entry guard refuses it at `utf16.maxon:49`, naming `Codepoint` — the premise the caller actually broke,
+before `codepoint - 65536` underflows on a value the type said could not occur. An argument door that
+owed only the compile-time half would let the value run the whole body and be caught on the way OUT by
+the `return`'s guard, naming `CodeUnit16` at `utf16.maxon:51` — the consequence in place of the cause.
 ```maxon
 function main() returns ExitCode
 	var lead = 0
@@ -398,17 +366,17 @@ Stack trace:
 ### A lead byte may not promise more bytes than the buffer holds
 `String.from(bytes)` is the FIRST door arbitrary bytes reach the UTF-8 decoders through: every earlier
 producer of a `String` is well-formed by construction (a literal is lexer-validated, a slice is
-grapheme-aligned, `replace`/`split` rebuild from valid pieces). A truncated lead therefore used to make
-`__utf8_cp_at` read the byte PAST the allocation — measured, and it answered rather than faulting, which
-is the worst version: at the end of a slab the same read crosses a page.
+grapheme-aligned, `replace`/`split` rebuild from valid pieces). A truncated lead could therefore make a
+decoder read the byte PAST the allocation — and answer rather than fault, which is the worst version: at
+the end of a slab the same read crosses a page.
 
-**A sequence the buffer cannot complete now decodes as its own lead byte and advances ONE**, so no read
+**A sequence the buffer cannot complete decodes as its own lead byte and advances ONE**, so no read
 leaves the buffer. The last row is the well-formed control: it must be untouched.
 
-⚠⚠ **`stdlib/helpers/string/utf8.maxon`'s `utf8WidthFits` carries this rule now**, and its own header
-cites THIS CASE as why, so what was a compiler-only memory-safety guarantee is the corpus's own.
-⇒ **W49 wave 6 moved `codepoints()`/`utf16()` onto that corpus code and the pinned output did not move**,
-which is the strongest evidence available that the two implementations of this rule agree to the byte.
+⚠⚠ **`stdlib/helpers/string/utf8.maxon`'s `utf8WidthFits` carries this rule**, and its own header
+cites THIS CASE as why, so the memory-safety guarantee is the corpus's own as well as the compiler's
+`__utf8_cp_at`. ⇒ `codepoints()`/`utf16()` run on that corpus code, and one pinned output holds for
+both implementations of the rule.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteSeq = Array with Byte
@@ -520,19 +488,14 @@ The case above rides `emitArrayElementAccessor`'s trivial arm; the element type 
 A `typealias` the AUTHOR wrote does — and without that arm the element erases to a bare `int`, so
 `[x, y]` builds an eight-byte-strided `Array with integer` instead of an `OctetArray`.
 
-⭐⭐ **THE ASSERTION IS THE PARAMETER TYPE, AND IT USED TO BE `String.from` — WHICH WAS PINNING A WRONG
-ANSWER (W55).** This case read `print("{String.from([x, y])}\n")` and claimed stdout `Hi` as *"a program
-both references accept"*. **MEASURED against the runnable oracle: it prints `H`.** The bootstrap erases
-the literal's element, strides eight, and hands `String.from` every eighth byte of the buffer — the exact
-silent wrong answer the case above exists to forbid, committed as an expectation, and is why this one had
-to stop asking `String.from` the question.
+⭐⭐ **THE ASSERTION IS THE PARAMETER TYPE, NOT `String.from`.**
 
 ⇒ **What the case pins is asserted where it belongs: at the RECORD.** `String.from` cannot be asked, because
 `Octet` is a different type from `Byte` and `OctetArray` a different instance from `ByteArray` — see
 `error.from-refuses-a-user-ranged-byte-alias` below.
 `aggregatesConflict` is nominal over containers, so a `readBack(bytes OctetArray)` parameter admits an
 argument whose element kept the name `Octet` and refuses an `Array_int`; reading the two elements back
-THROUGH that parameter is what proves the STRIDE as well as the name. Both compilers print `177`.
+THROUGH that parameter is what proves the STRIDE as well as the name. It prints `177`.
 ```maxon
 typealias Octet = int(0 to u8.max)
 typealias OctetArray = Array with Octet

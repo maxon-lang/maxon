@@ -204,8 +204,7 @@ error E3146: specs/fragments/match-case-range-removed/error.enum-case-range-upto
 
 <!-- test: error.enum-case-range-unknown-upper -->
 The range is refused BEFORE its upper bound is resolved, so an upper naming no case is still
-E3146 and not E3034. Pinning the order keeps the two compilers from disagreeing about which
-mistake a reader is told about first.
+E3146 and not E3034. Pinning the order fixes which mistake a reader is told about first.
 ```maxon
 typealias Code = int(0 to 125)
 

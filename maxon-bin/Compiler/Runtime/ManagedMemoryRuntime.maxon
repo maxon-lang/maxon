@@ -37,7 +37,7 @@
 // span, destructor 0). This mirrors a DETACHED String, not the inline one — an array grows, so its bytes
 // cannot live behind the record. `__managed_decref` releases both.
 //
-// ⭐⭐ **AND THAT SPLIT IS WHAT MAKES A ZERO-COPY SLICE POSSIBLE (P1.7 COW slice B).** Because the element
+// ⭐⭐ **AND THAT SPLIT IS WHAT MAKES A ZERO-COPY SLICE POSSIBLE.** Because the element
 // buffer is its OWN `__mm_alloc` allocation, it has its OWN refcount word, and a non-zero count there says
 // exactly one thing: **someone is viewing these bytes.** Refcounting the RECORD instead leaves a count of 2
 // unable to tell "two owners of this array" from "someone is viewing my buffer", which forces an eager copy
@@ -48,28 +48,19 @@
 
 // --- The fused 48-byte `__ManagedMemory` backing record ---
 //
-// Every field is an 8-byte slot; the six offsets are 0/8/16/24/32/40 and the record is 48 bytes. Since W157
-// a String record is this record with a SEVENTH slot (`singleByteGraphemes@48`) behind it, so the two are no
-// longer distinct shapes to be kept apart — a String record may be read as one of these, which is what
-// `String.addressableBytes()` now relies on. What must NOT happen is the reverse: a 48-byte buffer record
-// has no `@48` to read, so nothing that loads the flag may be given one (see `GraphemeRuntime.__char_at`).
+// Every field is an 8-byte slot; the six offsets are 0/8/16/24/32/40 and the record is 48 bytes. A String
+// record is this record with a SEVENTH slot (`singleByteGraphemes@48`) behind it, so a String
+// record may be read as one of these, which is what `String.addressableBytes()` relies on. What
+// must NOT happen is the reverse: a 48-byte buffer record has no `@48` to read, so nothing that
+// loads the flag may be given one (see `GraphemeRuntime.__char_at`).
 // ⭐ **ALL SIX ARE `BufferOwnership`'s OWN `ManagedRecord*Offset` CONSTANTS, NAMED DIRECTLY**, because
 // `__mm_cow_detach` is ONE emitted function that reads them out of this record AND out of the String record.
-// They were two coincidentally-equal sets of literals until that function existed; a divergence would now be
-// a wrong load inside it rather than a second value flowing through a parameter, so the numbers live in one
-// place.
-// ⚠ **THIS FILE USED TO ALIAS ALL SIX BEHIND `Arr*` SPELLINGS, AND THE ALIAS WAS THE FILE'S NAME SPEAKING.**
-// It existed so an `Array` runtime could spell a shared layout in its own vocabulary; renaming the file to the
-// buffer it is leaves `ManagedRecordBufferOffset = ManagedRecordBufferOffset`, which is a fact written twice
-// with nothing between the copies. `StringRuntime` keeps the `String*Offset` aliases its own emitters read
-// through, and that asymmetry is deliberate: a String record is a DIFFERENT record from this one, so a
-// String-side spelling of a shared offset still says something the shared name does not.
-//
-// ⚠ **`ManagedRecordElementDestroyOffset` STOOD HERE AND MOVED TO `BufferOwnership` AT W157.** Its header
-// said `@40` was *"the one slot that is genuinely THIS record's own — the String record's `@40` is
-// `singleByteGraphemes`"*, which is exactly what W157 undid: a String record now embeds the whole buffer
-// record and keeps a real `element_destroy@40` (always `TrivialElementDestroy`), with its flag at `@48`. So
-// all SIX offsets are read out of both records by one emitted function and all six live in one place.
+// A divergence would be a wrong load inside it rather than a second value flowing through a
+// parameter, so the numbers live in one place.
+// ⚠ **`StringRuntime` KEEPS `String*Offset` ALIASES AND THIS FILE DOES NOT, DELIBERATELY.** A
+// String record is a DIFFERENT record from this one, so a String-side spelling of a shared offset
+// still says something the shared name does not; an alias here would be a fact written twice with
+// nothing between the copies.
 
 // ⭐ **`capacity@16` AND `parent@32` CARRY THE BUFFER-OWNERSHIP ENCODING, WHICH IS NOT THIS FILE'S TO
 // DEFINE — `BufferOwnership` owns it, and the String record answers the same two questions the same
@@ -92,8 +83,7 @@ export let TrivialElementDestroy = 0 as ParsedInt
 // compares against exactly it.
 export let NoBufferAllocated = 0 as ParsedInt
 
-// --- Constant array literals over an immortal `.rdata` blob (P1.7 slice 2; generalized at
-// `ranged-int-bit-packing`) ---
+// --- Constant array literals over an immortal `.rdata` blob ---
 //
 // A CONSTANT array literal is the Array analogue of a String literal: a HEAP 48-byte record over an
 // IMMORTAL `.rdata` blob. Its `capacity@16` is `RdataBufferCapacity` — the shared encoding's negative value
@@ -109,18 +99,15 @@ export let NoBufferAllocated = 0 as ParsedInt
 //
 // ⭐ **IT IS THE SAME 1 `ProgramSignatures.arrayElementSize` GIVES AN `Array with Byte`, AND THAT IS NOW
 // CHECKED RATHER THAN HOPED FOR.** A `Byte = int(0 to u8.max)` element is one byte wide by the ranged-alias
-// storage rule (`rangedAliasStorageBytes`), so a `.create()`d array and a literal agree by construction —
-// they did NOT before P1.7 slice 2's element-size unification, when every ranged element took a machine
-// word and appending a literal into an `Array with Byte` aborted. This constant is also the number the
-// parser's gate compares that rule's answer against (`byteStringBlobStrideMessage`): a program that
+// storage rule (`rangedAliasStorageBytes`), so a `.create()`d array and a literal agree by construction.
+// This constant is also the number the parser's gate compares that rule's answer against
+// (`byteStringBlobStrideMessage`): a program that
 // declares `Byte` WIDER than one byte cannot hold both records at one type, and is refused at the literal.
-// ⚠ **AND THE STRING RECORD'S `element_size@24` IS THE SAME FACT, WHICH IS WHY THERE IS NO LONGER A
-// SECOND CONSTANT FOR IT (W49 wave 9).** `StringRuntime.StringElementSize = 1 as ParsedInt` stood beside
-// this one saying *"a String's elements are bytes"*, which is this sentence in other words: a String IS
-// its `__ManagedMemory with Byte` since the envelope collapse, so the stride the four String producers
-// stamp — a literal's record, an owned inline record, an interpolation's record and the byte view — is the
-// stride of an `Array with Byte`. Two constants, one number, and only THIS one carried the derivation
-// above and the parser gate that checks it. ⇒ the checked one survives and the four readers moved onto it.
+// ⚠ **AND THE STRING RECORD'S `element_size@24` IS THE SAME FACT, SO IT READS THIS CONSTANT.** A
+// String IS its `__ManagedMemory with Byte`, so the stride the four String producers stamp — a
+// literal's record, an owned inline record, an interpolation's record and the byte view — is the
+// stride of an `Array with Byte`, and only this constant carries the derivation above and the
+// parser gate that checks it.
 export let ByteStringElementSize = 1 as ParsedInt
 
 // The `.rdata` label prefix a byte-string literal's blob registers under. `__`-prefixed so it never
@@ -158,7 +145,7 @@ let ByteArrayRecordPrefix = "__barr_rec_"
 export function registerImmortalByteArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray, debugStream bool) returns String
 	let blobLabel = registerByteArrayLiteralBlob(globalData, bytes: bytes)
 	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(blobLabel), length: elementCount, elementSize: elementSize as ParsedInt, elementDestroy: TrivialElementDestroy)
-	let recordLabel = registerImmortalRecord(globalData, prefix: ByteArrayRecordPrefix, record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, shape: ImmortalRecordShape.managedRecord, debugStream: debugStream)
+	let recordLabel = registerImmortalRecord(globalData, prefix: ByteArrayRecordPrefix, record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, debugStream: debugStream)
 	globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
 	return recordLabel
 end 'registerImmortalByteArrayRecord'
@@ -194,12 +181,19 @@ let RelocatedElementDestroy = 0 as ParsedInt
 // It is also what ROOTS the destructor: `MmRuntime.noteRelocatedFunctionUsage` installs every callee named
 // by an `.rdata` relocation, and this record is that callee's only compile-time reference once the global's
 // `__module_init` construction is gone.
-export function registerImmortalEmptyArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementDestroy ByteArray, debugStream bool) returns String
-	let trivial = elementDestroy.isEmpty()
-	let destroyName = TrivialElementDestroyLabelSegment if trivial else String.from(elementDestroy)
-	let destroySlot = TrivialElementDestroy if trivial else RelocatedElementDestroy
+export function registerImmortalEmptyArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementDestroy OwnershipCallee, debugStream bool) returns String
+	let destroyName = match elementDestroy 'destroy'
+		inert gives TrivialElementDestroyLabelSegment
+		named(callee) gives String.from(callee)
+	end 'destroy'
+
+	let destroySlot = match elementDestroy 'destroy'
+		inert gives TrivialElementDestroy
+		named gives RelocatedElementDestroy
+	end 'destroy'
+
 	let recordBytes = immortalRecordBytes(NoImmortalBlob, length: 0, elementSize: elementSize as ParsedInt, elementDestroy: destroySlot)
-	return registerImmortalRecordLabeled(globalData, label: "{EmptyArrayRecordPrefix}{elementSize}_{destroyName}", record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, shape: ImmortalRecordShape.managedRecord, debugStream: debugStream)
+	return registerImmortalRecordLabeled(globalData, label: "{EmptyArrayRecordPrefix}{elementSize}_{destroyName}", record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, debugStream: debugStream)
 end 'registerImmortalEmptyArrayRecord'
 
 // The `.rdata` label prefixes an imaged STRING TABLE's two payloads register under — the element buffer of
@@ -257,7 +251,7 @@ export function registerImmortalStringTableRecord(globalData GlobalDataTable, te
 
 	let bufferLabel = globalData.registerRdataConstant(StringTableBufferPrefix, bytes: stringTableBufferBytes(globalData, elementLabels: elementLabels), kind: RdataPayloadKind.stringTableBuffer)
 	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(bufferLabel), length: elementLabels.count() as ParsedInt, elementSize: elementSize as ParsedInt, elementDestroy: RelocatedElementDestroy)
-	let recordLabel = registerImmortalRecord(globalData, prefix: StringTableRecordPrefix, record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, shape: ImmortalRecordShape.managedRecord, debugStream: debugStream)
+	let recordLabel = registerImmortalRecord(globalData, prefix: StringTableRecordPrefix, record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, debugStream: debugStream)
 	globalData.recordStringBufferFixup(recordLabel, blobLabel: bufferLabel)
 	return ImmortalStringTable.create(recordLabel, bufferLabel: bufferLabel, elementLabels: elementLabels)
 end 'registerImmortalStringTableRecord'
@@ -291,12 +285,10 @@ end 'stringTableBufferBytes'
 //     `append` is the ONE array op that strides TWO records by a SINGLE element size (it reads `dest`'s
 //     and applies it to `src`), so it is correct only when they agree; blitting `srcLen · dest.element_size`
 //     bytes across a seam where they do not OVER-READS the narrower source and splices garbage in.
-//     ⚠ **THE CASE THIS USED TO NAME IS GONE**: a byte-string literal and a `.create()`d `Array with Byte`
-//     both stride 1 since P1.7 slice 2 unified the element size on the ranged element's declared range, and
-//     a program whose `Byte` is WIDER than one byte is now refused at the literal
-//     (`Parser.byteStringBlobStrideMessage`) rather than reaching this abort. So the guard is a LAST
-//     RESORT against a stamp divergence no front-end rule allows — not a routine outcome — and an
-//     element-wise WIDENING append across differing strides remains a distinct mechanism, not slice 4's.
+//     ⚠ **IT IS A LAST RESORT**: a byte-string literal and a `.create()`d `Array with Byte` both
+//     stride 1, and a program whose `Byte` is WIDER than one byte is refused at the literal
+//     (`Parser.byteStringBlobStrideMessage`), so no front-end rule lets a stamp divergence reach
+//     it. An element-wise WIDENING append across differing strides is a distinct mechanism.
 //   * `arrayNegativeResize` — the one with a contract argument behind it, immediately below.
 
 // `arrayNegativeResize` — `__managed_resize` asked for a NEGATIVE length. A length is a count, so a
@@ -336,15 +328,13 @@ end 'stringTableBufferBytes'
 let ArrayErrorIndexOutOfBoundsOrdinal = 0 as ParsedInt
 let ArrayErrorIndexOutOfBoundsFlag = ArrayErrorIndexOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 
-// ⭐⭐ **THE OTHER `ArrayError` FLAG — `emptySlot`, ordinal 1 (R4.4).** An index INSIDE `[0, length)` whose
+// ⭐⭐ **THE OTHER `ArrayError` FLAG — `emptySlot`, ordinal 1.** An index INSIDE `[0, length)` whose
 // MANAGED slot was never filled is a different failure from an index outside the array, and
 // `stdlib/Array.maxon:7-8` says so in the enum's own comments.
 //
-// ⚠ **BOTH ARMS USED TO RETURN `indexOutOfBounds`, AND THAT WAS A WRONG ANSWER RATHER THAN A ROUNDING**
-// — `specs/array-slots.md` states it exactly: `emptySlot` is "NOT `indexOutOfBounds`, which would blame
-// an index that is perfectly in range". It was unobservable until R4.4, because binding the error at all needs
-// `runtimeThrowsClause` to name the enum and reaching an empty slot needs `.managed.setLength` — both this
-// rung's. Its four cases now pin the split.
+// ⚠ **`indexOutOfBounds` FOR BOTH WOULD BE A WRONG ANSWER, NOT A ROUNDING** —
+// `specs/array-slots.md` states it exactly: `emptySlot` is "NOT `indexOutOfBounds`, which would
+// blame an index that is perfectly in range". Its four cases pin the split.
 let ArrayErrorEmptySlotOrdinal = 1 as ParsedInt
 let ArrayErrorEmptySlotFlag = ArrayErrorEmptySlotOrdinal + ErrorFlagOrdinalBias
 
@@ -381,7 +371,7 @@ export let ManagedCreateName = b"__managed_create"
 export let ManagedPushName = b"__managed_push"
 export let ManagedGetName = b"__managed_get"
 
-// ⭐ **THE ELEMENT READ A `for x in arr` LOOP MAKES (P1.8 slice A) — NON-THROWING, and that is the whole
+// ⭐ **THE ELEMENT READ A `for x in arr` LOOP MAKES — NON-THROWING, and that is the whole
 // reason it is a second entry point rather than a call to `__managed_get`.** Three facts force it:
 //   • `__managed_get` is DECLARED THROWING, and a bare call to one is E3057 BY DESIGN
 //     (`SemanticCheck.validatePlainCall`) — a loop has no `try` to attach and no fallback value to
@@ -395,7 +385,7 @@ export let ManagedGetName = b"__managed_get"
 // ⚠⚠ **THE THIRD BULLET RESTS ON A GUARANTEE HELD IN ANOTHER FILE, AND THIS IS WHERE IT IS NAMED.**
 // Dropping the NULL-slot arm is only safe while no index in `[0, count)` can hold an empty managed
 // slot, and the reason none can is that GROWING an array of managed elements is refused at COMPILE
-// time — `ParseError.arrayResizeManagedElement` / E3106, rendered in `Queries.maxon`, because a grown
+// time — `SourceParseError.arrayResizeManagedElement` / E3106, rendered in `Queries.maxon`, because a grown
 // slot holds no element and Maxon has no default constructor. `push` always writes, and `[count,
 // capacity)` is always zeroed. So the invariant is real, but it is a PARSER rule protecting a RUNTIME
 // omission with nothing between them: relax that refusal and this read is a null deref, in a function
@@ -406,8 +396,8 @@ export let ManagedGetName = b"__managed_get"
 export let ManagedGetUncheckedName = b"__managed_get_unchecked"
 export let ManagedSetName = b"__managed_set"
 
-// ⭐⭐ **EMPTY A SLOT WITHOUT DESTROYING WHAT WAS IN IT — the write half of a MOVE OUT of a container**
-// (`W217`). `__managed_vacate(arr, index, read)` stores a zero over slot `index`: no bounds throw, no COW
+// ⭐⭐ **EMPTY A SLOT WITHOUT DESTROYING WHAT WAS IN IT — the write half of a MOVE OUT of a container**.
+// `__managed_vacate(arr, index, read)` stores a zero over slot `index`: no bounds throw, no COW
 // detach, no occupant destroy.
 //
 // ⛔ **NEITHER SETTER CAN STAND IN, AND THAT IS THE WHOLE REASON THIS EXISTS.** `__managed_set` and
@@ -434,14 +424,6 @@ export let ManagedVacateName = b"__managed_vacate"
 export let ManagedCountName = b"__managed_count"
 export let ManagedCapacityName = b"__managed_capacity"
 
-// ⭐⭐⭐ **`__managed_is_empty` IS GONE (ARR4), AND ITS ABSENCE IS THE ONLY RUNTIME THIS ROSTER STRIKE
-// DELETED.** It answered `length@8 == 0` through two return blocks, and its ONE emitter was
-// `dispatchArrayMethod`'s `isEmpty` arm. `stdlib/Array.maxon:159` says the same thing in Maxon
-// (`managed.length() == 0`) and is now the only provider, so what a program emits for `arr.isEmpty()` is a
-// call to that body over `__managed_count` rather than a second, byte-identical length read of the
-// compiler's own. Every other name struck from `arraySurfaceMemberNames` kept its runtime, because every
-// other one has a non-`Array` caller (`ManagedClearName` is `stdlib/Array.maxon:358`'s AND the BUFFER
-// surface's, which is exactly why `clear` left the `Array` roster and stayed on the buffer's).
 let ManagedReserveName = b"__managed_reserve"
 export let ManagedResizeName = b"__managed_resize"
 export let ManagedFirstName = b"__managed_first"
@@ -449,12 +431,12 @@ export let ManagedClearName = b"__managed_clear"
 export let ManagedRemoveName = b"__managed_remove"
 export let ManagedDecrefName = b"__managed_decref"
 
-// The whole-array copy operations (P1.7 slice 4). `slice` is THROWING (bounds/inverted-range → `ArrayError`),
+// The whole-array copy operations. `slice` is THROWING (bounds/inverted-range → `ArrayError`),
 // `clone`/`append` are not. `slice`/`clone` return an array that BEHAVES as an independent copy but is an
-// O(1) zero-copy VIEW over the source's buffer until either side writes (P1.7 COW slice B — see
+// O(1) zero-copy VIEW over the source's buffer until either side writes (see
 // `emitRecordView`); `append` grows `self` and block-copies `other`'s bytes in, leaving `other` untouched.
 // TRIVIAL elements only — a managed element would need a per-element deep clone (the parser rejects the
-// managed cases, P1.7 slice 4).
+// managed cases).
 //
 // ⚖ **`append` IS NON-THROWING ON THE `__ManagedMemory` SURFACE TOO, AND THIS ENTRY SERVES BOTH.** It is the
 // ONE mm mutator with no `throwsType`, where `set`/`grow`/`setByte`/`slice` all carry `mmErr`. The
@@ -472,7 +454,7 @@ export let ManagedSliceName = b"__managed_slice"
 export let ManagedCloneName = b"__managed_clone"
 export let ManagedAppendName = b"__managed_append"
 
-// ⭐ **THE MANAGED-ELEMENT copy operations (P1.7 slice 3b-vi-b).** The DEEP-CLONE twins of the three above: an
+// ⭐ **THE MANAGED-ELEMENT copy operations.** The DEEP-CLONE twins of the three above: an
 // array whose element is MANAGED (String / struct / boxed union) cannot byte-blit its elements — that would
 // duplicate a heap pointer and double-free it — so each element is DEEP-CLONED into a FRESH OWNED buffer through
 // the per-element clone function the call site passes (`funcAddr(__str_clone)` / `funcAddr(__clone_<T>)` /
@@ -499,13 +481,14 @@ export let ManagedAppendManagedName = b"__managed_append_managed"
 export let ManagedSoleName = b"__managed_sole"
 export let ManagedSoleManagedName = b"__managed_sole_managed"
 
-// ⭐⭐ **THE SHARE WALK OVER A CONTAINER RECORD** — the soleness pair's twin for a LEND. It marks the record
-// shared, marks the allocation its bytes live in — views step that count from any green thread once the record
-// is lent — and — the `_managed` entry — walks each live element through the stamped `funcAddr(__share_<E>)`.
+// ⭐⭐ **THE SHARE WALK OVER A CONTAINER RECORD** — the soleness pair's twin for a SHARE. It marks
+// the record shared, marks the allocation its bytes live in — views step that count from any green
+// thread once the record is shared — and — the `_managed` entry — walks each live element through
+// the stamped `funcAddr(__share_<E>)`.
 //
-// ⭐ **IT DETACHES NOTHING.** A lend is not a write: the record stays where it is, frozen, and every holder of
-// its bytes — a view copies before it writes, the owner writes only after a detach — finds the marked buffer's
-// count non-zero and copies out rather than writing in place.
+// ⭐ **IT DETACHES NOTHING.** A share is not a write: the record stays where it is, frozen, and
+// every holder of its bytes — a view copies before it writes, the owner writes only after a detach
+// — finds the marked buffer's count non-zero and copies out rather than writing in place.
 export let ManagedShareName = b"__managed_share"
 export let ManagedShareManagedName = b"__managed_share_managed"
 
@@ -535,7 +518,7 @@ export let ManagedShareAloneName = b"__managed_share_alone"
 export let ManagedRetainName = b"__managed_retain"
 export let ManagedIncrefName = b"__managed_incref"
 
-// ⭐ **THE OPAQUE-`T` copy operations (P1.7 slice 3b-vi-b-β).** A `slice`/`append` on an `Array with <type
+// ⭐ **THE OPAQUE-`T` copy operations.** A `slice`/`append` on an `Array with <type
 // parameter>` field inside a GENERIC body serves both a MANAGED (`Container with String`) and a TRIVIAL
 // (`Container with SmallInt`) instantiation from ONE shared body, so the shared body cannot pick the trivial
 // byte-blit or the managed deep-clone statically. Each is a thin RUNTIME wrapper that takes the enclosing
@@ -578,18 +561,17 @@ export let ManagedAppendOpaqueName = b"__managed_append_opaque"
 let ManagedHashName = b"__managed_hash"
 export let ManagedEqName = b"__managed_eq"
 
-// ⭐⭐ **THE `__ManagedMemory` MEMBERS R4.2 DELIVERS.** `__ManagedMemory` IS an `Array with Byte` at this
-// rung (`SignatureIndex.ManagedMemoryTypeName`), so its members are entries of this same runtime — which is
+// ⭐⭐ **THE `__ManagedMemory` MEMBERS.** `__ManagedMemory` IS an `Array with Byte`
+// (`SignatureIndex.ManagedMemoryTypeName`), so its members are entries of this same runtime — which is
 // also why they are `__managed_`-prefixed and ride the existing `usesManagedMemory` install with no bit of
 // their own.
 //
-// ⚠ **THE `mem_` INFIX MARKS THE ENTRY WHOSE BARE-NAMED TWIN IS THE `Array` SURFACE'S, AND IT SURVIVES ARR6
-// FOR THAT ONE REASON.** Three of the six carrying it (`create`, `grow`, `set`) sit beside an `Array` entry
-// of the same verb with a DIFFERENT CONTRACT — capacity vs length as the bound, exact vs policy growth — so
-// `__managed_mem_set` and `__managed_set` must stay two symbols while both surfaces exist. The other three
-// (`swap`, `shift_right`, `shift_left`) have no twin and keep the infix only so the six read as one group.
-// When the sibling rung retires the `Array` surface onto `stdlib/Array.maxon`, the twins go with it and the
-// infix becomes a stutter with nothing left to disambiguate; dropping it then is a rename of six names.
+// ⚠ **THE `mem_` INFIX MARKS THE ENTRY WHOSE BARE-NAMED TWIN IS THE `Array` SURFACE'S.** Three of
+// the six carrying it (`create`, `grow`, `set`) sit beside an `Array` entry of the same verb with a
+// DIFFERENT CONTRACT — capacity vs length as the bound, exact vs policy growth — so
+// `__managed_mem_set` and `__managed_set` must stay two symbols while both surfaces exist. The
+// other three (`swap`, `shift_right`, `shift_left`) have no twin and keep the infix only so the six
+// read as one group. Without the `Array` twins the infix would have nothing left to disambiguate.
 //
 // ⚠ **NONE FOLDS ONTO AN EXISTING ENTRY, AND THE REASONS ARE SEPARATE.**
 //   • `__managed_mem_create(count, elementSize)` RESERVES `count` elements — `count` is a CAPACITY request and
@@ -597,11 +579,6 @@ export let ManagedEqName = b"__managed_eq"
 //     `setByte(0, …)` legal (`stdlib/Character.maxon:172-179`): the SETTER's bound is capacity, not length.
 //     `__managed_create` takes no count at all and cannot express the reservation. It also takes its element size
 //     as a RUNTIME argument rather than a compile-time literal, because the source writes one.
-//     ⚠⚠ **THIS PARAGRAPH SAID "PUBLISHES `count` ELEMENTS — length AND capacity are `count`" UNTIL THE
-//     Array-retirement RUNG, AND IT HAD BEEN FALSE SINCE R4.4.** That was R4.2's behaviour;
-//     `create-and-length` measured it wrong and R4.4 changed the builder, whose own comment states the
-//     correct contract and cites the case. The two headers then sat in one file disagreeing, and the stale
-//     one is the one a reader meets first — it cost this rung a spec case written against a length of 4.
 //   • `__managed_set_length(arr, n)` REFUSES an `n` above the capacity where `__managed_resize` GROWS to fit. That
 //     refusal is the method's whole contract — `stdlib/Array.maxon:373-382` builds `resize`
 //     out of `reserve` THEN `setLength` precisely because `setLength` will not grow — so folding the two
@@ -638,9 +615,6 @@ export let ManagedByteAtName = b"__managed_byte_at"
 // one is `-(bits per element)` — so `ranged-int-bit-packing` reads `-2` off an `Array with int(0 to 3)` and
 // `-1` off an `Array with bool`, and `boundary-16-is-byte` reads `1`. The field is stored as a full machine
 // word, so the two's-complement negative comes back as one and needs no decoding here.
-//
-// ⚠ This paragraph sat above `ManagedIsEmptyName` — two screens up, decorating a different function — until
-// ARR4 deleted that name and had to decide where it belonged. It is here now, over the name it describes.
 export let ManagedElementSizeName = b"__managed_element_size"
 
 // ⭐⭐ **THE THREE RELOCATORS — `swap`, `shiftRight`, `shiftLeft`.** They are what `stdlib/Array.maxon` builds
@@ -728,7 +702,7 @@ export let CursorSourceOffset = 0 as ByteOffset
 let CursorPositionOffset = 8 as ByteOffset
 export let CursorRecordBytes = 16 as ParsedInt
 
-// ⭐⭐ **`__managed_mem_set` — THE BUFFER'S ELEMENT WRITE, BOUNDED BY CAPACITY (R4.6).**
+// ⭐⭐ **`__managed_mem_set` — THE BUFFER'S ELEMENT WRITE, BOUNDED BY CAPACITY.**
 //
 // ⚖ **USER RULING: a `__ManagedMemory` write is bounded by CAPACITY, not by length.** The canonical lines
 // disagree — `specs/managed-memory-methods.md:21` says `set` panics at `index >= length` and
@@ -746,24 +720,23 @@ export let CursorRecordBytes = 16 as ParsedInt
 // `__managed_set` is shared — so the two surfaces need two entries. Which one a receiver gets is decided by
 // PROVENANCE at the single door (`Parser.dispatchArrayMethod`'s `isManagedMemory`), never by the element type.
 //
-// ⚠ **`append` USED TO BE CITED HERE AS THE PRECEDENT AND IS NOW THE COUNTER-EXAMPLE**, which is worth
-// keeping because it names what a second entry actually costs: it earns one when the two surfaces' CONTRACTS
-// differ (here, the bound), and not when only their SENTENCES do. `append`'s split rested on a throwing-ness
-// it does not have, so the ruling folded it back to `__managed_append` while the surface
-// split — the argument rule and its diagnostic — stayed in the parser where it belongs.
+// ⚠ **A SECOND ENTRY IS EARNED WHEN THE TWO SURFACES' CONTRACTS DIFFER (here, the bound), NOT WHEN
+// ONLY THEIR SENTENCES DO.** `append` is the counter-example: both surfaces share
+// `__managed_append`, and the surface split — the argument rule and its diagnostic — lives in the
+// parser.
 //
 // ⚠ It owns only what differs — the CAPACITY bound, the detach that bound needs, and the complaint — and
 // delegates the write itself to `emitElementStoreAndOkReturn`, which is `__managed_set`'s tail verbatim.
 //
 // ⚠⚠ **THE STAGING REGION `[length, capacity)` CARRIES NO OWNERSHIP, WHICH IS WHY A MANAGED ELEMENT MAY NOT
-// REACH THIS ENTRY AT ALL.** ⚖ USER RULING, 2026-07-30 (the second on this member): the front end REFUSES
+// REACH THIS ENTRY AT ALL.** ⚖ USER RULING: the front end REFUSES
 // `arr.managed.set` when the element type is managed — `Parser.requireBufferSetOwnsWhatItStores`, **E3109**.
 // A managed element written past the length would be owned by NOBODY until `setLength` published it:
 // `__managed_decref` destroys only `[0, length)`, `__managed_push`/`__managed_append` store AT `length`
-// WITHOUT destroying the occupant (before R4.6 that slot was provably NULL, so there was nothing to destroy),
-// and a grow or a detach copies only `length · element_size` live bytes and abandons the rest. MEASURED in
-// R4.6 review, all at exit **101**: a `String` staged and never published; one staged then `push`ed over; and
-// a boxed STRUCT element staged past the length, which is why the rule is "managed" and not "String".
+// WITHOUT destroying the occupant, and a grow or a detach copies only `length · element_size` live
+// bytes and abandons the rest. Each leaks (exit **101**): a `String` staged and never published,
+// one staged then `push`ed over, and a boxed STRUCT element staged past the length — which is why
+// the rule is "managed" and not "String".
 //
 // ⭐ **REJECTED RATHER THAN FIXED, and the reason is this file's own invariant.** Making the staged slot owned
 // means a destructor gate on every managed `push` — a hot path — and it makes `[length, capacity)`-reads-ZERO
@@ -780,7 +753,7 @@ export let ManagedMemSetName = b"__managed_mem_set"
 //
 // ⚠ **THE DECLINE IS THE CONTRACT AND NOT A GAP.** A MANAGED element's slot holds exactly one reference,
 // and taking and releasing one PER SLOT is the PARSER's obligation, emitted at each `managed.set`
-// (`Parser.moveElementIntoContainer` — `coOwnBorrowedOpaque` for the shared generic body's opaque `T`, W58).
+// (`Parser.moveElementIntoContainer` — `coOwnBorrowedOpaque` for the shared generic body's opaque `T`).
 // A runtime loop cannot respell that: it holds a machine word, not a value it knows the ownership protocol
 // of, and the enclosing instance's `retainFunc@64` is the caller's descriptor rather than anything reachable
 // from an array record. So a non-zero `element_destroy@40` stores NOTHING and answers 0, the caller loops,
@@ -794,7 +767,7 @@ export let ManagedMemSetName = b"__managed_mem_set"
 export let ManagedFillName = b"__managed_fill"
 
 // The `__ManagedMemoryError` ordinals these members throw, as error FLAGS — positional facts about the case
-// order of the enum DECLARED at `stdlib/Builtins.maxon:152` (A1s), exactly as `ArrayErrorIndexOutOfBoundsFlag` is
+// order of the enum DECLARED at `stdlib/Builtins.maxon:152`, exactly as `ArrayErrorIndexOutOfBoundsFlag` is
 // about the still-synthesized `ArrayError`'s. DERIVED from the one bias rather than spelled 1/4/7/8.
 //
 // ⚠ `MemoryIndexOutOfBoundsOrdinal` is 0, the same ordinal `ArrayErrorIndexOutOfBoundsOrdinal` names — the two enums
@@ -803,7 +776,7 @@ export let ManagedFillName = b"__managed_fill"
 // because "these two enums agree today" is a fact about their case lists and not a fact about this family's
 // wire format; folding them would make a later divergence in either list silently reroute the other's arms.
 //
-// ⚠ **1 AND 2 CARRY NO FLAG BECAUSE THIS RUNTIME THROWS NEITHER, AND THE ORDINALS ARE HERE ANYWAY (W135).**
+// ⚠ **1 AND 2 CARRY NO FLAG BECAUSE THIS RUNTIME THROWS NEITHER, AND THE ORDINALS ARE HERE ANYWAY.**
 // `emptySlot` is thrown against `ArrayError` by the ARRAY accessors — `__managed_get` and `__managed_first`,
 // through `emitLoadElemAndOkReturn`'s `ArrayErrorEmptySlotFlag` — and never against THIS enum, because the
 // `__ManagedMemory` surface has no element READ (`create`/`grow`/`set`/`swap`/`shift*`). `sliceOutOfBounds`
@@ -811,7 +784,7 @@ export let ManagedFillName = b"__managed_fill"
 // which is bounds-checked against `ArrayError.indexOutOfBounds`. Both are still CASES of the enum
 // `public enum __ManagedMemoryError` in `stdlib/Builtins.maxon` declares, and a corpus `throw` resolves
 // its tag from that declaration itself, so there is no second half there to drift. These two positions
-// are transcribed because they are what puts `invalidLength` at 3 — and until W135 they were the gap a
+// are transcribed because they are what puts `invalidLength` at 3 — left out, they would be a gap a
 // corpus reorder could move in silence.
 let MemoryIndexOutOfBoundsOrdinal = 0 as ParsedInt
 let MemoryEmptySlotOrdinal = 1 as ParsedInt
@@ -842,26 +815,26 @@ export function isManagedElementCopyCallee(callee ByteArray) returns bool
 	return callee.equals(ManagedSliceManagedName) or callee.equals(ManagedCloneManagedName) or callee.equals(ManagedAppendManagedName)
 end 'isManagedElementCopyCallee'
 
-// Is `callee` one of the OPAQUE-`T` array copies — the `usesOpaqueElementCopy` gate (P1.7 slice
-// 3b-vi-b-β). Their install is decoupled from `usesManagedMemory` (like the managed copies) so a program that
+// Is `callee` one of the OPAQUE-`T` array copies — the `usesOpaqueElementCopy` gate.
+// Their install is decoupled from `usesManagedMemory` (like the managed copies) so a program that
 // touches no opaque-array copy does not carry them; and a reference ALSO turns on `usesManagedElementCopy`
 // (`recordCallUsage`), because each wrapper's managed branch calls the α `__managed_*_managed` helpers.
 export function isOpaqueElementCopyCallee(callee ByteArray) returns bool
 	return callee.equals(ManagedSliceOpaqueName) or callee.equals(ManagedAppendOpaqueName)
 end 'isOpaqueElementCopyCallee'
 
-// ⭐ **THE SINGLE-VALUE DESCRIPTOR-GATED DROP (P1.7 slice 3b-v).** `__drop_type_param(descriptor, value)`
+// ⭐ **THE SINGLE-VALUE DESCRIPTOR-GATED DROP.** `__drop_type_param(descriptor, value)`
 // drops ONE consumed opaque type-parameter binding whose element destructor is not known statically: the
 // shared generic body owns the value (a `push`/forward feed parameter left live on some path), but the
 // destructor lives in the enclosing instance's layout descriptor. NOT `__managed_`-prefixed (it is a single value,
 // not an array operation), but `__`-prefixed so `isCompilerInternalCallee` routes its call and the golden skip
 // (`isRuntimeFunction`) hides its body. Installed under its OWN `usesDropTypeParam` bit (`installDropTypeParamRuntime`),
-// NOT `usesManagedMemory`: a bare opaque `T` FIELD reassignment (P1.7 Finding A) emits it in an ARRAY-FREE generic struct,
+// NOT `usesManagedMemory`: a bare opaque `T` FIELD reassignment emits it in an ARRAY-FREE generic struct,
 // so gating its install on the array floor would leave that call unlinked. An opaque-array program sets the bit too
 // (its move-out / feed drops route through it), so ONE install covers both, exactly once.
 export let DropTypeParamName = b"__drop_type_param"
 
-// ⭐⭐ **THE SINGLE-VALUE DESCRIPTOR-GATED RETAIN (W41-opaque).** `__retain_type_param(descriptor, value) ->
+// ⭐⭐ **THE SINGLE-VALUE DESCRIPTOR-GATED RETAIN.** `__retain_type_param(descriptor, value) ->
 // value` takes the reference a shared generic body owes when it stores a BORROWED opaque `T` into a record it
 // builds — a tuple, a `Self{…}` field, an array element. The body compiles ONCE, so it cannot name the
 // protocol; the enclosing instance's descriptor names it at `retainFunc@64`, and a trivial instantiation
@@ -869,10 +842,9 @@ export let DropTypeParamName = b"__drop_type_param"
 //
 // ⚠⚠ **THE RECORD IT FILLS IS CONCRETE AT THE CALLER, WHICH IS WHY THE REFERENCE IS OWED AT ALL.**
 // `MapIterator.current` returns `(Key, Value)`; the caller's substituted `(String, Integer)` is a tuple whose
-// `__destruct___Tuple2.String.int` decrefs slot 0 whoever filled it. Storing the raw borrow made that record a
-// second OWNER of one reference — MEASURED as `__mm_alloc` followed by a bare `store [r8+0], rbx`, then a
-// decref from the tuple AND a decref from the container's array: 0xC0000005 on
-// `interface-extensions/stdlib-map-on-map` and `tuples/for-destructuring-map`.
+// `__destruct___Tuple2.String.int` decrefs slot 0 whoever filled it. Storing the raw borrow would make that
+// record a second OWNER of one reference: a decref from the tuple AND one from the container's
+// array, and an access violation.
 //
 // ⚠ **IT IS `__drop_type_param` AT A DIFFERENT OFFSET AND WITH THE OTHER ACTION**, so `buildRecordGatedAction`
 // builds it — the fourth entry of that shape and the second `retainThroughWord`. Its ANSWER is what the caller
@@ -880,7 +852,7 @@ export let DropTypeParamName = b"__drop_type_param"
 // DIFFERENT record.
 export let RetainTypeParamName = b"__retain_type_param"
 
-// ⭐ **THE EXISTENTIAL'S DROP (P1.7a-existentials slice 2).** `__drop_existential(witness, value)` releases
+// ⭐ **THE EXISTENTIAL'S DROP.** `__drop_existential(witness, value)` releases
 // the VALUE half of a fat pointer through the destructor its WITNESS table names
 // (`IrInterface.WitnessDestroyFuncOffset`) — the drop an owned interface-typed field or binding takes, whose
 // callee cannot be picked statically because the conformer is a run-time fact.
@@ -892,7 +864,7 @@ export let RetainTypeParamName = b"__retain_type_param"
 // shared emitter is what decides where it lives.
 export let DropExistentialName = b"__drop_existential"
 
-// ⭐⭐ **THE EXISTENTIAL'S CO-OWNERSHIP (P1.7a-existentials slice 2).** `__retain_existential(witness, value)
+// ⭐⭐ **THE EXISTENTIAL'S CO-OWNERSHIP.** `__retain_existential(witness, value)
 // -> value` takes a SECOND owner of a fat pointer's value half — but ONLY when the witness says there is a
 // record to own (`retainFunc@16 != 0`), and it takes it THROUGH THAT WORD, answering with whatever the word
 // hands back. Two facts a caller cannot know statically ride in it, and each was measured as a crash when it
@@ -915,7 +887,7 @@ export let DropExistentialName = b"__drop_existential"
 export let RetainExistentialName = b"__retain_existential"
 
 // Internal helpers the public ones call: `__managed_grown_cap` is the policy, `__managed_grow` reallocs to fit,
-// `__managed_cow_detach` gives the record a private writable buffer before any in-place write (P1.7 COW slice A).
+// `__managed_cow_detach` gives the record a private writable buffer before any in-place write.
 // ⭐ The two ELEMENT-RANGE helpers packing made runtime functions rather than emitted-inline loops — see
 // `buildManagedMoveElems` for the register-pressure measurement that forces the split, and for why the
 // four mutators call one function rather than each inlining a byte `memmove`.
@@ -972,7 +944,7 @@ end 'isManagedMemoryRuntimeCallee'
 // only the value register and drops the error flag, so an out-of-bounds `get` silently returns 0 (a wrong
 // answer). THE ONE home of "which array
 // callee throws": `Parser.dispatchArrayMethod` emits exactly these seven METHODS through its throwing path,
-// and the two lists name the same `Managed*Name` constants so they cannot drift. `slice` (P1.7 slice 4) throws on
+// and the two lists name the same `Managed*Name` constants so they cannot drift. `slice` throws on
 // an out-of-bounds or inverted range.
 // ⚠ Seven METHODS, NINE CALLEES — `slice` has three entries (plain, managed-element, opaque-element), picked
 // by the element's ownership rather than by anything the author writes. The split is nothing the author
@@ -982,13 +954,13 @@ end 'isManagedMemoryRuntimeCallee'
 // the proof is a fact about the call site, and a vector's `get`/`set` are one shared corpus body reached
 // by a CALL.
 export function isThrowingManagedMemoryRuntimeCallee(callee ByteArray) returns bool
-	// R4.2 appends the three `__ManagedMemory` members, which throw `__ManagedMemoryError` rather than
-	// `ArrayError` — a different enum, but the same "throwing vs not" answer this predicate exists to give
-	// (`funcSignatureResultValTypes` reads the SECONDARY-SLOT predicate, never the name's bytes — and since
-	// P1.7a slice 2 that predicate is `functionUsesSecondaryReturnSlot` rather than `throwsClauseIsThrowing`
-	// alone; a runtime entry never returns an interface, so the two agree here and the conclusion stands). They arrive as
-	// the ONE list `isManagedMemoryMemberCallee` holds, because `GtRuntime.runtimeThrowsClause` needs the same
-	// three names and two hand-written lists of one set is what this file's guard exists to catch.
+	// The `__ManagedMemory` members throw `__ManagedMemoryError` rather than `ArrayError` — a
+	// different enum, but the same "throwing vs not" answer this predicate exists to give
+	// (`funcSignatureResultValTypes` reads the SECONDARY-SLOT predicate,
+	// `functionUsesSecondaryReturnSlot`, never the name's bytes; a runtime entry never returns an
+	// interface, so that agrees with `throwsClauseIsThrowing` here). They arrive as the ONE list
+	// `isManagedMemoryMemberCallee` holds, because `GtRuntime.runtimeThrowsClause` needs the same
+	// names and two hand-written lists of one set is what this file's guard exists to catch.
 	return isThrowingArrayAccessorCallee(callee) or isManagedMemoryMemberCallee(callee) or isThrowingCursorRuntimeCallee(callee)
 end 'isThrowingManagedMemoryRuntimeCallee'
 
@@ -997,7 +969,7 @@ end 'isThrowingManagedMemoryRuntimeCallee'
 // they compose into the union above exactly as the buffer members do — and for the same reason they need a
 // NARROW predicate of their own: `GtRuntime.runtimeCalleeSourceMethod` must reach a cursor map rather than
 // the array family's, or `c.advance()` written without a `try` inherits *"throwing array accessor"* for a
-// construct the program does not contain (D11c's defect, one family over).
+// construct the program does not contain.
 //
 // ⚠ **`__managed_cursor_create` IS NOT HERE — IT IS A `__ManagedMemory` MEMBER.** The author writes
 // `buf.createCursor()`, on the BUFFER, so its spelling and its receiver both belong to that family and it is
@@ -1058,30 +1030,29 @@ end 'isThrowingArrayAccessorCallee'
 // ones — and are already covered by the list above. That is the binding's consequence, not an omission: one
 // record, one runtime, so one throws clause per callee.
 //
-// ⚠⚠ **`set` LEFT THAT GROUP IN R4.6 AND CHANGED ERROR FAMILY WITH IT**, which is worth stating because it
-// is the one member whose thrown TYPE moved: `__managed_mem_set` throws `__ManagedMemoryError.indexOutOfBounds`
-// where the shared `__managed_set` throws `ArrayError.indexOutOfBounds`. The ORDINAL is identical (both enums'
-// first case, by the shared name constant), so no handler's arms move and no `otherwise` value changes —
-// what changes is the type an `otherwise (e)` binds, and it is the surface's own.
+// ⚠⚠ **`set` IS NOT IN THAT GROUP:** `__managed_mem_set` throws
+// `__ManagedMemoryError.indexOutOfBounds` where the shared `__managed_set` throws
+// `ArrayError.indexOutOfBounds`. The ORDINAL is identical (both enums' first case, by the shared
+// name constant), so no handler's arms differ and no `otherwise` value changes — what differs is
+// the type an `otherwise (e)` binds, and it is the surface's own.
 // ⚠ `get` and `slice` remain on `ArrayError`, so a user function cannot
 // declare ONE `throws` clause and propagate a buffer `set` and a buffer `get` through it; moving those two
-// needs buffer entries of their own (`get` carries the empty-slot arm) and is a rung, not a rename.
+// needs buffer entries of their own (`get` carries the empty-slot arm), not a rename.
 export function isManagedMemoryMemberCallee(callee ByteArray) returns bool
 	return callee.equals(ManagedMemCreateName) or callee.equals(ManagedSetLengthName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedByteAtName) or callee.equals(ManagedMemGrowName) or callee.equals(ManagedMemSetName) or callee.equals(ManagedFillName) or callee.equals(ManagedMemSwapName) or callee.equals(ManagedMemShiftRightName) or callee.equals(ManagedMemShiftLeftName) or callee.equals(ManagedCursorCreateName)
 end 'isManagedMemoryMemberCallee'
 
-// ⭐ **WHAT THE USER ACTUALLY WROTE (D12)** — this family's `managedDirectorySourceMethodName`, read through
-// the same composer (`GtRuntime.runtimeCalleeSourceMethod`). It is the family the wrong noun hid in longest:
-// the seven names above reach `isThrowingManagedMemoryRuntimeCallee` BY COMPOSITION, so a `buf.byteAt(i)` written
-// without a `try` INHERITED the array-accessor wording — the right E3057 describing a construct the program
-// does not contain. Separating the two costs an ORDERING in the message chain, not a second predicate: the
-// composer asks this list BEFORE the array one, so what still reaches the array arm is a genuine `Array`-surface
-// accessor.
+// ⭐ **WHAT THE USER ACTUALLY WROTE** — this family's `managedDirectorySourceMethodName`, read through
+// the same composer (`GtRuntime.runtimeCalleeSourceMethod`). The names above reach
+// `isThrowingManagedMemoryRuntimeCallee` BY COMPOSITION, so without this map a `buf.byteAt(i)`
+// written without a `try` would inherit the array-accessor wording — the right E3057 describing a
+// construct the program does not contain. The composer's array arm asks the narrow
+// `isThrowingArrayAccessorCallee`, so what reaches it is a genuine `Array`-surface accessor.
 //
 // ⚠ **IT IS A MAP ONTO THE PARSER'S OWN CONSTANTS, NOT A SECOND SPELLING** — each arm answers with the byte
 // string `parseManagedMemoryStaticCall`/`dispatchArrayMethod` matched the source token against. Two
-// of them (`set`, `append`) are the shared `Array` spellings and moved from a file-private `let` in
-// `Parser.maxon` to `SignatureIndex` at D12 so this map could name them; see that block. Asked only on the
+// of them (`set`, `append`) are the shared `Array` spellings and live in `SignatureIndex` so this
+// map can name them; see that block. Asked only on the
 // COLD path, and only behind `isManagedMemoryMemberCallee` — which is what the panic states rather than
 // answers.
 export function managedMemorySourceMethodName(callee ByteArray) returns ByteArray
@@ -1134,27 +1105,24 @@ export function managedMemorySourceMethodName(callee ByteArray) returns ByteArra
 	panic("managedMemorySourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a `__ManagedMemory` runtime callee — this map is asked ONLY behind `isManagedMemoryMemberCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `verifyThrowingAccessorsMatchPredicate` asks this for every buffer member `installManagedMemoryRuntime` installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedMemorySourceMethodName'
 
-// ⭐⭐ **WHAT THE USER CALLED A GENUINE `Array`-SURFACE ACCESSOR (D11c) — the sibling above's twin, and the arm that
+// ⭐⭐ **WHAT THE USER CALLED A GENUINE `Array`-SURFACE ACCESSOR — the sibling above's twin, and the arm that
 // makes `GtRuntime.runtimeCalleeSourceMethod` TOTAL over every throwing runtime callee this compiler emits.**
 //
-// ⚠⚠ **THE ARRAY FAMILY USED TO BE THE ONE FAMILY WITH NO SPELLING, AND THAT PARTIALITY WAS A CONSUMER'S
-// PREFERENCE WEARING A MAP'S CLOTHES.** D12 recorded it as "a design fact rather than a gap": the nine
-// accessors are worded AS A FAMILY by E3057 ("throwing array accessor requires try …"), so its composer never
-// wanted a per-method noun and the map was simply never given the arms. But this map answers *"what did the
-// author write?"* — a question with an answer for all nine, since `arr.get(0)` is spelled `get` whoever is
-// asking — so `notFound` was the map declining to state a fact it holds, and the FAMILY WORDING is a policy
-// belonging to the one diagnostic that wants it.
+// ⚠⚠ **THE FAMILY WORDING IS A CONSUMER'S POLICY, NOT A REASON FOR THE MAP TO BE PARTIAL.** The
+// nine accessors are worded AS A FAMILY by E3057 ("throwing array accessor requires try …"), but
+// this map answers *"what did the author write?"* — a question with an answer for all nine, since
+// `arr.get(0)` is spelled `get` whoever is asking.
 //
-// ⇒ **The fact lives here; the policy moved to the consumer.** `SemanticCheck.throwingRuntimeCalleeMessage`
-// now asks `isThrowingArrayAccessorCallee` for its family sentence BEFORE consulting the map, so E3057 says
-// exactly what it said before (`try-postfix-target.error.two-throwing-calls-in-one-chain` pins it, on
+// ⇒ **The fact lives here; the policy lives in the consumer.** `SemanticCheck.throwingRuntimeCalleeMessage`
+// asks `isThrowingArrayAccessorCallee` for its family sentence BEFORE consulting the map, so E3057
+// keeps its family wording (`try-postfix-target.error.two-throwing-calls-in-one-chain` pins it, on
 // `__managed_slice`) while E3059 — which needs a NOUN, because *"'array accessor' does not return a value"* is
 // not a sentence — gets `set`. Two diagnostics, one spelling, no second list.
 //
 // ⚠ **THE MAP IS MANY-TO-ONE AND THAT IS NOT THE FILE FAMILY'S PROBLEM.** Three callees answer `slice`
 // (`__managed_slice`, plus the managed and opaque element variants), which is fine: the map's key is the CALLEE
 // and every key has exactly one answer. `RuntimeCalleeSourceMethod.sharedByTwoSpellings` exists for the
-// opposite shape — ONE callee two authors could have written (`__mf_open_write`) — and nothing here needs it,
+// opposite shape — ONE callee two authors could have written — and nothing here needs it,
 // because the three slice entries are picked by the ELEMENT's ownership, which the author never spells.
 export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArray
 	if callee.equals(ManagedGetName) 'get'
@@ -1190,27 +1158,22 @@ end 'arrayAccessorSourceMethodName'
 let ArrayErrorOrdinalInstaller = b"the managed-memory runtime (ArrayError)"
 let ManagedMemoryOrdinalInstaller = b"the managed-memory runtime (__ManagedMemoryError)"
 
-// ⭐ **THE ORDINAL DRIFT GUARD FOR THE TWO FAMILIES THIS FILE TRANSCRIBES (7b, split at A1s).** They share
+// ⭐ **THE ORDINAL DRIFT GUARD FOR THE TWO FAMILIES THIS FILE TRANSCRIBES.** They share
 // their case-name constants without sharing an enum — `ArrayError` declares only the first two cases while
 // `__ManagedMemoryError` declares eight, so the same name sits at the same ordinal in both BY DESIGN and each
 // is asserted against its OWN layout. Drift is otherwise silent: every handler arm would name the wrong case
 // with no crash and no wrong exit code.
 //
-// ⚠⚠ **THE ASYMMETRY THIS BLOCK RECORDED IS GONE, AND ITS DISAPPEARANCE IS THE POINT.** It read:
-// *"`__ManagedMemoryError` is DECLARED in `stdlib/Builtins.maxon:152` and is read from there; `ArrayError` is
-// declared in `stdlib/Array.maxon:6`, which the stdlib loader does not LIST, so the compiler still
-// SYNTHESIZES it and a disagreement there remains a compiler bug that PANICS."* `land-the-listing` lists that
-// module, so BOTH families are read from their declarations and both take `overDeclared` — a disagreement is
-// now an edit to this checkout's `stdlib/`, which is `E4016` and not a panic
-// (`Project.BuiltinErrorDeclarationSource`).
+// ⚠⚠ **BOTH FAMILIES ARE READ FROM THEIR DECLARATIONS** (`stdlib/Builtins.maxon`,
+// `stdlib/Array.maxon`) and both take `overDeclared`, so a disagreement is an edit to this
+// checkout's `stdlib/`, which is `E4016` and not a panic (`Project.BuiltinErrorDeclarationSource`).
 //
-// ⛔ **KEEPING THE SYNTHESIZED CHECK WOULD HAVE BEEN WORSE THAN DROPPING IT, WHICH IS NOT OBVIOUS.**
+// ⛔ **A CHECK AGAINST THE SYNTHESIZED SEED WOULD BE WORSE THAN NONE, WHICH IS NOT OBVIOUS.**
 // `ArrayErrorTypeName` is the BARE `b"ArrayError"`, so the parsed declaration displaces the seed on one
 // registry key and the program runs on the CORPUS layout — while `overSynthesized(builtinArrayErrorEnum())`
-// rebuilt the seed and compared it against itself, agreeing unconditionally. MEASURED: swapping the two cases
-// in `stdlib/Array.maxon:7-8` traded this file's two handler answers (42↔99 across
-// `array-slots.raw-open-slot-reports-empty-slot` and `past-the-end-reports-index-out-of-bounds`) with the
-// guard SILENT. Reading the declaration is what makes the guard watch the layout the program actually uses.
+// would rebuild the seed and compare it against itself, agreeing unconditionally: swapping the two
+// cases in `stdlib/Array.maxon:7-8` would trade the handler answers with the guard SILENT. Reading
+// the declaration is what makes the guard watch the layout the program actually uses.
 export function verifyManagedMemoryRuntimeOrdinals(project Project)
 	match declaredBuiltinErrorEnum(project, typeName: ArrayErrorTypeName, installer: ArrayErrorOrdinalInstaller) 'arrayDeclaration'
 		notDeclared then break 'arrayDeclaration'
@@ -1291,10 +1254,10 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildArrayEquals(module, name: ManagedEqName)
 	buildManagedDecref(module)
 
-	// The `__ManagedMemory` members with a runtime of their own (three from R4.2, three from R4.4, one from
-	// R4.6, three relocators) — part of the all-or-nothing `usesManagedMemory` install for the reason the header
-	// gives: `__`-prefixed functions are excluded from the goldens, so an unreferenced one costs nothing a
-	// fragment can see, and these call `__managed_create`/`__managed_reserve`/`__managed_cow_detach` anyway.
+	// The `__ManagedMemory` members with a runtime of their own — part of the all-or-nothing
+	// `usesManagedMemory` install for the reason the header gives: `__`-prefixed functions are
+	// excluded from the goldens, so an unreferenced one costs nothing a fragment can see, and these
+	// call `__managed_create`/`__managed_reserve`/`__managed_cow_detach` anyway.
 	buildManagedMemCreate(module)
 	buildManagedSetLength(module)
 	buildManagedSetByte(module)
@@ -1314,7 +1277,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildManagedCursorNavigator(module, name: ManagedCursorRetreatName, step: CursorStep.backward)
 	buildManagedCursorNavigator(module, name: ManagedCursorSeekName, step: CursorStep.absolute)
 
-	// The MANAGED-element copies (P1.7 slice 3b-vi-b) — installed under their OWN bit, so a trivial-array
+	// The MANAGED-element copies — installed under their OWN bit, so a trivial-array
 	// program (the common one) does not carry them. `usesManagedElementCopy` implies `usesManagedMemory` (they are
 	// `__managed_`-prefixed), so this install is always reached when the bit is set.
 	if usage.usesManagedElementCopy 'managedCopy'
@@ -1323,7 +1286,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 		buildManagedAppendManaged(module)
 	end 'managedCopy'
 
-	// The OPAQUE-`T` copy wrappers (P1.7 slice 3b-vi-b-β) — installed under their OWN bit, which also implies
+	// The OPAQUE-`T` copy wrappers — installed under their OWN bit, which also implies
 	// `usesManagedElementCopy` (`recordCallUsage`), so the α helpers they branch to are already built above.
 	if usage.usesOpaqueElementCopy 'opaqueCopy'
 		buildManagedSliceOpaque(module)
@@ -1343,7 +1306,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	verifyThrowingAccessorsMatchPredicate(module)
 end 'installManagedMemoryRuntime'
 
-// ⭐ **INSTALL THE SINGLE-VALUE DESCRIPTOR-GATED DROP** (`__drop_type_param`, P1.7 slice 3b-v / Finding A) —
+// ⭐ **INSTALL THE SINGLE-VALUE DESCRIPTOR-GATED DROP** (`__drop_type_param`) —
 // its OWN install, gated on `usesDropTypeParam` rather than `usesManagedMemory`. Both an opaque-ARRAY program (a
 // `.pop()` move-out / a consumed feed left live) and an array-FREE bare-field reassign (`self.saved = next`)
 // set the bit through `recordCallUsage`, so this installs the ONE `__drop_type_param` for either — exactly
@@ -1357,7 +1320,7 @@ export function installDropTypeParamRuntime(module StdModule, usage RuntimeUsage
 	buildRecordGatedAction(module, symbolName: DropTypeParamName, wordOffset: LAYOUT_OFFSET_DESTROY_FUNC, action: RecordGatedAction.destroyThroughWord)
 end 'installDropTypeParamRuntime'
 
-// ⭐ **INSTALL THE SINGLE-VALUE DESCRIPTOR-GATED RETAIN** (`__retain_type_param`, W41-opaque) — its own bit for
+// ⭐ **INSTALL THE SINGLE-VALUE DESCRIPTOR-GATED RETAIN** (`__retain_type_param`) — its own bit for
 // `installDropTypeParamRuntime`'s reason: a body that only STORES a borrowed opaque `T` (`MapIterator.current`
 // building its `(Key, Value)` entry) never drops one, and a body that only drops a consumed feed never stores
 // one, so neither bit implies the other.
@@ -1369,7 +1332,7 @@ export function installRetainTypeParamRuntime(module StdModule, usage RuntimeUsa
 	buildRecordGatedAction(module, symbolName: RetainTypeParamName, wordOffset: LAYOUT_OFFSET_RETAIN_FUNC, action: RecordGatedAction.retainThroughWord)
 end 'installRetainTypeParamRuntime'
 
-// ⭐ **INSTALL `__drop_existential` (P1.7a-existentials slice 2)** — its own bit for
+// ⭐ **INSTALL `__drop_existential`** — its own bit for
 // `installDropTypeParamRuntime`'s reason: an interface-typed FIELD drops through it in a program that
 // instantiates no generic at all, so gating it on the descriptor drop's bit would leave that call unlinked.
 export function installDropExistentialRuntime(module StdModule, usage RuntimeUsage)
@@ -1380,7 +1343,7 @@ export function installDropExistentialRuntime(module StdModule, usage RuntimeUsa
 	buildRecordGatedAction(module, symbolName: DropExistentialName, wordOffset: WitnessDestroyFuncOffset, action: RecordGatedAction.destroyThroughWord)
 end 'installDropExistentialRuntime'
 
-// ⭐ **INSTALL `__retain_existential` (P1.7a-existentials slice 2)** — its own bit for
+// ⭐ **INSTALL `__retain_existential`** — its own bit for
 // `installDropExistentialRuntime`'s reason: a program can co-own a borrowed existential without ever
 // dropping one through a witness, and vice versa.
 export function installRetainExistentialRuntime(module StdModule, usage RuntimeUsage)
@@ -1396,42 +1359,31 @@ end 'installRetainExistentialRuntime'
 // SAME set or a callee's wasm SIGNATURE and its call site disagree — the throwing function gains (or
 // loses) the i64 error-flag result `funcSignatureResultValTypes` derives from the clause, while the body and
 // the call site use the other shape. That mismatch is INVISIBLE on native (the flag rides a fixed register
-// outside the signature) and surfaces on wasm as an invalid module — precisely the Slice 1 bug this rung
-// fixed. The predicate's header PROMISES the two lists cannot drift; this makes it a CHECKED invariant. It
-// reads the ACTUAL stamped clause off each built function rather than re-listing the names (a re-list
-// would be a third copy to drift), and checks BOTH directions: a `__managed_` function is throwing iff the
-// predicate names it. Runs once per array-using compile (`installManagedMemoryRuntime`'s tail) — linear in the
+// outside the signature) and surfaces on wasm as an invalid module. The predicate's header PROMISES
+// the two lists cannot drift; this makes it a CHECKED invariant. It reads the ACTUAL stamped clause
+// off each built function rather than re-listing the names (a re-list would be a third copy to
+// drift), and checks BOTH directions: a `__managed_` function is throwing iff the predicate names
+// it. Runs once per array-using compile (`installManagedMemoryRuntime`'s tail) — linear in the
 // module's function count, a compile abort rather than a runtime trap on drift.
 //
-// ⚠ It tests THROWING-NESS, not WHICH enum, which is why it kept working unchanged when the `__ManagedMemory`
-// members joined the predicate (R4.2/R4.4): those are `__managed_`-prefixed and throwing, but they stamp
-// `__ManagedMemoryError`. Which enum a callee's clause NAMES is `GtRuntime.runtimeThrowsClause`'s fact and is
-// checked by the cases that discriminate it, not here — the wasm signature depends only on throwing-ness.
+// ⚠ It tests THROWING-NESS, not WHICH enum: the `__ManagedMemory` members are `__managed_`-prefixed
+// and throwing, but they stamp `__ManagedMemoryError`. Which enum a callee's clause NAMES is
+// `GtRuntime.runtimeThrowsClause`'s fact and is checked by the cases that discriminate it, not here
+// — the wasm signature depends only on throwing-ness.
 function verifyThrowingAccessorsMatchPredicate(module StdModule)
 	for func in module.functions 'eachFunc'
 		if isManagedMemoryRuntimeCallee(func.name) 'arr'
 			let stamped = throwsClauseIsThrowing(func.throwsTypeName)
 			let named = isThrowingManagedMemoryRuntimeCallee(func.name)
 
-			if stamped and not named 'stampedNotNamed'
-				panic("installManagedMemoryRuntime: '{String.from(func.name)}' stamps a `throws ArrayError` clause but isThrowingManagedMemoryRuntimeCallee does NOT name it — the throwing-accessor builder set and the predicate have drifted (P1.7 slice 1)")
-			end 'stampedNotNamed'
+			requireThrowsStampMatchesPredicate("installManagedMemoryRuntime", predicate: "isThrowingManagedMemoryRuntimeCallee", callee: func.name, stamped: stamped, named: named)
 
-			if named and not stamped 'namedNotStamped'
-				panic("installManagedMemoryRuntime: isThrowingManagedMemoryRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-accessor builder set and the predicate have drifted (P1.7 slice 1)")
-			end 'namedNotStamped'
-
-			// ⭐ **THE THIRD LIST (D12 review): a throwing callee must also have a SOURCE-METHOD arm** — and
-			// as of D11c that is checked for BOTH halves of `named` rather than for the buffer half alone.
-			// It stays keyed on the two NARROW predicates rather than on `named`, because each half has its
-			// own map and each map panics off its own domain; asking through `named` would hand every buffer
-			// member to the array map. Reasoning lives once, on `GtRuntime.runtimeCalleeSourceMethod`.
-			//
-			// ⚠ **THE ARRAY ARM CLOSES D12's ONE DOCUMENTED PARTIALITY, AND THE PARTIALITY IS WHAT D11c PAID
-			// FOR.** While the nine accessors had no map, "which throwing callees have a quotable spelling?"
-			// was answerable only by reading the composer — so E3059, whose noun the family sentence cannot
-			// supply, printed `'__managed_set'` at authors for as long as it existed. Now the chain is builders ≡
-			// predicate ≡ map for every throwing `__managed_` entry, in this ONE traversal.
+			// ⭐ **THE THIRD LIST: a throwing callee must also have a SOURCE-METHOD arm**, checked for every
+			// half of `named`. It stays keyed on the NARROW predicates rather than on `named`, because each
+			// half has its own map and each map panics off its own domain; asking through `named` would hand
+			// every buffer member to the array map. Reasoning lives once, on
+			// `GtRuntime.runtimeCalleeSourceMethod`. The chain is builders ≡ predicate ≡ map for every
+			// throwing `__managed_` entry, in this ONE traversal.
 			if isThrowingArrayAccessorCallee(func.name) 'accessorHasSourceMethod'
 				requireQuotableSourceSpelling(arrayAccessorSourceMethodName(func.name), callee: func.name)
 			end 'accessorHasSourceMethod'
@@ -1475,19 +1427,19 @@ end 'RecordGatedAction'
 // borrow) at every call site, so unlike the array walk it needs no per-slot null guard.
 //
 // **SEVEN ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
-//   • `__drop_type_param(descriptor, value)` (P1.7 slice 3b-v) — a shared generic body dropping a consumed
+//   • `__drop_type_param(descriptor, value)` — a shared generic body dropping a consumed
 //     opaque type-parameter binding (a `push`/forward feed parameter left live on some path). The record is
 //     the enclosing instance's LAYOUT DESCRIPTOR and the word is `destroyFunc@40` — the same word the
 //     array-create stamp `appendOpaqueContainerCreate` reads, so the value is destroyed by exactly the
 //     element's own destructor.
-//   • `__drop_existential(witness, value)` (P1.7a-existentials slice 2) — an owned interface-typed field or
+//   • `__drop_existential(witness, value)` — an owned interface-typed field or
 //     binding dropping the VALUE half of its fat pointer. The record is the conformer's WITNESS TABLE and
 //     the word is `destroyFunc@8`.
-//   • `__retain_existential(witness, value) -> value` (P1.7a-existentials slice 2, made word-dispatched at
-//     2b) — the exact INVERSE of the one above, reading the SAME table one word along (`retainFunc@16`),
-//     which `existentialOwnershipProtocol` fills from the same decision — so a conformer whose drop is inert
-//     has an inert retain. See `RetainExistentialName` for the two access violations the shortcuts measured.
-//   • `__retain_type_param(descriptor, value) -> value` (W41-opaque) — the FIRST entry's inverse, one
+//   • `__retain_existential(witness, value) -> value` — the exact INVERSE of the one above, reading
+//     the SAME table one word along (`retainFunc@16`), which `existentialOwnershipProtocol` fills
+//     from the same decision — so a conformer whose drop is inert has an inert retain. See
+//     `RetainExistentialName` for the two access violations the shortcuts measured.
+//   • `__retain_type_param(descriptor, value) -> value` — the FIRST entry's inverse, one
 //     record over: a shared generic body taking the reference a record it BUILDS owes on a borrowed opaque
 //     `T`. The record is the LAYOUT DESCRIPTOR and the word is `retainFunc@64`, filled from the same
 //     `ExistentialOwnershipProtocol` the witness pair is (`retainCalleeForProtocol`).
@@ -1512,7 +1464,7 @@ module function buildRecordGatedAction(module StdModule, symbolName ByteArray, w
 		paramTypes.push(StdType.i64)
 	end 'eachParam'
 
-	var func = IrFunction.createFromStd(symbolName, returnType: recordGatedReturnType(action), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var func = IrFunction.createFromStd(symbolName, returnType: recordGatedReturnType(action), paramCount: paramCount, paramTypes: paramTypes)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1682,14 +1634,14 @@ end 'emitCopyRun'
 // old→new copy, a remove's shift-left, every fresh-buffer blit, and `__str_copy` itself.
 //
 // ⭐⭐ **THE WORD RUN IS CORRECT EXACTLY WHERE THE BYTE LOOP IT REPLACES WAS, AND THAT IS PROVABLE RATHER
-// THAN AUDITED** (EC3). The rule for a low-address-first copy is `dest <= src` or no overlap at all. Under
+// THAN AUDITED**. The rule for a low-address-first copy is `dest <= src` or no overlap at all. Under
 // it, the chunk at offset `k` reads `src + [k, k+w)` while everything written so far is `dest + [0, k)`,
 // whose top lies at `dest + k - 1 <= src + k - 1` — BELOW the read. That argument does not mention `w`, so
 // widening the chunk from one byte to eight cannot admit a caller the byte loop excluded, and cannot exclude
 // one it admitted. The word run also never touches a byte outside `[0, byteCount)`: it stops at the last
 // WHOLE word, and the tail covers what is left, so the two partition the range exactly.
 //
-// ⚠ EXPORTED for `ManagedFileRuntime` (R4.1), which copies a path's bytes into a NUL-terminated scratch
+// ⚠ EXPORTED for `ManagedFileRuntime`, which copies a path's bytes into a NUL-terminated scratch
 // buffer, and for `MmRuntime`'s box cloners and `__str_copy`. Exported rather than re-implemented: a second
 // copy loop is the duplication this file's own header argues against ("One implementation of each … so the
 // element-stride arithmetic lives in exactly one place per direction"), and the low-address-first direction
@@ -1707,7 +1659,7 @@ end 'emitForwardCopy'
 // ⭐ **COPY `byteCount` BYTES FROM `src` TO `dest`, HIGH ADDRESS FIRST** — the overlap-safe direction when
 // `dest > src` (an insert's shift-right).
 //
-// ⭐⭐ **IT RUNS THE TAIL BEFORE THE WORDS, AND THAT ORDER IS THE WHOLE OF WHAT MAKES IT BACKWARD** (EC3).
+// ⭐⭐ **IT RUNS THE TAIL BEFORE THE WORDS, AND THAT ORDER IS THE WHOLE OF WHAT MAKES IT BACKWARD**.
 // The `byteCount mod 8` tail sits at the TOP of the range, so a copy that must touch the highest bytes first
 // has to move it first — running the words first would overwrite tail source bytes that had not been read.
 // Within each run the chunks descend too (`emitCopyRun`'s mirrored addressing), so the whole move visits
@@ -1730,7 +1682,7 @@ function emitBackwardCopy(module StdModule, func IrFunction, cur IrBlock, dest V
 	return closeWordTailSplit(module, split: split, tail: afterWords)
 end 'emitBackwardCopy'
 
-// ⭐ **THE MANAGED-ELEMENT DESTROY WALK (P1.7 slice 3).** Walk `[start, end)` of `buffer` (stride
+// ⭐ **THE MANAGED-ELEMENT DESTROY WALK.** Walk `[start, end)` of `buffer` (stride
 // `elementSize`, always 8 for a managed element — a heap pointer) and DESTROY each NON-NULL slot by calling
 // the `destroy` function pointer on it through a `callIndirect`. ONE home for the null-guarded per-slot
 // destroy loop, shared by `__managed_decref` (drop, `[0, length)`), `__managed_clear` (`[0, length)`) and
@@ -1773,23 +1725,22 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 	return done
 end 'emitElementDestroyRange'
 
-// ⭐ **CALL AN ELEMENT/KEY DESTRUCTOR on `elem` through the `destroy` function pointer (P1.7 / P1.7b).** THE one
+// ⭐ **CALL AN ELEMENT/KEY DESTRUCTOR on `elem` through the `destroy` function pointer.** THE one
 // home of the element-destructor register-file ABI: an element destructor is `(i64) -> void`, so its result slot
 // is an unused i64 (matching every scalar indirect call) and its single element-pointer argument is a whole
 // machine word — never a float (float mask 0). The mask is 0 because the
 // callee is a POINTER-taking function whichever destructor is stamped in the slot: `__str_decref`,
 // `__mm_decref`, `__managed_decref` and every synthesized `__destruct_<T>` declare one `i64`. Shared by the array's
 // per-slot destroy walk (`emitElementDestroyRange`), the single-value
-// record-gated entries (`buildRecordGatedAction` — `__drop_type_param`, `__drop_existential` and `__retain_existential`), AND (until W105) the hash table's key drop sites (a managed
-// set's stored key destructor IS its source array's element destructor — same `funcAddr`, same ABI), so the
-// copies cannot drift if that ABI changes. The caller has already loaded `destroy` and confirmed it non-null;
-// this only emits the indirect call.
+// record-gated entries (`buildRecordGatedAction` — `__drop_type_param`, `__drop_existential` and
+// `__retain_existential`), so the copies cannot drift if that ABI changes. The caller has already
+// loaded `destroy` and confirmed it non-null; this only emits the indirect call.
 export function emitElementDestructorCall(module StdModule, block IrBlock, destroy ValueId, elem ValueId, ids ValueMinter)
 	let dropped = ids.mint()
 	module.appendOp(block, op: StdOp.callIndirect(dropped, calleeReg: destroy, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(elem)))
 end 'emitElementDestructorCall'
 
-// ⭐ **GATE THE MANAGED-ELEMENT DESTROY WALK on `element_destroy@40` (P1.7 slice 3a).** Load the array's stamped
+// ⭐ **GATE THE MANAGED-ELEMENT DESTROY WALK on `element_destroy@40`.** Load the array's stamped
 // element destructor and, when it is non-zero (a MANAGED-element array), DESTROY `[start, stop)` through
 // `emitElementDestroyRange`; a TRIVIAL-element array (destructor 0) skips the walk untouched. Returns the block
 // both paths converge on. This is the ONE home of the "must these slots be destroyed, and if so destroy them"
@@ -1896,7 +1847,7 @@ function emitLoadElem(module StdModule, func IrFunction, cur IrBlock, exit IrBlo
 end 'emitLoadElem'
 
 // Load the element at `addr` (size `size`) from array `record` and throw-RETURN it — the get/first/last tail.
-// ⭐ **EMPTY-SLOT DETECTION for a MANAGED element (P1.7 slice 3).** A managed array grown by `resize` has NULL
+// ⭐ **EMPTY-SLOT DETECTION for a MANAGED element.** A managed array grown by `resize` has NULL
 // slots inside `[0, length)` (never written — the buffer is zeroed), and a null pointer is not a valid element:
 // reading its fields would fault. So for a managed element (`element_destroy@40 != 0`) a NULL loaded value is
 // treated as an empty slot and THROWS `indexOutOfBounds`, routing the caller's `try … otherwise` to its
@@ -1953,18 +1904,16 @@ end 'emitManagedReserve'
 // world's answer to the same question and which is what every ELEMENT accessor goes through.
 //
 // ⚠ **EVERY CALLER CLEARS IT, AND THERE ARE THREE WAYS OF CLEARING IT — a reader checking a NEW call site
-// has to name which one.** (Found in review of the packing rung, where this note said "the two callers left
-// here are the managed-element walks" and there were nine.)
+// has to name which one.**
 //
 //   1. **INSIDE AN `es >= 0` ARM** the caller itself branched on — `emitGenericStrideStore`'s byte-loop arm
 //      and the byte arms of `__managed_move_elems` / `__managed_zero_elems`. The guard is three lines above
 //      the call.
 //      ⭐ **EVERY SINGLE-MEMORY-OP ARM IS THIS CASE AT ITS STRONGEST**: `emitStrideDispatch` reaches them
 //      only on `es == MachineWordBytes` or `es == ByteStringElementSize`, so the stride is not merely
-//      non-negative there, it is one exact positive number. The dispatch has FOUR call sites now — the
-//      element load, the element store, `__managed_fill`'s three per-stride loops (EC3), and the inline
-//      pass one tier up — and they are named here as a class rather than counted, because a count in this
-//      note is the thing the parenthesis below records going stale.
+//      non-negative there, it is one exact positive number. The dispatch's call sites are the
+//      element load, the element store, `__managed_fill`'s three per-stride loops, and the inline
+//      pass one tier up.
 //   2. **A MANAGED ELEMENT**, which is never packed by construction
 //      (`ProgramSignatures.arrayElementPackedBits` answers `NotSubBytePacked` for it before it reads
 //      anything else) — the destroy walk, the deep-clone walk, and the `_managed` slice/append the parser
@@ -2100,7 +2049,7 @@ end 'slotIndexOf'
 // and a bare `64`/`3`/`7` beside a bit width reads as one of the widths.
 //
 // ⚠ **TWO OF THE THREE ARE DERIVED, NOT TRANSCRIBED.** A word's bits and a byte's high bit index are
-// RELATIONS over `BitsPerByte` and `MachineWordBytes` — both of which this rung single-homed one tier down
+// RELATIONS over `BitsPerByte` and `MachineWordBytes` — both of them single-homed one tier down
 // in `LayoutDescriptor` — and writing `64` and `7` here would be two more copies of numbers that already
 // have an owner. `emitBitsToBytes` below spells the same 7 as `BitsPerByte - 1`, so a literal here would
 // have put both spellings of one relation inside one file.
@@ -2182,7 +2131,7 @@ end 'emitBitsToBytes'
 // and a byte-only copy there would hand a NEGATIVE extent to the OS length argument, where DWORD truncation
 // turns it into an enormous unsigned count. That site is unreachable with a packed record today — the front
 // end gates both callers on `isBytePackedArrayInstance` — but the guard is stated in two other files and
-// nothing at the arithmetic says so, which is precisely the shape that stops being true one rung later.
+// nothing at the arithmetic says so, which is precisely the shape that stops being true unnoticed.
 //
 // ⚠ **IT SURVIVES AS A NAMED DOOR RATHER THAN A SPELLED-OUT CALL AT EACH SITE BECAUSE IT TAKES TWO
 // ARGUMENTS OF ONE TYPE.** Nine sites in four files pass a count and a stride as bare `ValueId`s; written
@@ -2241,7 +2190,7 @@ function emitFieldPlacement(module StdModule, block IrBlock, index ValueId, es V
 	return PackedElementPlacement.create(byteOffset, shiftBits: shiftBits, widthMask: widthMask, byteSpan: byteSpan)
 end 'emitFieldPlacement'
 
-// ⭐⭐⭐ **THE TWO STRIDES A TARGET CAN MOVE IN ONE MEMORY OP, AND THE ONE HOME OF THAT LIST (EC1).**
+// ⭐⭐⭐ **THE TWO STRIDES A TARGET CAN MOVE IN ONE MEMORY OP, AND THE ONE HOME OF THAT LIST.**
 // Terminates `cur` with the two comparisons that route a WORD stride (`es == MachineWordBytes`) and a
 // single-BYTE stride (`es == ByteStringElementSize`) to their own arms, and every other stride — 2, 4, the
 // unset 0, and every NEGATIVE sub-byte width — to `otherArm`, which is the generic path unchanged.
@@ -2255,10 +2204,10 @@ end 'emitFieldPlacement'
 // here. The two strides this DOES cover are every `int`, every pointer, every managed element and every
 // byte — which is the whole of the hot path the fast arms exist for.
 //
-// ⭐ **IT IS ONE FUNCTION BECAUSE NO READER OF THE LIST MAY DISAGREE WITH ANOTHER ABOUT IT.** It began as
-// the load's and the store's — two halves of a round trip, where a pair of comparisons written twice is one
-// rule written twice — and EC3 added two more readers to the same list: `__managed_fill` (which now asks
-// ONCE above its loop instead of per element) and the inline pass one tier up. The shape
+// ⭐ **IT IS ONE FUNCTION BECAUSE NO READER OF THE LIST MAY DISAGREE WITH ANOTHER ABOUT IT.** Its readers
+// are the load and the store — two halves of a round trip, where a pair of comparisons written twice is one
+// rule written twice — `__managed_fill` (asked ONCE above its loop rather than per element) and the
+// inline pass one tier up. The shape
 // `containerElementIsFloatWord` is single-homed for one tier up, and the shape `buildManagedCowDetach`'s
 // header calls a drifting checklist.
 //
@@ -2274,9 +2223,9 @@ end 'emitFieldPlacement'
 // stride read with an `i64` access reads seven bytes of its NEIGHBOURS — neither is a type error at any
 // tier, so nothing but this pairing can make the two agree.
 //
-// ⚠ **THE INLINE PASS ONE TIER UP HAD SIX SEPARATE SPELLINGS OF IT** — a locally-derived word stride
-// beside `StdType.i64` and `ByteStringElementSize` beside `StdType.u8`, once per arm of each of its three
-// expanders (EC3-F3, found in review). It asks for an arm now. `CopyChunk` further up this file is this
+// ⚠ **THE INLINE PASS ONE TIER UP ASKS FOR AN ARM** rather than spelling a locally-derived word
+// stride beside `StdType.i64` and `ByteStringElementSize` beside `StdType.u8` once per arm of each
+// of its three expanders. `CopyChunk` further up this file is this
 // same union for the contiguous copies, and exists for the same reason.
 //
 // The word stamp is DERIVED from `LayoutDescriptor.MachineWordBytes` — the owner of "how wide is a value
@@ -2290,7 +2239,7 @@ export union SingleOpStride
 	byte
 end 'SingleOpStride'
 
-// ⭐ **THE `element_size@24` STAMP THIS ARM IS REACHED ON — and since EC15 the ONLY spelling of either
+// ⭐ **THE `element_size@24` STAMP THIS ARM IS REACHED ON — and the ONLY spelling of either
 // number.** `emitStrideDispatch`'s two runtime compares and `strideDispatchPlanForStamp`'s two compile-time
 // ones both read them from here, so a stamp cannot mean one thing to the fork and another to the answer that
 // replaces it.
@@ -2331,7 +2280,7 @@ export function emitStrideDispatch(module StdModule, func IrFunction, cur IrBloc
 end 'emitStrideDispatch'
 
 // ⭐⭐ **WHAT `emitStrideDispatch` WOULD DO IF IT COULD SEE `element_size@24` — THE COMPILE-TIME ANSWER TO ITS
-// TWO RUNTIME COMPARES (EC15).** `InlineManagedPrimitives` asks it once per call site and emits the arm it
+// TWO RUNTIME COMPARES.** `InlineManagedPrimitives` asks it once per call site and emits the arm it
 // names; the fork itself is emitted only for `runtimeFork`.
 export union StrideDispatchPlan
 	// The stride is not known at compile time — an opaque element in a shared generic body, an array reached
@@ -2352,7 +2301,7 @@ end 'StrideDispatchPlan'
 // above, asked of `singleOpStrideBytes` (the union's OWN stamp) so neither number is written twice.
 //
 // ⛔⛔ **THE STATIC STAMP IS NOT ALWAYS THE RECORD'S, AND THAT IS WHY THIS IS NOT SIMPLY THE TWO COMPARES
-// AGAIN. MEASURED, EC15.** A container declared over a TYPE PARAMETER is created inside a SHARED GENERIC
+// AGAIN.** A container declared over a TYPE PARAMETER is created inside a SHARED GENERIC
 // BODY, where every `T` occupies one machine word — `Parser.emitOpaqueArrayCreateOp` stamps
 // `LAYOUT_TYPE_PARAM_SLOT_BYTES` and not the concrete element's width, because the one compiled body moves
 // elements as words whatever the instantiation. Read back through a concrete receiver, that same record
@@ -2422,7 +2371,7 @@ end 'emitSingleOpElementLoad'
 // (`get`, `get_unchecked`, `first`, `last`, `pop`, `remove`) goes through here rather than spelling an
 // `emitSlotAddr` + `emitLoadElem` pair for itself.
 //
-// ⭐⭐ **THE TWO COMMON STRIDES TAKE ONE MEMORY OP; EVERY OTHER STRIDE TAKES THE BRANCHLESS BYTE LOOP (EC1).**
+// ⭐⭐ **THE TWO COMMON STRIDES TAKE ONE MEMORY OP; EVERY OTHER STRIDE TAKES THE BRANCHLESS BYTE LOOP.**
 // The generic arm below is unchanged and is still the answer for a packed element, an unset stride and the
 // 2- and 4-byte widths: the same byte loop `emitLoadElem` always was, over the field's `byteSpan` rather
 // than a whole element, followed by a shift and a mask that are a no-op for a byte-strided element
@@ -2509,12 +2458,11 @@ end 'emitSingleOpElementStore'
 // the hottest array write there is, to compute a value that is provably discarded. One compare and one
 // branch is the cheaper honesty.
 //
-// ⭐⭐ **AND SINCE EC1 THE TWO COMMON STRIDES DO NOT REACH THAT FORK AT ALL.** `emitStrideDispatch` takes a
+// ⭐⭐ **AND THE TWO COMMON STRIDES DO NOT REACH THAT FORK AT ALL.** `emitStrideDispatch` takes a
 // WORD and a single BYTE to one `storeIndirect` apiece, ahead of the packed/byte split, for
-// `emitLoadElemAt`'s measured reason — the byte loop that follows is eight trips of
-// `shrLogical`/`store_u8` to move a word one `mov` moves, and `__managed_mem_set` was 21% of a self-compile.
-// The generic arm is untouched and is still what a 2- or 4-byte element, an unset stride and every sub-byte
-// width take.
+// `emitLoadElemAt`'s reason — the byte loop that follows is eight trips of `shrLogical`/`store_u8`
+// to move a word one `mov` moves, on a path the self-compile runs hot. The generic arm is what a 2-
+// or 4-byte element, an unset stride and every sub-byte width take.
 //
 // Threads `cur` and returns the join every arm reaches.
 function emitStoreElemAt(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter) returns IrBlock
@@ -2537,9 +2485,9 @@ end 'emitStoreElemAt'
 
 // ⭐ **THE STRIDES NO TARGET MOVES IN ONE MEMORY OP — 2, 4, the unset 0 and every sub-byte packed width.**
 // The packed/byte-loop fork `emitStoreElemAt` has always had, SPLIT OUT so a caller that has already
-// answered the stride question can run it as a loop body of its own without re-asking it (EC3:
-// `buildManagedFill`'s generic arm). Both arms terminate at `joinId`; nothing is returned, because the
-// caller owns the block they converge on and already knows which one it is.
+// answered the stride question can run it as a loop body of its own without re-asking it
+// (`buildManagedFill`'s generic arm). Both arms terminate at `joinId`; nothing is returned, because
+// the caller owns the block they converge on and already knows which one it is.
 function emitGenericStrideStore(module StdModule, func IrFunction, cur IrBlock, joinId BlockId, buffer ValueId, index ValueId, value ValueId, es ValueId, ids ValueMinter)
 	var packedArm = module.addBlock(func, label: b"stpk", heat: BlockHeat.normal)
 	var byteLoopArm = module.addBlock(func, label: b"stby", heat: BlockHeat.normal)
@@ -2618,7 +2566,7 @@ end 'emitPackedFieldStore'
 // elements starting at an arbitrary index has no byte alignment to blit on, so the packed arm reads and
 // writes one field at a time.
 function buildManagedMoveElems(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMoveElemsName, returnType: StdReturnType.void, paramCount: 6, paramTypes: sixI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedMoveElemsName, returnType: StdReturnType.void, paramCount: 6, paramTypes: sixI64Params())
 	var ids = ValueMinter.create(6)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2741,7 +2689,7 @@ end 'emitPackedElementMove'
 // ANSWER is wrong. See `emitRecordContentByteLen` for the measurement and for the remedy if this ever has to
 // change (mask the final byte there, in that one place).
 function buildManagedZeroElems(module StdModule)
-	var func = IrFunction.createFromStd(ManagedZeroElemsName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedZeroElemsName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
 	var ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2841,15 +2789,15 @@ end 'emitZeroElems'
 // itself, to CALL); this answers the single question every ownership decision in the family turns on, and
 // `TrivialElementDestroy` is the one value that means "nothing to release".
 //
-// ⛔⛔ **IT IS A FUNCTION BECAUSE FIVE PLACES DECIDE OWNERSHIP BY IT AND NOTHING MADE THEM AGREE (EC1
-// review).** `emitDestroyRangeIfManaged` (destroy what a vacating write overwrites),
-// `emitLoadElemAndOkReturn` (a NULL slot is EMPTY for a managed element and a genuine 0 for a trivial one),
-// `buildManagedFill` (a managed element is DECLINED outright) and — one tier up, in a different file —
-// `InlineManagedPrimitives`' inline `get` and `set` arms, whose whole licence to skip the runtime rests on
-// this answer matching the runtime's. Two of those five spelled the constant as a bare `0`. A pass that
-// inlines a fast path on a predicate the runtime states elsewhere is precisely the drifting checklist
-// `buildManagedCowDetach`'s header rejects, and the failure mode is not a compile error: it is a store over
-// an occupant nobody released, which is a LEAK (exit 101).
+// ⛔⛔ **IT IS A FUNCTION BECAUSE FIVE PLACES DECIDE OWNERSHIP BY IT AND NOTHING ELSE MAKES THEM
+// AGREE.** `emitDestroyRangeIfManaged` (destroy what a vacating write overwrites),
+// `emitLoadElemAndOkReturn` (a NULL slot is EMPTY for a managed element and a genuine 0 for a
+// trivial one), `buildManagedFill` (a managed element is DECLINED outright) and — one tier up, in a
+// different file — `InlineManagedPrimitives`' inline `get` and `set` arms, whose whole licence to
+// skip the runtime rests on this answer matching the runtime's. A pass that inlines a fast path on
+// a predicate the runtime states elsewhere is precisely the drifting checklist
+// `buildManagedCowDetach`'s header rejects, and the failure mode is not a compile error: it is a
+// store over an occupant nobody released, which is a LEAK (exit 101).
 export function emitElementIsManaged(module StdModule, block IrBlock, destroy ValueId, ids ValueMinter) returns ValueId
 	let trivial = emitConst(module, block: block, value: TrivialElementDestroy, ids: ids)
 	return emitCmp(module, block: block, a: destroy, b: trivial, pred: StdCmpPred.ne, ids: ids)
@@ -3218,9 +3166,8 @@ end 'limitFieldRecord'
 // throws and leaves the container unchanged), and a WINDOW'S END (`__managed_fill`'s `start + count`, which
 // may legally reach the length exactly).
 //
-// ⚠ **IT IS NAMED FOR THE PREDICATE AND NOT FOR EITHER CALLER (EC1 review).** It was
-// `emitInsertPositionOutOfRange` while `__list_insert` was its only caller, which made the name a statement
-// about that one member rather than about the question — and the second caller is not an insert.
+// ⚠ **IT IS NAMED FOR THE PREDICATE AND NOT FOR EITHER CALLER**: a name after one member is a
+// statement about that member rather than about the question, and the second caller is not an insert.
 //
 // ⭐ **IT IS ALSO THE OVERFLOW GUARD FOR A COMPUTED BOUNDARY, WHICH IS WHY `__managed_fill` CAN ASK ITS
 // WINDOW'S END THROUGH THIS AND NOTHING ELSE.** `start + count` for two NON-NEGATIVE operands lands in
@@ -3283,11 +3230,11 @@ export function emitOobReturn(module StdModule, block IrBlock, ids ValueMinter)
 end 'emitOobReturn'
 
 // ⚠ `emitErrorReturn`/`emitOkReturn` — the two throwing exits this file calls at a few dozen sites — live in
-// `MmRuntime` beside the single-op emit helpers. They were this file's own until R4.3 needed the third copy;
-// see their header there for why one home rather than one per family. (`emitMemoryThrow` below stays here:
-// what it adds is which ENUM's ordinals it names, and that IS a per-family fact.)
+// `MmRuntime` beside the single-op emit helpers; see their header there for why one home rather
+// than one per family. (`emitMemoryThrow` below stays here: what it adds is which ENUM's ordinals
+// it names, and that IS a per-family fact.)
 
-// ⭐⭐ **BUILD AN O(1) ZERO-COPY VIEW of `srcRecord`'s elements `[start, start+sliceLen)` (P1.7 COW slice B).**
+// ⭐⭐ **BUILD AN O(1) ZERO-COPY VIEW of `srcRecord`'s elements `[start, start+sliceLen)`.**
 // The shared body of `__managed_clone` (start 0, sliceLen = length) and `__managed_slice` (a bounds-checked sub-range).
 //
 // ⭐ **NOTHING IS COPIED, AND THE COST DOES NOT DEPEND ON `sliceLen`.** The result is a fresh 48-byte record
@@ -3307,11 +3254,11 @@ end 'emitOobReturn'
 // `parent@32`. So a slice of a slice increfs the ORIGINAL allocation and stores it directly — no chain
 // exists, and nothing ever walks one.
 //
-// ⚠⚠ **THE BASE IS `emitBufferHostAllocation`, NOT `emitOwedAllocationBase`, AND W157 IS WHERE THAT STOPPED
-// BEING THE SAME QUESTION.** A view must count the allocation its `buffer@0` points INTO — "where do these
-// bytes live?" — which for an Array coincides at every provenance with "what do I owe a release to?",
-// because an Array's elements are never inside its own record. An INLINE String's are, and
-// `String.addressableBytes()` now hands its receiver's own record to this surface, so
+// ⚠⚠ **THE BASE IS `emitBufferHostAllocation`, NOT `emitOwedAllocationBase`, BECAUSE THEY ARE NOT
+// THE SAME QUESTION.** A view must count the allocation its `buffer@0` points INTO — "where do
+// these bytes live?" — which for an Array coincides at every provenance with "what do I owe a
+// release to?", because an Array's elements are never inside its own record. An INLINE String's
+// are, and `String.addressableBytes()` hands its receiver's own record to this surface, so
 // `path.addressableBytes().slice(…)` slices an INLINE record: the owed answer is `NoOwedAllocation` and a
 // view built on it would hold a raw interior pointer into a live String's payload with NO count on it. The
 // host answer counts the record. The two functions are one built on the other and part company at exactly
@@ -3328,8 +3275,8 @@ end 'emitOobReturn'
 // TRIVIAL elements only — the view duplicates heap POINTERS without a per-element retain, so a managed
 // element would be destroyed twice. A CONCRETE managed array never reaches here: `Parser.parseArraySlice`/
 // `parseArrayAppend`/the clone branch route a managed element to the deep-cloning `__managed_slice_managed`/
-// `__managed_clone_managed` (a fresh OWNER, not a view) instead, so `emitRecordView` stays trivial-only (P1.7 slice
-// 3b-vi-b). `exit` is caller-owned (passed IN, the `emitLoadElem` shape): the new record is minted in `cur`, which
+// `__managed_clone_managed` (a fresh OWNER, not a view) instead, so `emitRecordView` stays trivial-only.
+// `exit` is caller-owned (passed IN, the `emitLoadElem` shape): the new record is minted in `cur`, which
 // dominates `exit`, so it is live there for the caller's `ret`/`errorReturn`. Threads `cur` and returns the
 // new record value.
 // ⚠⚠ **A SUB-BYTE-PACKED ELEMENT CANNOT BE VIEWED, AND IT IS THE REPRESENTATION THAT FORBIDS IT — DO NOT
@@ -3387,7 +3334,7 @@ function emitPackedWindowCopy(module StdModule, cur IrBlock, exit IrBlock, srcBu
 	module.appendOp(cur, op: StdOp.call(newRec, callee: ManagedCreateName, args: twoArgs(es, second: elementDestroy)))
 
 	let byteLen = emitElementByteLen(module, block: cur, count: sliceLen, es: es, ids: ids)
-	let bufferDtor = emitConst(module, block: cur, value: TrivialElementDestroy, ids: ids)
+	let bufferDtor = emitConst(module, block: cur, value: TrivialDestructor, ids: ids)
 	let newBuf = ids.mint()
 	emitMmAllocCall(module, block: cur, result: newBuf, size: byteLen, destructor: bufferDtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
 	emitStoreField(module, block: cur, record: newRec, offset: ManagedRecordBufferOffset, value: newBuf)
@@ -3434,14 +3381,13 @@ end 'emitViewRecordTail'
 
 // --- The runtime functions ---
 
-// ⭐ **`__managed_cow_detach(arr)` — GIVE THE RECORD A PRIVATE, WRITABLE BUFFER (P1.7 COW slice A).** If `arr`'s
+// ⭐ **`__managed_cow_detach(arr)` — GIVE THE RECORD A PRIVATE, WRITABLE BUFFER.** If `arr`'s
 // buffer is already privately owned and writable, do nothing; otherwise replace it with a fresh `__mm_alloc`'d
 // copy of the array's LIVE bytes. Every in-place mutator calls this before its first buffer write, so a write
 // can never reach memory the record does not own.
 //
-// ⭐ **THERE ARE TWO TRIGGERS, AND THEY ARE THE TWO DIRECTIONS OF SHARING (P1.7 COW slice B).** Slice A
-// shipped the first and promised the second would arrive as another arm of THIS test, without moving the
-// check or touching a call site; it did.
+// ⭐ **THERE ARE TWO TRIGGERS, AND THEY ARE THE TWO DIRECTIONS OF SHARING** — two arms of this one
+// test:
 //
 //  1. **`capacity@16 < 0` — the buffer is NOT this record's** (`emitBufferNotOwned`): a byte-string
 //     literal's immortal `.rdata` blob, or a zero-copy VIEW's interior pointer into someone else's
@@ -3495,26 +3441,19 @@ end 'emitViewRecordTail'
 //     it. ⚠ The release MUST follow the copy: a view whose parent has already dropped is the LAST owner of
 //     those bytes, so the decref frees them, and reading them afterwards is a use-after-free.
 //
-//     ⚠⚠ **NO TEST CATCHES A REVERSAL OF THAT ORDER — MEASURED TWICE, AND THE SECOND MEASUREMENT DELETED
-//     THE FIRST ONE'S REASON.** Reversing it (the release emitted before the copy) was built and run at
-//     P1.7: the suite stayed 1197/0, and the explanation recorded here was that *"`__mm_free` RECLAIMS
-//     NOTHING under the bump allocator, so the freed bytes read back intact"* — with the prediction that it
-//     *"becomes testable the day `__mm_free` reuses memory"*. That day came at S2–S4: there is no bump
-//     allocator, `__mm_free` returns the box to `__slab_free` for the next allocation to take, and the
-//     payload is POISONED with `0x3F` on the way out regardless. **Re-measured at S4 against exactly that
-//     allocator: `--filter=arrays` read 151 passed / 0 failed, `both-sides-detach-parent-first` among
-//     them**, against a compiler whose emitted code genuinely differed (same program, byte-different image),
-//     so the instrument was live. ⇒ The ordering is a RULE this function keeps on its own and NOT one a gate
-//     protects; the PREDICTION was wrong and WHY the reversal survives is now an open question rather than a
-//     date. Do not "simplify" the two halves back together, and do not re-derive the retired reason: the
-//     split across the copy is the whole point of `base` being read at `detach` and spent at `afterCopy`.
+//     ⚠⚠ **NO TEST CATCHES A REVERSAL OF THAT ORDER.** With the release emitted before the copy,
+//     the `arrays` specs (`both-sides-detach-parent-first` among them) still pass, under an
+//     allocator that hands a freed box to the next allocation and POISONS its payload — and WHY the
+//     reversal survives is an open question. ⇒ The ordering is a RULE this function keeps on its
+//     own and NOT one a gate protects. Do not "simplify" the two halves back together: the split
+//     across the copy is the whole point of `base` being read at `detach` and spent at `afterCopy`.
 //
 // The published `capacity@16` is `length` — the buffer holds exactly the live elements and no slack, so
 // `b"hi"` then `set` then `capacity()` reads 2 —
 // and `parent@32` returns to `NoOwedAllocation`, because a record that has just copied its bytes out owes
 // nothing to anyone.
 function buildManagedCowDetach(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCowDetachName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedCowDetachName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3569,7 +3508,7 @@ end 'buildManagedCowDetach'
 // `__managed_grown_cap(current, required) -> newCap` — the growth policy; see the `GrowthThreshold` note
 // above for why it eases. An ask that outruns doubling is taken at face value with no slack.
 function buildManagedGrownCap(module StdModule)
-	var func = IrFunction.createFromStd(ManagedGrownCapName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedGrownCapName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3639,7 +3578,7 @@ end 'emitAtLeastMinimumReturn'
 // copying the live bytes) when it does not. A fresh `__mm_alloc` is zeroed, and only `length·es` bytes
 // are copied in, so the new `[length, newCap)` slots read zero — the capacity-slot invariant, for free.
 function buildManagedGrow(module StdModule)
-	var func = IrFunction.createFromStd(ManagedGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3678,7 +3617,7 @@ function buildManagedGrow(module StdModule)
 end 'buildManagedGrow'
 
 // ⭐⭐ **REALLOCATE `arr`'s BUFFER TO EXACTLY `newCap` ELEMENTS AND PUBLISH IT — the reallocation both grows
-// share (R4.4).** `__managed_grow` reaches it with a capacity the growth POLICY picked; `__managed_mem_grow` reaches
+// share.** `__managed_grow` reaches it with a capacity the growth POLICY picked; `__managed_mem_grow` reaches
 // it with the one the SOURCE wrote. Nothing else about the two differs, and a second copy of this is a
 // second chance to get the release-then-publish order wrong.
 //
@@ -3739,7 +3678,7 @@ end 'emitReallocateToCapacity'
 // from `__mm_alloc`, so only the two non-zero fields are stamped (`buffer`/`length`/`capacity`/`parent`
 // are the zeroing contract's job); a 0 element size is a compiler bug and diverges.
 function buildManagedCreate(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3759,7 +3698,7 @@ function buildManagedCreate(module StdModule)
 	emitRuntimeAbort(module, func: func, block: badSize, abort: RuntimeAbort.arrayElementSizeZero, ids: ids)
 
 	let recordSize = emitConst(module, block: ok, value: ManagedRecordBytes as ParsedInt, ids: ids)
-	let recordDtor = emitConst(module, block: ok, value: TrivialElementDestroy, ids: ids)
+	let recordDtor = emitConst(module, block: ok, value: TrivialDestructor, ids: ids)
 	let record = ids.mint()
 	emitMmAllocCall(module, block: ok, result: record, size: recordSize, destructor: recordDtor, tag: mmTagIndex(MmTag.ArrayRecord), ids: ids)
 	emitStoreField(module, block: ok, record: record, offset: ManagedRecordElementSizeOffset, value: elementSize)
@@ -3771,7 +3710,7 @@ end 'buildManagedCreate'
 
 // `__managed_push(arr, value)` — append `value`, growing first if the buffer is full.
 function buildManagedPush(module StdModule)
-	var func = IrFunction.createFromStd(ManagedPushName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedPushName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3799,7 +3738,7 @@ end 'buildManagedPush'
 
 // `__managed_get(arr, index) -> (value, flag)` — bounds-checked element read (throws indexOutOfBounds).
 function buildManagedGet(module StdModule)
-	var func = IrFunction.createFromStd(ManagedGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(ManagedGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3834,7 +3773,7 @@ end 'emitGetLoadAndReturn'
 // both. Its ONE caller is `Parser.parseForStatement`, which supplies a counter it minted itself and
 // compared against a live `__managed_count` in the same iteration.
 function buildManagedGetUnchecked(module StdModule)
-	var func = IrFunction.createFromStd(ManagedGetUncheckedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedGetUncheckedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3857,7 +3796,7 @@ end 'buildManagedGetUnchecked'
 
 // See `ManagedVacateName` for the contract and for why neither setter can stand in.
 function buildManagedVacate(module StdModule)
-	var func = IrFunction.createFromStd(ManagedVacateName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedVacateName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3898,11 +3837,11 @@ end 'emitPromiseSlotVacateTail'
 // `__managed_set(arr, index, value) -> (_, flag)` — LENGTH-bounded element write (throws indexOutOfBounds).
 //
 // ⚠ **THE LENGTH BOUND IS `Array.set`'s CONTRACT AND MUST NOT BECOME THE BUFFER'S CAPACITY BOUND.** The two
-// surfaces sit on one record and this entry is the `Array` one; `__managed_mem_set` is the buffer's, and R4.6
-// exists because they were the same function. `specs/arrays.md` and the array corpus are written against
+// surfaces sit on one record and this entry is the `Array` one; `__managed_mem_set` is the buffer's, and the
+// two must stay separate functions. `specs/arrays.md` and the array corpus are written against
 // this bound.
 function buildManagedSet(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(ManagedSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3935,12 +3874,12 @@ end 'buildManagedSet'
 // and in nothing else, so the store is written once here. The caller has already bounds-checked `index` and
 // detached; this destroys the occupant, stores, and ok-returns.
 //
-// ⭐ **DESTROY THE OCCUPANT A SET OVERWRITES (P1.7 slice 3a).** A managed array's `set` moves a new owner into
+// ⭐ **DESTROY THE OCCUPANT A SET OVERWRITES.** A managed array's `set` moves a new owner into
 // the slot, so whatever the slot held must be destroyed first or it leaks (the parser consumes the new value
 // into the array — nothing else drops the old one). Destroy exactly the one slot `[index, index+1)` through
 // the shared gate (a trivial-element array skips it and stores directly), THEN store the new value.
 //
-// ⭐⭐ **AND THAT WALK IS ALREADY CORRECT FOR A SLOT PAST THE LENGTH, WHICH IS WHY R4.6 ADDS NOTHING HERE.**
+// ⭐⭐ **AND THAT WALK IS ALREADY CORRECT FOR A SLOT PAST THE LENGTH.**
 // `__managed_mem_set` may address `[length, capacity)`, a slot that was never live. By the capacity-slot
 // invariant every such slot reads ZERO — every vacating operation erases on the way out and fresh capacity
 // comes zeroed from the allocator — and `emitElementDestroyRange`'s per-slot NULL GUARD skips a zero slot, so
@@ -3963,29 +3902,22 @@ function emitElementStoreAndOkReturn(module StdModule, func IrFunction, store Ir
 	emitOkReturn(module, block: afterStore, value: okVal, ids: ids)
 end 'emitElementStoreAndOkReturn'
 
-// ⭐⭐ **DESTROY AN ELEMENT THE SETTER REFUSED TO STORE — THE THROW PATH'S HALF OF THE MOVE-IN CONTRACT
-// (found and fixed in R4.6).** `Parser.parseArraySetOrInsert` MOVES the value into the call
-// (`moveElementIntoContainer`), so from that point the callee owns it and the caller's scope-exit drop is
-// suppressed. On the success path the array becomes the owner; on the out-of-range path nothing did, and the
-// element simply leaked.
-//
-// ⚠ **MEASURED, on the tree R4.6 received:** `var xs = StrArray.create(); xs.push(…); try xs.set(99, value:
-// "<heap string>") otherwise return 0` exited **101**, while the identical program over an `Array with Int`
-// exited 0 — the control that says this is the managed move-in and not the throw. It is a defect of
-// `Array.set` (P1.7 slice 3a) that R4.6 fixes because `__managed_mem_set` would otherwise ship the identical
-// leak on the day it was written, and two spellings of one ownership contract is what this file refuses.
+// ⭐⭐ **DESTROY AN ELEMENT THE SETTER REFUSED TO STORE — THE THROW PATH'S HALF OF THE MOVE-IN CONTRACT.**
+// `Parser.parseArraySetOrInsert` MOVES the value into the call (`moveElementIntoContainer`), so
+// from that point the callee owns it and the caller's scope-exit drop is suppressed. On the success
+// path the array becomes the owner; on the out-of-range path nothing does, and without this the
+// element leaks (exit 101 on a managed element, 0 on a trivial one). `Array.set` and
+// `__managed_mem_set` share it, because two spellings of one ownership contract is what this file
+// refuses.
 //
 // ⭐⭐ **AND IT IS NOT AN `Array`'s RULE — IT IS EVERY MOVE-IN CONTAINER'S, WHICH IS WHY THE DESTRUCTOR'S
-// OFFSET IS THE CALLER'S TO NAME (spec-port `list`).** The contract this enforces belongs to
+// OFFSET IS THE CALLER'S TO NAME.** The contract this enforces belongs to
 // `Parser.parseArraySet`, the shape parser, and every entry reached through it owes it. `__list_insert` is
 // the third, and its per-element destructor lives at `ListRecord.element_drop@24` rather than at
 // `ManagedRecord.element_destroy@40` — one `ByteOffset`, and the ONLY thing about a chain that differs here.
 //
-// ⚠ **MEASURED on the tree that added `List.insert` with this call MISSING**: `try list.insert(5, value:
-// "<heap string>")` on a one-element list printed `rejected` and exited **101**, while the identical program
-// over a `List with Int` exited 0 — the same managed/trivial control pair R4.6 measured one container over,
-// on a defect shipped by the same omission. A private copy of these three blocks inside `ListRuntime` would
-// have been the fourth transcription of one ownership contract; the offset parameter is the whole difference.
+// ⚠ A private copy of these three blocks inside `ListRuntime` would be another transcription of one
+// ownership contract; the offset parameter is the whole difference.
 //
 // The null guard is `emitElementDestructorCall`'s stated precondition ("the caller has already loaded
 // `destroy` and confirmed it non-null"), honoured at a second call site rather than assumed away.
@@ -4012,7 +3944,7 @@ end 'emitDestroyRejectedElement'
 
 // `__managed_count(arr) -> length`.
 function buildManagedCount(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
@@ -4023,7 +3955,7 @@ end 'buildManagedCount'
 
 // `__managed_element_size(arr) -> element_size@24`, signed — see `ManagedElementSizeName`.
 function buildManagedElementSize(module StdModule)
-	var func = IrFunction.createFromStd(ManagedElementSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedElementSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
@@ -4034,7 +3966,7 @@ end 'buildManagedElementSize'
 
 // `__managed_capacity(arr) -> capacity`.
 function buildManagedCapacity(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCapacityName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedCapacityName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
@@ -4045,7 +3977,7 @@ end 'buildManagedCapacity'
 
 // `__managed_reserve(arr, n)` — ensure capacity ≥ n. `__managed_grow` is a no-op when capacity already suffices.
 function buildManagedReserve(module StdModule)
-	var func = IrFunction.createFromStd(ManagedReserveName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedReserveName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
@@ -4069,7 +4001,7 @@ end 'buildManagedReserve'
 // `insert`'s clamp because `insert` documents a `[0, length]` clamping contract and `resize` documents none —
 // a caller asking for a negative length has a bug, and silently resizing to empty would hide it.
 function buildManagedResize(module StdModule)
-	var func = IrFunction.createFromStd(ManagedResizeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedResizeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4098,7 +4030,7 @@ function buildManagedResize(module StdModule)
 	let es = emitLoadField(module, block: doZero, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: doZero, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 
-	// ⭐ **DESTROY THE VACATED MANAGED ELEMENTS `[n, oldLen)` BEFORE ZEROING (P1.7 slice 3a).** A shrink drops the
+	// ⭐ **DESTROY THE VACATED MANAGED ELEMENTS `[n, oldLen)` BEFORE ZEROING.** A shrink drops the
 	// tail `[n, oldLen)`, so each managed element there must be destroyed or it leaks; the destroy MUST precede the
 	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
 	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: doZero, record: arr, buffer: buffer, start: n, stop: oldLen, elementSize: es, ids: ids)
@@ -4114,7 +4046,7 @@ end 'buildManagedResize'
 
 // `__managed_first(arr) -> (value, flag)` — element 0 (throws on empty).
 function buildManagedFirst(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(ManagedFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4142,7 +4074,7 @@ end 'buildManagedFirst'
 // `__managed_clear(arr)` — length ← 0, zeroing the whole live region (capacity-slot invariant). The buffer
 // and capacity are left in place for reuse.
 function buildManagedClear(module StdModule)
-	var func = IrFunction.createFromStd(ManagedClearName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedClearName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4156,7 +4088,7 @@ function buildManagedClear(module StdModule)
 	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 
-	// ⭐ **DESTROY THE LIVE MANAGED ELEMENTS `[0, length)` BEFORE ZEROING (P1.7 slice 3a).** `clear` drops the
+	// ⭐ **DESTROY THE LIVE MANAGED ELEMENTS `[0, length)` BEFORE ZEROING.** `clear` drops the
 	// whole live region, so each managed element must be destroyed or it leaks; the destroy MUST run before the
 	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
 	let start = emitConst(module, block: entry, value: 0, ids: ids)
@@ -4172,7 +4104,7 @@ end 'buildManagedClear'
 // `__managed_remove(arr, index) -> (value, flag)` — remove and return element `index` (throws OOB), shifting
 // the tail left by one slot (a forward copy — low address first) and zeroing the vacated last slot.
 function buildManagedRemove(module StdModule)
-	var func = IrFunction.createFromStd(ManagedRemoveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(ManagedRemoveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4234,7 +4166,7 @@ end 'buildManagedRemove'
 // 0, and its `parent@32` is simply 0 when the source never allocated a buffer). The cost is that an empty
 // slice keeps its parent's bytes alive until it drops, which no program can observe.
 function buildManagedSlice(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSliceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(ManagedSliceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4264,7 +4196,7 @@ end 'buildManagedSlice'
 // always in bounds — so it reuses `emitRecordView` directly with `start = 0`, `sliceLen = length` and needs
 // no bounds check (`Array.clone` is literally `slice(0, len)`).
 function buildManagedClone(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4286,7 +4218,7 @@ end 'buildManagedClone'
 // The clone is `__managed_clone`, so the copy an immortal record produces is the same COW view any other
 // `.clone()` produces: a fresh 48-byte record over the same immortal blob, detaching at its first write.
 function buildManagedRetain(module StdModule)
-	var func = IrFunction.createFromStd(ManagedRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4315,7 +4247,7 @@ end 'buildManagedRetain'
 // `emitRecordIsImmortal` test, so the acquire and the release decline together — the pairing
 // `BufferOwnership.emitRecordIsImmortal` requires of every reader of that test.
 function buildManagedIncref(module StdModule)
-	var func = IrFunction.createFromStd(ManagedIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4358,7 +4290,7 @@ end 'managedRecordRetainCallee'
 // across that seam over-reads the packed source. `entry` guards the two element sizes equal and diverges
 // (`RuntimeAbort.arrayAppendElementSizeMismatch`) otherwise — the file's "a corrupt operation must never proceed" shape.
 function buildManagedAppend(module StdModule)
-	var func = IrFunction.createFromStd(ManagedAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4446,7 +4378,7 @@ end 'emitRecordContentByteLen'
 // ⚠ It BORROWS `arr`: it reads `buffer@0`/`length@8`/`element_size@24` and walks bytes, freeing nothing —
 // `buildStrHash`'s contract, so a hashed array neither double-frees nor leaks.
 export function buildArrayHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4474,7 +4406,7 @@ end 'buildArrayHash'
 //
 // ⚠ Both operands are BORROWED, exactly as `buildStrEq`'s are.
 export function buildArrayEquals(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4507,7 +4439,7 @@ end 'buildArrayEquals'
 // `__managed_decref(arr)` — an array's drop: the shared refcount RMW, then on the last owner DESTROY each managed
 // element, free the external element buffer (if any) and the record.
 //
-// ⭐ **THE MANAGED-ELEMENT WALK (P1.7 slice 3).** When `element_destroy@40 != 0` the array's elements are
+// ⭐ **THE MANAGED-ELEMENT WALK.** When `element_destroy@40 != 0` the array's elements are
 // managed heap POINTERS (a String / struct / union / instance / nested-Array box), so before the buffer is
 // freed the last owner WALKS `[0, length)` and calls `element_destroy@40` on each NON-NULL slot through a
 // `callIndirect`. ⭐ `element_destroy@40` holds the element's DESTROY function
@@ -4519,7 +4451,7 @@ end 'buildArrayEquals'
 // takes the direct buffer free unchanged (no golden moves — the array helpers are `__`-prefixed, out of the
 // spec fragments, so this whole restructuring is invisible to them).
 //
-// ⭐ **THE BUFFER IS RELEASED THROUGH THE SENTINEL LADDER, NOT FREED DIRECTLY** (P1.7 slices 2 and COW B).
+// ⭐ **THE BUFFER IS RELEASED THROUGH THE SENTINEL LADDER, NOT FREED DIRECTLY.**
 // `emitOwedAllocationBase` answers which allocation — if any — this record owes a `__mm_decref` to, and
 // `emitReleaseOwedBase` pays it. That pair covers all three record kinds and is the same pair
 // `__managed_cow_detach` uses, so the two cannot disagree about what a record owns:
@@ -4539,7 +4471,7 @@ end 'buildArrayEquals'
 // only for the last owner of the buffer, and that is sound rather than lucky: a managed-element array can
 // never be SHARED. `slice`/`clone`/`append` are the only operations that could give two records the same
 // element buffer, and on a MANAGED-element array they take the DEEP-CLONE path (`__managed_slice_managed`/
-// `__managed_clone_managed`/`__managed_append_managed`, P1.7 slice 3b-vi-b) — which build a FRESH OWNER over
+// `__managed_clone_managed`/`__managed_append_managed`) — which build a FRESH OWNER over
 // independent per-element clones, never a COW view over the source's buffer. So a managed record's buffer
 // refcount is always 0 here, and this walk destroys each element exactly once. Gating the walk on the
 // refcount would be a branch no program can execute, which is the one thing this runtime consistently refuses
@@ -4561,7 +4493,7 @@ end 'buildArrayEquals'
 // element size reaching here came from SOURCE (`__ManagedMemory.create(4, 0)`), where `__managed_create`'s can
 // only be a compiler bug. Letting it through would end the process for a program error.
 function buildManagedMemCreate(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedMemCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4611,14 +4543,14 @@ end 'buildManagedMemCreate'
 // republishes `capacity@16` as the live length, so after it the bound is real and the buffer is this
 // record's. (`__managed_grow` detaches first for the same reason and says so.)
 //
-// ⚠ **BUT THE NEGATIVE-LENGTH REFUSAL COMES BEFORE THE DETACH, AND IT IS THE ONE CHECK THAT MAY** (named by
-// the R4.2 review, fixed in R4.4). A detach ALLOCATES; `setLength(-1)` is refused on every input, so running
-// the detach first made a doomed call copy the buffer into a fresh allocation and then throw — work done for
-// a call that cannot succeed, on a record whose provenance the throw then leaves silently changed. The
-// reorder is safe precisely because this check reads only the ARGUMENT: the load-bearing part of the order
+// ⚠ **BUT THE NEGATIVE-LENGTH REFUSAL COMES BEFORE THE DETACH, AND IT IS THE ONE CHECK THAT MAY.** A detach
+// ALLOCATES; `setLength(-1)` is refused on every input, so running the detach first would make a
+// doomed call copy the buffer into a fresh allocation and then throw — work done for a call that
+// cannot succeed, on a record whose provenance the throw then leaves silently changed. The order is
+// safe precisely because this check reads only the ARGUMENT: the load-bearing part of the order
 // above is "the CAPACITY read comes after the detach", and it still does.
 function buildManagedSetLength(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSetLengthName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedSetLengthName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4671,7 +4603,7 @@ end 'buildManagedSetLength'
 // is its own entry rather than that one's alias. The bound, the detach and the reason both differ from
 // `__managed_byte_at`'s live — in one place, `emitBufferAccessGuard`.
 function buildManagedSetByte(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSetByteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedSetByteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4702,7 +4634,7 @@ end 'buildManagedSetByte'
 // `.rdata`-backed literal, an inline String's bytes — is a perfectly good thing to read THROUGH. That is
 // the one asymmetry with the setter, and it is the whole of it.
 function buildManagedByteAt(module StdModule)
-	var func = IrFunction.createFromStd(ManagedByteAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedByteAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4727,7 +4659,7 @@ function buildManagedByteAt(module StdModule)
 end 'buildManagedByteAt'
 
 // ⭐⭐ **`0 <= offset < limit`, THE ONE BOUND EVERY `__ManagedMemory` ACCESSOR IS CHECKED AGAINST** — the byte
-// setter, the byte reader and (R4.6) the element setter. It terminates `block` (the sign test) and
+// setter, the byte reader and the element setter. It terminates `block` (the sign test) and
 // `checkHigh` (the limit test), branching to `bad` or `ok`; the CALLER terminates `bad` with its own
 // complaint, because what an out-of-range access reports is a fact about the member, not about the bound.
 //
@@ -4751,8 +4683,8 @@ end 'buildManagedByteAt'
 // exactly what a view is for.
 //
 // ⚠ **THE PRICE, stated so it is not rediscovered as a surprise: the parameter also forbids a SOUND
-// combination — detach with a LENGTH limit — and `__managed_set` is standing proof that one exists** (found in
-// R4.6 review). It is a write, it detaches, and its bound is the live length, so it cannot be folded onto
+// combination — detach with a LENGTH limit — and `__managed_set` is standing proof that one exists.** It is a
+// write, it detaches, and its bound is the live length, so it cannot be folded onto
 // this guard as it stands; it does not try to. It also detaches AFTER its bounds check so a doomed
 // `Array.set` allocates nothing, which is a third axis this guard cannot express and must not, since a
 // capacity limit is only readable once the detach has published it. If a fourth member ever needs
@@ -4847,7 +4779,7 @@ end 'emitBufferAccessGuard'
 // `ManagedGetUncheckedName` pin each other. Relax the refusal and this call becomes load-bearing again with no
 // edit; delete this call and nothing will tell you.
 function buildManagedMemSet(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedMemSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4908,7 +4840,7 @@ end 'buildManagedMemSet'
 // fast arms and the sub-byte read-modify-write without knowing that any of them exist — an `Array with bool`
 // refill writes FIELDS through the same one call an `Array with Int` refill writes words through.
 function buildManagedFill(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFillName, returnType: StdReturnType.value(valueTagToStdType(ValueTypeTag.boolean)), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedFillName, returnType: StdReturnType.value(valueTagToStdType(ValueTypeTag.boolean)), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4939,7 +4871,7 @@ function buildManagedFill(module StdModule)
 	// end is one addition whichever of the two asks for it.
 	//
 	// ⛔⛔ **THE HIGH GUARD IS `emitBoundaryPositionOutOfRange` AND NOT A BARE `stop > length`, BECAUSE THE
-	// ADDITION ABOVE CAN WRAP (EC1 review).** `start` and `count` are both non-negative by the two guards
+	// ADDITION ABOVE CAN WRAP.** `start` and `count` are both non-negative by the two guards
 	// above, so their sum lands in `[0, 2^64-2]` — which either fits an `i64` or comes back NEGATIVE, never
 	// as a small positive. A bare `stop > length` reads a wrapped end as in range, the loop then runs zero
 	// times because `i >= stop` holds at once, and the call answers APPLIED having written nothing: a LIE,
@@ -5026,7 +4958,7 @@ end 'emitSingleOpFillLoop'
 // live elements' own bytes (`emitElementByteLen(length, es)`) into a fresh `__mm_alloc` (which is zeroed). Destructors run on a SHRINK
 // (`__managed_set_length`, `__managed_clear`) and nowhere else.
 function buildManagedMemGrow(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedMemGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5075,7 +5007,7 @@ end 'buildManagedMemGrow'
 // It is also the one input where the exchange itself would be observable if the reads and writes were
 // interleaved, which is the second reason it is answered rather than performed.
 function buildManagedMemSwap(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemSwapName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedMemSwapName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5132,7 +5064,7 @@ end 'buildManagedMemSwap'
 // `Array.insert` — the only corpus caller — never asks for one (it
 // calls this only when `index < length`, so `count >= 1`).
 function buildManagedMemShiftRight(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemShiftRightName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedMemShiftRightName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5177,7 +5109,7 @@ end 'buildManagedMemShiftRight'
 // slots that leave the live range. Zeroing here as well would erase a slot the caller may still be about to
 // read, and would duplicate a rule that already has one home.
 function buildManagedMemShiftLeft(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemShiftLeftName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedMemShiftLeftName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5253,7 +5185,7 @@ end 'emitShiftRangePastCapacity'
 // out of its range, which is what `indexOutOfBounds` names. Nothing observable moves: the only consumer
 // (`stdlib/Array.maxon:491`) relabels every failure as `IterationError.exhausted`.
 function buildManagedCursorCreate(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCursorCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedCursorCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5271,12 +5203,12 @@ function buildManagedCursorCreate(module StdModule)
 	emitMemoryThrow(module, block: refuse, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
 
 	let recordSize = emitConst(module, block: build, value: CursorRecordBytes, ids: ids)
-	let recordDtor = emitConst(module, block: build, value: TrivialElementDestroy, ids: ids)
+	let recordDtor = emitConst(module, block: build, value: TrivialDestructor, ids: ids)
 	let cursor = ids.mint()
 	emitMmAllocCall(module, block: build, result: cursor, size: recordSize, destructor: recordDtor, tag: mmTagIndex(MmTag.CursorRecord), ids: ids)
 
 	// ⭐⭐ **THE RETAIN THE HEADER ARGUES FOR — SKIPPED FOR AN IMMORTAL SOURCE, AND ITS RELEASE IS SKIPPED BY
-	// THE SAME ONE TEST (W157 review).** `__mm_incref` is a read-modify-write, and a String or Character
+	// THE SAME ONE TEST.** `__mm_incref` is a read-modify-write, and a String or Character
 	// literal's record is `.rdata`, which the PE writer maps READ-ONLY: increfing one FAULTS.
 	//
 	// ⭐ **THE PAIRING NEEDS NO SECOND EDIT, AND THAT IS WHY THE GUARD BELONGS HERE RATHER THAN AT BOTH ENDS.**
@@ -5287,12 +5219,9 @@ function buildManagedCursorCreate(module StdModule)
 	// is not this file's to add or to forget. ⛔ A guard duplicated into `__managed_cursor_decref` would be the
 	// second copy that could drift, and drifting toward "release without acquire" is a DOUBLE FREE.
 	//
-	// ⚠⚠ **NO LEGAL PROGRAM REACHES IT, MEASURED.** With an `osExit(74)` in place of this incref: zero hits
-	// across 1,636 spec cases in eight families, because nothing in `stdlib/` iterates an `addressableBytes()`
-	// result and that member is the only door an immortal record has onto the buffer surface. ✅ Proved LIVE by
-	// inverting the polarity — an ordinary `for x in arr` then exits 74. It is a guard against W157 having made
-	// the shape POSSIBLE (before it, `addressableBytes()` always minted, so no caller could hold a `.rdata`
-	// record at all), not against a crash anyone has seen.
+	// ⚠⚠ **NO LEGAL PROGRAM IN THE SUITE REACHES IT**: nothing in `stdlib/` iterates an
+	// `addressableBytes()` result, and that member is the only door an immortal record has onto the
+	// buffer surface. It guards a shape that member makes POSSIBLE, not a crash anyone has seen.
 	var countSource = module.addBlock(func, label: b"curcount", heat: BlockHeat.normal)
 	var storeSource = module.addBlock(func, label: b"curstore", heat: BlockHeat.normal)
 
@@ -5317,7 +5246,7 @@ end 'buildManagedCursorCreate'
 // `__mm_decref` cannot reach. ⚠ It is never NULL: the only producer stores it before the cursor can escape,
 // and the refusal path above produces no cursor at all, so there is nothing for a null guard to catch.
 //
-// ⭐⭐ **AND THAT ROUTING IS WHAT MAKES THE IMMORTAL SKIP SYMMETRIC FOR FREE (W157 review).**
+// ⭐⭐ **AND THAT ROUTING IS WHAT MAKES THE IMMORTAL SKIP SYMMETRIC FOR FREE.**
 // `__managed_cursor_create` does not incref an immortal `.rdata` source (increfing one faults), and this
 // release does not decref one either — not because a second guard was written here, but because
 // `__managed_decref` carries that arm on the one shared `emitRecordIsImmortal` test. ⛔ **DO NOT ADD A COPY OF
@@ -5331,7 +5260,7 @@ end 'buildManagedCursorCreate'
 // would have exactly one caller — this one. **The cursor is the only box of this shape in the compiler**;
 // if a second appears, lift them together.
 function buildManagedCursorDecref(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCursorDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedCursorDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5353,7 +5282,7 @@ end 'buildManagedCursorDecref'
 
 // `__managed_cursor_index(cursor) -> position` — the one member that reads nothing but the cursor itself.
 function buildManagedCursorIndex(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCursorIndexName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedCursorIndexName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5374,7 +5303,7 @@ end 'buildManagedCursorIndex'
 // above holds; a member that moved on failure would break it silently, which is why all four navigators test
 // BEFORE they store.
 function buildManagedCursorCurrent(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCursorCurrentName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedCursorCurrentName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5394,7 +5323,7 @@ end 'buildManagedCursorCurrent'
 // because the offset is the caller's and may leave the buffer in either direction (`emitIndexOutOfRange`
 // rejects a negative `position + ahead` as well as one at or past the length).
 function buildManagedCursorPeek(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCursorPeekName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(ManagedCursorPeekName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5443,7 +5372,7 @@ function buildManagedCursorNavigator(module StdModule, name ByteArray, step Curs
 	let takesTarget = step == CursorStep.absolute
 	let paramCount = 2 if takesTarget else 1
 	let paramTypes = twoI64Params() if takesTarget else oneI64Param()
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: managedMemoryThrows())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5499,15 +5428,11 @@ end 'emitCursorElementAt'
 // reference gives it its own enum, whose `invalidLength` and `invalidByteRange` name conditions `ArrayError`
 // has no case for, and a handler that binds the error must see the cases the operation can actually report.
 //
-// ⚠ **EXPORTED IN REVIEW, BECAUSE UNTIL THEN `__ManagedMemoryError` HAD NO READER (R4.2).**
-// `ProgramSignatures.throwsOf` answered `none` for these three callees, so `e` bound with no type and
-// `match e 'k' invalidLength then …` was refused as `E2015: Unsupported: a match pattern naming
-// 'invalidLength' (… enum-case patterns arrive in a later wave)` — a diagnostic about a MISSING FEATURE for a
-// program whose feature is present, and the exact defect `throwsOf`'s own comment records R4.1 having fixed
-// for the file family. MEASURED against the control that the identical `match` over `__ManagedFileError`
-// compiles and runs. The rung made this enum's case ORDER a wire format precisely so a handler could
-// discriminate it, and a wire format with no reader is a claim nothing checks;
-// `managed-memory-error-variants` now pins all three reachable cases.
+// ⚠ **EXPORTED SO `GtRuntime.runtimeThrowsClause` CAN NAME IT.** Without a reader `throwsOf`
+// answers `none` for these callees, `e` binds with no type, and `match e` is refused as a MISSING
+// FEATURE for a program whose feature is present. This enum's case ORDER is a wire format so a
+// handler can discriminate it, and a wire format with no reader is a claim nothing checks;
+// `managed-memory-error-variants` pins all three reachable cases.
 export function managedMemoryThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ManagedMemoryErrorTypeName))
 end 'managedMemoryThrows'
@@ -5525,7 +5450,7 @@ function emitMemoryThrow(module StdModule, block IrBlock, flag ParsedInt, ids Va
 end 'emitMemoryThrow'
 
 // ⭐⭐ **`__managed_decref(record)` — ONE FEWER OWNER OF A BUFFER RECORD, AND ITS FIRST QUESTION IS WHETHER
-// THE RECORD IS COUNTABLE AT ALL (W157).** An `ImmortalRecordCapacity` record is a String literal's or a
+// THE RECORD IS COUNTABLE AT ALL.** An `ImmortalRecordCapacity` record is a String literal's or a
 // module-level byte-array constant's: it and its blob are both `.rdata`, which the PE writer maps READ-ONLY,
 // so the refcount read-modify-write below is an access violation rather than a miscount — and there is
 // nothing to reclaim in any case, because nothing was ever allocated. It leaves untouched.
@@ -5539,7 +5464,7 @@ end 'emitMemoryThrow'
 // "not mine" about their buffer while sitting in an ordinary `__mm_alloc` box that must be freed. This is
 // the one provenance whose RECORD is image data, so it is the one value compared against.
 function buildManagedDecref(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5581,9 +5506,9 @@ function buildManagedDecref(module StdModule)
 	module.functions.push(func)
 end 'buildManagedDecref'
 
-// --- The MANAGED-element deep-clone copies (P1.7 slice 3b-vi-b) ---
+// --- The MANAGED-element deep-clone copies ---
 
-// ⭐ **DEEP-CLONE `count` ELEMENTS from `srcBase` into `destBase` (P1.7 slice 3b-vi-b).** Walk `[0, count)`
+// ⭐ **DEEP-CLONE `count` ELEMENTS from `srcBase` into `destBase`.** Walk `[0, count)`
 // (stride `elementSize`, always 8 for a managed element — a heap pointer), load each source slot and, when it
 // is NON-NULL, `callIndirect` the per-element `cloneFn` on it (a `(box) -> newBox`) and store the fresh clone
 // into the destination slot. The DUAL of `emitElementDestroyRange`: where the destroy walk calls the element's
@@ -5697,7 +5622,7 @@ end 'elementRangeLabels'
 // deep-cloned in. The result is a full OWNER (`parent@32 = 0`), NOT a COW view — a managed view would let both
 // arrays' `__managed_decref` walks destroy the shared elements, which is the whole reason a managed copy deep-clones.
 function buildManagedCloneManaged(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCloneManagedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedCloneManagedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5771,8 +5696,8 @@ end 'buildManagedWalk'
 
 // ⭐ **WHAT A WALK OWES THE BYTES OF A RECORD IT DESCENDS.** A view's reference to the allocation its bytes live in
 // is met (`WalkMeeting.view`), because that allocation may be a String record the graph also owns; an owner's
-// separate buffer is a lend's to mark, and no owner reference but the record's reaches it. A move then detaches
-// either, since a move is a write. Answers the cursor the walk continues at.
+// separate buffer is a share walk's to mark, and no owner reference but the record's reaches it. A
+// move then detaches either, since a move is a write. Answers the cursor the walk continues at.
 function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor CascadeCursor, arr ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
 	var ownedBytes = module.addBlock(func, label: b"ownbytes", heat: BlockHeat.normal)
 	var viewedBytes = module.addBlock(func, label: b"viewbytes", heat: BlockHeat.normal)
@@ -5831,7 +5756,7 @@ end 'emitElementWalkRange'
 // OWNER over deep clones of `arr[start, end)`. The source window's first element is `srcBuf + start·es`; the
 // clones land at `[0, sliceLen)` of the new buffer.
 function buildManagedSliceManaged(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSliceManagedName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(ManagedSliceManagedName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5873,7 +5798,7 @@ end 'buildManagedSliceManaged'
 // up front (one grow), then clone each `src` element into the freshly-grown tail `[destLen, destLen+srcLen)`.
 // The element-size seam is guarded exactly as `__managed_append`'s is (a cross-stride blit must never proceed).
 function buildManagedAppendManaged(module StdModule)
-	var func = IrFunction.createFromStd(ManagedAppendManagedName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedAppendManagedName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5910,7 +5835,7 @@ function buildManagedAppendManaged(module StdModule)
 	module.functions.push(func)
 end 'buildManagedAppendManaged'
 
-// --- The OPAQUE-`T` copy wrappers (P1.7 slice 3b-vi-b-β) ---
+// --- The OPAQUE-`T` copy wrappers ---
 //
 // Each takes the enclosing instance's layout DESCRIPTOR as its LAST parameter (appended by
 // `LowerMaxonToStd.opaqueCopyArgsWithDescriptor`), reads `copyFunc@32`, and branches ONCE on it: a 0 slot
@@ -5938,7 +5863,7 @@ end 'emitCopyFuncBranch'
 // `(value, flag)` through a joined `errorReturn`, so an out-of-bounds slice throws exactly as the inner
 // `__managed_slice`/`__managed_slice_managed` would.
 function buildManagedSliceOpaque(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSliceOpaqueName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(ManagedSliceOpaqueName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5979,7 +5904,7 @@ end 'buildManagedSliceOpaque'
 // the block-copy `__managed_append`; managed → the deep-clone `__managed_append_managed(dest, src, copyFunc)`. `src` is
 // borrowed and preserved by both inner helpers.
 function buildManagedAppendOpaque(module StdModule)
-	var func = IrFunction.createFromStd(ManagedAppendOpaqueName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedAppendOpaqueName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

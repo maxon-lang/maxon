@@ -48,10 +48,6 @@ than conventions:
   other's stride cannot produce an answer, only a wrong one — so the pairing is checked, not
   assumed (`E2070`).
 
-An unchecked label was a PATH TRAVERSAL, not merely a wrong answer: the label used to be turned
-into a file name and joined onto the stdlib directory, so `"__ucd_../../../x"` reached for a file
-outside it.
-
 ## Tests
 
 <!-- test: builtins-ucd.bmp-byte-load -->
@@ -110,7 +106,7 @@ supplementary range in the checked-in table: U+10000..U+1000B, category `Lo` (5)
 
 ⚠ **ENTRY 1 IS CHECKED TOO, AND THAT IS THE ONLY THING THAT PINS THE STRIDE.** Entry 0 sits at
 offset 0 of the table whatever the stride is, so an assertion about it alone passes under a stride
-of one byte — MEASURED, by sabotaging the stride to 1 and watching this case stay green. Entry 1 is
+of one byte. Entry 1 is
 where a wrong stride reads a word straddling two entries, and the table's own sortedness
 (`entry1.rangeStart > entry0.rangeEnd`) is asserted beside the exact fields so the case cannot pass
 on a coincidence in either direction.
@@ -214,8 +210,7 @@ error E2053: <fragment>:3:43: the second and later arguments must be named ('nam
 
 <!-- test: builtins-ucd.index-must-be-labelled -->
 The sibling door, refused identically. `ucdI64At` is the same shape one name over, and a rule
-enforced at only the name that forced the question would leave the defect class alive inside its
-own fix.
+enforced at only one of the two names would leave the defect class alive at the other.
 ```maxon
 function main() returns ExitCode
 	return __Builtins.ucdI64At("__ucd_supp", 0) as ExitCode
@@ -263,8 +258,7 @@ error E2010: <fragment>:4:30: Expected 'string literal' but got 'name'
 ```
 
 <!-- test: builtins-ucd.label-must-name-a-readable-table -->
-A literal that names no table this intrinsic reads is refused with `E2070`. The label used to be
-turned into a FILE NAME, so an unchecked one reached outside the stdlib directory entirely.
+A literal that names no table this intrinsic reads is refused with `E2070`, however it is spelled.
 ```maxon
 function main() returns ExitCode
 	return __Builtins.ucdByteAt("__ucd_../../../evil", offset: 65) as ExitCode
@@ -288,8 +282,8 @@ error E2070: <fragment>:3:29: '__Builtins.ucdI64At' reads the compiler-owned tab
 
 <!-- test: builtins-ucd.arity-is-exactly-two -->
 Both take exactly two arguments. A call that stops after the label is refused at the `)` it found,
-before anything tries to read a table — and that is the BOOTSTRAP's answer too, which is why it is
-not an arity diagnostic: neither compiler has one for a builtin whose arguments it parses itself.
+before anything tries to read a table. It is not an arity diagnostic: the compiler has none for a
+builtin whose arguments it parses itself.
 ```maxon
 function main() returns ExitCode
 	return __Builtins.ucdByteAt("__ucd_bmp") as ExitCode

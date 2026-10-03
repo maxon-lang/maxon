@@ -5,7 +5,7 @@ keywords: [match, union, ownership, scrutinee, gives, drop, decref, move]
 category: ownership
 ---
 
-# Match Owned-Value Flow (P1.3)
+# Match Owned-Value Flow
 
 ## Documentation
 
@@ -25,8 +25,8 @@ A `match` handles two owned heap values whose lifetime the arms decide:
     managed payload a binding arm moved out (`text(s) gives s`) — is owned by nothing
     else, so ownership TRANSFERS and the value is dropped neither on the arm's edge
     nor in the post-match drain.
-  - A value an IMMUTABLE binding declared outside the arm still owns is CO-OWNED
-    (⚖ 2026-08-04): the arm's edge takes a SECOND reference and the binding keeps the
+  - A value an IMMUTABLE binding declared outside the arm still owns is CO-OWNED:
+    the arm's edge takes a SECOND reference and the binding keeps the
     one it already owed, so the source stays readable after the merge and each holder
     releases its own. A **mutable** source still moves — a `var` can be written through
     afterwards, so a second name for its value could watch it change (`moves.md`'s
@@ -34,7 +34,7 @@ A `match` handles two owned heap values whose lifetime the arms decide:
   - A BORROWED give is promoted so the phi is uniformly owned: a `String` is copied,
     and a non-text aggregate — which has no copy — is increfed, so the merge is CORRECT
     on either arm rather than refused on both (see
-    `match-borrowed-aggregate-give-co-owned`, and the ternary's twin at OPEN #14/S5).
+    `match-borrowed-aggregate-give-co-owned`).
 
 Every case below is leak-free (a leak is exit 101) and crash-free (a double-free is
 `0xC0000005`).
@@ -291,11 +291,10 @@ temporary scrutinee payload long enough to heap
 <!-- test: match-borrowed-aggregate-give-co-owned -->
 A `match … gives` whose arms merge a BORROWED aggregate give (`e.kind`, a field read of a
 borrowed struct parameter) with an OWNED one (`remapKind(e.kind)`, a fresh call result) is the
-same merge the equivalent ternary makes, through the same shared code (OPEN #14): the owned
+same merge the equivalent ternary makes, through the same shared code: the owned
 result phi would free the borrowed box while its real owner frees it too, so the borrowed arm is
 INCREF'd on its own edge and the phi's drop releases that second reference. Exit `0` is the
-assertion — this program leaked (exit 101) before the merge promoted the borrowed give, and it
-was refused outright (E2015) between then and S5, on the false premise that the compiler had no incref.
+assertion; a leak is exit 101.
 ```maxon
 typealias Id = int(0 to 1000)
 
@@ -351,7 +350,7 @@ end 'main'
 An owned interpolation give in one arm makes the result phi owned, so the other arm is routed
 through the borrowed-give promotion. Here that arm is an UNDECLARED call — an UNRESOLVED give that
 is neither a String to promote nor an aggregate to refuse. The merge must DEFER it so semantic
-analysis reports the real `E3004`, never a parser panic. (Twin of the ternary regression guard:
+analysis reports the real `E3004`, never a parser panic. (Twin of the ternary's guard case:
 the shared `promoteBorrowedGive` must not crash on an unresolved give.)
 ```maxon
 function pick(x Integer, c bool) returns String
@@ -372,12 +371,12 @@ error E3004: specs/fragments/match-owned-value-flow/gives-owned-string-arm-undec
 ```
 
 <!-- test: gives-immutable-binding-is-co-owned -->
-⭐⭐ **AN ARM GIVING AN IMMUTABLE BINDING'S OWN VALUE CO-OWNS IT, IT DOES NOT MOVE IT (⚖ 2026-08-04).**
+⭐⭐ **AN ARM GIVING AN IMMUTABLE BINDING'S OWN VALUE CO-OWNS IT, IT DOES NOT MOVE IT.**
 The two constructs share one door (`Parser.settleArmGive`), so this is the ternary case's twin and the
 reason the rule is written down once: `let u = t` from an immutable `t` ALIASES at a rebind, and a
-`gives` arm reading the same `t` used to POISON it — one rule with two answers, decided by which
-construct the read stood in. The phi still owns its value outright; it simply takes a SECOND reference
-rather than stealing the binding's, which is what `try … otherwise <binding>` has always done
+`gives` arm reading the same `t` co-owns it the same way — one rule, whichever construct the read
+stands in. The phi still owns its value outright; it simply takes a SECOND reference
+rather than stealing the binding's, which is what `try … otherwise <binding>` does
 (`Parser.transferFallbackToPhi`). Both bindings are read after the merge, and each box is released
 exactly once — a move here would double-free and an unbalanced incref would leak (exit 101).
 ```maxon
@@ -414,8 +413,7 @@ B y padded out long enough to be a real heap allocation | A y padded out long en
 
 <!-- test: error.gives-mutable-binding-still-moves -->
 The control for the case above, in this construct: a `var` source can be written through after the
-merge, so a second name for its value could watch it change and the arm keeps the MOVE it always had
-(⚖ 2026-08-04's own rationale, read the other way). Without it the co-owning arm could be widened to
+merge, so a second name for its value could watch it change and the arm MOVES it. Without it the co-owning arm could be widened to
 every source and no case in this file would notice.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

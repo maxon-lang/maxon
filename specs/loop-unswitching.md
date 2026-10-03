@@ -11,7 +11,7 @@ category: codegen
 `unswitchInvariantGuards` is a Std-tier pass that runs after `loopInvariantCodeMotion`. A natural
 loop whose conditional branches test values that do not change inside the loop is VERSIONED: the
 preheader evaluates those conditions once, a fast copy of the loop has every such branch folded to the
-arm on which the refusal is false (the arms that can no longer be reached are dropped from the copy), and the
+arm on which the refusal is false (the arms that cannot be reached are dropped from the copy), and the
 original loop stays as the slow version for the entries where a condition is false. The loads those
 conditions and the copy's body read are hoisted out of the copy, so its body is call-free but for the
 one arm a bound failure reaches.
@@ -49,7 +49,7 @@ the loop, a body of bound check + store and bound check + load) and the CONTROLS
 every path the rewrite touches under a value the program reads back: the slow version's detach, an
 out-of-bounds fallback taken inside the fast version, a loop-defined value read after the loop, a
 value carried out through two loops at once, a hoisted load read after its loop, two names for one
-record. Measured under sabotage — `__managed_push` declared to write nothing — the push control reads
+record. Under sabotage — `__managed_push` declared to write nothing — the push control reads
 slot 0 through a buffer the push has freed and exits 1, and `a-value-carried-out-of-two-loops` is
 versioned around its pushes and answers wrong; the compiler built by that sabotaged compiler then
 miscompiles itself, which is the class of defect the callee table exists to refuse.
@@ -319,7 +319,7 @@ Control for the hoist-only mode. `last` is `a.count()`, an inlined header load t
 in place, and it is read after the loop: `elimTrivialBlockArgs` has already folded the one-edge exit
 phi onto the load itself, so the reader outside the loop names the loop's own op. Hoisting it would
 leave that reader with a value nothing defines on its path; the loop is refused and the program
-answers 506. This program used to panic the register allocator.
+answers 506.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word

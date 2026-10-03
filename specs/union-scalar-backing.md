@@ -88,8 +88,8 @@ end 'main'
 
 <!-- test: error.unknown-union-case -->
 A match arm naming a case the union does not have is E3034, worded "union" — the
-reference compiler distinguishes a union from an enum here (`IsUnion ? "union" :
-"enum"`), unlike the always-"enum" declaration diagnostics.
+message distinguishes a union from an enum here, unlike the always-"enum"
+declaration diagnostics.
 ```maxon
 union Shape
 	circle
@@ -143,10 +143,10 @@ sub
 
 <!-- test: payload-case-scalar-raw-value -->
 A case's PAYLOAD LIST and its RAW VALUE are independent halves, so a case may write both. This is the shape
-`/specs/union-struct-backing.md` forced — `add(dest ID, src ID) = OpMeta.create(1)` — read at the scalar
-backing this file is about; for one rung a payload list ENDED the case and every such declaration died at
-the `=` with `E2010 Expected 'an enum case name'`. The raw value is read AFTER the optional payload
-list.
+`specs/union-struct-backing.md` pins — `add(dest ID, src ID) = OpMeta.create(1)` — read at the scalar
+backing this file is about. The raw value is read AFTER the optional payload list; a parser that let
+the payload list END the case would refuse every such declaration at the `=` with `E2010 Expected 'an
+enum case name'`.
 
 ⚠ It is also the first declaration that is **heap-boxed AND renumbered at once**: `op.rawValue` is the
 written raw value `5` while `op.ordinal` is the declaration index `0`. Those are two independent questions

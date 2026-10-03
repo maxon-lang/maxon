@@ -1001,7 +1001,8 @@ items.sort(function(a, b) gives a.priority.compare(b.priority))
 let always42 = function(_ Integer) gives 42
 ```
 
-Closures capture by reference. A closure passed where the parameter is declared with a function type (like
+A closure owns what it captures: a scalar is copied, a local holding a record or a `String` is moved into
+the closure (reading it afterwards is E3102), and a parameter, `self` or a field is shared. A closure passed where the parameter is declared with a function type (like
 `sort`'s comparator) may omit its parameter types; everywhere else they are written.
 
 ### Function Types

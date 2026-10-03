@@ -20,10 +20,10 @@ value the program produces.
 
 <!-- test: many-constants -->
 <!-- Args: 4 -->
-Phase 1 gating test: forces the allocator to materialize many distinct
+Constant-rematerialization gating test: forces the allocator to materialize many distinct
 integer constants in arithmetic against a large number of working values
-kept live across calls. Pre-Phase-1 each constant either takes a
-register or a spill slot, inflating pressure / stack usage. Post-Phase-1
+kept live across calls. Without rematerialization each constant would take a
+register or a spill slot, inflating pressure / stack usage. Instead,
 constants are re-emitted at each use via `movRegImm` and never enter the
 live set, so pressure stays bounded and no constant gets a stack slot.
 
@@ -84,34 +84,27 @@ end 'main'
 
 <!-- test: dialect-roundtrip -->
 <!-- Args: 0 -->
-Phase 2 gating test for the X64 dialect groundwork. The new op variants
+Gating test for the X64 dialect's memory- and immediate-operand ALU variants
 (addRegMem / subRegMem / andRegMem / orRegMem / xorRegMem / imulRegMem /
-cmpRegMem and andRegImm / orRegImm / xorRegImm / imulRegImm) live in the
-dialect but no codegen path emits them in Phase 2 — Phase 3 will fold
-spilled reads into them.
+cmpRegMem and andRegImm / orRegImm / xorRegImm / imulRegImm).
 
 What this test gates:
 
-1. The new variants exist in the `X64Op` union. Adding them is what
-   *lets the compiler build at all* — every match site on `X64Op` in the
-   regalloc / backend / slot projection / op query files needs an arm
-   for each new variant, so missing variants surface as
-   "match is not exhaustive" build errors and the self-hosted
-   compiler can no longer build itself. (Compile-time gate.)
-2. The printer arms for the new variants compile (covered by the build).
-3. The encoder dispatch routes the new variants to their encoders
+1. The variants exist in the `X64Op` union. Every match site on `X64Op`
+   in the regalloc / backend / slot projection / op query files needs an
+   arm for each variant, so a missing variant surfaces as a
+   "match is not exhaustive" build error and the self-hosted
+   compiler cannot build itself. (Compile-time gate.)
+2. The printer arms for the variants compile (covered by the build).
+3. The encoder dispatch routes the variants to their encoders
    (covered by the build).
-4. The end-to-end pipeline still works on a normal program — Phase 2 is
-   behaviorally a no-op, so an existing ALU mix using the unchanged
-   reg-reg and reg-imm forms must still compile, run, and produce the
-   expected exit code with the new dialect in place.
+4. The end-to-end pipeline works on a normal program — an ALU mix using
+   the reg-reg and reg-imm forms must compile, run, and produce the
+   expected exit code with the dialect variants in place.
 
-The program mirrors the and/or/xor/cmp shape that Phase 3 will eventually
-fold into reg-mem ALU forms when the source operands spill, so wiring
-the fold for these specific operators (Phase 3 work) keeps the same
-test source meaningful end-to-end. For Phase 2 the test simply asserts
-the exit code; RequiredIR is intentionally omitted to avoid pinning the
-exact reg-reg lowering that Phase 3 will deliberately change.
+The program is the and/or/xor/cmp shape the spill fold rewrites into
+reg-mem ALU forms when the source operands spill. The test asserts the
+exit code.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -147,15 +140,15 @@ end 'main'
 
 <!-- test: many-call-crossing -->
 <!-- Args: 0 -->
-Phase 3 gating test: a function with several i64 values live across
-multiple helper calls inside a loop body. Pre-Phase-3, every spilled-
-source use of a reg-reg ALU op materializes a fresh reload vreg; with
+Spill-slot read fold gating test: a function with several i64 values live across
+multiple helper calls inside a loop body. Without the fold, every spilled-
+source use of a reg-reg ALU op would materialize a fresh reload vreg; with
 enough such uses chained in close proximity the reload-vreg pressure
-exhausts the GPR pool and the allocator panics. With Phase 3's
+exhausts the GPR pool and the allocator panics. With
 `tryFoldReadFromSlot` plumbed through `SpillCodeInsertion`, the reg-reg
 ALU ops rewrite themselves to read directly from the spill slot
-(`addRegMem`, `xorRegMem`, etc.) — fold-eligible source uses no longer
-mint a reload vreg, and the in-block reload pressure stays below the
+(`addRegMem`, `xorRegMem`, etc.) — fold-eligible source uses mint no
+reload vreg, and the in-block reload pressure stays below the
 GPR pool size.
 
 What this test gates:
@@ -167,10 +160,8 @@ What this test gates:
 2. The capability flag `TargetRegAlloc.hasMemOperandAlu` reaches the
    spill code insertion path through `desc`, so `processOp` actually
    probes the fold on x64.
-3. The Pass A / Pass B refactor in `insertSpillCode` (which lets a
-   future memory-routed-phi optimization run before block-arg
-   spill-stores are emitted) preserves correct behavior on a non-trivial
-   program with branches and a loop.
+3. The Pass A / Pass B split in `insertSpillCode` preserves correct
+   behavior on a non-trivial program with branches and a loop.
 4. The per-block reload-vreg cache reuses the same fresh reload vreg
    across consecutive in-block uses of the same spilled value
    (invalidated at calls and defs), trimming the simultaneous-live
@@ -230,10 +221,10 @@ end 'main'
 
 <!-- test: eviction-required -->
 <!-- Args: 0 -->
-Phase 4 gating test: forces the colorer into a scenario where greedy
+Eviction gating test: forces the colorer into a scenario where greedy
 first-fit assigns cold values to limited callee-saved registers first,
 then a hot loop body's higher-spill-weight values can't find callee-
-saved slots and either spill or get evicted. With Phase 4's eviction
+saved slots and either spill or get evicted. With the eviction
 fixup, the high-weight reloads displace the cold occupants of the
 callee-saved tier instead, and the spill picker only has to spill the
 cold values whose use sites are outside the hot loop body.
@@ -309,7 +300,7 @@ end 'main'
 
 <!-- test: scheduler-pressure -->
 <!-- Args: 0 -->
-Phase 5 gating test: forces the bottom-up list scheduler to make a
+List-scheduler gating test: forces the bottom-up list scheduler to make a
 pressure-vs-critical-path choice. `kernel` defines four "early" values
 (a, b, c, d) at the top of its body, then runs a long chain of
 intermediate computations that do not reference a..d, then consumes
@@ -318,14 +309,14 @@ the reordering decisions happen within one ready set.
 
 What this test gates:
 
-1. With the pre-Phase-5 scheduler, the def-only ops that mint a..d
-   carry critical-path weight roughly equal to the intermediate
-   chain's ops, so the bottom-up scheduler tends to pick them early
+1. By critical-path weight alone, the def-only ops that mint a..d
+   weigh roughly the same as the intermediate chain's ops, so a
+   critical-path-only bottom-up scheduler tends to pick them early
    in bottom-up order (= late in top-down order, near the consume
    point) only when their critical paths dominate. Many shapes
    instead leave a..d at the top of the schedule, where they pin
    four registers across the whole intermediate phase.
-2. Phase 5 splits `selectBestReady` into explicit high-pressure and
+2. `selectBestReady` has explicit high-pressure and
    low-pressure modes. At/above `pressureThreshold` the picker
    prefers ops whose pressure-delta is most negative: a..d's def-only
    ops have delta +1 (one def, nothing dies), the intermediate
@@ -402,20 +393,20 @@ end 'main'
 <!-- test: call-arg-parallel-copy -->
 <!-- Args: 0 -->
 Sequentialized call-arg setup test. Each ABI parameter slot is moved
-into one-by-one by `emitDirectCall`; before sequentialization, an
-earlier-arg `mov physArg, virtual(srcId)` could clobber a register that
-a later-arg mov still needed to read from. The exact coloring layout
-that triggers the miscompile depends on the regalloc's pressure
+into one-by-one by `emitDirectCall`; unsequentialized, an
+earlier-arg `mov physArg, virtual(srcId)` can clobber a register that
+a later-arg mov still needs to read from. The exact coloring layout
+that triggers the clobber depends on the regalloc's pressure
 heuristics, so this test pushes the allocator into a shape where:
 
 1. Several live values cross a call that takes many args.
 2. The args' source-virtuals tend to live in caller-saved registers
    that overlap the ABI parameter slots, so the colorer's choice
-   for the arg's source landed naturally in the parameter set —
+   for the arg's source lands naturally in the parameter set —
    exactly the shape where the next arg's mov would clobber it
-   under the pre-sequentialization emission.
+   under unsequentialized emission.
 
-After the fix, `ApplyColoring`'s buffered walk recognizes the run of
+`ApplyColoring`'s buffered walk recognizes the run of
 `mov physArg, virtual(_)` ops preceding the `callDirect`, hands them
 to `sequentializeCallArgSetup`, and either topologically orders the
 moves (no conflict) or inserts an `xchg` / cycle-break-via-scratch

@@ -154,6 +154,33 @@ end 'main'
 
 Output: `1 false true 5`.
 
+## Random
+
+`Random` draws integers from the operating system's cryptographic random source, on every target —
+`wasm32-wasi` included, through `wasi:random`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `Random.draw()` | `RandomDraw` | `RandomError` | A uniformly distributed integer from 0 to `i64.max`. |
+| `Random.below(bound RandomBound)` | `RandomDraw` | `RandomError` | A uniformly distributed integer from 0 to `bound - 1`. |
+
+| Name | Definition |
+|------|------------|
+| `RandomDraw` | `int(0 to i64.max)` |
+| `RandomBound` | `int(1 to i64.max)`, implementing `RandomDraw` |
+
+`RandomError` has one case, `unavailable`: the operating system refused to supply random bytes.
+
+```maxon
+function main() returns ExitCode
+	let roll = try Random.below(6) otherwise panic("no random source")
+	print("{roll + 1}\n")
+	return 0
+end 'main'
+```
+
+It prints a number from 1 to 6.
+
 ## Math
 
 `Math` provides the elementary functions over `Real`, which is `float(f64.min to f64.max)`. The rounding and

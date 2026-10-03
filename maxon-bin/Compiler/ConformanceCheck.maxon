@@ -1,4 +1,4 @@
-// ConformanceCheck.maxon — the whole-program `implements`-conformance pass (P1.7a slice 1).
+// ConformanceCheck.maxon — the whole-program `implements`-conformance pass.
 //
 // ⭐ **IT RUNS BEFORE `resolveTypes`, and that placement IS the design.** A conformance diagnostic
 // prints SOURCE type spellings — `is missing 1 method(s):\n  - increment() returns void`,
@@ -16,16 +16,16 @@
 //
 // An UNKNOWN interface is E3015: a typo'd interface name must not pass.
 //
-// ⭐⭐ **AN ASSOCIATED TYPE IS SUBSTITUTED ONCE, AT COLLECTION, AND EVERY LATER READER SEES ONLY THE RESULT
-// (R5).** `type Box implements Container with Score` binds `Element := Score` before a single requirement is
-// compared, so the requirement a verdict is computed from and the requirement a diagnostic prints ARE THE
-// SAME STRING. `collectInterfaceMethods` is that one site; `signatureMatches` and
-// `formatInterfaceMethodSignature` do no binding of their own.
+// ⭐⭐ **AN ASSOCIATED TYPE IS SUBSTITUTED ONCE, AT COLLECTION, AND EVERY LATER READER SEES ONLY THE
+// RESULT.** `type Box implements Container with Score` binds `Element := Score` before a single
+// requirement is compared, so the requirement a verdict is computed from and the requirement a
+// diagnostic prints ARE THE SAME STRING. `collectInterfaceMethods` is that one site;
+// `signatureMatches` and `formatInterfaceMethodSignature` do no binding of their own.
 
-// Validate every `type X implements …` conformance whole-program (P1.7a slice 1). Records E3015 (unknown
-// interface) / E3016 (partial or wrong-signature implementation); the pipeline's error gate stops the
-// build. A conformance-free program short-circuits before building the function index — the same
-// allocation-free gate `checkLinearAwait`/`buildEscapeSummary` use.
+// Validate every `type X implements …` conformance whole-program. Records E3015 (unknown interface)
+// / E3016 (partial or wrong-signature implementation); the pipeline's error gate stops the build. A
+// conformance-free program short-circuits before building the function index — the same
+// allocation-free gate `checkLinearAwait` uses.
 //
 // ⚠ THE SCALE CORPUS IS NOT AN EXAMPLE OF THAT GATE BEING TAKEN: the generated corpus carries
 // `y_iface_0.maxon` and `y_ifdisp.maxon`, four `implements` clauses each, so this check runs on every
@@ -54,10 +54,10 @@ export function checkConformance(project Project, module MaxonModule, signatures
 
 	// The index is keyed by the REGISTRATION name (`func.name`): `qualifiedMethodName(typeName, methodName)`
 	// for the first declaration of a method name, and the mangled `Type.method#Suffix` for every later overload
-	// of it (D7) — which is exactly why `checkOneMethod` asks `project.overloadSets` for the whole set rather
-	// than the bare key alone (R10).
+	// of it — which is exactly why `checkOneMethod` asks `project.overloadSets` for the whole set rather
+	// than the bare key alone.
 	//
-	// ⭐ **THE SHARED, CHECKED NAME INDEX (`FunctionNameIndex`, A1w) — THOUGH THIS IS THE ONE OF ITS FOUR
+	// ⭐ **THE SHARED, CHECKED NAME INDEX (`FunctionNameIndex`) — THOUGH THIS IS THE ONE OF ITS FOUR
 	// SITES THAT CANNOT MEET A DUPLICATE, AND THAT IS WORTH STATING RATHER THAN INHERITING.** Two bars, either
 	// sufficient: the only cause available at this point is two PARSED declarations, which is E3006 at merge
 	// and which the refusal four lines above has already turned into a `return`; and every synthesizer that
@@ -148,7 +148,7 @@ end 'checkOneGrantedEnumConformance'
 // ONE declared member against ONE granted requirement.
 //
 // ⚠ **AN OVERLOADED NAME IS REFUSED RATHER THAN RESOLVED, and that is the witness slot's shape talking**: a
-// slot holds exactly one address, and `enumConformanceImplName` names the BARE key, which under D7 is the
+// slot holds exactly one address, and `enumConformanceImplName` names the BARE key, which is the
 // FIRST declaration of the name — so with two members the stamped one would be decided by declaration order.
 // `checkOverloadedMembers` resolves this for a declared conformance by matching the whole set and requiring
 // exactly one; there is no author-written clause here to hang that on, and no corpus enum overloads either
@@ -196,15 +196,16 @@ let grantedEnumTypeParamNames = ByteArrayArray.create()
 // DISPATCHED, the associated type reaches the CALLING CONVENTION, no receiver of such a dispatch FIXED it,
 // and what the conformers bound it to.
 //
-// ⭐⭐ **THE FOURTH FACT IS W59's, AND IT IS WHAT MAKES `stdlib/Array.maxon` LISTABLE.** An associated binding
-// is a property of the USE SITE (user ruling): a receiver declared `Taker with Integer` fixes `Element` for
-// every dispatch on it, the emission takes the site's binding
+// ⭐⭐ **THE FOURTH FACT IS WHAT MAKES `stdlib/Array.maxon` LISTABLE.** An associated binding is a
+// property of the USE SITE (user ruling): a receiver declared `Taker with Integer` fixes `Element`
+// for every dispatch on it, the emission takes the site's binding
 // (`LowerMaxonToStd.associatedFormalType`, `Parser.associatedReturnThroughReceiverInstance`), and
-// `SemanticCheck.checkExistentialSiteClaimAtArgument` (E3127) refuses every conformer that would not keep
-// that claim. So the conformers' fold is never read for such a position and nothing about their disagreement
-// can reach the ABI. What is left for these two refusals is exactly the receivers that say NOTHING — a bare
-// `Taker` parameter, a constrained type parameter, a field load, a merge phi — which is the shape all three
-// of E3119's recorded failures have, and they stay refused.
+// `SemanticCheck.checkExistentialSiteClaimAtArgument` (E3127) refuses every conformer that would
+// not keep that claim. So the conformers' fold is never read for such a position and nothing about
+// their disagreement can reach the ABI. What is left for these two refusals is exactly the
+// receivers that say NOTHING — a bare `Taker` parameter, a constrained type parameter, a field
+// load, a merge phi — which is the shape all three of E3119's recorded failures have, and they stay
+// refused.
 //
 // ⚠ MEASURED, the corpus case the narrowing exists for: `stdlib/Array.maxon`'s
 // `from(source Iterable with (Element, Iterator with Element))` is the ONLY site in the listed stdlib that
@@ -212,12 +213,13 @@ let grantedEnumTypeParamNames = ByteArrayArray.create()
 // and `WithIterIterator` binds it to a tuple. Under the old rule that pair refused every program that listed
 // `stdlib/Array.maxon`, `for … in` included.
 //
-// ⚠ **DISPATCH IS THE GATE, AND WITHOUT IT THE CHECK FALSE-REJECTS A CORRECT PROGRAM.** Two conformers of one
-// interface are only in tension if a SHARED body is compiled against both; a program whose every call is
-// statically resolved has no shared body and no witness table to be wrong about. MEASURED: two conformers
-// binding `Element` to `float` and to `Integer`, every call direct, ran correctly (51) and was refused.
-// The compiler is whole-program, so which interfaces are dispatched is knowable exactly — `dispatchedInterfaceNames`
-// reads it off the ops the parser emitted.
+// ⚠ **DISPATCH IS THE GATE, AND WITHOUT IT THE CHECK FALSE-REJECTS A CORRECT PROGRAM.** Two
+// conformers of one interface are only in tension if a SHARED body is compiled against both; a
+// program whose every call is statically resolved has no shared body and no witness table to be
+// wrong about. MEASURED: two conformers binding `Element` to `float` and to `Integer`, every call
+// direct, ran correctly (51) and was refused. The compiler is whole-program, so which interfaces
+// are dispatched is knowable exactly — `dispatchedRequirementSlots` reads it off the ops the parser
+// emitted.
 //
 // ⚠ **BOTH ARE REFUSED ON EVERY TARGET, AND THE REGISTER TARGETS ARE WHY.** wasm traps `indirect call type
 // mismatch`, which is loud; x64-windows compiled every one of these clean and answered 1 for 51, 20 for 51,
@@ -260,10 +262,11 @@ function checkAssociatedTypeAbiAgreement(project Project, module MaxonModule, si
 	end 'eachInterface'
 end 'checkAssociatedTypeAbiAgreement'
 
-// ⭐⭐ **WHICH OBLIGATION ONE ASSOCIATED POSITION CARRIES — and they are alternatives, not a sequence.** A HELD
-// position answers to `checkOneHeldPosition` and to nothing else; every other position answers to E3119/E3120
-// behind the dispatch gate. One walk decides it, because the two paths need the same three facts and asking
-// twice is what let the gates drift apart in the first place.
+// ⭐⭐ **WHICH OBLIGATION ONE ASSOCIATED POSITION CARRIES — and they are alternatives, not a
+// sequence.** A HELD position answers to `checkHeldAssociatedTypeBindings` and to nothing else;
+// every other position answers to E3119/E3120 behind the dispatch gate. One walk decides it,
+// because the two paths need the same three facts and asking twice is what let the gates drift
+// apart in the first place.
 function checkOneAssociatedPosition(project Project, signatures ProgramSignatures, written DispatchedAssociatedNames, iface IrInterface, name ByteArray, position ElementIndex)
 	if let held = try signatures.associatedTypeHeldAt(iface.name, position: position) 'heldAtAnInterface'
 		checkHeldAssociatedTypeBindings(project, signatures: signatures, iface: iface, name: name, position: position, heldAt: held)
@@ -290,7 +293,7 @@ function checkOneAssociatedType(project Project, signatures ProgramSignatures, i
 end 'checkOneAssociatedType'
 
 // ⭐⭐ **THE WITNESS SLOTS THIS PROGRAM DISPATCHES, PER INTERFACE — AND, PER SLOT, HOW MUCH THE LEAST
-// INFORMATIVE RECEIVER SAYS (W59).** A slot index maps to the number of the dispatched interface's associated
+// INFORMATIVE RECEIVER SAYS.** A slot index maps to the number of the dispatched interface's associated
 // positions that EVERY receiver jumping through it fixed: a receiver declared `Taker with Integer` fixes one,
 // a bare `Taker` parameter or a constrained type parameter fixes none, and the entry keeps the MINIMUM,
 // because a position is only settled per-site if it is settled at EVERY site.
@@ -523,7 +526,7 @@ function dispatchedAssociatedNamesOf(interfaces IrInterfaceMap, dispatched Dispa
 	return DispatchedAssociatedNames.create(inAnAbiPosition, inAResult: inAResult)
 end 'dispatchedAssociatedNamesOf'
 
-// ⭐⭐ **IS `name` AN ASSOCIATED TYPE OF `iface` THAT THE DISPATCH SITES LEFT UNSETTLED? — the whole of W59's
+// ⭐⭐ **IS `name` AN ASSOCIATED TYPE OF `iface` THAT THE DISPATCH SITES LEFT UNSETTLED? — the whole
 // narrowing, in one predicate.** A name that is not associated at all answers no, exactly as `namesInclude`
 // did. An associated one answers no as well once EVERY receiver through this slot fixed its position, because
 // then the emission takes the SITE's binding (`LowerMaxonToStd.associatedFormalType` for the formal,
@@ -548,12 +551,13 @@ end 'unclaimedAssociatedPosition'
 // cause is that the parser must type the result while the interface is only a NAME, and a holding is exactly
 // that missing type — known program-wide, off the interface name, before any file parses.
 //
-// ⚠⚠ **AND IT IS GATED ON NEITHER OF THEIR GATES, WHICH IS THE WHOLE DIFFERENCE.** Not on DISPATCH: the
-// obligation is that `__witness_<binding>.<heldAt>` can be MINTED, and `stampAssociatedWitnessSlots` mints it
-// for every table this conformer gets — which a WIDENING alone is enough to demand. MEASURED as a COMPILER
-// PANIC while it was behind that gate (`witnessSlotImpl: no conformance selected a member for slot
-// 'Tally.Cursor.current'`), on a program that widened a non-conforming conformer into a held existential and
-// never called anything on it. Not on `requirementWritesTypeInAbiPosition` either: the slot is stamped from
+// ⚠⚠ **AND IT IS GATED ON NEITHER OF THEIR GATES, WHICH IS THE WHOLE DIFFERENCE.** Not on DISPATCH:
+// the obligation is that `__witness_<binding>.<heldAt>` can be MINTED, and
+// `stampAssociatedWitnessSlots` mints it for every table this conformer gets — which a WIDENING
+// alone is enough to demand. MEASURED as a COMPILER PANIC while it was behind that gate
+// (`witnessSlotImpl: no conformance selected a member for slot 'Tally.Cursor.current'`), on a
+// program that widened a non-conforming conformer into a held existential and never called anything
+// on it. Not on `dispatchedAssociatedNamesOf`'s `inAnAbiPosition` either: the slot is stamped from
 // the HOLDING, so a position no requirement writes still names a nested table.
 //
 // Asked PER CONFORMER rather than of the fold, because a held position is precisely where the fold's one
@@ -644,11 +648,12 @@ end 'checkAgreedBindingIsCarryable'
 // The admitted set is therefore "an unmanaged machine word", asked of the BINDING NAME because the resolved
 // type has already collapsed a struct and a ranged alias to the same `integer` (`renderedTypeNameAbiType`).
 //
-// ⚠ **AT A RECEIVER THAT DOES SAY WHICH BINDING IT HOLDS THE PARSER *CAN* NAME IT, WHICH IS WHY THIS IS NO
-// LONGER ASKED THERE (W59).** `Parser.associatedReturnThroughReceiverInstance` reads the site's own `with`
-// argument and types the result as that binding, ownership included, so the stated cause above is simply
-// false at such a position. The gate that keeps this refusal off them is `unclaimedAssociatedPosition`, one
-// walk up — the SAME gate E3119 gets, which is how these two go on keying on one set of facts.
+// ⚠ **AT A RECEIVER THAT DOES SAY WHICH BINDING IT HOLDS THE PARSER *CAN* NAME IT, WHICH IS WHY
+// THIS IS NOT ASKED THERE.** `Parser.associatedReturnThroughReceiverInstance` reads the site's own
+// `with` argument and types the result as that binding, ownership included, so the stated cause
+// above is simply false at such a position. The gate that keeps this refusal off them is
+// `unclaimedAssociatedPosition`, one walk up — the SAME gate E3119 gets, which is how these two go
+// on keying on one set of facts.
 function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, isDispatchedResult bool)
 	if bindingIsUnmanagedMachineWord(signatures, binding: binding) 'travelsAsAPlainWord'
 		return
@@ -725,20 +730,22 @@ end 'requirementTakesType'
 // `Point` declares `implements Digest`. Conformance is DECLARED (nominal), matching `checkConformance`'s model.
 export typealias DeclaredConformanceMap = Map with (ByteArray, InterfaceNameSet)
 
-// ⭐ **WHERE-CONSTRAINT VALIDATION AT INSTANTIATION (P1.7a slice 2a — E3017).** For every `typealias X = Base
-// with Args` whose base declares `where T is <Interface>` constraints, each concrete argument must conform to
-// (declare `implements`) the interface its parameter is constrained to — else E3017, anchored on the
-// instantiation. Runs AFTER `queryProgramSignatures` (the instances are interned by then) and reads the
-// DECLARED conformances `checkConformance` already validated (E3016), so a type reaching here as conforming has
-// a complete, correct implementation. A program with no constrained instantiation short-circuits allocation-free.
+// ⭐ **WHERE-CONSTRAINT VALIDATION AT INSTANTIATION (E3017).** For every `typealias X = Base with
+// Args` whose base declares `where T is <Interface>` constraints, each concrete argument must
+// conform to (declare `implements`) the interface its parameter is constrained to — else E3017,
+// anchored on the instantiation. Runs AFTER `queryProgramSignatures` (the instances are interned by
+// then) and reads the DECLARED conformances `checkConformance` already validated (E3016), so a type
+// reaching here as conforming has a complete, correct implementation. A program with no constrained
+// instantiation short-circuits allocation-free.
 //
-// ⭐⭐ **AN INSTANTIATION NEED NOT HAVE BEEN WRITTEN AS A `typealias`, AND THE ONE THAT IS NOT WAS THE ONE
-// GOING UNCHECKED (W41-lit).** `[k: v]` interns a `Map with (K, V)` from its first pair — a real
-// instantiation of a real constrained generic, with a real source position and no type name anywhere in the
-// program. The token SWEEP that fills `instantiationSites` reads `typealias` declarations, so it structurally
-// cannot see one; the PARSER records it instead (`Project.inferredInstantiationSites`). Both lists are walked
-// here, by one loop over one rule, because *"does this type argument satisfy the base's `where` clause"* is
-// one question and a second copy of it would be free to answer the literal differently from the alias.
+// ⭐⭐ **AN INSTANTIATION NEED NOT HAVE BEEN WRITTEN AS A `typealias`, AND THE ONE THAT IS NOT MUST
+// NOT GO UNCHECKED.** `[k: v]` interns a `Map with (K, V)` from its first pair — a real
+// instantiation of a real constrained generic, with a real source position and no type name
+// anywhere in the program. The token SWEEP that fills `instantiationSites` reads `typealias`
+// declarations, so it structurally cannot see one; the PARSER records it instead
+// (`Project.inferredInstantiationSites`). Both lists are walked here, by one loop over one rule,
+// because *"does this type argument satisfy the base's `where` clause"* is one question and a
+// second copy of it would be free to answer the literal differently from the alias.
 export function checkWhereConstraints(project Project, signatures ProgramSignatures)
 	let aliasSites = signatures.instantiationSites()
 
@@ -780,12 +787,13 @@ function checkInstantiationSites(project Project, signatures ProgramSignatures, 
 	end 'eachSite'
 end 'checkInstantiationSites'
 
-// ⭐ **`<Type> from "…"` REQUIRES `implements InitableFromStringLiteral` — checked HERE, at the merge, for
-// `checkWhereConstraints`' reason (BATCH2 slice 3).** The construction is sugar for `<Type>.init(<literal>)`
-// and the parser emits exactly that call; what it CANNOT decide at the construction site is whether the type
-// declares the conformance, because the clause is recorded when the type's own file is parsed and the two
-// files have no ordering. So the parser records the SITE (see `LiteralInitSite`) and the verdict is taken
-// here, off the one conformance store `checkConformance` validated.
+// ⭐ **`<Type> from "…"` REQUIRES `implements InitableFromStringLiteral` — checked HERE, at the
+// merge, for `checkWhereConstraints`' reason.** The construction is sugar for
+// `<Type>.init(<literal>)` and the parser emits exactly that call; what it CANNOT decide at the
+// construction site is whether the type declares the conformance, because the clause is recorded
+// when the type's own file is parsed and the two files have no ordering. So the parser records the
+// SITE (see `LiteralInitSite`) and the verdict is taken here, off the one conformance store
+// `checkConformance` validated.
 //
 // The diagnostic is `E3005: Type 'Wrapper' does not conform to InitableFromStringLiteral`, anchored
 // on the type-name token.
@@ -829,8 +837,8 @@ export function checkLiteralInitConformance(project Project)
 	end 'eachSite'
 end 'checkLiteralInitConformance'
 
-// Validate one instantiation site's every `where` constraint (P1.7a slice 2a). A base with no constraints
-// (the whole non-generic-witness corpus) iterates zero times.
+// Validate one instantiation site's every `where` constraint. A base with no constraints (the whole
+// non-generic-witness corpus) iterates zero times.
 function checkOneInstantiation(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite)
 	let baseName = signatures.genericInstanceBaseName(site.gid)
 
@@ -886,7 +894,7 @@ function checkOneAssociatedBinding(project Project, signatures ProgramSignatures
 	end 'heldAtAnInterface'
 
 	// ⭐⭐ **AN OPAQUE ARGUMENT IS A CLAIM ABOUT EACH INSTANTIATION, NOT ABOUT THE PROGRAM, SO IT IS DEFERRED TO
-	// THE WIDENING (W58, E3127).** The comparison below rests on the argument naming a TYPE, and the enclosing
+	// THE WIDENING (E3127).** The comparison below rests on the argument naming a TYPE, and the enclosing
 	// generic's own parameter does not: `typealias TakerOfT = Taker with T` inside `type Box uses T` says
 	// nothing that could agree or disagree with `Runner`'s `Integer` — it says something different at every
 	// `Box with X`, and `stdlib/Array.maxon`'s `Iterable with (Element, ElementIterator)` is the shape of it.
@@ -931,18 +939,18 @@ end 'requireWrittenBindingNamesTheHolding'
 function requireWrittenBindingMatchesConformers(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementIndex, conformer ConformanceDecl, binding ByteArray)
 	// The SOURCE spelling, which is the side a conformance's `withArgs` is also recorded in — comparing the
 	// compiled name against a source string would report a difference in RENDERING as a difference in type.
-	let written = signatures.instanceArgDisplayName(site.gid, position: position)
-
-	if written.equals(signatures.rangeScopedDeclaredName(binding, readerFilePath: conformer.filePath)) 'restatesTheSettledBinding'
+	if signatures.instanceArgBindingIdentity(site.gid, position: position).equals(signatures.rangeScopedDeclaredName(binding, readerFilePath: conformer.filePath)) 'restatesTheSettledBinding'
 		return
 	end 'restatesTheSettledBinding'
+
+	let written = signatures.instanceArgDisplayName(site.gid, position: position)
 
 	let name = try iface.associatedTypeNames.get(position) otherwise panic("requireWrittenBindingMatchesConformers: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the caller's loop bounds this position by that same list")
 	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{String.from(written)}', but '{String.from(conformer.typeName)}' binds it to '{String.from(binding)}' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 end 'requireWrittenBindingMatchesConformers'
 
-// Validate one STRUCT instantiation's every `where` constraint (P1.7a slice 2a). A base with no constraints
-// (the whole non-generic-witness corpus) iterates zero times.
+// Validate one STRUCT instantiation's every `where` constraint. A base with no constraints (the
+// whole non-generic-witness corpus) iterates zero times.
 function checkStructInstantiationConstraints(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite, baseName ByteArray)
 	let constraints = signatures.structWhereConstraints(baseName)
 
@@ -1072,7 +1080,7 @@ end 'suppliedConstraintBinding'
 // ⭐⭐ **DOES ONE `where` CONSTRAINT HOLD AT ONE INSTANTIATION? — THE VERDICT, ONCE, FOR THE TWO READERS THAT
 // DISAGREE ABOUT WHAT TO DO WITH IT.** `checkStructInstantiationConstraints` above REPORTS an unmet one
 // (E3017); `ProgramSignatures.instantiationViolatesItsOwnWhereClause` SUPPRESSES a downstream refusal that
-// would otherwise speak over it (W90). One rule, because a suppression that disagreed with the report about
+// would otherwise speak over it. One rule, because a suppression that disagreed with the report about
 // which instantiations are unsatisfiable would either silence a live refusal or let the masked one back in.
 //
 // ⚠⚠ **THE CONFORMANCE INDEX IS THE CALLER'S, and a SUPPRESSION MAY ONLY EVER PASS A SUPERSET OF WHAT THE
@@ -1080,7 +1088,7 @@ end 'suppliedConstraintBinding'
 // malformed project — see `checkWhereConstraints`); the suppression reads what a PURE parser can reach,
 // which is `ProgramSignatures.sweptConformanceIndex` ORed with
 // `ProgramSignatures.extensionDeclaredConformances`. The asymmetry is the whole rule and it is NOT
-// symmetric: a false `satisfied` at the suppression merely leaves the pre-W90 over-refusal standing, which
+// symmetric: a false `satisfied` at the suppression merely leaves an over-refusal standing, which
 // is loud; a false `unmet` withholds a refusal the report then does NOT raise, which is a program that
 // should be refused compiling in silence. The swept index ALONE is strictly weaker than the merged one — it
 // never holds an `extension <T> implements <I>` — and this header once argued the opposite direction was the
@@ -1091,7 +1099,7 @@ end 'suppliedConstraintBinding'
 // name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling.
 //
 // ⭐⭐ **AN OPAQUE TYPE ARGUMENT IS DISCHARGED BY ITS OWNER'S OWN `where` CLAUSE, NOT BY A CONFORMER
-// NAME (W41).** A generic body instantiating another constrained generic binds that callee's
+// NAME.** A generic body instantiating another constrained generic binds that callee's
 // constrained parameter to its OWN type parameter — `Map with (Key, Value)`'s body building a
 // `MapIterator with (Key, Value)`. `Key` is opaque, so it reduces to a MANGLED token no `implements`
 // claims, and the conformer test below refuses it: under dictionary-passing that refuses EVERY generic
@@ -1111,11 +1119,11 @@ export function instantiationMeetsConstraint(signatures ProgramSignatures, inter
 	return typeConformsTo(declared, interfaces: interfaces, typeName: conformerType, interfaceName: constraint.interfaceName, discovered: signatures.discoveredConformerOf(conformerType))
 end 'instantiationMeetsConstraint'
 
-// The ONE E3017 sentence, for the two arms that reach it — a CONCRETE argument whose type declares no
-// conformance, and an OPAQUE one whose owner declaration promises nothing (W41). Split out when the second
-// arm landed: one diagnostic written twice is one that comes to disagree with itself about which name it
-// blames, and the SOURCE-spelling half (`instanceArgDisplayName`, which keeps `IntWrapper` where the
-// comparison uses the canonical name) is exactly the half that would drift.
+// The ONE E3017 sentence, for the two arms that reach it — a CONCRETE argument whose type declares
+// no conformance, and an OPAQUE one whose owner declaration promises nothing. One diagnostic
+// written twice is one that comes to disagree with itself about which name it blames, and the
+// SOURCE-spelling half (`instanceArgDisplayName`, which keeps `IntWrapper` where the comparison
+// uses the canonical name) is exactly the half that would drift.
 function reportUnsatisfiedConstraint(project Project, signatures ProgramSignatures, site GenericInstantiationSite, constraint WhereConstraint, baseName ByteArray)
 	let sourceType = signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex)
 	reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "Type '{String.from(sourceType)}' does not satisfy constraint '{String.from(constraint.interfaceName)}' required by type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex as FieldIndex))}' of '{String.from(baseName)}'", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
@@ -1136,20 +1144,20 @@ function constrainedTypeParamName(signatures ProgramSignatures, baseName ByteArr
 	end 'base'
 end 'constrainedTypeParamName'
 
-// ⭐ **DOES `typeName` CONFORM TO `interfaceName`? THE ONE predicate every conformance site consults (P1.7a
-// slice 2b + P1.7b).** An intrinsic builtin-type conformance (`int`/`String` implements `Hashable`/`Equatable`,
-// synthesized natively) ORed with the user-declared registry — so "int conforms to Hashable" is decided in
-// exactly one place, never split between an intrinsic answer and a registry answer that could drift. `typeName`
-// is the CANONICAL conformer name (`conformerTypeArgName`); the registry is keyed by the declared struct name,
-// which a ranged-int alias's `int` or a `String` argument's `String` never collides with, so the OR is
-// unambiguous.
+// ⭐ **DOES `typeName` CONFORM TO `interfaceName`? THE ONE predicate every conformance site
+// consults.** An intrinsic builtin-type conformance (`int`/`String` implements
+// `Hashable`/`Equatable`, synthesized natively) ORed with the user-declared registry — so "int
+// conforms to Hashable" is decided in exactly one place, never split between an intrinsic answer
+// and a registry answer that could drift. `typeName` is the CANONICAL conformer name
+// (`conformerTypeArgName`); the registry is keyed by the declared struct name, which a ranged-int
+// alias's `int` or a `String` argument's `String` never collides with, so the OR is unambiguous.
 //
-// ⚠ **`discovered` IS THE INTRINSIC TABLE'S TWO PROGRAM-KEYED ROWS, AND EVERY CALLER DERIVES IT THROUGH
-// `ProgramSignatures.discoveredConformerOf` (ARR6, enum-hashable)** — never by comparing against a name of
-// its own. The array row's key is the spelling the CORPUS declares the record under, discovered from the
-// `BuiltinArrayLiteral` marker; the enum row's is whatever the author named their `enum`. Both are the same
-// discovered answer `conformerNameOfType` already reduced `typeName` to. Asking one home means the reduction
-// and the rows cannot come to disagree about which conformer a name is.
+// ⚠ **`discovered` IS THE INTRINSIC TABLE'S TWO PROGRAM-KEYED ROWS, AND EVERY CALLER DERIVES IT
+// THROUGH `ProgramSignatures.discoveredConformerOf`** — never by comparing against a name of its
+// own. The array row's key is the spelling the CORPUS declares the record under, discovered from
+// the `BuiltinArrayLiteral` marker; the enum row's is whatever the author named their `enum`. Both
+// are the same discovered answer `conformerNameOfType` already reduced `typeName` to. Asking one
+// home means the reduction and the rows cannot come to disagree about which conformer a name is.
 export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray, discovered DiscoveredConformer) returns bool
 	if isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName, discovered: discovered) 'intrinsic'
 		return true
@@ -1192,7 +1200,7 @@ export function receiverMeetsExtensionConstraints(signatures ProgramSignatures, 
 end 'receiverMeetsExtensionConstraints'
 
 // ⭐⭐ **HOW AN OPAQUE TYPE PARAMETER DISCHARGES A CONSTRAINT — the ONE answer, read by the CHECK that
-// accepts the program and by the LOWERING that supplies the witness pointer (W41).**
+// accepts the program and by the LOWERING that supplies the witness pointer.**
 //
 // Under dictionary-passing a generic body is compiled ONCE over an opaque `T`, so a call it makes into
 // another constrained generic binds that callee's constrained parameter to `T` itself. There is no concrete
@@ -1312,7 +1320,7 @@ export union ExtensionConstraintCheck
 	unmet(interfaceName ByteArray, bindingName ByteArray)
 end 'ExtensionConstraintCheck'
 
-// Does this verdict mean the extension gives the conformer NOTHING — no methods, and (W3) no nested
+// Does this verdict mean the extension gives the conformer NOTHING — no methods, and no nested
 // typealiases either? The bool the union deliberately is not, for the one caller that needs the verdict
 // WITHOUT the names: `Parser.foldExtensionDeclarationInto` publishes an extension body's aliases only for the
 // conformers the extension actually reaches, and has no diagnostic to fill in. Asked through this rather
@@ -1329,7 +1337,7 @@ end 'extensionMethodsWithheld'
 // separately refuses (E3016 names the unbound associated type), so it is a phrase and never a type name.
 let UnboundAssociatedTypePhrase = b"(nothing)"
 
-// ⭐ **A CONFORMER'S `with` BINDINGS, OR NOTHING — THE POSITIONAL-PAIRING GATE (W43).** Every reader of
+// ⭐ **A CONFORMER'S `with` BINDINGS, OR NOTHING — THE POSITIONAL-PAIRING GATE.** Every reader of
 // `StructLayout.conformanceBindings` pairs it against the interface's associated-type names BY INDEX, so a
 // list of a different LENGTH has no positional meaning at all: reading position `i` out of it answers about
 // a neighbour rather than about the name it was asked for. Emptying it is what makes the two readers agree —
@@ -1371,11 +1379,12 @@ export function checkExtensionConstraints(signatures ProgramSignatures, constrai
 	return ExtensionConstraintCheck.satisfied
 end 'checkExtensionConstraints'
 
-// ⭐ **THE DECLARED-CONFORMANCE INDEX, BUILT ONCE PER COMPILE (P1.7a-existentials slice 1).** Three passes
-// now ask "does this type conform?" — the E3017 where-constraint check, the `<Type> from "…"` check, and the
-// EXISTENTIAL widening doors, which ask it once per interface-typed argument, assignment, field store and
-// return in the program. Rebuilding the map at each of those would be O(sites x declarations); memoizing it
-// on the `Project` beside the store it is derived from makes it one build and one lookup.
+// ⭐ **THE DECLARED-CONFORMANCE INDEX, BUILT ONCE PER COMPILE.** Three passes now ask "does this
+// type conform?" — the E3017 where-constraint check, the `<Type> from "…"` check, and the
+// EXISTENTIAL widening doors, which ask it once per interface-typed argument, assignment, field
+// store and return in the program. Rebuilding the map at each of those would be O(sites x
+// declarations); memoizing it on the `Project` beside the store it is derived from makes it one
+// build and one lookup.
 //
 // ⚠ It resets in `resetMergeTargets`, with `conformances` — the store it is derived from — for
 // `WitnessSlotImplMap`'s reason stated in full there: a warm rebuild whose sources changed which types
@@ -1391,8 +1400,7 @@ export function declaredConformanceIndex(project Project) returns DeclaredConfor
 	return project.declaredConformances
 end 'declaredConformanceIndex'
 
-// ⭐⭐ **MAY A VALUE OF `valueType` STAND WHERE AN `interfaceRef` IS DECLARED? — THE WIDENING DOOR
-// (P1.7a-existentials slice 1).**
+// ⭐⭐ **MAY A VALUE OF `valueType` STAND WHERE AN `interfaceRef` IS DECLARED? — THE WIDENING DOOR.**
 //
 // ⚠ **ONE CALLER, AND IT SERVES EVERY WIDENING POSITION: `SemanticCheck.existentialWideningVerdict`.** A
 // call ARGUMENT, a `return` into an interface-typed return and a store into an interface-typed FIELD all
@@ -1474,9 +1482,8 @@ function copyDeclaredInterfaces(declared DeclaredConformanceMap, typeName ByteAr
 	end 'declaredEarlierToo'
 end 'copyDeclaredInterfaces'
 
-// Does `typeName` declare `implements interfaceName`, DIRECTLY OR THROUGH `extends` (P1.7a slice 2a; made
-// transitive by P1.7a-existentials slice 1)? A type with no conformance declaration answers false — the E3017
-// case.
+// Does `typeName` declare `implements interfaceName`, DIRECTLY OR THROUGH `extends`? A type with no
+// conformance declaration answers false — the E3017 case.
 //
 // ⚠ **THE `extends` WALK IS WHY IT TAKES THE INTERFACE REGISTRY**, and the walk itself is
 // `IrInterface.declaredInterfacesReach` — the ONE list-level home, shared with
@@ -1497,7 +1504,7 @@ end 'typeDeclaresInterface'
 // Check one `implements I1, I2` declaration against each named interface.
 function checkOneConformance(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, signatures ProgramSignatures)
 	// The conforming type's own `uses` names — the list a `typeParameter(token)` in one of its methods is
-	// re-spelled against (`typeParamPositionIn`, W14: a token is a digest of `(declaring type, parameter)`,
+	// re-spelled against (`typeParamPositionIn`: a token is a digest of `(declaring type, parameter)`,
 	// not an index, so the position is recovered by re-spelling and never by subscripting this list), read
 	// ONCE per declaration rather than per rendered type (it is a map lookup, and it does not vary).
 	//
@@ -1528,7 +1535,7 @@ function checkOneConformance(project Project, functionsByName FunctionNameIndex,
 end 'checkOneConformance'
 
 // ⭐ **EVERY ASSOCIATED TYPE THE INTERFACE DECLARES MUST BE BOUND, AND THAT IS ASKED BEFORE ANY SIGNATURE
-// IS COMPARED (R5).** `type Broken implements HasElement` against `interface HasElement uses Element`
+// IS COMPARED.** `type Broken implements HasElement` against `interface HasElement uses Element`
 // leaves `Element` denoting nothing, so every requirement mentioning it would be reported as a WRONG
 // SIGNATURE — the consequence of the mistake rather than the mistake, and a message telling the author to
 // change a method that is already right. A spec pins the sentence.
@@ -1538,7 +1545,7 @@ end 'checkOneConformance'
 // than listing all of them is right: a missing binding is written
 // at a single site the author fixes in one edit.
 //
-// ⚖ **A SURPLUS ARGUMENT IS NOT DIAGNOSED *HERE*, AND AFTER R6 THAT IS A STATEMENT ABOUT THE TIER RATHER
+// ⚖ **A SURPLUS ARGUMENT IS NOT DIAGNOSED *HERE*, AND THAT IS A STATEMENT ABOUT THE TIER RATHER
 // THAN ABOUT THE RULE.** The rule now splits on the SPELLING — `implements One with (Integer, Float)` against
 // `interface One uses A` is refused (**E2066**, `Parser.checkParenthesizedConformanceArgs`), while the same
 // surplus written WITHOUT parentheses is still ignored. That split cannot be made at this tier and never
@@ -1627,7 +1634,7 @@ end 'checkInterfaceMethods'
 // the other two lack is exactly how the three part. Order, the diamond rule and the cyclic-chain guard
 // are stated there, once.
 //
-// ⭐⭐ **WHAT STAYS HERE IS THE SUBSTITUTION, AND IT IS THE ONLY PLACE ASSOCIATED TYPES ARE SUBSTITUTED (R5).** A
+// ⭐⭐ **WHAT STAYS HERE IS THE SUBSTITUTION, AND IT IS THE ONLY PLACE ASSOCIATED TYPES ARE SUBSTITUTED.** A
 // collected requirement is ALREADY substituted, so the two things that read one — `signatureMatches`, which
 // decides the verdict, and `formatInterfaceMethodSignature`, which writes the sentence — are reading one
 // string rather than each deriving their own. Substituting at two sites instead would let a
@@ -1636,14 +1643,12 @@ end 'checkInterfaceMethods'
 // which is why `error.extends.wrong-signature-under-an-inherited-binding-names-the-substituted-type` asserts
 // the SENTENCE of a still-rejected program and not merely its code.
 //
-// ⭐⭐ **A REQUIREMENT IS SUBSTITUTED UNDER TWO PAIRS, NOT ONE, AND THE SECOND IS W60's WHOLE CONTENT.**
-// The CLAUSE pair is the entry the walk started from — the pre-existing rule, and it is the one that
-// survives verbatim: an `extends` parent that RE-DECLARES the same `uses` NAME is substituted by it,
-// because substitution is by name and that spelling is the only vocabulary the two interfaces share
-// (`interface Derived extends Base uses Element`, which
+// ⭐⭐ **A REQUIREMENT IS SUBSTITUTED UNDER TWO PAIRS, NOT ONE.** The CLAUSE pair is the entry the
+// walk started from: an `extends` parent that RE-DECLARES the same `uses` NAME is substituted by
+// it, because substitution is by name and that spelling is the only vocabulary the two interfaces
+// share (`interface Derived extends Base uses Element`, which
 // `associated-types.extends-projected-associated-type-single-conformer` writes and which a
-// declaring-interface-only rule REGRESSES — measured, mid-rung, as
-// `E3016 … take(e float) (expected take(e Element))`).
+// declaring-interface-only rule refuses with `E3016 … take(e float) (expected take(e Element))`).
 //
 // The DECLARING pair is consulted for what the clause pair does not spell: a name introduced by an
 // ANCESTOR that the root interface does not re-declare is bound by this same type's conformance to that
@@ -1661,7 +1666,7 @@ end 'checkInterfaceMethods'
 // ⛔ **THE MISSING HALF WAS INVISIBLE BECAUSE TWO INDIVIDUALLY-CORRECT RULES NEVER MET.**
 // `Parser.conformanceUsesArity` counts an interface's OWN `uses` names and deliberately not its inherited
 // ones, so for `implements … BiCursor` the root's `associatedTypeNames` is EMPTY and the guard below took
-// the "nothing to substitute" path — while the slot list it hands back has, since R10c, included every
+// the "nothing to substitute" path — while the slot list it hands back includes every
 // requirement `Cursor` declares. MEASURED: `type Walker implements Cursor with Pos, BiCursor` was
 // `E3016 … current() returns Pos (expected current() returns Element)`, and striking `, BiCursor` — which
 // REMOVES a conformance — made the same program compile and print 7. Conforming to a DESCENDANT destroyed
@@ -1674,11 +1679,11 @@ end 'checkInterfaceMethods'
 // belongs here: a name no entry of this clause binds is left denoting ITSELF, which is what
 // `error.inherited-uses-name-unparenthesized-is-still-a-signature-error` pins.
 //
-// ⭐⭐ **AND AN INTERFACE-SCOPED `typealias` IS EXPANDED AT THIS SAME DOOR (W61).** `function absorb(value
+// ⭐⭐ **AND AN INTERFACE-SCOPED `typealias` IS EXPANDED AT THIS SAME DOOR.** `function absorb(value
 // ElementArray)` inside `interface Holder uses Element` renders its parameter as the unresolved name
 // `Holder.ElementArray`, while every conformer's own alias renders a RESOLVED `Array_…` — so the two sides
 // of one requirement were compared as an unresolved name against an instance and every conformer was
-// refused. Expansion belongs HERE and not at a second site for R5's reason above: the expanded name is what
+// refused. Expansion belongs HERE and not at a second site for the reason above: the expanded name is what
 // the verdict compares AND what the diagnostic prints.
 //
 // ⚠ **EXPAND FIRST, THEN SUBSTITUTE — the order is not a preference, the reverse is undefined.** Before
@@ -1688,17 +1693,18 @@ end 'checkInterfaceMethods'
 // compose rather than each having its own idea of what a name means.
 //
 // ⚠ **THE FAST PATH IS TWO CONDITIONS NOW, AND BOTH ARE EXACT.** "This clause binds nothing" has to
-// replace "the ROOT interface declares no associated type", which is precisely the wrong question after the
-// W60 paragraph: asking whether ANY entry wrote a `with` argument is one pass over a handful of entries,
-// allocates nothing, needs no interface lookup, and is sufficient by construction, since every binding this
-// function can apply comes from one of those lists. But a clause that binds nothing can still need
-// EXPANSION — `interface Sink` with `typealias Bytes = Array with Byte` and no `uses` at all was equally
-// broken (measured) — so `anySlotDeclarerHasAnAlias` rides beside it. That one is asked PER DECLARING
-// INTERFACE and not program-wide, for the reason its own header gives: `stdlib/Builtins.maxon` declares an
-// alias, so a program-wide bool is true for every program that loads the stdlib and would put every
-// conformance in the corpus back on the substituting path. Both conditions fail for every conformance
-// outside this rung's cases and the two stdlib literal-init conformers, and the slot list is handed
-// straight back.
+// replace "the ROOT interface declares no associated type", which is precisely the wrong question
+// after the two-pair paragraph: asking whether ANY entry wrote a `with` argument is one pass over a
+// handful of entries, allocates nothing, needs no interface lookup, and is sufficient by
+// construction, since every binding this function can apply comes from one of those lists. But a
+// clause that binds nothing can still need EXPANSION — `interface Sink` with `typealias Bytes =
+// Array with Byte` and no `uses` at all was equally broken (measured) — so
+// `anySlotDeclarerHasAnAlias` rides beside it. That one is asked PER DECLARING INTERFACE and not
+// program-wide, for the reason its own header gives: `stdlib/Builtins.maxon` declares an alias, so
+// a program-wide bool is true for every program that loads the stdlib and would put every
+// conformance in the corpus back on the substituting path. Both conditions fail for every
+// conformance outside the shapes above and the two stdlib literal-init conformers, and the slot
+// list is handed straight back.
 function collectInterfaceMethods(project Project, signatures ProgramSignatures, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray) returns CollectedInterfaceMethodArray
 	let slots = interfaceWitnessSlots(project.interfaces, iface: iface)
 
@@ -1821,13 +1827,12 @@ function boundConformanceFor(conformance ConformanceDecl, entry InterfaceConform
 	return InterfaceConformance.withoutBindings(interfaceName)
 end 'boundConformanceFor'
 
-// ⛔ **A NAME LIST WITH NO ARGUMENT LIST TO PAIR AGAINST BINDS NOTHING — AND IT IS THE *NAMES* THAT MUST BE
-// EMPTIED, NOT THE ARGUMENTS.** `boundTypeName` is driven by the NAME list, so a short argument list left
-// beside a full name list is not "no substitution", it is a subscript past the end of the arguments:
-// MEASURED as `panic: boundTypeName: boundTypeNames.get OOB at 0 below associated-type count 1` on the
-// harness's own `refusal/runtime-name-parsed-from-source` fixture, from the first cut of this rung which
-// emptied the arguments instead. `pairableConformanceBindings` states the same positional rule for the
-// registry copy of these lists, and states why a list of a different length has no positional meaning at all.
+// ⛔ **A NAME LIST WITH NO ARGUMENT LIST TO PAIR AGAINST BINDS NOTHING — AND IT IS THE *NAMES* THAT
+// MUST BE EMPTIED, NOT THE ARGUMENTS.** `boundTypeName` is driven by the NAME list, so a short
+// argument list left beside a full name list is not "no substitution", it is a subscript past the
+// end of the arguments. `pairableConformanceBindings` states the same positional rule for the
+// registry copy of these lists, and states why a list of a different length has no positional
+// meaning at all.
 //
 // The gate is a no-op for the entry being checked — `checkOneInterfaceConformance` reported a short one and
 // returned before any requirement was collected — and it is what makes it true for a SIBLING entry too,
@@ -1837,7 +1842,7 @@ function pairableAssociatedTypeNames(associatedTypeNames ByteArrayArray, boundTy
 	return sharedEmptyDeclaredConformances if boundTypeNames.count() < associatedTypeNames.count() else associatedTypeNames
 end 'pairableAssociatedTypeNames'
 
-// One requirement with every associated type replaced by what the conformance bound it to (R5) — the
+// One requirement with every associated type replaced by what the conformance bound it to — the
 // substitution the header above says happens exactly once. The two pairs are threaded as four arrays rather
 // than merged into one, because merging them is not free of meaning: their lengths are what pairs them
 // positionally, so a concatenation would have to be two arrays anyway, and it would allocate a pair per
@@ -1865,23 +1870,21 @@ function boundTypeName(name ByteArray, under RequirementSubstitution) returns By
 		return bound
 	end 'anAssociatedTypeOfEitherPair'
 
-	// ⭐ **A NAME NEITHER PAIR SPELLS MAY STILL BE THE DECLARING INTERFACE'S OWN `typealias` (W61).** It is
+	// ⭐ **A NAME NEITHER PAIR SPELLS MAY STILL BE THE DECLARING INTERFACE'S OWN `typealias`.** It is
 	// asked LAST because the lookup above is what its own expansion is defined in terms of: an associated type
 	// resolves to a binding, and only then does the alias's right-hand side mean anything. An interface that
 	// declares no alias, and a name that is not one of its members, fall straight through to the name itself —
-	// which is every requirement in the corpus outside this rung's cases.
+	// which is every requirement in the corpus outside the shapes above.
 	return try expandedInterfaceAlias(name, under: under) otherwise return name
 end 'boundTypeName'
 
-// ⛔ **THE ASSOCIATED-TYPE HALF ALONE, AND IT IS A SEPARATE FUNCTION TO MAKE THE RECURSION IMPOSSIBLE RATHER
-// THAN MERELY UNREACHED.** The expansion below resolves the declaring interface's `uses` names through this
-// door, and the first cut of this rung had it call `boundTypeName` — whose last act is to expand. Every name
-// that reached the expansion therefore re-entered it, rebuilding the same spelling list for ever: **MEASURED
-// as `panic: stack overflow … in Compiler.expandedInterfaceAlias / in Compiler.boundTypeName`, on all four
-// W61 shapes at once.** That cut's header argued the recursion was bounded "by construction" because an
-// associated type is found by one of the two pair lookups — an argument true only while both pairs are
-// non-empty, which `pairableAssociatedTypeNames` exists to make false. A structure that CANNOT recurse needs
-// no such argument.
+// ⛔ **THE ASSOCIATED-TYPE HALF ALONE, AND IT IS A SEPARATE FUNCTION TO MAKE THE RECURSION
+// IMPOSSIBLE RATHER THAN MERELY UNREACHED.** The expansion below resolves the declaring interface's
+// `uses` names through this door. Calling `boundTypeName` here instead — whose last act is to
+// expand — would send every name that reached the expansion back into it, rebuilding the same
+// spelling list for ever. The recursion is not bounded "by construction" by the two pair lookups:
+// that holds only while both pairs are non-empty, which `pairableAssociatedTypeNames` exists to
+// make false. A structure that CANNOT recurse needs no such argument.
 function boundAssociatedTypeName(name ByteArray, under RequirementSubstitution) returns ByteArray
 	if let clausePosition = try namePositionIn(under.clauseNames, name: name) 'boundByTheClause'
 		return try under.clauseArgs.get(clausePosition) otherwise panic("boundAssociatedTypeName: clauseArgs.get OOB at {clausePosition} below name count {under.clauseNames.count()} — `pairableAssociatedTypeNames` empties the NAME list whenever the arguments cannot pair with it positionally, so a name reaching this point always has an argument at its own index")
@@ -1923,19 +1926,20 @@ end 'substituteThrowsClause'
 // Check ONE interface method against the conforming type: absent -> `missing`, present but mismatched ->
 // `wrongSignature`. A missing method's expected signature is tagged `(from Parent)` when it was inherited.
 //
-// ⭐⭐ **A REQUIREMENT IS MATCHED AGAINST EVERY MEMBER DECLARED UNDER ITS NAME, NOT AGAINST WHICHEVER ONE
-// HOLDS THE BARE KEY (R10).** Under D7 only the FIRST declaration of a name registers as `Type.method`; a
-// later overload is `Type.method#Suffix`. A lookup by the bare name alone therefore made CONFORMANCE DEPEND
-// ON MEMBER DECLARATION ORDER — `label()` beside `label(extra Code)` satisfied `Named.label()` when it was
-// written first and was rejected as a wrong signature when it was written second, with a message naming the
-// member that is not even the candidate.
+// ⭐⭐ **A REQUIREMENT IS MATCHED AGAINST EVERY MEMBER DECLARED UNDER ITS NAME, NOT AGAINST WHICHEVER
+// ONE HOLDS THE BARE KEY.** Only the FIRST declaration of a name registers as `Type.method`; a
+// later overload is `Type.method#Suffix`. A lookup by the bare name alone would make CONFORMANCE
+// DEPEND ON MEMBER DECLARATION ORDER — `label()` beside `label(extra Code)` would satisfy
+// `Named.label()` when written first and be rejected as a wrong signature when written second, with
+// a message naming the member that is not even the candidate.
 //
-// ⚠ **THE OVERLOADED CASE IS SPLIT OFF AND PAYS FOR ITSELF ALONE, and that is measured rather than tidy.**
-// Materializing a candidate list and a match list for EVERY requirement would allocate two arrays per
-// conforming method of every program that declares any conformance — the same per-conforming-method cost
-// `validateThrowsConformance`'s header records scale-test reading straight off a 16-byte union box
-// (+16 … +264 allocations across the six rungs). A name that is not in `overloadSets` — every method in the
-// corpus outside this rung's cases — takes the arm below and allocates nothing it did not allocate before.
+// ⚠ **THE OVERLOADED CASE IS SPLIT OFF AND PAYS FOR ITSELF ALONE, and that is measured rather than
+// tidy.** Materializing a candidate list and a match list for EVERY requirement would allocate two
+// arrays per conforming method of every program that declares any conformance — the same
+// per-conforming-method cost `validateThrowsConformance`'s header records scale-test reading
+// straight off a 16-byte union box (+16 … +264 allocations across the six rungs). A name that is
+// not in `overloadSets` — every method that is not overloaded — takes the arm below and allocates
+// nothing.
 function checkOneMethod(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, rootInterfaceName ByteArray, typeParamNames ByteArrayArray, signatures ProgramSignatures, missing StringArray, wrongSignature StringArray)
 	let method = collectedMethod.method
 	let qualifiedName = qualifiedMethodName(conformance.typeName, methodName: method.name)
@@ -1986,7 +1990,7 @@ function grantedConformanceServes(signatures ProgramSignatures, conformerName By
 end 'grantedConformanceServes'
 
 // The requirement's name is OVERLOADED: match it against every live member of the set and accept it when
-// EXACTLY ONE matches (R10).
+// EXACTLY ONE matches.
 //
 // ⚠ **EXACTLY ONE, because a witness slot holds exactly one address.** Two members can genuinely match one
 // requirement — an overload set whose members differ only in a parameter NAME, or in a type the renderer
@@ -2024,7 +2028,7 @@ function checkOverloadedMembers(project Project, functionsByName FunctionNameInd
 end 'checkOverloadedMembers'
 
 // ⭐⭐ **THE ONE PLACE A REQUIREMENT IS DECLARED SATISFIED — and the place the WITNESS TABLE learns by which
-// member (R10).** The selection is filed under the slot's own key so `ensureWitnessTable` stamps the
+// member.** The selection is filed under the slot's own key so `ensureWitnessTable` stamps the
 // relocation from THIS answer rather than re-joining `<Type>.<method>` for itself; see `WitnessSlotImplMap`
 // for the silent wrong dispatch that second derivation was.
 //
@@ -2036,17 +2040,16 @@ function acceptConformingMember(project Project, functionsByName FunctionNameInd
 	validateThrowsConformance(project, signatures: signatures, conformance: conformance, collectedMethod: collectedMethod, implFunc: implFunc)
 end 'acceptConformingMember'
 
-// File the accepted member under its witness slot's key (R10). An entry already present must AGREE: two
+// File the accepted member under its witness slot's key. An entry already present must AGREE: two
 // conformances of one type routinely reach the same `(conformer, interface, method)` slot — `implements Sub,
 // Base` where `Sub extends Base` collects Base's requirements twice — and they normally select identically,
 // because the selection is a function of the conformer and the requirement's SUBSTITUTED signature alone.
 //
-// ⭐⭐ **A DISAGREEMENT IS THE AUTHOR'S, NOT THE COMPILER'S, AND IT PANICKED UNTIL THE R10 REVIEW.** The
-// substituted signature is exactly what an associated-type binding varies, so two routes to one slot that
-// bind that interface's `uses` names differently compare DIFFERENT requirements under one key and can select
-// different members. Both spellings are ordinary source and both were rejected cleanly as E3016 before R10
-// (the bare key could satisfy only one of the two requirements, so the other reported a wrong signature) —
-// matching a requirement against the whole overload set is what lets both routes SUCCEED and disagree:
+// ⭐⭐ **A DISAGREEMENT IS THE AUTHOR'S, NOT THE COMPILER'S.** The substituted signature is exactly
+// what an associated-type binding varies, so two routes to one slot that bind that interface's
+// `uses` names differently compare DIFFERENT requirements under one key and can select different
+// members. Both spellings are ordinary source, and matching a requirement against the whole
+// overload set is what lets both routes SUCCEED and disagree:
 //
 //   • `implements Conv with Whole, Conv with Real` — one interface named twice, bound two ways.
 //   • `implements Child with Whole, Parent with Real`, `interface Child extends Parent uses Item` — reaches
@@ -2121,12 +2124,12 @@ function conformanceImplSignature(project Project, name ByteArray) returns FuncS
 	return try project.funcSignatures.get(name) otherwise panic("conformanceImplSignature: '{String.from(name)}' is in the module but has no funcSignatures entry")
 end 'conformanceImplSignature'
 
-// ⭐ **THE WRONG-SIGNATURE LINE FOR AN OVERLOADED NAME MUST NOT SPEAK AS THOUGH ONE CANDIDATE EXISTED
-// (R10).** E3016's line is `<actual> (expected <required>)`, which is exactly right for a name declared
-// once — and a lie for a set of two, where naming whichever member held the bare key told the author to
-// change a method that may be perfectly correct. Both arms therefore say HOW MANY members carry the name and
-// render all of the ones that matter: every candidate when none matches, and only the tied ones when several
-// do (the others are irrelevant to an ambiguity).
+// ⭐ **THE WRONG-SIGNATURE LINE FOR AN OVERLOADED NAME MUST NOT SPEAK AS THOUGH ONE CANDIDATE
+// EXISTED.** E3016's line is `<actual> (expected <required>)`, which is exactly right for a name
+// declared once — and a lie for a set of two, where naming whichever member held the bare key would
+// tell the author to change a method that may be perfectly correct. Both arms therefore say HOW
+// MANY members carry the name and render all of the ones that matter: every candidate when none
+// matches, and only the tied ones when several do (the others are irrelevant to an ambiguity).
 function overloadMismatchLine(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, functionsByName FunctionNameIndex, candidates ByteArrayArray, matched ByteArrayArray, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns String
 	let method = collectedMethod.method
 	let expected = formatInterfaceMethodSignature(collectedMethod.displayMethod)
@@ -2155,11 +2158,11 @@ function renderMemberSignatures(project Project, conformance ConformanceDecl, me
 	return rendered
 end 'renderMemberSignatures'
 
-// ⭐⭐ **THE THROWS RELATION BETWEEN AN INTERFACE METHOD AND ITS IMPL, CHECKED IN BOTH DIRECTIONS (P1.7a
-// slice 2b-v).** A witness dispatch picks its ABI from the INTERFACE — a `throws` method is dispatched as
-// the dual-register `witnessTryCall`, a non-throwing one as the single-register `witnessCall` — while the
-// callee returns through the ABI its OWN declaration chose. The two must agree, and only this check can
-// make them:
+// ⭐⭐ **THE THROWS RELATION BETWEEN AN INTERFACE METHOD AND ITS IMPL, CHECKED IN BOTH DIRECTIONS.**
+// A witness dispatch picks its ABI from the INTERFACE — a `throws` method is dispatched as the
+// dual-register `witnessTryCall`, a non-throwing one as the single-register `witnessCall` — while
+// the callee returns through the ABI its OWN declaration chose. The two must agree, and only this
+// check can make them:
 //
 //   • impl does not throw where the interface does. The `try` at the dispatch would
 //     branch on an error-flag register the callee never wrote, i.e. on whatever the ABI left in R10.
@@ -2180,7 +2183,7 @@ end 'renderMemberSignatures'
 //     pointer and SEGFAULT. `checkPropagateType`'s E3059 cannot see it — that check compares the INTERFACE's
 //     clause against the enclosing function's, and those two agree in exactly this program.
 //
-// ⭐⭐ **THE THIRD RULE HAS ONE EXEMPTION, AND IT IS THE ONE `Error` EXISTS FOR (A1s).** `stdlib`'s own
+// ⭐⭐ **THE THIRD RULE HAS ONE EXEMPTION, AND IT IS THE ONE `Error` EXISTS FOR.** `stdlib`'s own
 // `interface Parsable` declares `static function fromString(input String) returns Self throws Error`, and
 // every conformer in the corpus throws its own concrete error enum — an impl being MORE SPECIFIC than the
 // requirement. The rule above is stated as "the same NAME", but the fact it protects is "the same DECODE":
@@ -2191,16 +2194,17 @@ end 'renderMemberSignatures'
 // wrong. `throwsRequirementIsAbstract` is where same-name stops standing in for same-decode.
 //
 // ⚠ **THE FLAG SHAPE STILL HAS TO AGREE, so the exemption reaches only a SCALAR impl error**
-// (`requireImplErrorIsANarrowableError`). An abstract requirement is caught through the `ordinal + ErrorFlagOrdinalBias`
-// ABI — `Parser.throwsTypeIsBoxedUnion` answers `false` for a name in no enum registry — while a
-// payload-carrying union hands its error over as a heap BOX POINTER. The plain direct-call spelling of
-// that pair (`function f() returns Code throws Error` throwing a boxed union) exits 101 with a leaked
-// box. The witness-dispatch route into it is refused here rather
-// than opening a second door to it; the FIRST door was shut by A1s-throwsbox, whose E3113
-// (`SemanticCheck.checkThrowsClausesNameDeclaredErrors`) requires a FUNCTION's own clause to name a declared
-// enum or union. The two checks own disjoint sides — this one the relation between a requirement and its
-// impl, that one a function's own clause — so an impl method reaches both, and reaches THIS one first
-// (`checkConformance` runs before the pipeline) because only it can name the requirement being violated.
+// (`requireImplErrorIsANarrowableError`). An abstract requirement is caught through the `ordinal +
+// ErrorFlagOrdinalBias` ABI — `Parser.throwsTypeIsBoxedUnion` answers `false` for a name in no enum
+// registry — while a payload-carrying union hands its error over as a heap BOX POINTER. The plain
+// direct-call spelling of that pair (`function f() returns Code throws Error` throwing a boxed
+// union) exits 101 with a leaked box. The witness-dispatch route into it is refused here rather
+// than opening a second door to it; the FIRST door is shut by E3113
+// (`SemanticCheck.checkThrowsClausesNameDeclaredErrors`) requires a FUNCTION's own clause to name a
+// declared enum or union. The two checks own disjoint sides — this one the relation between a
+// requirement and its impl, that one a function's own clause — so an impl method reaches both, and
+// reaches THIS one first (`checkConformance` runs before the pipeline) because only it can name the
+// requirement being violated.
 //
 // Split on the INTERFACE's clause first: each side then asks a different question of the impl's, and both
 // answers come out of a `match` on it rather than a boolean pair, so a clause is never re-extracted behind an
@@ -2238,15 +2242,16 @@ function requireImplThrowsSameType(project Project, signatures ProgramSignatures
 end 'requireImplThrowsSameType'
 
 // Both sides throw: they must name the same error type — unless the REQUIREMENT is ABSTRACT, which is the
-// one narrowing the header above exempts (A1s). Split out because the comparison is a labelled `if`, which a
+// one narrowing the header above exempts. Split out because the comparison is a labelled `if`, which a
 // `match` arm cannot hold inline (the shape `rejectIfDifferentThrows` is split for).
 //
-// ⚠ **THE EXEMPTION IS ASKED ONLY AFTER THE NAMES DISAGREE, and that placement is the whole of its cost.**
-// An agreeing pair — every conformance in the corpus that does not narrow, and every one in the scale ladder
-// — returns above without asking either question, so this rung adds no allocation to any program that
-// compiled before it. Both questions below box a union (`InterfaceLookup`, `DeclaredEnum`), which the header
-// of `validateThrowsConformance` records scale-test reading straight off a per-conforming-method box; here
-// they are paid only where the old rule was about to produce a diagnostic.
+// ⚠ **THE EXEMPTION IS ASKED ONLY AFTER THE NAMES DISAGREE, and that placement is the whole of its
+// cost.** An agreeing pair — every conformance in the corpus that does not narrow, and every one in
+// the scale ladder — returns above without asking either question, so they add no allocation to
+// such a program. Both questions below box a union (`InterfaceLookup`, `DeclaredEnum`), which the
+// header of `validateThrowsConformance` records scale-test reading straight off a
+// per-conforming-method box; here they are paid only where the old rule was about to produce a
+// diagnostic.
 function requireSameErrorType(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
 	if declared.equals(required) 'sameErrorType'
 		return
@@ -2261,7 +2266,7 @@ function requireSameErrorType(project Project, signatures ProgramSignatures, con
 end 'requireSameErrorType'
 
 // ⭐⭐ **DOES THE REQUIREMENT'S `throws` TYPE NAME AN INTERFACE RATHER THAN A CONCRETE ERROR — i.e. is there
-// anything for the dispatch's `(e)` binding to decode WRONG (A1s)?** The sorting is
+// anything for the dispatch's `(e)` binding to decode WRONG?** The sorting is
 // `classifyThrowsClauseName`'s, below, where the reason each of its three answers exists is written down
 // ONCE; what belongs here is only what this caller does with them. `undeclared` reads as NOT abstract, which
 // is the whole point of the classifier's third box: a typo'd requirement must not buy the abstract
@@ -2276,15 +2281,14 @@ function throwsRequirementIsAbstract(project Project, signatures ProgramSignatur
 	end 'kind'
 end 'throwsRequirementIsAbstract'
 
-// ⭐⭐ **WHAT A `throws` CLAUSE NAME DENOTES — ONE CLASSIFIER, FOR THE TWO RULES THAT ASK (A1s-throwsbox
-// review).** The two questions above and `SemanticCheck.requireThrowsClauseNamesADeclaredError`'s E3113 are
-// about DIFFERENT things — this file owns the relation between a requirement's clause and its impl's, that
-// one owns a function's own clause — but both begin by sorting one name into the SAME three boxes, and both
-// were sorting it with their own copy of the two lookups. Nothing made the copies agree, and the way they
-// would have come apart is silent: teach one of them that a `typealias` to an enum is concrete too, or that
-// a user's own `enum Error` is special, and the impl side and the plain-function side would disagree about
-// what an error type IS, with no compile error anywhere to say so. This project's signature bug, in the exact
-// place A1s-throwsbox was written to remove one instance of it.
+// ⭐⭐ **WHAT A `throws` CLAUSE NAME DENOTES — ONE CLASSIFIER, FOR THE TWO RULES THAT ASK.** The two
+// questions above and `SemanticCheck.requireThrowsClauseNamesADeclaredError`'s E3113 are about
+// DIFFERENT things — this file owns the relation between a requirement's clause and its impl's,
+// that one owns a function's own clause — and both begin by sorting one name into the SAME three
+// boxes. Two copies of the two lookups would come apart silently: teach one of them that a
+// `typealias` to an enum is concrete too, or that a user's own `enum Error` is special, and the
+// impl side and the plain-function side would disagree about what an error type IS, with no compile
+// error anywhere to say so.
 //
 // The three boxes are exhaustive by construction, and each of the two conditions rules out a wrong answer the
 // other cannot:
@@ -2341,23 +2345,24 @@ end 'classifyThrowsClauseName'
 // function's own reason: a boxed union must not be encoded as a pointer at one end and decoded as an ordinal
 // at the other, and two spellings of "is it boxed?" is exactly how that comes to be true.
 //
-// ⚠⚠ **"NOT FOUND IN THE ENUM REGISTRY" IS NOT EVIDENCE THE FLAG IS SCALAR — IT IS THE COMPILER HAVING NO
-// ANSWER, AND IT GETS ITS OWN REFUSAL (A1s review).** As first written this asked `enumInAnyFile(declared)` and
-// read the `undeclared` arm as `false`, i.e. as "not boxed, therefore fine" — the PERMISSIVE reading of a
-// memory-safety question, taken for a name the compiler could not resolve. MEASURED on the shipped rung:
-// an impl declaring `throws Bogus`, a name in no registry at all, was ACCEPTED under `throws Error` and
-// linked and ran, where the strict same-name rule this exemption relaxes had refused it.
+// ⚠⚠ **"NOT FOUND IN THE ENUM REGISTRY" IS NOT EVIDENCE THE FLAG IS SCALAR — IT IS THE COMPILER
+// HAVING NO ANSWER, AND IT GETS ITS OWN REFUSAL.** Reading the `undeclared` arm as `false`, i.e. as
+// "not boxed, therefore fine", is the PERMISSIVE reading of a memory-safety question, taken for a
+// name the compiler could not resolve: an impl declaring `throws Bogus`, a name in no registry at
+// all, would be ACCEPTED under `throws Error` where the strict same-name rule this exemption
+// relaxes refuses it.
 //
-// It is the same hazard `throwsRequirementIsAbstract`'s SECOND conjunct exists for, one side over: there
-// the argument is that abstractness is something a requirement DECLARES rather than something it fails to
-// be, so a typo must not read as a licence. The impl side owes the identical argument — a resolvable error
-// type is something an implementation DECLARES — and did not make it. Both arms below therefore report;
-// neither is silent, which is what AGENTS.md's "no silent unhandled cases" asks of a `match` like this one.
+// It is the same hazard `throwsRequirementIsAbstract`'s SECOND conjunct exists for, one side over:
+// there the argument is that abstractness is something a requirement DECLARES rather than something
+// it fails to be, so a typo must not read as a licence. The impl side owes the identical argument —
+// a resolvable error type is something an implementation DECLARES. Both arms below therefore
+// report; neither is silent, which is what AGENTS.md's "no silent unhandled cases" asks of a
+// `match` like this one.
 //
-// ⚠ It refuses only pairs the OLD rule already refused: a same-named pair returns from `requireSameErrorType`
-// before either question is asked, so nothing that compiled before A1s can reach here. (`throws Bogus` on a
-// PLAIN function was accepted when this was written; A1s-throwsbox's E3113 closed that gap, and this arm
-// still owns the IMPL-side spelling because it alone can name the requirement the impl is violating.)
+// ⚠ It refuses only pairs the same-name rule refuses: a same-named pair returns from
+// `requireSameErrorType` before either question is asked. (`throws Bogus` on a PLAIN function is
+// E3113; this arm owns the IMPL-side spelling because it alone can name the requirement the impl is
+// violating.)
 function requireImplErrorIsANarrowableError(project Project, signatures ProgramSignatures, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
 	match signatures.enumInAnyFile(declared.toByteArray()) 'implError'
 		declared(layout) then requireImplErrorConformsAndIsScalar(project, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared, layout: layout)
@@ -2365,10 +2370,11 @@ function requireImplErrorIsANarrowableError(project Project, signatures ProgramS
 	end 'implError'
 end 'requireImplErrorIsANarrowableError'
 
-// ⭐⭐ **AN ABSTRACT REQUIREMENT NARROWS TO A CONFORMER, NOT TO ANY ENUM AT ALL (A1s wave 2).** The narrowing
-// an abstract `throws Error` permits is "an error type", and this is the half that says WHICH: the impl's
-// enum must DECLARE `implements <the requirement's interface>`. Without it the exemption read `throws Error`
-// as `throws anything`, a strictly weaker rule than the same-name one it replaced.
+// ⭐⭐ **AN ABSTRACT REQUIREMENT NARROWS TO A CONFORMER, NOT TO ANY ENUM AT ALL.** The narrowing an
+// abstract `throws Error` permits is "an error type", and this is the half that says WHICH: the
+// impl's enum must DECLARE `implements <the requirement's interface>`. Without it the exemption
+// would read `throws Error` as `throws anything`, a strictly weaker rule than the same-name one it
+// relaxes.
 //
 // `enum NotAnError { Bad = 1 }`, declaring no conformance, used as a `Parsable.fromString`'s `throws`
 // type is refused with `error E3016: … Method 'Value.fromString' throws 'NotAnError' which does not
@@ -2377,8 +2383,7 @@ end 'requireImplErrorIsANarrowableError'
 // ⚠ **IT IS ASKED AFTER RESOLVABILITY, WHICH IS THE DIAGNOSTIC AND NOT AN ORDERING PREFERENCE.** A name
 // in no registry is refused by the arm above with the message that says exactly that; telling that author
 // their type "does not conform to Error" would blame the wrong thing about a type that does not exist.
-// `error.throws-unresolvable-impl-type-under-abstract-requirement` is the pin, and it caught this order
-// being wrong.
+// `error.throws-unresolvable-impl-type-under-abstract-requirement` is the pin.
 function requireImplErrorConformsAndIsScalar(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String, layout EnumLayout)
 	if not conformanceListDeclares(layout.conformsTo, interfaceName: required.toByteArray()) 'doesNotConform'
 		reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' which does not conform to {required}")
@@ -2402,8 +2407,7 @@ end 'refuseBoxedImplError'
 
 // The ONE report site for every throws-conformance violation. Not a pass-through: it derives four of
 // `reportPositioned`'s six arguments from `conformance` (the code, and the position the `implements` clause
-// anchors on), which each arm would otherwise spell out separately — and it has already earned that once:
-// A1s added a FOURTH violation (a boxed impl error under an abstract requirement) and spelled none of them.
+// anchors on), which each arm would otherwise spell out separately.
 function reportThrowsViolation(project Project, conformance ConformanceDecl, message String)
 	reportPositioned(project, code: ErrorCode.semanticPartialInterfaceImpl, message: message, line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
 end 'reportThrowsViolation'
@@ -2427,7 +2431,7 @@ end 'throwsConformanceSubject'
 // reader's own type name repeated back;
 // an associated type does not, because its name is meaningless outside the interface that declared it.
 function signatureMatches(project Project, method InterfaceMethodSig, conformingType ByteArray, implFunc IrFunction, implSig FuncSignature, typeParamNames ByteArrayArray, signatures ProgramSignatures) returns bool
-	// ⭐ **A `static` REQUIREMENT IS MET BY A STATIC MEMBER, AND AN INSTANCE ONE BY AN INSTANCE MEMBER (R9).**
+	// ⭐ **A `static` REQUIREMENT IS MET BY A STATIC MEMBER, AND AN INSTANCE ONE BY AN INSTANCE MEMBER.**
 	// The two have different ABIs — an instance method takes `__self` at position 0 — and the witness slot is
 	// stamped with whichever the type declared, so an instance impl under a static requirement would be
 	// dispatched with no receiver in the register it reads `self` from. Neither reference has this rule: both

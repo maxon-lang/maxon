@@ -106,8 +106,7 @@ syntax: when `U16Array = Array with U16`, the element type `U16`
 `EmitArrayLiteralElements` so each integer literal is range-checked at
 compile time and re-tagged with the optimal storage kind (i16/u16). The
 constant-folding pass then lifts the array into `.rdata` with the narrow
-element width, replacing what `U16{x}` per-element construction used to
-produce.
+element width.
 
 ```maxon
 typealias U16 = int(0 to 65535)

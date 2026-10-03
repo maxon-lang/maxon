@@ -40,7 +40,7 @@
 // because `grow` writes what it was handed, so the literal is promoted at `outer("hello")` — the frame
 // that owns it — and `grow` writes the clone two frames down.
 //
-// ⭐⭐ **A MERGE PHI IS THE SECOND PROMOTION, AND IT IS A DIFFERENT QUESTION WITH A DIFFERENT ANSWER (W56).**
+// ⭐⭐ **A MERGE PHI IS THE SECOND PROMOTION, AND IT IS A DIFFERENT QUESTION WITH A DIFFERENT ANSWER.**
 // `grow("a" if c else "b")` and `grow(try arr.get(5) otherwise "lit")` hand the callee a BLOCK ARG, not a
 // `stringLiteral` result, and a phi is not provably ANYTHING: one edge of the second is a real heap element
 // whose write MUST reach the array, the other is an immortal `.rdata` record that must be copied. A
@@ -184,8 +184,8 @@ function opCallsAWritingCallee(op MaxonOp, mutationSummary ParamMutationSummary)
 
 		// ⭐ **A SEND'S ARGUMENTS ARE ALREADY WRITABLE BY THE TIME THIS PASS COULD ACT, AND THAT IS WHY BOTH
 		// ANSWER `false`.** This pass exists to give an IMMORTAL `.rdata` record to a callee that writes its
-		// parameter; a message's arguments went into the request box through `Parser.handIntoGreenThread`,
-		// which PROMOTES a borrowed byte record to a fresh owned copy — so nothing immortal survives to the
+		// parameter; a message's arguments go into the request box through `Parser.handOffArguments`,
+		// which PROMOTES a string literal to a fresh owned copy — so nothing immortal survives to the
 		// handler. A `serviceSpawn`'s only operand is the factory's own fresh box.
 		serviceSpawn or
 			serviceSend or
@@ -492,7 +492,7 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 	end 'eachPromotion'
 
 	let original = try module.ops.get(opIdx) otherwise panic("promoteArgsOf: module.ops.get OOB at {opIdx}")
-	let rewritten = withRewrittenArgs(original, args: promotedArgs)
+	let rewritten = withRewrittenArgs(original, args: promotedArgs, argImmutableNames: callArgImmutableNamesOf(original))
 	try module.ops.set(opIdx, value: rewritten) otherwise panic("promoteArgsOf: module.ops.set OOB at {opIdx}")
 	newRefs.push(opIdx)
 
@@ -594,8 +594,6 @@ type PromotedValueMinter
 		self.func.valueNameIds.push(UnnamedTypeId)
 		self.func.valueBrandIds.push(UnnamedTypeId)
 		self.func.valueMintedSole.push(false)
-		self.func.valueClosureEnv.push(0)
-		self.func.valueIsCapturingClosure.push(false)
 		return id
 	end 'mint'
 end 'PromotedValueMinter'

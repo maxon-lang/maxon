@@ -45,9 +45,9 @@ an immediate with no form, as the assertion that the selector asked.
 
 ### These cases pin an ENCODING, not an answer
 
-Every band below computed the right answer before the shifted and `cmn` forms existed —
-the fallback ladder is correct, merely long. What the cases pin is that each band still
-computes it once the shorter form is selected: a `cmn` emitted where a `cmp` was meant, or
+Every band below also computes the right answer through the fallback ladder — it is
+correct, merely long. What the cases pin is that each band computes it when the shorter
+form is selected: a `cmn` emitted where a `cmp` was meant, or
 a shifted field filled with the unshifted value, is a WRONG COMPARISON and therefore a
 distinct exit code here. Both orderings and both equalities are exercised per band,
 because a mis-selected form shows up in the condition codes before it shows up in

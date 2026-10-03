@@ -743,11 +743,9 @@ error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.tes
 <!-- test: error.try-on-non-throwing-instance-method -->
 
 Regression: `try recv.method()` on a non-throwing **instance method** must also
-report E3055. The error-handling check originally inspected only `call` /
-`tryCall` ops, so a `tryMethodCall` (the op a method receiver produces) slipped
-through and the spurious `try` was silently accepted — diverging from the C#
-bootstrap. The check now resolves the method's qualified callee via
-`resolvedCallees` and reports E3055 when it is registered non-throwing.
+report E3055. The error-handling check inspects `tryMethodCall` (the op a method
+receiver produces) as well as `call` / `tryCall`: it resolves the method's qualified
+callee via `resolvedCallees` and reports E3055 when it is registered non-throwing.
 
 ```maxon
 typealias Int = int(i64.min to i64.max)
@@ -1044,7 +1042,7 @@ end 'main'
 An error union declared in the FORWARD file (`liberr.maxon` sorts before
 `main.maxon`, so it is folded into the signatures index before the catch site is
 parsed) is caught across files. Its `bad(code Code)` payload type crosses by NAME
-through the union-payload adopt door (OPEN #52), so `(e)` recovers `LibErr` and
+through the union-payload adopt door, so `(e)` recovers `LibErr` and
 `match e` dispatches. The backward ordering is
 `error.cross-file-throws-caught-later-file`; this is the one that reaches the door
 with the declaration already in the index.
@@ -1089,8 +1087,7 @@ the catch site in `app.maxon`. The whole-program signature sweep
 file's union LAYOUTS and `throws` clauses into the shared index BEFORE any body is
 parsed, so `Woe`'s layout is already seeded when `app.maxon`'s body is parsed; the
 union-payload adopt doors then re-intern the payload type by name into the reader
-file's interner. That is the declaration-order union-layout prescan OPEN #52's
-backward slice asked for — it already exists.
+file's interner: a declaration-order union-layout prescan.
 ```maxon
 // --- file: app.maxon
 // The throwing callee `risky` is declared in `zzz.maxon`, which sorts AFTER
@@ -1176,7 +1173,7 @@ struct `Payload` are declared in `zzz.maxon` (sorts after `app.maxon`). The catc
 site in `app.maxon` binds the struct payload and reads `p.mass`. Classifying the
 `named` payload `Payload` at the reader's match-bind site resolves its type id
 against `app.maxon`'s interner (via the adopt door) — the exact interner-mismatch
-family that panicked `classifyUnionPayload` before the doors landed.
+family that `classifyUnionPayload` panics on without the doors.
 ```maxon
 // --- file: app.maxon
 function main() returns ExitCode
@@ -1860,12 +1857,10 @@ end 'main'
 
 <!-- test: throw-borrowed-union-co-owns -->
 ### Throwing a BORROWED union CO-OWNS its box — it does not move it
-⛔⛔ **THIS CASE PINNED A REFUSAL, AND THE REFUSAL'S OWN STATED REASON HAD ALREADY BEEN RETIRED.** Its prose
-called it *"the throw twin of the borrowed-aggregate RETURN refusal"*, refused *"until cross-call consume"* —
-but S5 lifted exactly that on the RETURN door, and `Parser.valueIsNonTextAggregate`'s header says why in as many
-words: *"the two that did not were held back by a WRONG PREMISE … the callee increfs before the `ret`, the caller
-adopts and decrefs once, and the borrow's own owner never notices … **what genuinely needs the cross-call consume
-is a MOVE**, where the source must be poisoned so exactly one owner remains."*
+⛔⛔ **A BORROWED AGGREGATE CROSSES A CALL BOUNDARY WITHOUT A CROSS-CALL CONSUME, AND A `throw` IS NO
+EXCEPTION.** `Parser.valueIsNonTextAggregate`'s header states it for the RETURN door: the callee increfs before
+the `ret`, the caller adopts and decrefs once, and the borrow's own owner never notices. **What genuinely needs
+the cross-call consume is a MOVE**, where the source must be poisoned so exactly one owner remains.
 
 ⭐ **A `throw` IS A HAND-OFF, NOT A MOVE.** Nothing is poisoned, so nothing needs the consume — the thrown
 reference is a SECOND owner, the catch consumes it, and the borrow's own owner drops its own. The mechanism is the
@@ -2135,8 +2130,8 @@ end 'main'
 
 <!-- test: error.otherwise-wrong-struct -->
 An `otherwise` fallback of a DIFFERENT named aggregate than the try's result would merge into the
-owned result phi and be dropped under the RESULT's destructor — a wild free (OPEN #54; this program
-compiled clean and exited 139 before the check). The scalar checks below cannot see it: `BoxA` and
+owned result phi and be dropped under the RESULT's destructor — a wild free (unchecked, this program
+compiles clean and exits 139). The scalar checks below cannot see it: `BoxA` and
 `BoxB` share the `structRef` tag. Identity is the interned name, exact.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2178,12 +2173,12 @@ error E3059: specs/fragments/error-handling/error.otherwise-wrong-struct.test:32
 ```
 
 <!-- test: error.throwing-float-return -->
-A THROWING function that RETURNS a float. The OK edge places the real double in the return register
-(F2a); the THROW edge's family-default primary value — which the caller ignores once the error flag is
-set — must be classed for the SAME register file, an XMM zero rather than a GPR zero. Before F3b the
-throw edge emitted an i64 GPR zero, which the backend's `errorReturn` move then routed to XMM0 for the
-float return type and panicked (`move from rax to xmm0 crosses register files`). F3b types the throw-edge
-default to the function's return type. `safeRoot(-1)` throws (caught → 0.0) and `safeRoot(5)` returns
+A THROWING function that RETURNS a float. The OK edge places the real double in the return register;
+the THROW edge's family-default primary value — which the caller ignores once the error flag is
+set — must be classed for the SAME register file, an XMM zero rather than a GPR zero. An i64 GPR zero
+there would be routed to XMM0 by the backend's `errorReturn` move for the float return type, which panics
+(`move from rax to xmm0 crosses register files`), so the throw-edge default is typed to the function's
+return type. `safeRoot(-1)` throws (caught → 0.0) and `safeRoot(5)` returns
 2.0, so `trunc(bad) + trunc(ok)` is 0 + 2.
 ```maxon
 enum MathError implements Error
@@ -2214,8 +2209,8 @@ typealias Integer = int(i64.min to i64.max)
 A block-form `try … otherwise (e) 'label' … end` STATEMENT nested inside a `while`
 loop. The loop's carried-variable pre-scan re-derives block structure at the token
 level (`opensBlockAt`), and must recognize the block-form `otherwise` as opening a
-block — else it mis-predicts the loop's closing `end` and the drift guard panics
-(OPEN #62). `i` is assigned AFTER the try-block, so it is exactly the carried var a
+block — else it mis-predicts the loop's closing `end` and the drift guard panics.
+`i` is assigned AFTER the try-block, so it is exactly the carried var a
 too-short extent would lose. `risky` always throws, so the handler runs each
 iteration: `acc` counts the 4 iterations.
 ```maxon
@@ -2281,8 +2276,8 @@ end 'main'
 <!-- test: error.try-block-in-if -->
 A block-form `try … otherwise (e) 'label' … end` inside an `if` body, with a var
 assigned AFTER the try-block. `parseIfStatement` shares the same carried-variable
-pre-scan + drift guard as `parseWhileStatement`, so it panics identically without
-the `opensBlockAt` fix. `acc` is set to 7 in the handler then incremented to 8.
+pre-scan + drift guard as `parseWhileStatement`, so without the `opensBlockAt` check it
+would panic identically. `acc` is set to 7 in the handler then incremented to 8.
 ```maxon
 typealias Code = int(i64.min to i64.max)
 
@@ -2312,14 +2307,13 @@ end 'main'
 ```
 
 <!-- test: error.throws-interface-on-a-plain-function -->
-⭐⭐ **A PLAIN FUNCTION'S `throws` CLAUSE MUST NAME A DECLARED ENUM OR UNION, AND THIS IS THE PROGRAM THAT
-BOUGHT THE RULE (A1s-throwsbox).** The error-flag ABI has two shapes — `ordinal + ErrorFlagOrdinalBias` for a
+⭐⭐ **A PLAIN FUNCTION'S `throws` CLAUSE MUST NAME A DECLARED ENUM OR UNION, AND THIS IS THE PROGRAM THE
+RULE EXISTS FOR.** The error-flag ABI has two shapes — `ordinal + ErrorFlagOrdinalBias` for a
 payload-free enum, a heap BOX POINTER for a payload-carrying union — and the two ends of a throw derive which
 one is in play from different places: the THROW site from the value it actually throws, the CATCH site from
-the DECLARED clause. `Error` is an interface, so it is in no enum registry, so the catch decoded a heap
-pointer as an ordinal and never released the box. **MEASURED before the check existed: exit 101 — a leak —
-in the compiler AND in the C# oracle, with `MM leak: 1 allocation(s) remain`.** Nothing reconciled the two
-derivations, and nothing can: a clause with no declared cases has no flag shape to reconcile to. The
+the DECLARED clause. `Error` is an interface, so it is in no enum registry, so the catch would decode a
+heap pointer as an ordinal and never release the box: **exit 101 — a leak, `MM leak: 1 allocation(s)
+remain`.** Nothing reconciles the two derivations, and nothing can: a clause with no declared cases has no flag shape to reconcile to. The
 abstract `throws Error` an INTERFACE REQUIREMENT declares is a different door, dispatched through the witness
 ABI and guarded by E3016 — see `specs/interface-conformance.md`.
 ```maxon
@@ -2345,9 +2339,9 @@ error E3113: <fragment>:8:10: 'throws Error' names an INTERFACE. A caught error 
 ```
 
 <!-- test: throws-concrete-union-is-untouched -->
-⭐ **THE CONTROL THAT PROVES THE RIGHT THING WAS REFUSED.** The identical program with the CONCRETE clause —
-the only difference is `throws BoxedError` for `throws Error` — still compiles, still catches the boxed
-error, and still releases the box. This is the bisection the refusal above rests on: same union, same throw,
+⭐ **THE CONTROL: WHAT IS REFUSED ABOVE IS THE CLAUSE, NOT THE PROGRAM.** The identical program with the
+CONCRETE clause — the only difference is `throws BoxedError` for `throws Error` — compiles, catches the boxed
+error, and releases the box. This is the bisection the refusal above rests on: same union, same throw,
 same catch, only the declared clause differs.
 ```maxon
 typealias Code = int(0 to u32.max)
@@ -2464,29 +2458,11 @@ error E3113: <fragment>:12:10: 'throws Payload' names no declared enum or union.
 ```
 
 <!-- test: throws-a-stdlib-error-the-compiler-synthesizes -->
-⭐ **THE NARROWING THIS CASE ONCE PINNED IS GONE, AND THE FLIP IS THE SIGNAL ITS OWN NOTE PROMISED.** Until
-`StringError` was synthesized, this program was refused `E3113: 'throws StringError' names no declared enum
-or union` — because `StringError` is declared in `stdlib/String.maxon`, which the loader's whitelist
-did not then list: The compiler EMITS its String runtime rather
-than compiling that file. The name resolved to nothing, so the clause was accepted only as an unchecked
-opaque label — `throws Bogus` wearing a real name — and the old note recorded this as **the one place the
-rule read differently from the ORACLE**.
-
-⭐ **It now agrees with the oracle, and that is why the case flipped rather than being deleted.** MEASURED on
-this exact program: The compiler compiles it and exits **2** —
-the byte position of the space in `"ab cd"`. A divergence became an agreement, so what is worth pinning is
-the agreement.
-
-⚠ **The old note predicted the flip and named the wrong cause**, which is worth keeping rather than quietly
-correcting: it said *"this case flips the day `stdlib/String.maxon` is listed"*. It had not been listed when
-it flipped, and it flipped because the compiler **synthesizes** the declaration instead —
-`Project.builtinStringErrorEnum`, seeded with `implements Error`, exactly as it has synthesized
-`ArrayError` from `stdlib/Array.maxon:6` since R4.4. ⚠ **The loader's filter is gone and every file under
-`stdlib/` now loads, so the clause that read "still cannot be" has expired**; the synthesized declaration
-is still what this case's expectation rests on, and the expectation is unchanged. The old note also argued that
-doing so *"would need a hardcoded second copy of the stdlib's declarations inside the compiler — exactly
-what listing a module exists to avoid"*; that argument was already false when written, because
-`ArrayError` is that copy and R4.4 accepted it deliberately.
+⭐ **A `throws StringError` CLAUSE NAMES A DECLARED ENUM.**
+`StringError` is declared in `stdlib/String.maxon`, and the compiler **synthesizes** the declaration —
+`Project.builtinStringErrorEnum`, seeded with `implements Error`, exactly as it synthesizes `ArrayError`
+from `stdlib/Array.maxon:6`. The synthesized declaration is what this case's expectation rests on. The
+compiler compiles this program and it exits **2** — the byte position of the space in `"ab cd"`.
 
 ⚠ **AND THE BILL `ArrayError` CARRIES IS NOT CHARGED HERE.** `ArrayError` is reserved program-wide
 (`TypeResolution.isCompilerOwnedTypeName`) because `verifyManagedMemoryRuntimeOrdinals` holds a runtime's
@@ -2494,8 +2470,7 @@ literal error flags against its declared case order, and a user declaration disp
 handler arm. Nothing transcribes `StringError`'s ordinals, so it is an ordinary library nominal name: a user
 program may declare its own, and `SignatureIndex.contestStdlibTypeName` shadows the library's to `__StringError`
 exactly as it does for any other contested one. `throws-a-stdlib-error-has-a-user-declared-spelling` below is
-still the control and still answers 2 — an author's own error enum remains the spelling that can be
-`match`ed.
+the control and answers 2 — an author's own error enum is the spelling that can be `match`ed.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -2514,21 +2489,17 @@ end 'main'
 
 <!-- test: throws-a-stdlib-error-has-a-user-declared-spelling -->
 ⭐ **THE CONTROL FOR THE CASE ABOVE**: the author's own `enum SearchFailed implements Error` compiles and
-answers 2 — the byte position of the space in `"ab cd"` — so nothing that rung refuses leaves a program with
+answers 2 — the byte position of the space in `"ab cd"` — so nothing E3113 refuses leaves a program with
 no way to say what it meant.
 
-⛔⛔ **THIS CASE SPENT ITS WHOLE LIFE ASSERTING A WRONG ANSWER, AND W49 WAVE 3 IS WHAT MADE THE COMPILER
-DISAGREE WITH IT.** It was authored with `let idx = try s.findFirst(" ")` and NO `otherwise` under a
-`throws SearchFailed` clause — i.e. propagating a `StringError` out of a function that declares it throws
-something else. **The runnable oracle refuses exactly that, and always has:** `error E3059: try propagates
-'StringError' but enclosing function throws 'SearchFailed' — add 'otherwise' to convert`.
-The compiler compiled it and exited 2, because `findFirst` was a SYNTHESIZED
-runtime callee (`__strix_first`) and E3059's `try` gate reads the thrown type off a DECLARED signature,
-which a synthesized callee does not have. Retiring `findFirst` onto `stdlib/String.maxon` gives it one, and
-the compiler now raises the oracle's diagnostic at the oracle's position.
-⇒ **The fix is the `otherwise` the diagnostic asks for, which is also what the case's own prose describes**
-— converting a stdlib error into the author's own spelling is the whole point of the control, and it was
-never actually doing it. Both compilers answer 2 on the program below.
+⛔⛔ **THE `otherwise` IS REQUIRED.** `let idx = try s.findFirst(" ")` with NO `otherwise` under a
+`throws SearchFailed` clause propagates a `StringError` out of a function that declares it throws
+something else, and the compiler refuses exactly that:
+`error E3059: try propagates 'StringError' but enclosing function throws 'SearchFailed' — add 'otherwise'
+to convert`. `findFirst` is declared in `stdlib/String.maxon`, so E3059's `try` gate reads the thrown type
+off its DECLARED signature.
+⇒ **The `otherwise` the diagnostic asks for is what converts a stdlib error into the author's own
+spelling**, which is the whole point of the control. The program below answers 2.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -2550,7 +2521,7 @@ end 'main'
 ```
 
 <!-- test: a-user-declared-string-error-shadows-the-library-one -->
-⭐⭐ **THE PROOF THAT LIFTING `StringError`'S RESERVATION DID NOT OPEN THE HOLE THE RESERVATION WAS FOR.**
+⭐⭐ **`StringError` IS NOT RESERVED, AND THIS IS WHAT KEEPS THAT FROM OPENING A HOLE.**
 The name is a library nominal one, so the user declaration below shadows `stdlib/String.maxon`'s to
 `__StringError` (`SignatureIndex.contestStdlibTypeName`) rather than DISPLACING it. Two enums stand at once
 and neither can see the other, which is the third of `Project.typeNamePairMayCoexist`'s coexistence routes.
@@ -2558,8 +2529,8 @@ and neither can see the other, which is the third of `Project.typeNamePairMayCoe
 ⚠ **THE DISCRIMINATING HALF IS THE `otherwise`, NOT THE DECLARATION.** A program that merely declares the
 name proves nothing — it would compile under a displacement too. Here `findFirst` throws the LIBRARY's enum
 and the clause names the USER's, so the two must be different types for `otherwise throw` to be the required
-conversion; and the miss path has to reach `another` rather than whichever case ordinal 0 lands on. Both
-compilers answer **9** = 2 (the space in `"ab cd"`) + 7 (the miss).
+conversion; and the miss path has to reach `another` rather than whichever case ordinal 0 lands on. The
+program answers **9** = 2 (the space in `"ab cd"`) + 7 (the miss).
 
 ⚠ `ArrayError` keeps its reservation and this is not an argument against it: a runtime transcribes that
 enum's ordinals as literal error flags and `verifyManagedMemoryRuntimeOrdinals` holds them to the declared
@@ -2588,15 +2559,13 @@ end 'main'
 ```
 
 <!-- test: error.throw-a-boxed-union-under-a-scalar-clause -->
-⭐⭐ **THE SIBLING DOOR INTO A1s-throwsbox's OWN DEFECT, FOUND BY PROBING ITS FIX (A1s-throwsbox review).**
-The rung refused a clause that names no declared enum; it did not refuse a clause that names a DIFFERENT one.
-The mechanism is identical and so is the failure: the THROW site stamps boxedness off the value it actually
-throws (a heap BOX POINTER for this payload-carrying union), the CATCH site derives it off the DECLARED
-clause (`ScalarError`, an ordinal), and the box is decoded as an ordinal and never released. **MEASURED
-before this check: `exit 101` — `MM leak: 1 allocation(s) remain` — in the compiler AND in the C# oracle**, the same
-signature the rung's own motivating program produced. An error leaves a function by exactly two doors, and
-the `try` door has refused this since P1.4b (E3059, `try propagates 'X' but enclosing function throws 'Y'`);
-this is that one rule reaching its other door.
+⭐⭐ **THE SIBLING DOOR TO `error.throws-interface-on-a-plain-function`: A CLAUSE THAT NAMES A DIFFERENT
+DECLARED ENUM.** The mechanism is identical and so is the failure it prevents: the THROW site stamps boxedness
+off the value it actually throws (a heap BOX POINTER for this payload-carrying union), the CATCH site derives
+it off the DECLARED clause (`ScalarError`, an ordinal), and the box would be decoded as an ordinal and never
+released — **`exit 101`, `MM leak: 1 allocation(s) remain`**, the same signature as the interface clause's.
+An error leaves a function by exactly two doors, and the `try` door refuses this (E3059,
+`try propagates 'X' but enclosing function throws 'Y'`); this is that one rule reaching its other door.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -2626,10 +2595,9 @@ error E3059: <fragment>:14:3: type mismatch: 'throw of 'BoxedError' but the encl
 <!-- test: error.throw-a-different-scalar-error-than-declared -->
 ⭐⭐ **THE SAME HOLE WITH NO LEAK IN IT — A SILENT WRONG ANSWER, which is why the rule is about the TYPE and
 not about boxedness.** Both enums are scalar, so nothing is allocated and the `exit 101` gate above is blind.
-The caller still decodes the flag against the DECLARED clause: **measured before this check, `throw ErrB.bOne`
-under `throws ErrA` ran the handler's `aOne` arm and the program answered 7** — one enum's ordinals read as
-another's tags, in the compiler and in the C# oracle alike. A refusal that only asked "do the two agree about a box?"
-would have let this through.
+The caller still decodes the flag against the DECLARED clause: **accepted, `throw ErrB.bOne` under
+`throws ErrA` would run the handler's `aOne` arm** — one enum's ordinals read as another's tags. A refusal
+that only asked "do the two agree about a box?" would let this through.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -2664,9 +2632,9 @@ error E3059: <fragment>:16:3: type mismatch: 'throw of 'ErrB' but the enclosing 
 ```
 
 <!-- test: error.throw-with-no-enclosing-throws -->
-⭐ **A `throw` IN A FUNCTION THAT DECLARES NO `throws` HAD NOWHERE TO PUBLISH THE FLAG, so the error was
-silently discarded — measured, the program exited 0 where the answer is the error path**.
-`rejectPropagateAgainstEnclosing`'s `none` arm had already measured and refused exactly this discard at the
+⭐ **A `throw` IN A FUNCTION THAT DECLARES NO `throws` HAS NOWHERE TO PUBLISH THE FLAG, so accepted, the
+error would be silently discarded — the program would exit 0 where the answer is the error path**.
+`rejectPropagateAgainstEnclosing`'s `none` arm refuses exactly this discard at the
 `try` door; the `throw` door is the same rule's other half, and the `none` case is that mismatch at its
 limit — there is no there to fit into.
 ```maxon
@@ -2693,8 +2661,8 @@ error E3059: <fragment>:10:3: type mismatch: 'throw of 'ErrA' but the enclosing 
 
 <!-- test: error.throw-a-value-that-is-not-an-error -->
 ⭐ **THE THIRD SHAPE THE FLAG HAS NO ENCODING FOR: a value that is not an error type at all.** The error flag
-carries an enum ORDINAL or a union BOX POINTER and has no third shape, so `throw 1` produced a flag nothing
-could decode — the compiler compiled and RAN it. It is now refused with **E3005**.
+carries an enum ORDINAL or a union BOX POINTER and has no third shape, so `throw 1` would produce a flag
+nothing could decode. It is refused with **E3005**.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -2719,8 +2687,8 @@ error E3005: <fragment>:10:3: throw requires an error enum value
 
 <!-- test: throw-matching-the-declared-clause-is-untouched -->
 ⭐ **THE CONTROL FOR ALL FOUR REFUSALS ABOVE.** The same two error types, the same throw, the same catch —
-only the thrown type now IS the declared one, and it compiles, runs, and decodes `bOne` as `bOne`, answering
-2. Nothing the review refuses leaves an author without a spelling for what they meant.
+only the thrown type IS the declared one, and it compiles, runs, and decodes `bOne` as `bOne`, answering
+2. Nothing those refusals refuse leaves an author without a spelling for what they meant.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -2793,11 +2761,8 @@ error E3059: <fragment>:20:11: type mismatch: 'throw of 'ErrB' but the enclosing
 <!-- test: error.default-throws-arm-with-no-enclosing-throws -->
 ⭐⭐ **THE `default` ARM IS THE "UNREACHABLE" MARKER THE ENUM-`match` GRAMMAR DEMANDS, and in a function that
 declares no `throws` it has to be spelled `default panic(...)`** — there is no error channel for a `throws` to
-publish into. It used to be accepted, and it is the SAME leak by another door: **measured with a
-payload-carrying union, `exit 101` / `MM leak: 1 allocation(s) remain`**, because the arm minted a heap box no
-caller ever adopted. Four committed programs held
-exactly this shape and were the false-reject sweep's only hits — they now say `panic`, which is what they
-always meant.
+publish into. Accepted, it is the SAME leak by another door: **with a payload-carrying union, `exit 101` /
+`MM leak: 1 allocation(s) remain`**, because the arm mints a heap box no caller ever adopts.
 ```maxon
 typealias Code = int(0 to u32.max)
 

@@ -14,7 +14,7 @@ Namespaces are derived from the file's location in the directory structure. Func
 ### File-Based Namespaces
 
 The namespace of a file is determined by its path:
-- `math.maxon` in root → no namespace (global)
+- `math.maxon` in root → the root namespace, qualified as `export` (`export.add`, `export.Score`)
 - `utils/helpers.maxon` → namespace `utils`
 - `stdlib/fmt/integer.maxon` → namespace `stdlib.fmt`
 
@@ -167,8 +167,6 @@ end 'main'
 Two files in the same directory `utils/` share a module namespace. A function in `utils/b.maxon` calls a function in `utils/a.maxon` with no qualifier because they belong to the same module. The producer uses `module` visibility so it is visible across files inside the `utils/` subtree but not to callers outside it; the consumer (`export`ed) is the only entry point from `app/main.maxon`.
 ```maxon
 // --- file: utils/a.maxon
-module typealias Integer = int(i64.min to i64.max)
-
 module function siblingProducer() returns Integer
 	return 21
 end 'siblingProducer'
@@ -211,7 +209,7 @@ end 'main'
 
 
 <!-- test: error.cross-file-bare-name-ambiguous -->
-When two different directories both export a function with the same bare name, a third file's unqualified call is ambiguous. E3095 instructs the user to qualify the call with the appropriate directory namespace. The compiler emits exactly the message pinned below and this suite runs the case (measured 2026-08-06, BATCH29/A3a).
+When two different directories both export a function with the same bare name, a third file's unqualified call is ambiguous. E3095 instructs the user to qualify the call with the appropriate directory namespace. The compiler emits exactly the message pinned below.
 ```maxon
 // --- file: alpha/dup.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -233,7 +231,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: app/specs/fragments/namespaces/error.cross-file-bare-name-ambiguous.test:18:9: Ambiguous bare-name call to 'duplicate': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.duplicate, beta.duplicate
+error E3095: app/specs/fragments/namespaces/error.cross-file-bare-name-ambiguous.test:18:9: Ambiguous bare-name call to 'duplicate': more than one visible declaration matches it. Qualify it as one of: alpha.duplicate, beta.duplicate
 ```
 
 <!-- test: bare-sibling-instance-method-call-injects-self -->
@@ -295,8 +293,6 @@ export function store(base Code, offset Code, scale Code) returns Code
 end 'store'
 
 // --- file: lib/cache.maxon
-export typealias Code = int(0 to 125)
-
 export type Cache
 	export var last as Code
 
@@ -322,28 +318,25 @@ end 'main'
 ```
 
 
-⭐⭐ **A ROOT DECLARATION OWNS THE BARE KEY, AND THE FOUR CASES BELOW ARE WHAT THAT MEANS.** N1c
-qualifies a contested free function's registration name with its module directory — but the root
+⭐⭐ **A ROOT DECLARATION OWNS THE BARE KEY, AND THE FOUR CASES BELOW ARE WHAT THAT MEANS.** A contested
+free function's registration name is qualified with its module directory — but the root
 has no qualifier, so a root declaration's registration name IS the bare name and a bare call
 reaches it. The whole-program declaration sweep files every declaration under its bare name first
 and re-files a contested one afterwards, so while a contest lasts the bare key is written by every
 contestant in fold order and the LAST one wins.
 
-⛔ **SELECTION AND TYPING THEN READ ONE FACT FROM TWO PLACES AND GOT TWO ANSWERS.** The merge
-registry routed the call to the ROOT's declaration — its parameter types are what a range refusal
-named — while the sweep tables handed the call site whatever the last contestant had written there.
-MEASURED, all three against the root's own declaration two lines above the call: a value-returning
-root function was refused `E2004: Function 'pick' does not return a value`; a `try … otherwise (e)`
-bound `e` to the SUBDIRECTORY's error enum and refused the root's own case as
-`E3034: unknown enum case`; and a root declaration with NO parameter default silently borrowed the
-subdirectory's, so `pick()` ran the root's body on the subdirectory's argument and printed a number
-the program does not contain. A wrong ANSWER, not a diagnostic.
+⛔ **SELECTION AND TYPING MUST READ THE SAME DECLARATION.** The merge registry routes the call to the
+ROOT's declaration, while the sweep tables' bare key holds whatever the last contestant wrote there.
+Typing the call from that stale entry would refuse a value-returning root function with
+`E2004: Function 'pick' does not return a value`, bind the `e` of a `try … otherwise (e)` to the
+SUBDIRECTORY's error enum and refuse the root's own case as `E3034: unknown enum case`, and let a root
+declaration with NO parameter default borrow the subdirectory's, so `pick()` would run the root's body
+on the subdirectory's argument. A wrong ANSWER, not a diagnostic.
 
-The premise that had made this look safe was written down — *"which of the stale bare entries
-survives does not matter: the only call that reads one is a bare call to a contested name, and that
-call is E3095"* — and it holds only when every contestant is in a SUBDIRECTORY. A root declaration
-contributes no qualified spelling, so the candidate set can never reach the two E3095 requires, no
-ambiguity is reported, and the call proceeds to read the stale entry.
+The premise *"which of the stale bare entries survives does not matter: the only call that reads one
+is a bare call to a contested name, and that call is E3095"* holds only when every contestant is in a
+SUBDIRECTORY. A root declaration is never one of E3095's candidates — a bare call reaches it — so the
+candidate set can never reach the two E3095 requires, and no ambiguity is reported.
 
 <!-- test: root-declaration-owns-the-bare-key -->
 A root `pick` that RETURNS a value, contested by a subdirectory's VOID `pick` declared after it.
@@ -378,9 +371,9 @@ r=8
 
 
 <!-- test: root-declaration-owns-the-bare-key-whatever-the-fold-order -->
-The same program with the SUBDIRECTORY declared first. This is the ordering control: it passed
-while the case above failed, which is precisely what identified the bare key's last-writer-wins as
-the fault rather than the contest itself.
+The same program with the SUBDIRECTORY declared first. This is the ordering control: a bare key
+typed by its last writer would pass this order and fail the case above, so the pair separates that
+fault from the contest itself.
 ```maxon
 // --- file: sub/helper.maxon
 public typealias Slot = int(0 to 100)
@@ -412,8 +405,8 @@ r=8
 
 <!-- test: root-declaration-owns-the-bare-key-throws-clause -->
 `returnTypes` is not the only table keyed by the bare name. The `throws` clause is what types the
-`(e)` binding of a `try … otherwise`, so a root declaration whose clause was overwritten by a
-subdirectory's bound `e` to the wrong enum and refused the root's own case.
+`(e)` binding of a `try … otherwise`, so a root declaration's clause read from a subdirectory's entry
+would bind `e` to the wrong enum and refuse the root's own case. The `e` here is the root's enum.
 ```maxon
 // --- file: main.maxon
 enum RootError
@@ -464,9 +457,9 @@ r=8
 
 <!-- test: error.root-declaration-owns-the-bare-key-parameter-defaults -->
 Parameter defaults are recorded ONLY by a declaration that has one, so a root declaration with no
-default left the bare key holding the SUBDIRECTORY's. `pick()` then compiled, ran the ROOT's body
-on the subdirectory's default and printed `r=97` — a number the program does not contain. The root
-declares one required parameter and omitting it is E3036.
+default must not borrow the SUBDIRECTORY's: `pick()` would then run the ROOT's body on the
+subdirectory's default and print a number the program does not contain. The root declares one required
+parameter and omitting it is E3036.
 ```maxon
 // --- file: main.maxon
 typealias Ms = int(0 to 1000)

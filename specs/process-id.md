@@ -16,9 +16,9 @@ are INTRINSICS rather than functions any file declares. This spec pins one of th
 |---|---|
 | `__Builtins.currentProcessId()` | the OS-assigned id of the RUNNING process, as an `int` |
 
-It takes no arguments, and `/specs/builtins-type.md` documents it as *"Pid of the current process"*.
+It takes no arguments, and `specs/builtins-type.md` documents it as *"Pid of the current process"*.
 Unlike `__Builtins.executablePath` it has no `stdlib/` wrapper: the intrinsic IS the surface, and its
-one caller in this tree is `maxon-bin/Compiler/TreeLock.maxon`, which stamps the id into a lock file
+one caller in the compiler is `maxon-bin/Compiler/TreeLock.maxon`, which stamps the id into a lock file
 so a later reader can tell a live holder from an abandoned one.
 
 ### The id is MACHINE- AND RUN-SPECIFIC, so every case here asserts a PROPERTY
@@ -46,7 +46,7 @@ share an id. That falsifies every wrong answer of the shape "a constant", "the s
 everybody" and "the child's id" — which is the whole class a stable, positive, DWORD-sized number
 could otherwise hide in.
 
-### It is the SIMPLEST member of the `processInfo` band, and its gate was never `executablePath`'s
+### It is the SIMPLEST member of the `processInfo` band, and its gate is not `executablePath`'s
 
 `__Builtins.currentProcessId` lowers to `__proc_pid`, one of the two IDENTITY reads behind the
 `processInfo` host facility — gated by the `__proc_` PREFIX, so it is covered by construction rather
@@ -59,13 +59,12 @@ is named individually ahead of the prefix. It is a WRITE whose POSIX scope disag
 Darwin, the calling thread on Linux — so a lane can serve the two reads long before it can serve it,
 and one facility for all three would have made the whole band wait on the narrowest member.
 
-⚠ `process-executable-path.md` argues that its own intrinsic was host-only because the three
+⚠ `process-executable-path.md` argues that its own intrinsic is more than a lowering because the three
 platforms genuinely DISAGREE about the API's shape (a fill-and-count, an in-out size, a symlink).
-That argument never reached this one and was never borrowed: `getpid()` and `GetCurrentProcessId()`
-are the same call with two spellings, and neither can fail. What gated it was narrower — the lane
-had no OS-primitive substrate for the one instruction to go through — and that is what a port
-removes. WASI stays refused for a reason no port removes: a component has no process identity to
-report.
+That argument does not reach this one: `getpid()` and `GetCurrentProcessId()`
+are the same call with two spellings, and neither can fail. What a lane needs is narrower — an
+OS-primitive substrate for the one instruction to go through. WASI is refused for a reason no
+substrate removes: a component has no process identity to report.
 
 ⚠ **`fits-in-a-dword` IS FREE ON ONE LANE AND BOUGHT ON THE OTHER.** Writing `EAX` zeroes the upper
 half of `RAX` architecturally, so `GetCurrentProcessId`'s `DWORD` arrives clean; AAPCS64 leaves the

@@ -1,0 +1,23 @@
+let CaseDirName = "an-empty-word-is-refused"
+let FmtCommandWord = "fmt"
+let EmptyWord = ""
+let MisformattedFileName = "untouched.maxon"
+let MisformattedSource = "function main() returns ExitCode\n    return 0\nend 'main'\n"
+let EmptyWordRefusal = "an empty word names nothing"
+
+test 'an empty word on a command line is refused rather than read as absent'
+	let dir = freshCaseDir(CaseDirName)
+	let misformatted = dir.join(MisformattedFileName)
+	writeStagedFile(misformatted, content: MisformattedSource)
+
+	let fmt = runDriver([FmtCommandWord, EmptyWord], workingDirectory: dir)
+	let fmtSaid = "It wrote to stdout: {fmt.stdout} and to stderr: {fmt.stderr}"
+	Expect.equal(fmt.exitCode(), expected: 1, message: "`maxon {FmtCommandWord} \"\"` did not exit 1. {fmtSaid}")
+	Expect.contains(fmt.stderr, needle: EmptyWordRefusal, message: "`maxon {FmtCommandWord} \"\"` did not refuse the empty word. {fmtSaid}")
+	Expect.equal(File.readText(misformatted), expected: MisformattedSource, message: "`maxon {FmtCommandWord} \"\"` rewrote a file in the working directory. {fmtSaid}")
+
+	let build = runDriver([BuildCommandWord, EmptyWord], workingDirectory: dir)
+	let buildSaid = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+	Expect.equal(build.exitCode(), expected: 1, message: "`maxon {BuildCommandWord} \"\"` did not exit 1. {buildSaid}")
+	Expect.contains(build.stderr, needle: EmptyWordRefusal, message: "`maxon {BuildCommandWord} \"\"` did not refuse the empty word. {buildSaid}")
+end 'an empty word on a command line is refused rather than read as absent'

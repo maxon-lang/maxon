@@ -9,16 +9,16 @@ category: memory
 ## Documentation
 
 `specs/borrow-liveness.md` pins E3070 over a CONCRETE managed element. This file pins the
-same rule over the element a shared generic body cannot name — a `typeParameter` — and it exists
-because that half was missing and the gap was a **use-after-free the whole suite was green over**.
+same rule over the element a shared generic body cannot name — a `typeParameter`. Without it, the
+gap is a **use-after-free the whole suite is green over**.
 
-`Parser.emitContainerElementAccessor` minted its E3070 borrow only when
-`containerElementIsManaged(giid)` answered true. That predicate is a LOSSY PROJECTION on a shared
+`Parser.emitContainerElementAccessor` cannot gate its E3070 borrow on
+`containerElementIsManaged(giid)` alone. That predicate is a LOSSY PROJECTION on a shared
 generic body: `false` there means *"no static answer"*, not *"owns nothing"* — the element of
 `Array with String` owns a heap record whatever the body can see. Read as "nothing to borrow", it
-left every write through an opaque container invisible to the one rule that guards this hazard.
+would leave every write through an opaque container invisible to the one rule that guards this hazard.
 
-Reachable, and MEASURED `0xC0000005` on the tree that shipped it:
+Reachable, and a `0xC0000005` fault without the borrow:
 
 ```maxon
 let a = try managed.get(0) otherwise panic("oob")   // borrows slot 0's record
@@ -51,8 +51,8 @@ one instantiation and silent about it.
 <!-- test: error.a-self-overwriting-swap-through-get-and-set -->
 ### A swap built from get + set frees the element it is mid-way through moving
 The sort-of-managed-elements UAF, in the smallest program that reaches it. Both borrows are of the
-same storage, and the first `set` destroys the record the OTHER one holds. Measured
-**`0xC0000005`** before this rule, with the suite green over it.
+same storage, and the first `set` destroys the record the OTHER one holds. Without this rule it
+faults with **`0xC0000005`**.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
@@ -138,8 +138,8 @@ error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.a-thre
 <!-- test: error.a-borrow-displaced-by-a-set-is-refused-even-when-it-is-never-stored -->
 ### A borrow the write DISPLACES is a conflict even when nothing stores it back
 The value written here comes from a DIFFERENT container, so the store itself is sound — the
-conflict is the borrow the write destroys on its way past. Measured **`0xC0000005`**: the freed
-record was read again by the `return`'s own `retainFunc@64`.
+conflict is the borrow the write destroys on its way past. Without the refusal it faults with
+**`0xC0000005`**: the freed record is read again by the `return`'s own `retainFunc@64`.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
@@ -178,10 +178,10 @@ error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.a-borr
 
 <!-- test: error.the-bare-spelling-is-the-same-write -->
 ### … and the BARE spelling is the same write, which is the spelling `stdlib/Array.maxon` uses
-`get(0)` and `set(0, …)` with no receiver written at all. The refusal above reached only the
-`managed.`-prefixed spelling, so this program **SEGFAULTED while its own prefixed twin was
-refused** — one storage under two keys, which is the shape the fix collapses
-(`Parser.receiverBorrowSubjectName`). An unnamed receiver that IS the enclosing `self` keys on
+`get(0)` and `set(0, …)` with no receiver written at all. A refusal that reached only the
+`managed.`-prefixed spelling would let this program **SEGFAULT while its own prefixed twin is
+refused** — one storage under two keys, which `Parser.receiverBorrowSubjectName` collapses
+to one. An unnamed receiver that IS the enclosing `self` keys on
 `self`, and the blame reads as the source would spell it, never as the `__self` the receiver
 parameter is bound under.
 ```maxon
@@ -225,8 +225,7 @@ error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.the-ba
 `Array with <ranged int>` cannot dangle — the element is a bare word — and this program runs
 correctly. It is refused anyway, because the body it is refused in is compiled ONCE for every
 instantiation and the `Array with String` instantiation of that same body is a use-after-free.
-The runnable oracle monomorphizes and accepts this; The compiler cannot, and the refusing direction is the
-only sound one. **This case exists so the cost is a decision on the record rather than a surprise.**
+The body is not monomorphized, so the refusing direction is the only sound one. **This case exists so the cost is a decision on the record rather than a surprise.**
 ```maxon
 typealias Small = int(0 to 100)
 
@@ -359,7 +358,7 @@ step are this loop: read the element at `i`, write it down to `w`. It is SOUND �
 its reference through `retainFunc@64` BEFORE the callee destroys the slot it is displacing, so
 even `w == i` survives — and it stays legal because a container write's site is the token its
 write HAPPENS at, past its own arguments (`Parser.containerWriteToken`). Recorded at the method
-name instead, this whole family was refused.
+name instead, this whole family would be refused.
 ```maxon
 typealias Small = int(0 to 100)
 
@@ -451,8 +450,8 @@ end 'main'
 Because a write's site is the closing `)` of its own argument list, the OUTER write is recorded
 first and happens last — so the two sites arrive in decreasing token order, which the resolver's
 linear walk forbids and panics on. `Parser.pushMutationSiteInTokenOrder` restores the order at the
-one push. MEASURED with that insert removed: **`panic at BorrowCheck.maxon:293 … site 1 is at
-token 55, below its predecessor's 58`** — a compiler crash on a legal program.
+one push. Without that insert the resolver panics (**`site 1 is at token 55, below its
+predecessor's 58`**) — a compiler crash on a legal program.
 ```maxon
 function main() returns ExitCode
 	var xs = ["alpha value long enough for a heap record", "beta value long enough for a heap record"]
@@ -471,7 +470,7 @@ error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.a-writ
 ### The trivial-element control
 An `Array with <ranged int>` element owns no heap, so an element read is a bare word that no write
 can dangle — and `emitContainerElementAccessor`'s trivial arm returns before the borrow is minted
-at all. Nothing about this program changed.
+at all.
 ```maxon
 typealias Small = int(0 to 100)
 

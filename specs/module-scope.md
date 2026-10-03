@@ -339,7 +339,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2003: other/<fragment>:7:16: Expected type name after 'as'
+error E3088: other/<fragment>:7:16: typealias 'Score' is module-scoped and not visible from this directory
 ```
 
 <!-- test: error.a-module-enum-binds-nothing-outside-the-subtree -->
@@ -359,7 +359,44 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: other/<fragment>:10:10: Undefined variable 'Color'
+error E3088: other/<fragment>:10:10: type 'Color' is module-scoped and not visible from this directory
+```
+
+<!-- test: error.a-module-types-method-is-hidden-outside-the-subtree -->
+A value of a module type that reached a file outside the subtree exposes none of the type's methods there.
+```maxon
+// --- file: feature/box.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+module type Box
+	var v as Integer
+
+	module static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+
+	export function get() returns Integer
+		return self.v
+	end 'get'
+end 'Box'
+
+export type Shelf
+	export var box as Box
+
+	export static function make() returns Self
+		return Self{box: Box.create(42)}
+	end 'make'
+end 'Shelf'
+
+// --- file: other/main.maxon
+function main() returns ExitCode
+	let s = Shelf.make()
+	print("{s.box.get()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3088: other/<fragment>:28:16: type 'Box' is module-scoped and not visible from this directory
 ```
 
 <!-- test: error.a-module-type-is-unreachable-through-a-field-outside-the-subtree -->
@@ -384,7 +421,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: other/<fragment>:16:11: Unknown type 'Box' in field access chain
+error E3088: other/<fragment>:16:11: type 'Box' is module-scoped and not visible from this directory
+error E3088: other/<fragment>:15:10: type 'Box' is module-scoped and not visible from this directory
 ```
 
 <!-- test: a-module-type-is-reachable-from-a-subdirectory -->
@@ -408,4 +446,54 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: a-module-alias-outranks-an-unrelated-files-private-alias -->
+```maxon
+// --- file: lib/a.maxon
+module typealias Score = int(0 to 200)
+
+// --- file: lib/b.maxon
+export function pick() returns ExitCode
+	return 150 as Score
+end 'pick'
+
+// --- file: z/z.maxon
+typealias Score = int(0 to 5)
+
+export function tiny() returns ExitCode
+	let s = 1 as Score
+	return s
+end 'tiny'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return pick() + tiny()
+end 'main'
+```
+```exitcode
+151
+```
+
+<!-- test: error.a-qualified-static-call-head-the-reader-cannot-see-is-refused-and-the-file-reads-on -->
+A qualified static-call head the reader may not name is refused at the name, and the refusal does not stop the
+file: a second hidden name later in it is reported too, exactly as two bare ones are.
+```maxon
+// --- file: feature/types.maxon
+module typealias Bag = Array with ExitCode
+
+module typealias Score = int(0 to 100)
+
+// --- file: other/main.maxon
+function main() returns ExitCode
+	var b = feature.Bag.create()
+	b.push(4)
+	let s = 7 as feature.Score
+	print("{s} {b.count()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3088: other/<fragment>:9:10: typealias 'feature.Bag' is module-scoped and not visible from this directory
+error E3088: other/<fragment>:11:15: typealias 'feature.Score' is module-scoped and not visible from this directory
 ```

@@ -105,11 +105,11 @@ export let WitnessDestroyFuncOffset = 8 as ByteOffset
 export let WitnessRetainFuncOffset = 16 as ByteOffset
 
 // ⭐⭐ **HOW A FAT POINTER'S VALUE HALF IS WALKED BEFORE IT CROSSES TO ANOTHER GREEN THREAD** — the conformer's
-// `__sole_<T>` (a move) and `__share_<T>` (a lend), the same per-type walks a record of that type takes as a
-// field, or **0** when the conformer owns nothing a count could be stepped on. `__mm_sole_existential` /
-// `__mm_share_existential` read these words exactly as `__drop_existential` reads `destroyFunc@8`, because
-// which conformer an interface-typed value holds is a run-time fact
-// (`ProgramSignatures.existentialCascadeCallee` decides what they hold).
+// `__sole_<T>` (a move) and `__share_<T>` (a share), the same per-type walks a record of that type
+// takes as a field, or **0** when the conformer owns nothing a count could be stepped on.
+// `__mm_sole_existential` / `__mm_share_existential` read these words exactly as
+// `__drop_existential` reads `destroyFunc@8`, because which conformer an interface-typed value
+// holds is a run-time fact (`ProgramSignatures.existentialCascadeCallee` decides what they hold).
 export let WitnessSoleWalkFuncOffset = 24 as ByteOffset
 export let WitnessShareWalkFuncOffset = 32 as ByteOffset
 
@@ -637,12 +637,24 @@ export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, t
 		if signatures.instanceIsDeclarationSelf(genericInstanceIdOf(t), declarationName: declarationName, paramNames: typeParamNames) 'theDeclarationsOwnInstance'
 			return declarationName
 		end 'theDeclarationsOwnInstance'
+	end 'genericInstanceType'
 
+	return renderTypeNameOutsideAnyDeclaration(t, typeNames: typeNames, signatures: signatures)
+end 'renderDeclaredTypeName'
+
+export function renderTypeNameOutsideAnyDeclaration(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
+	let tag = maxonTypeTag(t)
+
+	if tag == ValueTypeTag.typeParameter 'typeParameterType'
+		panic("renderTypeNameOutsideAnyDeclaration: type-parameter token {typeNameIdOf(t)} rendered where no declaration's `uses` list is in scope")
+	end 'typeParameterType'
+
+	if tag == ValueTypeTag.genericInstance 'genericInstanceType'
 		return signatures.canonicalInstanceName(genericInstanceIdOf(t))
 	end 'genericInstanceType'
 
 	return maxonTypeName(t, typeNames: typeNames).toByteArray()
-end 'renderDeclaredTypeName'
+end 'renderTypeNameOutsideAnyDeclaration'
 
 // A parsed (or synthesized) `interface`. `extendsInterfaces` are parent interface names
 // whose methods a conforming type must ALSO supply (`interface D extends B` — the check
@@ -1524,13 +1536,17 @@ export function builtinInterfaceNames() returns ByteArrayArray
 	end 'rosterDrifted'
 
 	for rosterName in names 'eachName'
-		if builtinInterfaceKind(rosterName) == BuiltinInterfaceKind.notABuiltin 'notAProtocolAfterAll'
+		if not isBuiltinInterfaceName(rosterName) 'notAProtocolAfterAll'
 			panic("builtinInterfaceNames: '{String.from(rosterName)}' is in the roster but `builtinInterfaceKind` does not classify it as a protocol — the two read the same name constants and have drifted")
 		end 'notAProtocolAfterAll'
 	end 'eachName'
 
 	return names
 end 'builtinInterfaceNames'
+
+export function isBuiltinInterfaceName(name ByteArray) returns bool
+	return builtinInterfaceKind(name) != BuiltinInterfaceKind.notABuiltin
+end 'isBuiltinInterfaceName'
 
 // One per `BuiltinInterfaceKind` arm EXCEPT `notABuiltin`, which classifies rather than names. Stated here so
 // `builtinInterfaceNames` can check itself against the enum instead of against a literal.
@@ -1583,7 +1599,7 @@ end 'builtinInterfaceKind'
 // that only needs the ANSWER — the parser's type reference, the swept-type normalization — asks this; a
 // caller that needs the DECLARATION asks `lookupInterface`.
 export function isInterfaceName(interfaces IrInterfaceMap, name ByteArray) returns bool
-	return builtinInterfaceKind(name) != BuiltinInterfaceKind.notABuiltin or interfaces.contains(name)
+	return isBuiltinInterfaceName(name) or interfaces.contains(name)
 end 'isInterfaceName'
 
 // The synthesized protocol a name denotes, or `notABuiltin`. A payload-free ENUM, so a classification is a
@@ -1751,6 +1767,8 @@ export let StringConformerName = b"String"
 // because the reasons genuinely differ (a field slot, a return register, a witness call's argument, a
 // value-producing merge's one word per branch).
 export let ExistentialIsFatPointerReason = "a value held at an interface type is a two-word fat pointer `(value, witness)`"
+
+export let IndirectCallHasNoWitnessSlotReason = "a function value is called indirectly, through a call that reserves no adjacent slot for the witness half"
 
 export let ExistentialPairUnprovableReason = "two values held at one interface may have different dynamic types, and nothing here can prove they match"
 

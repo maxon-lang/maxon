@@ -20,7 +20,7 @@ Three neighbours have to stay legal for that to be the rule rather than a blanke
 is a case below:
 
 - **A PARTIAL discard is legal** (`two(_, b)`) — the list is not equivalent to omitting it: `b` is
-  bound. This is the case that stops a later rung widening the check to "any `_` in a binding list".
+  bound. This is the case that stops the check widening to "any `_` in a binding list".
 - **A BARE case name is legal** (`value then …` on a payload-carrying case) — it is the canonical
   alternative the message names, so a compiler that refused it would be recommending a rejection.
 - **The rule is about the LIST, not about the match FORM** — a `gives` (expression) arm and a `then`

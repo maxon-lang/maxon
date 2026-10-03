@@ -197,12 +197,11 @@ end 'main'
 ```
 
 <!-- test: two-type-parameters-each-with-their-own-chain -->
-⭐⭐ **THE BLOCK-OFFSET HAZARD, PINNED (W134 review).** A layout descriptor reserves one block **per type
+⭐⭐ **THE BLOCK-OFFSET HAZARD, PINNED.** A layout descriptor reserves one block **per type
 parameter**, so a type with two of them holds two chains whose stamps come from two different blocks of
 one descriptor. Reading the wrong block is not a refusal — it stamps the *other* parameter's destructor,
 which for `Small`-then-`String` means either leaking every string or calling a string destructor on an
-integer. The rung's own comments name this hazard; nothing pinned it, and a probe that finds nothing is
-only a result once it is a case.
+integer. A probe that finds nothing is only a result once it is a case.
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias Small = int(0 to 1000)
@@ -245,14 +244,13 @@ end 'main'
 ```
 
 <!-- test: removing-an-opaque-element-from-a-chain-releases-it -->
-⭐⭐ **THE MOVE-OUT, WHICH THE RUNG LEFT HALF-OPEN (W134 review).** Taking an element *out* of a chain
+⭐⭐ **THE MOVE-OUT.** Taking an element *out* of a chain
 makes the caller its sole owner, so an unbound one is released at scope exit through the
 descriptor-gated `__drop_type_param` — and a method reserves that descriptor only if the pre-scan
-recognised its call as a move-out. The pre-scan's roster was the `Array`'s two names (`pop`, `remove`),
-so `__ManagedList.remove` was covered only by the coincidence of sharing a spelling and the `List`
-surface's `removeFirst` was not covered at all: this program, the exact twin of a `self.arr.pop()` that
-compiles, was **refused** with a sentence naming three shapes none of which is its own. The machinery
-was whole; only the roster was short.
+recognises its call as a move-out. The pre-scan's roster (`Parser.containerMoveOutMethodAt`) carries the
+chain surfaces' move-outs beside the `Array`'s two names (`pop`, `remove`); without the `List` surface's
+`removeFirst` on it, this program, the exact twin of a `self.arr.pop()` that compiles, would be
+**refused** with a sentence naming three shapes none of which is its own.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -293,12 +291,12 @@ end 'main'
 ```
 
 <!-- test: an-opaque-element-removed-from-one-chain-and-moved-into-another -->
-The move-out's other half: the element the caller now solely owns is handed straight on to a second
+The move-out's other half: the element the caller solely owns is handed straight on to a second
 chain, so it must be **moved** rather than dropped-and-reinserted. One record, one release — a drop
 here on top of the second chain's teardown walk is a double free, and no release at all is a leak.
 
-⚠ **THIS CASE DOES NOT PIN THE ROSTER ABOVE, AND SAYING SO IS THE POINT.** MEASURED with
-`removeFirst` removed from `Parser.containerMoveOutMethodAt`: this one still passes, because the
+⚠ **THIS CASE DOES NOT PIN THE ROSTER ABOVE, AND SAYING SO IS THE POINT.** With
+`removeFirst` removed from `Parser.containerMoveOutMethodAt`, this one still passes, because the
 `self.spare.append(moved)` one line down reserves the descriptor through the move-**in** roster. Its
 subject is the ownership transfer, not the reservation; the case above is the one that goes red.
 ```maxon

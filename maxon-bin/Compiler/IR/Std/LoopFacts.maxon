@@ -5,12 +5,10 @@
 // be one fact written twice — the disagreement being a value one pass calls invariant and the other
 // calls loop-carried, which no case reddens.
 
-// Which analysed loop an entry belongs to. `NoLoopStamp` is the value a freshly grown column holds and
-// the one `beginLoop` counts up from, so it never collides with a real loop's stamp.
 typealias LoopStamp = int(0 to u64.max)
-typealias LoopStampColumn = Array with LoopStamp
+typealias LoopStampColumn = OptionalIndexColumn with LoopStamp
 
-let NoLoopStamp = 0 as LoopStamp
+let FirstLoopStamp = 0 as LoopStamp
 
 // ⭐⭐ **A DENSE PER-VALUE SET WHOSE RESET IS O(1), AND THE RESET IS THE WHOLE REASON IT IS NOT
 // `StdValueUseSet`.** That type is right for its callers, every one of which builds a set once per
@@ -27,7 +25,7 @@ module type LoopValueStamps
 	var current as LoopStamp
 
 	module static function create() returns LoopValueStamps
-		return Self{stampOf: LoopStampColumn.create(), current: NoLoopStamp}
+		return Self{stampOf: LoopStampColumn.create(), current: FirstLoopStamp}
 	end 'create'
 
 	module function beginLoop()
@@ -35,8 +33,8 @@ module type LoopValueStamps
 	end 'beginLoop'
 
 	module function insert(valueId ValueId)
-		self.stampOf.growFilled(((valueId + 1) as ElementIndex), value: NoLoopStamp)
-		try self.stampOf.set(valueId, value: self.current) otherwise panic("LoopValueStamps.insert: stampOf.set OOB at {valueId}")
+		self.stampOf.growAbsent((valueId + 1) as ElementIndex)
+		self.stampOf.set(valueId, value: self.current)
 	end 'insert'
 
 	module function contains(valueId ValueId) returns bool
@@ -44,7 +42,7 @@ module type LoopValueStamps
 			return false
 		end 'neverStamped'
 
-		return (try self.stampOf.get(valueId) otherwise panic("LoopValueStamps.contains: stampOf.get OOB at {valueId}")) == self.current
+		return (try self.stampOf.get(valueId) otherwise return false) == self.current
 	end 'contains'
 end 'LoopValueStamps'
 

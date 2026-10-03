@@ -1,22 +1,14 @@
 // TreeLock — ONE ADVISORY LOCK PER CHECKOUT, held by the commands that write the checkout's SHARED
 // build products, so two of them can never run in one tree at once.
 //
-// ⭐ **THE RULE THIS REPLACES WAS PROSE, AND PROSE IS NOT A GATE.** `AGENTS.md` and the rung
-// skill both carried a sentence — *"NEVER run two suites in one tree at once"* — that a second agent
-// cannot see and a timed-out MCP call cannot honour. Two races were MEASURED against it in one
-// session:
+// Without it, two such commands corrupt each other's work:
 //
 //   1. **Two suites → `specs/.spec-tmp` → a FALSE RED.** Both runs stage their fragments under
 //      the same per-spec scratch directory, so one deletes what the other is compiling and a lane
 //      that is green reports `FAIL exit 1`.
-//   2. **Two builds → `maxon-bin/.maxon/` → a FALSE SLOW, then a silent `exit 1`.** A 12-minute
-//      build printing nothing but `error-codes: OK` — and it made a reviewer report the change under
-//      review as a compile-time regression. **A race that manifests as SLOW is worse than one that
-//      manifests as WRONG, because slow gets attributed to the change under test.**
-//
-// The project had already reasoned its way to the cure one level up and stopped there: the slice
-// board's *"`git push` IS THE LOCK"* is a real, contended, machine-checked lock for the BOARD. This
-// is the same thing for the TREE.
+//   2. **Two builds → `maxon-bin/.maxon/` → a FALSE SLOW, then a silent `exit 1`.** **A race that
+//      manifests as SLOW is worse than one that manifests as WRONG, because slow gets attributed to
+//      the change under test.**
 //
 // ============================================================================================
 // WHAT IT LOCKS, AND WHO TAKES IT
@@ -49,83 +41,213 @@
 // developer's own suite.
 //
 // ============================================================================================
-// LIVENESS IS A HEARTBEAT, NOT A PID PROBE. THIS IS A DELIBERATE DIVERGENCE.
+// THE CLAIM FILE
+// ============================================================================================
+//
+// The record is read and changed only by a command holding the claim file beside it, which it
+// creates exclusively with a fresh token, so taking, taking over, refreshing and releasing the lock
+// never interleave. A claim held by another command is waited on with a random backoff, for at most
+// `ClaimWaitLimitMs`.
+//
+// A created claim is trusted only after a random settle and a re-read that still finds its token,
+// and `changeRecordUnderClaim` re-reads it once more just before the record changes. A command
+// removing a stale claim sets the file aside before it can read whose it is, so a fresh claim can
+// vanish for a moment and be created again by a third command; the re-reads are what catch that.
+//
+// A claim nothing has touched for `ClaimStaleAfterSeconds` belonged to a command that ended while
+// claiming. It is set aside under a `.removing-` name, deleted if it still holds the token that was
+// judged stale, and put back if it does not.
+//
+// The record is written to a `.staged-` file and renamed over the lock, so a failed write never
+// leaves a truncated record. A `.removing-`, `.probe-` or `.staged-` file its command left behind
+// is swept once it is older than `ClaimStaleAfterSeconds`.
+//
+// ============================================================================================
+// LIVENESS
 // ============================================================================================
 //
 // A stale lock that outlives its holder blocks every later command forever, and a holder can die
-// without releasing it: killed by hand, or ended with its process tree when an MCP tool call
-// reaches its timeout.
+// without releasing it: killed by hand, ended with its process tree when an MCP tool call reaches its
+// timeout, or stopped by a panic, which runs no cleanup.
 //
 // So the record is REWRITTEN while its holder works (`TreeLockHold.touch`, throttled to one write
-// every `TouchIntervalMs`), and its FILE MTIME is the liveness signal: a lock nothing has touched
-// for `AbandonedAfterSeconds` is broken automatically, with a printed line saying so.
+// every `TouchIntervalMs`), and its FILE MTIME is the heartbeat: a lock nothing has refreshed for
+// `AbandonedAfterSeconds` is taken over, with a printed line saying so, even when its process still
+// runs, because that holder has stopped making progress.
 //
-// ⚠ A pid probe answers the wrong question here. The pid is recorded, because a reader needs it to
-// end the holder, but it is never tested: a pid is reused, so "alive" can be a stranger, and a
-// wedged `maxon` process is alive forever while making no progress. The heartbeat asks whether the
-// holder is still getting anywhere, which is right for both.
+// A holder on this host is also probed by pid. One that has ended is taken over at once, and a
+// record naming this command's own pid was left by a process that ended and whose id was reused.
 //
-// ⚠ **THE MTIME IS A WALL CLOCK, AND A WALL CLOCK CAN STEP BACKWARDS** (NTP, a timezone change, a VM
-// resuming from a snapshot — see `WallClock`'s header). That is forced, not chosen: two processes
-// share no monotonic origin, so a timestamp one writes and another reads can only be wall time. A
-// backwards step is clamped to "no time has passed", which errs toward keeping a live lock rather than
-// breaking it.
+// ⚠ **EVERY AGE COMPARES TWO MTIMES STAMPED BY ONE FILESYSTEM** — the file's against the held
+// claim's or a fresh `.probe-` file's — never against this machine's clock. A checkout shared
+// between hosts is stamped by one clock and judged by several, and a skew between them would break
+// a live lock or keep a dead one.
 //
 // ============================================================================================
 // THE RECORD IS ECHOED, NOT RE-DERIVED
 // ============================================================================================
 //
 // A refusal QUOTES the record it found rather than reformatting parsed fields, so a field a reader
-// does not know is still displayed, and the only thing a reader must parse is the one key it acts on.
+// does not know is still displayed, and a reader parses only the keys it acts on.
 // The lines are plain `key=value` and may not be reordered for prettiness.
 
-// The three constants below are the record's shared terms: the file name, the heartbeat and the
-// abandonment window. Every reader takes them from here rather than spelling its own, so two
-// commands cannot disagree about which lock they are contending for or when one is dead.
-
-// Where the record lives, relative to the checkout root: at the top, visibly, under a name that says
-// what it is. Gitignored (`/.maxon-tree.lock`).
 let LockFileName = ".maxon-tree.lock"
+let ClaimFileSuffix = ".claim"
+let ClockProbeInfix = ".probe-"
+let StagedRecordInfix = ".staged-"
+let SetAsideClaimInfix = ".removing-"
+let SetAsideStampSeparator = "-"
+let UnstampedAsideReason = "its name carries no time it was set aside at"
 
-// The record's fields. `heldSeconds` is computed BY THE HOLDER — which knows when it started — so a
-// reader needs no clock arithmetic and no decimal parser to say how long this has been going on.
+let LockFileWhat = "the tree lock"
+let ClaimFileWhat = "the tree lock's claim file"
+let ClockProbeWhat = "the tree lock's clock probe"
+let LeftoverWhat = "the tree lock's leftover file"
+
+let LeftInPlaceOutcome = "was left in place"
+let NotRefreshedOutcome = "was not refreshed this time"
+
 let PidField = "pid"
 let TokenField = "token"
 let SinceField = "sinceUnix"
 let HeldField = "heldSeconds"
 let ArgvField = "argv"
+let HostField = "host"
 let FieldSeparator = "="
+let HostIdentitySeparator = "/"
+
+#if os(Windows)
+	let HostNameVariable = "COMPUTERNAME"
+#endif
+
+#if os(Linux)
+	let KernelHostNamePath = "/proc/sys/kernel/hostname"
+	let MachineIdPath = "/etc/machine-id"
+	let DbusMachineIdPath = "/var/lib/dbus/machine-id"
+#endif
+
 let RecordLineSeparator = "\n"
 let ArgvWordSeparator = " "
 
-// How often the holder rewrites the record, and how long without one before it is treated as
-// abandoned. The gap between them is the whole margin: the interval must be far smaller than the
-// window so ordinary jitter — a slow phase, a busy disk — never reads as a dead holder, and the window
-// must be small enough that a KILLED holder does not wedge the tree for long. 5 s against 60 s is a
-// factor of twelve, and both directions of being wrong are cheap and visible: a break that should not
-// have happened prints a line saying it broke a lock, and a wait that should not have happened is
-// bounded by one minute.
+// The heartbeat must stay far below the abandonment window, so a slow phase or a busy disk never
+// reads as a dead holder; the window must stay short, so a killed holder cannot wedge the tree.
 let TouchIntervalMs = 5000
+let RefreshRetryMs = 1000
 let AbandonedAfterSeconds = 60
+let RefreshWarningAfterSeconds = AbandonedAfterSeconds / 2
+let MillisecondsPerSecond = 1000
 
-// The pause between writing the record and reading it back — see `takeLock`.
-let AcquireVerifyDelayMs = 20
+let ClaimSettleMinMs = 10
+let ClaimSettleMaxMs = 40
+let ClaimBackoffMinMs = 20
+let ClaimBackoffMaxMs = 120
+let ClaimWaitLimitMs = 2000
+
+// A claim is held for its settle and one record change, far under this; a window near that time
+// would remove claims that are still live.
+let ClaimStaleAfterSeconds = 10
 
 // Whole seconds a lock has been held, or has gone untouched. A duration, not an instant: it is what
 // the refusal prints and what the abandonment window compares against.
 typealias LockSeconds = int(0 to u64.max)
 
-// The lock this process wrote. A run that found no checkout above its operand owns nothing: there
-// is nothing for it to keep alive and nothing for it to remove.
 type OwnedLock
 	export let path as FilePath
+	export let claimPath as FilePath
 	export let token as String
 	export let sinceUnix as UnixSeconds
+	export let host as LockHost
 
-	static function create(path FilePath, token String, sinceUnix UnixSeconds) returns OwnedLock
-		return Self{path: path, token: token, sinceUnix: sinceUnix}
+	static function create(path FilePath, claimPath FilePath, token String, sinceUnix UnixSeconds, host LockHost) returns OwnedLock
+		return Self{path: path, claimPath: claimPath, token: token, sinceUnix: sinceUnix, host: host}
 	end 'create'
 end 'OwnedLock'
+
+type Acquisition
+	export let lockPath as FilePath
+	export let claimPath as FilePath
+	export let claimToken as String
+	export let host as LockHost
+
+	static function create(lockPath FilePath, claimPath FilePath, claimToken String, host LockHost) returns Acquisition
+		return Self{lockPath: lockPath, claimPath: claimPath, claimToken: claimToken, host: host}
+	end 'create'
+end 'Acquisition'
+
+union LockHost
+	known(identity String)
+	unknown
+
+	function recorded(identity String) returns bool
+		return match self 'host'
+			known(own) gives own == identity
+			unknown gives false
+		end 'host'
+	end 'recorded'
+end 'LockHost'
+
+// A pid is probed only when a record's host identity equals this one (`holderOf`), so the identity
+// names the machine AND its pid space: probing another machine's or container's pid would find it
+// ended and take over a live lock. A part that cannot be read leaves the host unknown, which is
+// never probed.
+function thisLockHost() returns LockHost
+	#if os(Windows)
+		let hostName = try Process.environmentVariable(HostNameVariable) otherwise return LockHost.unknown
+		return lockHostNamed([hostName, String.init(__Builtins.processNamespace())])
+	#endif
+
+	#if os(Linux)
+		let kernelName = try firstNamedIn([KernelHostNamePath]) otherwise return LockHost.unknown
+		let machineId = try firstNamedIn([MachineIdPath, DbusMachineIdPath]) otherwise return LockHost.unknown
+		return lockHostNamed([kernelName, machineId, String.init(__Builtins.processNamespace())])
+	#endif
+
+	#if os(Macos)
+		return lockHostNamed([String.init(__Builtins.processNamespace())])
+	#endif
+
+	#if os(Wasi)
+		return LockHost.unknown
+	#endif
+end 'thisLockHost'
+
+#if os(Linux)
+	function firstNamedIn(locations StringArray) returns String throws AbsentError
+		for location in locations 'eachLocation'
+			let path = try FilePath.from(location) otherwise panic("TreeLock: '{location}' is not a valid path")
+
+			let text = try File.readText(path) otherwise (e) 'unread'
+				if faultOf(e.failure()) == FileFault.gone 'notHere'
+					continue
+				end 'notHere'
+
+				throw AbsentError.absent
+			end 'unread'
+
+			if not text.trim().isEmpty() 'named'
+				return text
+			end 'named'
+		end 'eachLocation'
+
+		throw AbsentError.absent
+	end 'firstNamedIn'
+#endif
+
+function lockHostNamed(parts StringArray) returns LockHost
+	var identity = String.from(osCanonicalName(detectHostTarget().os))
+
+	for part in parts 'eachPart'
+		let trimmed = part.trim()
+
+		if trimmed.isEmpty() 'namesNoHost'
+			return LockHost.unknown
+		end 'namesNoHost'
+
+		identity.append("{HostIdentitySeparator}{trimmed}")
+	end 'eachPart'
+
+	return LockHost.known(identity)
+end 'lockHostNamed'
 
 union HeldTreeLock
 	held(lock OwnedLock)
@@ -135,9 +257,12 @@ end 'HeldTreeLock'
 export type TreeLockHold
 	var holding as HeldTreeLock
 	var lastTouchMs as InstantMs
+	var touchDelayMs as DurationMs
+	var lastRefreshMs as InstantMs
+	var refreshWarned = false
 
 	export static function none() returns TreeLockHold
-		return Self{holding: HeldTreeLock.none, lastTouchMs: 0}
+		return Self{holding: HeldTreeLock.none, lastTouchMs: 0, touchDelayMs: TouchIntervalMs, lastRefreshMs: 0}
 	end 'none'
 
 	// ⭐ Say the holder is still working. Cheap enough to call from anywhere that runs regularly — the
@@ -158,27 +283,68 @@ export type TreeLockHold
 		end 'holding'
 	end 'touch'
 
-	// Rewrite the record with a fresh mtime and a fresh `heldSeconds`. A failed write is IGNORED: the tree
-	// lock is an advisory guard against two developers' commands, and failing a twelve-minute build over
-	// one unwritable heartbeat would cost far more than the race it prevents. The consequence of a
-	// swallowed failure is bounded and self-correcting — the lock ages out and the next command breaks it,
-	// loudly.
 	function touchHeld(lock OwnedLock)
-		if Clock.elapsedMs(self.lastTouchMs) < TouchIntervalMs 'tooSoon'
+		if Clock.elapsedMs(self.lastTouchMs) < self.touchDelayMs 'tooSoon'
 			return
 		end 'tooSoon'
 
-		_ = writeRecord(lock.path, token: lock.token, sinceUnix: lock.sinceUnix, heldSeconds: secondsSince(lock.sinceUnix))
 		self.lastTouchMs = Clock.nowMs()
+
+		let refresh = match takeClaim(lock.claimPath) 'claim'
+			held(claimToken) gives refreshUnderClaim(lock, claimToken: claimToken)
+			busy(untouchedSeconds) gives Refresh.contended(heldClaimReason(untouchedSeconds))
+			contended(reason) gives Refresh.contended(reason)
+			failed(reason) gives Refresh.failed(reason)
+		end 'claim'
+
+		match refresh 'refresh'
+			refreshed then self.refreshed(lock)
+			contended(reason) then self.contendedRefresh(lock, reason: reason)
+			failed(reason) then self.failedRefresh(lock, reason: reason)
+			foreign(found) then self.dropForeignHold(lock, found: found)
+		end 'refresh'
 	end 'touchHeld'
+
+	function refreshed(lock OwnedLock)
+		self.lastRefreshMs = Clock.nowMs()
+		self.touchDelayMs = TouchIntervalMs
+
+		if self.refreshWarned 'recovered'
+			self.refreshWarned = false
+			printError("note: {LockFileWhat} at {lock.path.toString()} is being refreshed again.\n")
+		end 'recovered'
+	end 'refreshed'
+
+	function firstWarningSinceRefresh() returns bool
+		if self.refreshWarned 'alreadyWarned'
+			return false
+		end 'alreadyWarned'
+
+		self.refreshWarned = true
+		return true
+	end 'firstWarningSinceRefresh'
+
+	function contendedRefresh(lock OwnedLock, reason String)
+		self.touchDelayMs = RefreshRetryMs
+		let unrefreshedSeconds = Clock.elapsedMs(self.lastRefreshMs) / MillisecondsPerSecond
+
+		if unrefreshedSeconds < RefreshWarningAfterSeconds or not self.firstWarningSinceRefresh() 'stillFreshOrWarned'
+			return
+		end 'stillFreshOrWarned'
+
+		printError("warning: the tree lock at {lock.path.toString()} has not been refreshed for {unrefreshedSeconds} s — {reason}, so this one could not take its claim file. Another command takes the lock over once nothing has refreshed it for {AbandonedAfterSeconds} s.\n")
+	end 'contendedRefresh'
+
+	function failedRefresh(lock OwnedLock, reason String)
+		self.touchDelayMs = RefreshRetryMs
+
+		if self.firstWarningSinceRefresh() 'firstFailure'
+			warnUpkeep(lock.path, upkeep: LockUpkeep.refreshing, reason: reason)
+		end 'firstFailure'
+	end 'failedRefresh'
 
 	// Give the lock up. A no-op for a hold that never took one, so every command may call it on the way
 	// out without asking whether it holds anything.
-	//
-	// ⚠ **IT REMOVES THE FILE ONLY IF THE FILE IS STILL MINE.** A holder that stalled long enough to be
-	// declared abandoned has had its lock broken and RETAKEN by somebody else; deleting the path blindly
-	// would then delete a stranger's live lock and hand the tree to a third process. The token is what
-	// distinguishes them, and it is the reason the record carries one at all.
 	export function release()
 		match self.holding 'holding'
 			none then return
@@ -187,33 +353,267 @@ export type TreeLockHold
 	end 'release'
 
 	function releaseHeld(lock OwnedLock)
-		if not recordCarriesToken(lock.path, token: lock.token) 'brokenAndRetaken'
-			return
-		end 'brokenAndRetaken'
-
-		try File.delete(lock.path) otherwise ignore
 		self.holding = HeldTreeLock.none
+
+		match takeClaim(lock.claimPath) 'claim'
+			held(claimToken) then releaseUnderClaim(lock, claimToken: claimToken)
+			busy(untouchedSeconds) then warnUpkeep(lock.path, upkeep: LockUpkeep.releasing, reason: "{heldClaimReason(untouchedSeconds)}, so the release could not take it")
+			contended(reason) then warnUpkeep(lock.path, upkeep: LockUpkeep.releasing, reason: "{reason}, so the release could not take its claim file")
+			failed(reason) then warnUpkeep(lock.path, upkeep: LockUpkeep.releasing, reason: reason)
+		end 'claim'
 	end 'releaseHeld'
+
+	function dropForeignHold(lock OwnedLock, found ForeignRecord)
+		self.holding = HeldTreeLock.none
+		reportForeignRecord(lock, found: found, during: LockUpkeep.refreshing)
+	end 'dropForeignHold'
 
 	function take(lock OwnedLock)
 		self.holding = HeldTreeLock.held(lock)
 		self.lastTouchMs = Clock.nowMs()
+		self.refreshWarned = false
+		self.refreshed(lock)
 	end 'take'
 end 'TreeLockHold'
 
-// What one read of the lock file found. `present` carries the record's own bytes (echoed verbatim by
-// the refusal) and how long ago it was last touched (the liveness signal, read from the mtime rather
-// than from anything inside it).
-union LockRecord
-	absent
+function refreshUnderClaim(lock OwnedLock, claimToken String) returns Refresh
+	let refresh = match recordOwnership(lock.path, token: lock.token) 'owner'
+		mine gives refreshOutcome(changeRecordUnderClaim(lock, claimToken: claimToken, change: RecordChange.rewrite(secondsSince(lock.sinceUnix))))
+		another(record) gives Refresh.foreign(ForeignRecord.replaced(record))
+		absent gives Refresh.foreign(ForeignRecord.removed)
+		failed(reason) gives Refresh.failed(reason)
+	end 'owner'
+
+	releaseClaimOrWarn(lock.claimPath, token: claimToken)
+	return refresh
+end 'refreshUnderClaim'
+
+function refreshOutcome(step LockStep) returns Refresh
+	return match step 'step'
+		done gives Refresh.refreshed
+		failed(reason) gives Refresh.failed(reason)
+	end 'step'
+end 'refreshOutcome'
+
+function releaseUnderClaim(lock OwnedLock, claimToken String)
+	match recordOwnership(lock.path, token: lock.token) 'owner'
+		mine then warnIfFailed(lock.path, upkeep: LockUpkeep.releasing, step: changeRecordUnderClaim(lock, claimToken: claimToken, change: RecordChange.removal))
+		another(record) then reportForeignRecord(lock, found: ForeignRecord.replaced(record), during: LockUpkeep.releasing)
+		absent then reportForeignRecord(lock, found: ForeignRecord.removed, during: LockUpkeep.releasing)
+		failed(reason) then warnUpkeep(lock.path, upkeep: LockUpkeep.releasing, reason: reason)
+	end 'owner'
+
+	releaseClaimOrWarn(lock.claimPath, token: claimToken)
+end 'releaseUnderClaim'
+
+function changeRecordUnderClaim(lock OwnedLock, claimToken String, change RecordChange) returns LockStep
+	match claimOwnership(lock.claimPath, token: claimToken, startedMs: Clock.nowMs()) 'claim'
+		mine then break 'claim'
+		another then return LockStep.failed("another command took over this command's claim on the lock before it could change the record")
+		contended(reason) then return LockStep.failed(reason)
+		failed(reason) then return LockStep.failed(reason)
+	end 'claim'
+
+	return match change 'change'
+		rewrite(heldSeconds) gives writeRecord(lock, heldSeconds: heldSeconds)
+		removal gives deleteRecord(lock.path)
+	end 'change'
+end 'changeRecordUnderClaim'
+
+function reportForeignRecord(lock OwnedLock, found ForeignRecord, during LockUpkeep)
+	printError("error: while {during.name} its tree lock, this command found that the lock at {lock.path.toString()} is no longer its own — another command broke it and took it while this one was still running, so two commands may now be writing this checkout's output directories. This command has dropped its hold and leaves the lock alone.\n")
+
+	match found 'found'
+		replaced(record) then printError("  It now says:\n{indentedRecord(record)}\n")
+		removed then printError("  The lock file is gone.\n")
+	end 'found'
+end 'reportForeignRecord'
+
+function warnIfFailed(lockPath FilePath, upkeep LockUpkeep, step LockStep)
+	match step 'step'
+		done then return
+		failed(reason) then warnUpkeep(lockPath, upkeep: upkeep, reason: reason)
+	end 'step'
+end 'warnIfFailed'
+
+function warnUpkeep(lockPath FilePath, upkeep LockUpkeep, reason String)
+	let outcome = match upkeep 'upkeep'
+		refreshing gives NotRefreshedOutcome
+		releasing gives LeftInPlaceOutcome
+	end 'upkeep'
+
+	warnOutcome(LockFileWhat, path: lockPath, outcome: outcome, reason: reason, consequence: "The lock is treated as abandoned once nothing refreshes it for {AbandonedAfterSeconds} s.")
+end 'warnUpkeep'
+
+function warnOutcome(what String, path FilePath, outcome String, reason String, consequence String)
+	printError("warning: {what} at {path.toString()} {outcome} — {reason}. {consequence}\n")
+end 'warnOutcome'
+
+enum LockUpkeep
+	refreshing
+	releasing
+end 'LockUpkeep'
+
+enum FileFault
+	gone
+	contended
+	failed
+end 'FileFault'
+
+union FaultResponse
+	gone
+	retry
+	exhausted(reason String)
+	failed(reason String)
+end 'FaultResponse'
+
+union FileText
+	text(content String)
+	fault(kind FileFault, reason String)
+end 'FileText'
+
+union FileStamp
+	at(seconds UnixSeconds)
+	fault(kind FileFault, reason String)
+end 'FileStamp'
+
+union FilesystemNow
+	at(seconds UnixSeconds)
+	fault(kind FileFault, reason String)
+end 'FilesystemNow'
+
+union ClockSource
+	heldClaim(claimPath FilePath)
+	measured(seconds UnixSeconds)
+end 'ClockSource'
+
+union AgedText
 	present(text String, untouchedSeconds LockSeconds)
-end 'LockRecord'
+	fault(kind FileFault, reason String)
+end 'AgedText'
+
+union RecordOwnership
+	mine
+	another(record String)
+	absent
+	failed(reason String)
+end 'RecordOwnership'
+
+union LockStep
+	done
+	failed(reason String)
+end 'LockStep'
+
+union RecordChange
+	rewrite(heldSeconds LockSeconds)
+	removal
+end 'RecordChange'
+
+union Refresh
+	refreshed
+	contended(reason String)
+	failed(reason String)
+	foreign(found ForeignRecord)
+end 'Refresh'
+
+union ClaimAttempt
+	held(token String)
+	busy(untouchedSeconds LockSeconds)
+	contended(reason String)
+	failed(reason String)
+end 'ClaimAttempt'
+
+union ClaimStep
+	held(token String)
+	retry
+	busy(untouchedSeconds LockSeconds)
+	contended(reason String)
+	failed(reason String)
+end 'ClaimStep'
+
+union ClaimText
+	text(content String)
+	gone
+	contended(reason String)
+	failed(reason String)
+end 'ClaimText'
+
+union ClaimOwnership
+	mine
+	another
+	contended(reason String)
+	failed(reason String)
+end 'ClaimOwnership'
+
+union ClaimRemoval
+	removed
+	gone
+	another
+	contended(reason String, left FilePath)
+	failed(reason String, left FilePath)
+end 'ClaimRemoval'
+
+union ClaimFileChange
+	setAsideTo(aside FilePath)
+	delete
+end 'ClaimFileChange'
+
+union ChangeAttempt
+	done
+	fault(kind FileFault, reason String)
+end 'ChangeAttempt'
+
+union ClaimChange
+	done
+	gone
+	contended(reason String)
+	failed(reason String)
+end 'ClaimChange'
+
+enum LockLeftover
+	setAsideClaim
+	clockProbe
+	stagedRecord
+
+	function prefix() returns String
+		return match self 'leftover'
+			setAsideClaim gives "{LockFileName}{ClaimFileSuffix}{SetAsideClaimInfix}"
+			clockProbe gives "{LockFileName}{ClaimFileSuffix}{ClockProbeInfix}"
+			stagedRecord gives "{LockFileName}{StagedRecordInfix}"
+		end 'leftover'
+	end 'prefix'
+end 'LockLeftover'
+
+type LeftoverSweep
+	var swept = false
+
+	static function pending() returns LeftoverSweep
+		return Self{}
+	end 'pending'
+
+	function sweepOnce(claimPath FilePath, nowSeconds UnixSeconds)
+		if self.swept 'alreadySwept'
+			return
+		end 'alreadySwept'
+
+		self.swept = true
+		sweepLeftovers(claimPath, nowSeconds: nowSeconds)
+	end 'sweepOnce'
+end 'LeftoverSweep'
+
+union AcquireDecision
+	takeFresh
+	takeOver(warning String)
+	busy(record String, untouchedSeconds LockSeconds, holder LeftoverOwner, liveness OwnerLiveness)
+end 'AcquireDecision'
+
+union ForeignRecord
+	replaced(record String)
+	removed
+end 'ForeignRecord'
 
 // Stopping answers `NothingRanExitCode`, the code `refuseIfStale` answers, because both mean the
 // same thing to a caller reading only the number: nothing ran.
-//
-// A refusal is immediate and never a wait: a silent wait turns a fast, legible error into a hang
-// indistinguishable from a wedge.
 export function acquireTreeLock(operand FilePath, into TreeLockHold) returns ExitCode
 	let lockPath = try lockPathFor(operand) otherwise 'noCheckout'
 		// Nothing shared to guard. `operand` has no `stdlib/` above it, so no other command in any
@@ -221,10 +621,15 @@ export function acquireTreeLock(operand FilePath, into TreeLockHold) returns Exi
 		return SucceededExit
 	end 'noCheckout'
 
-	return match readLockRecord(lockPath) 'existing'
-		absent gives takeLock(lockPath, into: into)
-		present(text, untouchedSeconds) gives claimOverExisting(lockPath, record: text, untouchedSeconds: untouchedSeconds, into: into)
-	end 'existing'
+	let claimPath = claimPathFor(lockPath)
+	let host = thisLockHost()
+
+	return match takeClaim(claimPath) 'claim'
+		held(claimToken) gives acquireUnderClaim(Acquisition.create(lockPath, claimPath: claimPath, claimToken: claimToken, host: host), into: into)
+		busy(untouchedSeconds) gives reportClaimBusy(claimPath, untouchedSeconds: untouchedSeconds)
+		contended(reason) gives reportClaimContended(claimPath, reason: reason)
+		failed(reason) gives reportLockFailure(reason)
+	end 'claim'
 end 'acquireTreeLock'
 
 // The lock file for the checkout containing `operand`, or a throw when there is no checkout above it.
@@ -241,81 +646,661 @@ function lockPathFor(operand FilePath) returns FilePath throws CompileError
 	return checkoutRoot.join(name)
 end 'lockPathFor'
 
-// Read the record, and how long ago it was last touched.
-//
-// The mtime is read AFTER the text and a failure to read it is reported as `absent` — that pairing is
-// a race with another process breaking or releasing the lock between the two calls, and "it went away"
-// is the honest reading of it.
-function readLockRecord(lockPath FilePath) returns LockRecord
-	let text = try File.readText(lockPath) otherwise return LockRecord.absent
-	let info = try File.info(lockPath) otherwise return LockRecord.absent
-	return LockRecord.present(text, untouchedSeconds: secondsSince(info.modifiedTime as UnixSeconds))
-end 'readLockRecord'
+function claimPathFor(lockPath FilePath) returns FilePath
+	return try FilePath.from("{lockPath.toString()}{ClaimFileSuffix}") otherwise panic("TreeLock: the path '{lockPath.toString()}' does not take the '{ClaimFileSuffix}' suffix")
+end 'claimPathFor'
 
-// A record is already there: refuse to the holder, or break it if it has stopped moving.
-function claimOverExisting(lockPath FilePath, record String, untouchedSeconds LockSeconds, into TreeLockHold) returns ExitCode
+function leftoverPath(leftover LockLeftover, beside FilePath, unique String) returns FilePath
+	let directory = try beside.parent() otherwise panic("TreeLock.leftoverPath: {beside.toString()} sits beside the tree lock at a checkout root, so it has a parent")
+	let name = try FilePath.from("{leftover.prefix()}{unique}") otherwise panic("TreeLock.leftoverPath: '{leftover.prefix()}{unique}' is not a valid path component")
+	return directory.join(name)
+end 'leftoverPath'
+
+function acquireUnderClaim(acquisition Acquisition, into TreeLockHold) returns ExitCode
+	return match agedText(acquisition.lockPath, what: LockFileWhat, clock: ClockSource.heldClaim(acquisition.claimPath)) 'existing'
+		present(text, untouchedSeconds) gives settleUnderClaim(acquisition, decision: decideOverExisting(acquisition.lockPath, record: text, untouchedSeconds: untouchedSeconds, host: acquisition.host), into: into)
+		fault(kind, reason) gives settleRecordFaultUnderClaim(acquisition, kind: kind, reason: reason, into: into)
+	end 'existing'
+end 'acquireUnderClaim'
+
+function settleRecordFaultUnderClaim(acquisition Acquisition, kind FileFault, reason String, into TreeLockHold) returns ExitCode
+	return match kind 'kind'
+		gone gives settleUnderClaim(acquisition, decision: AcquireDecision.takeFresh, into: into)
+		contended or
+			failed gives releaseClaimThenFail(acquisition, reason: reason)
+	end 'kind'
+end 'settleRecordFaultUnderClaim'
+
+function settleUnderClaim(acquisition Acquisition, decision AcquireDecision, into TreeLockHold) returns ExitCode
+	return match decision 'decision'
+		takeFresh gives takeUnderClaim(acquisition, into: into)
+		takeOver(warning) gives takeOverUnderClaim(acquisition, warning: warning, into: into)
+		busy(record, untouchedSeconds, holder, liveness) gives releaseClaimThenReportBusy(acquisition, record: record, untouchedSeconds: untouchedSeconds, holder: holder, liveness: liveness)
+	end 'decision'
+end 'settleUnderClaim'
+
+function releaseClaimThenFail(acquisition Acquisition, reason String) returns ExitCode
+	releaseClaimOrWarn(acquisition.claimPath, token: acquisition.claimToken)
+	return reportLockFailure(reason)
+end 'releaseClaimThenFail'
+
+function decideOverExisting(lockPath FilePath, record String, untouchedSeconds LockSeconds, host LockHost) returns AcquireDecision
+	let holder = holderOf(record, host: host)
+
+	if holderIsThisProcess(holder) 'reusedId'
+		return AcquireDecision.takeOver("warning: taking over the tree lock at {lockPath.toString()} — it names {holderDescription(holder)}, which is this command's own process, so the command that took it has ended and its process id has been reused. It said:\n{indentedRecord(record)}\n")
+	end 'reusedId'
+
+	let liveness = livenessOfOwner(holder)
+
+	return match liveness 'liveness'
+		ownerGone gives AcquireDecision.takeOver("warning: taking over the tree lock at {lockPath.toString()} — the process that took it, {holderDescription(holder)}, has ended without releasing it. It said:\n{indentedRecord(record)}\n")
+		ownerAlive or
+			notOwned gives decideByHeartbeat(lockPath, record: record, untouchedSeconds: untouchedSeconds, holder: holder, liveness: liveness)
+	end 'liveness'
+end 'decideOverExisting'
+
+function holderIsThisProcess(holder LeftoverOwner) returns bool
+	return match holder 'holder'
+		process(pid) gives pid == __Builtins.currentProcessId()
+		notOwned gives false
+	end 'holder'
+end 'holderIsThisProcess'
+
+function decideByHeartbeat(lockPath FilePath, record String, untouchedSeconds LockSeconds, holder LeftoverOwner, liveness OwnerLiveness) returns AcquireDecision
 	if untouchedSeconds <= AbandonedAfterSeconds 'stillMoving'
-		return reportBusy(lockPath, record: record, untouchedSeconds: untouchedSeconds)
+		return AcquireDecision.busy(record, untouchedSeconds: untouchedSeconds, holder: holder, liveness: liveness)
 	end 'stillMoving'
 
-	// ⭐ **BREAKING A LOCK IS EXPLICIT AND LOGGED, NEVER SILENT** — the slice board's own rule for a
-	// stale claim, and for its reason: if this ever breaks a lock whose holder was merely slow, the
-	// line below is the only evidence that would explain the two runs that followed.
-	printError("warning: breaking an ABANDONED tree lock at {lockPath.toString()} — nothing has touched it for {untouchedSeconds} s (a live holder rewrites it every {TouchIntervalMs} ms), so the process that took it is gone or has stopped making progress. It said:\n{indentedRecord(record)}\n")
-	return takeLock(lockPath, into: into)
-end 'claimOverExisting'
+	return AcquireDecision.takeOver("warning: taking over an ABANDONED tree lock at {lockPath.toString()} — nothing has refreshed it for {untouchedSeconds} s (a live holder refreshes it every {TouchIntervalMs} ms), so the process that took it is gone or has stopped making progress. Is it still alive? {livenessLine(holder, liveness: liveness)}. It said:\n{indentedRecord(record)}\n")
+end 'decideByHeartbeat'
 
-// ⚠ The read-back is the mutual exclusion, and the pause is what makes it work. Neither the stdlib
-// nor the emitted runtime offers an exclusive create (`O_EXCL`), an `flock`, or a `rename` that
-// fails on an existing target, so two processes that both find the path free both write it. After
-// the pause both read the later writer's bytes, so exactly one survives.
-//
-// A process that stalls longer than `AcquireVerifyDelayMs` between finding the path free and
-// writing it can still overwrite a lock the winner has verified. The contention guarded is
-// human-scale, and the failure left is two runs, never a worse one.
-function takeLock(lockPath FilePath, into TreeLockHold) returns ExitCode
-	let sinceUnix = WallClock.nowUnixSeconds()
-	let pid = __Builtins.currentProcessId()
+function takeOverUnderClaim(acquisition Acquisition, warning String, into TreeLockHold) returns ExitCode
+	printError(warning)
+	return takeUnderClaim(acquisition, into: into)
+end 'takeOverUnderClaim'
 
-	// Unique across every process that could contend: a pid cannot be shared by two live processes,
-	// and the two clocks separate a REUSED pid from the one that held this lock before it.
-	let token = "{pid}-{sinceUnix}-{Clock.nowNanos()}"
+function takeUnderClaim(acquisition Acquisition, into TreeLockHold) returns ExitCode
+	let lock = OwnedLock.create(acquisition.lockPath, claimPath: acquisition.claimPath, token: freshToken(), sinceUnix: WallClock.nowUnixSeconds(), host: acquisition.host)
+	let written = changeRecordUnderClaim(lock, claimToken: acquisition.claimToken, change: RecordChange.rewrite(0))
+	releaseClaimOrWarn(acquisition.claimPath, token: acquisition.claimToken)
 
-	// The remedy is in the message because the likeliest reader owns neither the directory nor the
-	// problem: an installed Maxon can live somewhere a user cannot write, and `stdlibDirAbove` finds
-	// that install's `stdlib/` for any file placed beneath it, so building a `hello.maxon` there lands
-	// here. The message says "directory", not "checkout": that reader has no checkout.
-	if not writeRecord(lockPath, token: token, sinceUnix: sinceUnix, heldSeconds: 0) 'unwritable'
-		printError("error: could not write the tree lock at {lockPath.toString()} — that directory is not writable by you. The lock guards the shared output directories two commands would otherwise corrupt, so nothing was run.\n")
-		printError("  If you are building inside an installed copy of Maxon, build from a directory you own instead.\n")
-		return NothingRanExitCode
-	end 'unwritable'
+	return match written 'written'
+		done gives tookLock(lock, into: into)
+		failed(reason) gives reportLockFailure(reason)
+	end 'written'
+end 'takeUnderClaim'
 
-	sleep(AcquireVerifyDelayMs)
-
-	if not recordCarriesToken(lockPath, token: token) 'lostTheRace'
-		printError("error: another maxon command claimed this checkout's tree lock at the same instant, and it won. Nothing was run — re-run once it has finished.\n")
-		return NothingRanExitCode
-	end 'lostTheRace'
-
-	into.take(OwnedLock.create(lockPath, token: token, sinceUnix: sinceUnix))
+function tookLock(lock OwnedLock, into TreeLockHold) returns ExitCode
+	into.take(lock)
 	return SucceededExit
-end 'takeLock'
+end 'tookLock'
 
-// The record's bytes. `argv` is the whole command line, because "which of my four terminals is this?"
-// is the question a reader actually has, and a bare command name does not answer it.
-function writeRecord(lockPath FilePath, token String, sinceUnix UnixSeconds, heldSeconds LockSeconds) returns bool
-	let pid = __Builtins.currentProcessId()
+function releaseClaimThenReportBusy(acquisition Acquisition, record String, untouchedSeconds LockSeconds, holder LeftoverOwner, liveness OwnerLiveness) returns ExitCode
+	releaseClaimOrWarn(acquisition.claimPath, token: acquisition.claimToken)
+	return reportBusy(acquisition.lockPath, record: record, untouchedSeconds: untouchedSeconds, holder: holder, liveness: liveness)
+end 'releaseClaimThenReportBusy'
+
+function agedText(path FilePath, what String, clock ClockSource) returns AgedText
+	var text = ""
+
+	match readClassified(path, what: what) 'text'
+		text(content) then text = content
+		fault(kind, reason) then return AgedText.fault(kind, reason: reason)
+	end 'text'
+
+	var stampSeconds = 0 as UnixSeconds
+
+	match modifiedStamp(path, what: what) 'stamp'
+		at(seconds) then stampSeconds = seconds
+		fault(kind, reason) then return AgedText.fault(kind, reason: reason)
+	end 'stamp'
+
+	return match clockNow(clock) 'now'
+		at(seconds) gives AgedText.present(text, untouchedSeconds: secondsBetween(stampSeconds, later: seconds))
+		fault(kind, reason) gives AgedText.fault(FileFault.failed if kind == FileFault.gone else kind, reason: reason)
+	end 'now'
+end 'agedText'
+
+function clockNow(clock ClockSource) returns FilesystemNow
+	return match clock 'clock'
+		heldClaim(claimPath) gives heldClaimStamp(claimPath)
+		measured(seconds) gives FilesystemNow.at(seconds)
+	end 'clock'
+end 'clockNow'
+
+function heldClaimStamp(claimPath FilePath) returns FilesystemNow
+	return match modifiedStamp(claimPath, what: ClaimFileWhat) 'claimStamp'
+		at(seconds) gives FilesystemNow.at(seconds)
+		fault(kind, reason) gives FilesystemNow.fault(kind, reason: "{ClaimFileWhat} at {claimPath.toString()}, which this command holds, is gone" if kind == FileFault.gone else reason)
+	end 'claimStamp'
+end 'heldClaimStamp'
+
+function readClassified(path FilePath, what String) returns FileText
+	let content = try File.readText(path) otherwise (e) 'unread'
+		return FileText.fault(faultOf(e.failure()), reason: "could not read {what} at {path.toString()} ({e.name})")
+	end 'unread'
+
+	return FileText.text(content)
+end 'readClassified'
+
+function modifiedStamp(path FilePath, what String) returns FileStamp
+	let info = try File.info(path) otherwise (e) 'noInfo'
+		return FileStamp.fault(faultOf(e.failure()), reason: "could not read the timestamp of {what} at {path.toString()} ({e.name})")
+	end 'noInfo'
+
+	return FileStamp.at(info.modifiedTime as UnixSeconds)
+end 'modifiedStamp'
+
+// On Windows a file whose delete is pending answers access denied until its last handle closes,
+// which is contention. Elsewhere it is a real refusal, and must end in `reportLockFailure`.
+#if os(Windows)
+	let AccessDeniedFault = FileFault.contended
+#else
+	let AccessDeniedFault = FileFault.failed
+#endif
+
+function faultOf(failure FileFailure) returns FileFault
+	return match failure 'failure'
+		notFound gives FileFault.gone
+		busy gives FileFault.contended
+		accessDenied gives AccessDeniedFault
+		alreadyExists gives FileFault.contended
+		failed gives FileFault.failed
+	end 'failure'
+end 'faultOf'
+
+function filesystemNow(claimPath FilePath) returns FilesystemNow
+	let probe = leftoverPath(LockLeftover.clockProbe, beside: claimPath, unique: freshToken())
+
+	try File.createText(probe, content: ClockProbeWhat) otherwise (e) 'unwritten'
+		return FilesystemNow.fault(faultOf(e.failure()), reason: "could not write {ClockProbeWhat} at {probe.toString()} ({e.name})")
+	end 'unwritten'
+
+	let stamp = modifiedStamp(probe, what: ClockProbeWhat)
+
+	try File.delete(probe) otherwise (e) 'kept'
+		warnOutcome(ClockProbeWhat, path: probe, outcome: LeftInPlaceOutcome, reason: "it could not be deleted ({e.name})", consequence: "Nothing reads it, so it may be deleted by hand.")
+	end 'kept'
+
+	return match stamp 'stamp'
+		at(seconds) gives FilesystemNow.at(seconds)
+		fault(kind, reason) gives FilesystemNow.fault(kind, reason: "{ClockProbeWhat} at {probe.toString()} was gone before its timestamp could be read" if kind == FileFault.gone else reason)
+	end 'stamp'
+end 'filesystemNow'
+
+function recordOwnership(lockPath FilePath, token String) returns RecordOwnership
+	return match readClassified(lockPath, what: LockFileWhat) 'record'
+		text(content) gives ownershipOfRecord(content, token: token)
+		fault(kind, reason) gives RecordOwnership.absent if kind == FileFault.gone else RecordOwnership.failed(reason)
+	end 'record'
+end 'recordOwnership'
+
+function ownershipOfRecord(record String, token String) returns RecordOwnership
+	let recordedToken = try fieldValue(record, key: TokenField) otherwise return RecordOwnership.another(record)
+	return RecordOwnership.mine if recordedToken == token else RecordOwnership.another(record)
+end 'ownershipOfRecord'
+
+function writeRecord(lock OwnedLock, heldSeconds LockSeconds) returns LockStep
+	let staged = leftoverPath(LockLeftover.stagedRecord, beside: lock.path, unique: lock.token)
+
+	try File.writeText(staged, content: recordText(lock.token, sinceUnix: lock.sinceUnix, heldSeconds: heldSeconds, host: lock.host)) otherwise (e) 'unwritten'
+		return LockStep.failed(withStagedRecordRemoved("could not write the tree lock's new record at {staged.toString()} ({e.name})", staged: staged))
+	end 'unwritten'
+
+	try File.rename(staged, to: lock.path) otherwise (e) 'unmoved'
+		return LockStep.failed(withStagedRecordRemoved("could not move the tree lock's new record from {staged.toString()} to {lock.path.toString()} ({e.name})", staged: staged))
+	end 'unmoved'
+
+	return LockStep.done
+end 'writeRecord'
+
+function withStagedRecordRemoved(reason String, staged FilePath) returns String
+	try File.delete(staged) otherwise (e) 'kept'
+		if faultOf(e.failure()) == FileFault.gone 'neverWritten'
+			return reason
+		end 'neverWritten'
+
+		return "{reason}, and the staged record could not be removed ({e.name})"
+	end 'kept'
+
+	return reason
+end 'withStagedRecordRemoved'
+
+function deleteRecord(lockPath FilePath) returns LockStep
+	try File.delete(lockPath) otherwise (e) 'undeleted'
+		return LockStep.failed("could not delete the tree lock at {lockPath.toString()} ({e.name})")
+	end 'undeleted'
+
+	return LockStep.done
+end 'deleteRecord'
+
+function takeClaim(claimPath FilePath) returns ClaimAttempt
+	let startedMs = Clock.nowMs()
+	var sweep = LeftoverSweep.pending()
+
+	while true 'claiming'
+		match claimStep(claimPath, startedMs: startedMs, sweep: sweep) 'step'
+			held(token) then return ClaimAttempt.held(token)
+			retry then continue
+			busy(untouchedSeconds) then return ClaimAttempt.busy(untouchedSeconds)
+			contended(reason) then return ClaimAttempt.contended(reason)
+			failed(reason) then return ClaimAttempt.failed(reason)
+		end 'step'
+	end 'claiming'
+
+	panic("TreeLock.takeClaim: the claiming loop leaves only by returning a step that is not a retry")
+end 'takeClaim'
+
+function claimStep(claimPath FilePath, startedMs InstantMs, sweep LeftoverSweep) returns ClaimStep
+	let token = freshToken()
+
+	try File.createText(claimPath, content: token) otherwise (e) 'notCreated'
+		if e == FileWriteError.alreadyExists 'heldElsewhere'
+			return claimHeldElsewhere(claimPath, startedMs: startedMs, sweep: sweep)
+		end 'heldElsewhere'
+
+		return claimStepAfter(respondTo(faultOf(e.failure()), reason: "could not create {ClaimFileWhat} at {claimPath.toString()} ({e.name})", startedMs: startedMs))
+	end 'notCreated'
+
+	let settle = try randomMilliseconds(ClaimSettleMinMs, maxMs: ClaimSettleMaxMs) otherwise (e) 'noDelay'
+		return abandonOwnClaim(claimPath, token: token, step: ClaimStep.failed("could not draw the random delay a claim waits before it is trusted ({e.name})"))
+	end 'noDelay'
+
+	sleep(settle)
+
+	return match claimOwnership(claimPath, token: token, startedMs: startedMs) 'settled'
+		mine gives ClaimStep.held(token)
+		another gives ClaimStep.retry
+		contended(reason) gives abandonOwnClaim(claimPath, token: token, step: ClaimStep.contended(reason))
+		failed(reason) gives abandonOwnClaim(claimPath, token: token, step: ClaimStep.failed(reason))
+	end 'settled'
+end 'claimStep'
+
+function abandonOwnClaim(claimPath FilePath, token String, step ClaimStep) returns ClaimStep
+	releaseClaimOrWarn(claimPath, token: token)
+	return step
+end 'abandonOwnClaim'
+
+function respondTo(fault FileFault, reason String, startedMs InstantMs) returns FaultResponse
+	return match fault 'fault'
+		gone gives FaultResponse.gone
+		contended gives contend(startedMs, reason: reason)
+		failed gives FaultResponse.failed(reason)
+	end 'fault'
+end 'respondTo'
+
+function contend(startedMs InstantMs, reason String) returns FaultResponse
+	if Clock.elapsedMs(startedMs) >= ClaimWaitLimitMs 'waitedEnough'
+		return FaultResponse.exhausted("{reason}, and it kept failing that way for {ClaimWaitLimitMs} ms")
+	end 'waitedEnough'
+
+	return match backOff() 'backoff'
+		done gives FaultResponse.retry
+		failed(why) gives FaultResponse.failed(why)
+	end 'backoff'
+end 'contend'
+
+function claimStepAfter(response FaultResponse) returns ClaimStep
+	return match response 'response'
+		gone or
+			retry gives ClaimStep.retry
+		exhausted(reason) gives ClaimStep.contended(reason)
+		failed(reason) gives ClaimStep.failed(reason)
+	end 'response'
+end 'claimStepAfter'
+
+function claimHeldElsewhere(claimPath FilePath, startedMs InstantMs, sweep LeftoverSweep) returns ClaimStep
+	var nowSeconds = 0 as UnixSeconds
+
+	match filesystemNow(claimPath) 'now'
+		at(seconds) then nowSeconds = seconds
+		fault(kind, reason) then return claimStepAfter(respondTo(kind, reason: reason, startedMs: startedMs))
+	end 'now'
+
+	sweep.sweepOnce(claimPath, nowSeconds: nowSeconds)
+
+	return match agedText(claimPath, what: ClaimFileWhat, clock: ClockSource.measured(nowSeconds)) 'found'
+		present(foundToken, untouchedSeconds) gives judgeLiveClaim(claimPath, foundToken: foundToken, untouchedSeconds: untouchedSeconds, startedMs: startedMs, nowSeconds: nowSeconds)
+		fault(kind, reason) gives claimStepAfter(respondTo(kind, reason: reason, startedMs: startedMs))
+	end 'found'
+end 'claimHeldElsewhere'
+
+function sweepLeftovers(claimPath FilePath, nowSeconds UnixSeconds)
+	let directory = try claimPath.parent() otherwise panic("TreeLock.sweepLeftovers: the claim file at {claimPath.toString()} is a sibling of the lock file at a checkout root, so it has a parent")
+
+	let entries = try Directory.list(directory) otherwise (e) 'unlisted'
+		printError("warning: could not list {directory.toString()} to remove the tree lock's leftover files ({e.name}). They stay until a later command lists it.\n")
+		return
+	end 'unlisted'
+
+	for entry in entries 'eachEntry'
+		let leftover = try leftoverNamed(entry.filename()) otherwise continue
+		sweepLeftover(entry, leftover: leftover, nowSeconds: nowSeconds)
+	end 'eachEntry'
+end 'sweepLeftovers'
+
+function leftoverNamed(name String) returns LockLeftover throws AbsentError
+	for leftover in LockLeftover.allCases 'eachLeftover'
+		if name.startsWith(leftover.prefix()) 'thisKind'
+			return leftover
+		end 'thisKind'
+	end 'eachLeftover'
+
+	throw AbsentError.absent
+end 'leftoverNamed'
+
+function sweepLeftover(path FilePath, leftover LockLeftover, nowSeconds UnixSeconds)
+	match leftoverStamp(path, leftover: leftover) 'stamp'
+		at(seconds) then removeIfAbandoned(path, untouchedSeconds: secondsBetween(seconds, later: nowSeconds))
+		fault(kind, reason) then warnUnswept(path, kind: kind, reason: reason)
+	end 'stamp'
+end 'sweepLeftover'
+
+function leftoverStamp(path FilePath, leftover LockLeftover) returns FileStamp
+	return match leftover 'leftover'
+		setAsideClaim gives setAsideStamp(path)
+		clockProbe or
+			stagedRecord gives modifiedStamp(path, what: LeftoverWhat)
+	end 'leftover'
+end 'leftoverStamp'
+
+// From the filesystem time written into the aside's name: a rename keeps the stale claim's own
+// mtime, so its mtime would let a contender sweep the aside while its remover is still reading it.
+function setAsideStamp(path FilePath) returns FileStamp
+	let unique = path.filename().replaceFirst(LockLeftover.setAsideClaim.prefix(), with: "")
+	let stampText = try unique.split(SetAsideStampSeparator).get(0) otherwise panic("TreeLock.setAsideStamp: a split of '{unique}' has a first part")
+	let stamp = try int.fromString(stampText) otherwise 'unstamped'
+		return FileStamp.fault(FileFault.failed, reason: UnstampedAsideReason)
+	end 'unstamped'
+
+	if stamp < 0 'beforeTheEpoch'
+		return FileStamp.fault(FileFault.failed, reason: UnstampedAsideReason)
+	end 'beforeTheEpoch'
+
+	return FileStamp.at(stamp as UnixSeconds)
+end 'setAsideStamp'
+
+function removeIfAbandoned(path FilePath, untouchedSeconds LockSeconds)
+	if untouchedSeconds <= ClaimStaleAfterSeconds 'stillInUse'
+		return
+	end 'stillInUse'
+
+	try File.delete(path) otherwise (e) 'kept'
+		warnUnswept(path, kind: faultOf(e.failure()), reason: "it could not be deleted ({e.name})")
+		return
+	end 'kept'
+
+	printError("warning: removed a leftover tree lock file at {path.toString()} — nothing has touched it for {untouchedSeconds} s, and the command that made it lasts well under {ClaimStaleAfterSeconds} s, so it ended before it could remove the file.\n")
+end 'removeIfAbandoned'
+
+function warnUnswept(path FilePath, kind FileFault, reason String)
+	if kind == FileFault.gone or kind == FileFault.contended 'removedOrInUseMeanwhile'
+		return
+	end 'removedOrInUseMeanwhile'
+
+	warnOutcome(LeftoverWhat, path: path, outcome: LeftInPlaceOutcome, reason: reason, consequence: leftoverConsequence())
+end 'warnUnswept'
+
+function judgeLiveClaim(claimPath FilePath, foundToken String, untouchedSeconds LockSeconds, startedMs InstantMs, nowSeconds UnixSeconds) returns ClaimStep
+	if untouchedSeconds > ClaimStaleAfterSeconds 'stale'
+		return removeStaleClaim(claimPath, staleToken: foundToken, untouchedSeconds: untouchedSeconds, startedMs: startedMs, nowSeconds: nowSeconds)
+	end 'stale'
+
+	if Clock.elapsedMs(startedMs) >= ClaimWaitLimitMs 'waitedEnough'
+		return ClaimStep.busy(untouchedSeconds)
+	end 'waitedEnough'
+
+	return match backOff() 'backoff'
+		done gives ClaimStep.retry
+		failed(reason) gives ClaimStep.failed(reason)
+	end 'backoff'
+end 'judgeLiveClaim'
+
+function backOff() returns LockStep
+	let backoff = try randomMilliseconds(ClaimBackoffMinMs, maxMs: ClaimBackoffMaxMs) otherwise (e) 'noDelay'
+		return LockStep.failed("could not draw the random delay a contended claim backs off by ({e.name})")
+	end 'noDelay'
+
+	sleep(backoff)
+	return LockStep.done
+end 'backOff'
+
+function removeStaleClaim(claimPath FilePath, staleToken String, untouchedSeconds LockSeconds, startedMs InstantMs, nowSeconds UnixSeconds) returns ClaimStep
+	return match removeClaimHolding(claimPath, token: staleToken, startedMs: startedMs, clock: ClockSource.measured(nowSeconds)) 'removal'
+		removed gives staleClaimRemoved(claimPath, untouchedSeconds: untouchedSeconds)
+		gone or
+			another gives ClaimStep.retry
+		contended(reason, _) gives ClaimStep.contended(reason)
+		failed(reason, _) gives ClaimStep.failed(reason)
+	end 'removal'
+end 'removeStaleClaim'
+
+function staleClaimRemoved(claimPath FilePath, untouchedSeconds LockSeconds) returns ClaimStep
+	printError("warning: removed a stale tree lock claim file at {claimPath.toString()} — nothing has touched it for {untouchedSeconds} s, and a live claim lasts well under {ClaimStaleAfterSeconds} s, so the command that made it ended while it was claiming the lock.\n")
+	return ClaimStep.retry
+end 'staleClaimRemoved'
+
+function removeClaimHolding(claimPath FilePath, token String, startedMs InstantMs, clock ClockSource) returns ClaimRemoval
+	return match claimTextOf(claimPath, startedMs: startedMs) 'current'
+		text(content) gives setAsideClaimHolding(claimPath, token: token, startedMs: startedMs, clock: clock) if content == token else ClaimRemoval.another
+		gone gives ClaimRemoval.gone
+		contended(reason) gives ClaimRemoval.contended(reason, left: claimPath)
+		failed(reason) gives ClaimRemoval.failed(reason, left: claimPath)
+	end 'current'
+end 'removeClaimHolding'
+
+function setAsideClaimHolding(claimPath FilePath, token String, startedMs InstantMs, clock ClockSource) returns ClaimRemoval
+	var nowSeconds = 0 as UnixSeconds
+
+	match clockNow(clock) 'now'
+		at(seconds) then nowSeconds = seconds
+		fault(kind, reason) then return claimRemovalAfter(kind, reason: reason, left: claimPath)
+	end 'now'
+
+	let aside = leftoverPath(LockLeftover.setAsideClaim, beside: claimPath, unique: "{nowSeconds}{SetAsideStampSeparator}{freshToken()}")
+
+	return match retriedChange(claimPath, change: ClaimFileChange.setAsideTo(aside), startedMs: startedMs) 'setAside'
+		done gives removeSetAsideClaim(claimPath, aside: aside, token: token, startedMs: startedMs)
+		gone gives ClaimRemoval.gone
+		contended(reason) gives ClaimRemoval.contended(reason, left: claimPath)
+		failed(reason) gives ClaimRemoval.failed(reason, left: claimPath)
+	end 'setAside'
+end 'setAsideClaimHolding'
+
+function claimRemovalAfter(kind FileFault, reason String, left FilePath) returns ClaimRemoval
+	return match kind 'kind'
+		gone gives ClaimRemoval.gone
+		contended gives ClaimRemoval.contended(reason, left: left)
+		failed gives ClaimRemoval.failed(reason, left: left)
+	end 'kind'
+end 'claimRemovalAfter'
+
+function removeSetAsideClaim(claimPath FilePath, aside FilePath, token String, startedMs InstantMs) returns ClaimRemoval
+	return match claimTextOf(aside, startedMs: startedMs) 'setAside'
+		text(content) gives settleSetAsideClaim(claimPath, aside: aside, content: content, token: token, startedMs: startedMs)
+		gone gives ClaimRemoval.gone
+		contended(reason) gives discardUnreadAside(aside, step: ClaimRemoval.contended(reason, left: aside), startedMs: startedMs)
+		failed(reason) gives discardUnreadAside(aside, step: ClaimRemoval.failed(reason, left: aside), startedMs: startedMs)
+	end 'setAside'
+end 'removeSetAsideClaim'
+
+function discardUnreadAside(aside FilePath, step ClaimRemoval, startedMs InstantMs) returns ClaimRemoval
+	return match retriedChange(aside, change: ClaimFileChange.delete, startedMs: startedMs) 'deletion'
+		done or
+			gone gives ClaimRemoval.removed
+		contended or
+			failed gives step
+	end 'deletion'
+end 'discardUnreadAside'
+
+function settleSetAsideClaim(claimPath FilePath, aside FilePath, content String, token String, startedMs InstantMs) returns ClaimRemoval
+	if content == token 'theJudgedClaim'
+		deleteSetAsideClaim(aside, startedMs: startedMs)
+		return ClaimRemoval.removed
+	end 'theJudgedClaim'
+
+	try File.createText(claimPath, content: content) otherwise (e) 'notRestored'
+		if e != FileWriteError.alreadyExists 'notPutBack'
+			printError("warning: the tree lock's claim file at {claimPath.toString()} held another command's claim, which this command set aside by mistake and could not put back ({e.name}). That command finds its claim gone and claims the lock again.\n")
+		end 'notPutBack'
+	end 'notRestored'
+
+	deleteSetAsideClaim(aside, startedMs: startedMs)
+	return ClaimRemoval.another
+end 'settleSetAsideClaim'
+
+function deleteSetAsideClaim(aside FilePath, startedMs InstantMs)
+	match retriedChange(aside, change: ClaimFileChange.delete, startedMs: startedMs) 'deletion'
+		done or
+			gone then return
+		contended(reason) then warnClaimLeft(aside, reason: reason)
+		failed(reason) then warnClaimLeft(aside, reason: reason)
+	end 'deletion'
+end 'deleteSetAsideClaim'
+
+function claimTextOf(path FilePath, startedMs InstantMs) returns ClaimText
+	while true 'attempting'
+		var response = FaultResponse.retry
+
+		match readClassified(path, what: ClaimFileWhat) 'attempt'
+			text(content) then return ClaimText.text(content)
+			fault(kind, reason) then response = respondTo(kind, reason: reason, startedMs: startedMs)
+		end 'attempt'
+
+		match response 'response'
+			gone then return ClaimText.gone
+			retry then continue
+			exhausted(reason) then return ClaimText.contended(reason)
+			failed(reason) then return ClaimText.failed(reason)
+		end 'response'
+	end 'attempting'
+
+	panic("TreeLock.claimTextOf: the loop leaves only by returning an answer")
+end 'claimTextOf'
+
+function retriedChange(path FilePath, change ClaimFileChange, startedMs InstantMs) returns ClaimChange
+	while true 'attempting'
+		var response = FaultResponse.retry
+
+		match attemptedChange(path, change: change) 'attempt'
+			done then return ClaimChange.done
+			fault(kind, reason) then response = respondTo(kind, reason: reason, startedMs: startedMs)
+		end 'attempt'
+
+		match response 'response'
+			gone then return ClaimChange.gone
+			retry then continue
+			exhausted(reason) then return ClaimChange.contended(reason)
+			failed(reason) then return ClaimChange.failed(reason)
+		end 'response'
+	end 'attempting'
+
+	panic("TreeLock.retriedChange: the loop leaves only by returning an answer")
+end 'retriedChange'
+
+function attemptedChange(path FilePath, change ClaimFileChange) returns ChangeAttempt
+	return match change 'change'
+		setAsideTo(aside) gives attemptedSetAside(path, aside: aside)
+		delete gives attemptedDelete(path)
+	end 'change'
+end 'attemptedChange'
+
+function attemptedSetAside(path FilePath, aside FilePath) returns ChangeAttempt
+	try File.rename(path, to: aside) otherwise (e) 'unmoved'
+		return ChangeAttempt.fault(faultOf(e.failure()), reason: "could not set {ClaimFileWhat} at {path.toString()} aside ({e.name})")
+	end 'unmoved'
+
+	return ChangeAttempt.done
+end 'attemptedSetAside'
+
+function attemptedDelete(path FilePath) returns ChangeAttempt
+	try File.delete(path) otherwise (e) 'undeleted'
+		return ChangeAttempt.fault(faultOf(e.failure()), reason: "it could not be deleted ({e.name})")
+	end 'undeleted'
+
+	return ChangeAttempt.done
+end 'attemptedDelete'
+
+function claimOwnership(claimPath FilePath, token String, startedMs InstantMs) returns ClaimOwnership
+	return match claimTextOf(claimPath, startedMs: startedMs) 'claim'
+		text(content) gives ClaimOwnership.mine if content == token else ClaimOwnership.another
+		gone gives ClaimOwnership.another
+		contended(reason) gives ClaimOwnership.contended(reason)
+		failed(reason) gives ClaimOwnership.failed(reason)
+	end 'claim'
+end 'claimOwnership'
+
+function releaseClaimOrWarn(claimPath FilePath, token String)
+	match removeClaimHolding(claimPath, token: token, startedMs: Clock.nowMs(), clock: ClockSource.heldClaim(claimPath)) 'removal'
+		removed then return
+		gone then printError("warning: the tree lock's claim file at {claimPath.toString()} no longer existed when this command came to release it, so there was nothing to remove.\n")
+		another then printError("warning: the tree lock's claim file at {claimPath.toString()} was taken over by another command while this one held it, so it is left to that command.\n")
+		contended(reason, left) then warnClaimLeft(left, reason: reason)
+		failed(reason, left) then warnClaimLeft(left, reason: reason)
+	end 'removal'
+end 'releaseClaimOrWarn'
+
+function heldClaimReason(untouchedSeconds LockSeconds) returns String
+	return "another command has held its claim file for {untouchedSeconds} s"
+end 'heldClaimReason'
+
+function leftoverConsequence() returns String
+	return "A command that finds the lock's claim file held removes it once nothing has touched it for {ClaimStaleAfterSeconds} s."
+end 'leftoverConsequence'
+
+function warnClaimLeft(path FilePath, reason String)
+	warnOutcome(ClaimFileWhat, path: path, outcome: LeftInPlaceOutcome, reason: reason, consequence: leftoverConsequence())
+end 'warnClaimLeft'
+
+function randomMilliseconds(minMs Milliseconds, maxMs Milliseconds) returns Milliseconds throws RandomError
+	let draw = try Random.below((maxMs - minMs + 1) as RandomBound)
+	return minMs + draw as Milliseconds
+end 'randomMilliseconds'
+
+function reportClaimBusy(claimPath FilePath, untouchedSeconds LockSeconds) returns ExitCode
+	printBusyHeadline("is claiming its tree lock")
+	printError("  claim: {claimPath.toString()}\n")
+	printError("  This command waited {ClaimWaitLimitMs} ms for the claim to be released; it was last touched {untouchedSeconds} s ago. A claim nothing has touched for {ClaimStaleAfterSeconds} s is removed automatically, with a line saying so.\n")
+	return NothingRanExitCode
+end 'reportClaimBusy'
+
+function reportClaimContended(claimPath FilePath, reason String) returns ExitCode
+	printBusyHeadline("is using its tree lock's claim file")
+	printError("  claim: {claimPath.toString()}\n")
+	printError("  {reason}.\n")
+	return NothingRanExitCode
+end 'reportClaimContended'
+
+function printBusyHeadline(activity String)
+	printError("error: this checkout is BUSY — another maxon command {activity}, and two of them in one tree corrupt each other's output directories. Nothing was run.\n")
+end 'printBusyHeadline'
+
+function reportLockFailure(reason String) returns ExitCode
+	printError("error: the tree lock could not be taken — {reason}. The lock guards the shared output directories two commands would otherwise corrupt, so nothing was run.\n")
+	printError("  If you are building inside an installed copy of Maxon, build from a directory you own instead.\n")
+	return NothingRanExitCode
+end 'reportLockFailure'
+
+function freshToken() returns String
+	return "{__Builtins.currentProcessId()}-{WallClock.nowUnixSeconds()}-{Clock.nowNanos()}"
+end 'freshToken'
+
+function recordText(token String, sinceUnix UnixSeconds, heldSeconds LockSeconds, host LockHost) returns String
 	var text = StringBuilder.create()
-	appendField(text, key: PidField, value: "{pid}")
+	appendField(text, key: PidField, value: "{__Builtins.currentProcessId()}")
 	appendField(text, key: TokenField, value: token)
 	appendField(text, key: SinceField, value: "{sinceUnix}")
 	appendField(text, key: HeldField, value: "{heldSeconds}")
 	appendField(text, key: ArgvField, value: joinArgs())
 
-	try File.writeText(lockPath, content: text.build()) otherwise return false
-	return true
-end 'writeRecord'
+	match host 'host'
+		known(identity) then appendField(text, key: HostField, value: identity)
+		unknown then break 'host'
+	end 'host'
+
+	return text.build()
+end 'recordText'
 
 function appendField(text StringBuilder, key String, value String)
 	text.append("{key}{FieldSeparator}{value}{RecordLineSeparator}")
@@ -334,22 +1319,13 @@ function joinArgs() returns String
 	return joinedWith(words, separator: ArgvWordSeparator)
 end 'joinArgs'
 
-// Does the record at `lockPath` still name `token` as its holder? The token is the ONE field parsed
-// out of a record — everything else is echoed.
-function recordCarriesToken(lockPath FilePath, token String) returns bool
-	let text = try File.readText(lockPath) otherwise return false
-	return fieldValue(text, key: TokenField) == token
-end 'recordCarriesToken'
-
-// The value of one `key=` line, or the empty String when the record does not carry that key. Empty is
-// a real answer here rather than a sentinel: the only caller compares it against a token that is never
-// empty, so a truncated or foreign record answers "not yours", which is the correct reading of it.
+// The value of one `key=` line; a record that does not carry the key throws.
 //
 // `replaceFirst` off a line already known to START with the key, rather than `split("=")` and part 1 —
 // which is the text between the FIRST and SECOND `=`, so any value containing one is silently
 // truncated. `argv` routinely contains several (`--filter=…`, `--compiler=…`), and
 // `CommandLine.optionValue` carries the scar from making exactly that mistake.
-function fieldValue(text String, key String) returns String
+function fieldValue(text String, key String) returns String throws AbsentError
 	let prefix = "{key}{FieldSeparator}"
 
 	for line in text.split(RecordLineSeparator) 'eachLine'
@@ -358,50 +1334,58 @@ function fieldValue(text String, key String) returns String
 		end 'found'
 	end 'eachLine'
 
-	return ""
+	throw AbsentError.absent
 end 'fieldValue'
 
-// Whole seconds from a past wall-clock stamp to now, clamped at zero — see this file's header on why a
-// wall clock is forced here and what it does when it steps backwards.
 function secondsSince(stamp UnixSeconds) returns LockSeconds
-	let now = WallClock.nowUnixSeconds()
-
-	if now <= stamp 'clockWentBackwards'
-		return 0
-	end 'clockWentBackwards'
-
-	return now - stamp
+	return secondsBetween(stamp, later: WallClock.nowUnixSeconds())
 end 'secondsSince'
 
-// ⭐ The refusal. It names the holder, says how long it has been going and when it last moved, quotes
-// the record whole, and says what to do about it — the four things a reader needs and the four a bare
-// "locked" sends them off to re-derive. `refuseIfStale` is the model: a refusal that says only that it
-// refused is a second problem, not a diagnosis.
-function reportBusy(lockPath FilePath, record String, untouchedSeconds LockSeconds) returns ExitCode
-	printError("error: this checkout is BUSY — another maxon command holds its tree lock, and two of them in one tree corrupt each other's output directories. Nothing was run.\n")
+// Clamped at zero: a clock can step backwards (NTP, a VM resuming from a snapshot), and a backwards
+// step must read as no time passed, which keeps a live lock rather than breaking it.
+function secondsBetween(earlier UnixSeconds, later UnixSeconds) returns LockSeconds
+	if later <= earlier 'notLater'
+		return 0
+	end 'notLater'
+
+	return later - earlier
+end 'secondsBetween'
+
+function reportBusy(lockPath FilePath, record String, untouchedSeconds LockSeconds, holder LeftoverOwner, liveness OwnerLiveness) returns ExitCode
+	printBusyHeadline("holds its tree lock")
 	printError("  lock:  {lockPath.toString()}\n")
 	printError("  held by:\n{indentedRecord(record)}\n")
-	printError("  last progress: {untouchedSeconds} s ago (a live holder rewrites the record every {TouchIntervalMs} ms)\n")
-	printError("  is it still alive? {livenessProbeLine(fieldValue(record, key: PidField))}\n")
-	printError("  Wait for it to finish, or end that process. A holder that stops making progress for {AbandonedAfterSeconds} s is treated as abandoned and its lock is broken automatically, with a line saying so.\n")
+	printError("  last progress: {untouchedSeconds} s ago (a live holder refreshes the record every {TouchIntervalMs} ms)\n")
+	printError("  is it still alive? {livenessLine(holder, liveness: liveness)}\n")
+	printError("  Wait for it to finish, or end that process. A holder that refreshes nothing for {AbandonedAfterSeconds} s, or a holder on this machine whose process has ended, is taken over automatically, with a line saying so.\n")
 	return NothingRanExitCode
 end 'reportBusy'
 
-// The probe is PRINTED for the reader to run, never performed here: this lock's liveness is the record's
-// mtime heartbeat, and the section at the top of this file argues why testing a pid is the wrong rule. What
-// the reader needs is the one command their own host answers, spelled exactly.
-function livenessProbeLine(pid String) returns String
-	if pid.isEmpty() 'recordCarriesNoPid'
-		return "the record above carries no {PidField} field, so there is no process to probe — wait for the abandonment window instead"
-	end 'recordCarriesNoPid'
+function livenessLine(holder LeftoverOwner, liveness OwnerLiveness) returns String
+	return match liveness 'liveness'
+		ownerAlive gives "yes — {holderDescription(holder)} is running"
+		notOwned gives "the record names no process this host can probe, so only its heartbeat says"
+		ownerGone panic("TreeLock.livenessLine: a holder that has ended is taken over by `decideOverExisting` before any refusal is reported")
+	end 'liveness'
+end 'livenessLine'
 
-	match detectHostTarget().os 'host'
-		windows then return "run `tasklist /FI \"PID eq {pid}\"` — it lists the process, or prints that no task matches"
-		linux or
-			macos then return "run `ps -p {pid}` — it lists the process, or exits 1 with no row"
-		wasi then panic("livenessProbeLine: no wasi process hosts this compiler, so none of them can hold a tree lock")
-	end 'host'
-end 'livenessProbeLine'
+function holderOf(record String, host LockHost) returns LeftoverOwner
+	let recordedHost = try fieldValue(record, key: HostField) otherwise return LeftoverOwner.notOwned
+
+	if not host.recorded(recordedHost) 'anotherHost'
+		return LeftoverOwner.notOwned
+	end 'anotherHost'
+
+	let pid = try fieldValue(record, key: PidField) otherwise return LeftoverOwner.notOwned
+	return ownerProcessNamed(pid)
+end 'holderOf'
+
+function holderDescription(holder LeftoverOwner) returns String
+	return match holder 'holder'
+		process(pid) gives "process {pid}"
+		notOwned gives "an unnamed process"
+	end 'holder'
+end 'holderDescription'
 
 // The record, indented under the line that introduces it. Its own trailing newline is dropped so the
 // caller's `\n` is the only one — a record ends with one, and two would put a blank line inside the

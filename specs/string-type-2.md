@@ -8,8 +8,7 @@ category: types
 # String Type (Part 2)
 
 Continuation of [string-type](string-type.md): heap-string access, memory-tracking,
-grapheme/codepoint iteration, slicing, clone/COW, and `String.append`. Split from the
-original 77-fragment spec so each batch stays under the per-worker test timeout.
+grapheme/codepoint iteration, slicing, clone/COW, and `String.append`.
 
 ## Tests
 
@@ -89,12 +88,9 @@ end 'main'
 <!-- test: reassigned-var-equality-not-const-folded -->
 A `var` declared with a compile-time string constant (`""`) and then reassigned
 to a runtime value must compare by content, not against its stale declaration-
-time constant. Regression: the TypeResolution string-const specializer aliased
-the slot to its declaration id and never invalidated it on reassignment, so
-`v == "_"` folded to `"" == "_"` (false) at compile time. A self-compiled
-compiler inherited the miscompile in `parseForStatement` (`var iterName = "";
-iterName = nameToken.value; iterName == "_"`), taking the non-discard branch for
-every `for _` loop and spuriously firing E3012 on the stdlib's discard loops.
+time constant. A string-const specializer that aliased the slot to its declaration
+without invalidating it on reassignment would fold `v == "_"` to `"" == "_"` (false)
+at compile time.
 ```maxon
 function pick(useUnderscore bool) returns String
 	if useUnderscore 'u'
@@ -281,10 +277,10 @@ hello
 
 <!-- test: case-conversion-does-not-mutate-receiver -->
 ### toLower / toUpper return a new string and leave the receiver unchanged
-Regression guard. `toLower`/`toUpper` used to rewrite the receiver's bytes in place and
-return the SAME buffer, so `let b = a.toLower()` silently lowercased `a` too. They now
-transform an independent copy: the receiver reads back unchanged even after both calls,
-and — because they no longer mutate `self` — they are callable on a `let` binding.
+Regression guard. `toLower`/`toUpper` transform an independent copy rather than rewriting
+the receiver's bytes in place and returning the SAME buffer (which would make
+`let b = a.toLower()` silently lowercase `a` too): the receiver reads back unchanged even
+after both calls, and — because they do not mutate `self` — they are callable on a `let` binding.
 ```maxon
 function main() returns ExitCode
 	var a = "Hello World"
@@ -773,18 +769,16 @@ end 'main'
 `s.append(s)` ALIASES the argument to the receiver's own bytes, so the source of the blit is the buffer the
 grow has just replaced. The result must still be the doubled text, and the run must stay leak-free: the old
 allocation may only be released once BOTH the grow's copy and the blit have finished reading it.
-compiler-authored; the expected output is `abcabc`.
+The expected output is `abcabc`.
 
-⚠ The parenthetical here read *"the corpus has no self-append case"* until BATCH32, and it was wrong:
-`specs/ownership-edge-cases.md` carries `rc-repeated-self-append`, which is now ported beside it.
+⚠ `specs/ownership-edge-cases.md` carries `rc-repeated-self-append` beside this one.
 
-⛔ **THE REASON BATCH32 GAVE FOR KEEPING BOTH WAS ALSO WRONG, AND THE REVIEW MEASURED IT (BATCH32 review).**
-It said the ported case's SECOND round *"frees the block it copies from"* where this one-round case cannot.
-It does not: growth is `2 * requiredLen` against a `capacity < requiredLen` test, so round 1 detaches the
-`.rdata` literal with no owed allocation to free (`len 6, cap 12`) and round 2 fits exactly and appends IN
-PLACE. **Neither this case nor a two-round one can fail on the read-after-free both describe** — verified by
-moving `emitReleaseOwedBase` ahead of the blit, which left rounds 1 and 2 clean and corrupted round 3.
-⇒ `rc-repeated-self-append` now runs THREE rounds and is the case that guards the hazard. This one stays as
+⛔ **ONLY THE THIRD ROUND OF A SELF-APPEND FREES THE BLOCK IT COPIES FROM.** Growth is `2 * requiredLen`
+against a `capacity < requiredLen` test, so round 1 detaches the `.rdata` literal with no owed allocation
+to free (`len 6, cap 12`) and round 2 fits exactly and appends IN PLACE. **Neither this case nor a
+two-round one can fail on the read-after-free** — `emitReleaseOwedBase` moved ahead of the blit leaves
+rounds 1 and 2 clean and corrupts round 3.
+⇒ `rc-repeated-self-append` runs THREE rounds and is the case that guards the hazard. This one is
 the ONE-round boundary — the detach off an unowned literal, which the three-round case passes through
 without ever asserting on its own.
 ```maxon
@@ -811,8 +805,8 @@ detaches it onto a private buffer — and `u`, which detaches at length ZERO, ge
 (`__str_append` asks for `2 * requiredLen`, and twice nothing is nothing), so its next append has no slack
 and must grow again. A `capacity` test that only asked whether the length increased would let that second
 append blit past the buffer it just sized, so this case is what pins the growth test to the capacity rather
-than to the length — and it is the one shape that still reaches a second consecutive detach now that growth
-is geometric. compiler-authored (the corpus has no empty-append case).
+than to the length — and under geometric growth it is the one shape that reaches a second consecutive
+detach.
 ```maxon
 function main() returns ExitCode
 	var t = "xy"
@@ -842,16 +836,15 @@ costs one copy of its text. Each use describes those bytes through its own 48-by
 buffer (`BufferOwnership.emitBufferCannotHold` is unconditionally true against a negative capacity), leaving
 the blob untouched for every other use.
 
-⚠ **THE DETACH NEEDS SOMEWHERE WRITABLE TO PUBLISH ITSELF, AND THAT IS THE HALF THAT WAS MISSING.**
-`__str_append` already detached the BUFFER; what it had nowhere to write back was the new
-`buffer@0`/`capacity@16`/`length@8`, because a literal's record is emitted into `.rdata` beside its blob.
-The symptom splits by target, and BOTH readings below are measured:
+⚠ **THE DETACH NEEDS SOMEWHERE WRITABLE TO PUBLISH ITSELF.** Detaching the BUFFER is not enough: the new
+`buffer@0`/`capacity@16`/`length@8` must be written back somewhere, and a literal's record is emitted into
+`.rdata` beside its blob. A write-back into that record fails differently by target:
 
-- **x64/arm64** — the record is in a read-only image section, so the store faulted. `grow("hello")` was an
+- **x64/arm64** — the record is in a read-only image section, so the store faults. `grow("hello")` is an
   ACCESS VIOLATION (`0xC0000005`, exit 3221225477) with an empty stdout.
-- **wasm32-wasi** — linear memory has no read-only segment, so the identical store SUCCEEDED and the program
-  ran to completion. **MEASURED: exit 101 with stdout CORRECT** — `grow("hello")` then `print("hello")`
-  printed `hello`, and doubling the pair printed `hello` twice. The leak gate's orphaned detached buffer is
+- **wasm32-wasi** — linear memory has no read-only segment, so the identical store SUCCEEDS and the program
+  runs to completion: **exit 101 with stdout CORRECT** — `grow("hello")` then `print("hello")`
+  prints `hello`, and doubling the pair prints `hello` twice. The leak gate's orphaned detached buffer is
   the whole signal. It does NOT print `helloXY`: `GlobalDataTable` dedupes identical BLOBS but mints a
   record per literal OCCURRENCE (`__str_rec_1`, `__str_rec_3`, … in any golden), so the repointed record is
   the writing use's own and no reader can see it.
@@ -874,10 +867,10 @@ at the last owner. ⚠ The provenance is genuinely not a compile-time fact even 
 `String` PARAMETER is a heap record when its caller owned one and an immortal record when its caller wrote a
 literal, and one `pick(s String, c bool)` sees both.
 
-⚠ **THE FAILURE MODES ARE OPPOSITE AND BOTH WERE MEASURED**, which is why the cases below pin the
+⚠ **THE FAILURE MODES ARE OPPOSITE**, which is why the cases below pin the
 write-through as hard as they pin the fault: increfing an immortal record writes a refcount into a read-only
 image section (`0xC0000005`), and cloning a heap record hands the callee a COPY, so the append lands
-somewhere nobody reads (`v=ab` where the oracle prints `v=abXY` — silent, exit 0, and invisible to a check
+somewhere nobody reads (`v=ab` where the expected output is `v=abXY` — silent, exit 0, and invisible to a check
 that only watched for the crash).
 
 <!-- test: string-literal-through-a-mutating-parameter -->
@@ -907,9 +900,9 @@ survived
 ### A Write Through One Use Leaves Every Other Use Alone
 ⭐ **THIS IS THE COW PROPERTY ITSELF, and it is the case the x64 fault could never have shown.** The two
 `"hello"`s share one interned blob; the first is written through and must detach onto a private buffer,
-which leaves the second reading the original bytes. On wasm this case printed `helloXY` before the record
-became per-use — the shared record had been repointed at the grown buffer, so a use that never wrote saw
-the write anyway.
+which leaves the second reading the original bytes. The record is per-use; on wasm a shared record would
+be repointed at the grown buffer, so a use that never wrote would see the write anyway and this case would
+print `helloXY`.
 ```maxon
 function grow(s String)
 	s.append("XY")
@@ -932,7 +925,7 @@ hello
 ### A Literal Through Two Call Levels
 The borrow is transitive: `outer` passes its own borrowed parameter on to `grow`, so the record that is
 finally written is two frames away from the literal that produced it. Nothing along the way copies it, which
-is the point — a fix that worked by promoting at the immediate call site would still fault here.
+is the point — promoting only at the immediate call site would still fault here.
 ```maxon
 function grow(s String)
 	s.append("XY")
@@ -982,8 +975,8 @@ done
 ### A Literal on a `try … otherwise` Fallback Edge
 ⭐ **THE TWO EDGES DISAGREE, AND BOTH ARE EXERCISED HERE.** The `ok` edge is a real heap element the array
 owns and whose append MUST reach it (`t=abXY`); the `otherwise` edge is an immortal literal that must get a
-record of its own. The first `grow` takes the ok edge, the second takes the fallback — so a fix that copied
-the element would print `t=ab`, and one that increfed the literal would fault on the second call.
+record of its own. The first `grow` takes the ok edge, the second takes the fallback — so copying
+the element would print `t=ab`, and increfing the literal would fault on the second call.
 ```maxon
 typealias StringArray = Array with String
 
@@ -1043,10 +1036,10 @@ done
 
 <!-- test: a-merged-borrow-still-writes-through-to-the-caller -->
 ### The Non-Literal Edge Still Writes Through
-⭐⭐ **THE PROPERTY A NAIVE FIX DESTROYS, PINNED RATHER THAN ASSUMED.** Here the merge already has an OWNED
+⭐⭐ **THE PROPERTY A NAIVE PROMOTION DESTROYS, PINNED RATHER THAN ASSUMED.** Here the merge already has an OWNED
 edge (`make()`), so the borrowed `s` edge is promoted to match it — and promoting it by COPYING is exactly
-the wrong answer: `grow` would append to the copy and `main`'s `v` would never see it. This printed `v=ab`
-before the promotion became a co-ownership, silently and with exit 0.
+the wrong answer: `grow` would append to the copy and `main`'s `v` would never see it, printing `v=ab`
+silently and with exit 0. The promotion is a co-ownership.
 ```maxon
 function grow(s String)
 	s.append("XY")
@@ -1208,9 +1201,8 @@ a=Hello b=Hello arr[0]=74
 <!-- test: tobytearray-is-independent-through-the-raw-managed-door -->
 The independence holds through the RAW door too, and that is what makes `s.toByteArray().managed` the
 sanctioned way for code outside the stdlib to hand a string's bytes to an intrinsic that wants a
-`__ManagedMemory`. `Array` still exports `managed`; `String` stopped exporting it in Stage 4c of the
-SSO plan. So this is the one remaining route from a string to a writable buffer — and it detaches,
-where reaching through the string's own field did not.
+`__ManagedMemory`. `Array` exports `managed`; `String` does not. So this is the one route from a string
+to a writable buffer — and it detaches.
 
 This is pinned separately from the tests above because they go through `Array.set`, which is
 COW-aware by construction. `arr.managed.set` bypasses that and writes the buffer directly, so it is

@@ -18,8 +18,7 @@ before the argument is parsed, because the callee's declaration names them.
 
 **The offer is positional, and its arity is the declared one.** Parameter k of the closure takes type k. A
 parameter past the end of the offer has no declared slot to be typed from — and nothing to infer it by, since
-the compiler has no inference pass. It is refused as un-inferrable (**E2003**), with the reference
-bootstrap's own wording, positioned at the parameter's name. A closure that declares an earlier parameter's
+the compiler has no inference pass. It is refused as un-inferrable (**E2003**), positioned at the parameter's name. A closure that declares an earlier parameter's
 type itself is still counted positionally, so `function(a Integer, b)` at a one-parameter slot is refused
 exactly as `function(a, b)` is.
 
@@ -44,28 +43,27 @@ that types every parameter, a closure that declares none, and a bare reference t
 wrong shape. The last has no closure literal to look at, which is why the check cannot live in the closure
 parse: it is the ordinary argument agreement check (**E3005**), decided whole-program at the argument.
 
-⚠ **THIS DIVERGES FROM THE REFERENCE BOOTSTRAP, DELIBERATELY (user ruling 2026-08-04).** The bootstrap
-accepts `nums.map(function(a Integer, b Integer) gives a + b)`, and so did the compiler — both printing `sum=6`.
-Both were reading an argument nobody passed. `map` calls its transform with ONE element plus the uniform
-`__env` slot, so `b` is whatever the second argument slot happened to hold: change the body to `gives b`
-and arm64-macOS prints `sum=0`, a value that is luck rather than an answer. On `wasm32-wasi` the same
-program does not run at all — `call_indirect` type-checks the callee's signature, so the call to the
-transform traps with *"indirect call type mismatch"*. One target of four could see it, which is what makes
-the shape undefined rather than merely unspecified, and agreeing with the reference about an undefined program is not
-agreement worth keeping.
+⚠ **WHY A WRONG-ARITY TRANSFORM IS REFUSED RATHER THAN RUN.** Admitted,
+`nums.map(function(a Integer, b Integer) gives a + b)` would read an argument
+nobody passed. `map` calls its transform with ONE element plus the uniform
+`__env` slot, so `b` would be whatever the second argument slot happens to hold — a value that is luck
+rather than an answer. On `wasm32-wasi` the same
+program would not run at all — `call_indirect` type-checks the callee's signature, so the call to the
+transform traps with *"indirect call type mismatch"*. The shape is undefined rather than merely
+unspecified, so it is refused.
 
 The rules stay separate because they refuse different things. E2003 is about a parameter no declared slot
 can TYPE and fires in the parser at the parameter's name; E3005 is about a function value whose SHAPE — its
 arity or its parameter types — disagrees with the parameter, and fires after merge, at the argument.
-`nums.map(function(a String) gives 1)` over an int array used to be accepted — and `gives a.count()`, the
-spelling that actually USES the parameter, compiled clean and SEGFAULTED, since the walk hands the transform
-the element whatever it declares. It is pinned by `collection.error-map-transform-param-type-mismatch`, with
+`nums.map(function(a String) gives 1)` over an int array is refused by the second — accepted,
+`gives a.count()`, the spelling that actually USES the parameter, would compile clean and SEGFAULT, since
+the walk hands the transform the element whatever it declares. It is pinned by `collection.error-map-transform-param-type-mismatch`, with
 `collection.map-struct-element-preserved` as its anti-false-refusal control.
 
 ⚠ **A shape this file exists to keep out.** Accepted, an untyped `b` past the offer would type itself from
 some other slot, and the closure would lift with three ABI slots `(a, b, __env)`; `map`'s call to its
 transform passes exactly two, so `b` would read the environment POINTER as its value and `a + b` would
-degrade to `a`. It compiled clean and printed a plausible number — `sum=6` for `[1, 2, 3]`, the right answer
+degrade to `a`. It would compile clean and print a plausible number — `sum=6` for `[1, 2, 3]`, the right answer
 to a different question.
 
 ⭐ **EVERY CONTAINER'S `map` IS AN ORDINARY DECLARED FUNCTION.** `nums.map(f)` is a call to
@@ -104,10 +102,9 @@ sum=60
 
 <!-- test: error-a-fully-typed-transform-of-the-wrong-arity-is-still-refused -->
 Nothing is INFERRED here — every parameter declares its type — so E2003 has nothing to say and the arity
-rule is what refuses it. This case used to be pinned as accepted with `sum=6`, on the reference bootstrap's
-agreement; the agreement was two compilers reading the same uninitialised second argument. `wasm32-wasi`
-does not read it — its `call_indirect` type-checks the signature and traps — and on arm64-macOS a body of
-`gives b` prints `sum=0`, the second argument slot's leftovers. The anchor is the argument, not a
+rule is what refuses it. Admitted, it would read an uninitialised second argument: `wasm32-wasi`'s
+`call_indirect` type-checks the signature and traps, and a native target reads the second argument
+slot's leftovers. The anchor is the argument, not a
 parameter: the value is what disagrees with the position.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -187,8 +184,7 @@ error E2003: <fragment>:5:33: Cannot infer type for closure parameter 'b'. Add a
 <!-- test: error-the-offer-is-spent-even-when-the-first-parameter-declined-it -->
 The first parameter declares its own type, so it does not TAKE the offer — and it still occupies the first
 position, because the offer is positional. `b` is the second parameter of a one-parameter slot, refused for
-the same reason and with the same sentence as above; the reference bootstrap refuses it too (its anchor is
-the `)`, the compiler's is the parameter name).
+the same reason and with the same sentence as above, anchored at the parameter name.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -275,6 +271,57 @@ function main() returns ExitCode
 
 	for score in scores 'each'
 		print("{score}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```stdout
+3
+2
+1
+```
+
+<!-- test: a-comparator-whose-element-is-a-generic-alias-takes-parameters-declared-at-it -->
+The container's element is itself a generic alias, `ByteArray`, so the comparator's two slots are that
+alias's instance, and a closure that declares its parameters at `ByteArray` matches them.
+```maxon
+typealias Rows = Array with ByteArray
+
+function main() returns ExitCode
+	var rows = Rows.create()
+	rows.push(b"ccc")
+	rows.push(b"a")
+	rows.push(b"bb")
+	rows.sort(function(left ByteArray, right ByteArray) gives left.count().compare(right.count()))
+
+	for row in rows 'each'
+		print("{row.count()}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```stdout
+1
+2
+3
+```
+
+<!-- test: the-comparator-parameters-take-a-generic-alias-element -->
+The same comparator with its parameter types left out takes them from the generic-alias element.
+```maxon
+typealias Rows = Array with ByteArray
+
+function main() returns ExitCode
+	var rows = Rows.create()
+	rows.push(b"ccc")
+	rows.push(b"a")
+	rows.push(b"bb")
+	rows.sort(function(left, right) gives right.count().compare(left.count()))
+
+	for row in rows 'each'
+		print("{row.count()}\n")
 	end 'each'
 
 	return 0

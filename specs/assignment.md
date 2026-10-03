@@ -3,7 +3,6 @@ feature: assignment
 status: selfhosted
 keywords: [assignment, equals, mutation, reassignment, var]
 category: statements
-milestone: M4b
 ---
 
 # Assignment Statement
@@ -16,7 +15,7 @@ The assignment operator `=` updates the value of a mutable (`var`) binding:
 variable = expression
 ```
 
-M4b adds reassignment on top of M2's `let`/`var` bindings. A `var` may be
+A `var` may be
 reassigned any number of times; each write rebinds the variable's current value,
 so a later reference sees the new value (`x = x + 2` reads the old `x`, then
 rebinds it to the sum). A `let` binding is immutable — assigning to it is E2013.
@@ -30,9 +29,8 @@ before the backend (see `specs/while-loops.md`).
 
 ## Tests
 
-The M4b slice of `specs/assignment.md`: straight-line reassignment, chained
-reassignment across two variables, and the canonical accumulator loop. All three
-fit the placeholder register allocator's pool.
+The first three cases: straight-line reassignment, chained reassignment across
+two variables, and the canonical accumulator loop.
 
 <!-- test: basic-assignment -->
 ```maxon
@@ -93,8 +91,8 @@ error E2013: <fragment>:4:2: cannot assign to immutable variable: 'x'
 Two different structs are two different types, even though both are "a struct". A kind alone cannot
 tell them apart, so a bare `structRef == structRef` tag check passes this retype and the overwritten
 box is later dropped under the binding's declared destructor — a wrong answer, and
-a memory-safety hole once the field is managed (OPEN #54). Struct identity is
-the interned name, exact. (Ported from `specs/assignment.md`; the compiler's `assignTypeMismatch` wording.)
+a memory-safety hole once the field is managed. Struct identity is
+the interned name, exact. (The compiler's `assignTypeMismatch` wording.)
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -127,8 +125,8 @@ error E3005: specs/fragments/assignment/error.retype-struct-to-other-struct-erro
 ```
 
 <!-- test: error.reassign-wrong-struct -->
-The same retype with MANAGED (String-field) structs — the case OPEN #54 was filed for. The scalar tag
-check accepts it; the overwrite drops the old `BoxA` and the scope exit drops `a` under `BoxA`'s
+The same retype with MANAGED (String-field) structs. A scalar tag
+check alone accepts it; the overwrite drops the old `BoxA` and the scope exit drops `a` under `BoxA`'s
 destructor while it holds a `BoxB` box. Rejected at the reassignment, before either drop.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -160,7 +158,7 @@ error E3005: specs/fragments/assignment/error.reassign-wrong-struct.test:22:2: c
 ```
 
 <!-- test: error.reassign-union-as-scalar -->
-Reassigning a scalar-typed var to a boxed union (OPEN 59): the var declares Integer (a scalar) but the
+Reassigning a scalar-typed var to a boxed union: the var declares Integer (a scalar) but the
 value is a boxed Holder union. The tag check accepts named-vs-named (the ValueTypeTag.named overload is
 a boxed union value AND a ranged-int alias), so the union box would be dropped under the scalar var's
 absent destructor at scope exit, a leak. The aggregate-name check runs after the tag check and rejects
@@ -191,11 +189,10 @@ error E3005: specs/fragments/assignment/error.reassign-union-as-scalar.test:18:2
 ```
 
 <!-- test: error.wrong-enum-into-an-enum-field -->
-The SCALAR field store was the one coercion door of the eight that never asked `aggregatesConflict`, so a
-field declared `Color` accepted a `Shade` — MEASURED 2026-08-06 (BATCH32): this program COMPILED and printed
-`stored`, where it must be refused, and `h.c.ordinal` would then read `Shade.light`'s tag under
-`Color`'s name. It is `error.retype-enum-to-other-enum-errors` one slot over, which is exactly the pairing
-`error.retype-enum-field-errors` below states. compiler-authored, in the compiler's `assignTypeMismatch`
+The SCALAR field store is one of the eight coercion doors, and it asks `aggregatesConflict` like the
+others, so a field declared `Color` refuses a `Shade`. Accepted, this program would print `stored`, and
+`h.c.ordinal` would then read `Shade.light`'s tag under `Color`'s name. It is `error.retype-enum-to-other-enum-errors` one slot over, which is exactly the pairing
+`error.retype-enum-field-errors` below states. The diagnostic is the compiler's `assignTypeMismatch`
 wording.
 ```maxon
 
@@ -229,9 +226,8 @@ error E3005: specs/fragments/assignment/error.wrong-enum-into-an-enum-field.test
 
 <!-- test: error.wrong-enum-in-a-struct-literal-field -->
 The STRUCT-LITERAL door reaches the same slot under the same declared type through `requireFieldType`, so
-it shared the hole and is fixed by the same check rather than by a second copy of it. MEASURED 2026-08-06
-(BATCH32): before the fix this compiled and stored a `Shade` in a `Color` slot with no diagnostic.
-compiler-authored, the literal twin of the case above.
+it is refused by the same check rather than by a second copy of it; accepted, it would store a `Shade` in
+a `Color` slot with no diagnostic. It is the literal twin of the case above.
 ```maxon
 
 enum Color
@@ -264,9 +260,9 @@ error E3005: specs/fragments/assignment/error.wrong-enum-in-a-struct-literal-fie
 ### The type rule — rejections
 
 <!-- test: error.retype-local-errors -->
-A `var`'s type is its declared type. This program compiled CLEAN and printed `hello` — the
-assignment was silently accepted, because a local's readers forward the assigned value and so
-never consult the declared type at all. The variable appeared to re-infer; nothing re-inferred it.
+A `var`'s type is its declared type. A local's readers forward the assigned value and so never
+consult the declared type at all: accepted, this program would print `hello`, and the variable would
+appear to re-infer when nothing re-inferred it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -284,9 +280,9 @@ error E3005: specs/fragments/assignment/error.retype-local-errors.test:7:2: cann
 
 <!-- test: error.retype-global-errors -->
 The SAME store to a GLOBAL, and the same error — this test and the local one above are the pair
-that pins the two paths together. They used to disagree: a global cannot forward the assigned
-value, it must go through a typed load using the declared kind, so this program compiled clean
-and printed a raw heap pointer (`140696866942976`) with exit 0. One rule, one answer, either way.
+that pins the two paths together. A global cannot forward the assigned value, it must go through
+a typed load using the declared kind, so an accepted retype here would print a raw heap pointer
+with exit 0. One rule, one answer, either way.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -305,8 +301,8 @@ error E3005: specs/fragments/assignment/error.retype-global-errors.test:8:2: can
 
 <!-- test: error.retype-conditional-errors -->
 A retype the program never executes is still a type error: the rule is about the ASSIGNMENT, not
-about whether control reaches it. This branch is dead (`c` is `false`), and the program still
-panicked with a nil pointer — `z` was typed String lexically while holding the int `0`.
+about whether control reaches it. This branch is dead (`c` is `false`); accepted, the program would
+panic with a nil pointer — `z` typed String lexically while holding the int `0`.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -347,9 +343,8 @@ error E3005: specs/fragments/assignment/error.retype-in-loop-errors.test:9:3: ca
 ```
 
 <!-- test: error.retype-struct-to-int-errors -->
-A struct into an `int`. Unchecked, this reached the arithmetic below and died as
-`E9001: Unhandled cast combination: Struct -> Integer` — an INTERNAL error with a .NET stack
-trace, naming no source position, for a plain type error. The check fires at the assignment,
+A struct into an `int`. Unchecked, this would reach the arithmetic below as an INTERNAL
+error naming no source position, for a plain type error. The check fires at the assignment,
 which is both where the defect is and where the user can see it.
 ```maxon
 
@@ -377,9 +372,9 @@ error E3005: specs/fragments/assignment/error.retype-struct-to-int-errors.test:1
 
 <!-- test: error.retype-struct-field-errors -->
 A FIELD is a place with a declared type too, and the rule does not change because the store lands
-in a struct instead of a frame slot. This site carried only the WIDENING half of the rule — a
-mismatch it could not widen was stored anyway — so this program compiled clean and printed a raw
-heap pointer (`1827332661328`) with exit 0, exactly as the global did.
+in a struct instead of a frame slot. The field store applies both halves of the rule: a mismatch it
+cannot widen is refused rather than stored, where it would print a raw heap pointer with exit 0,
+exactly as the global would.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -485,8 +480,8 @@ end 'main'
 
 <!-- test: assign-widening-int-to-float-promotes -->
 An `int` assigned to a `float` is PROMOTED, not merely permitted. The stored value carries the
-declared type, so this prints `5.0`. Before the declared type was made the single source of
-truth this printed `5`: the widening was legal, went unapplied, and the reader saw the raw int.
+declared type, so this prints `5.0`. A widening that is legal but unapplied would print `5`: the
+reader would see the raw int.
 ```maxon
 function main() returns ExitCode
 	var f = 1.5
@@ -588,14 +583,13 @@ end 'main'
 ```
 
 
-### The type rule for an ENUM place — the same rule, the same hole
+### The type rule for an ENUM place — the same rule
 
 <!-- test: error.retype-enum-to-other-enum-errors -->
 Two different enums are two different types, exactly as two different structs are. This is the
-struct case above one type over, and it had the identical defect for the identical reason: the
-assignment door compared the declared NAME against the value only when the value was a struct, so
-an enum place accepted any enum at all. `c` is declared `Color` and holds `Shade.light`; the
-program compiled clean and `c.ordinal` reported `Shade.light`'s ordinal under `Color`'s name.
+struct case above one type over: the assignment door compares the declared NAME against the value
+for an enum exactly as for a struct. Accepted, `c` would be declared `Color` and hold `Shade.light`,
+and `c.ordinal` would report `Shade.light`'s ordinal under `Color`'s name.
 ```maxon
 
 enum Color
@@ -620,7 +614,7 @@ error E3005: specs/fragments/assignment/error.retype-enum-to-other-enum-errors.t
 
 <!-- test: error.retype-enum-field-errors -->
 The FIELD store reaches the same place by the same road — it shares the door with the local
-assignment, so it shared the hole.
+assignment, so it shares the rule.
 ```maxon
 
 enum Color
@@ -652,9 +646,8 @@ error E3005: specs/fragments/assignment/error.retype-enum-field-errors.test:23:4
 ```
 
 <!-- test: error.wrong-enum-in-struct-literal-field-errors -->
-And the STRUCT-LITERAL field initializer, which put the same value in the same slot under the same
-declared type — but reached it through a door that skipped the check entirely unless the field was
-a numeric primitive.
+And the STRUCT-LITERAL field initializer, which puts the same value in the same slot under the same
+declared type through a door of its own — one that checks every field, not only a numeric primitive.
 ```maxon
 
 enum Color

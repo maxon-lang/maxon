@@ -113,7 +113,9 @@ closes on time whatever the traffic. When the server ends, every session still o
 **An argument a tool does not declare is refused** with `invalidParams`, so the arguments listed below
 are exactly the ones that exist. A developer-mode argument sent to a standard-mode server is refused the
 same way, as is an argument of the wrong JSON type, an array argument holding anything but strings, or a
-number outside the range the tool declares.
+number outside the range the tool declares. A string given as `""`, alone or in a list, is refused too: leave it out
+instead. The program-argument lists, `arguments` on `execute` and `args` on `debug_start`, may hold `""`,
+which the program receives as an empty argument.
 
 **`timeoutSeconds`** bounds the `maxon` command a tool runs: `build`, `execute`, `test`, `fmt`, the
 developer tools, and the build `debug_start` makes of a `source`. It is a number of seconds, fractions

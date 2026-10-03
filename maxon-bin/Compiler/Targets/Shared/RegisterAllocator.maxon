@@ -65,14 +65,10 @@
 // NOT a panic: it is the E5001 compile error, source-mapped via `ValueOrigin` and rendered by
 // `RegisterPressureDiagnostic`. Hence `throws CompileError` down this whole path.
 
-// The color column's "not yet colored" sentinel: one past the last real register — the one value a
-// `RegNum` holds that is not a register (see `RegNum`).
-let Uncolored = RegisterFileSize as RegNum
-
-// A per-function coloring: value id → physical register number (0..15), dense. A value holds ONE
-// register for its whole range, so the column is a total function.
+// A per-function coloring: value id → physical register number, absent until the value is
+// colored. A value holds ONE register for its whole range.
 export type Allocation
-	export var color as RegNumColumn
+	export var color as RegisterColumn
 	export var valueCount as ValueId
 
 	// The INVERSE of `color`, for the registers held RIGHT NOW: register number -> the value
@@ -92,8 +88,7 @@ export type Allocation
 		// Each column is BUILT as its own declared instance: `RegNum` strides ONE byte and `DenseInt` EIGHT
 		// (`rangedAliasStorageBytes`), so a buffer filled as one and read as the other would hand every later
 		// read a stride it was not written at.
-		var color = RegNumColumn.create()
-		color.refill(valueCount, value: Uncolored)
+		let color = RegisterColumn.absent(valueCount)
 		var holderOfReg = ValueIdArray.create()
 		holderOfReg.refill(RegisterFileSize, value: 0)
 
@@ -101,22 +96,16 @@ export type Allocation
 	end 'create'
 
 	export function isColored(v ValueId) returns bool
-		return (try self.color.get(v) otherwise panic("Allocation.isColored: value {v} out of range")) != Uncolored
+		return self.color.holds(v)
 	end 'isColored'
 
 	// The register NUMBER assigned to `v` (panics if uncolored — a coloring bug).
 	export function regNumOf(v ValueId) returns RegNum
-		let c = try self.color.get(v) otherwise panic("Allocation.regNumOf: value {v} out of range")
-
-		if c == Uncolored 'uncolored'
-			panic("Allocation.regNumOf: value {v} is uncolored — a use was reached before its def was colored (dominance-order violation)")
-		end 'uncolored'
-
-		return c
+		return try self.color.get(v) otherwise panic("Allocation.regNumOf: value {v} is uncolored — a use was reached before its def was colored (dominance-order violation)")
 	end 'regNumOf'
 
 	export function assign(v ValueId, regNum RegNum)
-		try self.color.set(v, value: regNum) otherwise panic("Allocation.assign: value {v} out of range")
+		self.color.set(v, value: regNum)
 		self.noteHolder(v, regNum: regNum)
 	end 'assign'
 
@@ -155,38 +144,20 @@ end 'Allocation'
 // per function. A list scanned per op was O(ops × copies) — the same quadratic shape the splitter
 // had.
 export type ReuseCopyPlan
-	var present as BoolArray
-	var destRegs as RegNumColumn
-	var srcRegs as RegNumColumn
+	var destRegs as RegisterColumn
+	var srcRegs as RegisterColumn
 
 	export static function create() returns ReuseCopyPlan
-		return Self{present: BoolArray.create(), destRegs: RegNumColumn.create(), srcRegs: RegNumColumn.create()}
+		return Self{destRegs: RegisterColumn.create(), srcRegs: RegisterColumn.create()}
 	end 'create'
 
 	// Record the copy for the op at layout sequence `seq`. The columns grow to fit rather than
 	// being sized up front: a function with no reuse copy at all then allocates nothing.
-	//
-	// `growFilled`, NEVER `resize`. The colorer walks the function in layout order, so `seq` ARRIVES
-	// INCREASING and these columns are extended one copy at a time — the exact shape `resize` is
-	// quadratic on, because it reserves EXACTLY the length asked and so reallocates and copies the
-	// whole column on every extension: Θ(copies × ops) BYTES for columns that end up Θ(ops) long.
-	// `growFilled` grows the capacity geometrically and initialises what it added; `at()` still reads
-	// `count()` as "past the last copy", which is unchanged (the length is still `seq + 1`).
-	//
-	// The register columns are filled with the out-of-file sentinel rather than register 0, so an entry
-	// whose `present` flag is false names no real register (`RegNum` is `int(0 to 32)` precisely so that
-	// `RegisterFileSize` is representable and is not one of the 0..31 the file holds). Nothing READS it
-	// — `at()` returns `none` on a false `present` before it touches either register column — so this is
-	// a defence against a future reader, not a value any decision depends on today.
 	export function record(seq OpSeq, destReg RegNum, srcReg RegNum)
-		let noRegister = RegisterFileSize as RegNum
-		self.present.growFilled(((seq + 1) as ElementIndex), value: false)
-		self.destRegs.growFilled(((seq + 1) as ElementIndex), value: noRegister)
-		self.srcRegs.growFilled(((seq + 1) as ElementIndex), value: noRegister)
-
-		try self.present.set(seq, value: true) otherwise panic("ReuseCopyPlan.record: present.set OOB at sequence {seq}")
-		try self.destRegs.set(seq, value: destReg) otherwise panic("ReuseCopyPlan.record: destRegs.set OOB at sequence {seq}")
-		try self.srcRegs.set(seq, value: srcReg) otherwise panic("ReuseCopyPlan.record: srcRegs.set OOB at sequence {seq}")
+		self.destRegs.growAbsent((seq + 1) as ElementIndex)
+		self.srcRegs.growAbsent((seq + 1) as ElementIndex)
+		self.destRegs.set(seq, value: destReg)
+		self.srcRegs.set(seq, value: srcReg)
 	end 'record'
 
 	// Is there a copy to splice before the op at layout sequence `seq`? A sequence past the last
@@ -194,11 +165,11 @@ export type ReuseCopyPlan
 	// two register reads rather than one union answer: a payload-bearing union heap-boxes every case
 	// including the payload-free one (`CseLookup`), and this is asked at every body op of every function.
 	export function hasCopyAt(seq OpSeq) returns bool
-		if seq >= self.present.count() as OpSeq 'pastLastCopy'
+		if seq >= self.destRegs.count() as OpSeq 'pastLastCopy'
 			return false
 		end 'pastLastCopy'
 
-		return try self.present.get(seq) otherwise panic("ReuseCopyPlan.hasCopyAt: present.get OOB at sequence {seq}")
+		return self.destRegs.holds(seq)
 	end 'hasCopyAt'
 
 	// The two registers of the copy at `seq`; meaningful only where `hasCopyAt` holds.
@@ -213,12 +184,11 @@ export type ReuseCopyPlan
 	// Forget every copy — a colouring pass that ended with a value the colorer could not place is thrown
 	// away, and its copies with it. Carrying one into the next pass would splice a `mov` between two
 	// registers that pass never chose. `hasCopyAt` reads `count()` as "past the last copy", so emptying
-	// the three columns is the whole of it, and the CAPACITY is kept: the pass that follows records into
+	// the two columns is the whole of it, and the CAPACITY is kept: the pass that follows records into
 	// the same function's sequence space.
 	export function clear()
-		self.present.clear()
-		self.destRegs.clear()
-		self.srcRegs.clear()
+		self.destRegs.truncate(0)
+		self.srcRegs.truncate(0)
 	end 'clear'
 end 'ReuseCopyPlan'
 
@@ -913,25 +883,23 @@ end 'assertOneCallClobber'
 // The twin of `allocatablePool` and `registerFileFor`: sourced ONCE per module in
 // `lowerAndAllocateOnAWorkerPool` and carried beside `pool` through the whole colorer.
 //
-// ⭐⭐ **THE COLORER ASKED `callerSavedMask()` — X64'S — ON EVERY TARGET UNTIL A5c, AND THE REGISTER
-// NUMBERS DO NOT EVEN LINE UP.** x64's `xmm0..xmm5` are RegNums 16–21, which in the arm64 file are
-// x16..x21: three genuinely callee-saved arm64 GPRs (x19/x20/x21) read as volatile while x3, x4, x5
-// and x12..x15 — genuinely caller-saved — did not, and on the SIMD side the intersection was EMPTY,
-// so a float got no volatility preference at all. That is not merely a worse allocation. The
-// greedy colorer is exact for this constraint family only because *"it prefers caller-saved
-// registers first, so an unconstrained value never takes a callee-saved one while a caller-saved one
-// is free"* (`HallCondition.hallVerdictAt`) — and with the wrong half named, that premise is false:
-// unconstrained values ate x19/x20/x21 (or d8..d15), a later value confined to the callee-saved half
-// found none, and `chooseRegister` DIED on a program Hall's condition had declared feasible. Both
-// halves are pinned by `register-volatility-preference`, which compiled on x64-windows, x64-linux and
-// wasm32-wasi and panicked the compiler on arm64.
+// ⭐⭐ **THE MASK MUST BE THE TARGET'S OWN: x64'S `callerSavedMask()` IS WRONG ON arm64, AND
+// THE REGISTER NUMBERS DO NOT EVEN LINE UP.** x64's `xmm0..xmm5` are RegNums 16–21, which in the
+// arm64 file are x16..x21: x64's mask reads three genuinely callee-saved arm64 GPRs (x19/x20/x21)
+// as volatile and misses x3, x4, x5 and x12..x15, and on the SIMD side its intersection is EMPTY.
+// That is not merely a worse allocation. The greedy colorer is exact for this constraint family
+// only because *"it prefers caller-saved registers first, so an unconstrained value never takes a
+// callee-saved one while a caller-saved one is free"* (`HallCondition.hallVerdictAt`) — and with
+// the wrong half named, that premise is false: unconstrained values take x19/x20/x21 (or
+// d8..d15), a later value confined to the callee-saved half finds none, and `chooseRegister` dies
+// on a program Hall's condition declared feasible. Both halves are pinned by
+// `register-volatility-preference`.
 //
 // ⚠ IT IS SOURCED PER MODULE, NOT PER VALUE, AND THAT IS THE REASON A PER-TARGET BRANCH IS FREE
 // HERE. `preferredVolatilityMask` is on the colorer's per-value path (up to twice per
 // `chooseRegister`); a `match` on `target.cpu` there would be a per-value cost, and
 // `arm64CallerSavedMask`'s 40-iteration derivation would be a far larger one. Threaded as a plain
-// `RegMask` beside `pool`, the per-value path does no work at all for it — strictly LESS than
-// before, when it rebuilt x64's fifteen-register mask on every colouring decision.
+// `RegMask` beside `pool`, the per-value path does no work at all for it.
 module function callerSavedMaskFor(target Target) returns RegMask
 	match target.cpu 'cpu'
 		x64 then return callerSavedMask()
@@ -1349,19 +1317,14 @@ function harvestDebugValueLocations(alloc Allocation, liveness LivenessResult, v
 	end 'eachNamedValue'
 end 'harvestDebugValueLocations'
 
-typealias DebugOrdinalColumn = Array with DebugOpAnchor
 typealias BlockIdColumn = Array with BlockId
 
-// Absent is 0 and every real anchor and place is biased past it, because a column's top is a value
-// the column is required to be able to hold and so is not available as a sentinel.
-let NoDebugPlace = 0 as DebugPlace
-let NoDebugOrdinal = 0 as DebugOpAnchor
-let DebugAnchorBias = 1
-
-typealias DebugNamedSlot = int(0 to u32.max)
+typealias DebugNamedSlot = int(0 to u32.max) implements ElementIndex
 typealias DebugNamedSlotColumn = Array with DebugNamedSlot
-typealias DebugPlace = int(0 to u32.max)
-typealias DebugPlaceColumn = Array with DebugPlace
+typealias DebugPlace = int(0 to u32.max) implements ElementIndex
+typealias DebugPlaceColumn = OptionalIndexColumn with DebugPlace
+typealias CopyPartnerColumn = OptionalIndexColumn with ValueId
+typealias DebugAnchorColumn = OptionalIndexColumn with DebugOpAnchor
 
 type DebugTouches
 	var slots as CsrColumn
@@ -1389,15 +1352,13 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 	let topo = liveness.cfg.topo
 	let names = DebugNameIndex.over(roster, valueCount: liveness.valueCount)
 
-	var ordinalOfOp = DebugOrdinalColumn.create()
-	ordinalOfOp.refill(module.ops.count(), value: NoDebugOrdinal)
-	var placeOfLocal = DebugPlaceColumn.create()
-	placeOfLocal.refill(topo.numBlocks, value: NoDebugPlace)
+	var ordinalOfOp = DebugAnchorColumn.absent(module.ops.count())
+	var placeOfLocal = DebugPlaceColumn.absent(topo.numBlocks)
 	var localOfPlace = CfgIndexArray.create()
 	var blockIdOfPlace = BlockIdColumn.create()
 	var siteKeyOfPlace = DebugSiteKeyColumn.create()
-	var blockFirst = DebugOrdinalColumn.create()
-	var blockLast = DebugOrdinalColumn.create()
+	var blockFirst = DebugAnchorColumn.create()
+	var blockLast = DebugAnchorColumn.create()
 	var ordinal = 0 as DebugOpAnchor
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -1405,42 +1366,42 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 		let opened = ordinal
 
 		for opIdx in block.opRefs 'eachOp'
-			try ordinalOfOp.set(opIdx, value: ordinal + DebugAnchorBias) otherwise panic("harvestDebugValueRanges: ordinalOfOp.set OOB at op {opIdx} of {module.ops.count()}")
+			ordinalOfOp.set(opIdx, value: ordinal)
 			ordinal = ordinal + 1
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerminator'
-			try ordinalOfOp.set(block.terminatorIndex(), value: ordinal + DebugAnchorBias) otherwise panic("harvestDebugValueRanges: ordinalOfOp.set OOB at terminator {block.terminatorIndex()} of {module.ops.count()}")
+			ordinalOfOp.set(block.terminatorIndex(), value: ordinal)
 			ordinal = ordinal + 1
 		end 'hasTerminator'
 
-		try placeOfLocal.set(localOfBlockId(topo, blockId: block.id), value: (localOfPlace.count() + DebugAnchorBias) as DebugPlace) otherwise panic("harvestDebugValueRanges: placeOfLocal.set OOB for block {block.id} of the topology's {topo.numBlocks}")
+		placeOfLocal.set(localOfBlockId(topo, blockId: block.id), value: localOfPlace.count() as DebugPlace)
 		localOfPlace.push(localOfBlockId(topo, blockId: block.id))
 		blockIdOfPlace.push(block.id)
 		siteKeyOfPlace.push(debugSiteKeyOf(block.inlineSite))
-		blockFirst.push(NoDebugOrdinal if ordinal == opened else opened + DebugAnchorBias)
-		blockLast.push(NoDebugOrdinal if ordinal == opened else ordinal)
+
+		if ordinal == opened 'emitsNothing'
+			blockFirst.pushAbsent()
+			blockLast.pushAbsent()
+		end 'emitsNothing' else 'emitsOps'
+			blockFirst.push(opened)
+			blockLast.push(ordinal - 1)
+		end 'emitsOps'
 	end 'eachBlock'
 
 	var scratch = DebugNamedSlotColumn.create()
 	var touches = DebugTouches.create()
 	collectDebugTouches(touches, liveness: liveness, names: names, ordinalOfOp: ordinalOfOp, placeOfLocal: placeOfLocal, blockFirst: blockFirst, siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
-	let byAnchor = touches.byAnchor((ordinal + DebugAnchorBias) as ElementIndex)
+	let byAnchor = touches.byAnchor(ordinal)
 
-	var startOrd = DebugOrdinalColumn.create()
-	startOrd.refill(roster.valueIds.count(), value: NoDebugOrdinal)
-	var endOrd = DebugOrdinalColumn.create()
-	endOrd.refill(roster.valueIds.count(), value: NoDebugOrdinal)
+	var startOrd = DebugAnchorColumn.absent(roster.valueIds.count())
+	var endOrd = DebugAnchorColumn.absent(roster.valueIds.count())
 	var active = DebugNamedSlotColumn.create()
 
 	for (place, local) in localOfPlace.withIterator() 'eachBlocksRuns'
-		let first = debugOrdinalAt(blockFirst, at: place.index())
-		let last = debugOrdinalAt(blockLast, at: place.index())
+		let first = try blockFirst.get(place.index()) otherwise continue
+		let last = try blockLast.get(place.index()) otherwise panic("harvestDebugValueRanges: place {place.index()} opens at anchor {first} and records no last anchor — a block that emits an op has both")
 		let siteKey = debugSiteKeyAt(siteKeyOfPlace, at: place.index())
-
-		if first == NoDebugOrdinal 'emptyBlock'
-			continue
-		end 'emptyBlock'
 
 		active.clear()
 
@@ -1465,12 +1426,12 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 		var opening = 0 as ElementIndex
 
 		for slot in active 'eachRun'
-			let named = (slot - DebugAnchorBias) as ElementIndex
-			let opened = debugOrdinalAt(startOrd, at: named)
-			into.push(DebugValueRange.create(named, blockId: blockId, first: opened - DebugAnchorBias, last: debugOrdinalAt(endOrd, at: named) - DebugAnchorBias, fromBlockEntry: opening < liveOnEntry))
+			let opened = try startOrd.get(slot) otherwise panic("harvestDebugValueRanges: slot {slot} is active with no opening anchor — `openDebugRun` sets both ends before it activates a slot")
+			let closed = try endOrd.get(slot) otherwise panic("harvestDebugValueRanges: slot {slot} is active with no closing anchor — `openDebugRun` sets both ends before it activates a slot")
+			into.push(DebugValueRange.create(slot, blockId: blockId, first: opened, last: closed, fromBlockEntry: opening < liveOnEntry))
 			opening = opening + 1
-			try startOrd.set(named, value: NoDebugOrdinal) otherwise panic("harvestDebugValueRanges: startOrd.set OOB at slot {slot}")
-			try endOrd.set(named, value: NoDebugOrdinal) otherwise panic("harvestDebugValueRanges: endOrd.set OOB at slot {slot}")
+			startOrd.clear(slot)
+			endOrd.clear(slot)
 		end 'eachRun'
 	end 'eachBlocksRuns'
 end 'harvestDebugValueRanges'
@@ -1546,7 +1507,7 @@ type DebugNameIndex
 				return
 			end 'pastTheSite'
 
-			into.push((name + DebugAnchorBias) as DebugNamedSlot)
+			into.push(name as DebugNamedSlot)
 		end 'eachNameOfTheSite'
 	end 'collectNamesAt'
 
@@ -1571,7 +1532,7 @@ function debugSiteKeyAt(column DebugSiteKeyColumn, at ElementIndex) returns Debu
 	return try column.get(at) otherwise panic("harvestDebugValueRanges: a site column was read at {at}, past the {column.count()} it was sized to")
 end 'debugSiteKeyAt'
 
-function openNamedRuns(active DebugNamedSlotColumn, startOrd DebugOrdinalColumn, endOrd DebugOrdinalColumn, names DebugNameIndex, value ValueId, siteKey DebugSiteKey, at DebugOpAnchor, scratch DebugNamedSlotColumn)
+function openNamedRuns(active DebugNamedSlotColumn, startOrd DebugAnchorColumn, endOrd DebugAnchorColumn, names DebugNameIndex, value ValueId, siteKey DebugSiteKey, at DebugOpAnchor, scratch DebugNamedSlotColumn)
 	if not names.isNamed(value) 'unnamed'
 		return
 	end 'unnamed'
@@ -1583,27 +1544,21 @@ function openNamedRuns(active DebugNamedSlotColumn, startOrd DebugOrdinalColumn,
 	end 'eachApplicable'
 end 'openNamedRuns'
 
-function debugOrdinalAt(column DebugOrdinalColumn, at ElementIndex) returns DebugOpAnchor
-	return try column.get(at) otherwise panic("harvestDebugValueRanges: an ordinal column was read at {at}, past the {column.count()} it was sized to")
-end 'debugOrdinalAt'
-
-function openDebugRun(active DebugNamedSlotColumn, startOrd DebugOrdinalColumn, endOrd DebugOrdinalColumn, slot DebugNamedSlot, at DebugOpAnchor)
-	let named = (slot - DebugAnchorBias) as ElementIndex
-
-	if debugOrdinalAt(startOrd, at: named) == NoDebugOrdinal 'firstTouchInThisBlock'
-		try startOrd.set(named, value: at) otherwise panic("openDebugRun: startOrd.set OOB at slot {slot}")
-		try endOrd.set(named, value: at) otherwise panic("openDebugRun: endOrd.set OOB at slot {slot}")
+function openDebugRun(active DebugNamedSlotColumn, startOrd DebugAnchorColumn, endOrd DebugAnchorColumn, slot DebugNamedSlot, at DebugOpAnchor)
+	if not startOrd.holds(slot) 'firstTouchInThisBlock'
+		startOrd.set(slot, value: at)
+		endOrd.set(slot, value: at)
 		active.push(slot)
 
 		return
 	end 'firstTouchInThisBlock'
 
-	if at > debugOrdinalAt(endOrd, at: named) 'widens'
-		try endOrd.set(named, value: at) otherwise panic("openDebugRun: endOrd.set OOB at slot {slot}")
+	if at > (try endOrd.get(slot) otherwise panic("openDebugRun: slot {slot} opened a run with no closing anchor — both ends are set together")) 'widens'
+		endOrd.set(slot, value: at)
 	end 'widens'
 end 'openDebugRun'
 
-function collectDebugTouches(touches DebugTouches, liveness LivenessResult, names DebugNameIndex, ordinalOfOp DebugOrdinalColumn, placeOfLocal DebugPlaceColumn, blockFirst DebugOrdinalColumn, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
+function collectDebugTouches(touches DebugTouches, liveness LivenessResult, names DebugNameIndex, ordinalOfOp DebugAnchorColumn, placeOfLocal DebugPlaceColumn, blockFirst DebugAnchorColumn, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
 	let index = liveness.useIndex
 
 	for value in 0 upto liveness.valueCount 'eachValue'
@@ -1613,8 +1568,8 @@ function collectDebugTouches(touches DebugTouches, liveness LivenessResult, name
 
 		match index.defKindOf(value) 'def'
 			none then break 'def'
-			opDef then noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.requireDefOp(value)), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
-			phiDef then noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugBlockOpening(blockFirst, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value))), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+			opDef then noteOpTouches(touches, names: names, value: value, placeOfLocal: placeOfLocal, local: index.defBlockOf(value), ordinalOfOp: ordinalOfOp, opIdx: index.requireDefOp(value), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+			phiDef then notePhiDefTouches(touches, names: names, value: value, placeOfLocal: placeOfLocal, local: index.defBlockOf(value), blockFirst: blockFirst, siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
 		end 'def'
 
 		let useSites = index.useCount(value)
@@ -1626,31 +1581,26 @@ function collectDebugTouches(touches DebugTouches, liveness LivenessResult, name
 		var record = index.firstUseOf(value)
 
 		for _ in 0 upto useSites 'eachUse'
-			noteDebugTouches(touches, names: names, value: value, place: debugPlaceOf(placeOfLocal, local: index.useBlockAt(record)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.useOpAt(record)), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+			noteOpTouches(touches, names: names, value: value, placeOfLocal: placeOfLocal, local: index.useBlockAt(record), ordinalOfOp: ordinalOfOp, opIdx: index.useOpAt(record), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
 			record = index.nextUseOf(record)
 		end 'eachUse'
 	end 'eachValue'
 end 'collectDebugTouches'
 
-function debugPlaceOf(placeOfLocal DebugPlaceColumn, local ElementIndex) returns DebugPlace
-	return try placeOfLocal.get(local) otherwise panic("harvestDebugValueRanges: block {local} is past the {placeOfLocal.count()} blocks of the topology the place column was sized to")
-end 'debugPlaceOf'
+function noteOpTouches(touches DebugTouches, names DebugNameIndex, value ValueId, placeOfLocal DebugPlaceColumn, local ElementIndex, ordinalOfOp DebugAnchorColumn, opIdx ElementIndex, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
+	let place = try placeOfLocal.get(local) otherwise return
+	let ordinal = try ordinalOfOp.get(opIdx) otherwise return
+	noteDebugTouches(touches, names: names, value: value, place: place, ordinal: ordinal, siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+end 'noteOpTouches'
 
-function debugBlockOpening(blockFirst DebugOrdinalColumn, place DebugPlace) returns DebugOpAnchor
-	if place == NoDebugPlace 'notLaidDown'
-		return NoDebugOrdinal
-	end 'notLaidDown'
-
-	return debugOrdinalAt(blockFirst, at: (place - DebugAnchorBias) as ElementIndex)
-end 'debugBlockOpening'
+function notePhiDefTouches(touches DebugTouches, names DebugNameIndex, value ValueId, placeOfLocal DebugPlaceColumn, local ElementIndex, blockFirst DebugAnchorColumn, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
+	let place = try placeOfLocal.get(local) otherwise return
+	let ordinal = try blockFirst.get(place) otherwise return
+	noteDebugTouches(touches, names: names, value: value, place: place, ordinal: ordinal, siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
+end 'notePhiDefTouches'
 
 function noteDebugTouches(touches DebugTouches, names DebugNameIndex, value ValueId, place DebugPlace, ordinal DebugOpAnchor, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
-	if ordinal == NoDebugOrdinal or place == NoDebugPlace 'notEmitted'
-		return
-	end 'notEmitted'
-
-	let placed = (place - DebugAnchorBias) as ElementIndex
-	names.collectApplicable(value, siteKey: debugSiteKeyAt(siteKeyOfPlace, at: placed), into: scratch)
+	names.collectApplicable(value, siteKey: debugSiteKeyAt(siteKeyOfPlace, at: place), into: scratch)
 
 	for slot in scratch 'eachApplicable'
 		touches.note(slot, anchor: ordinal)
@@ -1750,8 +1700,7 @@ type StuckValues
 	end 'occupantAt'
 end 'StuckValues'
 
-// ⭐⭐ **COLOUR THE FUNCTION, REPAIRING EVERY CONFINEMENT THE GREEDY CANNOT COLOUR AROUND — the A5g
-// cure's outer loop.**
+// ⭐⭐ **COLOUR THE FUNCTION, REPAIRING EVERY CONFINEMENT THE GREEDY CANNOT COLOUR AROUND.**
 //
 // The splitter's post-condition is that no program point exceeds its pool, and that is NOT enough to
 // make a GREEDY colouring exist — see `HallCondition.hallVerdictAt`. So a value the colorer cannot place
@@ -1912,9 +1861,9 @@ end 'repairStuckValues'
 // Register hints (biased coloring) — a CORRECTNESS obligation, not an optimization
 // ==========================================================================
 
-// The "no fixed-register hint" sentinel (a copy-partner uses valueCount) — the same
-// one-past-the-last-register value `Uncolored` uses, and the reason `RegNum` runs to 16.
-let NoFixedHint = RegisterFileSize as RegNum
+enum RegisterHintLookup implements Error
+	noHint
+end 'RegisterHintLookup'
 
 // Per-value coloring hints: a FIXED physical register (a value copied to/from a
 // pinned register — the R8 return value), and a COPY PARTNER value (a two-address
@@ -1923,33 +1872,16 @@ let NoFixedHint = RegisterFileSize as RegNum
 // copy-related values into a single register so the copy elides — for a loop back
 // edge, that keeps the copy OUT of the loop.
 type ColorHints
-	export var fixedHint as RegNumColumn
-	export var copyHint as ValueIdArray
-	export var noPartner as ValueId
+	export var fixedHint as RegisterColumn
+	export var copyHint as CopyPartnerColumn
 
 	static function create(valueCount ValueId) returns ColorHints
-		// `fixedHint` is BUILT as a `RegNumColumn` for the reason `Allocation.create`'s colour column is —
-		// element stride ONE against `filledColumn`'s EIGHT, so filling a `DenseColumn` and storing it here
-		// would hand every later read a stride the buffer was not written at. Nothing is narrowed:
-		// `NoFixedHint` is `RegisterFileSize as RegNum`, and every value `setFixedIfUnset` writes is a
-		// `RegNum` already, so the mismatch is the fill's hard-typed element and never the data.
-		//
-		// `copyHint` needs no such treatment: `ValueIdArray` and `DenseColumn` are both `Array with
-		// int(0 to u64.max)`, one instance under two alias spellings.
-		var fixedHint = RegNumColumn.create()
-		fixedHint.refill(valueCount, value: NoFixedHint)
-
-		var copyHint = ValueIdArray.create()
-		copyHint.refill(valueCount, value: valueCount)
-
-		return Self{fixedHint: fixedHint, copyHint: copyHint, noPartner: valueCount}
+		return Self{fixedHint: RegisterColumn.absent(valueCount), copyHint: CopyPartnerColumn.absent(valueCount)}
 	end 'create'
 
 	function setFixedIfUnset(v ValueId, regNum RegNum)
-		let cur = try self.fixedHint.get(v) otherwise panic("ColorHints.setFixedIfUnset: OOB")
-
-		if cur == NoFixedHint 'unset'
-			try self.fixedHint.set(v, value: regNum) otherwise panic("ColorHints.setFixedIfUnset: set OOB")
+		if not self.fixedHint.holds(v) 'unset'
+			self.fixedHint.set(v, value: regNum)
 		end 'unset'
 	end 'setFixedIfUnset'
 
@@ -1958,27 +1890,25 @@ type ColorHints
 			return
 		end 'selfPartner'
 
-		let cur = try self.copyHint.get(v) otherwise panic("ColorHints.setCopyIfUnset: OOB")
-
-		if cur == self.noPartner 'unset'
-			try self.copyHint.set(v, value: partner) otherwise panic("ColorHints.setCopyIfUnset: set OOB")
+		if not self.copyHint.holds(v) 'unset'
+			self.copyHint.set(v, value: partner)
 		end 'unset'
 	end 'setCopyIfUnset'
 
-	function fixedOf(v ValueId) returns RegNum
-		return try self.fixedHint.get(v) otherwise panic("ColorHints.fixedOf: OOB")
+	function fixedOf(v ValueId) returns RegNum throws RegisterHintLookup
+		return try self.fixedHint.get(v) otherwise throw RegisterHintLookup.noHint
 	end 'fixedOf'
 
-	function copyOf(v ValueId) returns ValueId
-		return try self.copyHint.get(v) otherwise panic("ColorHints.copyOf: OOB")
+	function copyOf(v ValueId) returns ValueId throws RegisterHintLookup
+		return try self.copyHint.get(v) otherwise throw RegisterHintLookup.noHint
 	end 'copyOf'
 
 	function hasFixed(v ValueId) returns bool
-		return self.fixedOf(v) != NoFixedHint
+		return self.fixedHint.holds(v)
 	end 'hasFixed'
 
 	function hasCopy(v ValueId) returns bool
-		return self.copyOf(v) != self.noPartner
+		return self.copyHint.holds(v)
 	end 'hasCopy'
 end 'ColorHints'
 
@@ -2460,18 +2390,14 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 	let groupBlocked = copyGroupBlocked(v, blocked: blocked, hints: hints, alloc: alloc, liveness: liveness)
 	let takeable = preferredVolatilityMask(groupBlocked, classPool: classPool, callerSaved: callerSaved) or dyingRegs
 
-	if hints.hasFixed(v) 'fixed'
-		let fr = hints.fixedOf(v)
-
+	if let fr = try hints.fixedOf(v) 'fixed'
 		if hintIsTakeable(fr, blocked: blocked, takeable: takeable) 'fixedFree'
 			counters.hintsHonoured = counters.hintsHonoured + 1
 			return fr
 		end 'fixedFree'
 	end 'fixed'
 
-	if hints.hasCopy(v) 'copy'
-		let p = hints.copyOf(v)
-
+	if let p = try hints.copyOf(v) 'copy'
 		if alloc.isColored(p) 'partnerColored'
 			let cr = alloc.regNumOf(p)
 
@@ -2484,12 +2410,12 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 
 	// The partner is not colored yet, but it is PINNED — take its register now (see
 	// `pinnedPartnerRegister`).
-	let pinned = pinnedPartnerRegister(v, hints: hints, alloc: alloc, liveness: liveness)
-
-	if pinned != NoFixedHint and hintIsTakeable(pinned, blocked: blocked, takeable: takeable) 'pinnedFree'
-		counters.hintsHonoured = counters.hintsHonoured + 1
-		return pinned
-	end 'pinnedFree'
+	if let pinned = try pinnedPartnerRegister(v, hints: hints, alloc: alloc, liveness: liveness) 'aPinnedPartner'
+		if hintIsTakeable(pinned, blocked: blocked, takeable: takeable) 'pinnedFree'
+			counters.hintsHonoured = counters.hintsHonoured + 1
+			return pinned
+		end 'pinnedFree'
+	end 'aPinnedPartner'
 
 	if hints.hasFixed(v) or hints.hasCopy(v) 'missed'
 		counters.hintsMissed = counters.hintsMissed + 1
@@ -2498,19 +2424,11 @@ function chooseRegister(v ValueId, classPool RegMask, callerSaved RegMask, block
 	// Prefer the copy group's volatility. If nothing in it is free, `v` cannot coalesce with its
 	// partner however it is colored, so fall back to `v`'s OWN constraint and let SSA destruction
 	// emit the copy — which is strictly what would have happened without the group at all.
-	let grouped = pickPreferredRegister(groupBlocked, classPool: classPool, callerSaved: callerSaved)
-
-	if grouped != RegisterFileSize 'gotGrouped'
+	if let grouped = try pickPreferredRegister(groupBlocked, classPool: classPool, callerSaved: callerSaved) 'gotGrouped'
 		return grouped
 	end 'gotGrouped'
 
-	let reg = pickPreferredRegister(blocked, classPool: classPool, callerSaved: callerSaved)
-
-	if reg == RegisterFileSize 'exhausted'
-		panic("chooseRegister: no register for value {v} (class pool {classPool}, blocked {blocked}) — but `allocateDef` screens `blocked == fullRegisterMask()` before it calls this, and that screen and this failure are the SAME event: every hint path tests `blocked` first (`hintIsTakeable`), the copy-group pick measures a superset of `blocked`, and this fallback is `lowestClearRegister(blocked)`. Reaching here means the screen and the pick have come apart.")
-	end 'exhausted'
-
-	return reg
+	return try pickPreferredRegister(blocked, classPool: classPool, callerSaved: callerSaved) otherwise panic("chooseRegister: no register for value {v} (class pool {classPool}, blocked {blocked}) — but `allocateDef` screens `blocked == fullRegisterMask()` before it calls this, and that screen and this failure are the SAME event: every hint path tests `blocked` first (`hintIsTakeable`), the copy-group pick measures a superset of `blocked`, and this fallback is `lowestClearRegister(blocked)`. Reaching here means the screen and the pick have come apart.")
 end 'chooseRegister'
 
 // ⭐⭐ **THE COLORER RAN OUT OF REGISTERS FOR `v`. Decide WHOSE bug that is** — and, when it is the one
@@ -2628,7 +2546,7 @@ function reportExhaustion(v ValueId, working RegMask, classPool RegMask, callerS
 	// `seedInUse`'s "a live-in must be coloured" and `colorOpForward`'s "every use is already coloured"
 	// are real dominance assertions, and weakening them permanently to accommodate a rare path would
 	// blind them on every ordinary function.
-	let provisional = lowestClearRegister(fullRegisterMask() and not free)
+	let provisional = regMaskLowest(free)
 
 	// CHECKED, not argued: `free` is a subset of `classPool`, so the pick is in `v`'s own file — and this
 	// file's convention is that legality is asserted where it is available, discarded pass or not.
@@ -2670,8 +2588,6 @@ end 'describeRegisterOccupants'
 
 // The register `v`'s copy partner is PINNED to and will therefore take if it is free: the partner's
 // OWN fixed hint, when the partner is not yet colored and is not forbidden that register.
-// `NoFixedHint` when there is no such register — the same "no hint" sentinel `ColorHints.fixedOf`
-// returns.
 //
 // This is the other half of `copyGroupBlocked`, and it exists for the same reason: the forward sweep
 // colors the DEF before the phi, so a pin on the PHI can only reach the value that feeds it by being
@@ -2683,25 +2599,17 @@ end 'describeRegisterOccupants'
 // It is safe even when the prediction is WRONG (the partner's pin turns out to be occupied at its
 // own def, so the two do not coalesce after all): `v` still only ever takes a register that
 // `hintIsTakeable` has cleared for `v` itself, so the worst case is the copy we already had.
-function pinnedPartnerRegister(v ValueId, hints ColorHints, alloc Allocation, liveness LivenessResult) returns RegNum
-	if not hints.hasCopy(v) 'noPartner'
-		return NoFixedHint
-	end 'noPartner'
-
-	let p = hints.copyOf(v)
+function pinnedPartnerRegister(v ValueId, hints ColorHints, alloc Allocation, liveness LivenessResult) returns RegNum throws RegisterHintLookup
+	let p = try hints.copyOf(v)
 
 	if alloc.isColored(p) 'partnerColored'
-		return NoFixedHint
+		throw RegisterHintLookup.noHint
 	end 'partnerColored'
 
-	if not hints.hasFixed(p) 'partnerNotPinned'
-		return NoFixedHint
-	end 'partnerNotPinned'
-
-	let pr = hints.fixedOf(p)
+	let pr = try hints.fixedOf(p)
 
 	if regMaskContains(liveness.forbiddenOf(p), regNum: pr) 'partnerCannotTakeIt'
-		return NoFixedHint
+		throw RegisterHintLookup.noHint
 	end 'partnerCannotTakeIt'
 
 	return pr
@@ -2732,11 +2640,7 @@ end 'pinnedPartnerRegister'
 // It cannot over-constrain: the widened mask is only a PREFERENCE (`chooseRegister` falls back to
 // `blocked` when the group's preferred volatility is full), never a legality claim.
 function copyGroupBlocked(v ValueId, blocked RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult) returns RegMask
-	if not hints.hasCopy(v) 'noPartner'
-		return blocked
-	end 'noPartner'
-
-	let p = hints.copyOf(v)
+	let p = try hints.copyOf(v) otherwise return blocked
 
 	if alloc.isColored(p) 'partnerColored'
 		return blocked
@@ -2771,7 +2675,7 @@ end 'copyGroupBlocked'
 // per-value cost.
 function preferredVolatilityMask(blocked RegMask, classPool RegMask, callerSaved RegMask) returns RegMask
 	let volatilePart = classPool and callerSaved
-	let anyVolatileFree = lowestClearRegister(blocked or (fullRegisterMask() and not volatilePart)) != RegisterFileSize
+	let anyVolatileFree = hasAClearRegister(blocked or (fullRegisterMask() and not volatilePart))
 	return volatilePart if anyVolatileFree else classPool
 end 'preferredVolatilityMask'
 
@@ -2800,21 +2704,20 @@ end 'hintIsTakeable'
 //
 // The final fallback scans `blocked` alone and is class-safe BECAUSE of it: `allocateDef` put
 // `fullRegisterMask() and not classPool` into that mask, so every foreign-file register is already
-// blocked and `lowestClearRegister` — which scans all 32 — cannot reach one.
+// blocked and `lowestClearRegister` — which reads every register of both files — cannot reach one.
 //
 // It ASKS `preferredVolatilityMask` rather than re-deriving the same preference, so the hint path and
 // this one cannot disagree about what a value should take. Spelling the volatile probe twice makes
 // "the two must agree" a comment instead of a property — and a second spelling of a pool is exactly
 // how `fullRegisterMask()` comes to stand in for "the whole pool" in one of them and not the other.
-function pickPreferredRegister(blocked RegMask, classPool RegMask, callerSaved RegMask) returns RegNum
+function pickPreferredRegister(blocked RegMask, classPool RegMask, callerSaved RegMask) returns RegNum throws RegisterSearch
 	let preferred = preferredVolatilityMask(blocked, classPool: classPool, callerSaved: callerSaved)
-	let pick = lowestClearRegister(blocked or (fullRegisterMask() and not preferred))
 
-	if pick != RegisterFileSize 'gotPreferred'
+	if let pick = try lowestClearRegister(blocked or (fullRegisterMask() and not preferred)) 'gotPreferred'
 		return pick
 	end 'gotPreferred'
 
-	return lowestClearRegister(blocked)
+	return try lowestClearRegister(blocked)
 end 'pickPreferredRegister'
 
 // Color one op: assert its uses are already colored (dominance), free the operands

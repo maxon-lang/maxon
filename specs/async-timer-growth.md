@@ -9,24 +9,20 @@ category: concurrency
 
 ## Documentation
 
-**This is an compiler-authored spec, not a port.** It pins an invariant of the compiler's own green-thread scheduler that
-no canonical spec describes, because the structure it is about — a flat timer store with a seed capacity — is
-the compiler's implementation choice rather than a property of the language.
+This spec pins an invariant of the compiler's own green-thread scheduler, because the structure it is about —
+a flat timer store with a seed capacity — is the compiler's implementation choice rather than a property of
+the language.
 
 Every green thread parked on a timer occupies one entry in the scheduler's timer store
 (`GtRuntime.TimerHeapCapacity`, seeded at 256). **The seed is a starting size, not a limit:** when the store
 fills, `__gt_timer_add` doubles it, copies the live entries across, and republishes the base — so the number
 of threads that may wait on a timer at once is bounded by memory, not by a constant.
 
-### What this pins, and what it caught
+### What this pins
 
-The store used to be a bare append with **no capacity check at all**, justified by a comment reasoning that
-the concurrent-timer count was *"≤2 in the specs, 1 in a sequential loop, far below `TimerHeapCapacity`"*.
-That is an argument about the test corpus, not about the code: nothing stopped a program parking a 257th
-thread, and **MEASURED, 300 concurrent `sleep`s wrote 44 entries past the end of the 256-entry store** — plain
-out-of-bounds writes into neighbouring slab memory — and the program still exited 0. A green suite could never
-have found it, which is exactly why the false premise survived: it had been checked against the tests rather
-than against the store.
+A store without the capacity check would let a program parking a 257th thread write past the end of the
+256-entry store — plain out-of-bounds writes into neighbouring slab memory — and still exit 0. A suite whose
+programs park only a few timers at once cannot see that, however green it is.
 
 The case below is therefore a **red-gate pin**, not a feature demonstration. It parks far more threads than
 the seed capacity and checks that every one of them comes back with its own value.

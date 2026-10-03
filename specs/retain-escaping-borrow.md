@@ -16,18 +16,17 @@ source: when the container binding lives in an outer scope and its element's sou
 scope (`var b = …; { let pInner = Point.create(…); b = PointBox.create(pInner) }; …`), a pure borrow
 would dangle — the element is freed at the inner scope's exit while the container still points at it.
 
-The fix (user ruling, 2026-07-23) generalizes the OPEN #40 `__mm_retain` co-ownership thesis: a
+`__mm_retain` co-ownership closes it: a
 trivial struct/instance stored into a generic field is RETAINED at the constructor feed, so the box
 holds a REAL second reference. The box's destructor decrefs that reference, and the caller's own drop
 decrefs the caller's reference — freed EXACTLY once on every path, whether the source is a temporary,
-a named inner binding, an outer binding, or loop-carried. The consume boundary is unchanged (the
+a named inner binding, an outer binding, or loop-carried. The consume boundary stays where it is (the
 caller keeps `p`): every heap struct is refcounted.
 
 This is a BOUNDED refcount exception for a co-owned trivial struct, not a general refcounting scheme.
 A SHARED-body reassignment of a co-owned trivial field (`self.saved = next`) cannot drop the old
-co-owned value without a trivial-struct single-value drop (a later slice), so it is REJECTED rather
-than leaked. (The true E3070 NLL borrow-liveness pass — `arr.get(0); arr.push(x)` — is a separate
-future rung.)
+co-owned value without a trivial-struct single-value drop, which the compiler does not have, so it is
+REJECTED rather than leaked.
 
 ## Tests
 
@@ -280,8 +279,8 @@ end 'main'
 <!-- test: error.reassign-co-owned-trivial-in-shared-body -->
 A shared-body reassignment of a type-parameter field that a trivial-struct instantiation co-owns is
 rejected: the box retains and drops the co-owned trivial struct, but a shared-body reassignment cannot
-drop the old co-owned value without the trivial-struct single-value drop (a later slice). Rejected
-cleanly rather than leaked.
+drop the old co-owned value without a trivial-struct single-value drop, which the compiler does not
+have. Rejected cleanly rather than leaked.
 ```maxon
 typealias Coord = int(0 to 1000)
 type Point
@@ -307,7 +306,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:8: Unsupported: reassigning the type-parameter field 'saved' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type
+error E2015: <fragment>:15:8: Unsupported: reassigning the type-parameter field 'saved' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor has no single-value drop for a trivial struct); reassign the field on a concrete instance, or use a managed element type
 ```
 
 <!-- test: error.reassign-co-owned-trivial-instantiated-by-another-file-box-first -->
@@ -350,7 +349,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:9:8: Unsupported: reassigning the type-parameter field 'saved' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type
+error E2015: <fragment>:9:8: Unsupported: reassigning the type-parameter field 'saved' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor has no single-value drop for a trivial struct); reassign the field on a concrete instance, or use a managed element type
 ```
 
 <!-- test: error.reassign-co-owned-trivial-instantiated-by-another-file-use-first -->
@@ -390,5 +389,5 @@ export type Outer uses T
 end 'Outer'
 ```
 ```maxoncstderr
-error E2015: <fragment>:23:8: Unsupported: reassigning the type-parameter field 'saved' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type
+error E2015: <fragment>:23:8: Unsupported: reassigning the type-parameter field 'saved' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor has no single-value drop for a trivial struct); reassign the field on a concrete instance, or use a managed element type
 ```

@@ -1,0 +1,113 @@
+// Presence is its own column, so no entry value has to be reserved to mean "absent". An absent run
+// costs nothing until an entry inside it is set (`materialize`).
+enum EntryPresence
+	absent
+	held
+end 'EntryPresence'
+
+typealias EntryPresenceColumn = Array with EntryPresence
+
+export type OptionalIndexColumn uses Entry
+	typealias EntryColumn = Array with Entry
+
+	var values as EntryColumn
+	var present as EntryPresenceColumn
+	var length as ElementIndex
+
+	export static function create() returns Self
+		return Self.absent(0)
+	end 'create'
+
+	export static function absent(count ElementIndex) returns Self
+		return Self{values: EntryColumn.create(), present: EntryPresenceColumn.create(), length: count}
+	end 'absent'
+
+	export function count() returns ElementIndex
+		return self.length
+	end 'count'
+
+	export function makeAbsent(count ElementIndex)
+		self.values.clear()
+		self.present.clear()
+		self.length = count
+	end 'makeAbsent'
+
+	export function growAbsent(count ElementIndex)
+		if count > self.length 'longer'
+			self.length = count
+		end 'longer'
+	end 'growAbsent'
+
+	export function truncate(count ElementIndex)
+		if count >= self.length 'nothingToDrop'
+			return
+		end 'nothingToDrop'
+
+		self.values.truncate(count)
+		self.present.truncate(count)
+		self.length = count
+	end 'truncate'
+
+	export function push(value Entry)
+		if self.present.count() < self.length 'absentTail'
+			self.materialize()
+		end 'absentTail'
+
+		self.values.push(value)
+		self.present.push(EntryPresence.held)
+		self.length = self.length + 1
+	end 'push'
+
+	export function pushAbsent()
+		self.length = self.length + 1
+	end 'pushAbsent'
+
+	export function set(at ElementIndex, value Entry)
+		self.requireInside(at, reader: "set")
+
+		if at >= self.present.count() 'notMaterializedYet'
+			self.materialize()
+		end 'notMaterializedYet'
+
+		try self.values.set(at, value: value) otherwise panic("OptionalIndexColumn.set: entry {at} is past the {self.values.count()} values materialized for a column of {self.length}")
+		try self.present.set(at, value: EntryPresence.held) otherwise panic("OptionalIndexColumn.set: entry {at} is past the {self.present.count()} entries materialized for a column of {self.length}")
+	end 'set'
+
+	export function clear(at ElementIndex)
+		self.requireInside(at, reader: "clear")
+
+		if at < self.present.count() 'materialized'
+			try self.present.set(at, value: EntryPresence.absent) otherwise panic("OptionalIndexColumn.clear: entry {at} is past the {self.present.count()} entries materialized")
+		end 'materialized'
+	end 'clear'
+
+	export function holds(at ElementIndex) returns bool
+		if at >= self.present.count() 'neverSet'
+			self.requireInside(at, reader: "holds")
+			return false
+		end 'neverSet'
+
+		return (try self.present.get(at) otherwise panic("OptionalIndexColumn.holds: entry {at} is past the {self.present.count()} entries materialized")) == EntryPresence.held
+	end 'holds'
+
+	export function get(at ElementIndex) returns Entry throws AbsentError
+		if not self.holds(at) 'absentHere'
+			throw AbsentError.absent
+		end 'absentHere'
+
+		return try self.values.get(at) otherwise panic("OptionalIndexColumn.get: entry {at} is held past the {self.values.count()} values materialized")
+	end 'get'
+
+	function materialize()
+		self.values.resize(self.length)
+		self.present.growFilled(self.length, value: EntryPresence.absent)
+	end 'materialize'
+
+	function requireInside(at ElementIndex, reader String)
+		if at >= self.length 'pastTheColumn'
+			panic("OptionalIndexColumn.{reader}: entry {at} is past the {self.length} the column holds")
+		end 'pastTheColumn'
+	end 'requireInside'
+end 'OptionalIndexColumn'
+
+export typealias OptionalElementIndexColumn = OptionalIndexColumn with ElementIndex

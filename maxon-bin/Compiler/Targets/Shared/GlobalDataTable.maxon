@@ -183,6 +183,8 @@ export enum RdataPayloadKind
 	//
 	// ⚠ APPENDED AT THE END OF THE ENUM, past the text band, per this enum's own band rule.
 	stringTableBuffer
+
+	functionRecord
 end 'RdataPayloadKind'
 
 // The kind column, parallel to `names`/`values` — see `GlobalDataTable.payloadKinds`.
@@ -817,6 +819,38 @@ export type GlobalDataTable
 	export function recordFuncAbs64InRdata(funcName ByteArray, rdataLabel String, offsetInLabel ByteOffset)
 		self.pendingRdataRelocs.push(PendingRdataReloc.create(funcName, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel))
 	end 'recordFuncAbs64InRdata'
+
+	// A function record nothing surviving names stays in `.rdata` with its code slot unbaked: the
+	// function it names may have been swept, and `bakeFuncAbs64Relocs` panics on a reloc to one.
+	export function dropFunctionRecordRelocsExcept(referenced ReferencedGlobalLabelSet)
+		var kept = PendingRdataRelocArray.create()
+
+		for reloc in self.pendingRdataRelocs 'eachRdataSlot'
+			if not isFunctionRecordLabel(reloc.rdataLabel) or referenced.contains(reloc.rdataLabel.toByteArray()) 'stillFilled'
+				kept.push(reloc)
+			end 'stillFilled'
+		end 'eachRdataSlot'
+
+		self.pendingRdataRelocs = kept
+	end 'dropFunctionRecordRelocsExcept'
+
+	export function functionRecordLabelsNamedInRdata() returns StringArray
+		var named = StringArray.create()
+
+		for reloc in self.pendingRdataAbsRelocs 'eachAbsoluteSlot'
+			if isFunctionRecordLabel(reloc.targetLabel) 'namesAFunctionRecord'
+				named.push(reloc.targetLabel)
+			end 'namesAFunctionRecord'
+		end 'eachAbsoluteSlot'
+
+		for reloc in self.pendingRdataSelfRelRelocs 'eachRelativeSlot'
+			if isFunctionRecordLabel(reloc.targetLabel) 'namesAFunctionRecord'
+				named.push(reloc.targetLabel)
+			end 'namesAFunctionRecord'
+		end 'eachRelativeSlot'
+
+		return named
+	end 'functionRecordLabelsNamedInRdata'
 
 	// Record that `rdataLabel`'s slot at `offsetInLabel` must be patched with `targetLabel`'s distance from
 	// `rdataLabel`'s own base — see PendingRdataSelfRelReloc. Both are `.rdata` labels this table minted, and

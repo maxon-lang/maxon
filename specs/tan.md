@@ -50,22 +50,10 @@ end 'main'
 ```
 
 <!-- test: tan.multiple-values -->
-⚠ **THE `stdout` BLOCK IS RETRACTED, FOR THE REASON `specs/sin.md` SETS OUT AT LENGTH — see that
-file rather than a second copy here.** In short: `/specs` rendered floats in a
-fixed-6-decimal format, whose carry never reaches the integer part; The compiler prints the **shortest
-round-trip** representation by user ruling, which makes that whole class of defect unreachable. Every
-`/specs` file that prints a float needs this same retraction; it is one decision, not a per-file
-judgement.
-
-⭐ **It changes the RENDERING, not the numbers, and you can check that here without running anything:**
-each old value is exactly the fixed-6-decimal rendering of the double replacing it — `0.5463024898437905`
-→ `0.546302`, `1.5574077246549025` → `1.557408`, `1.0000036732118494` → `1.000004`, `0.0` → `0.0`. The
-two blocks describe the same four doubles.
-
-Verified per file, because a shortest digit string is only correct for the exact double it came from:
-the four `Math.tan` RESULTS here are the doubles with bit
-patterns `0`, `4603095874924660554`, `4609692760021066663`, `4607182435342692924` — so only the
-rendering differs.
+Floats print in the **shortest round-trip** representation (⚖ user ruling; `specs/sin.md` sets out
+why). A shortest digit string is only correct for the exact double it came from, so these four are
+verified against the doubles `Math.tan` returns here, with bit patterns `0`, `4603095874924660554`,
+`4609692760021066663`, `4607182435342692924`.
 ```maxon
 function main() returns ExitCode
 	let x1 = Math.tan(0.0)

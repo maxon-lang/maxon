@@ -202,10 +202,15 @@ end 'arm64EmitWin32BoolFromZeroStatus'
 // non-blocking read that could not be served yet is an operation still in flight, which is exactly the arm
 // `__gt_subp_yield_read` parks on. `ENOTEMPTY` answers `ERROR_DIR_NOT_EMPTY`, which is what tells a
 // `Directory.delete` caller that the directory is occupied rather than missing.
+//
+// `EBUSY` and `ETXTBSY` answer `ERROR_SHARING_VIOLATION`, the code the file surface classifies as
+// busy (`ManagedFileRuntime`), so a busy file throws the same case on every lane.
 export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt, dirNotEmpty ParsedInt)
 	let notFound = asm.newLabel()
 	let pathNotFound = asm.newLabel()
 	let denied = asm.newLabel()
+	let exists = asm.newLabel()
+	let busy = asm.newLabel()
 	let notEmpty = asm.newLabel()
 	let noMoreFiles = asm.newLabel()
 	let stillInFlight = asm.newLabel()
@@ -224,6 +229,12 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt,
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: denied)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.operationNotPermitted.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: denied)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.fileExists.rawValue as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: exists)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.deviceBusy.rawValue as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: busy)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.textFileBusy.rawValue as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: busy)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorGenericFailure as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
 
@@ -237,6 +248,14 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt,
 
 	asm.placeLabel(denied)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorAccessDenied as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(exists)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorFileExists as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(busy)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorSharingViolation as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(notEmpty)

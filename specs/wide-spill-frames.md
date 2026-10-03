@@ -3,7 +3,6 @@ feature: wide-spill-frames
 status: The compiler
 keywords: [register-allocator, spill-slot, arm64, imm12, frame, ldr, str, scratch, x64, guard-page, stack-probe, green-threads]
 category: register-allocator
-milestone: P1.9
 ---
 
 # A spill slot past the scaled imm12
@@ -27,20 +26,20 @@ stack one page at a time and only when the GUARD PAGE ITSELF is touched, so a `s
 carries rsp eight pages past that page without ever accessing it, and the first write below lands
 on reserved-but-uncommitted memory: `0xC0000005`, at a frame size the arm64 ceiling happens to sit
 near for a completely unrelated reason. The prologue therefore WALKS the pages — `sub rsp, 4096` /
-touch / repeat — for any frame past one page. ⇒ **these two cases were RED on x64-windows for both
-reasons at once**: the arm64 imm12 fix (`A5h`) closed one target's, and the walk closes the
-other's. See `X64Backend.encodeStackProbe`.
+touch / repeat — for any frame past one page. ⇒ **these two cases exercise both ceilings at once**:
+the arm64 imm12 displacement handling covers one target's, and the walk covers the other's. See
+`X64Backend.encodeStackProbe`.
 
 **THE THRESHOLD IS "MORE THAN ONE PAGE", AND THE EVIDENCE THAT FIXES IT IS A CASE THAT PASSES.**
-Measured from an emitted PE's optional header: `SizeOfStackReserve` = 1,048,576 (1 MB) and
+An emitted PE's optional header has `SizeOfStackReserve` = 1,048,576 (1 MB) and
 `SizeOfStackCommit` = **4096 — exactly one page**. A thread therefore starts with ONE committed
 page and a guard page directly below it, and the guard services exactly ONE page of growth per
 fault. So the question a frame has to answer is not "how big am I" but **"do I LAND ON the guard
 page or step over it"**:
 
-  • `x64-large-frame-arg7`'s frame is **6408 bytes, 1.56 pages** — and it is GREEN, and always has
-    been. It lands one page below the committed region, which is the guard page itself: the fault
-    fires, the handler commits, execution resumes. Nothing was ever wrong with it.
+  • `x64-large-frame-arg7`'s frame is **6408 bytes, 1.56 pages** — and it is GREEN without a walk.
+    It lands one page below the committed region, which is the guard page itself: the fault fires,
+    the handler commits, execution resumes.
   • These cases' frame is **32808 bytes, 8.01 pages** — it lands in the NINTH page, far below the
     guard, in reserved address space with nothing watching it.
 
@@ -56,15 +55,15 @@ below pins the other side of that line: 4104 bytes, the smallest frame that must
 EVERY PAGE, AND THE ONE A GREEN THREAD COLLECTS ON.** A green thread's stack is an exact `mmap`'d region.
 Its prologue guard projects `rsp - frameBytes - margin` against a guard word the grower placed
 (`GtRuntime.gtStackGuardHeight`), so the room below a frame's base is the margin and nothing more — where
-an OS-grown stack has pages and pages. A walk that TOUCHED and then compared overshot the base by
+an OS-grown stack has pages and pages. A walk that TOUCHED and then compared would overshoot the base by
 `4096 - (frameBytes mod 4096)` bytes, up to a whole page, and on a green thread that write lands off the
 bottom of the stack.
 
-⚠ **MEASURED, on the compiler itself.** The called-once inliner splices every function `main` alone calls
-into it, which carries the compiler's own `main` to a 12,984-byte frame. Its green thread opened that frame
-3,232 bytes above the lowest page of its stack — legal, and what the guard reserved — and
-the walk's last touch landed 136 bytes BELOW that page: `maxon version` SIGSEGV'd on x64-linux, printing
-nothing at all, the second self-compile of every x64-linux build. ⇒ **the walk COMPARES FIRST**: it stops
+⚠ **THE COMPILER ITSELF IS SUCH A PROGRAM.** The called-once inliner splices every function `main` alone
+calls into it, which carries the compiler's own `main` to a frame over 12 KB, opened on a green thread a
+few KB above the lowest page of its stack — legal, and what the guard reserves. A touch-then-compare walk's
+last touch lands BELOW that page, and `maxon version` SIGSEGVs on x64-linux, printing nothing at all.
+⇒ **the walk COMPARES FIRST**: it stops
 when the next touch would be at or below the base, lands on the base, and touches THAT. Every page is still
 covered — consecutive touches are one page apart and the base is less than a page below the last of them.
 
@@ -72,7 +71,7 @@ covered — consecutive touches are one page apart and the base is less than a p
 `GtWindowsExceptionDispatchBytes` — one page — under the guard word for the OS's exception dispatch, so a
 page of overshoot fits inside a reservation that exists for an unrelated reason. arm64 opens even a large
 frame with one `sub sp` and walks nothing. **x64-linux is the only lane where the overshoot is a fault**,
-which is why it stood while four green lanes reported otherwise.
+so the other four lanes can be green on a walk that overshoots.
 
 ⚠ **The cure the sibling ceilings took is not available here.** `wide-field-offsets.md`'s
 struct-field displacement is a compile-time constant at instruction selection, so the ISel
@@ -84,7 +83,7 @@ which runs after. There is nothing for an ISel-tier fold to fold.
 that later passes demonstrably splice ops between; a spill or a reload is exactly such a
 spliced op, so an encoder-tier `x16` materialisation for spill addressing would clobber a
 pending fold. `x17` — the other AAPCS64 IP scratch, outside the allocatable pool, and used
-today only inside a single terminator (`arm64JumpTable`, which declares both) — is the one
+only inside a single terminator (`arm64JumpTable`, which declares both) — is the one
 register no post-ISel splice can be sitting inside.
 
 ⚠ **AND THE SPILL SLOT IS NOT THE ONLY FRAME REFERENCE THAT OUTRUNS THE FIELD.** An INCOMING
@@ -8926,13 +8925,13 @@ end 'main'
 `wide` reserves the SAME 4104-byte frame as the case above and opens it on a GREEN THREAD's stack rather
 than the process's: 64 spawns in turn, each on a fresh 2 KB seed the grower has to enlarge before the frame
 clears the guard word, each answering `138591`. The room below that frame base is the guard margin and
-nothing else, so a walk that overshot the base by the frame's 4088-byte remainder wrote off the bottom of
-the stack — MEASURED 6 runs of 6 SIGSEGV before the walk compared first, and 6 of 6 exit 0 after.
+nothing else, so a walk that overshot the base by the frame's 4088-byte remainder would write off the
+bottom of the stack and SIGSEGV.
 
 ⚠ **ONE SPAWN IS NOT THE GATE, AND THAT IS WHY THERE ARE 64.** Whether the page under a given green
 thread's stack happens to be mapped is the allocator's business: where it is, the overshoot silently
-corrupts a neighbour instead of faulting, and the sum still comes back right. A single spawn MEASURED
-green on 1 run in 3 against the broken walk; 64 fresh stacks is what makes the fault the outcome.
+corrupts a neighbour instead of faulting, and the sum still comes back right, so a single spawn can
+pass against an overshooting walk; 64 fresh stacks is what makes the fault the outcome.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

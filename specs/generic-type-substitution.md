@@ -226,8 +226,8 @@ end 'main'
 `typealias Inner = Cell with T` inside `type Holder uses T` is the other spelling of the same field, and it
 is the spelling `stdlib/Array.maxon` uses for its own buffer (`typealias ElementMemory = __ManagedMemory
 with Element`). The sweep records it as a bare `named("Holder.Inner")` because the alias registry is filled
-after the file is swept, so the cascade used to classify the field by its ALIAS NAME and resolve that to the
-UNSUBSTITUTED `Cell with Holder.T` — the trivial box drop, and a stranded string. Measured at exit 101.
+after the file is swept, so a cascade that classified the field by its ALIAS NAME would resolve that to the
+UNSUBSTITUTED `Cell with Holder.T` — the trivial box drop, and a stranded string (the leak gate's exit 101).
 ```maxon
 type Cell uses T
 	export var v as T
@@ -520,13 +520,11 @@ end 'main'
 
 <!-- test: bare-generic-name-nesting-is-deep-cloneable -->
 ### The CLONE direction CASCADES two instances deep, and is not silently shallow
-⭐ **THIS CASE WAS A REFUSAL UNTIL W162, AND ITS SUBJECT IS WHAT THAT RUNG BUILT.** The drop side of a
-nested bare generic name has always cascaded; the clone side had no cascade to reach, because a non-`Array`
-generic instance had no `__clone_<instance>` at all — so the gate and the strategy agreed to refuse, which
-is what kept the two directions from disagreeing (a gate that admitted the copy with no cloner behind it
-would byte-blit the inner box's pointer and free it twice).
+⭐ **ITS SUBJECT IS THE CLONE CASCADE.** The drop side of a nested bare generic name cascades, and the
+clone side must cascade the same levels: a gate that admitted the copy with no cloner behind it would
+byte-blit the inner box's pointer and free it twice.
 
-The cloner now exists and is the exact dual of the drop cascade it mirrors: `__clone_Holder_String` clones
+The cloner is the exact dual of the drop cascade it mirrors: `__clone_Holder_String` clones
 its `cell` field through `__clone_Cell_String`, which clones its `v` through `__str_clone` — the same three
 levels `__destruct_Holder_String` → `__destruct_Cell_String` → `__str_decref` releases. Neither inner cloner
 is named anywhere the module scan can see, so `noteCascadeUsage`'s closure has to reach them through the
@@ -1240,8 +1238,8 @@ already promotes-or-passes-through an OWNED record and the hand-off is discharge
 
 ⚠ **THAT `+1` IS THE CALLEE'S.** It is emitted in `emitOwnedValueReturn` through `coOwnBorrowedOpaque` →
 `__retain_type_param`. The discrimination this case is about therefore lives at that one door:
-`emitOwnedValueReturn` promotes only a BORROWED value, and the tuple the body just built is already owned. Measured
-on this program: `Holder.pair` `__mm_alloc`s the pair record and `__retain_type_param`s each opaque ELEMENT into
+`emitOwnedValueReturn` promotes only a BORROWED value, and the tuple the body just built is already owned. On this
+program `Holder.pair` `__mm_alloc`s the pair record and `__retain_type_param`s each opaque ELEMENT into
 it, and `main` spends exactly one `__mm_decref` on the result and takes no reference of its own.
 
 ⛔ **Co-owning the record anyway leaks it, once per call, and that is what the exit code is for.** The caller

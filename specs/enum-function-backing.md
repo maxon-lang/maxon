@@ -278,7 +278,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: api/<fragment>:18:13: Ambiguous bare function name 'doubleFn' backing an enum case: multiple visible definitions found. Qualify with a directory name. Candidates: alpha.doubleFn, beta.doubleFn
+error E3095: api/<fragment>:18:13: Ambiguous bare function name 'doubleFn' backing an enum case: more than one visible declaration matches it. Qualify it as one of: alpha.doubleFn, beta.doubleFn
 ```
 
 <!-- test: function-backing.error.contested-name-with-different-results-is-called-from-another-file -->
@@ -312,7 +312,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: api/<fragment>:18:13: Ambiguous bare function name 'doubleFn' backing an enum case: multiple visible definitions found. Qualify with a directory name. Candidates: alpha.doubleFn, beta.doubleFn
+error E3095: api/<fragment>:18:13: Ambiguous bare function name 'doubleFn' backing an enum case: more than one visible declaration matches it. Qualify it as one of: alpha.doubleFn, beta.doubleFn
 ```
 
 <!-- test: function-backing.error.undeclared-name-is-called-from-another-file -->

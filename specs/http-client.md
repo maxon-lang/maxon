@@ -358,8 +358,7 @@ function staySilent(listener TcpListener) returns String
 	return "heard {heard.byteLength()} more bytes"
 end 'staySilent'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async staySilent(listener)
 	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return 2
 	var limits = HttpClientLimits.create()
@@ -373,6 +372,11 @@ function main() returns ExitCode
 
 	print("client=answered {response.statusCode().number()} peer={await peer}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -604,8 +608,7 @@ function switchAndHold(listener TcpListener) returns String
 	return "heard {heard.byteLength()} more bytes"
 end 'switchAndHold'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async switchAndHold(listener)
 
 	var request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise return 2
@@ -621,6 +624,11 @@ function main() returns ExitCode
 
 	print("client=answered {outcome.statusCode().number()} peer={await peer}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -664,8 +672,7 @@ function streamAHead(listener TcpListener) returns String
 	return "stoppedEarly={sent < MostLines}"
 end 'streamAHead'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async streamAHead(listener)
 
 	let outcome = try HttpClient.get("http://127.0.0.1:{listener.port()}/") otherwise (e) 'failed'
@@ -675,6 +682,11 @@ function main() returns ExitCode
 
 	print("client=answered {outcome.statusCode().number()} peer={await peer}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout

@@ -81,11 +81,7 @@ function declaringFileOfTheCursorsMember(signatures ProgramSignatures, corpus Ls
 	end 'nothingBeforeTheDot'
 
 	let subject = lspSubjectOfReceiver(text, tokens: tokens, keywords: keywords, receiver: cursor - TokensBetweenAReceiverAndItsMember, corpus: corpus)
-	let typeName = lspSubjectTypeName(subject)
-
-	if typeName.isEmpty() 'noReceiverType'
-		throw LspDeclarationLookupError.nothingThere
-	end 'noReceiverType'
+	let typeName = try lspSubjectTypeName(subject) otherwise throw LspDeclarationLookupError.nothingThere
 
 	return try lspDeclaringFileOfAMember(signatures, owner: typeName.toByteArray(), member: member, readerPath: readerPath)
 end 'declaringFileOfTheCursorsMember'
@@ -251,7 +247,7 @@ function declaringFileOfAnInterface(signatures ProgramSignatures, name ByteArray
 	end 'nothingDeclaresIt'
 
 	for site in signatures.interfaceDeclSites 'eachSite'
-		if site.name.equals(name) 'thisInterface'
+		if site.name.names(name) 'thisInterface'
 			return site.path
 		end 'thisInterface'
 	end 'eachSite'

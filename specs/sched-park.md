@@ -22,9 +22,8 @@ needs `main` to move, `main` woken behind a service that is still waiting, and a
 that must run while its handler sleeps.
 
 ⚖ **An `async` coroutine still belongs to the green thread that started it, and runs only where that green
-thread's work runs** — one coroutine of a green thread at a time, never on a second machine at once. What
-changes is that its green thread's WAIT no longer pins it: a coroutine started before a `sleep` runs during
-the sleep.
+thread's work runs** — one coroutine of a green thread at a time, never on a second machine at once. Its
+green thread's WAIT does not pin it: a coroutine started before a `sleep` runs during the sleep.
 
 ## Tests
 <!-- test: sched-park.nested-awaits-through-three-services-complete -->

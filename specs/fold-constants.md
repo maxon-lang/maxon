@@ -82,9 +82,8 @@ rounded answer, and the compiler emits that one answer on all three targets (`ro
   indefinite integer, arm64 `fcvtzs` saturates, and wasm's `i64.trunc_f64_s` **traps**. Folding one
   would replace a wasm trap with a number.
 
-⛔ **TWO OF THOSE THREE DECLINES HAVE NO CASE IN THIS FILE, AND SAYING SO IS THE POINT.** Both were
-sabotage-measured on 2026-08-30 and BOTH SABOTAGES LEAVE THE WHOLE SUITE GREEN, on this lane and on
-wasm, because the compiler here runs on an x64 host and on x64 the folded answer and the emitted
+⛔ **TWO OF THOSE THREE DECLINES HAVE NO CASE IN THIS FILE, AND SAYING SO IS THE POINT.** Removing
+either one LEAVES THE WHOLE SUITE GREEN, on this lane and on wasm, because the compiler here runs on an x64 host and on x64 the folded answer and the emitted
 instruction's answer are the same number:
 
 - **The NaN decline** is visible only in `a-computed-nan-keeps-its-instruction`'s committed fragment,
@@ -92,8 +91,8 @@ instruction's answer are the same number:
   spells a NaN *constant* (there is no NaN literal, `__Builtins.bitsToFloat` is reserved), and every
   program that can make one prints `nan` and answers `y != y` true whichever payload it holds. The
   divergence is between two MACHINES, and one host's suite cannot stage it.
-- **The `fpToSi` range guard** IS observable, on wasm, and could not be pinned for a harness reason
-  rather than a semantic one. MEASURED with the guard removed: `trunc(1.0e300)` compiled to
+- **The `fpToSi` range guard** IS observable, on wasm, and is not pinned for a harness reason
+  rather than a semantic one. With the guard removed, `trunc(1.0e300)` compiled to
   `wasm32-wasi` prints `-9223372036854775808` — the compiling HOST's `cvttsd2si` answer, baked into a
   binary for a machine that never ran it — and exits 0, where the guard leaves the emitted
   `i64.trunc_f64_s` in place and wasmtime traps with exit 3. A case for it would have to pin
@@ -101,9 +100,7 @@ instruction's answer are the same number:
   exactly and has no normalizer for it. **A path normalizer for the wasm runner would make this a real
   case, and it is the one thing missing.**
 
-⚠ **The float control below is INVERTED from what it was.** It used to pin that the guard refusing
-every float was load-bearing; it now pins the fold. The same sabotage still measures it, one field
-along: mint the folded float's `const` at `FoldedArithType` (i64) instead of `FoldedFloatType` and the
+⚠ **The float control below pins the fold.** A sabotage one field along discriminates it: mint the folded float's `const` at `FoldedArithType` (i64) instead of `FoldedFloatType` and the
 x64 emitter dies with *"rax is in the gpr register file where the xmm file is required"* while the
 wasm module fails validation on the local's class.
 
@@ -186,8 +183,8 @@ end 'main'
 <!-- test: a-negation-of-a-constant-is-evaluated -->
 `-a` and `not a` are the ONE-operand shapes, and they reach this pass the way the two-operand ones
 do: a parameter a leaf negates becomes `neg (const)` once `inlineLeaves` has substituted the caller's
-literal. Until 2026-08-31 the pass evaluated only two-operand shapes, so a `-K` over an inlined (or
-top-level) constant kept a `neg` instruction that the same value spelled `0 - K` never had. The
+literal. So a `-K` over an inlined (or top-level) constant keeps no `neg` instruction, exactly as the
+same value spelled `0 - K` keeps no `sub`. The
 evaluator is the parser's own (`foldIntUnaryOp`, reached through `maxonUnaryOpOfStdOpcode`), so
 `i64.min` negated is `i64.min` — the wrap the instruction computes, folded to the same bits.
 ```maxon
@@ -229,13 +226,13 @@ The right shifts are the sign-filling direction, where saturation is a CLAMP of 
 a zeroed result: `-8 shr 70` is the sign, `-1`.
 
 ⭐⭐ **THE NEGATIVE COUNT IS THE CHECK THAT DISCRIMINATES, AND IT LIVES IN THE SIBLING CASE BELOW.**
-MEASURED 2026-08-28: with `FoldConstants.evaluateIntBinOp`'s `shiftCountIsUnguarded` gate removed, every
+With `FoldConstants.evaluateIntBinOp`'s `shiftCountIsUnguarded` gate removed, every
 POSITIVE count here stays green — `evalShift` saturates to the same answer the emitted cascade computes, so
-folding one would have been correct. What the gate actually stands in front of is a count the folder refuses
+folding one would be correct. What the gate actually stands in front of is a count the folder refuses
 to answer for at all: a negative literal reaches this pass as a single `const` once `inlineLeaves` has
 substituted it for the parameter, and `evalShift` PANICS on one (`negative count -1 — a negative count is
 E2054 and must never reach the folder`), taking the whole compiler down. That check cannot share a case with
-these, because a negative count now ABORTS THE PROGRAM — see
+these, because a negative count ABORTS THE PROGRAM — see
 `a-negative-count-is-not-folded-and-panics-at-run-time`.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -338,10 +335,9 @@ end 'main'
 ```
 
 <!-- test: the-remainder-at-the-overflow-pair-is-zero -->
-`i64.min mod -1`. The QUOTIENT is unrepresentable there and the REMAINDER is 0, and this compiler's
-constant folder once refused the pair for both operators — the folder disagreeing with the language
-it folds for (A1x). Nothing here folds the operation itself (a `mod` is never folded), so what this
-pins is that the runtime answer and the constant domain still agree about the one input where they
+`i64.min mod -1`. The QUOTIENT is unrepresentable there and the REMAINDER is 0. Nothing here folds
+the operation itself (a `mod` is never folded), so what this
+pins is that the runtime answer and the constant domain agree about the one input where they
 could differ.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -443,11 +439,11 @@ end 'main'
 ```
 
 <!-- test: a-float-constant-expression-is-evaluated -->
-⭐ **THE CONTROL, AND IT IS STILL SABOTAGE-MEASURED — one field along.** The three multiplications
+⭐ **THE CONTROL, AND WHAT A SABOTAGE OF IT BREAKS — one field along.** The three multiplications
 and the addition below leave no `mulsd`/`addsd` in the committed fragment: each is one
-`movsd xmm, [rip + __fconst_…]`. What the sabotage moved to is the MINTED TYPE. Carry the folded
+`movsd xmm, [rip + __fconst_…]`. What discriminates the fold is the MINTED TYPE. Carry the folded
 float on a `const` typed `FoldedArithType` (i64) rather than `FoldedFloatType` (f64) and the value
-lands in the wrong register file: MEASURED 2026-08-28 on this very program,
+lands in the wrong register file: on this very program,
 `x64 emitter: rax is in the gpr register file where the xmm file is required`; on wasm the same
 mistake declares an i64 local that every `f64.*` consumer fails validation against.
 ```maxon
@@ -589,7 +585,7 @@ keep their instructions and the machine that runs them picks.
 
 ⚠ **WHAT THE CHECKS BELOW PIN IS THAT THE ANSWER IS *A* NaN — NOT THAT THE FOLD DECLINED**, and the
 difference is worth being exact about. `y != y` is true of every NaN on every target, so it stays true
-whichever payload the program ends up holding; MEASURED 2026-08-30, this case is still GREEN with the
+whichever payload the program ends up holding; this case stays GREEN with the
 decline removed. **What sees the decline is this case's committed FRAGMENT**, where removing it deletes
 the `subsd` — and that is the whole of the coverage, for the reason the Documentation gives: a payload
 divergence is between two MACHINES, and no assertion runnable on one host can stage it.

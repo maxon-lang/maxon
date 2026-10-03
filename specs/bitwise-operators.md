@@ -286,12 +286,6 @@ declared `int(0 to 63)` — an *unsigned* optimal type, and the most natural way
 shift distance — as making the whole shift unsigned, and a signed `shr` would ZERO-fill: `(0-8) shr 60`
 would answer **15**. It answers -1, whatever the count's declared type.
 
-⚠ This file used to claim the compiler "was right by construction (every int is a signed i64)". **That was
-false, and it was false in the way that matters**: the sentence names the very premise —
-*there is no unsigned integer type* — that a zero-low-bound alias refutes, and that the compiler's parser
-accepts. The compiler got the COUNT's signedness right for the same reason it got the OPERAND's wrong: it
-never asked. "Right by construction" is exactly the claim that rots unpinned, and this is what it
-rotted into.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 typealias ShiftBits = int(0 to 63)
@@ -331,7 +325,7 @@ end 'main'
 
 <!-- test: shl-count-negative -->
 A negative shift count reads as "shift the other way" and is not that at all: masked, `shl -1`
-silently became `shl 63` — the MAXIMUM left shift, a wrong answer with the opposite sign. The
+silently becomes `shl 63` — the MAXIMUM left shift, a wrong answer with the opposite sign. The
 compiler is holding the count, so it rejects it.
 ```maxon
 function main() returns ExitCode
@@ -486,13 +480,12 @@ The same, with a count the PARSER cannot see: a parameter. This is the case the 
 unguarded, 65 masks to 1 and `7 shl 65` is 14; 100 masks to 36. Every answer here matches the
 constant-folded one above, which is the whole point: one rule, two readings.
 
-⚠ **"NO PASS CAN SEE IT" WAS TRUE WHEN THIS WAS WRITTEN AND IS NOT ANY MORE, AND THE CORRECTION
-MATTERS BECAUSE IT IS WHY THESE ANSWERS STILL AGREE.** `shiftLeft` is a tiny leaf, so `inlineLeaves`
-(EC5) substitutes the caller's literal for `count`, and `foldConstants` (EC12) then evaluates the
+⚠ **A PASS CAN SEE THE COUNT, AND THAT IS WHY THESE ANSWERS MUST AGREE.** `shiftLeft` is a tiny leaf,
+so `inlineLeaves` substitutes the caller's literal for `count`, and `foldConstants` then evaluates the
 shift itself — but ONLY for a count inside the window the instruction takes as written (`0..63`).
 `count: 3` is folded; `count: 65` and `count: 100` are not, because the fold declines outside that
 window and the saturation cascade the parser emitted computes them at run time. So the two readings
-this case pins are still both present, and they are now in ONE program rather than two.
+this case pins are both present, in ONE program.
 `specs/fold-constants.md` carries the same split with the negative counts added.
 ```maxon
 typealias Num = int(i64.min to i64.max)
@@ -865,7 +858,7 @@ end 'main'
 The other half of the same sentence, and the reason the unsigned case above is a *narrowing* of the
 rule rather than a reversal of it: a **signed** left operand still shifts arithmetically. Both
 compilers must keep answering -1 here while answering 15 above — the operand's type is the only
-thing that changed.
+thing that differs.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -981,19 +974,15 @@ end 'main'
 ```
 
 <!-- test: shift-ranged-operand-is-64-bit -->
-⭐ **A RANGED LEFT OPERAND DECIDES A SHIFT'S FILL, NEVER ITS WIDTH.** The compiler used to conflate
-the two: a shift whose operands fit a narrow ranged type was lowered as a **32-bit** op, which
-truncated the shift's *value*. `(0-8) shl 29` on an `int(-2147483648 to 2147483647)` needs 61 bits
-to hold its answer and got 32, so it answered **0** — while the identical shift by a count the
-compiler could not fold (and so lowered at 64 bits) answered **-4294967296**.
+⭐ **A RANGED LEFT OPERAND DECIDES A SHIFT'S FILL, NEVER ITS WIDTH.** A shift whose operands fit a
+narrow ranged type is still a 64-bit op, because a **32-bit** lowering truncates the shift's *value*:
+`(0-8) shl 29` on an `int(-2147483648 to 2147483647)` needs 61 bits to hold its answer, and at 32 it
+would answer **0** — while the identical shift by a count the compiler cannot fold answers
+**-4294967296**. That would be the folded path and the emitted path holding two opinions.
 
-**Same value, same count, same program, two answers.** The folded path and the emitted path had
-become two opinions.
-
-Nothing in the suite shifted a ranged operand, which is why nothing caught it: every existing shift
-case uses a bare `int`, and a bare `int` never narrows. Each case below therefore compares the two
-paths *against each other* — a folded count against a count passed as a parameter — so it fails if
-they ever diverge again, whatever they diverge to.
+A bare `int` never narrows, so only a ranged operand can tell the two apart. Each case below compares the
+two paths *against each other* — a folded count against a count passed as a parameter — so it fails if
+they ever diverge, whatever they diverge to.
 ```maxon
 typealias I32 = int(-2147483648 to 2147483647)
 typealias U32 = int(0 to 4294967295)
@@ -1221,13 +1210,13 @@ end 'main'
 ⛔⛔ **AN `and` THAT CHANGES NOTHING MUST NOT CHANGE WHAT IS PROVEN.** The inheritance above hands an
 operand's ranged alias to the `and`'s result, and that answer is RECORDED — into the same map a cast
 writes, which every proof reader takes AHEAD of the merge withhold. So reading the operand through the
-DECLARED-type door would launder `a-merged-count-is-not-proven-around-a-loop`'s phi straight past G14:
-`n` declares `int(0 to 63)` and holds **71**, and `m = n and 127` holds the SAME 71.
+DECLARED-type door would launder `a-merged-count-is-not-proven-around-a-loop`'s phi straight past the
+merge withhold: `n` declares `int(0 to 63)` and holds **71**, and `m = n and 127` holds the SAME 71.
 
-⚠ **MEASURED, one value with two answers:** `1 shl n` gave the saturated **0** while `1 shl m` gave
-**128** — the hardware's masked `1 shl 7` — differing only by an `and` with an all-ones mask. The
+⚠ **That would be one value with two answers:** `1 shl n` gives the saturated **0**, and `1 shl m` would
+give **128** — the hardware's masked `1 shl 7` — differing only by an `and` with an all-ones mask. The
 operand is read through the PROOF door instead, so a merge nothing proved hands down nothing and the
-`and` result falls back to a bare `int`, exactly where it was before the rule existed.
+`and` result falls back to a bare `int`.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 typealias Bits = int(0 to 63)
@@ -1498,18 +1487,15 @@ end 'main'
 ⚠ **THE OTHER END OF THE BOUND.** An alias may
 reach below 0 as well as above 63, and `int(-1 to 5)` is small in every direction but one. A count
 of -1 masks to **63** in the hardware, so an elision that checked only the upper bound would turn
-`1 shl -1` into `1 shl 63` — the MAXIMUM left shift — and `u64.max shr -1` into **1**. Both are 0
-here, which is what the compiler's saturation reads an out-of-range count as.
+`1 shl -1` into `1 shl 63` — the MAXIMUM left shift — and `u64.max shr -1` into **1**.
 
-⭐⭐ **THE SHIFT PANIC HAS LANDED, AND THIS CASE MOVED WITH IT — the move its own prose predicted.** It
-used to pin the SATURATED answers (`1 shl -1` is 0, `u64.max shr -1` is 0) because the compiler had no run-time
-panic; now the first negative shift aborts, so what the case pins is the ABORT, in `shlBy` — the callee, not
-`main`, which is what says the guard rides the shift and not the call site.
+⭐⭐ **WHAT THIS CASE PINS IS THE SHIFT PANIC.** The first negative shift aborts, in `shlBy` — the callee,
+not `main`, which is what says the guard rides the shift and not the call site.
 
-⚠ **AND IT STILL SEES THE LOWER BOUND, WHICH IS THE WHOLE REASON IT EXISTS.** `int(-1 to 5)` is small in
+⚠ **AND IT SEES THE LOWER BOUND, WHICH IS THE WHOLE REASON IT EXISTS.** `int(-1 to 5)` is small in
 every direction but one, and an elision that checked only the upper bound would hand `1 shl -1` straight to
 the hardware — which masks it to `1 shl 63`, the MAXIMUM left shift, and returns 42 with every comparison
-below satisfied. The panic is now what an elision would silently remove.
+below satisfied. The panic is what an elision would silently remove.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 typealias Word = bits(64)
@@ -1565,7 +1551,7 @@ Stack trace:
 
 <!-- test: a-merged-count-is-not-proven-around-a-loop -->
 ⛔⛔ **A MERGE'S DECLARED ALIAS IS NOT A PROOF, AND A SHIFT COUNT IS THE THIRD READER THAT MUST NOT
-SPEND IT AS ONE (G14).** The cases above prove a count through a PARAMETER (guarded at the callee's
+SPEND IT AS ONE.** The cases above prove a count through a PARAMETER (guarded at the callee's
 entry) and through an `as` (guarded at the cast). A `var` reassigned around a loop crosses NEITHER:
 an assignment is a door on no tier, so the loop's header phi keeps the name `Bits` while the body
 hands it whatever it computed. `n` below is declared `int(0 to 63)` and holds **71**.
@@ -1576,10 +1562,8 @@ answers those identically whether or not it is sound. Read as a proof, this coun
 saturation and the hardware masks 71 to 7: `1 shl 71` becomes **128** and `0 - 4` shifted right by
 71 becomes `0 - 1` by luck rather than by rule. The saturated value is the answer.
 
-⚠ Its expectation rides on the same non-door assignment G14 records. If an assignment to a ranged
-alias ever becomes a door, this program panics at `n = n + 10` instead, and the case moves to that
-expectation — exactly as `a-count-whose-alias-reaches-below-zero-keeps-the-guard` moves when the
-negative-count panic lands.
+⚠ Its expectation rides on an assignment to a ranged alias not being a door. If one ever becomes a
+door, this program panics at `n = n + 10` instead, and the case moves to that expectation.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 typealias Word = bits(64)
@@ -1715,19 +1699,17 @@ end 'main'
 
 
 <!-- test: bitwise-operators.a-counted-loop-count-is-not-proven -->
-⛔⛔ **THE COUNT A COUNTED LOOP COULD PROVE AND DELIBERATELY DOES NOT — AND THIS FRAGMENT IS THE DECISION
-(EC7).** `i` here is provably `0 … 63`, exactly the counts the instruction takes as written, but it DENOTES
+⛔⛔ **THE COUNT A COUNTED LOOP COULD PROVE AND DELIBERATELY DOES NOT — AND THIS FRAGMENT IS THE
+DECISION.** `i` here is provably `0 … 63`, exactly the counts the instruction takes as written, but it DENOTES
 no alias — its written type is the bare `int` its bounds were written at — so `shiftCountIsProvenUnguarded`
 answers `undeclared` for it and the whole `(count and -64) != 0` saturation is emitted for a case that cannot
 happen.
 
-EC7 gives that counter an interval, and reading it here is SOUND and deletes those seven ops. It was built
-and TIMED, and the reading came back INSIDE THE NOISE: with the join the self-compile read **71.9 / 71.9 s**
-against **71.0 / 71.0 s** without it — but two LOGICALLY IDENTICAL compilers, differing only in comments and
-one retired private method, read **68.5 / 68.8 s** against that same 71.0. The compiler's own code layout
-moves further under an unrelated edit than the elision does. The corpus's counted shift counts are few and
-cold, so nothing here can settle it; it stays out until a program that pays for them exists, and the
-saturation below is what says so — a paragraph nobody checks would not.
+The counted-loop analysis gives that counter an interval, and reading it here is SOUND and deletes those
+seven ops — but the saving is inside the self-compile's noise, where the compiler's own code layout moves
+further under an unrelated edit than the elision does. The corpus's counted shift counts are few and cold,
+so it stays out until a program that pays for them exists, and the saturation below is what says so — a
+paragraph nobody checks would not.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

@@ -1341,8 +1341,7 @@ error E4014: <fragment>:8:6: type 'Cell' contains a reference cycle (via Cell �
 base's fields are opaque type parameters, so its node holds nothing and is a SINK; the argument that closes
 the loop lives in the instance. `valueWidensToInterface` reduces `Box with Holder` to `Box` when it asks
 whether the value may be stored, so the cycle graph must reduce the same way when it asks what that value
-HOLDS — two different nodes otherwise, and the reach through the instance goes unseen. MEASURED as a clean
-compile and **exit 101** while the same program with a concrete payload was refused.
+HOLDS — two different nodes otherwise, and the reach through the instance goes unseen.
 ⚠ The path names `HolderBox`, the author's own `typealias`, rather than the mangled instance symbol.
 ```maxon
 typealias Small = int(0 to 255)

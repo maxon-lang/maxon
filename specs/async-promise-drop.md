@@ -5,7 +5,7 @@ keywords: [async, await, promise, green-threads, drop, cancel, ownership, leak, 
 category: concurrency
 ---
 
-# Async / Await — un-awaited Promise drop-reclaim + cancel (P1.5-B2 #88)
+# Async / Await — un-awaited Promise drop-reclaim + cancel
 
 ## Documentation
 
@@ -47,8 +47,7 @@ family is marked because its CHILD COMMAND is a shell's or `cmd`'s, never becaus
 <!-- test: async-promise-drop.never-ran-drop-no-leak -->
 A spawned green thread that is never awaited is DROPPED at scope exit: it is renounced where it sits in its
 strand's queue, so it is reclaimed — seed stack and struct — rather than run, and `__gt_live_count` balances to
-zero — so the program exits with `main`'s own code (0), not the GT-leak abort (75). Before #88 this spawn leaked
-its struct + stack silently.
+zero — so the program exits with `main`'s own code (0), not the GT-leak abort (75).
 ```maxon
 
 function trivial() returns Integer
@@ -124,12 +123,12 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.spawn-drop-loop-bounded -->
-The real #88 leak shape: a loop that spawns a promise every iteration and never awaits it. Each iteration's
+The leak shape: a loop that spawns a promise every iteration and never awaits it. Each iteration's
 promise is dropped at the loop body's scope exit — renounced in its strand's queue (so it is reclaimed rather
 than run when the queue reaches it) and its struct recycled onto the free-list, which the next spawn reuses.
-Memory stays bounded across 1000 iterations and the live count balances to zero (exit 0). Before #88 each
-iteration bump-leaked its struct and seed stack — neither of them a box, so both are invisible to the heap
-leak gate's tracked live column, and `__gt_live_count` is the gate that catches them.
+Memory stays bounded across 1000 iterations and the live count balances to zero (exit 0). Neither the struct
+nor the seed stack is a box, so both are invisible to the heap leak gate's tracked live column, and
+`__gt_live_count` is the gate that catches them.
 ```maxon
 
 function trivial() returns Integer
@@ -265,16 +264,14 @@ thread resumes, gives the source back, closes the child's handle (abandon the WA
 unwinds its own frame. The abandoned child runs to completion independently; the program exits promptly with 42
 and the live count balances to zero.
 
-⚠ **`s` MUST BE BOUND, AND THIS CASE READ `_ = async slowProc()` WHILE DESCRIBING THE `waiting` ARM.** That
-spelling discards the promise at its own statement, before `main` ever parks: the committed fragments showed
-`__gt_spawn` → `__gt_ready` → `__gt_promise_drop` back to back, so `slowProc` never ran, never spawned a
-child, and the drop took the QUEUED arm — the identical defect `parked-timer-drop-cancel`'s own warning
-records, in the case written against it. **It answered 42 by testing nothing**, which is why the expectation
-here is unchanged and the program is not.
+⚠ **`s` MUST BE BOUND.** `_ = async slowProc()` discards the promise at its own statement, before `main`
+ever parks: `__gt_spawn` → `__gt_ready` → `__gt_promise_drop` run back to back, so `slowProc` never runs,
+never spawns a child, and the drop takes the QUEUED arm — the shape `parked-timer-drop-cancel`'s own warning
+names. **That spelling answers 42 by testing nothing.**
 
-⚠ **AND IT CARRIED NO `unsupported-targets` MARKER WHILE SPAWNING THROUGH `cmd /c`**, so on the three POSIX
-lanes `/bin/sh -c "cmd /c ping …"` failed to exec and returned at once — nothing to park on even had the
-promise been bound. `posix-parked-subprocess-drop-cancel` is this case's real sibling on those lanes.
+⚠ **IT SPAWNS THROUGH `cmd /c`, SO IT CARRIES AN `unsupported-targets` MARKER**: on the three POSIX lanes
+`/bin/sh -c "cmd /c ping …"` fails to exec and returns at once — nothing to park on.
+`posix-parked-subprocess-drop-cancel` is this case's sibling on those lanes.
 ```maxon
 
 function slowProc() returns Integer
@@ -336,10 +333,8 @@ not a wrong answer, which is why the symptom is an exit code no arithmetic in th
 
 ⚠ **`parked-subprocess-drop-cancel` DOES NOT COVER THIS, AND THE ONE INTERPOLATED `String` IS THE WHOLE
 DIFFERENCE.** Its coroutine holds nothing, so a drop that frees the parked stack and a drop that unwinds it
-answer 42 alike — there is nothing on that stack to strand. It also drops at the `_ =` site, before the
-coroutine has run; binding the promise to `p` and dropping it at scope exit is what puts the drop AFTER the
-park. `posix-parked-subprocess-drop-reclaims-the-frames-heap` is this case on the POSIX lane and carries the
-measurement.
+answer 42 alike — there is nothing on that stack to strand.
+`posix-parked-subprocess-drop-reclaims-the-frames-heap` is this case on the POSIX lane.
 ```maxon
 
 function slowProc(tag Integer) returns Integer
@@ -483,11 +478,10 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.rearm-var-across-loop -->
-Re-arming a promise `var` INSIDE A LOOP is not phi-blind (P1.5-B2 #88, review Finding 1): the loop-header phi
+Re-arming a promise `var` INSIDE A LOOP is not phi-blind: the loop-header phi
 carries the promise mark, so each iteration DROPS the previous thread (cancelling it) and the last one drops at
-scope exit — the live count balances to zero (exit 0). Before the fix the loop body emitted no drop (the phi was
-unmarked, so the re-arm saw no live thread to drop) and the scope-exit drop misrouted to `__mm_decref` on a GT
-pointer, corrupting the heap count (exit 101).
+scope exit — the live count balances to zero (exit 0). An unmarked phi would give the re-arm no live thread to
+drop and route the scope-exit drop to `__mm_decref` on a GT pointer, corrupting the heap count (exit 101).
 ```maxon
 function trivial() returns Integer
 	Scheduler.yield()
@@ -510,9 +504,9 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.rearm-var-across-branch -->
-Re-arming a promise `var` in ONE ARM OF A BRANCH is likewise not phi-blind (Finding 1): the if-continuation phi
+Re-arming a promise `var` in ONE ARM OF A BRANCH is likewise not phi-blind: the if-continuation phi
 merges the re-armed thread and the untouched one, both marked promises, so the scope-exit drop cancels whichever
-the taken path holds — balanced on every path (exit 0). Before the fix this exited 101.
+the taken path holds — balanced on every path (exit 0).
 ```maxon
 function trivial() returns Integer
 	Scheduler.yield()
@@ -537,11 +531,10 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.await-rearmed-var -->
-AWAITING a promise `var` re-armed across a branch works and yields the re-armed thread's result (Finding 1): the
+AWAITING a promise `var` re-armed across a branch works and yields the re-armed thread's result: the
 merge phi is recognised as a promise, and its awaited result type is recovered by tracing the phi's incoming
 `async` calls. `positive()` is true, so `p` holds the re-armed thread; `await p` returns 7 and both threads are
-accounted for (the original dropped at the re-arm, the re-armed one awaited). Before the fix `await p` on the
-phi was rejected E2015 ("not a promise").
+accounted for (the original dropped at the re-arm, the re-armed one awaited).
 ```maxon
 function seven() returns Integer
 	Scheduler.yield()
@@ -567,12 +560,11 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.await-rearmed-loop-var -->
-AWAITING a promise `var` re-armed INSIDE A LOOP, from AFTER the loop — the loop-EXIT phi (P1.5-B2 #88; this
-closes residual #89's E2015 over-rejection of an `await` on a block-arg-carried promise). `p` is re-armed each
+AWAITING a promise `var` re-armed INSIDE A LOOP, from AFTER the loop — the loop-EXIT phi, a block-arg-carried
+promise. `p` is re-armed each
 iteration (dropping the previous thread); after the loop `await p` targets the loop-exit phi, whose promise mark
 and awaited result type are recovered by tracing the phi's incoming `async` calls. It returns the LAST spawn's
-result (5), every intermediate thread dropped and the live count balanced. Before #88 the phi-carried promise
-was rejected E2015 ("not a promise") at the `await`.
+result (5), every intermediate thread dropped and the live count balanced.
 ```maxon
 function five() returns Integer
 	Scheduler.yield()
@@ -595,7 +587,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.error.rearm-aliased-thread -->
-Re-arming a promise `var` whose thread is still named by a LIVE ALIAS is refused (Finding 2): `let q = p` gives
+Re-arming a promise `var` whose thread is still named by a LIVE ALIAS is refused: `let q = p` gives
 the thread a second name, so re-arming `p` would drop it while `q` still names it, and `await q` would then
 reclaim freed memory — a use-after-free E3100 cannot catch (it is not a double await). A compile error, not a
 miscompile. (`double-await-alias-outlives-rebind` stays E3100 because there the thread is AWAITED before the
@@ -619,16 +611,13 @@ error E2015: <fragment>:9:2: Unsupported: cannot re-arm the promise binding ('p'
 ```
 
 <!-- test: async-promise-drop.error.await-then-reassign-nonpromise -->
-⛔ **A `var` DOES NOT CHANGE TYPE, AND A PROMISE BINDING IS NO EXCEPTION.** This case used to RUN, and it
-ran only because a promise had no type of its own: the binding was declared from `async nine()`, which minted
-a bare machine word, so `p` was an `int` binding and `p = 5` was an ordinary scalar reassignment. Once the
-spawn is typed (`W230`), `p` holds a `Promise with Integer` for its whole life and assigning an `int` to it is
-the same refusal assigning an `int` to any other declared type earns.
+⛔ **A `var` DOES NOT CHANGE TYPE, AND A PROMISE BINDING IS NO EXCEPTION.** The spawn is typed, so `p`
+holds a `Promise with Integer` for its whole life and assigning an `int` to it is the same refusal assigning
+an `int` to any other declared type earns.
 
-⚠ **THE OWNERSHIP FACT IT USED TO PIN IS UNCHANGED AND IS STILL PINNED** — that an AWAITED promise's binding
-owns nothing, so nothing is dropped at scope exit and no use-after-move is reported. That is what
-`rearm-var-across-loop`, `rearm-var-across-branch` and `await-rearmed-var` test, with a re-armed PROMISE
-rather than a scalar, which is the only re-arm the type now admits. What is gone is a spelling, not a rule.
+⚠ **AN AWAITED PROMISE'S BINDING OWNS NOTHING**, so nothing is dropped at scope exit and no use-after-move is
+reported. That is what `rearm-var-across-loop`, `rearm-var-across-branch` and `await-rearmed-var` test, with a
+re-armed PROMISE rather than a scalar, which is the only re-arm the type admits.
 ```maxon
 function nine() returns Integer
 	Scheduler.yield()
@@ -718,9 +707,8 @@ end 'main'
 
 <!-- test: async-promise-drop.branch-store-into-a-container-reads-the-doors-in-either-order -->
 The mirror of the case above, and the reason it is a second case rather than a second assertion: the defect it
-pins was ORDER-DEPENDENT — the first store door the parser read retyped the spawn's value to the storage
-instance, and the SECOND one then mistook it for a promise already read back out of a container and skipped
-the move. So the arms are written the other way round here, `set` first and `push` second, which makes `push`
+pins is ORDER-DEPENDENT — a first store door that retyped the spawn's value to the storage instance would
+make the SECOND one mistake it for a promise already read back out of a container and skip the move. So the arms are written the other way round here, `set` first and `push` second, which makes `push`
 the door that is read second and taken FIRST at run time. Same two threads, same 42: whichever door the parser
 happens to read second must still consume the thread it stores.
 ```maxon
@@ -784,9 +772,9 @@ end 'main'
 <!-- test: async-promise-drop.a-container-drops-its-un-awaited-elements -->
 ⭐ The container is an OWNER. An array of promises that reaches scope exit holding un-awaited elements
 drops each one — the same `__gt_promise_drop` a bare binding gets, reached through the element
-destructor the array record stamps. Before this slice the record stamped `element_destroy@40 = 0`,
-because the compiler classed a promise as owing nothing, and the array died taking its elements'
-threads with it, unreclaimed: `__gt_live_count` stayed at 1 and the program exited **75**.
+destructor the array record stamps at `element_destroy@40`. A record stamped `0` there would let the array
+die taking its elements' threads with it, unreclaimed: `__gt_live_count` would stay at 1 and the program
+would exit **75**.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -809,10 +797,7 @@ end 'main'
 
 <!-- test: async-promise-drop.an-element-moved-out-by-pop-belongs-to-the-caller -->
 `pop` MOVES the element out: the array no longer holds it and the caller's binding does, so the binding
-drops it at scope exit like any other owned promise. Before this slice a popped promise was owned by
-NOBODY — the array had already forgotten it and the binding never adopted it — so both the promise's
-box and its green thread leaked. The heap gate is checked first, so the symptom was **101**, with the
-green-thread leak (75) hiding behind it. `.inner` peeks at the handle without consuming it, which is
+drops it at scope exit like any other owned promise. `.inner` peeks at the handle without consuming it, which is
 what lets this case observe the promise at all without awaiting it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -840,19 +825,16 @@ popped a thread true, array now 0
 ```
 
 <!-- test: async-promise-drop.a-struct-field-drops-the-promise-it-holds -->
-A struct FIELD is an owner too, and the struct's synthesized destructor drops it. This case could not
-even be WRITTEN before promises were typed: `Holder.of(async plain())` was refused (`expected
-'IntPromise', got 'int'`) because the spawn was a bare machine word, so the only way a promise ever
-reached a field was through a container read — and once it did, nothing dropped it. Typing the promise
-opens the position; stamping the field destructor is what makes opening it safe.
+A struct FIELD is an owner too, and the struct's synthesized destructor drops it. A spawn is typed
+`Promise with …`, so `Holder.of(async plain())` stores it into the field; stamping the field destructor is
+what makes that position safe.
 
-⚠ **IT AWAITS THE FIELD RATHER THAN PEEKING IT, AND THE DIFFERENCE IS THE WHOLE CASE.** An earlier draft
-observed the promise with `h.p.inner > 0` and PASSED the moment the spawn was typed — for the wrong
-reason. The spawn is a statement-scoped pending temporary, so storing it into a field without MOVING it
-leaves the drain to cancel the thread at the end of that statement; the field then holds a dead handle,
-and a peek reads a dangling pointer that is still non-zero. `await h.p` is what tells the two apart:
-against the cancelled thread it aborts (**exit 92**), and only a field that really owns a live promise
-answers 7.
+⚠ **IT AWAITS THE FIELD RATHER THAN PEEKING IT, AND THE DIFFERENCE IS THE WHOLE CASE.** A peek
+`h.p.inner > 0` passes for the wrong reason. The spawn is a statement-scoped pending temporary, so storing it
+into a field without MOVING it would leave the drain to cancel the thread at the end of that statement; the
+field would then hold a dead handle, and a peek reads a dangling pointer that is still non-zero. `await h.p`
+is what tells the two apart: against a cancelled thread it aborts (**exit 92**), and only a field that
+really owns a live promise answers 7.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -885,10 +867,8 @@ element and leaves it in the array. For a refcounted element that is sound — t
 holders own a reference — and for a green thread it is impossible: there is no second reference to take,
 so the array and the caller would each reclaim the same thread.
 
-⛔ **THIS WAS THE ONE CASE THE ELEMENT STAMP MADE WORSE BEFORE IT WAS REFUSED, WHICH IS WHY THE REFUSAL IS
-PART OF THE SAME CHANGE.** Measured: `try s.last() … ; await l` exited **7** while an `Array with Promise`
-dropped nothing, and **75** once it dropped — a leak turning into a double free. A container of promises
-now refuses the read instead.
+⛔ **A CONTAINER OF PROMISES REFUSES THE READ.** Admitted, `try s.last() … ; await l` would have the
+array's element destructor and the caller's `await` each reclaim the same thread — a double free.
 
 ⚠ **THE RULE IS DECIDED AT THE CALL SITE AND IT HAS TO BE.** `stdlib/Array.maxon` is compiled ONCE over an
 opaque `Element`, so inside `last()` the element is a type parameter and nothing about green threads is
@@ -966,11 +946,10 @@ end 'main'
 ```
 
 <!-- test: async-promise-drop.error.cancel-a-promise-no-frame-owns -->
-⭐⭐ **`cancel` IS A CONSUME, SO IT ASKS THE SAME OWNERSHIP QUESTION `await` ASKS — AND FOR TWO WEEKS IT
-DID NOT.** `requireConsumedPromiseIsOwned` had exactly one caller, `emitAwaitOp`, so this program and
-its `await` twin — the SAME program with one word changed — disagreed: the twin was refused with the
-E3141 below, and this one COMPILED and aborted **75** at run time. A reclaim the compiler cannot
-account for is not less wrong for being spelled `cancel`.
+⭐⭐ **`cancel` IS A CONSUME, SO IT ASKS THE SAME OWNERSHIP QUESTION `await` ASKS.**
+`requireConsumedPromiseIsOwned` guards both doors, so this program and its `await` twin — the SAME program
+with one word changed — are refused with the same E3141, each naming its own door. A reclaim the compiler
+cannot account for is not less wrong for being spelled `cancel`.
 
 ⚠ **THE SHAPE IS A MERGE, and that is why no frame owns the promise.** A phi is minted with the slot
 columns seeded NOT-SET — there is no single slot to empty, because the two edges name different ones —
@@ -1014,11 +993,9 @@ vacates its binding at the call and the callee is enrolled the promise's owner a
 
 ⛔⛔ **THE OWNERSHIP IS DECIDED BEFORE THE CALLEE'S BODY IS PARSED, WHICH IS WHY THE DECLARATION SWEEP HAS
 TO SEE THE DOOR.** `bindParameters` asks the swept consume set whether the callee takes its promise
-parameter, and that sweep recognised stores into durable storage and nothing else — so `await p` on a
-parameter enrolled nobody, and the `await` met `requireConsumedPromiseIsOwned`'s E3141 at a program that
-is perfectly legal. That refusal is the SECOND answer this shape got: before it existed the callee awaited
-a thread it did not own and the program aborted **75**, which is the stamp-without-vacate abort
-`error.cancel-a-promise-no-frame-owns` records one case up. `promise-peek.md`'s
+parameter, and the sweep counts an `await` of the parameter as a take. A sweep that saw only stores into
+durable storage would enroll nobody, and the `await` would meet `requireConsumedPromiseIsOwned`'s E3141 at a
+program that is perfectly legal. `promise-peek.md`'s
 `a-peek-through-a-function-leaves-the-promise-alone` pins the other side — a callee that only READS
 `p.inner` consumes nothing and leaves the promise with the caller.
 ```maxon
@@ -1106,7 +1083,7 @@ so the frame that spells it is the owner and the caller moves the promise in at 
 ⛔ **WHICH IS A CLAIM ABOUT THE DECLARATION SWEEP, because ownership is settled before the body is
 parsed.** `bindParameters` asks the swept consume set, so a sweep reading only receiver-less declarations
 leaves nobody enrolled and the method's own `await` meets E3141 — a refusal earned by the receiver rather
-than by the program, which is what it answered until the sweep read every shape's parameters
+than by the program. The sweep therefore reads every shape's parameters
 (`Parser.sweptParamNamesFor`). `ServiceLoop.dropUnconsumedPayloads` reads the same widened set and still
 gets `false` for every message, by a checked reason rather than by that skip: a promise never crosses a
 send (E3135 refuses a `Promise` payload at the `spawn`, reading the handler's declared slot type), and
@@ -1662,11 +1639,10 @@ error E3102: <fragment>:28:9: use of moved value 'p': its ownership moved to ano
 ```
 
 <!-- test: async-promise-drop.error.a-slot-read-stored-inside-a-loop-it-was-read-outside -->
-A store inside a loop is parsed ONCE and runs on every trip, so a slot read taken OUTSIDE the loop would
-empty `a`'s slot on the first trip and meet an already-empty one on the second, while `b` collected two
-entries naming one thread. That is the loop-escaping move an owned binding is already refused for, on the
-road that enrols no owned binding — so it earns the same refusal, and the cure is the same: read the
-element inside the loop body.
+A store inside a loop runs on every trip, so a slot read taken OUTSIDE the loop empties `a`'s slot on the
+first trip and would meet an already-empty one on the second, while `b` collected two entries naming one
+thread. The second trip reads a value the first moved, which is E3102; the cure is to read the element
+inside the loop body.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -1695,7 +1671,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:21:5: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary
+error E3102: <fragment>:21:10: use of moved value 'p': it was moved in an earlier iteration of this loop
 ```
 
 <!-- test: async-promise-drop.error.a-slot-read-awaited-inside-a-loop-it-was-read-outside -->
@@ -1769,10 +1745,8 @@ error E3141: <fragment>:19:15: a promise cannot be borrowed through 'await': it 
 
 <!-- test: async-promise-drop.error.a-slot-read-given-away-in-a-while-condition -->
 A `while` CONDITION runs on every trip exactly as its body does, so giving a slot read away inside one
-escapes the loop the same way — passing a promise to a callee that awaits it is a move, and the second trip
-would hand over a thread the first already gave up. The loop's own context is not pushed until the condition
-has parsed, so the depth the body is measured against cannot see this; the refusal is the one an owned
-binding in this position already earns.
+moves it on every trip — passing a promise to a callee that awaits it is a move, and the second trip would
+hand over a thread the first already gave up. That second trip is E3102.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -1802,14 +1776,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:22:2: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary
+error E3102: <fragment>:22:14: use of moved value 'p': it was moved in an earlier iteration of this loop
 ```
 
 <!-- test: async-promise-drop.a-returned-spawn-is-the-callers-to-await -->
 ⭐⭐ **A `return` HANDS THE GREEN THREAD TO THE CALLER, SO THE CALLEE'S EXIT MUST NOT DROP IT.** The spawn is
 the callee's pending temporary until the `return` moves it out, exactly as a returned heap value leaves the
 frame's drop sets; the caller adopts the call's result as the thread's one owner. Without the move the callee
-cancelled the thread it was handing back, and the caller's `await` waited on a thread that would never run:
+would cancel the thread it was handing back, and the caller's `await` would wait on a thread that never runs:
 **exit 92**, `RuntimeAbort.schedulerDeadlock`, with nothing printed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1869,8 +1843,8 @@ end 'main'
 
 <!-- test: async-promise-drop.a-returned-spawn-dropped-by-the-caller -->
 A returned promise the caller never awaits is the CALLER's to drop: its binding's scope exit renounces the
-thread, and `__gt_live_count` balances to zero. With the callee also dropping it the thread was reclaimed
-twice and the run aborted **75**.
+thread, and `__gt_live_count` balances to zero. Were the callee to drop it too, the thread would be
+reclaimed twice and the run would abort **75**.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -2006,9 +1980,9 @@ end 'main'
 <!-- test: async-promise-drop.a-peeked-promise-argument-stays-with-the-caller -->
 ⭐⭐ **A CALLER MOVES A PROMISE ARGUMENT IN EXACTLY WHERE THE CALLEE OWNS IT.** `finish` awaits `q`, so it owns
 `q`; it only peeks `p`, so `p` stays the caller's, and the caller's later `await p` is legal. The caller and the
-callee answer "does the callee take this one?" off one predicate over the swept facts. With the caller moving
-every promise argument of a callee that consumes ANY parameter, this program was refused at `await p` with
-E3102, and its sibling below leaked.
+callee answer "does the callee take this one?" off one predicate over the swept facts. A caller that moved
+every promise argument of a callee that consumes ANY parameter would refuse this program at `await p` with
+E3102 and leak its sibling below.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -2040,7 +2014,7 @@ end 'main'
 
 <!-- test: async-promise-drop.a-peeked-promise-argument-is-dropped-by-the-caller -->
 The same peeked argument left to the caller's scope exit: the caller still owns it, so the caller drops it.
-Moved into a callee that did not own it, nobody dropped it and the run aborted **75**.
+Were it moved into a callee that did not own it, nobody would drop it and the run would abort **75**.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -2072,8 +2046,8 @@ end 'main'
 <!-- test: async-promise-drop.error.a-ternary-of-promise-parameters-is-returned -->
 ⭐⭐ **A `return` IS A CONSUME DOOR, SO IT ASKS THE OWNERSHIP QUESTION EVERY OTHER DOOR ASKS.** A ternary over
 two promises is a merge, and a merge has no owner — `await` and `cancel` refuse the same value with this same
-E3141. Handed back, the caller adopted a thread its own spawn still owned: the statement's drain cancelled it
-and the caller's `await` never returned, **exit 92**.
+E3141. Handed back, the caller would adopt a thread its own spawn still owned: the statement's drain would
+cancel it and the caller's `await` would never return, **exit 92**.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -2099,8 +2073,8 @@ error E3141: <fragment>:11:2: a promise cannot be borrowed through 'return': it 
 
 <!-- test: async-promise-drop.error.a-ternary-of-owned-promises-is-returned -->
 The same merge over two spawns this frame owns: each binding keeps its own drop, so the merged value has no
-owner to hand back. Returned, the frame's exit dropped both spawns — the returned one included — and the
-caller awaited a cancelled thread, **exit 92**.
+owner to hand back. Returned, the frame's exit would drop both spawns — the returned one included — and the
+caller would await a cancelled thread, **exit 92**.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -2157,8 +2131,8 @@ error E3141: <fragment>:12:2: a promise cannot be borrowed through 'return': it 
 <!-- test: async-promise-drop.an-awaited-parenthesized-parameter-is-owned -->
 Parentheses do not change what an `await` consumes: `await (p)` is the same door as `await p`, and the
 declaration sweep reads its operand with the parentheses stripped, by the one rule the `return` door and a
-struct-field store use. Read without stripping, the parameter was never enrolled as the callee's, and this
-legal program was refused with E3141 at its own `await`.
+struct-field store use. Read without stripping, the parameter would not be enrolled as the callee's, and
+this legal program would be refused with E3141 at its own `await`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

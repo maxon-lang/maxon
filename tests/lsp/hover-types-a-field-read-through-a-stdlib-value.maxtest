@@ -1,0 +1,15 @@
+let FieldReadBindingLine = 4 as LspCoordinate
+let FieldReadBindingCharacter = 5 as LspCoordinate
+
+test 'hover types a field read through a stdlib value'
+	let rendering = hoverRendering(collectedStatusSource(), line: FieldReadBindingLine, character: FieldReadBindingCharacter)
+
+	Expect.contains(rendering, needle: "TerminationStatus", message: "`let s = out.status` reads a field the stdlib's `CollectedOutput` declares, so the binding has that field's type, and the hover must name it.")
+
+	let uninferred = rendering.contains("could not infer")
+	Expect.isFalse(uninferred, message: "the hover said it could not infer the type of a field read through a stdlib value. It answered: {rendering}")
+end 'hover types a field read through a stdlib value'
+
+function collectedStatusSource() returns String
+	return "typealias StringArray = Array with String\n\nfunction main() returns ExitCode\n\tlet out = try Subprocess.run(Executable.name(\"cmd\"), arguments: StringArray.create()) otherwise return 1\n\tlet s = out.status\n\treturn 0 if s.isSuccess() else 1\nend 'main'\n"
+end 'collectedStatusSource'

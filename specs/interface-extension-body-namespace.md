@@ -11,22 +11,22 @@ category: type-system
 
 `export extension Iterable` is re-parsed once per CONFORMER, with the enclosing type set to that conformer —
 which is what lets `for item in self` walk it and what makes `self.createIterator()` a direct call. The
-conformer's FIELDS were installed into that body as bare aliases too, and they must not be: the body is
-written in another file, against the INTERFACE, by an author who cannot see them.
+conformer's FIELDS are NOT installed into that body as bare aliases: the body is written in another file,
+against the INTERFACE, by an author who cannot see them.
 
 **An interface declares a contract, not storage.** A bare name in such a body therefore denotes a local, a
 parameter or nothing at all — never a conformer field. `self.<field>` remains the explicit spelling for a
 body that has some other reason to reach one.
 
-### What the aliases cost while they were installed
+### What installing the aliases would cost
 
 Two things, and the first is the one a user meets.
 
 E3006 refuses a local that would displace a self-field alias, because the scope is keyed by NAME and the
 displaced field's own reads and writes would silently stop happening. That rule is right for a method whose
 author can see both names. It is not right across a library boundary: a `type Bag uses Element implements
-Iterable` whose field is spelled `item` collided with `map`'s own `for item in self`, and the whole
-diagnostic was
+Iterable` whose field is spelled `item` would collide with `map`'s own `for item in self`, and the whole
+diagnostic would be
 
 ```
 error E3006: stdlib/Interfaces.maxon:201:7: local 'item' shadows self field 'Bag.item' —
@@ -34,11 +34,12 @@ rename the local to avoid silent type confusion at every read/write keyed on the
 ```
 
 — a refusal quoting a library line, naming a library local, on a program whose author's only mistake was
-choosing a field name. Every local in every `extension Iterable` method was a reserved word for conformers.
+choosing a field name. Every local in every `extension Iterable` method would be a reserved word for
+conformers.
 
-The second half never produced a diagnostic at all, which is why withholding the aliases is the narrower fix
-rather than merely permitting the shadow: a bare name that did NOT collide with a local resolved to the
-conformer's private field, so the body's meaning depended on storage the interface does not expose and a
+The second half would produce no diagnostic at all, which is why withholding the aliases is the narrower rule
+rather than merely permitting the shadow: a bare name that did NOT collide with a local would resolve to the
+conformer's private field, so the body's meaning would depend on storage the interface does not expose and a
 different conformer does not have. That is the same "silent type confusion" E3006 is named for, one scope
 out.
 

@@ -18,24 +18,58 @@ File operations use function-specific error types:
 ```maxon
 enum FileReadError implements Error
 	notFound
+	accessDenied
+	busy
+	failed
 end 'FileReadError'
 
 enum FileWriteError implements Error
 	failed
+	notFound
+	accessDenied
+	alreadyExists
+	busy
+	partialFileLeft
 end 'FileWriteError'
 
 enum FileDeleteError implements Error
 	notFound
+	accessDenied
+	busy
+	failed
 end 'FileDeleteError'
 
 enum FileRenameError implements Error
 	failed
+	notFound
+	accessDenied
+	busy
 end 'FileRenameError'
+
+enum FileInfoError implements Error
+	notFound
+	accessDenied
+	busy
+	failed
+end 'FileInfoError'
+
+enum FileFailure
+	notFound
+	accessDenied
+	alreadyExists
+	busy
+	failed
+end 'FileFailure'
 ```
+
+Each error type has a `failure()` method returning a `FileFailure`, so a caller can judge every `File`
+error in one place. `busy` is a file another process holds open in a way that blocks the operation;
+`partialFileLeft` is `File.createText`'s, and its `failure()` is `FileFailure.failed`.
 
 ### File.readText
 
-Read the entire contents of a text file as a UTF-8 encoded string.
+Read the entire contents of a text file as a UTF-8 encoded string. It reads to the end of the file,
+whatever size the file reports.
 
 **Signature:** `static function readText(path FilePath) returns String throws FileReadError`
 
@@ -44,7 +78,7 @@ Read the entire contents of a text file as a UTF-8 encoded string.
 
 **Returns:** File contents as a string
 
-**Throws:** `FileReadError.notFound` if file cannot be read
+**Throws:** `FileReadError` — `notFound`, `accessDenied`, `busy` or `failed`
 
 **Example:**
 
@@ -75,11 +109,26 @@ Write a string to a text file using UTF-8 encoding.
 - `path`: File path
 - `content`: Text content to write
 
-**Throws:** `FileWriteError.failed` on failure
+**Throws:** `FileWriteError` — `notFound`, `accessDenied`, `busy` or `failed`
+
+### File.createText
+
+Create a new file holding a string, UTF-8 encoded. The file must not exist.
+
+**Signature:** `static function createText(path FilePath, content String) throws FileWriteError`
+
+**Parameters:**
+- `path`: File path
+- `content`: Text content to write
+
+**Throws:** `FileWriteError.alreadyExists` when the path already exists. A failed write deletes the file
+it created and throws the write's error; when that delete fails too it throws
+`FileWriteError.partialFileLeft`.
 
 ### File.readBinary
 
-Read the entire contents of a file as raw bytes.
+Read the entire contents of a file as raw bytes. It reads to the end of the file, whatever size the
+file reports.
 
 **Signature:** `static function readBinary(path FilePath) returns ByteArray throws FileReadError`
 
@@ -90,7 +139,7 @@ where `type ByteArray implements Array with Byte`
 
 **Returns:** File contents as a byte array
 
-**Throws:** `FileReadError.notFound` if file cannot be read
+**Throws:** `FileReadError` — `notFound`, `accessDenied`, `busy` or `failed`
 
 **Example:**
 
@@ -117,7 +166,7 @@ where `type ByteArray implements Array with Byte`
 - `path`: File path
 - `content`: Binary data as a byte array
 
-**Throws:** `FileWriteError.failed` on failure
+**Throws:** `FileWriteError` — `notFound`, `accessDenied`, `busy` or `failed`
 
 ### File.exists
 
@@ -152,7 +201,7 @@ Delete a file at the given path.
 **Parameters:**
 - `path`: File path
 
-**Throws:** `FileDeleteError.notFound` if the file cannot be deleted
+**Throws:** `FileDeleteError` — `notFound`, `accessDenied`, `busy` or `failed`
 
 **Example:**
 
@@ -201,25 +250,15 @@ wasm32-wasi implementation
 A pass elsewhere is not a thing that could be had, and the marker only spares the runner a compile
 whose answer is already known.
 
-⚠ **NOBODY HAD EVER RUN THESE CASES OFF-WINDOWS, AND A SURVEY CALLED THEM "byte-identically
-portable" (N2 review, MEASURED).** They were unreachable until the rung that first loaded
-`stdlib/File.maxon` landed — so the claim had never been tested, and the first cross-target run after
-that read **15 failures on x64-linux and 14 on wasm32-wasi**, every one of them this gate.
-A portability claim about code nothing has executed is a guess.
-
 ⚠ **IT IS NOT A PER-TARGET OPT-IN, AND THE TEST OF THAT IS WHAT CARRIES NO MARKER.** Anything
 decided BEFORE lowering is target-neutral and runs everywhere. `bytearray-element-size`'s
 `a-byte-two-files-disagree-about-is-two-types` asserts an **E3005** and was rewritten to reach it
 without touching the filesystem rather than given a marker — a marker there would have been hiding a
 green lane, not describing a red one.
 
-⚠ **UN-GATE THE MOMENT A SECOND `__mf_*` SUBSTRATE LANDS. A stale gate is indistinguishable from a
-real one — and this paragraph was collected once already.** It read *"What unblocks every case in this
-file is one thing: POSIX (`open`/`read`/`write`/`unlink`/`rename`/`stat`) and WASI Preview2
-implementations of those six entries."* The POSIX half exists (MAC4, arm64-macOS), and every marker in
-this file, in `file-info.md` and in `bytearray-element-size.md`'s filesystem cases widened with it. What
-is still owed is the WASI half, and the two Linux lanes — which are raw static images with no libc, so
-each of the six is a syscall table rather than a re-spelling of the macOS work.
+⚠ **UN-GATE THE MOMENT A WASI `__mf_*` SUBSTRATE LANDS. A stale gate is indistinguishable from a
+real one.** What unblocks every case in this file on wasm32-wasi is one thing: WASI Preview2
+implementations of the `__mf_*` entries.
 
 ## Tests
 
@@ -327,6 +366,209 @@ end 'main'
 ```
 ```stdout
 Hello World
+```
+
+<!-- test: create-text-of-an-existing-file-throws-already-exists -->
+The refusal is `FileWriteError.alreadyExists`, which is what tells a caller that somebody else made the file
+from every other reason a create can fail.
+```maxon
+function main() returns ExitCode
+	let path = FilePath from "test_create_text_exists.txt"
+
+	try File.createText(path, content: "first") otherwise 'createFailed'
+		return 1
+	end 'createFailed'
+
+	var answer = 2 as ExitCode
+
+	try File.createText(path, content: "second") otherwise (e) 'refused'
+		answer = 42 if e == FileWriteError.alreadyExists else 3
+	end 'refused'
+
+	try File.delete(path) otherwise return 4
+	return answer
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: write-text-over-the-running-executable-throws-busy -->
+<!-- unsupported-targets: arm64-macos, wasm32-wasi -->
+A file a running program's image keeps from being written — which Windows refuses with a sharing violation and
+Linux with `ETXTBSY` — is `FileWriteError.busy`, distinct from a permission refusal. The program writes over a COPY
+of itself that it keeps running, so a host that lets the write through truncates only the copy. macOS lets it
+through, so it does not run there.
+```maxon
+#if os(Windows)
+	let CopyDeleteAttempts = 40
+#else
+	let CopyDeleteAttempts = 1
+#endif
+
+let CopyDeleteRetryMs = 50
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'theRunningCopy'
+		print("running\n")
+		var input = Console.stdin()
+		_ = try input.readLine() otherwise return 0
+		return 0
+	end 'theRunningCopy'
+
+	let executable = try Process.executablePath() otherwise return 1
+	let image = try File.readBinary(executable) otherwise return 2
+	let copy = (FilePath from "test_write_over_a_running_copy.exe").resolve(Directory.currentPath())
+
+	try File.writeBinary(copy, content: image, mode: FilePermission.executable) otherwise 'unwritten'
+		return 3 if deleteTheCopy(copy) else 7
+	end 'unwritten'
+
+	let verdict = verdictOverARunningCopy(copy)
+
+	if not deleteTheCopy(copy) 'copyLeftBehind'
+		return 7
+	end 'copyLeftBehind'
+
+	return verdict
+end 'main'
+
+function verdictOverARunningCopy(copy FilePath) returns ExitCode
+	var argv = StringArray.create()
+	argv.push("hold")
+	var running = try StreamingSubprocess.spawn(Executable.path(copy), arguments: argv) otherwise return 4
+	let verdict = verdictWhileItRuns(running, copy: copy)
+	running.closeStdin()
+	let ended = endedCleanly(running)
+	running.release()
+	return verdict if ended else 6
+end 'verdictOverARunningCopy'
+
+function verdictWhileItRuns(running StreamingSubprocess, copy FilePath) returns ExitCode
+	_ = try running.readStdoutLine() otherwise return 5
+
+	try File.writeText(copy, content: "") otherwise (e) 'refused'
+		return 42 if e == FileWriteError.busy else (10 + e.ordinal) as ExitCode
+	end 'refused'
+
+	return 2
+end 'verdictWhileItRuns'
+
+function endedCleanly(running StreamingSubprocess) returns bool
+	_ = try running.wait() otherwise return false
+	return true
+end 'endedCleanly'
+
+function deleteTheCopy(copy FilePath) returns bool
+	for attempt in 1 to CopyDeleteAttempts 'eachAttempt'
+		try File.delete(copy) otherwise (e) 'refused'
+			if e == FileDeleteError.notFound 'nothingToDelete'
+				return true
+			end 'nothingToDelete'
+
+			if attempt < CopyDeleteAttempts 'anotherAttemptFollows'
+				sleep(CopyDeleteRetryMs)
+			end 'anotherAttemptFollows'
+
+			continue
+		end 'refused'
+
+		return true
+	end 'eachAttempt'
+
+	return false
+end 'deleteTheCopy'
+```
+```exitcode
+42
+```
+
+<!-- test: read-text-of-a-missing-file-throws-not-found -->
+A file that is not there is `FileReadError.notFound`, distinct from a read that failed for another reason.
+```maxon
+function main() returns ExitCode
+	let text = try File.readText(FilePath from "test_missing_read_text.txt") otherwise (e) 'unread'
+		return 42 if e == FileReadError.notFound else 1
+	end 'unread'
+
+	return text.count() as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: create-text-refuses-an-existing-file -->
+`File.createText` writes a file that does not exist yet, and refuses one that does without touching it.
+```maxon
+function main() returns ExitCode
+	let path = FilePath from "test_create_text.txt"
+
+	try File.createText(path, content: "first") otherwise 'createFailed'
+		return 1
+	end 'createFailed'
+
+	var refused = false
+
+	try File.createText(path, content: "second") otherwise 'secondRefused'
+		refused = true
+	end 'secondRefused'
+
+	let content = try File.readText(path) otherwise 'readFailed'
+		return 2
+	end 'readFailed'
+
+	try File.delete(path) otherwise 'deleteFailed'
+		return 3
+	end 'deleteFailed'
+
+	print(content)
+
+	if refused 'refusedTheSecond'
+		return 42
+	end 'refusedTheSecond'
+
+	return 4
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+first
+```
+
+<!-- test: read-text-of-a-file-that-reports-no-size -->
+<!-- unsupported-targets: x64-windows, arm64-macos, wasm32-wasi -->
+A Linux `/proc` file reports a size of 0 and still holds text, so `File.readText` reads to the end of the file
+rather than stopping at the size it was told. `/proc/self/smaps` is longer than one 4096-byte read, so the
+whole file arrives only when the read continues past the first chunk: its last line is the last mapping's
+`VmFlags:` line.
+```maxon
+let OneReadChunkBytes = 4096
+
+function main() returns ExitCode
+	let path = FilePath from "/proc/self/smaps"
+	let text = try File.readText(path) otherwise 'readFailed'
+		return 1
+	end 'readFailed'
+
+	if text.byteLength() <= OneReadChunkBytes 'withinOneChunk'
+		return 2
+	end 'withinOneChunk'
+
+	let lines = text.trimEnd().split("\n")
+	let last = try lines.get(lines.count() - 1) otherwise return 3
+
+	if last.startsWith("VmFlags:") 'theWholeFile'
+		return 42
+	end 'theWholeFile'
+
+	return 4
+end 'main'
+```
+```exitcode
+42
 ```
 
 <!-- test: write-and-read-binary -->
@@ -454,4 +696,22 @@ end 'main'
 ```
 ```stdout
 Rename OK
+```
+
+<!-- test: rename-of-a-missing-file-throws-not-found -->
+A source that is not there is `FileRenameError.notFound`, distinct from a rename that failed for another reason.
+```maxon
+function main() returns ExitCode
+	let src = FilePath from "test_rename_missing_src.bin"
+	let dst = FilePath from "test_rename_missing_dst.bin"
+
+	try File.rename(src, to: dst) otherwise (e) 'unmoved'
+		return 42 if e == FileRenameError.notFound else (10 + e.ordinal) as ExitCode
+	end 'unmoved'
+
+	return 1
+end 'main'
+```
+```exitcode
+42
 ```

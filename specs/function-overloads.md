@@ -119,50 +119,31 @@ cannot throw is itself an error).
 A `static` member beside an instance member of one name is **not** an overload set — the two are told
 apart at the call by syntax, and each is registered under a key of its own — and the sweep files each
 member's `throws` clause under that member's key, so a `try` at either call recovers that member's own
-error type. (Such a pair was refused whenever either member threw, for as long as the sweep published one
-clause under the one name they share.)
+error type.
 
 A **free function** whose bare name is also declared in another directory is registered under its
 directory-qualified name (`alpha.want`), and the sweep files that declaration's facts — and the tallies
 that say whether its declarations agree — under the same key. So such an overload set is judged on its
-declarations exactly as a root-level one is: agreeing members compile, disagreeing ones are refused. (It
-was refused whatever the members said until the tallies were keyed that way, because the verdict was kept
-under the bare name, where a second directory's declarations are counted too.)
+declarations exactly as a root-level one is: agreeing members compile, disagreeing ones are refused. The
+verdict is not kept under the bare name, where a second directory's declarations are counted too.
 
-##### ⚠ Every refusal above is **narrower than the language**, and none of them is canon
+##### ⚠ Every refusal above is **narrower than the language**
 
-The paragraphs above describe what **The compiler** can compile, not what the language permits. The compiler
+The paragraphs above describe what the compiler can compile, not what the language permits. The compiler
 decides the ABI of a `try` while the call is **parsed**, from a whole-program entry keyed by the name the
-source wrote; the oracle carries its throws facts **per declaration** and so has nothing to be unable to
-tell apart. Every one of these programs is a conservative refusal awaiting per-member facts in the sweep,
-and a later reader must not read them as rules. MEASURED on the very programs the cases below refuse:
+source wrote, so it cannot tell the members of one name apart. Throws facts kept **per declaration** would
+admit both refused shapes — two members naming two error types, and a throwing member beside a
+non-throwing one — so each is a conservative refusal awaiting per-member facts in the sweep, not a rule.
 
-| the compiler refuses | the oracle |
-|---|---|
-| two members naming two error types (`Boom` beside `Splat`) | accepts, answers **14** |
-| a throwing member beside a non-throwing one | accepts, answers **14** |
+#### An overload's registration name is unique by construction, not by an injective join
 
-The `static`/instance pair is the one place the two compilers disagree about the SHAPE and not merely about
-what the compiler can attribute: the oracle treats such a pair as **one overload set**, so when the two members'
-parameter types cannot tell them apart it reports `E3007: Ambiguous overload for 'T.m'` at the call, where
-the compiler separates them by registration key (`same-name-methods.md`) and compiles. The pair cases below are
-therefore programs **The compiler accepts and the oracle refuses** — the opposite direction from the table above,
-and a difference of rule rather than of precision.
-
-#### The canonical non-injective overload name is deliberately not ported
-
-The canonical suite's `error.overload-pair-compiling-to-one-name` pins a **refusal**: an
-overload's disambiguating name built by joining `{parameter}_{type}` parts with `_` is not
-injective, `_` being legal inside both a parameter name and a type name — `f(x_i64_y P, w R)`
-and `f(x i64_y_P, w R)` compile to one name, and `E3006` follows.
-
-The compiler **compiles that program and prints the correct `3 34`**, both overloads live, each
-answering for its own argument types. Its overload identity does not go through that join at
-all: a member's registration name is claimed against the file's own set of already-claimed
-names and counted past on a contest, so uniqueness is established by construction rather than
-by an injectivity argument (`Parser.overloadRegistrationNameFor`). Porting the canonical case
-would therefore demand a regression — a refusal of a program this compiler handles — so it is
-not ported, and this paragraph is the record of that decision rather than a silent gap.
+A disambiguating name built by joining `{parameter}_{type}` parts with `_` would not be injective,
+`_` being legal inside both a parameter name and a type name — `f(x_i64_y P, w R)` and
+`f(x i64_y_P, w R)` would compile to one name. The compiler's overload identity does not go through
+that join at all: a member's registration name is claimed against the file's own set of
+already-claimed names and counted past on a contest, so uniqueness is established by construction
+rather than by an injectivity argument (`Parser.overloadRegistrationNameFor`). Such a pair compiles,
+both overloads live, each answering for its own argument types.
 
 ## Tests
 
@@ -760,7 +741,7 @@ end 'main'
 <!-- test: method-call-argument-returns-self -->
 A chainable method declared `returns Self` yields the RECEIVER's type, so it
 must keep selecting the `Widget` overload however long the chain gets. This is
-the one shape the old receiver-typed guess got right by accident — scoring
+the one shape a receiver-typed guess would get right by accident — scoring
 `w.bump()` as `w` happens to be correct exactly when the method returns `Self`
 — so it is the case most at risk of quietly regressing.
 ```maxon
@@ -798,10 +779,10 @@ end 'main'
 <!-- test: enum-property-argument -->
 An ENUM PROPERTY is a member access that is not a struct field, and it scores by
 what the property yields. `.name` is a `String` for every enum, so it selects the
-`String` overload even though the `Wide` one is declared first. Reaching this
-needed the member step of the argument peek to know an enum receiver at all: it
-recognised struct fields only, so `k.name` produced no type, both overloads
-survived, and the call was rejected as ambiguous rather than resolved.
+`String` overload even though the `Wide` one is declared first. The member step
+of the argument peek knows an enum receiver, not only struct fields: without it
+`k.name` would produce no type, both overloads would survive, and the call would
+be rejected as ambiguous rather than resolved.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -896,8 +877,7 @@ satisfied by a constant answer.
 `ExitCode` any host has. `ExitCode` is `int(0 to u32.max)` on Windows but
 `int(0 to 255)` on Linux, macOS and wasi (`stdlib/Process.maxon`), so a larger
 sum is not merely truncated on POSIX — the range check fires and the program
-panics before it can return at all. This test returned 309 until 2026-07-27 and
-was therefore red on every non-Windows target.
+panics before it can return at all.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -1315,9 +1295,8 @@ end 'main'
 <!-- test: error.overloads-disagree-on-the-error-they-throw -->
 Two error types under one name. The `(e)` binding a `try` mints is typed while the call is PARSED, from
 the one entry the by-name sweep holds — whichever declaration wrote it last — so one of the two calls
-would decode the other member's error. The oracle accepts this program (it answers 14): its throws facts
-are per-declaration, and the compiler's sweep is keyed by the name the source wrote, so this is a conservative
-refusal of a program the language permits rather than a rule of the language.
+would decode the other member's error. The compiler's sweep is keyed by the name the source wrote rather than
+by declaration, so this is a conservative refusal of a program the language permits rather than a rule of the language.
 ```maxon
 typealias Num = int(-1000 to 1000)
 
@@ -1359,8 +1338,7 @@ recorded, so nothing in the throws registry can report the member that publishes
 declaration COUNT that does — every declaration is counted once, and the throwing ones are counted again
 in a tally of their own, so a difference between the two IS the silent sibling. Without it this set is
 admitted and `want(true)` is compiled as a throwing call, whose error flag the bool member never writes.
-⚠ **A CONSERVATIVE REFUSAL, not a rule of the language**: the oracle compiles this exact program and
-answers **14** (MEASURED), because its throws facts are per-declaration. Lifting it needs per-member facts
+⚠ **A CONSERVATIVE REFUSAL, not a rule of the language**: the language permits this program. Lifting it needs per-member facts
 in the compiler's sweep, not a better test here.
 ```maxon
 typealias Num = int(-1000 to 1000)
@@ -1430,18 +1408,14 @@ error E2015: <fragment>:15:10: Unsupported: overloading 'want' — its declarati
 ```
 
 <!-- test: a-static-and-instance-pair-where-the-static-throws -->
-✅ **REFUSED UNTIL W75, AND WHAT REFUSED IT WAS THE KEY.** A `static` member and an instance member of one
-type are two registration keys — `T.m` and `T.m#__static`, told apart at the call by SYNTAX — and the
-declaration sweep used to publish a function's `throws` clause under the ONE name the source wrote, so the
-clause belonged to neither key. The by-name sweep folds now key by the MEMBER each entry belongs to, so the
-static's clause is filed under the static's key and the instance's under the instance's, and a `try` at
-either call recovers that member's own error type. Answers **7**.
+✅ **THE `throws` CLAUSE IS KEYED BY THE MEMBER, NOT BY THE NAME.** A `static` member and an instance
+member of one type are two registration keys — `T.m` and `T.m#__static`, told apart at the call by
+SYNTAX — and the by-name sweep folds key by the MEMBER each entry belongs to, so the static's clause is
+filed under the static's key and the instance's under the instance's, and a `try` at either call
+recovers that member's own error type. Answers **7**.
 
-⚠ **THE ORACLE REFUSES THIS PROGRAM, ON A DIFFERENT RULE** (MEASURED: `E3007: Ambiguous overload for 'T.m'`).
-It treats a `static`/instance pair as ONE overload set and cannot tell these two members apart by their
-parameter types; The compiler separates them by registration key (`same-name-methods.md`). That divergence is about
-what a PAIR IS, and it is unchanged — this case is only about whether the clause can be attributed once the
-pair exists.
+The pair is two members and not one overload set even where their parameter types cannot tell them apart
+(`same-name-methods.md`); this case is only about whether the clause can be attributed once the pair exists.
 ```maxon
 typealias Num = int(-1000 to 1000)
 
@@ -1482,8 +1456,7 @@ end 'main'
 ✅ **THE SAME PAIR WITH THE STATIC WRITTEN FIRST, and the point is that the answer is the same.** The
 contest is detected at the SECOND member to fold, so one order re-keys the incumbent's already-filed clause
 and the other files the newcomer's under its own key from the start — two different paths through the sweep
-to one answer, and only running both says whether they agree. Answers **7**, as above. The oracle refuses
-this one too, on `E3007`.
+to one answer, and only running both says whether they agree. Answers **7**, as above.
 ```maxon
 typealias Num = int(-1000 to 1000)
 
@@ -1521,10 +1494,10 @@ end 'main'
 ```
 
 <!-- test: a-static-and-instance-pair-where-the-instance-throws -->
-✅ **THE OTHER HALF OF THE PAIR CARRYING THE CLAUSE.** Before W75 the instance's call found the clause and
-was right by accident, while the static's asked for `T.m#__static`, missed, and was compiled as a call that
-cannot throw — so a `try` over the STATIC would have been refused as a `try` on a non-throwing callee. Each
-member now carries its own. Answers **7**; the oracle refuses on `E3007`.
+✅ **THE OTHER HALF OF THE PAIR CARRYING THE CLAUSE.** With one clause filed under the name, the
+instance's call would find it and be right by accident, while the static's would ask for `T.m#__static`,
+miss, and be compiled as a call that cannot throw — so a `try` over the STATIC would be refused as a `try`
+on a non-throwing callee. Each member carries its own. Answers **7**.
 ```maxon
 typealias Num = int(-1000 to 1000)
 
@@ -1562,14 +1535,13 @@ end 'main'
 ```
 
 <!-- test: a-throwing-overload-set-whose-bare-name-another-directory-declares -->
-✅ **THIS WAS A REFUSAL UNTIL W78, AND WHAT REFUSED IT WAS THE KEY, NOT THE DECLARATIONS.** The members
-AGREE — both `throws Boom` — and the same two declarations at the root have always compiled. What refused
-this one is that a free function contested across directories is registered as `alpha.want` while the
-declaration sweep filed its clause, its disagreement verdict and both of its tallies under the bare `want`
-— where `beta/`'s declaration is tallied too. There was no verdict at `alpha.want` to read, so the honest
-answer was a blanket refusal. The sweep now files a declaration's facts AND its tallies under the one key
-the parser asks with (`ProgramSignatures.sweepRegistrationKey`), so this set is judged on its declarations
-like any other and answers **18** — which is what the oracle has always answered (MEASURED).
+✅ **THE VERDICT IS KEYED BY THE REGISTRATION KEY, NOT BY THE BARE NAME.** The members AGREE — both
+`throws Boom` — exactly as the same two declarations at the root do. A free function contested across
+directories is registered as `alpha.want`, and a clause, disagreement verdict and tallies filed under the
+bare `want` — where `beta/`'s declaration is tallied too — would leave no verdict at `alpha.want` to read.
+The sweep files a declaration's facts AND its tallies under the one key the parser asks with
+(`ProgramSignatures.sweepRegistrationKey`), so this set is judged on its declarations like any other and
+answers **18**.
 ```maxon
 // --- file: alpha/x.maxon
 export typealias Num = int(-1000 to 1000)
@@ -1613,10 +1585,10 @@ end 'main'
 <!-- test: error.a-contested-overload-set-whose-members-name-two-error-types -->
 ⛔ **THE DISCRIMINATING HALF OF THE CASE ABOVE, AND WITHOUT IT "the contested set compiles" WOULD BE
 INDISTINGUISHABLE FROM "the contested set is never judged".** The same shape, with `alpha/`'s two members
-made to name DIFFERENT error types: the verdict now has to be computed at `alpha.want` and has to say no.
-Before W78 the verdict lived on the bare `want` and this key had none, so the refusal here proves the
-per-key tally actually FIRES rather than merely being absent. ⚠ **Still narrower than the language**: the
-oracle carries its throws facts per declaration and compiles this too.
+made to name DIFFERENT error types: the verdict has to be computed at `alpha.want` and has to say no. A
+verdict living on the bare `want` would leave this key with none, so the refusal here proves the per-key
+tally actually FIRES rather than merely being absent. ⚠ **Still narrower than the language**: throws
+facts kept per declaration would compile this too.
 ```maxon
 // --- file: alpha/x.maxon
 export typealias Num = int(-1000 to 1000)
@@ -1662,13 +1634,12 @@ error E2015: alpha/specs/fragments/function-overloads/error.a-contested-overload
 ```
 
 <!-- test: contested-directory-overload-set-agreeing-on-defaults -->
-⭐ **THE CONTROL FOR W78's PER-KEY TALLY: A CONTESTED OVERLOAD SET WHOSE MEMBERS *AGREE* MUST STILL
+⭐ **THE CONTROL FOR THE PER-KEY TALLY: A CONTESTED OVERLOAD SET WHOSE MEMBERS *AGREE* MUST STILL
 COMPILE.** `alpha/`'s two `pick` members declare the same parameter names and default the same position, so
-a short call is filled identically whichever one resolves — the W74 rule — and `beta/`'s own `pick` merely
-contests the bare name. Before W78 this compiled for the wrong reason (the verdict was read off a key
-nothing had written, which answers "agree" for every program); it must go on compiling once the tally is
-kept per registration key, or the cure has bought its correctness by refusing what the language allows.
-The oracle answers **65** too.
+a short call is filled identically whichever one resolves — the shape-of-defaults rule — and `beta/`'s own `pick`
+merely contests the bare name. A verdict read off a key nothing had written would answer "agree" for every
+program and compile this for the wrong reason; a tally kept per registration key must still compile it, or
+it buys its correctness by refusing what the language allows.
 ```maxon
 // --- file: alpha/a.maxon
 export typealias Num = int(-1000 to 1000)
@@ -1725,12 +1696,8 @@ ok 3
 0
 ```
 
-<!-- test: error.overloads-that-hand-back-a-promise-parameter -->
-⭐⭐ **A PROMISE PARAMETER'S OWNERSHIP IS READ BY NAME, SO AN OVERLOAD SET WHOSE MEMBERS TAKE A PROMISE CANNOT
-DECIDE IT PER MEMBER.** The declaration sweep files one set of ownership facts per NAME, and the second
-`relay` is the one filed: it hands back its parameter at position 1, which it calls `q`. A call to the first
-`relay` slots its labelled `p:` against those names — position 0, not handed back — so the caller would keep
-its spawn while the callee owns and returns it: two owners of one thread. Refused rather than miscompiled.
+<!-- test: overloads-that-hand-back-a-promise-parameter-transfer-by-the-member-called -->
+Two overloads take a promise at different positions and each hands back its own; a call transfers ownership by the member its arguments select.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -1756,9 +1723,425 @@ end 'relay'
 function main() returns ExitCode
 	let r = relay(1, p: async work(1))
 	print("{await r}\n")
-	return 0 as ExitCode
+	return 0
+end 'main'
+```
+```stdout
+1
+2
+```
+
+<!-- test: overloads-where-one-stores-its-parameter-bind-each-members-ownership -->
+Two static factories share a name: the first moves its `String` parameter into a field and the second only returns its `Integer` parameter; each call transfers ownership by the member it selects.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder
+	export var s as String
+	export var n as Integer
+
+	static function make(s String) returns Self
+		return Self{s: s, n: 0}
+	end 'make'
+
+	static function make(n Integer) returns Integer
+		return n
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	print("{Holder.make("abc").s} {Holder.make(7)}\n")
+	return 0
+end 'main'
+```
+```stdout
+abc 7
+```
+
+<!-- test: overloads-where-the-second-stores-its-parameter-bind-each-members-ownership -->
+The same set written in the other order.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder
+	export var s as String
+	export var n as Integer
+
+	static function make(n Integer) returns Integer
+		return n
+	end 'make'
+
+	static function make(s String) returns Self
+		return Self{s: s, n: 0}
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	print("{Holder.make("abc").s} {Holder.make(7)}\n")
+	return 0
+end 'main'
+```
+```stdout
+abc 7
+```
+
+<!-- test: a-live-binding-to-the-overload-that-stores-it-is-still-readable -->
+A live `String` binding passed to the overload that stores it is co-owned by the record, so the binding reads the same text afterwards.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder
+	export var s as String
+	export var n as Integer
+
+	static function make(s String) returns Self
+		return Self{s: s, n: 0}
+	end 'make'
+
+	static function make(n Integer) returns Integer
+		return n
+	end 'make'
+
+	static function make(s String, n Integer) returns Integer
+		return (s.count() as Integer) + n
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	let word = "ab{Holder.make(1)}"
+	let held = Holder.make(word)
+	let counted = Holder.make(word, n: 4)
+	print("{held.s} {counted} {word}\n")
+	return 0
+end 'main'
+```
+```stdout
+ab1 7 ab1
+```
+
+<!-- test: a-call-resolving-to-the-overload-that-only-borrows-leaves-its-argument-owned -->
+A call resolving to the overload that only reads its argument leaves a live binding owned by the caller and releases a temporary once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder
+	export var s as String
+	export var n as Integer
+
+	static function make(s String) returns Self
+		return Self{s: s, n: 0}
+	end 'make'
+
+	static function make(h Holder) returns Integer
+		return h.n + 5
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	let held = Holder.make("x{1}")
+	let fresh = Holder.make(Holder.make("y{2}"))
+	let counted = Holder.make(held)
+	print("{held.s} {counted} {fresh}\n")
+	return 0
+end 'main'
+```
+```stdout
+x1 5 5
+```
+
+<!-- test: an-overload-that-stores-and-one-that-reassigns-the-same-column-bind-each-call -->
+One overload stores its `String` parameter and another reassigns its `Integer` parameter; each call binds its argument by the member it selects.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder
+	export var s as String
+
+	static function make(s String) returns Self
+		return Self{s: s}
+	end 'make'
+
+	static function make(n Integer)
+		n = 42
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	var word = "ab{1}"
+	let held = Holder.make(word)
+	var count = 1
+	Holder.make(count)
+	print("{held.s} {count} {word}\n")
+	word = "done"
+	return 0
+end 'main'
+```
+```stdout
+ab1 42 ab1
+```
+
+<!-- test: a-promise-passed-to-the-overload-that-only-reads-it-is-awaited-afterwards -->
+Two overloads take a promise in the same column: one hands it back, the other only reads a second argument. A call selecting the reading member leaves the promise with the caller, who awaits it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function peek(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'peek'
+
+function peek(_ IntPromise, v String) returns Integer
+	return v.count() as Integer
+end 'peek'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let n = peek(p, v: "a")
+	print("{n} {await p}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2
+```
+
+<!-- test: error.a-promise-handed-to-the-overload-that-takes-it-cannot-be-awaited-again -->
+<!-- unsupported-targets: wasm32-wasi -->
+A call selecting the overload that hands the promise back moves it, so awaiting the original binding again is refused. On wasm32-wasi the spawned `work`'s `Scheduler.yield` answers E3104 beside the E3102 this case pins.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function peek(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'peek'
+
+function peek(_ IntPromise, v String) returns Integer
+	return v.count() as Integer
+end 'peek'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let n = peek(p, v: 1)
+	print("{await n} {await p}\n")
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:10: Unsupported: overloading 'relay' — one of its declarations takes OWNERSHIP of a parameter (moving it into durable storage, or awaiting, cancelling or returning a promise) and one of them takes a parameter whose ownership that decides, and the whole-program declaration sweep publishes a function's ownership facts under the name the source wrote, so a call to this name cannot be told which overload's ownership transfer to apply (it would leak in one direction and free twice in the other). Give the overloads distinct names
+error E3102: <fragment>:22:26: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-promise-handed-over-on-one-branch-is-released-on-the-other -->
+One branch hands the promise to the overload that takes it and the other leaves it; each path releases it exactly once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function peek(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'peek'
+
+function peek(_ IntPromise, v String) returns Integer
+	return v.count() as Integer
+end 'peek'
+
+function decide(x Integer) returns bool
+	return x > 3
+end 'decide'
+
+function run(x Integer)
+	let p = async work(x)
+
+	if decide(x) 'taken'
+		let r = peek(p, v: x)
+		print("taken {await r}\n")
+	end 'taken'
+end 'run'
+
+function borrow(x Integer)
+	let p = async work(x)
+
+	if decide(x) 'read'
+		let n = peek(p, v: "abc")
+		print("read {n}\n")
+	end 'read'
+
+	print("awaited {await p}\n")
+end 'borrow'
+
+function main() returns ExitCode
+	run(5)
+	run(1)
+	borrow(5)
+	borrow(1)
+	return 0
+end 'main'
+```
+```stdout
+5
+taken 6
+read 3
+awaited 6
+awaited 2
+```
+
+<!-- test: error.a-promise-given-away-in-every-iteration-of-a-loop-is-used-after-its-move -->
+Handing a promise declared outside a loop to a callee that takes it, on every iteration, reads it again after the first iteration moved it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function keep(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'keep'
+
+function main() returns ExitCode
+	let p = async work(1)
+	var i = 0
+
+	while i < 2 'loop'
+		let q = keep(p, v: i)
+		print("{await q}\n")
+		i = i + 1
+	end 'loop'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:20:16: use of moved value 'p': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-promise-given-away-inside-a-loop-that-then-breaks-is-moved-once -->
+A promise declared outside a loop and handed to a callee that takes it, followed by `break`, is moved exactly once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function keep(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'keep'
+
+function main() returns ExitCode
+	let p = async work(1)
+	var i = 0
+
+	while i < 2 'loop'
+		let q = keep(p, v: i)
+		print("{await q}\n")
+		break
+	end 'loop'
+
+	return 0
+end 'main'
+```
+```stdout
+0
+2
+```
+
+<!-- test: error.an-alias-of-a-promise-given-away-cannot-be-awaited -->
+After a promise is handed to a callee that takes it, an alias bound before the call no longer owns it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function keep(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'keep'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let q = p
+	let r = keep(p, v: 5)
+	print("{await q}\n")
+	print("{await r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:16: use of moved value 'q': its ownership moved to another binding at an earlier bind or assignment
+```
+
+
+<!-- test: a-promise-reassigned-on-one-branch-and-read-by-the-other-is-awaited-after-the-join -->
+A promise reassigned on one branch and handed to the overload that only reads it on the other is owned by the caller after the join and awaited once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function peek(p IntPromise, v Integer) returns IntPromise
+	print("{v}\n")
+	return p
+end 'peek'
+
+function peek(_ IntPromise, v String) returns Integer
+	return v.count() as Integer
+end 'peek'
+
+function decide(x Integer) returns bool
+	return x > 3
+end 'decide'
+
+function joinReassignedAndHandedOver(x Integer) returns Integer
+	var p = async work(x)
+
+	if decide(x) 'rearm'
+		p = async work(x * 10)
+	end 'rearm' else 'read'
+		print("read {peek(p, v: "ab")}\n")
+	end 'read'
+
+	return await p
+end 'joinReassignedAndHandedOver'
+
+function main() returns ExitCode
+	print("{joinReassignedAndHandedOver(5)} {joinReassignedAndHandedOver(1)}\n")
+	return 0
+end 'main'
+```
+```stdout
+read 2
+51 2
 ```

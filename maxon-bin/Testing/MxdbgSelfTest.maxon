@@ -164,7 +164,28 @@ function checkTablesRoundTrip(broken StringArray)
 	checkRefusesAProloguePastItsFunction(broken, buildId: buildId)
 	checkRefusesAnEmptyLocalScope(broken, buildId: buildId)
 	checkRefusesADanglingCallFile(broken, buildId: buildId)
+	checkRefusesALineRowAtLineZero(broken, buildId: buildId)
+	checkRefusesALineRowAtColumnZero(broken, buildId: buildId)
+	checkRefusesACallPositionAtLineZero(broken, buildId: buildId)
 end 'checkTablesRoundTrip'
+
+function checkRefusesALineRowAtLineZero(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffLineTableOff, stride: MxdbgLineEntrySize, record: 0, field: MxdbgLineLine, value: 0)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.unnumberedPosition(MxdbgPositionHolder.lineRow, record: 0), damage: "an image whose line row 0 names line 0")
+end 'checkRefusesALineRowAtLineZero'
+
+function checkRefusesALineRowAtColumnZero(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffLineTableOff, stride: MxdbgLineEntrySize, record: 0, field: MxdbgLineCol, value: 0)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.unnumberedPosition(MxdbgPositionHolder.lineRow, record: 0), damage: "an image whose line row 0 names column 0")
+end 'checkRefusesALineRowAtColumnZero'
+
+function checkRefusesACallPositionAtLineZero(broken StringArray, buildId HashDigest)
+	var image = selfTestImage(buildId)
+	overwriteTableWord(image, tableAt: MxdbgOffInlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, record: DebitSite, field: MxdbgInlineSiteCallLine, value: 0)
+	requireRefusedAs(broken, image: image, expected: MxdbgReadError.unnumberedPosition(MxdbgPositionHolder.inlineSiteCall, record: DebitSite), damage: "an image whose inline site '{DebitName}' is called from line 0 of {AccountFileName}")
+end 'checkRefusesACallPositionAtLineZero'
 
 function checkRefusesAnInvertedFunctionRange(broken StringArray, buildId HashDigest)
 	var image = selfTestImage(buildId)

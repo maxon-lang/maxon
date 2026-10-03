@@ -31,19 +31,15 @@ survives the arm. Something has to drain it, against a floor taken before the ar
 | a match EXPRESSION arm (`red throws E.case`) | `finishArmExit(…, ownedFloor: armOwnedFloor, …)` |
 | a match `default` (`default throws E.case`) | `finishArmExit(…, ownedFloor: defaultOwnedFloor, …)` |
 
-The third one **had no floor at all** until this spec. With nothing to drain to, the move marks and the
-owned-binding stack fell out of lockstep and the compiler **panicked** —
-`reconcileMovesAtMerge: a reaching edge's mark holds 0 entries but 1 owned bindings are in scope` — with a
-twenty-frame stack trace, on a well-formed program (the answer is the same
-`gives=5` / `throws=9` these cases pin). It is the exact gap A3h closed for the *plain* `default`, whose
-comment records the same reasoning; A3h fixed that arm and left the diverging one beside it. The floors are
-now taken **once, above the fork**, so both default shapes reach one exit obligation rather than two that
-can drift apart again.
+With no floor to drain to, the move marks and the owned-binding stack fall out of lockstep and the
+compiler **panics** — `reconcileMovesAtMerge: a reaching edge's mark holds 0 entries but 1 owned bindings
+are in scope` — on a well-formed program (the answer is the `gives=5` / `throws=9` these cases pin). The
+floors are taken **once, above the fork**, so the plain `default` and the diverging one reach one exit
+obligation rather than two that can drift apart.
 
-⚠ **The two cases below are a matched pair and must stay one.** The first is the defect; the second is the
-control that proves the expression-arm position was independently correct. Measured by A/B on one binary
-with a single line reverted: the `default` case panicked, the arm case still answered `throws=9gives=5`.
-A fix that made both pass for one reason would have lost that.
+⚠ **The two cases below are a matched pair and must stay one.** The first pins the `default` position;
+the second is the control that proves the expression-arm position is independently correct. A change that
+made both pass for one reason would lose that.
 
 ⚠ **Both pin `exitcode` as well as `stdout`.** A leaked box exits **101**, and a case that pins only
 stdout never checks the exit code — so the leak this whole spec is about would pass silently.
@@ -51,9 +47,9 @@ stdout never checks the exit code — so the leak this whole spec is about would
 ## Tests
 
 <!-- test: default-throws-settles-a-borrowed-temporary -->
-The defect, both ways through the match: `pick(1)` takes the `gives` arm and `pick(2)` takes the diverging
-`default`, whose thrown value borrows a field out of a temporary box. Before the fix this program did not
-compile at all — the parser panicked at `reconcileMovesAtMerge`.
+The `default` position, both ways through the match: `pick(1)` takes the `gives` arm and `pick(2)` takes the diverging
+`default`, whose thrown value borrows a field out of a temporary box. Without the `default`'s floor this
+program does not compile at all — the parser panics at `reconcileMovesAtMerge`.
 ```maxon
 typealias Small = int(0 to 100)
 

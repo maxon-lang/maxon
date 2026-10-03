@@ -148,7 +148,7 @@ let EnumLookupNoSuchCaseNameFlag = EnumLookupNoSuchCaseNameOrdinal + ErrorFlagOr
 //
 // `overSynthesized`, and it is the honest word: `__EnumLookupError` is declared in no stdlib file at all, so
 // the compiler builds this layout and only the compiler's own source can make it disagree — which is what
-// keeps this family's verdict a `panic` rather than an E4016 (A1s). It is a free function called from
+// keeps this family's verdict a `panic` rather than an E4016. It is a free function called from
 // `Compiler.maxon` rather than the tail of `installEnumLookupHelpers`, because the installs run AFTER the
 // pipeline, where a diagnostic would have no error gate left to fail against.
 export function verifyEnumLookupErrorOrdinals(project Project)
@@ -284,7 +284,7 @@ end 'installEnumLookupHelpers'
 function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout, project Project)
 	let comparesBytes = enumRawValueIsBytes(layout.backing)
 
-	var func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
+	var func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -352,7 +352,7 @@ end 'enumRawValueIsBytes'
 // `synthesizeEnumFromNameCase` instead. A union all of whose cases carry payloads therefore gets a body
 // that is one error return, which is the honest answer rather than an absent function.
 function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Project)
-	var func = IrFunction.createFromStd(enumFromNameSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
+	var func = IrFunction.createFromStd(enumFromNameSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -401,7 +401,7 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 		paramTypes.push(StdType.i64)
 	end 'eachParam'
 
-	var func = IrFunction.createFromStd(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(caseIndex)), returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: enumLookupThrows())
+	var func = IrFunction.createFromStd(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(caseIndex)), returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -472,12 +472,12 @@ end 'emitCaseValueReturn'
 
 // Allocate a boxed union's record and stamp its tag — the Std-tier twin of `Parser.emitEnumBox`'s first two
 // steps, and it agrees with that door on all three constants that matter: the SIZE is the union-wide
-// `boxSizeBytes` (so every case shares one allocation size), the destructor slot is `TrivialElementDestroy`
+// `boxSizeBytes` (so every case shares one allocation size), the destructor slot is `TrivialDestructor`
 // (a union box is dropped through the `__destruct_<U>` cascade at scope exit, never through the mm header),
 // and the tag word sits at `UnionTagOffset`. The caller fills the payload slots.
 function emitBoxWithTag(module StdModule, block IrBlock, layout EnumLayout, caseIndex CaseIndex, project Project, ids ValueMinter) returns ValueId
 	let size = emitConst(module, block: block, value: layout.boxSizeBytes() as ParsedInt, ids: ids)
-	let destructor = emitConst(module, block: block, value: TrivialElementDestroy, ids: ids)
+	let destructor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let box = ids.mint()
 	emitMmAllocCall(module, block: block, result: box, size: size, destructor: destructor, tag: userTagIndex(project.globalData, name: layout.name, debugStream: module.debugStream), ids: ids)
 	emitStoreField(module, block: block, record: box, offset: UnionTagOffset, value: emitConst(module, block: block, value: layout.tagOfIndex(caseIndex), ids: ids))

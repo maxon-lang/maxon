@@ -37,23 +37,15 @@ var z = Math.sin(halfPi)  // 1.0 (approximately)
 ## Tests
 
 <!-- test: sin.basic -->
-⚠ **THE `stdout` BLOCK IS RETRACTED, AND IT IS THE ONLY RETRACTION IN THIS FILE.** `/specs` expects
-`0.479426` / `0.841471` / `0.999999` — a fixed 6-decimal-place format, which prints six decimals and
-trims trailing zeros. **That formatter has a measured arithmetic defect**: it rounds the fraction to six
-decimals but never carries into the integer part, so `1.9999999` prints `1.999999` rather than `2.0`, and
-`3.9999996` prints `3.999999`. The third line here is one of its victims — `Math.sin(1.5708)` is
-`0.9999999999932534`, and `0.999999` is what carry-loss makes of it, not what six decimals make of it.
-(The same defect is baked into `/specs/log.md`, and into `/specs/log10.md`, which writes `log10(10)`,
-`log10(100)`, `log10(1000)` and `log10(10000)` — true values 1, 2, 3 and 4 — as `0.999999`, `1.999999`,
-`2.999999` and `3.999999`. This compiler's `Math.log10` is exact at every power of ten a double holds, so
-`specs/log10.md` expects `1.0`, `2.0`, `3.0` and `4.0`.)
-
-**USER RULING: The compiler prints the SHORTEST ROUND-TRIP representation** — the fewest digits that uniquely
-identify the double, as Python 3, JavaScript, Rust, Go, Swift, Java and .NET Core all do. That makes the
-whole class of defect unreachable rather than fixing one instance of it: a value that is not exactly 1.0
-can never print as `1.0`, and a value that is cannot print as `0.999999`. The digits below are not "what
-the compiler happens to emit" — each is verified to parse back to the identical bit pattern, and dropping any
-last digit breaks that round-trip. `Math.sin` itself is unchanged; only the rendering differs.
+⚖ **USER RULING: The compiler prints the SHORTEST ROUND-TRIP representation** — the fewest digits that
+uniquely identify the double, as Python 3, JavaScript, Rust, Go, Swift, Java and .NET Core all do. A fixed
+six-decimal format is the alternative it rules out, and the third line here shows why: a formatter that
+rounds the fraction to six decimals without carrying into the integer part prints `Math.sin(1.5708)`
+(`0.9999999999932534`) as `0.999999`, and `1.9999999` as `1.999999` rather than `2.0`. Shortest round-trip
+makes that whole class of defect unreachable: a value that is not exactly 1.0 can never print as `1.0`, and
+a value that is cannot print as `0.999999`. The digits below are not "what the compiler happens to emit" —
+each is verified to parse back to the identical bit pattern, and dropping any last digit breaks that
+round-trip.
 ```maxon
 function main() returns ExitCode
 	let x1 = Math.sin(0.0)

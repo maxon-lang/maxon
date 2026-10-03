@@ -46,7 +46,7 @@ another `Self` (= `T`) only, and marshalling a literal into that `Self` slot wou
 constrained parameters (`type Mix uses A, B where A is Comparable, B is Comparable`), `self.a < self.b`
 is the same E3005 — the dispatch goes through `A`'s witness table, so a `B` handed to `compare`'s `Self`
 formal would be read as an `A` (for a struct `A` that is a dereference of whatever word `B` held). A
-genuine cross-parameter comparison needs a second witness and a conversion, and is not this rung. The
+genuine cross-parameter comparison needs a second witness and a conversion. The
 `.compare()` method form is refused at the same shared check.
 
 A constraint is only `Comparable` if it declares `compare` with `Comparable`'s own RESULT. The witness
@@ -71,11 +71,11 @@ half-shadowing it. The same rule covers the other compiler-owned type names, `Ha
 A RANGED typealias over one of those names stays legal: it erases to `int`/`float`, which is what the
 builtin resolves to as well, so there is no second meaning for the name to acquire.
 
-The witness dispatch rides the rdata function-pointer relocation, which EVERY target now fills — the
+The witness dispatch rides the rdata function-pointer relocation, which EVERY target fills — the
 fixed-base writers bake a `.text` VA, wasm a funcref-table index, and arm64-macOS a dyld chained-fixup
 rebase — so the witness cases run everywhere, carrying no target marker (as the `primitive-conformance`,
 `string-conformance` and `where-clauses` witness cases do). The compile-error cases and the
-pure-`Ordering` value cases were always target-independent.
+pure-`Ordering` value cases are target-independent.
 
 `Character` and `String` ordering is specified in `character-type.md`.
 
@@ -571,9 +571,9 @@ end 'main'
 ```
 
 <!-- test: comparable.error.declare-hashvalue-type -->
-The same rule closes a MEASURED fault on the sibling compiler-owned name: a user `type HashValue` made
+The same rule covers the sibling compiler-owned name: an admitted user `type HashValue` would make
 `Hashable.hash()`'s witness result resolve as a struct box (the parser reads the struct registry; type
-resolution claims `HashValue` before it), which was then dropped as one — an access violation. One
+resolution claims `HashValue` before it), which is then dropped as one — an access violation. One
 reject, stated once, for every compiler-owned type name.
 ```maxon
 typealias Small = int(0 to 100)

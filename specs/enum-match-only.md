@@ -173,7 +173,7 @@ error E3066: specs/fragments/enum-match-only/error.enum-eq-associated.test:13:7:
 ```
 
 <!-- test: union-return -->
-A payload-bearing union RETURNED across a call (OPEN #44, closed at P1.4a). The callee builds an owned heap box and MOVES it out; the caller ADOPTS it (`let c = make()`) — owned, dropped exactly once at scope exit, no leak (a leak is exit 101). The result is recognized as owned via a `named` + `isBoxed` LAYOUT lookup, not the tag: a boxed union and a bare enum both carry the `named` tag, but only the boxed one owns a box the caller must free.
+A payload-bearing union RETURNED across a call. The callee builds an owned heap box and MOVES it out; the caller ADOPTS it (`let c = make()`) — owned, dropped exactly once at scope exit, no leak (a leak is exit 101). The result is recognized as owned via a `named` + `isBoxed` LAYOUT lookup, not the tag: a boxed union and a bare enum both carry the `named` tag, but only the boxed one owns a box the caller must free.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -201,7 +201,7 @@ end 'main'
 <!-- test: error.return-wrong-union -->
 A boxed union carries its NAME (`named`) at the parser, so the same aggregate identity check that
 rejects a wrong struct rejects a wrong union: returning a `Palette` where a `Shape` is declared would
-hand back the wrong boxed layout to be dropped under `Shape`'s destructor (OPEN #54). Union identity
+hand back the wrong boxed layout to be dropped under `Shape`'s destructor. Union identity
 is the interned name, exact — the `resolveTypes` → integer erasure that a scalar tag would see is a
 later concern, and this is caught before it.
 ```maxon
@@ -231,7 +231,7 @@ error E3005: specs/fragments/enum-match-only/error.return-wrong-union.test:15:2:
 ```
 
 <!-- test: error.callarg-wrong-union-borrowed -->
-The aggregate-identity check reaches CALL ARGUMENTS, not just returns (OPEN #54 Slice B2). Its subtlety
+The aggregate-identity check reaches CALL ARGUMENTS, not just returns. Its subtlety
 for a union is that a `union`/`enum` PARAMETER loses its name before the check runs — `resolveTypes`
 erases the parameter's `named` tag to bare `integer` — so the check reads the name from a pre-erasure
 carrier the parser stashes on the signature (`FuncSignature.paramAggregateNames`), the same carrier the
@@ -266,8 +266,8 @@ error E3005: specs/fragments/enum-match-only/error.callarg-wrong-union-borrowed.
 ```
 
 <!-- test: error.callarg-wrong-union-consumed -->
-The union identity check is a memory-safety fix, not merely a wrong-answer one, exactly as for structs
-(OPEN #54 Slice B2). At a CONSUMING argument — `WrapA.create` moves its `BoxA` argument into a managed
+The union identity check is a memory-safety check, not merely a wrong-answer one, exactly as for structs.
+At a CONSUMING argument — `WrapA.create` moves its `BoxA` argument into a managed
 field — passing a `BoxB` would store the wrong box and later drop it under `BoxA`'s destructor, which
 expects a `String`-carrying case and would free `BoxB`'s scalar as a heap pointer: a wild free the
 scalar tag check cannot see (both unions erase to `integer`). Union identity is the interned name, EXACT

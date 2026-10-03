@@ -63,8 +63,8 @@ end 'mixBytes'
 ```
 
 ⭐ **That tag lives at the call site and never in stdlib.** A length tag baked into a function named
-for FNV-1a is a policy wearing an algorithm's name, and it is precisely how two copies of this hash
-drifted apart before: one folded a tag, one did not, and nothing named the difference. Anything that
+for FNV-1a is a policy wearing an algorithm's name, and it is precisely how two copies of one hash
+drift apart: one folds a tag, one does not, and nothing names the difference. Anything that
 must interoperate — the `sourceHash` stamped into `docs/error-codes.json` — needs the bare fold, and
 gets it by default.
 
@@ -72,7 +72,7 @@ gets it by default.
 
 `""` is the basis itself, `"abc"` is `e71fa2190541574b`, `"hello"` is `a430d84680aabd0b`. They are
 checkable against any other FNV-1a implementation, which is what makes these cases a pin on the
-ALGORITHM rather than a record of what this tree happened to compute.
+ALGORITHM rather than a record of whatever this tree computes.
 
 ## Tests
 
@@ -163,7 +163,7 @@ a-bc=e71fa2190541574b
 
 <!-- test: a-caller-added-length-tag-separates-them -->
 The same three groupings under `ContentHash.mixBytes`'s policy — fold the bytes, then fold the count
-— now disagree, and the last three lines are the compiler query spine's own per-file cache keys for
+— disagree, and the last three lines are the compiler query spine's own per-file cache keys for
 `""`, `"a"` and `"hello"`. These are the values the compiler memoizes on: a silent change here is a
 cache MISS rather than a wrong answer, which is exactly why it needs a case and would otherwise read
 green.

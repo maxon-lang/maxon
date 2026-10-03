@@ -54,8 +54,8 @@ export let ConsoleReadStdinName = b"__con_read_stdin"
 // the one allocator door and it already answers for every other reserve in the language — and duplicating
 // that judgement in a runtime builder would be a second allocation policy for one heap.
 // ⭐ **`GetStdHandle`'s THREE `nStdHandle` SELECTORS**, as the DWORD-negative values Win32 defines them to
-// be. They live here — with the standard-stream runtime — rather than in a backend, because since the
-// subprocess rung the selector is a VALUE OPERAND of `osStdHandle` rather than an immediate the isel
+// be. They live here — with the standard-stream runtime — rather than in a backend, because the
+// selector is a VALUE OPERAND of `osStdHandle` rather than an immediate the isel
 // materializes: `__con_read_stdin` asks for input, and `SubprocessRuntime`'s `inherit` stdio kind asks for
 // the other two when a child is to write straight to the parent's own streams.
 //
@@ -90,7 +90,7 @@ function assertStdHandleSelectorsMapToPosixFds()
 end 'assertStdHandleSelectorsMapToPosixFds'
 
 function buildConsoleReadStdin(module StdModule)
-	var func = IrFunction.createFromStd(ConsoleReadStdinName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ConsoleReadStdinName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

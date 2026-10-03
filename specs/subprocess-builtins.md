@@ -37,10 +37,9 @@ stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind, stderrData_cstr, stderrLim
   environment and the `env` slot beside it is not read; `envInherit = 0` (`EnvSource.block`) makes
   `env` the child's WHOLE environment — a NUL-separated `NAME=VALUE` block ended by one more NUL,
   which `a-caller-built-environment-is-the-childs-whole-environment` pins by having the child expand
-  a name that exists only in the block it was given. ⚠ This bullet used to say the block was refused
-  because *"`requireInheritEnv` refuses `Environment.custom` and `inheritUpdating` before any spawn
-  call is made"*; **that function is deleted** — `stdlib/Subprocess.maxon` assembles the block from
-  this process's own entries with the caller's overrides applied, so both arms are servable.
+  a name that exists only in the block it was given. `stdlib/Subprocess.maxon` assembles the block
+  from this process's own entries with the caller's overrides applied, so `Environment.custom` and
+  `inheritUpdating` are both servable.
 - **stdinKind** is `StdinKind`'s raw value: `0` none (the NUL device), `1` inherit, `2` bytes (the
   payload is pushed into a pipe while the child runs), `3` file.
 - **stdoutKind** / **stderrKind** are `OutputKind`'s: `0` discard (NUL), `1` inherit, `2` collect
@@ -76,21 +75,14 @@ and the slot's generation is the one the handle packs — and answers `-1`
 six `subprocessResult*` readers validate their struct POINTER the same way and answer `0` / an empty
 buffer / nothing.
 
-⚠ This is the property a previous attempt at this rung got wrong in the loudest possible way: it
-declared the intrinsics without building their runtime entries, and
-`__Builtins.subprocessWaitCollect(-1, 0)` became `panic at X64Backend.maxon:2019: resolveCallFixups:
-call to unknown function`.
+⛔⛔ **A GUARD APPLIED PER SITE, BY HAND, MISSES DOORS.** Unguarded,
+`__Builtins.subprocessReleaseHandle(-1)` is an ACCESS VIOLATION (0xC0000005) in a program that compiles
+clean, and the bare-name `subpRelease(-1)` with it: a slot address of `table + handle * SubpSlotBytes`
+names the `SubpSlotBytes` BEFORE the table for `-1` — inside the slab — and a garbage `inUse` read as
+live has the release close three garbage words as HANDLEs and zero memory it does not own. The six
+result readers are the same hazard one door over; each guards with its own `nullValue`.
 
-⛔⛔ **AND IT WAS STILL HALF TRUE WHEN THIS FILE FIRST CLAIMED IT.** The guard was applied per SITE,
-by hand, and four doors had it while six did not — `__Builtins.subprocessReleaseHandle(-1)` was an
-ACCESS VIOLATION (0xC0000005) in a program that compiled clean, and the bare-name `subpRelease(-1)`
-with it. `emitSubpSlotAddr` was then `table + handle * SubpSlotBytes`, so `-1` named the `SubpSlotBytes`
-BEFORE the table — inside the slab — and a garbage `inUse` read as live had the release close
-three garbage words as HANDLEs and zero memory it did not own. The gate case that existed to prove the
-guard exercised **exactly the four doors that had it**. The six result readers were the same defect one
-door over; each guards with its own `nullValue`.
-
-⭐ **SO THE RULE IS NOW STRUCTURAL, AND THE CASES BELOW COVER EVERY DOOR RATHER THAN A CHOSEN FOUR.**
+⭐ **SO THE RULE IS STRUCTURAL, AND THE CASES BELOW COVER EVERY DOOR.**
 The guard sits at the ENTRY POINT, never at a wrapper, so both families — the twenty-two
 `__Builtins.subprocess*` intrinsics and the seven bare-name `subp*` streaming builtins — reach it
 without either having anything to remember. `emitSubpSlotOf` is the one door from a caller's handle
@@ -119,7 +111,7 @@ returns on its miss branch. **The observable behaviour is identical**; only whic
 A fixed English sentence tells a caller which code path failed and nothing about why. The number
 tells them why — `2` is "the executable is not there", `5` is "access denied" — and there is neither
 an `.rdata` producer reachable from a runtime builder nor a message-formatting import, so the choice
-was a fixed string or the OS's own code. A code of `0` means nothing has failed and answers the
+is between a fixed string and the OS's own code. A code of `0` means nothing has failed and answers the
 empty message.
 
 ⚠ **THE NUMBER IS IN Win32's VOCABULARY ON EVERY LANE.** Windows answers `GetLastError()`; each POSIX
@@ -136,14 +128,13 @@ process-spawn primitive at all. Every one of these intrinsics lowers into the `_
 one refuses the call with **E3104** at its own span. ⚠ Outside that gate such a program dies as a BACKEND
 PANIC three tiers down instead. The two `rejected-on-*` cases below are what hold it shut.
 
-### ⭐ arm64-macOS HAS THE FACILITY, SO THE CASES COME IN PAIRS — AND WIDENING WAS NOT AN OPTION
+### ⭐ arm64-macOS HAS THE FACILITY, SO THE CASES COME IN PAIRS — AND WIDENING IS NOT AN OPTION
 
 `TargetFacilities.targetProvidesFacility` answers `subprocess gives true` for arm64-macOS
 (`posix_spawnp` under `POSIX_SPAWN_CLOEXEC_DEFAULT`, anonymous pipes, `poll`, `waitpid`), so the
-E3104 above does not fire there and every intrinsic in this file RUNS on that lane. What could not
+E3104 above does not fire there and every intrinsic in this file RUNS on that lane. What cannot
 be shared is the PROGRAMS: every case above spawns `cmd /c …`, which exists on no POSIX box, so
-widening their markers would test a missing executable rather than this surface (measured: 31 of 39
-cases across the four subprocess specs fail on a bare widening).
+widening their markers would test a missing executable rather than this surface.
 
 ⇒ **Each subject that this lane can express carries a SECOND case, named `posix-…`, marked
 `arm64-macos`, running an ordinary POSIX command.** That is `process-background-priority.md`'s
@@ -167,7 +158,7 @@ The whole attached path end to end: build an argv blob, spawn `cmd /c echo hello
 streams collected, wait, and read the result struct back. The child's stdout is `hello\r\n` — SEVEN
 bytes — which is what `stdlib/Subprocess.maxon`'s own
 `Subprocess.run(Executable.name("cmd"), arguments: ["/c", "echo", "hello"])` answers for the same
-command (measured: `outLen=7`). Both the exit code and the printed line are pinned, so a run that
+command (`outLen=7`). Both the exit code and the printed line are pinned, so a run that
 collected nothing cannot pass on its exit code alone.
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -277,7 +268,7 @@ on the poller and then woke on a period of its own would still be a poll.
 ⚠ **THE PARK-WAKE COUNT IS WHAT A PER-PASS YIELD ACTUALLY COSTS, WHICH IS WHY IT IS THE ONE READ.**
 `__Builtins.schedTimerStartCount()` counts the machines the system monitor starts for an overdue timer,
 not the timers a program arms, and a drain whose own machine wakes at each deadline gives the monitor
-nothing to rescue — measured: 0 over this second, against 1810 park wakes. A bound on the monitor's count
+nothing to rescue — 0 over this second, against well over a thousand park wakes. A bound on the monitor's count
 would therefore hold whatever the drain does.
 
 ⚠ **THE COLLECTED BYTES ARE PINNED BESIDE THE COUNTS, BECAUSE A LOOP THAT COLLECTED NOTHING IS ALSO
@@ -347,17 +338,16 @@ __np_pd_wait_any
 ⭐⭐ **A CHILD'S EXIT REACHES THE POLLER ONCE, SO THE COLLECT MUST REAP ON IT RATHER THAN ASK AGAIN.** The
 collect's idle pass parks on the child's poll source, and that source reports the exit exactly once. XNU can
 deliver `NOTE_EXIT` before `waitpid(WNOHANG)` is able to reap the child, so a drain that consumed the report and
-then re-asked the host with a non-blocking poll heard "running", went idle, and parked again on a source with
-nothing left to say — for ever, with the child a zombie. The wait now answers which of its members fired, and a
+then re-asked the host with a non-blocking poll would hear "running", go idle, and park again on a source with
+nothing left to say — for ever, with the child a zombie. The wait answers which of its members fired, and a
 child whose exit was reported goes straight to the blocking reap.
 
 ⚠ **THE CHILD ON arm64-macOS IS `/usr/bin/git --version`, BECAUSE THE WINDOW IS A PROPERTY OF THE CHILD.**
-MEASURED with a C observer polling the kernel queue: `NOTE_EXIT` arrived ahead of the reap for 74 of 300 of
-these (an Xcode tool reached through its `/usr/bin` shim), for none of 300 each of `/bin/echo`, `/bin/sh` and a
-plain C program, and for none of 200 of a Maxon green-thread program — so a loop of the simple children would
-pass on the defect. The host needs the Command Line Tools: without them the shim prints an install prompt and
+For this child (an Xcode tool reached through its `/usr/bin` shim) `NOTE_EXIT` can arrive ahead of the
+reap; for `/bin/echo`, `/bin/sh`, a plain C program or a Maxon green-thread program it does not, so a loop
+of the simple children would pass on the defect. The host needs the Command Line Tools: without them the shim prints an install prompt and
 exits non-zero, and the case reads `collected=0` for a reason that is not this one.
-Before the fix this program never finished on arm64-macOS — the harness killed it at its 120 s deadline with a
+On the defect this program never finishes on arm64-macOS — the harness kills it at its 120 s deadline with a
 `git` zombie beneath it. The other POSIX lanes report a child's exit only once it is reapable, so they have no
 such child; there any child serves, and the case holds that the same road collects every one of them.
 ```maxon
@@ -477,8 +467,8 @@ verbatim=true len=17 kind=0
 never spawned — a negative handle, one whose packed generation (`3` is generation 0) no live slot ever
 holds, and live-looking ones (`64`, `9999`) in a table no spawn allocated. ⚠ A guessed handle that
 happens to equal a live one is the live one; the guard names a child, it does not authenticate the
-caller. All eight, not the four that used to have the guard: the two VOID entries and the two READERS
-are here precisely because they were the ones that faulted, and reaching the final `print` at all is
+caller. All eight: the two VOID entries and the two READERS are here precisely because they are the
+ones that fault unguarded, and reaching the final `print` at all is
 what proves they returned.
 ```maxon
 function main() returns ExitCode
@@ -508,7 +498,7 @@ readOut=0 readErr=0 voidsReturned=true
 <!-- test: subprocess-builtins.result-pointer-guards -->
 The six `subprocessResult*` readers take the struct POINTER `subprocessWaitCollect` answers, and that
 answer is `-1` on failure. `stdlib/Subprocess.maxon` tests for it before reading — but a caller need
-not, and one line was an ACCESS VIOLATION. Each reader guards with its own `nullValue`; these are
+not, and unguarded, one line is an ACCESS VIOLATION. Each reader guards with its own `nullValue`; these are
 those answers.
 ```maxon
 function main() returns ExitCode
@@ -534,8 +524,8 @@ kind=0 code=0 duration=0 out=0 err=0 releaseReturned=true
 The OTHER family through the same entries. The seven bare-name `subp*` builtins are a separate
 surface (`streaming-subprocess.md`) that lowers to the very `__gt_subp_*` functions the intrinsics
 above lower to — which is exactly why the guard belongs at the ENTRY POINT and not at a wrapper:
-`subpRelease(-1)` faulted for the same reason `__Builtins.subprocessReleaseHandle(-1)` did, and one
-fix answers both. A wrapper-level guard would have left this case red.
+unguarded, `subpRelease(-1)` faults for the same reason `__Builtins.subprocessReleaseHandle(-1)` does,
+and one guard answers both. A wrapper-level guard would leave this case red.
 ```maxon
 function main() returns ExitCode
 	let line = subpReadLine(-1)
@@ -559,10 +549,9 @@ read=0 readErr=0 write=-1 wait=-1 voidsReturned=true
 <!-- test: subprocess-builtins.file-stdio-that-cannot-open-fails-the-spawn -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `InputSource.file(path)` and `OutputDestination.file(path)` are public corpus surface, and
-`CreateFileA` can fail. ⚠ **MEASURED before this case existed: it did not fail — it SUCCEEDED.**
-`INVALID_HANDLE_VALUE` went into the STARTUPINFO, `CreateProcessA` did not object, and the spawn
-answered handle `0` with an EMPTY `lastErrorMessage()` for a child whose stdin was a dead handle.
-The open is checked now, and the reason a caller reads is `CreateFileA`'s own — `3` is
+`CreateFileA` can fail. ⚠ **An unchecked open makes the spawn SUCCEED:** `INVALID_HANDLE_VALUE`
+goes into the STARTUPINFO, `CreateProcessA` does not object, and the spawn answers handle `0` with an
+EMPTY `lastErrorMessage()` for a child whose stdin is a dead handle. The open is checked, and the reason a caller reads is `CreateFileA`'s own — `3` is
 ERROR_PATH_NOT_FOUND — rather than whatever `CreateProcessA` would have said about it afterwards.
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -1841,7 +1830,7 @@ given the same stream can only answer the whole line (`abcdefghij\r\n`), so a ca
 a whole newline-terminated line would pass against it too and would prove nothing.
 
 ⚠ **SHORT ONLY AT EOF.** `cmd /c more` echoes the line CRLF-terminated and then a blank line, so the
-child produces `abcdefghij\r\n\r\n` — 14 bytes, MEASURED. The third read asks for 100 and gets the 6 that
+child produces `abcdefghij\r\n\r\n` — 14 bytes. The third read asks for 100 and gets the 6 that
 remain after the two four-byte reads, because the child has exited and its pipe is closed; the fourth
 read gets 0, from the SAME latched EOF the line reader uses. A short answer anywhere but EOF would be a
 wrong answer, not a limitation.
@@ -1942,11 +1931,11 @@ wrote=0 lineLen=7 after=abcd code=0
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⛔⛔ **A NEGATIVE COUNT IS REFUSED, AND THE STREAM IS LEFT EXACTLY AS IT WAS.** The refusal has to happen
 BEFORE the "is enough buffered?" test, because `bufferedBytes >= count` is VACUOUSLY TRUE for a negative
-count — so the request falls straight through into the consume with a negative length. That produced a
+count — so the request would fall straight through into the consume with a negative length. That produces a
 `String` record claiming a negative length AND, because the consume publishes `buffered - taken`, a stream
-buffer whose recorded length had been driven UP past what it holds: the corruption outlives the call and
-the NEXT reader walks it. MEASURED before the guard existed: `panic at String.maxon:279: Range check
-failed: value outside typealias 'BytePos'`, exit 1.
+buffer whose recorded length is driven UP past what it holds: the corruption outlives the call and
+the NEXT reader walks it (`panic at String.maxon:279: Range check failed: value outside typealias
+'BytePos'`, exit 1).
 
 ⚠ **`still=abcd` IS THE HALF THAT MAKES THIS A TEST.** An empty answer alone would also come from a
 reader that had quietly eaten the stream; reading four real bytes afterwards is what says the refusal
@@ -2057,9 +2046,9 @@ wrote=0 before=open errBefore=open outLen=7 after=atEof errLen=0 errAfter=atEof 
 
 <!-- test: subprocess-builtins.streaming-read-after-release-throws -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-The stdlib half of the case above. `StreamingSubprocess`'s three readers answer `""` ONLY for end of
-stream: a short `readStdoutBytes` at EOF and an empty `readStdoutLine` at EOF both return, and nothing
-else does. A refusal throws `SubprocessError.ioFailed` — here the one every caller can reach, a handle
+The stdlib half of the case above. `StreamingSubprocess`'s readers tell end of stream from a refusal:
+a short `readStdoutBytes` at EOF returns what remained, a `readStdoutLine` at EOF throws
+`SubprocessError.endOfStream`, and nothing else ends a read. A refusal throws `SubprocessError.ioFailed` — here the one every caller can reach, a handle
 used after `release()`, which the stdlib refuses itself before the runtime is asked (the handle is a
 raw pointer, so the runtime could not refuse it safely). `writeStdinLine` and `wait` are
 held to the same rule. `closeStdin` and `release` are NOT: they are idempotent, and a released child
@@ -2089,6 +2078,13 @@ function readErrLineAfterRelease(child StreamingSubprocess) returns String
 	return "answered {text.byteLength()} bytes"
 end 'readErrLineAfterRelease'
 
+function readLineAtTheEnd(child StreamingSubprocess) returns String
+	let text = try child.readStdoutLine() otherwise (e) 'ended'
+		return e.displayReason()
+	end 'ended'
+	return "answered {text.byteLength()} bytes"
+end 'readLineAtTheEnd'
+
 function writeAfterRelease(child StreamingSubprocess) returns String
 	try child.writeStdinLine("late") otherwise (e) 'refused'
 		return e.displayReason()
@@ -2112,10 +2108,10 @@ function main() returns ExitCode
 	child.closeStdin()
 	let line = try child.readStdoutLine() otherwise return 5
 	let tail = try child.readStdoutBytes(100) otherwise return 6
-	let atEnd = try child.readStdoutLine() otherwise return 7
+	let atEnd = readLineAtTheEnd(child)
 	let code = try child.wait() otherwise return 8
 	child.release()
-	print("line={line} tailLen={tail.byteLength()} atEndLen={atEnd.byteLength()} code={code}\n")
+	print("line={line} tailLen={tail.byteLength()} atEnd={atEnd} code={code}\n")
 	print("bytes: {readBytesAfterRelease(child)}\n")
 	print("line: {readLineAfterRelease(child)}\n")
 	print("errLine: {readErrLineAfterRelease(child)}\n")
@@ -2127,7 +2123,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-line=abc tailLen=2 atEndLen=0 code=0
+line=abc tailLen=2 atEnd=end of stream code=0
 bytes: I/O failed: used after release()
 line: I/O failed: used after release()
 errLine: I/O failed: used after release()
@@ -2145,8 +2141,8 @@ The `PATH` + `PATHEXT` walk. `cmd` is on the PATH of every Windows host and has 
 written, so a resolver that only tried the name verbatim would miss it and one that only tried the
 PATH directories without the extension list would too. The answer is machine-specific, so the
 properties asserted are that it is absolute, that it ends in the name, and that it is longer than
-what was handed in. A name nothing can resolve comes back UNCHANGED rather than as NULL — see the
-divergence note above — which is what `managedIsNull` then reports as "not null".
+what was handed in. A name nothing can resolve comes back UNCHANGED rather than as NULL — see
+*`subprocessResolveOnPath` never answers NULL* above — which is what `managedIsNull` then reports as "not null".
 ```maxon
 function main() returns ExitCode
 	let name = "cmd"
@@ -2209,16 +2205,13 @@ cleanLen=0 spawn=-1 message=true
 
 <!-- test: subprocess-builtins.a-caller-built-environment-is-the-childs-whole-environment -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-⭐⭐ **`envInherit = 0` HANDS THE CHILD THE CALLER'S OWN BLOCK, AND THIS CASE USED TO ASSERT THE
-OPPOSITE.** It was `custom-environment-is-refused`, and its prose said *"a caller-BUILT environment
-block … nothing in the corpus can produce"* — true exactly while `stdlib/Subprocess.maxon` refused
-`Environment.custom` and `Environment.inheritUpdating` before any spawn call was made. That refusal is
-gone: the stdlib assembles a block from this process's own entries (`__Builtins.osEnvironmentEntry`)
-with the caller's overrides applied, and this is the contract underneath it.
+⭐⭐ **`envInherit = 0` HANDS THE CHILD THE CALLER'S OWN BLOCK.** The stdlib assembles a block from
+this process's own entries (`__Builtins.osEnvironmentEntry`) with the caller's overrides applied for
+`Environment.custom` and `Environment.inheritUpdating`, and this is the contract underneath it.
 
 ⚠ **THE ASSERTION IS THE CHILD'S OWN READING, NOT THE SPAWN'S RETURN.** A spawn that merely SUCCEEDS
-would be satisfied by a runtime that accepted the block and then passed NULL — which is precisely the
-silent wrong answer the old refusal existed to prevent — so the child expands a name that exists ONLY
+would be satisfied by a runtime that accepted the block and then passed NULL — a silent wrong answer —
+so the child expands a name that exists ONLY
 in the block it was given and echoes it back.
 
 The block is the platform's own shape: NUL-terminated `NAME=VALUE` entries back to back, then one more
@@ -2283,7 +2276,7 @@ which is exactly the silent wrong answer the contract exists to prevent.
 
 ⛔ **`$PATH` CANNOT BE THAT WITNESS AND `$HOME` CAN, WHICH IS A FACT ABOUT `sh` RATHER THAN ABOUT THE
 SPAWN.** POSIX has a shell SYNTHESIZE a default `PATH` when the environment it is handed carries
-none, so an inherited and a caller-built environment both leave `$PATH` non-empty — MEASURED at 60
+none, so an inherited and a caller-built environment both leave `$PATH` non-empty — 60
 bytes on macOS and 77 on Linux, a witness that is neither empty nor even the same on two lanes.
 `$HOME` is set in every real parent environment and is synthesized by nothing.
 ```maxon
@@ -2329,18 +2322,15 @@ spawned=true echoed=true len=17
 
 <!-- test: subprocess-builtins.rejected-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The subprocess substrate is gated on `HostFacility.subprocess`, which x64-windows and arm64-macOS
-both provide and wasm does not. On a target that does not, the call is refused at its source span
+The subprocess substrate is gated on `HostFacility.subprocess`, which every native lane provides
+and wasm does not. On a target that does not, the call is refused at its source span
 with `E3104`, naming the runtime entry that has no lowering there — never a panic from inside the
-wasm backend, which is what this family did before this rung.
+wasm backend.
 
-⚠ **THIS LINE READ "the subprocess substrate is x64-windows only", AND THAT PREMISE OUTLIVED ITS
-TRUTH BY A WHOLE LANE.** Three compiler comments and one isel panic rested on the same sentence after
-arm64-macOS grew the substrate, and the panic is what a program hit: any `--target=arm64-macos`
-program touching `Subprocess` — with the DEFAULT `Environment.inherit`, which reads no environment at
-all — died in `StdToArm64Conversion` on the environment-block ops, because the reader was built for a
-lane whose lowering had been left out on the strength of this claim. The gate is the facility table,
-and it always was.
+⚠ **THE GATE IS THE FACILITY TABLE, NOT A LIST OF LANES.** A lowering left out on the strength of a
+lane list is an isel panic in any program that reaches it — a `--target=arm64-macos` program touching
+`Subprocess`, even with the DEFAULT `Environment.inherit`, builds the environment reader and needs the
+environment-block ops lowered on that lane.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -2362,31 +2352,24 @@ error E3104: <fragment>:9:21: this construct lowers to the runtime entry '__gt_s
 The bare-name streaming builtin is gated by the same band and names its own entry. ⚠ Outside that gate it
 dies on such a target as a BACKEND PANIC rather than as a diagnostic.
 
-⚠ **THE LANE IS `wasm32-wasi`, AND IT IS THE LAST ONE THAT CAN CARRY THIS RULE.** The case moved across
-the native lanes as each grew a child-process substrate — arm64-macOS at MAC8 (`posix_spawnp`, a
-file-actions builder, anonymous pipes, `waitpid` behind a handle object); arm64-Linux at L5 by hand,
-because Linux has no `posix_spawn` syscall (`clone(SIGCHLD)`, `dup3`, `execve`, and a close-on-exec status
-pipe reporting a failed exec back to the parent); then x64-Linux on the same POSIX shape. All of them
-COMPILE AND RUN it, so there is no fourth native lane to move to. A WASI component has no process-spawn
-primitive at all, so its refusal is PERMANENT where every native one was "not yet" — a difference in KIND
-carried by `SemanticCheck.targetCanHostSubprocess`'s E3074, not by this case, which pins only that the
-band is gated and names its own entry.
+⚠ **THE LANE IS `wasm32-wasi`, AND IT IS THE ONLY ONE THAT CAN CARRY THIS RULE.** Every native lane has
+a child-process substrate — arm64-macOS (`posix_spawnp`, a file-actions builder, anonymous pipes, `waitpid`
+behind a handle object), arm64-Linux (which has no `posix_spawn` syscall: `clone(SIGCHLD)`, `dup3`,
+`execve`, and a close-on-exec status pipe reporting a failed exec back to the parent) and x64-Linux on the
+same POSIX shape — so all of them COMPILE AND RUN it. A WASI component has no process-spawn primitive at
+all, so its refusal is PERMANENT — a difference in KIND carried by
+`SemanticCheck.targetCanHostSubprocess`'s E3074, not by this case, which pins only that the band is gated
+and names its own entry.
 
 ⇒ **THE NAME DOES NOT CARRY A TARGET, AND THAT IS DELIBERATE.** A target in the name would be a third
 copy beside the `unsupported-targets:` marker and the `maxoncstderr` text, forcing a rename at every re-point. The
 marker and the text are the pair the runner checks against each other; a name is the copy nothing
 verifies.
-⚠ **THE LANE IS `wasm32-wasi`, AND IT IS THE LAST ONE THAT CAN CARRY THIS.** The case moved across the
-native lanes as each grew a child-process substrate — arm64-macOS at MAC8, arm64-Linux at L5, x64-Linux
-with the green-thread floor — and there is no fourth native lane left. A WASI component has no
-process-spawn primitive at all, so its refusal is PERMANENT where every native one was "not yet"; that
-difference in KIND is carried by `SemanticCheck.targetCanHostSubprocess`'s E3074, not by this case, which
-pins only that the band is gated and names its own entry.
 
 ⚠ **IT IS NOT A DUPLICATE OF `subprocess-builtins.rejected-on-wasm`, AND THE ENTRY NAME SEPARATES THEM.**
 That case calls the raw fourteen-argument `__Builtins.subprocessSpawn` and names
 `__gt_subp_attached_spawn`; this one calls the BARE-NAME `subpSpawn` and names `__gt_subp_spawn`. Two
-doors, two entries, two gates — MEASURED: compiled for `wasm32-wasi`, this program emits exactly the
+doors, two entries, two gates — compiled for `wasm32-wasi`, this program emits exactly the
 diagnostic below.
 
 ```maxon
@@ -2401,26 +2384,23 @@ error E3104: <fragment>:3:10: this construct lowers to the runtime entry '__gt_s
 
 <!-- test: subprocess-builtins.the-stdlib-api-compiles-on-arm64 -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-linux, wasm32-wasi -->
-⛔⛔ **A `Subprocess` PROGRAM CROSS-COMPILED TO arm64-macOS, AND THE COMPILER USED TO PANIC ON THIS
-EXACT SIX LINES.** `--target=arm64-macos` on a `Configuration.create` + `runConfiguration` with the
-DEFAULT `Environment.inherit` died with *"panic at StdToArm64Conversion.maxon:947: the
-environment-block ops are x64-windows only"*, exit 1, while `--target=x64-windows` on the same source
-exited 0. The claim in that panic was FALSE — `TargetFacilities` answers `subprocess gives true` for
-arm64-macOS, so the whole `__gt_subp_` family is built there, `__gt_subp_env_entry` with it, and dead
-code elimination cannot drop what the stdlib's spawn path calls.
+⛔⛔ **A `Subprocess` PROGRAM CROSS-COMPILED TO arm64-macOS.** `--target=arm64-macos` on a
+`Configuration.create` + `runConfiguration` with the DEFAULT `Environment.inherit` must compile and run.
+`TargetFacilities` answers `subprocess gives true` for arm64-macOS, so the whole `__gt_subp_` family is
+built there, `__gt_subp_env_entry` with it, and dead code elimination cannot drop what the stdlib's
+spawn path calls — so the environment-block ops must lower on this lane.
 
-⭐ **WHY IT NEEDED A CASE OF ITS OWN, WITH EVERY OTHER arm64 SUBPROCESS CASE IN THIS FILE GREEN.** The
-nine `posix-*` cases above drive `__Builtins.subprocessSpawn` DIRECTLY, so none of them reaches
-`stdlib/Subprocess.maxon`'s `spawnEnvironmentFor` — and `spawnEnvironmentFor` is what keeps the
-environment reader alive, for `Environment.inherit` as much as for the other two arms. This is the
-first case on this lane that goes through the stdlib's own API, which is the door the compiler was
-panicking at. ⚠ `maxon-bin/Testing/SpecTestRunner.maxon` calls `runConfiguration`, so the compiler
+⭐ **WHY IT NEEDS A CASE OF ITS OWN.** The `posix-*` cases above drive
+`__Builtins.subprocessSpawn` DIRECTLY, so none of them reaches `stdlib/Subprocess.maxon`'s
+`spawnEnvironmentFor` — and `spawnEnvironmentFor` is what keeps the environment reader alive, for
+`Environment.inherit` as much as for the other two arms. This is the case on this lane that goes
+through the stdlib's own API. ⚠ `maxon-bin/Testing/SpecTestRunner.maxon` calls `runConfiguration`, so the compiler
 binary itself is inside this blast radius.
 
 ⚠ **THE ANSWER IS THE CHILD'S, NOT THE COMPILE'S**, so this is a run case rather than a compile-only
 one: `/bin/sh -c 'printf ok'` is echoed back through a collected stdout. On a host that cannot execute
-arm64-macOS the harness reports it COMPILED but NOT RUN, which is still the whole of what the panic
-made impossible.
+arm64-macOS the harness reports it COMPILED but NOT RUN, which is still the whole of what a lowering
+panic would make impossible.
 ```maxon
 function main() returns ExitCode
 	var config = Configuration.create(Executable.name("/bin/sh"))
@@ -2440,11 +2420,10 @@ exit=0 out=ok
 
 <!-- test: subprocess-builtins.the-stdlib-api-runs-on-windows -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-The host-lane twin of `the-stdlib-api-compiles-on-arm64`, and the reason both exist: the arm64 case is
-the one that pins the compile that used to panic, and this one is the same door with its ANSWER
-checked on a lane this box can execute. Between them the stdlib's `Configuration` +
-`runConfiguration` path — which nothing else in `specs` exercised — is covered on both lanes the
-`subprocess` facility serves.
+The host-lane twin of `the-stdlib-api-compiles-on-arm64`, and the reason both exist: the arm64 case
+pins the cross-compile, and this one is the same door with its ANSWER checked on a lane this box can
+execute. Between them the stdlib's `Configuration` + `runConfiguration` path — which nothing else in
+`specs` exercises — is covered on both lanes the `subprocess` facility serves.
 ```maxon
 function main() returns ExitCode
 	var config = Configuration.create(Executable.name("cmd"))

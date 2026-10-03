@@ -5,12 +5,12 @@ keywords: [sleep, async, await, green-threads, scheduler, timer, yield, concurre
 category: concurrency
 ---
 
-# Sleep — the mid-body yield and netpoller (P1.5)
+# Sleep — the mid-body yield and netpoller
 
 ## Documentation
 
 `sleep(ms)` suspends the **current green thread** for `ms` milliseconds and yields to the scheduler, so
-other green threads run while it waits. It is the first **mid-body yield**: unlike a B1a async body, which
+other green threads run while it waits. It is a **mid-body yield**: unlike an async body that never yields, which
 runs to completion in one shot, a sleeping thread parks on a timer, hands control back, and RESUMES where it
 left off once its deadline has passed.
 
@@ -43,30 +43,24 @@ export function sleep(milliseconds Milliseconds)
 end 'sleep'
 ```
 
-It used to be a BARE-NAME COMPILER BUILTIN instead — a name `Parser.parseCallNamed` recognized before any
-registry was consulted, standing in for a stdlib the compiler could not yet load. A call-site-only name is
-not a declaration, and the difference showed in two places: the name had no VALUE (`let nap = sleep` was
-*"Undefined variable 'sleep'"* where the reference compiler takes the function's address), and a user file
-declaring its own `function sleep` compiled with that declaration SILENTLY UNLINKED — `sleep(1)` still
-reached the builtin, no diagnostic, a wrong answer. Both are gone: the name is now resolved like every
-other, so it has an address, and a second declaration of it is the ordinary whole-program duplicate
-(`E3006`, naming `stdlib/Sleep.maxon`).
+A declaration is what a call-site-only name is not: the name is resolved like every other, so it has a
+VALUE (`let nap = sleep` takes the function's address), and a user file declaring its own `function sleep`
+is the ordinary whole-program duplicate (`E3006`, naming `stdlib/Sleep.maxon`) rather than a declaration
+silently left unlinked.
 
-Everything the builtin enforced by hand is now enforced by the declaration: the argument is checked against
-`milliseconds Milliseconds` by the ordinary argument rule, and the absent result by the ordinary void-call
-rule. Only the qualified `__Builtins.sleep(ms)` — stdlib's own floor — is still recognized by name.
+The declaration enforces the call's rules: the argument is checked against `milliseconds Milliseconds` by
+the ordinary argument rule, and the absent result by the ordinary void-call rule. Only the qualified
+`__Builtins.sleep(ms)` — stdlib's own floor — is recognized by name.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** `sleep` lowers to `__gt_sleep`, which two lanes now implement — x64-windows and
-arm64-macOS — and the others do not, so `SemanticCheck` refuses it with **E3104** on the rest. That is what
-the `rejected-on-wasm` and `rejected-on-a-native-target` cases below PIN, and why they carry the inverse marker naming
-only the target they are about.
+statement of it.** `sleep` lowers to `__gt_sleep`, which every native lane implements and `wasm32-wasi`
+does not, so `SemanticCheck` refuses it with **E3104** there. That is what the `rejected-on-wasm` cases
+below PIN, and why they carry the inverse marker naming only the target they are about.
 
 ### Deadline order is the TIMER STORE's answer, not the netpoller's
 
 The paragraph above says threads resume in deadline order *because* the netpoll waits on the earliest
-deadline. That is a true statement about the netpoller and it was, for a while, the whole of the
-implementation's argument — and it is an argument about the CALLER. It says the scheduler usually hands its
+deadline. That is a true statement about the netpoller, and it is an argument about the CALLER. It says the scheduler usually hands its
 timer walk exactly one due deadline at a time; it says nothing about what the walk does when it is handed
 several at once.
 
@@ -78,8 +72,8 @@ who wakes first.
 ⇒ **the store is a MIN-HEAP keyed on `(deadline, arm sequence)`, and every pass pops it in that order.** The
 rule is total and has no ties left in it: **an earlier deadline resumes first, and among threads whose
 deadlines are equal, the one that armed its timer first resumes first.** `coalesced-pass-fires-in-deadline-order`
-below is the case that holds it, and it is a RED-GATE pin: the store used to be a flat array fired in
-ARMING order, and that case answered `1432` where the rule says `4321`.
+below is the case that holds it, and it is a RED-GATE pin: a flat array fired in ARMING order answers
+`1432` there, where the rule says `4321`.
 
 ## Tests
 
@@ -160,9 +154,9 @@ its tag into a global as it resumes, so the printed number IS the firing order.
 
 ⇒ `4321` — deadline order. This is the case `interleave` above cannot reach: there the netpoll wakes on
 each deadline separately, so the walk is handed one entry at a time and its own ordering is never asked.
-Here it is the only thing being asked, and the flat unsorted store it replaced answered **`1432`** —
-firing the 400 ms sleeper first because it had been armed first, then the rest in the order its
-swap-removes happened to leave them.
+Here it is the only thing being asked, and a flat unsorted store fired in arming order answers
+**`1432`** — firing the 400 ms sleeper first because it was armed first, then the rest in the order its
+swap-removes happen to leave them.
 
 The busy wait is bounded by `Clock`, not by an iteration count, so it holds the M for 600 ms of real time
 on a fast machine and a slow one alike; 600 ms clears the longest deadline by 200.
@@ -250,9 +244,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-sleep.taken-as-a-value -->
 `sleep` is a DECLARATION, so it has an address: bound to a `let` and called indirectly, it parks the green
-thread exactly as the direct call does. A call-site-only builtin name has no value at all — this program was
-*"error E2004: Undefined variable 'sleep'"* while one claimed the name, though the reference compiler has
-always accepted it.
+thread exactly as the direct call does. A call-site-only builtin name would have no value at all.
 ```maxon
 function main() returns ExitCode
 	let nap = sleep
@@ -273,8 +265,7 @@ end 'main'
 <!-- unsupported-targets: wasm32-wasi -->
 `sleep` requires an integer millisecond count; a float is refused at compile time — by the ORDINARY
 argument rule against `milliseconds Milliseconds`, which is why the rejection names the parameter and offers
-the conversion, and is the same sentence every other narrowing site speaks. The bare-name builtin refused it
-with a rule of its own (`E3005: 'sleep' requires a integer, but its argument is float`), which said neither.
+the conversion, and is the same sentence every other narrowing site speaks.
 ```maxon
 function main() returns ExitCode
 	sleep(1.5)
@@ -287,10 +278,10 @@ error E3009: <fragment>:3:2: argument 'milliseconds': cannot implicitly convert 
 
 <!-- test: async-sleep.rejected-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The timer the park is built on reads `osReadClock` and waits with `osSleepMs`, and neither has an
-arm64 or wasm lowering at this rung. A `sleep` compiled for another target is therefore refused at its
-own call span with `E3104`, naming the runtime entry it lowers to — not a panic three tiers down in
-the backend, which is what it was before this gate:
+The timer the park is built on reads `osReadClock` and waits with `osSleepMs`, and neither has a
+wasm lowering. A `sleep` compiled for wasm is therefore refused at its own call span with `E3104`,
+naming the runtime entry it lowers to — not a panic three tiers down in the backend, which is what an
+ungated call reaches:
 
 ```text
 panic at StdToWasm.maxon:1099: emitBodyOp: `osReadClock` is x64-windows only
@@ -299,13 +290,9 @@ panic at StdToWasm.maxon:1099: emitBodyOp: `osReadClock` is x64-windows only
 The refusal is raised INSIDE `stdlib/Sleep.maxon`'s body and attributed to the crossing call, so it is
 positioned at the line the user wrote and names the stdlib function they called
 (`stdlib-loading.md`) — never at a path inside `stdlib/`.
-⚠ **THE NATIVE TWIN THIS CASE ONCE HAD IS RETIRED, AND THE RULE IT PINNED NOW LIVES HERE ALONE.**
-`async-sleep.rejected-on-a-native-target` moved down the native lanes as each grew a timed park —
-arm64-macOS until that lane grew a scheduler, then arm64-Linux until L4 gave it a futex-based one, then
-x64-Linux — to show that a NATIVE target refuses `sleep` at the user's own span, which a wasm-only case
-cannot show. x64-Linux's green-thread floor left no native lane refusing, and the twin's program and
-expected diagnostic were byte-identical to this one's but for the target name, so re-pointing it here
-would have written one fact down twice. It was deleted rather than duplicated.
+⚠ **NO NATIVE LANE REFUSES `sleep`, SO THIS CASE CARRIES THE RULE ALONE.** Every native lane has a timed
+park, and a native twin's program and expected diagnostic would be byte-identical to this one's but for the
+target name — one fact written down twice.
 
 ⇒ **THE CONVENTION, STATED ONCE FOR THE THREE CASES THAT SHARE IT** (`services.md` and
 `builtins-cpu-parallel.md` carry the other two): a target-refusal case needs a lane that actually refuses.
@@ -342,14 +329,11 @@ error E3104: <fragment>:3:10: 'sleep' lowers to the runtime entry '__gt_sleep', 
 
 <!-- test: async-sleep.unreached-compiles-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-An UNREACHED `sleep` now compiles for wasm, and that is a deliberate behaviour change this rung made:
-while `sleep` was a bare-name builtin the call was a `__gt_sleep` in USER code, and the target gate is
-reachability-BLIND for user code, so `napper` was refused though `main` never calls it
-(`builtins-sleep.rejected-on-wasm-when-unreached`, which pins the property at the spelling that still has
-it). The declaration moved that runtime entry INTO stdlib source, where the gate is reachability-AWARE —
-the same exemption that keeps an unused stdlib module byte-neutral
-(`stdlib-loading.unreached-clock-still-compiles-on-wasm`). A `sleep` on a path from `main` is still
-refused, as the case above shows.
+An UNREACHED `sleep` compiles for wasm. The target gate is reachability-BLIND for user code
+(`builtins-sleep.rejected-on-wasm-when-unreached` pins that for the intrinsic spelled there), but `sleep`'s
+`__gt_sleep` lives INSIDE stdlib source, where the gate is reachability-AWARE — the same exemption that
+keeps an unused stdlib module byte-neutral (`stdlib-loading.unreached-clock-still-compiles-on-wasm`). A
+`sleep` on a path from `main` is refused, as the case above shows.
 ```maxon
 function napper()
 	sleep(1)

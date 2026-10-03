@@ -51,34 +51,26 @@ let CarriageReturn = "\r"
 export function parseTestEvents(stderr String) returns TestEventArray
 	var events = TestEventArray.create()
 
-	for rawLine in stderr.split("\n") 'eachLine'
+	let pieces = stderr.split("\n")
+	let finalPiece = pieces.count() - 1
+
+	for (iter, rawLine) in pieces.withIterator() 'eachLine'
+		// The split's trailing empty piece is no line: kept, it appends a bare newline to the last
+		// test's output, which `--json` pins to the byte.
+		if iter.index() == finalPiece and rawLine.isEmpty() 'afterTheLastTerminator'
+			break
+		end 'afterTheLastTerminator'
+
 		let line = withoutTrailingReturn(rawLine)
 
 		match parseProtocolLine(line) 'shape'
 			event(parsed) then events.push(parsed)
-			notProtocol then pushOutputLine(events, line: line)
+			notProtocol then events.push(TestEvent.outputLine(line))
 		end 'shape'
 	end 'eachLine'
 
 	return events
 end 'parseTestEvents'
-
-// A non-protocol line, kept as output.
-//
-// ⛔ **AN EMPTY ONE IS DROPPED, AND THAT IS THE REFERENCE'S BEHAVIOUR RATHER THAN A ROUNDING OF IT.**
-// The trailing empty part of splitting on the final newline is an artifact and MUST go — kept, it would
-// append a bare newline to the last test's output, which `--json` pins to the byte. The reference
-// (`MaxonTestProtocol.Parse`) drops every empty line to achieve that, while its own comment claims it
-// keeps interior blanks; the CODE is what the committed expectations were generated from, so the code is
-// the contract and this matches it. ⚠ The cost is real and is stated here rather than discovered: a test
-// that writes a blank line between two stderr lines has that blank dropped from its report.
-function pushOutputLine(events TestEventArray, line String)
-	if line.isEmpty() 'nothingOnThisLine'
-		return
-	end 'nothingOnThisLine'
-
-	events.push(TestEvent.outputLine(line))
-end 'pushOutputLine'
 
 // One line with a trailing `\r` removed, if it had one. A lone `\r` at the end of a line split on `\n`
 // is one grapheme, which is what makes the length arithmetic exact.

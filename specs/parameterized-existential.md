@@ -38,7 +38,7 @@ an associated type a requirement TAKES.
 ## Tests
 
 <!-- test: parameterized.cursor-protocol -->
-⭐ **THE PROGRAM THAT USED TO BE THE WALL.** `Seq uses Element`, `Upto implements Seq with Integer`, and the
+⭐ **THE CURSOR PROTOCOL THROUGH A PARAMETERIZED EXISTENTIAL.** `Seq uses Element`, `Upto implements Seq with Integer`, and the
 parameter is written at the INSTANCE. Both protocol calls are witness dispatches through the fat pointer.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -471,10 +471,9 @@ error E3125: <fragment>:30:11: this use of 'Seq' binds its associated type 'Elem
 ```
 
 <!-- test: parameterized.associated-type-held-at-an-interface -->
-⭐ **THE WALL THIS FILE USED TO END AT.** `Iter` is bound to an INTERFACE, so `createIterator()` hands back a
+⭐ **AN ASSOCIATED TYPE HELD AT AN INTERFACE.** `Iter` is bound to an INTERFACE, so `createIterator()` hands back a
 value plus the table to walk it through — two words out of a call that returns one. The second travels in the
-FIRST table (`specs/associated-type-held-at-an-interface.md`), and this case is kept here, in the file
-that recorded the refusal, so the two readings of one program sit in one history.
+FIRST table (`specs/associated-type-held-at-an-interface.md`).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -550,10 +549,9 @@ end 'main'
 ⚠ **E3120 MUST STILL CATCH THE BINDING WHEN IT IS SPELLED AS AN ALIAS**, and what makes it do so is a
 RENDERING rather than a second predicate: `ProgramSignatures.declaredNameIsFatPointer` knows only the bare
 interface name, and `Parser.readConformanceWithArg` renders `IntegerSeq` to exactly that — `Seq` — so the
-alias arrives at the bare spelling's refusal. This case pins that rendering, because the alias only began
-denoting an existential in this rung and nothing else would notice if it started rendering to `Seq_Integer`
-instead: the binding would slip past E3120 and the dispatch would carry one machine word where the impl reads
-two, which is the exit 139 `associated-types.error.associated-type-bound-to-an-interface` measured.
+alias arrives at the bare spelling's refusal. This case pins that rendering, because nothing else would
+notice if it started rendering to `Seq_Integer` instead: the binding would slip past E3120 and the dispatch
+would carry one machine word where the impl reads two.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -611,4 +609,82 @@ end 'main'
 ```
 ```maxoncstderr
 error E3120: <fragment>:35:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Seq', and 'Element' reaches the calling convention of a requirement this program DISPATCHES through a receiver that does not say which binding it holds — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type
+```
+
+<!-- test: a-call-result-carries-the-instance-its-declared-return-names -->
+```maxon
+interface Source uses Element
+	function first() returns Element
+end 'Source'
+
+type Cell implements Source with String
+	var text as String
+
+	static function of(text String) returns Self
+		return Self{text: text}
+	end 'of'
+
+	function first() returns String
+		return text
+	end 'first'
+end 'Cell'
+
+typealias TextSource = Source with String
+
+function makeSource() returns TextSource
+	return Cell.of("from a call")
+end 'makeSource'
+
+function main() returns ExitCode
+	let s = makeSource()
+	print("{s.first()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+from a call
+```
+
+<!-- test: a-generic-alias-binding-agrees-with-the-conformers-instance -->
+```maxon
+typealias Measure = int(0 to 1000)
+typealias Items = Array with Measure
+
+interface Source uses Element
+	function first() returns Element
+end 'Source'
+
+type Cell implements Source with Items
+	var n as Items
+
+	static function of(n Items) returns Self
+		return Self{n: n}
+	end 'of'
+
+	function first() returns Items
+		return n
+	end 'first'
+end 'Cell'
+
+typealias ItemsSource = Source with Items
+
+function makeSource() returns ItemsSource
+	return Cell.of([500, 7])
+end 'makeSource'
+
+function firstOf(s ItemsSource) returns ExitCode
+	let v = s.first()
+	let first = try v.get(0) otherwise 0
+	return (first - 400) as ExitCode
+end 'firstOf'
+
+function main() returns ExitCode
+	return firstOf(makeSource())
+end 'main'
+```
+```exitcode
+100
 ```

@@ -239,8 +239,7 @@ end 'main'
 
 <!-- test: ternary-expression.mixed-int-float-promotes -->
 The two branches cross register classes — a `float` `1.0` and an `int` `2` — so the integer branch
-is promoted to float (`cvtsi2sd`) and the result is uniformly float (the old E2015 "different
-register classes" refusal is gone now that floats are a nameable, working type). `trunc` reads the
+is promoted to float (`cvtsi2sd`) and the result is uniformly float. `trunc` reads the
 float result back to an int for the exit code. With the condition
 true the float branch is selected, so `trunc(1.0)` is 1.
 ```maxon
@@ -377,9 +376,9 @@ sees the binding as already moved (a spurious use-after-move). Selecting the tru
 arm here, its value transfers exactly once with no leak.
 
 ⚠ **`k` IS A `var`, AND THE KEYWORD IS THE WHOLE CASE.** A ternary arm reading an
-IMMUTABLE binding CO-OWNS it (⚖ 2026-08-04) and poisons nothing, so with `let k`
+IMMUTABLE binding CO-OWNS it and poisons nothing, so with `let k`
 there is no move for the rewind to rewind and this case would pass without ever
-reaching its own subject. Only a MUTABLE source still moves, so only a `var` puts a
+reaching its own subject. Only a MUTABLE source moves, so only a `var` puts a
 poison between the arm's parse and the condition's.
 ```maxon
 function hasContent(s String) returns bool
@@ -461,10 +460,9 @@ end 'main'
 Regression: a postfix ternary appearing downstream of an inner-loop
 `try ... otherwise` (which allocates a `try_N.merge` block) inside an
 outer loop whose induction variable is **unused** must still surface the
-unused-variable diagnostic (E3012), not crash. The self-hosted parser
-previously left the inner `try_N.merge` block without a terminator in this
-exact CFG shape and tripped `assertAllBlocksTerminated` before E3012 could
-be reported. The block-terminator wiring must remain well-formed regardless
+unused-variable diagnostic (E3012), not crash. A parser that left the inner
+`try_N.merge` block without a terminator in this exact CFG shape would trip
+`assertAllBlocksTerminated` before E3012 could be reported. The block-terminator wiring must remain well-formed regardless
 of how many `if ... else` merge blocks are allocated later in the same
 function body.
 
@@ -611,7 +609,7 @@ rule is about what the arm that DID run owes the result. When both arms yield ow
 values the result is uniformly owned, by one of two routes: an owned TEMPORARY hands
 over the one reference it already holds, while a value an IMMUTABLE binding still owns
 is CO-OWNED — the arm's edge takes a SECOND reference and the binding keeps its own, so
-it stays readable after the merge (⚖ 2026-08-04). A **mutable** source still moves. When
+it stays readable after the merge. A **mutable** source moves. When
 one arm borrows a **String**, the borrow is promoted to an owned copy so the result is
 still uniformly owned.
 
@@ -623,8 +621,7 @@ freed by the merged result AND by the borrow's real owner: a double free, and a 
 (exit 101) whenever the borrowed arm is the one taken. The incref is what balances it —
 the result phi's single drop releases a real second reference — so the construct is
 CORRECT on either arm rather than refused on both, which is what the parser needs given
-that it cannot know which arm a runtime condition will pick. See OPEN #14, and S5 for why
-the refusal it originally shipped as was reasoning from a mechanism the tree already had.
+that it cannot know which arm a runtime condition will pick.
 
 Every ownership test below exits `0` only when every allocation is freed (the runtime's
 leak check substitutes exit code `101` when any allocation is still live at exit), so the
@@ -635,7 +632,7 @@ borrowed-arm cases pin the absence of the leak by RUNNING rather than by rejecti
 One arm gives a BORROWED boxed union (`e.kind`, a field read); the other gives an OWNED
 one (`remapKind(e.kind)`, a fresh call result). The merged result is owned, so the borrowed
 arm is increfed on its own edge: the result's drop releases that second reference and `e`
-still owns the box it always owned. Unpromoted this leaked (exit 101) with the borrowed arm
+still owns the box it always owned. Unpromoted this would leak (exit 101) with the borrowed arm
 taken, which is the run this case pins — the exit code is the assertion.
 ```maxon
 typealias Id = int(0 to 1000)
@@ -689,8 +686,8 @@ The only change from the case above is `identity = false`, which at runtime take
 arm and never touches the borrowed one. The promotion is a PARSE-time property of the
 construct, not of the runtime path — the parser cannot know the condition, so it increfs the
 borrowed edge whichever arm the condition would pick — and the incref sits on that edge, so
-the untaken arm costs nothing. (This spelling never leaked even before the fix: it was passing
-by dodging the unsound arm. It is the CONTROL, and it must keep exiting `0` and printing the
+the untaken arm costs nothing. (This spelling never takes the borrowed arm, so an unbalanced merge
+would not leak here. It is the CONTROL, and it must keep exiting `0` and printing the
 OWNED arm's answer, which is how a promotion wrongly hoisted out of the arm would show up.)
 ```maxon
 typealias Id = int(0 to 1000)
@@ -869,14 +866,13 @@ end 'main'
 
 <!-- test: ternary-expression.ownership.immutable-binding-arms-are-co-owned -->
 ### An arm reading an IMMUTABLE binding CO-OWNS it — the binding stays readable
-⭐⭐ **THE MERGE ASKS THE SAME QUESTION `try … otherwise <binding>` ALREADY ANSWERED (⚖ 2026-08-04,
-⚖ 2026-08-12).** An arm whose value IS an immutable binding's own value hands the phi a reference
+⭐⭐ **THE MERGE ASKS THE SAME QUESTION `try … otherwise <binding>` ANSWERS.** An arm whose value IS an immutable binding's own value hands the phi a reference
 the binding still owes a drop for, so the phi must take a SECOND one — exactly what
 `Parser.transferFallbackToPhi` does on a value `try`'s error edge, and exactly what a durable sink
-does (`Parser.storeOwnedValueIntoDurableSink`). Poisoning the source instead made `let` behave one
-way at a rebind (an ALIAS, both names live) and the opposite way one construct over, so this pair of
-ternaries — each reading both bindings, in opposite order — was refused E3102 on the second line
-while the identical `let receiversOwn = programsOwn` was accepted. Both bindings are read AFTER both
+does (`Parser.storeOwnedValueIntoDurableSink`). Poisoning the source instead would make `let` behave
+one way at a rebind (an ALIAS, both names live) and the opposite way one construct over, refusing this
+pair of ternaries — each reading both bindings, in opposite order — E3102 on the second line while the
+identical `let receiversOwn = programsOwn` is accepted. Both bindings are read AFTER both
 merges here, and each box is released exactly once, so the leak gate is the assertion.
 ```maxon
 function describe(spelling String, first bool) returns String
@@ -934,14 +930,14 @@ held b padded out long enough to be a real heap allocation | held b padded out l
 ```
 
 <!-- test: ternary-expression.ownership.immutable-arm-inside-a-loop -->
-### The co-owning arm lifts a LOOP refusal that only a move ever earned
-⭐ **A REFUSAL WHOSE PREMISE WAS THE MOVE.** `poisonOwningBinding` refuses a move of a binding declared
+### The co-owning arm is not held to a LOOP refusal that only a move earns
+⭐ **A REFUSAL WHOSE PREMISE IS THE MOVE.** `poisonOwningBinding` refuses a move of a binding declared
 outside the innermost loop — the back edge would re-move it next iteration and a `break` would leave it
 live on the normal exit, neither of which the join model reaches. An arm that CO-OWNS moves nothing, so
 none of that reasoning applies: the incref is taken on the arm's edge inside the loop and the phi's drop
 falls inside the loop too, balanced per iteration, and `base` keeps its one scope-exit drop. The `var`
-spelling of the same program is still refused by that E2015 — the refusal is intact, it simply no longer
-stands over a program that never moved anything. Three iterations, one of them taking the fresh arm.
+spelling of the same program is refused by that E2015; the refusal does not stand over a program that
+moves nothing. Three iterations, one of them taking the fresh arm.
 ```maxon
 function main() returns ExitCode
 	let base = "base {1} padded out long enough to be a real heap allocation"
@@ -966,9 +962,9 @@ end 'main'
 
 <!-- test: ternary-expression.error.mutable-binding-arm-still-moves -->
 ### A MUTABLE binding's arm still MOVES — the control for the case above
-⚠ **THE BOUNDARY, NOT AN OVERSIGHT.** Co-ownership rests on neither name being writable
-(⚖ 2026-08-04): a `var` source can be written through after the merge, so a second name for its
-value could watch it change, and the arm therefore keeps the MOVE it always had. Without this case
+⚠ **THE BOUNDARY, NOT AN OVERSIGHT.** Co-ownership rests on neither name being writable:
+a `var` source can be written through after the merge, so a second name for its value could watch
+it change, and the arm therefore MOVES. Without this case
 the co-owning arm above could be widened to every source and nothing in the suite would notice.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1014,8 +1010,8 @@ error E3004: specs/fragments/ternary-expression/ternary-expression.error.owned-s
 
 <!-- test: ternary-expression.ownership.result-stored-in-container -->
 ### The merged result can be stored, and is owned exactly once when it is
-This is the shape that found the defect: a table fold choosing between an
-already-interned entry and a freshly remapped one, then storing the winner.
+The shape is a table fold choosing between an already-interned entry and a
+freshly remapped one, then storing the winner.
 ```maxon
 typealias Id = int(0 to 1000)
 
@@ -1078,7 +1074,7 @@ An eagerly-evaluated ternary computes the same answer as a lazy one whenever bot
 total, so no value test can tell them apart. The evidence therefore has to be **observational**:
 a side effect that provably did not happen. Two oracles are used below — a counter in a global
 (exact), and an out-of-range cast, which range-check-panics the process if it is ever reached.
-(Integer `/` no longer serves as this oracle: a possibly-zero divide is a throwing operation, so
+(Integer `/` cannot serve as this oracle: a possibly-zero divide is a throwing operation, so
 it cannot appear bare in an arm — it would need a `try`, which would swallow the very fault the
 oracle relies on.)
 
@@ -1239,9 +1235,9 @@ Relocate the defining op and that cache names a block the value has left. The re
 **value provenance** — *which values did the ops that moved define?* — because the only other
 available question, *which variable names are new since the arm began?*, is a different one: a
 self-field alias is a **pre-existing name whose value is rewritten in place** when a call
-invalidates it, so name-novelty cannot see it. `n if n > threshold else base` in a method that
-had just called another method emitted a comparison in the entry block against a field load that
-had moved into the true arm.
+invalidates it, so name-novelty cannot see it. Keyed on names, `n if n > threshold else base` in a method that
+has just called another method would emit a comparison in the entry block against a field load that
+has moved into the true arm.
 
 **What a value CARRIES.** The merged result is a new temp holding a copy of the winning arm, so
 every fact the arms carried is either merged into it or dropped — and a fact that is silently
@@ -1256,7 +1252,7 @@ that is not a silent drop either — see `first-class-functions.md`.
 `pick` calls another method first, which invalidates the cached `self.n`. The arm's reload is
 relocated into the true branch; the condition, which runs unconditionally, must then get a
 reload of its own rather than reusing the one that moved. Pinning the ANSWER, not just that it
-compiles: the earlier compiler answered 0 here, and the one after it crashed.
+compiles: a condition that reused the moved reload would answer 0 here, or crash.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1399,8 +1395,8 @@ error E2028: specs/fragments/ternary-expression/ternary-expression.error.functio
 The helpers are declared BELOW `main`, so at parse the arms' parameter types are not yet in any
 registry the parser holds — signature agreement cannot be checked there. It is drained WHOLE-PROGRAM,
 after every file's signatures are merged, so a forward-referenced mismatch is caught exactly as a
-same-file backward one (and a cross-file one) is. Without this the merge silently adopted the first
-arm's signature and `h(21)` ran `binary` with one argument, reading an undefined second.
+same-file backward one (and a cross-file one) is. Without this the merge would silently adopt the first
+arm's signature and `h(21)` would run `binary` with one argument, reading an undefined second.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

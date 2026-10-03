@@ -43,26 +43,24 @@ reads only in its slow arm, the arm's own re-issued result — is split with its
 or inside the arm and its reload inside the arm, at no cost to the hot path.
 
 Where the hot working set itself is over the pool, a loop with a cold run is not refused: the run's
-call used to confine those values and force the bracket, and the region rule may not turn a loop that
-compiled into E5001. Such a loop pays what the confinement always charged — a store at the def and a
-reload before each use, on the hot path — and E5001 stays the answer for a loop with no cold run at
-all (`specs/register-pressure.md`). The unswitcher asks the same question before it hoists: a loop's
+call confines those values and forces the bracket, so the region rule never turns such a loop into
+E5001. Such a loop pays what the confinement charges — a store at the def and a reload before each use,
+on the hot path — and E5001 is the answer for a loop with no cold run at all (`specs/register-pressure.md`). The unswitcher asks the same question before it hoists: a loop's
 live-across set plus the record fields it would hoist must fit the target's allocatable GPRs less a
 margin for in-loop temporaries (`hoistPressureBudgetFor`), or the loop is left as it is.
 
 Why the rule matters: a versioned hot loop over two arrays holds two lengths, two buffers and its
-counters live across every slow arm, and confined to five registers what did not fit was stored and
-reloaded inside the loop on every iteration, for the sake of calls that never ran.
+counters live across every slow arm, and confined to five registers what did not fit would be stored
+and reloaded inside the loop on every iteration, for the sake of calls that never run.
 
-`specs/register-pressure.md`'s E5001 cases are the pin that a hot call's confinement is what it
-was; the splitter's own spill code (store at the def, reload before each run of uses) relieves a
+`specs/register-pressure.md`'s E5001 cases are the pin on a hot call's confinement; the splitter's own spill code (store at the def, reload before each run of uses) relieves a
 FULL pool and is a different mechanism.
 
 ⚠ A green case here proves nothing on its own — the bracket and the confinement compute the same
 thing. The evidence is the committed fragment of the first case (no store or reload in the loop
 body; a save/reload pair inside each slow arm) and the CONTROLS, which make a cold arm actually run
-under values live across it and read those values back afterwards. Measured under sabotage — the
-reload point re-storing instead of restoring — the six cases whose cold arm runs at their inputs
+under values live across it and read those values back afterwards. With the reload point re-storing
+instead of restoring, the six cases whose cold arm runs at their inputs
 answer wrong; the two whose arm never runs (`rotateAll`, the scratch-clobbering panic handler) stay
 green and pin the bracket's shape through their fragments alone; the managed-element and hot-call
 controls stay green because nothing is bracketed there.

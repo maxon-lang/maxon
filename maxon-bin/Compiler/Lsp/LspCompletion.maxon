@@ -114,11 +114,14 @@ function offersAt(text String, tokens TokenArray, keywords KeywordTable, blocks 
 	end 'nothingToComplete'
 
 	let inTheBuffer = lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: LspCorpus.unavailable)
-	let declaredHere = lspBlocksDeclaring(blocks, typeName: lspSubjectTypeName(inTheBuffer))
 
-	if not declaredHere.isEmpty() 'aTypeThisBufferDeclares'
-		return bufferOffers(inTheBuffer, tokens: tokens, blocks: blocks, declaring: declaredHere)
-	end 'aTypeThisBufferDeclares'
+	if let bufferTypeName = try lspSubjectTypeName(inTheBuffer) 'aNamedSubject'
+		let declaredHere = lspBlocksDeclaring(blocks, typeName: bufferTypeName)
+
+		if not declaredHere.isEmpty() 'aTypeThisBufferDeclares'
+			return bufferOffers(inTheBuffer, tokens: tokens, blocks: blocks, declaring: declaredHere)
+		end 'aTypeThisBufferDeclares'
+	end 'aNamedSubject'
 
 	let corpus = lspDocumentCorpus(uri)
 
@@ -128,11 +131,7 @@ end 'offersAt'
 // A type the buffer declares is answered from the buffer, whatever a compiled `stdlib/` says about a
 // type of the same name: the author is looking at the declaration in front of them.
 function offersFor(subject LspSubject, tokens TokenArray, blocks LspDocumentBlockArray, corpus LspCorpus) returns CompletionOfferArray
-	let typeName = lspSubjectTypeName(subject)
-
-	if typeName.isEmpty() 'nothingToComplete'
-		return CompletionOfferArray.create()
-	end 'nothingToComplete'
+	let typeName = try lspSubjectTypeName(subject) otherwise return CompletionOfferArray.create()
 
 	let declaring = lspBlocksDeclaring(blocks, typeName: typeName)
 

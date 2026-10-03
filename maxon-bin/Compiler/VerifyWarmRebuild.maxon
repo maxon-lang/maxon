@@ -1,8 +1,6 @@
-// VerifyWarmRebuild — the M2 warm-rebuild gate. `verify-warm-rebuild <file>`
-// asserts three independent properties of the incremental query spine and prints a
-// clear PASS/FAIL per property, so the driver exits 0 iff ALL hold. This gate
-// runs from M2 onward: incrementality and determinism are proven continuously,
-// never bolted on later.
+// VerifyWarmRebuild — the warm-rebuild gate. `verify-warm-rebuild <file>`
+// asserts four independent properties of the incremental query spine and prints a
+// clear PASS/FAIL per property, so the driver exits 0 iff ALL hold.
 //
 //   1. Determinism (byte-identity): two independent COLD compiles of the same
 //      input must emit byte-identical CodeResults.
@@ -13,12 +11,11 @@
 //   4. Warm equals cold: a compile that reuses the memos of files an edit did not touch must emit
 //      exactly what a cold compile of the edited program emits.
 //
-// ⚠ **(3) IS THE ONE WITH TEETH, AND IT WAS MISSING FOR AS LONG AS A PARSE READ ONLY ITS OWN
-// FILE.** (1) and (2) both prove a memo is STABLE; neither can catch the opposite failure — a
-// memo that stays valid after an input it read has CHANGED — and that is the failure a cache
-// actually kills you with, because it is a WRONG ANSWER served silently out of a hit. The
-// whole-program signature index made it reachable (a parse now reads every OTHER file's
-// declarations), so the property that keeps it unreachable is now gated. See `verifyInvalidation`.
+// ⚠ **(3) IS THE ONE WITH TEETH.** (1) and (2) both prove a memo is STABLE; neither can catch the
+// opposite failure — a memo that stays valid after an input it read has CHANGED — and that is the
+// failure a cache actually kills you with, because it is a WRONG ANSWER served silently out of a
+// hit. A parse reads every OTHER file's declarations through the whole-program signature index, so
+// that failure is reachable. See `verifyInvalidation`.
 //
 // THE MUTATE-THE-MEMO TRAP (why the two checks are structured the way they are):
 // `resolveTypes` mutates the merged `MaxonModule` IN PLACE (named -> concrete),
@@ -198,11 +195,11 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	let amMissBefore = project.db.allModuleMisses
 	let amHitBefore = project.db.allModuleHits
 
-	_ = try queryAllModule(project)
+	_ = try queryAllModule(project, directories: NamespaceDirectoryCheck.unchecked)
 	let amMissAfterFirst = project.db.allModuleMisses
 	let amHitAfterFirst = project.db.allModuleHits
 
-	_ = try queryAllModule(project)
+	_ = try queryAllModule(project, directories: NamespaceDirectoryCheck.unchecked)
 	let amMissAfterSecond = project.db.allModuleMisses
 	let amHitAfterSecond = project.db.allModuleHits
 
@@ -426,6 +423,114 @@ let ReceiverKindEditAfter = "interface WarmRebuildProbeInterface\n\tstatic funct
 let MethodReceiverKindEditBefore = "type WarmRebuildProbeHost\n\texport function warmRebuildProbeMethod() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMethod'\nend 'WarmRebuildProbeHost'"
 let MethodReceiverKindEditAfter = "type WarmRebuildProbeHost\n\texport static function warmRebuildProbeMethod() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeMethod'\nend 'WarmRebuildProbeHost'"
 
+let ModuleModifierText = "module "
+let ExportModifierText = "export "
+let PublicModifierText = "public "
+let NoModifierText = ""
+let TopLevelDeclarationLead = ""
+let WarmRebuildProbeStaticsLead = "type WarmRebuildProbeStatics\n\t"
+
+let MovedDeclarationText = "export typealias WarmRebuildProbeMoved = int(0 to 9)"
+let MethodHostDeclarationText = "export enum WarmRebuildProbeVessel\n\tfirst\n\tsecond\nend 'WarmRebuildProbeVessel'"
+let MovedMethodText = "extension WarmRebuildProbeVessel\n\tstatic function warmRebuildProbeCarried() returns bool\n\t\treturn true\n\tend 'warmRebuildProbeCarried'\nend 'WarmRebuildProbeVessel'"
+
+type VisibilityFlipProbe
+	export let kind as String
+	export let lead as String
+	export let declaration as String
+
+	static function create(kind String, lead String, declaration String) returns VisibilityFlipProbe
+		return Self{kind: kind, lead: lead, declaration: declaration}
+	end 'create'
+
+	function spelledAt(modifier String) returns String
+		return "{self.lead}{modifier}{self.declaration}"
+	end 'spelledAt'
+end 'VisibilityFlipProbe'
+
+typealias VisibilityFlipProbeArray = Array with VisibilityFlipProbe
+
+type InvalidationMeasurement
+	export let kind as String
+	export let probe as ParseMissProbe
+
+	static function create(kind String, probe ParseMissProbe) returns InvalidationMeasurement
+		return Self{kind: kind, probe: probe}
+	end 'create'
+end 'InvalidationMeasurement'
+
+typealias InvalidationMeasurementArray = Array with InvalidationMeasurement
+
+function visibilityFlipProbes() returns VisibilityFlipProbeArray
+	var probes = VisibilityFlipProbeArray.create()
+	probes.push(VisibilityFlipProbe.create("a ranged typealias", lead: TopLevelDeclarationLead, declaration: "typealias WarmRebuildProbeRange = int(0 to 9)"))
+	probes.push(VisibilityFlipProbe.create("a function typealias", lead: TopLevelDeclarationLead, declaration: "typealias WarmRebuildProbeCallback = function() returns bool"))
+	probes.push(VisibilityFlipProbe.create("a generic-instance typealias", lead: TopLevelDeclarationLead, declaration: "typealias WarmRebuildProbeFlags = Array with bool"))
+	probes.push(VisibilityFlipProbe.create("a tuple typealias", lead: TopLevelDeclarationLead, declaration: "typealias WarmRebuildProbeTuple = (bool, bool)"))
+	probes.push(VisibilityFlipProbe.create("a type", lead: TopLevelDeclarationLead, declaration: "type WarmRebuildProbeRecord\n\texport let flag as bool\n\tstatic function create(flag bool) returns WarmRebuildProbeRecord\n\t\treturn Self\{flag: flag\}\n\tend 'create'\nend 'WarmRebuildProbeRecord'"))
+	probes.push(VisibilityFlipProbe.create("an enum", lead: TopLevelDeclarationLead, declaration: "enum WarmRebuildProbeChoice\n\tfirst\n\tsecond\nend 'WarmRebuildProbeChoice'"))
+	probes.push(VisibilityFlipProbe.create("an interface", lead: TopLevelDeclarationLead, declaration: "interface WarmRebuildProbeContract\n\tfunction warmRebuildProbeAsk() returns bool\nend 'WarmRebuildProbeContract'"))
+	probes.push(VisibilityFlipProbe.create("a top-level constant", lead: TopLevelDeclarationLead, declaration: "let warmRebuildProbeFlipConstant = 5"))
+	probes.push(VisibilityFlipProbe.create("a static constant", lead: WarmRebuildProbeStaticsLead, declaration: "static let warmRebuildProbeLimit = 5\nend 'WarmRebuildProbeStatics'"))
+	return probes
+end 'visibilityFlipProbes'
+
+function measureVisibilityFlips(project Project, editedPath FilePath, original String) returns InvalidationMeasurementArray throws CompileError
+	var measurements = InvalidationMeasurementArray.create()
+
+	for flip in visibilityFlipProbes() 'eachFlip'
+		// Discarded: adding the declaration moves a name, so only the steps after it isolate a modifier.
+		fileChanged(project, path: editedPath, content: "{original}\n{flip.spelledAt(NoModifierText)}\n")
+		_ = try parseMissesOnRequery(project)
+
+		fileChanged(project, path: editedPath, content: "{original}\n{flip.spelledAt(ModuleModifierText)}\n")
+		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `module`", probe: try parseMissesOnRequery(project)))
+
+		fileChanged(project, path: editedPath, content: "{original}\n{flip.spelledAt(ExportModifierText)}\n")
+		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `module` to `export`", probe: try parseMissesOnRequery(project)))
+
+		fileChanged(project, path: editedPath, content: "{original}\n{flip.spelledAt(PublicModifierText)}\n")
+		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `export` to `public`", probe: try parseMissesOnRequery(project)))
+	end 'eachFlip'
+
+	return measurements
+end 'measureVisibilityFlips'
+
+function measureDeclarationMoves(project Project, editedPath FilePath, original String, receiver EditableSource) returns InvalidationMeasurementArray throws CompileError
+	var measurements = InvalidationMeasurementArray.create()
+	measurements.push(InvalidationMeasurement.create("a typealias MOVED to another file", probe: try measureDeclarationMove(project, editedPath: editedPath, editedBase: original, receiverPath: receiver.path, receiverBase: receiver.content, moving: MovedDeclarationText)))
+	measurements.push(InvalidationMeasurement.create("a method MOVED to another file", probe: try measureDeclarationMove(project, editedPath: editedPath, editedBase: "{original}\n{MethodHostDeclarationText}", receiverPath: receiver.path, receiverBase: receiver.content, moving: MovedMethodText)))
+
+	fileChanged(project, path: editedPath, content: original)
+	fileChanged(project, path: receiver.path, content: receiver.content)
+	_ = try parseMissesOnRequery(project)
+	return measurements
+end 'measureDeclarationMoves'
+
+function measureDeclarationMove(project Project, editedPath FilePath, editedBase String, receiverPath FilePath, receiverBase String, moving String) returns ParseMissProbe throws CompileError
+	// Discarded: seating the declaration in the edited file adds a name, so only the move after it
+	// holds every name in the program fixed.
+	fileChanged(project, path: editedPath, content: "{editedBase}\n{moving}\n")
+	fileChanged(project, path: receiverPath, content: receiverBase)
+	_ = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: editedBase)
+	fileChanged(project, path: receiverPath, content: "{moving}\n{receiverBase}")
+	return try parseMissesOnRequery(project)
+end 'measureDeclarationMove'
+
+function measurementsInvalidateEveryFile(measurements InvalidationMeasurementArray, fileCount QueryCount, project Project) returns bool
+	var allHeld = true
+
+	for measurement in measurements 'eachMeasurement'
+		if not assertParseMisses("{measurement.kind} edit re-parses EVERY file (parseMisses)", probe: measurement.probe, expectedDelta: fileCount, project: project) 'missed'
+			allHeld = false
+		end 'missed'
+	end 'eachMeasurement'
+
+	return allHeld
+end 'measurementsInvalidateEveryFile'
+
 // The fewest source files on which the INVALIDATION property says anything at all. TWO, and the
 // reason is arithmetic rather than taste: the property's halves assert "a declaration edit
 // re-parses `fileCount` files" (and likewise a constant-value edit) and "a bytes-only edit
@@ -438,10 +543,9 @@ let MinFilesForInvalidation = 2 as QueryCount
 // opposite directions, so a key that satisfies one and not the other is simply wrong:
 //
 //   (a) EDIT A DECLARATION IN ONE FILE ⇒ EVERY file's parse must be invalidated. `b.maxon`'s bytes
-//       did not move, but what `isReady()` MEANS inside it did. This is the wrong answer the key
-//       was added for: keying a parse on the file's OWN content hash alone — which is what shipped
-//       — serves `b.maxon` from cache with a parse built against the OLD return type. Property 2
-//       cannot see it: on unchanged input, the shipped key is right.
+//       did not move, but what `isReady()` MEANS inside it did. Keying a parse on the file's OWN
+//       content hash alone serves `b.maxon` from cache with a parse built against the OLD return
+//       type. Property 2 cannot see it: on unchanged input, that key is right.
 //   (b) EDIT ONLY BYTES (a comment, a body) ⇒ ONLY that file's parse may be invalidated. This is
 //       the half a lazy fix throws away: keying the parse on the COMPOSITE SOURCE hash would pass
 //       (a) and re-parse the entire program on every keystroke — sound, and useless.
@@ -460,15 +564,22 @@ let MinFilesForInvalidation = 2 as QueryCount
 //       ⚠ **AND EACH RECORD ARM NEEDS ITS OWN PAIR**: an ARRAY and a BOX hash through different functions,
 //       so a guard deleted in one is invisible to the other's probes. See `ArrayValueEditBefore` +
 //       `ArrayGlobalValueEditBefore`, and `StructFieldEditBefore` + `StructGlobalFieldEditBefore`.
+//   (f) EDIT A DECLARATION'S VISIBILITY ⇒ EVERY file's parse must be invalidated, at each step
+//       from no modifier to `module`, `module` to `export`, and `export` to `public`, for every
+//       declaration kind in `visibilityFlipProbes`. No name and no value moves; another file's
+//       parse admits or refuses the name on it.
+//   (g) MOVE A DECLARATION TO ANOTHER FILE ⇒ EVERY file's parse must be invalidated. The program
+//       declares the same names before and after; only the declaring file moves, and which files
+//       may name a declaration is decided against it. See `measureDeclarationMoves`.
 //
-// All five are asserted here, on ONE fresh project, by editing a real file in the query database
+// All seven are asserted here, on ONE fresh project, by editing real files in the query database
 // and re-querying.
 //
 // ⚠ AND ON A SINGLE-FILE INPUT THIS PROPERTY PROVES NOTHING, SO IT REFUSES TO CLAIM IT DID.
-// With `fileCount == 1` the assertions above collapse into the SAME assertion — (a), (c), (d) and (e)'s
-// imaged half expect `fileCount` re-parses while (b) and (e)'s stored half expect 1, and those are the
-// same number — so a key that tracks only the file's own bytes, which is EXACTLY the bug this property
-// exists to catch, sails through every one of them.
+// With `fileCount == 1` the assertions above collapse into the SAME assertion — (a), (c), (d),
+// (f), (g) and (e)'s imaged half expect `fileCount` re-parses while (b) and (e)'s stored half
+// expect 1, and those are the same number — so a key that tracks only the file's own bytes, which
+// is EXACTLY the bug this property exists to catch, sails through every one of them.
 // **A gate you cannot see fail is not a gate**, so this one FAILS on a single-file input rather than
 // reporting green, and says what to point it at.
 function verifyInvalidation(inputPath FilePath, target Target) returns bool throws CompileError
@@ -481,15 +592,14 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	end 'cannotProve'
 
 	// ⚠⚠ **BOTH OF THESE ARE OWNED COPIES, AND NEITHER IS DEFENSIVE.** What this gate does is EDIT the
-	// project five times, and both values it carries across those edits are read out of the very storage an
-	// edit writes:
+	// project repeatedly, and both values it carries across those edits are read out of the very
+	// storage an edit writes:
 	//   • `editedPath` is an element of `project.db.sourcePaths`, and `fileChanged` PUSHES to that array on
 	//     its `newFile` arm — so the element pointer can be invalidated by a call this function makes.
-	//     E3070 refused it, which is how it was found.
 	//   • `original` is the CONTENT of the `sourceFiles` entry for that same path, and every `fileChanged`
-	//     below UPSERTS that key — releasing the entry this string belongs to while five later
-	//     interpolations still read it. The borrow checker does not watch a `Map` read, so nothing refused
-	//     this one; it is the same defect one container over and it is fixed at the same time.
+	//     below UPSERTS that key — releasing the entry this string belongs to while later
+	//     interpolations still read it. The borrow checker does not watch a `Map` read, so nothing
+	//     refuses this one; it is the same defect one container over.
 	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("verifyInvalidation: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
 	let editedPath = try FilePath.from(firstPath.path.clone()) otherwise panic("verifyInvalidation: '{firstPath.path}' came out of the project's own source list, so it cannot fail to re-parse as a path")
 	let entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyInvalidation: sourcePaths lists {editedPath} but sourceFiles has no entry for it")
@@ -497,7 +607,7 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 
 	// Warm every per-file memo (and the signature index) against the UNEDITED program. Only
 	// `queryAllModule` runs, so nothing mutates the memoized module (the trap in this file's header).
-	_ = try queryAllModule(project)
+	_ = try queryAllModule(project, directories: NamespaceDirectoryCheck.unchecked)
 	let diagnosticsBefore = project.diagnostics.count()
 
 	fileChanged(project, path: editedPath, content: "{original}\n{BytesOnlyEditText}\n")
@@ -577,6 +687,17 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{MethodReceiverKindEditAfter}\n")
 	let methodReceiverKindEditMisses = try parseMissesOnRequery(project)
 
+	let visibilityFlips = try measureVisibilityFlips(project, editedPath: editedPath, original: original)
+	let receiver = try lastAuthoredSourceOf(project)
+
+	if receiver.path.equals(editedPath) 'noSecondFileToMoveInto'
+		printError("FAIL invalidation: {editedPath} is the only file of the project's own, so no declaration can be moved to another file — point the gate at a project with at least {MinFilesForInvalidation} files of its own\n")
+		return false
+	end 'noSecondFileToMoveInto'
+
+	fileChanged(project, path: editedPath, content: original)
+	let declarationMoves = try measureDeclarationMoves(project, editedPath: editedPath, original: original, receiver: receiver)
+
 	// A synthetic edit that stopped the program parsing would make BOTH assertions pass for the
 	// wrong reason — a failed parse is never cached, so it re-misses forever. Refuse to report on a
 	// probe whose premise broke.
@@ -601,10 +722,13 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let receiverKindEditInvalidatesEveryFile = assertParseMisses("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: receiverKindEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 	let methodReceiverKindEditInvalidatesEveryFile = assertParseMisses("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: methodReceiverKindEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and globalValueEditIsLocal and arrayGlobalValueEditIsLocal and structGlobalFieldEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile
+	let visibilityFlipsInvalidate = measurementsInvalidateEveryFile(visibilityFlips, fileCount: fileCount as QueryCount, project: project)
+	let declarationMovesInvalidate = measurementsInvalidateEveryFile(declarationMoves, fileCount: fileCount as QueryCount, project: project)
+
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and globalValueEditIsLocal and arrayGlobalValueEditIsLocal and structGlobalFieldEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
 
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array and imaged-struct edits each re-parsed all {fileCount}; var-value, var-array and stored-struct edits each re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array and imaged-struct edits each re-parsed all {fileCount}; var-value, var-array and stored-struct edits each re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
 		return true
 	end 'passed'
 

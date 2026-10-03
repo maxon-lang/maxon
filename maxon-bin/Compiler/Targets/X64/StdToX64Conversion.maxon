@@ -226,20 +226,15 @@ let PipeMaxInstances = 1  // one server instance per uniquely-named pipe
 let PipeBufferSize = 0x10000  // nOutBufferSize / nInBufferSize (64 KB)
 let PipeDefaultTimeout = 0x0  // nDefaultTimeOut (0 = the 50 ms system default; unused for a byte-mode read)
 let GenericWrite = 0x40000000  // the child write end's dwDesiredAccess (CreateFileW)
-let GenericRead = 0x80000000  // the child stdin-read end's dwDesiredAccess (CreateFileW, streaming slice 1b)
+let GenericRead = 0x80000000  // the child stdin-read end's dwDesiredAccess (CreateFileW)
 let PipeWriteOpenMode = 0x00080002  // PIPE_ACCESS_OUTBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE — the sync stdin server pipe (no OVERLAPPED)
 let FileShareNone = 0x0  // dwShareMode (the pipe is not shared)
 
-// A file opened for READING permits concurrent readers. `FileShareNone` is right for a pipe end,
-// which must not be shared, and would be wrong here — it would make a second `openRead` of the same path
-// fail with a sharing violation, which `managed-file.exists` (open, close, re-open) would trip over.
-let FileShareRead = 0x1  // dwShareMode for a read-only open
-
-// A file opened for WRITING permits concurrent readers AND writers. `FileShareRead` alone would make
-// `__ManagedFile.openWrite` fail with `ERROR_SHARING_VIOLATION` whenever an editor, an indexer or a virus
-// scanner happens to hold a write handle on the path — an intermittent failure that depends on what else is
-// running on the box.
-let FileShareReadWrite = 0x3  // dwShareMode for a write open: FILE_SHARE_READ | FILE_SHARE_WRITE
+// FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, on every file open, which is what a
+// POSIX open permits. Anything narrower makes another handle's open of the path, or a
+// `DeleteFileA`/`MoveFileExA` of it, fail with a sharing violation while this handle is open.
+// `FileShareNone` is right for a pipe end, which must not be shared.
+let FileShareAll = 0x7
 
 // FILE_MAP_ALL_ACCESS — the access both `OpenFileMappingA` and `MapViewOfFile` take for the DebugStream
 // ring. It is SECTION_ALL_ACCESS minus its standard-rights bits (0xF001F), and it must be ALL_ACCESS
@@ -252,6 +247,7 @@ let OpenExisting = 3  // dwCreationDisposition — connect to the already-create
 // (creates or overwrites)", which is exactly CREATE_ALWAYS — not OPEN_ALWAYS (which would leave a longer
 // previous file's tail behind the new bytes) and not CREATE_NEW (which fails on an existing path).
 let CreateAlways = 2  // dwCreationDisposition — create, truncating an existing file
+let CreateNew = 1  // dwCreationDisposition — create, failing on an existing path
 
 // `MoveFileExA`'s dwFlags. REPLACE_EXISTING makes publishing the destination atomic rather than a
 // delete-then-rename with a window where neither name exists; WRITE_THROUGH flushes the metadata so a crash
@@ -373,6 +369,7 @@ export let CreateNamedPipeStackArgWords = 4 as MachineWord  // args 5-8: nOutBuf
 export let CreateFileStackArgWords = 3 as MachineWord  // args 5-7: dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile
 export let CreateThreadStackArgWords = 2 as MachineWord  // args 5-6: dwCreationFlags, lpThreadId
 export let ReadFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
+export let RegGetValueStackArgWords = 3 as MachineWord  // args 5-7: pdwType, pvData, pcbData
 
 // The DebugStream producer's one import that overflows the register file. Stated in this band with its
 // five siblings rather than beside the lowering, for the band's own reason — the SAME constant sizes the
@@ -1197,6 +1194,8 @@ export type StdToX64Lowering
 				osCommandLine or
 				osStdHandle or
 				osExecutablePath or
+				osProcessNamespace or
+				osRandomFill or
 				osEnvBlock or
 				osEnvBlockFree or
 				loadAcquire or
@@ -1254,6 +1253,7 @@ export type StdToX64Lowering
 			// CreateFileA takes SEVEN arguments — four in registers, three on the stack.
 			osFileOpenRead or
 				osFileOpenWrite or
+				osFileOpenCreateNew or
 				osFileOpenWriteExecutable gives win64OutgoingArgBytes(CreateFileStackArgWords)
 
 			// ⚠ `CreateFileMappingA` takes six, so its last two are real outgoing stack arguments; reserving
@@ -1535,13 +1535,14 @@ export type StdToX64Lowering
 			// The rest of the file-IO primitives. Each routes on `x64OsCallKind` — one import call on Windows,
 			// one host chunk on Linux.
 			osReadFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsReadFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
-			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			osFileOpenWrite(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, disposition: CreateAlways, linuxFlags: LinuxOpenCreateTruncateFlags, mode: PosixCreateFileMode as MachineWord, dstBlock: dstBlock)
 
 			// ⭐ **`openWriteExecutable` REACHES THE SAME LOWERING ON THIS LANE.** POSIX has a permission mask
 			// and Win32 does not, so the two intents are two ops that happen to be ONE `CreateFileA` call here. That
 			// coincidence is a fact about Windows — an executable bit is not part of an NTFS file's mode — and
 			// stating it as a shared arm is what keeps it a decision rather than an omission.
-			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpenWriteExecutable(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			osFileOpenWriteExecutable(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, disposition: CreateAlways, linuxFlags: LinuxOpenCreateTruncateFlags, mode: PosixCreateExecutableFileMode as MachineWord, dstBlock: dstBlock)
+			osFileOpenCreateNew(resultId, pathPtrId) then self.lowerOsFileOpenWrite(resultId, pathPtrId: pathPtrId, disposition: CreateNew, linuxFlags: LinuxOpenCreateExclusiveFlags, mode: PosixCreateFileMode as MachineWord, dstBlock: dstBlock)
 			osFileSize(resultId, handleId, sizeOutPtrId) then self.lowerOsFileSize(resultId, handleId: handleId, sizeOutPtrId: sizeOutPtrId, dstBlock: dstBlock)
 			osFileDelete(resultId, pathPtrId) then self.lowerOsFileDelete(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osFileRename(resultId, oldPathPtrId, newPathPtrId) then self.lowerOsFileRename(resultId, oldPathPtrId: oldPathPtrId, newPathPtrId: newPathPtrId, dstBlock: dstBlock)
@@ -1558,6 +1559,8 @@ export type StdToX64Lowering
 			osCommandLine(resultId) then self.lowerOsCommandLine(resultId, dstBlock: dstBlock)
 			osStdHandle(resultId, whichId) then self.lowerOsStdHandle(resultId, whichId: whichId, dstBlock: dstBlock)
 			osExecutablePath(resultId, bufLenId, bufPtrId) then self.lowerOsExecutablePath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
+			osProcessNamespace(resultId, bufLenId, bufPtrId) then self.lowerOsProcessNamespace(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
+			osRandomFill(resultId, bufPtrId, lenId) then self.lowerOsRandomFill(resultId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 
 			// The same graph as the stdout write, one selector/descriptor over.
 			osWriteStderr(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError, dstBlock: dstBlock)
@@ -1643,7 +1646,7 @@ export type StdToX64Lowering
 				osProcessExitCode or
 				osCloseHandle or
 				osWaitHandle or
-				osWaitChild then panic("StdToX64Lowering: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
+				osWaitChild then panic("StdToX64Lowering: a subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
 			osHandleSetInherit or
 				osPipePeek or
 				osEnvRead or
@@ -1673,7 +1676,7 @@ export type StdToX64Lowering
 				osCancelIo or
 				osGetPid or
 				osPipeCreateOutbound or
-				osWriteFile then panic("StdToX64Lowering: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
+				osWriteFile then panic("StdToX64Lowering: an IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
 			osReadWallClock then panic("StdToX64Lowering: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
 			osFileOpenRead or
 				osFileClose or
@@ -1689,11 +1692,14 @@ export type StdToX64Lowering
 				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes or
+				osFileOpenCreateNew or
 				osFileOpenWriteExecutable then panic("StdToX64Lowering: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 			osPanicValue then panic("StdToX64Lowering: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
 			osCommandLine then panic("StdToX64Lowering: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-producing body op)")
 			osStdHandle then panic("StdToX64Lowering: an `osStdHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op)")
 			osExecutablePath then panic("StdToX64Lowering: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op)")
+			osProcessNamespace then panic("StdToX64Lowering: an `osProcessNamespace` op appeared as a block terminator (lowering bug — a namespace read is a value-producing body op)")
+			osRandomFill then panic("StdToX64Lowering: an `osRandomFill` op appeared as a block terminator (lowering bug — a random fill is a value-producing body op)")
 			osWriteStderr then panic("StdToX64Lowering: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
 			stackRecordAddr then panic("StdToX64Lowering: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
 			osOpenNamedSegment or
@@ -3494,7 +3500,7 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(syncSilencedPtrId), disp: 0, src: syncSilenced, width: X64AccessWidth.word64))
 	end 'lowerOsPipeCreateWin64'
 
-	// ⭐ **`CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+	// ⭐ **`CreateFileA(path, GENERIC_READ, FileShareAll, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
 	// NULL)`** — the file-IO runtime's OPEN primitive, and the first site in this file that opens an actual
 	// FILE rather than the far end of a named pipe.
 	//
@@ -3512,36 +3518,25 @@ export type StdToX64Lowering
 	// are `mrt_host_file_open`'s work, which is why this route branches into a chunk.
 	function lowerOsFileOpenRead(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericRead, shareMode: FileShareRead, disposition: OpenExisting, dstBlock: dstBlock)
+			importCall then self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericRead, disposition: OpenExisting, dstBlock: dstBlock)
 			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: PosixOpenReadOnly, mode: PosixNoFileMode as MachineWord, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsFileOpenRead'
 
-	// ⭐ **`CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS,
-	// FILE_ATTRIBUTE_NORMAL, NULL)`.** The read open's call with three constants changed — see
-	// `FileShareReadWrite` and `CreateAlways` for why each is what it is.
-	//
-	// ⭐ **`openWriteExecutable` REACHES THIS SAME LOWERING**, because its only difference in either
-	// reference is a Unix 0755 mode bit and the compiler's file IO is host-only Windows. See
-	// `StdDialect.osFileOpenWrite`.
+	// ⭐ **`CreateFileA(path, GENERIC_WRITE, FileShareAll, NULL, disposition, FILE_ATTRIBUTE_NORMAL,
+	// NULL)`.** The read open's call with the access and the disposition changed: `CREATE_ALWAYS` for
+	// `openWrite` and `openWriteExecutable` (see `CreateAlways`), and `CREATE_NEW` for
+	// `osFileOpenCreateNew`, which fails on an existing path as the Linux route's `O_EXCL` does.
 	//
 	// ⭐ **THE PERMISSION MASK IS WHAT SPLITS `openWriteExecutable` OFF ON THE LINUX ROUTE, AND ONLY THERE.**
 	// Win32 has no executable bit at all, so both ops are one `CreateFileA` on that route; POSIX has one, so
 	// the two carry different modes here. That is why the mode is a parameter of the shared emission.
-	function lowerOsFileOpenWrite(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.lowerOsFileOpenWriteMode(resultId, pathPtrId: pathPtrId, mode: PosixCreateFileMode as MachineWord, dstBlock: dstBlock)
-	end 'lowerOsFileOpenWrite'
-
-	function lowerOsFileOpenWriteExecutable(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
-		self.lowerOsFileOpenWriteMode(resultId, pathPtrId: pathPtrId, mode: PosixCreateExecutableFileMode as MachineWord, dstBlock: dstBlock)
-	end 'lowerOsFileOpenWriteExecutable'
-
-	function lowerOsFileOpenWriteMode(resultId ValueId, pathPtrId ValueId, mode MachineWord, dstBlock IrBlock)
+	function lowerOsFileOpenWrite(resultId ValueId, pathPtrId ValueId, disposition MachineWord, linuxFlags MachineWord, mode MachineWord, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericWrite, shareMode: FileShareReadWrite, disposition: CreateAlways, dstBlock: dstBlock)
-			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: LinuxOpenCreateTruncateFlags, mode: mode, dstBlock: dstBlock)
+			importCall then self.emitWin64CreateFileA(resultId, pathPtrId: pathPtrId, access: GenericWrite, disposition: disposition, dstBlock: dstBlock)
+			syscall then self.emitLinuxFileOpen(resultId, pathPtrId: pathPtrId, flags: linuxFlags, mode: mode, dstBlock: dstBlock)
 		end 'route'
-	end 'lowerOsFileOpenWriteMode'
+	end 'lowerOsFileOpenWrite'
 
 	// The flag word and the permission mask into rdx/r8, then the chunk that turns a `-errno` into the
 	// `-1`-plus-stashed-reason pair the Std tier reads.
@@ -3553,22 +3548,23 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
 	end 'emitLinuxFileOpen'
 
-	// ⭐ **THE ONE `CreateFileA` EMISSION, PARAMETERIZED BY THE THREE CONSTANTS THE TWO OPENS DIFFER IN.**
-	// The read and write opens differ ONLY in `dwDesiredAccess`, `dwShareMode` and `dwCreationDisposition`;
-	// the argument REGISTERS, the three stack slots, the entry point and the RAX capture are one shape, so
-	// they are written once. Two copies is how one of them would quietly acquire a different `hTemplateFile`.
+	// ⭐ **THE ONE `CreateFileA` EMISSION, PARAMETERIZED BY THE TWO CONSTANTS THE OPENS DIFFER IN.**
+	// The opens differ ONLY in `dwDesiredAccess` and `dwCreationDisposition`; the share mode, the
+	// argument REGISTERS, the three stack slots, the entry point and the RAX capture are one shape,
+	// so they are written once. Two copies is how one of them would quietly acquire a different
+	// `hTemplateFile`.
 	//
 	// Stack args 5-7 first (rax scratch, while every argument register is still free), then the register
 	// args — the ordering `lowerOsPipeCreateWin64` establishes and for its reason. The access mask uses the
 	// 64-bit `movRegImm` because `GENERIC_READ` is `0x80000000`, which reads as a sign bit in an imm32
 	// spelling; one form for both keeps the two opens byte-comparable.
-	function emitWin64CreateFileA(resultId ValueId, pathPtrId ValueId, access MachineWord, shareMode MachineWord, disposition MachineWord, dstBlock IrBlock)
+	function emitWin64CreateFileA(resultId ValueId, pathPtrId ValueId, access MachineWord, disposition MachineWord, dstBlock IrBlock)
 		self.emitWin64StackArgImm(dstBlock, slot: 0, value: disposition)
 		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
 		self.emitWin64StackArgImm(dstBlock, slot: 2, value: NullPointer)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(pathPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rdx), value: access))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: shareMode))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: FileShareAll))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateFileA, into: TargetVReg.virtual(resultId))
 	end 'emitWin64CreateFileA'
@@ -4642,9 +4638,36 @@ export type StdToX64Lowering
 	function lowerOsExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsExecutablePathWin64(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
-			syscall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostExePathName), args: twoArgs(bufPtrId, second: bufLenId), dstBlock: dstBlock)
+			syscall then self.lowerBufferFill(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, chunkName: HostExePathName, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsExecutablePath'
+
+	function lowerBufferFill(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, chunkName ByteArray, dstBlock IrBlock)
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(chunkName), args: twoArgs(bufPtrId, second: bufLenId), dstBlock: dstBlock)
+	end 'lowerBufferFill'
+
+	function lowerOsProcessNamespace(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerBufferFill(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, chunkName: WindowsProcessNamespaceName, dstBlock: dstBlock)
+			syscall then self.lowerBufferFill(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, chunkName: HostProcessNamespaceName, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsProcessNamespace'
+
+	function lowerOsRandomFill(resultId ValueId, bufPtrId ValueId, lenId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsRandomFillWin64(resultId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
+			syscall then self.lowerBufferFill(resultId, bufLenId: lenId, bufPtrId: bufPtrId, chunkName: HostRandomFillName, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsRandomFill'
+
+	function lowerOsRandomFillWin64(resultId ValueId, bufPtrId ValueId, lenId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(bufPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(lenId)))
+		let verdict = self.mintVirtual()
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.ProcessPrng, into: verdict)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(verdict, imm: Win32False as Imm32))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(TargetVReg.virtual(resultId), cond: X64CondCode.equal))
+	end 'lowerOsRandomFillWin64'
 
 	function lowerOsExecutablePathWin64(resultId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: CurrentModuleHandle))
@@ -5272,6 +5295,8 @@ export type StdToX64Lowering
 				osCommandLine or
 				osStdHandle or
 				osExecutablePath or
+				osProcessNamespace or
+				osRandomFill or
 				osWriteStderr or
 				stackRecordAddr or
 				osOpenNamedSegment or
@@ -5305,6 +5330,7 @@ export type StdToX64Lowering
 				osSetEvent or
 				osEnterBackgroundPriority or
 				osFileOpenWriteExecutable or
+				osFileOpenCreateNew or
 				osEnvBlock or
 				osEnvBlockFree or
 				loadAcquire or
@@ -5400,8 +5426,7 @@ export type StdToX64Lowering
 
 	// Mint an empty `ordered` block: a fresh function-local id, an entry in `targetModule.blocks`,
 	// and its ref registered on the function. Mirrors `addSplitBlock` (SsaDestruction), which is
-	// the established way a Target-tier pass grows the CFG — including its deliberate omission of
-	// `blockSourceInfo`, which the Target module does not carry (`prepareSkeleton` never fills it).
+	// the established way a Target-tier pass grows the CFG.
 	// The function is fetched HERE, by index, and mutated directly — its borrow never escapes to a
 	// caller that could still be holding one. Same shape as `addSplitBlock`, down to the inline site
 	// being COPIED: the original block keeps its own box, and the module travels home in a reply.
@@ -5505,7 +5530,7 @@ export type StdToX64Lowering
 				osCancelIo or
 				osGetPid or
 				osPipeCreateOutbound or
-				osWriteFile panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a P1.5 IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+				osWriteFile panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osReadWallClock panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osReadWallClock`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osFileOpenRead or
 				osFileClose or
@@ -5521,11 +5546,14 @@ export type StdToX64Lowering
 				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes or
+				osFileOpenCreateNew or
 				osFileOpenWriteExecutable panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPanicValue panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osPanicValue`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osCommandLine panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCommandLine`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osStdHandle panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osStdHandle`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osExecutablePath panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osExecutablePath`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osProcessNamespace panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osProcessNamespace`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osRandomFill panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osRandomFill`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osWriteStderr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osWriteStderr`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			stackRecordAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `stackRecordAddr`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osOpenNamedSegment or

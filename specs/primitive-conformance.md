@@ -37,16 +37,16 @@ operators (see `comparable.md`):
   `interface Weird` with `function equals(other Self) returns Integer` would otherwise be accepted and
   `a == b` would evaluate to whatever integer the author's `equals` returned.
 
-The witness dispatch rides the rdata function-pointer relocation, which EVERY target now fills — the
+The witness dispatch rides the rdata function-pointer relocation, which EVERY target fills — the
 fixed-base writers bake a `.text` VA, wasm a funcref-table index, and arm64-macOS a dyld chained-fixup
 rebase — so these cases run everywhere and carry no target marker (as the `where-clauses` witness cases
-do); the E3005 reject is a compile error and was always target-independent.
+do); the E3005 reject is a compile error and is target-independent.
 
 Float `hash` ships (it rides a Std-tier bit reinterpretation) but is DIRECT-dispatch only and is covered in
-`primitive-hashable.md`, not here: a float TYPE ARGUMENT is still E2062, so there is no float witness table
+`primitive-hashable.md`, not here: a float TYPE ARGUMENT is E2062, so there is no float witness table
 to reach it through. `Comparable`/`Ordering` and DIRECT dispatch on a concrete value (`i.hash()`,
-`i.equals(j)`, `i.compare(j)`, reaching the very same synthesized impls without a witness table) have both
-shipped and have their own specs — `comparable.md`, `primitive-hashable.md` and `primitive-comparable.md`.
+`i.equals(j)`, `i.compare(j)`, reaching the very same synthesized impls without a witness table) have
+their own specs — `comparable.md`, `primitive-hashable.md` and `primitive-comparable.md`.
 
 ## Tests
 

@@ -523,6 +523,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		CreateThread gives CreateThreadStackArgWords
 		ReadFile gives ReadFileStackArgWords
 		MapViewOfFile gives MapViewOfFileStackArgWords  // 5: hFileMappingObject, dwDesiredAccess, dwFileOffsetHigh, dwFileOffsetLow, dwNumberOfBytesToMap
+		RegGetValueW gives RegGetValueStackArgWords
 
 		ExitProcess or  // 1: uExitCode
 			GetStdHandle or  // 1: nStdHandle
@@ -623,7 +624,8 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 			DebugActiveProcessStop or  // 1: dwProcessId
 			DebugBreakProcess or  // 1: Process
 			WaitForDebugEvent or  // 2: lpDebugEvent, dwMilliseconds
-			ContinueDebugEvent gives 0  // 3: dwProcessId, dwThreadId, dwContinueStatus
+			ContinueDebugEvent or  // 3: dwProcessId, dwThreadId, dwContinueStatus
+			ProcessPrng gives 0  // 2: pbData, cbData
 
 		WriteConsoleW gives WriteConsoleStackArgWords  // 5: hConsoleOutput, lpBuffer, nNumberOfCharsToWrite, lpNumberOfCharsWritten, lpReserved
 		MultiByteToWideChar gives MultiByteToWideCharStackArgWords  // 6: CodePage, dwFlags, lpMultiByteStr, cbMultiByte, lpWideCharStr, cchWideChar
@@ -735,7 +737,8 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			WaitForDebugEvent or
 			WriteProcessMemory or
 			DebugActiveProcess or
-			VirtualProtectEx gives SyscallClass.blocking
+			VirtualProtectEx or
+			RegGetValueW gives SyscallClass.blocking
 
 		// --- `schedulerBound`: the scheduler's own machinery, and the bounded-and-short remainder ---
 		//
@@ -875,7 +878,8 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			GetFullPathNameA or
 			ContinueDebugEvent or
 			DebugActiveProcessStop or
-			DebugBreakProcess gives SyscallClass.schedulerBound
+			DebugBreakProcess or
+			ProcessPrng gives SyscallClass.schedulerBound
 	end 'k'
 end 'gtShimSyscallClassOf'
 

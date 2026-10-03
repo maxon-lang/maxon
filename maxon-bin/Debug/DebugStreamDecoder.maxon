@@ -579,10 +579,6 @@ end 'familyOf'
 /// Resolve a `--filter=` value. Refused HERE rather than in the decode loop, where the only available
 /// behaviours would be to throw or to silently show everything — which is the opposite of what was asked.
 module function parseFamilyFilter(spelling String) returns FamilyFilter
-	if spelling.isEmpty() 'noneGiven'
-		return FamilyFilter.all
-	end 'noneGiven'
-
 	let family = try EventFamily.fromName(spelling) otherwise return FamilyFilter.unknown(spelling)
 	return FamilyFilter.only(family)
 end 'parseFamilyFilter'
@@ -607,7 +603,7 @@ end 'familyChoiceList'
 // both tables, and a name may legitimately be missing (an executable built by an older compiler), so an
 // unresolvable index renders as `<field>=<n>` rather than throwing.
 function resolveInternedName(index NameIndex, names StringArray, fieldName String) returns String
-	let name = try names.get(index) otherwise ""
+	let name = try names.get(index) otherwise return "{fieldName}={index}"
 
 	if index == 0 or name.isEmpty() 'unresolvable'
 		return "{fieldName}={index}"

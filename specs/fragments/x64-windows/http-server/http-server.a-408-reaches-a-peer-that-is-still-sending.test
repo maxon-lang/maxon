@@ -51,22 +51,25 @@ function trickle(port NetworkPort) returns String
 	return statusCodeOf(answer)
 end 'trickle'
 
+function exchangeOver(listening HttpServer) returns ExitCode
+	let peer = async acceptedAs(listening)
+	let start = Clock.nowMs()
+	let status = trickle(listening.port())
+	let tookMs = Clock.elapsedMs(start)
+	let accepted = await peer
+	listening.close()
+
+	print("status={status} accept={accepted} prompt={tookMs < PromptMs}\n")
+
+	return 0
+end 'exchangeOver'
+
 function main() returns ExitCode
 	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	var limits = HttpServerLimits.create()
 	limits.readDeadlineMs = ReadDeadlineMs
 	server.setLimits(limits)
-
-	let peer = async acceptedAs(server)
-	let start = Clock.nowMs()
-	let status = trickle(server.port())
-	let tookMs = Clock.elapsedMs(start)
-	let accepted = await peer
-	server.close()
-
-	print("status={status} accept={accepted} prompt={tookMs < PromptMs}\n")
-
-	return 0
+	return exchangeOver(server)
 end 'main'
 ---
 ExitCode: 0
@@ -424,7 +427,7 @@ func @main {
     x64.storeSlotReg slot1, r8
     x64.movRegImm32 rax, 500
     x64.storeBaseDispReg.word64 [r8 + 16], rax
-  __il_body#7:
+  __il_body#4:
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.movRegReg rcx, r8
     x64.callDirect __mm_own
@@ -432,7 +435,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.storeBaseDispReg.word64 [rbx + 8], r13
-  __il_cont#6:
+  __il_body#6:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
     x64.movRegReg r12, r8
@@ -446,37 +449,37 @@ func @main {
     x64.callDirect __gt_ready
     x64.callDirect Clock.nowMs
     x64.storeSlotReg slot14, r8
-  __il_body#8:
+  __il_body#10:
     x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
-  __il_body#20:
+  __il_body#22:
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#41
+    x64.jcc less, __rc_panic#43
   __rc_chk:
     x64.cmpRegImm32 rdx, 65535
-    x64.jcc greater, __rc_panic#41
-  __rc_ok#40:
+    x64.jcc greater, __rc_panic#43
+  __rc_ok#42:
     x64.leaRegRdata rcx, [rip + __str_rec_162]  ; "127.0.0.1"
     x64.callDirect TcpClient.connect
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#21
-  tryerr#22:
+    x64.jcc equal, tryok#23
+  tryerr#24:
     x64.leaRegRdata rcx, [rip + __str_rec_164]  ; "connect-failed"
     x64.callDirect __str_retain
     x64.movRegReg r12, r8
-    x64.jmp __il_cont#19
-  tryok#21:
+    x64.jmp __il_cont#21
+  tryok#23:
     x64.leaRegRdata rcx, [rip + __str_rec_163]  ; "GET /slow HTTP/1.1\x0d\x0aHost: 127.0.0.1\x0d\x0aX-Pad: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\x0d\x0a\x0d\x0a"
-  __il_body#49:
+  __il_body#51:
     x64.movRegImm32 rdx, 0
-  __il_body#57:
+  __il_body#59:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-  __il_cont#56:
+  __il_cont#58:
     x64.callDirect __managed_slice
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#50
-  tryerr#51:
+    x64.jcc equal, tryok#52
+  tryerr#53:
     x64.leaRegRdata rcx, [rip + __str_blob_301]  ; "panic at String.maxon:157: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -488,13 +491,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#50:
+  tryok#52:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_retain
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-  __il_cont#48:
+  __il_cont#50:
     x64.movRegImm32 rdx, 0
     x64.jmp forhdr
   eachByte:
@@ -526,7 +529,7 @@ func @main {
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r13
     x64.callDirect __managed_push
-  __il_body#55:
+  __il_body#57:
     x64.movRegReg rcx, r15
     x64.callDirect __managed_retain
     x64.movRegReg r13, r8
@@ -543,13 +546,13 @@ func @main {
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-  __il_cont#54:
+  __il_cont#56:
     x64.loadRegSlot rdx, slot20
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.send
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#27
-  tryerr#28:
+    x64.jcc equal, tryok#29
+  tryerr#30:
     x64.leaRegRdata rcx, [rip + __str_rec_165]  ; "send-failed"
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
@@ -562,20 +565,20 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_TcpClient
     x64.movRegReg r12, r13
-    x64.jmp __il_cont#19
-  tryok#27:
+    x64.jmp __il_cont#21
+  tryok#29:
     x64.loadRegSlot rcx, slot20
     x64.callDirect __str_decref
     x64.movRegImm32 rcx, 100
-  __il_body#53:
+  __il_body#55:
     x64.callDirect __gt_sleep
-  __il_cont#52:
+  __il_cont#54:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.setReadDeadline
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#29
-  tryerr#30:
+    x64.jcc equal, tryok#31
+  tryerr#32:
     x64.leaRegRdata rcx, [rip + __str_rec_166]  ; "deadline-failed"
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
@@ -586,8 +589,8 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_TcpClient
     x64.movRegReg r12, r13
-    x64.jmp __il_cont#19
-  tryok#29:
+    x64.jmp __il_cont#21
+  tryok#31:
     x64.movRegImm32 rdx, 4096
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.recv
@@ -609,11 +612,11 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_TcpClient
     x64.movRegReg r12, r15
-    x64.jmp __il_cont#19
+    x64.jmp __il_cont#21
   ifelse:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 5
-    x64.jcc equal, ifcont#35
+    x64.jcc equal, ifcont#37
   gone:
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rcx
@@ -668,8 +671,8 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_TcpClient
     x64.movRegReg r12, r13
-    x64.jmp __il_cont#19
-  ifcont#35:
+    x64.jmp __il_cont#21
+  ifcont#37:
     x64.loadRegSlot rcx, slot18
     x64.callDirect __managed_decref
   forstep:
@@ -685,8 +688,8 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.setReadDeadline
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#36
-  tryerr#37:
+    x64.jcc equal, tryok#38
+  tryerr#39:
     x64.leaRegRdata rcx, [rip + __str_rec_166]  ; "deadline-failed"
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
@@ -695,15 +698,15 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_TcpClient
     x64.movRegReg r12, r13
-    x64.jmp __il_cont#19
-  tryok#36:
+    x64.jmp __il_cont#21
+  tryok#38:
     x64.movRegImm32 rdx, 4096
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.recv
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#38
-  tryerr#39:
+    x64.jcc equal, tryok#40
+  tryerr#41:
     x64.leaRegRdata rcx, [rip + __str_rec_172]  ; "recv-failed"
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
@@ -712,8 +715,8 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_TcpClient
     x64.movRegReg r12, r13
-    x64.jmp __il_cont#19
-  tryok#38:
+    x64.jmp __il_cont#21
+  tryok#40:
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.close
     x64.movRegReg rcx, r13
@@ -726,17 +729,17 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_TcpClient
     x64.movRegReg r12, r15
-  __il_cont#19:
+  __il_cont#21:
     x64.storeSlotReg slot2, r12
-  __il_body#9:
+  __il_body#11:
     x64.callDirect Clock.nowMs
     x64.loadRegSlot rax, slot14
     x64.cmpRegReg r8, rax
-    x64.jcc aboveEqual, ifcont#11
+    x64.jcc aboveEqual, ifcont#13
   clockSkew:
     x64.movRegImm32 r13, 0
-    x64.jmp __il_cont#4
-  ifcont#11:
+    x64.jmp __il_cont#8
+  ifcont#13:
     x64.loadRegSlot rax, slot14
     x64.movRegReg rcx, r8
     x64.subRegReg rcx, r8, rax
@@ -748,23 +751,23 @@ func @main {
     x64.andRegReg r8, r8, rcx
     x64.orRegReg rdx, rdx, r8
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#13
-  __rc_ok#12:
+    x64.jcc less, __rc_panic#15
+  __rc_ok#14:
     x64.movRegReg r13, rcx
-  __il_cont#4:
+  __il_cont#8:
     x64.loadRegSlot rcx, slot12
     x64.callDirect __gt_await
     x64.movRegReg r14, r8
     x64.storeSlotReg slot3, r14
-  __il_body#16:
+  __il_body#18:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.byte [rax + 0], rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#18:
+  __il_body#20:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __ms_close
-  __il_cont#15:
+  __il_cont#17:
     x64.leaRegRdata rax, [rip + __str_rec_173]  ; "status="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot15, rcx
@@ -860,10 +863,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot17
     x64.callDirect __mm_decref
-  __il_body#14:
+  __il_body#16:
     x64.loadRegSlot rcx, slot7
     x64.callDirect __write_stdout
-  __il_cont#3:
+  __il_cont#7:
     x64.loadRegSlot rcx, slot7
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -871,6 +874,7 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
+  __il_cont#5:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot0
@@ -884,7 +888,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#41:
+  __rc_panic#43:
     x64.leaRegRdata rcx, [rip + __str_blob_341]  ; "panic at http-server.a-408-reaches-a-peer-that-is-still-sending.test:24: Range check failed: value outside typealias 'NetworkPort'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -896,7 +900,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#13:
+  __rc_panic#15:
     x64.leaRegRdata rcx, [rip + __str_blob_346]  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0

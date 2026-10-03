@@ -3,7 +3,6 @@ feature: register-stress
 status: selfhosted
 keywords: [register-allocator, e5001, false-positive, trivial-phi, hall, nested-loops, break, forced-spill, boundary]
 category: register-allocator
-milestone: M5.15
 ---
 
 # Allocator stress: pressure boundaries, Hall's condition, and the false E5001
@@ -25,29 +24,24 @@ in scope. Every `var` declared before a loop therefore becomes a loop-carried ph
 not the loop touches it.
 
 `pruneDeadBlockArgs` deletes the ones nothing reads. The ones that ARE read — after the loop —
-survived, on the reasoning that a phi carrying an unchanging value costs nothing, since biased
-coloring coalesces it with its incoming value into one register.
+survive it, and a phi carrying an unchanging value looks free, since biased coloring coalesces it
+with its incoming value into one register.
 
-That is true of the register COUNT and false of everything else, because **a phi used to be exactly
-what the cold-spill splitter may not spill.** `isColdSpillable` refused any phi and any edge-passed
-value outright, so an idle `var` was PINNED in a register across a loop that never touched it, while
-an idle `let` — an ordinary value — was spilled around that loop for free. Fifteen of them and the
-compiler refused a program whose real working set was two, ranking values it could have spilled
-among the ones the user should delete.
+That is true of the register COUNT and false of everything else, because **a loop-header phi is
+exactly what the cold-spill splitter may not spill.** Unfolded, an idle `var` is PINNED in a register
+across a loop that never touches it, while an idle `let` — an ordinary value — is spilled around that
+loop for free. Fifteen of them and the compiler would refuse a program whose real working set is two,
+ranking values it could have spilled among the ones the user should delete.
 
-⚠ **Those two blanket bars are GONE (BATCH2), and this section is kept because it is why the FOLD
-below exists — not because the bars still stand.** They were over-approximations of "touches a loop"
-made while no loop depth was recorded for a phi's block or for an edge use, and each was in turn a
-false-E5001 generator in its own right (measured on `stdlib/URL.maxon`'s `URL.parse`). `isColdSpillable`
-now asks ONE question — is the value's def, and every use of it, at loop depth 0? — with a phi's block
-entry and a branch-edge arg carrying a depth like any op does. A loop-header phi and a loop-carried
-edge arg are still refused, by that depth. The tests below are unchanged and still pass: the fold is
-the better answer for an IDLE var either way, because a folded phi costs no slot and no reload at all.
+⚠ `isColdSpillable` asks ONE question — is the value's def, and every use of it, at loop depth 0? —
+with a phi's block entry and a branch-edge arg carrying a depth like any op does. A loop-header phi and
+a loop-carried edge arg are refused, by that depth. The fold is the better answer for an IDLE var,
+because a folded phi costs no slot and no reload at all.
 
 `elimTrivialBlockArgs` folds away a phi whose every incoming value, self-references discounted,
 is the same value: `phi = φ(v, phi)` IS `v`. `idle-vars-across-a-loop` below is the program that
-forced it, and `idle-lets-across-a-loop` is its control — the two are semantically identical and
-must now compile identically.
+needs it, and `idle-lets-across-a-loop` is its control — the two are semantically identical and
+must compile identically.
 
 ### Forced is not the same as hot
 
@@ -119,18 +113,18 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: idle-vars-across-a-loop -->
-THE FALSE E5001, and the program that forced `elimTrivialBlockArgs`. The test above with `let`
+THE FALSE E5001, and the program that needs `elimTrivialBlockArgs`. The test above with `let`
 replaced by `var` — each declared then assigned once, before the loop, because E3077 refuses a
 `var` that is never reassigned at all. What matters is unchanged and is the whole point: **not one
 of them is assigned INSIDE the loop**, so the two programs are SEMANTICALLY IDENTICAL across it and
 must compile identically.
 
-They did not. The parser mints a loop-header phi per mutable var in scope — it must, since the
-body has not been parsed yet — so each of these fifteen became a loop-carried phi, self-sustaining
-through the back edge and live across the whole loop. `pruneDeadBlockArgs` could not remove them
-(they ARE read, after the loop), and `isColdSpillable` refuses to spill a phi (a cold store goes
-in the preheader; a phi's def is the header). Fifteen unspillable values, a pool of fourteen, and
-the compiler refused a loop whose actual working set is `sum` and `i`:
+Without the fold they would not. The parser mints a loop-header phi per mutable var in scope — it
+must, since the body has not been parsed yet — so each of these fifteen becomes a loop-carried phi,
+self-sustaining through the back edge and live across the whole loop. `pruneDeadBlockArgs` cannot
+remove them (they ARE read, after the loop), and `isColdSpillable` refuses to spill a phi (a cold
+store goes in the preheader; a phi's def is the header). Fifteen unspillable values, a pool of
+fourteen, and the compiler would refuse a loop whose actual working set is `sum` and `i`:
 
   error E5001: the loop at …:20 needs 3 more register(s) than are available
 
@@ -260,10 +254,10 @@ are load-bearing, and each one adds a link to the chain the fold has to walk:
 - the enclosing `if` makes the continuation MERGE the branch that ran the loop with the one that
   did not, so it mints a THIRD phi per var (`Parser.mergeAtContinuation`).
 
-So each idle `k` now carries `merge ← exit ← header ← k`, and only the header phi is trivial to
+So each idle `k` carries `merge ← exit ← header ← k`, and only the header phi is trivial to
 begin with. The continuation's merge phi reads the EXIT phi, not the header phi — so a fold that
-notifies only the phis reading the value it just folded reaches the exit phi and stops. The merge
-phi becomes `φ(k, k)` and is never asked again. Fifteen of those survive, they are phis and
+notifies only the phis reading the value it just folded reaches the exit phi and stops. Under such
+a fold the merge phi becomes `φ(k, k)` and is never asked again. Fifteen of those survive, they are phis and
 therefore unspillable, and the compiler refuses a program whose real working set is two:
 
   error E5001: the loop at …:25 needs 4 more register(s) than are available
@@ -500,7 +494,7 @@ A `break` out of a loop under pressure. The early exit is a SECOND edge out of t
 the loop-carried phis to the exit block alongside the normal exit edge — so the exit block has two
 predecessors with two arg vectors, and the splitter's reloads must dominate the uses on BOTH paths.
 Twelve values are idle across the loop and summed after it, so the splitter is also spilling around
-a loop that now has two ways out.
+a loop that has two ways out.
 `k1..k12 = 1..12` sum to 78. The loop breaks when `sum` first exceeds 6: `sum` goes 0, 1, 3, 6, 10
 — at `i = 4`, `sum = 10 > 6`, so it breaks with `sum = 10`. Total `10 + 78 = 88`.
 ```maxon

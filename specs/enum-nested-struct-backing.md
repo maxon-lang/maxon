@@ -551,13 +551,10 @@ error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-back
 
 ### Error: a field typed by a LISTED STDLIB record
 
-⚠ **THIS CASE USED TO PIN THE OPPOSITE SENTENCE, AND W115 IS WHY.** It read *"a compiler-owned record whose
-DECLARED name is not the name a program writes, so the identity check refuses it whichever way the constant
-is spelled"* — true while `CharacterSet` named the compiler's own layout under the reserved spelling
-`__CharacterSet`, which no written constant could ever match. `stdlib/CharacterSet.maxon` is listed now, so
-the bare name IS a declared record, the identity check ADMITS it, and the descent goes one level further
-before refusing — landing on exactly the sentence its `Array` sibling below gets, at the same line:column.
-That is the rung's whole thesis stated as a diagnostic: a retired builtin stops having a second rule.
+⚠ **A LISTED STDLIB RECORD IS A DECLARED RECORD.** `stdlib/CharacterSet.maxon` is listed, so the bare
+name `CharacterSet` IS a declared record, the identity check ADMITS it, and the descent goes one level
+further before refusing — landing on exactly the sentence its `Array` sibling below gets, at the same
+line:column. A type the stdlib declares has no second rule.
 
 <!-- test: error.nested-struct-backing-characterset-field -->
 ```maxon

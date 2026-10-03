@@ -2814,14 +2814,14 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
-	code.append(buildSymbolTableBytes(debugSymbols, target: project.target))
+	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, spellings: project.stdlibShadowSpellings))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in; x64's
 	// concat lays them out the same way.
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
-	code.append(buildInlineFrameTableBytes(inlineFrames))
+	code.append(buildInlineFrameTableBytes(inlineFrames, spellings: project.stdlibShadowSpellings))
 
 	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 	arm64ResolveFuncAdrpRelocs(funcAdrpRelocs, labelOffsets: labelOffsets)

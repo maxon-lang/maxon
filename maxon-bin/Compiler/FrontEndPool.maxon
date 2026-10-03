@@ -207,6 +207,7 @@ type FrontEndWorkerState
 
 	// The index every later parse reads, replacing any this worker held.
 	function hold(index ProgramSignatures)
+		index.shareModuleDirectoriesWithProvenance()
 		self.ownIndex.clear()
 		self.ownIndex.push(index)
 	end 'hold'
@@ -572,8 +573,6 @@ module type FrontEndPool
 		end 'serveWhoeverFinishedFirst'
 	end 'drain'
 
-	// The tokens are copied rather than LENT: the parser keeps them in a field, which the freeze on a lent value
-	// refuses (E3160).
 	function dispatchJob(input FrontEndDrainInput, files PoolJobArray, workerSlot ElementIndex, dispatch PoolDispatch, replies FrontEndReplyPromiseArray)
 		let fileIndex = fileOfJob(files, job: dispatch.nextJob(workerSlot))
 

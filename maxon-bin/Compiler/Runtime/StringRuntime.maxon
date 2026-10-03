@@ -1,10 +1,8 @@
 // Runtime/StringRuntime.maxon — **THE FLOOR OF A `String`: the parts that were never method dispatch.**
 //
-// ⭐⭐ **W49 RETIRED THE WHOLE METHOD SURFACE ONTO `stdlib/String.maxon` — TWENTY-TWO MEMBERS ACROSS NINE
-// WAVES — AND `dispatchStringMethod` NOW SERVES NONE.** What could not retire is what is here, because it
-// was never a member to hand back: the RECORD a String IS, the LITERAL that materializes it, `==`, drop,
-// clone, and the two byte doors a fused wrapper's inline `managed` opens. Wave 9 took the last member
-// (`setByte`) and then took everything OUT of this file that a String was merely the loudest user of.
+// ⭐⭐ **THE METHOD SURFACE IS `stdlib/String.maxon`'s, AND `dispatchStringMethod` SERVES NONE OF
+// IT.** What is here was never a member: the RECORD a String IS, the LITERAL that materializes it,
+// `==`, drop, clone, and the two byte doors a fused wrapper's inline `managed` opens.
 //
 // This file owns THREE things and their single source is here:
 //   1. the RECORD LAYOUT — the offsets every reader loads by and the offsets `LowerMaxonToStd` writes when
@@ -21,18 +19,6 @@
 //      `__str_clone`, the two constructors, the byte view, and interpolation's number rendering — built as
 //      `StdOp` graphs exactly as `MmRuntime` builds the allocator, so they get register allocation, frames
 //      and the whole backend for free.
-//
-// ⚠⚠ **WHAT LEFT AT WAVE 9, AND WHY EACH WAS NOT A STRING'S:**
-//   * `Runtime/RuntimeUsage.maxon` — `RuntimeUsage`, `scanRuntimeUsage`, `recordCallUsage` and the four
-//     record/close pairs: **760 lines** deciding the install of the scheduler, IOCP, subprocesses, arrays,
-//     sets, maps, lists, descriptor and existential drops, union destructors, struct cloners, the wall
-//     clock, files, directories, argv, stdin and process introspection. A String was one tenant of that.
-//   * `MmRuntime` — `__str_copy` and the two `u8` load emitters. A byte blit and a byte load are Std-tier
-//     operations; both emitters were ALREADY exported for `GraphemeRuntime`, which is the two-files-own-
-//     the-one-spelling shape their own header claimed to prevent.
-//   * `ManagedMemoryRuntime.ByteStringElementSize` absorbed `StringElementSize`. Since the envelope collapse a
-//     String IS its `__ManagedMemory with Byte`, so its `element_size@24` is an `Array with Byte`'s — one
-//     number, and only the survivor carries a derivation anything checks.
 
 // --- The fused 56-byte String record ---
 //
@@ -40,12 +26,11 @@
 // `buffer@0` is the ABSOLUTE VA of the byte blob — emitted as a PLACEHOLDER 0 and patched by the PE
 // writer once `.rdata`'s RVA is known (a fixed-base image, so the VA is compile-time computable). The
 // blob is a SEPARATE `.rdata` entry, NUL-terminated, and `length@8` EXCLUDES the NUL.
-// ⭐⭐ **THE FIRST SIX SLOTS ARE A WHOLE `__ManagedMemory`, EMBEDDED, AND SINCE W157 THAT IS LITERAL RATHER
-// THAN NEARLY-TRUE.** They are `BufferOwnership`'s own constants — `__mm_cow_detach` and `__managed_decref`
-// are single emitted functions that read them out of BOTH records — so the numbers exist once and these
-// names alias them. `@40` was the one slot that disagreed (`singleByteGraphemes` here, `element_destroy`
-// there); it now holds a real `element_destroy`, always `TrivialElementDestroy`, and the flag moved to a
-// seventh slot at `@48`. That is what makes a String record servable to buffer code as-is.
+// ⭐⭐ **THE FIRST SIX SLOTS ARE A WHOLE `__ManagedMemory`, EMBEDDED.** They are `BufferOwnership`'s
+// own constants — `__mm_cow_detach` and `__managed_decref` are single emitted functions that read
+// them out of BOTH records — so the numbers exist once and these names alias them. `@40` holds a
+// real `element_destroy`, always `TrivialElementDestroy`, and the flag sits in a seventh slot at
+// `@48`. That is what makes a String record servable to buffer code as-is.
 export let StringBufferOffset = ManagedRecordBufferOffset
 export let StringLengthOffset = ManagedRecordLengthOffset
 
@@ -53,10 +38,9 @@ export let StringLengthOffset = ManagedRecordLengthOffset
 // here only ever writes rdata). One set of offsets, read by the runtime and written by the interpolation
 // lowering, so a reader and a writer of the same record cannot drift.
 // ⭐ **THESE TWO ARE DERIVED FROM `BufferOwnership`, NOT DECLARED HERE**, because `__mm_cow_detach` is ONE
-// emitted function that reads them out of this record AND out of the Array record. They were two
-// coincidentally-equal sets of literals until that function existed; a divergence would now be a wrong load
-// inside it rather than a second value flowing through a parameter, so the numbers live in one place and
-// these names alias them.
+// emitted function that reads them out of this record AND out of the Array record. A divergence
+// would be a wrong load inside it rather than a second value flowing through a parameter, so the
+// numbers live in one place and these names alias them.
 export let StringCapacityOffset = ManagedRecordCapacityOffset
 export let StringElementSizeOffset = ManagedRecordElementSizeOffset
 
@@ -196,21 +180,20 @@ export let BoolToStringScratchBytes = 5 as ParsedInt
 let StringBlobPrefix = "__str_blob_"
 let StringRecordPrefix = "__str_rec_"
 
-// ⭐⭐ **THE TWO STREAM WRITERS — `stdlib/Print.maxon`'s and `stdlib/PrintError.maxon`'s ONLY floor (W35),
-// and they REPLACE `__print_string`.** That entry point existed to serve a bare-name `print` BUILTIN,
-// which is retired: `print` is now an ordinary call to the corpus declaration, whose body is
-// `__Builtins.writeStdout(value.addressableBytes())`, and `printError` is its twin one stream over. So the
-// graph did not go away — it gained a stderr sibling, a `__ManagedMemory` argument in place of a String
-// pointer (the two records agree at `buffer@0`/`length@8`, which is all either reads) and a RESULT.
+// ⭐⭐ **THE TWO STREAM WRITERS — `stdlib/Print.maxon`'s and `stdlib/PrintError.maxon`'s ONLY floor.**
+// `print` is an ordinary call to the corpus declaration, whose body is
+// `__Builtins.writeStdout(value.addressableBytes())`, and `printError` is its twin one stream over. Each
+// takes a `__ManagedMemory` (a String record agrees at `buffer@0`/`length@8`, which is all either
+// reads) and answers a RESULT.
 //
 // `__`-prefixed (`isCompilerInternalCallee` treats them as the compiler's own — no E3004, no signature
 // slotting), but NOT `__mm_`-prefixed, so `isRuntimeCallee` leaves them out of the heap-runtime decision.
 //
 // ⚠⚠ **AND THAT NARROWNESS IS A MEASURED POLICY, NOT AN OVERSIGHT — see `MmRuntime.isRuntimeCallee`.**
-// Every W5-era runtime family declares `usesHeap` AND `usesManagedMemory` transitively, because its Std body calls
-// `__managed_create`/`__mm_alloc` one tier down. These two bodies call NOTHING: two loads and one system op.
-// Giving them a W5-shaped usage bit by reflex would drag the allocator and the leak gate into every
-// program that writes a byte to a stream.
+// Every buffer-answering runtime family declares `usesHeap` AND `usesManagedMemory` transitively,
+// because its Std body calls `__managed_create`/`__mm_alloc` one tier down. These two bodies call
+// NOTHING: two loads and one system op. Giving them such a usage bit by reflex would drag the
+// allocator and the leak gate into every program that writes a byte to a stream.
 //
 // ⚠ **`StreamWrite…`, NOT `WriteStderrName` — that spelling IS TAKEN, by the thing these must not be
 // confused with.** `BacktraceFormat.WriteStderrName` is `mrt_write_cstr_stderr`, the hand-assembled
@@ -221,11 +204,11 @@ export let StreamWriteStdoutName = b"__write_stdout"
 export let StreamWriteStderrName = b"__write_stderr"
 export let StrEqName = b"__str_eq"
 
-// ⚠ **`StrCopyName` WENT TO `MmRuntime` WITH ITS BUILDER (W49 wave 9)** — a byte BLIT is a Std-tier
-// operation, not a String's, and its consumers had already outgrown the name (`Parser`'s interpolation,
-// `GtRuntime`'s subprocess buffers, `__mm_to_cstring`'s copy path). The emitted SYMBOL keeps its
-// `__str_copy` spelling: a runtime callee's name is baked into the goldens and into `RuntimeUsage`'s bit,
-// so renaming it would be a codegen change wearing a tidy-up's clothes.
+// ⚠ **`StrCopyName` IS `MmRuntime`'s, WITH ITS BUILDER** — a byte BLIT is a Std-tier operation, not
+// a String's (`Parser`'s interpolation, `GtRuntime`'s subprocess buffers, `__mm_to_cstring`'s copy
+// path). The emitted SYMBOL keeps its `__str_copy` spelling: a runtime callee's name is baked into
+// the goldens and into `RuntimeUsage`'s bit, so renaming it would be a codegen change wearing a
+// tidy-up's clothes.
 //
 // The decimal renderer an interpolation lowers CALLS to (`Parser.emitStringInterp`), which stays: it
 // renders an integer part's text into a scratch buffer, and interpolation is this file's own subject.
@@ -272,14 +255,11 @@ end 'integerToStringScratchBytes'
 // call `__mm_alloc`/`__mm_free` inside its Std body — which `scanRuntimeUsage` cannot see, since those
 // calls are not in the Maxon module — so a reference to it explicitly turns on `usesHeap`.
 //
-// ⚠ **`__str_append` STOOD BESIDE IT AND RETIRED WITH `String.append` (W49 wave 8).** The corpus body
-// appends through `managed.append(other.managed)`, which is `__managed_append` over the receiver's own record,
-// so the String-specific grower had no producer left. Its two behaviours survive in the corpus rather than
-// being lost: the `singleByteGraphemesFlag` maintenance is the body's own `if`, and the GEOMETRIC growth it
-// spelled as `2 * requiredLen` is `__managed_grown_cap`'s, which `__managed_append` reaches through
-// `__managed_reserve`. That second one is load-bearing — exact growth made `var s = ""` plus a loop of appends
-// quadratic, MEASURED at ×3.94 ×4.07 ×3.82 ×3.88 per doubling — so a retirement onto a runtime with no
-// growth policy would have restored the quadratic silently.
+// ⚠ **THERE IS NO STRING-SPECIFIC GROWER.** The corpus `String.append` appends through
+// `managed.append(other.managed)`, which is `__managed_append` over the receiver's own record: the
+// `singleByteGraphemesFlag` maintenance is the body's own `if`, and the GEOMETRIC growth is
+// `__managed_grown_cap`'s, reached through `__managed_reserve`. That growth is load-bearing — exact
+// growth makes `var s = ""` plus a loop of appends quadratic.
 export let StrDecrefName = b"__str_decref"
 
 // ⭐⭐ **THE BYTE/ASCII METHOD FAMILY HAS NO ENTRY POINT HERE.** `startsWith`, `endsWith`, `toLower`/
@@ -297,10 +277,9 @@ export let StrDecrefName = b"__str_decref"
 // ⚠ **THE COST OF A CORPUS BODY IS ACCEPTED** (user ruling). The corpus `findIn` asks `byteAt` — a
 // THROWING, bounds-checked accessor — once per candidate position, where a Std-body search walks the bytes
 // with a raw load and a first-byte fast reject; and the corpus `sliceBytes` builds each segment through
-// `managed.slice` + a `String{…}` literal, where a fused-record blit does it in one. The compiler has no
-// inliner, so both differences are real calls per byte and per segment. Two candidate cures were MEASURED
-// and both are regressions; do not attempt a third here (the full argument is at
-// `Parser.stringSurfaceMemberNames`).
+// `managed.slice` + a `String{…}` literal, where a fused-record blit does it in one: a call per
+// byte and per segment. Two candidate cures were MEASURED and both are regressions; do not attempt
+// a third here (the full argument is at `Parser.stringSurfaceMemberNames`).
 
 // ⭐⭐ **`__str_from_bytes(arr) -> String` — `__str_of_buffer`'s TWIN, TAKEN WHEN THE FLAG MUST BE SCANNED
 // RATHER THAN SUPPLIED.** It is `__`-prefixed compiler-internal (no E3004, no signature slotting) and not
@@ -333,15 +312,12 @@ export let StrFromBytesName = b"__str_from_bytes"
 // (`stdlib/String.maxon:139-142`). Sharing the builder is what keeps the two from drifting into two record
 // shapes.
 //
-// ⚠⚠ **IT COPIES RATHER THAN BUILDING A ZERO-COPY VIEW, DELIBERATELY, AND THIS IS A DIFFERENT ARGUMENT
-// FROM THE ONE `buildStrFromBytes` USED TO MAKE.** That function's header says the compiler *cannot* share,
-// *"has no shared-ownership relationship between an `Array` record and a `String` record"*; that was true
-// when written and the P1.7 COW slice made it false — `buildStrBytesView`, two screens down, establishes
-// exactly that relationship in the other direction, increfing the allocation the bytes live in and stating
-// its refcount correct in both drop orders. **So the view is now REPRESENTABLE.** It is not taken here
-// because a view is the shape whose failure mode is a double free or a read of returned memory, and it
-// buys a constant factor on a path nothing has measured. Copying is what every other producer in this file
-// hands back and what `__str_decref` already reclaims. ⇒ A rung with the ladder read, not a line here.
+// ⚠⚠ **IT COPIES RATHER THAN BUILDING A ZERO-COPY VIEW, DELIBERATELY.** A view is REPRESENTABLE —
+// `buildStrBytesView`, two screens down, shares an allocation between an `Array` record and a
+// `String` record in the other direction, increfing the allocation the bytes live in. It is not
+// taken here because a view is the shape whose failure mode is a double free or a read of returned
+// memory, and it buys a constant factor on a path nothing has measured. Copying is what every other
+// producer in this file hands back and what `__str_decref` already reclaims.
 export let StrOfBufferName = b"__str_of_buffer"
 
 // ⭐⭐ **`__mm_to_cstring(bufRecord) -> ptr` — `__ManagedMemory.toCString()`, the corpus's ONE producer of a
@@ -417,14 +393,7 @@ export let MmFromCStringName = b"__mm_from_cstring"
 // `__mm_`-prefixed, so it declares its own transitive floor in `closeStringMethodNeeds`.
 export let StrBytesViewName = b"__str_bytes_view"
 
-// ⚠ **`StrFindNotFound` WAS HERE AND WENT WITH `__str_find`** (W49 wave 5). It was that search's "no
-// occurrence" answer — a NEGATIVE INDEX rather than a thrown error, because its callers were not throwing
-// and a `tryCall` per iteration would have been a control-flow join to answer a question they treated as
-// ordinary. The corpus spells the same search `throws StringError.notFound` (`findIn`), which is the
-// reference's own shape and needs no sentinel. `CommandLineRuntime.NoMoreArguments` is the one negative
-// byte-position sentinel left, and it now carries the argument itself rather than citing this one.
-
-// `__str_clone(src) -> newStr` — a String's DEEP CLONE (P1.7 slice 3b-vi-b): a fresh OWNED heap String, an
+// `__str_clone(src) -> newStr` — a String's DEEP CLONE: a fresh OWNED heap String, an
 // independent copy of `src` that is droppable through `__str_decref` without touching `src`. The `(box) ->
 // newBox` DUAL of `__str_decref`, so a managed array/struct that clones a String field through this drops it
 // through `__str_decref`. `__`-prefixed compiler-internal (no E3004, no signature slotting) but NOT
@@ -471,14 +440,12 @@ export let StrRetainName = b"__str_retain"
 //   * IMMORTAL (`capacity@16 = ImmortalRecordCapacity`) — a literal's immortal blob, in a record that is
 //     immortal too. It never reaches these two functions: the parser promotes a `var` String at its
 //     declaration and only an owned String is ever dropped.
-//     ⛔⛔ **AND "IT NEEDS NO ARM OF ITS OWN REGARDLESS" STOOD HERE AND IS WITHDRAWN (W157 review).** The
-//     argument was that an immortal record is a non-owned buffer owing nothing, which the encoding already
-//     says — true of the BUFFER half, and silent about the RECORD. `__str_decref` reaching one would run the
-//     shared refcount check against a header that is `.rdata` and then `__mm_free` an image address; that is
-//     why `__managed_decref` grew an explicit `emitRecordIsImmortal` arm at W157, the moment
-//     `addressableBytes()` made an immortal record reachable by a drop path at all. ⇒ **what keeps this
-//     function safe is the REACHABILITY argument above and nothing else**, so a change that lets a literal
-//     be dropped owes `__str_decref` the same arm its twin already has.
+//     ⛔⛔ **IT HAS NO ARM OF ITS OWN, AND THE BUFFER ENCODING DOES NOT MAKE THAT SAFE.** An immortal
+//     record's BUFFER owes nothing, but its RECORD is `.rdata`: `__str_decref` reaching one would
+//     run the shared refcount check against an image header and then `__mm_free` an image address,
+//     which is why `__managed_decref` has an explicit `emitRecordIsImmortal` arm. ⇒ **what keeps
+//     this function safe is the REACHABILITY argument above and nothing else**, so a change that
+//     lets a literal be dropped owes `__str_decref` the same arm its twin already has.
 //
 // ⚠ **THIS REPLACES `parent@32 == -1` ("a detached root"), AND THE BEHAVIOUR IT DECIDED IS UNCHANGED.**
 // That test was this file's own third spelling of "is this buffer mine?" — and, at the same offset as the
@@ -490,7 +457,7 @@ export let StrRetainName = b"__str_retain"
 // ⭐ **EXPORTED BECAUSE THE PARSER ASKS THE SAME QUESTION OF THE SAME BYTES.** `Parser.foldSliceFromStart`
 // folds `lit.slice(lit.startIndex(), length: n)` into a literal of its own only when a GRAPHEME count and a
 // BYTE count are the same number for those bytes — which is this predicate, and re-deriving it there would be
-// two spellings of one rule, free to disagree about `` on the day one of them was edited.
+// two spellings of one rule, free to disagree about a CR on the day one of them was edited.
 //
 // ⭐ **ONE PASS TESTING BOTH, rather than an ASCII scan followed by a CR scan** — the corpus's
 // `scanSingleByteGraphemes` (`stdlib/String.maxon:1060`) is the same loop for the same stated reason, and
@@ -532,7 +499,7 @@ end 'stringBlobBytes'
 // their strings are identical. The flag rides `appendRecordSlot` for the same reason the six do: its offset
 // is asserted, so a reordered or mis-sized slot panics here rather than shipping a record the runtime reads
 // wrong.
-// ⚠ **NOT `export`ED SINCE W49 WAVE 9** — the same orphan sweep. `registerStringRecord` is its one caller
+// ⚠ **NOT `export`ED.** `registerStringRecord` is its one caller
 // and the door every other file comes through; an `export` here advertised a second way to assemble the
 // record that would skip the blob registration the offset seed depends on.
 function buildStringRecordBytes(blobOffset ByteOffset, byteLength BytePos, singleByteGraphemes bool) returns ByteArray
@@ -564,7 +531,7 @@ end 'registerStringBlob'
 // offset, not 0). `blobLabel` must already be registered — its offset is read back here.
 function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength BytePos, singleByteGraphemes bool, debugStream bool) returns String
 	let blobOffset = globalData.rdataOffsetOf(blobLabel)
-	return registerImmortalRecord(globalData, prefix: StringRecordPrefix, record: buildStringRecordBytes(blobOffset, byteLength: byteLength, singleByteGraphemes: singleByteGraphemes), kind: RdataPayloadKind.stringRecord, shape: ImmortalRecordShape.managedRecord, debugStream: debugStream)
+	return registerImmortalRecord(globalData, prefix: StringRecordPrefix, record: buildStringRecordBytes(blobOffset, byteLength: byteLength, singleByteGraphemes: singleByteGraphemes), kind: RdataPayloadKind.stringRecord, debugStream: debugStream)
 end 'registerStringRecord'
 
 // ⭐ **THE WHOLE OF "MAKE THESE BYTES AN IMMORTAL `.rdata` String", AS ONE CALL — blob, record, and the
@@ -585,18 +552,6 @@ export function registerStringLiteralRecord(globalData GlobalDataTable, bytes By
 	return recordLabel
 end 'registerStringLiteralRecord'
 
-// ⚠⚠ **THE `RuntimeUsage` MACHINERY STOOD HERE — 760 LINES OF IT — AND IS `Runtime/RuntimeUsage.maxon`
-// NOW (W49 wave 9).** `RuntimeUsage` itself, `scanRuntimeUsage`, `recordCallUsage` and the four
-// `record*Usage`/`close*Needs` pairs decided the install of the green-thread scheduler, the IOCP
-// substrate, the streaming subprocess API, the array, set, map and list runtimes, the two descriptor
-// drops, the incref/retain helpers, the union destructors, the struct cloners, the wall clock, managed
-// files and directories, the command line, standard input and process introspection — none of which is a
-// String. A String was ONE TENANT of that list and never its landlord, and a file named for the tenant
-// told every later reader that a new family's bit belonged in a String file.
-//
-// What is below this line is what the name has always claimed: the record a String IS, the literal that
-// materializes it, and the graphs behind `==`, drop, clone and the two byte doors.
-
 // Install the referenced String runtime functions into the lowered Std module. Called AFTER the
 // pipeline (like `installMmRuntime`), so these are appended already-lowered — what runs over that appended
 // band is stated once, in `Compiler.compileToCodeResult`'s install block.
@@ -614,12 +569,11 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 		buildStrEq(module, name: StrEqName)
 	end 'streq'
 
-	// ⚠ **THE BUILDER IS `MmRuntime`'s NOW AND THE INSTALL ARM DELIBERATELY IS NOT (W49 wave 9).** A byte
-	// blit is a Std-tier operation, so the graph moved; the ARM stays here because moving it into
-	// `installMmRuntime` would change two things at once. That installer is gated on `usesHeap`, and this
-	// bit is not a subset of it (`GtRuntime`'s subprocess buffers blit without the program allocating) —
-	// and the install ORDER is the Std module's FUNCTION order, which is emitted code. A relocation that
-	// claims codegen neutrality does not get to move a symbol's position as a side effect.
+	// ⚠ **THE BUILDER IS `MmRuntime`'s AND THE INSTALL ARM DELIBERATELY IS NOT.** `installMmRuntime`
+	// is gated on `usesHeap`, and this bit is not a subset of it (`GtRuntime`'s subprocess buffers
+	// blit without the program allocating) — and the install ORDER is the Std module's FUNCTION order,
+	// which is emitted code, so moving the arm would move a symbol's position in every program that
+	// copies.
 	if usage.usesStrCopy 'strcopy'
 		buildStrCopy(module)
 	end 'strcopy'
@@ -689,12 +643,12 @@ end 'installStringRuntime'
 // twice.
 //
 // ⚠ **THE ARGUMENT IS A `__ManagedMemory`, NOT A String — and the offsets are the same ones because a
-// String record IS one.** `stdlib/Print.maxon` hands over `value.addressableBytes()`, which since W157 is
-// the receiver's own record rather than a minted view; either way the two shapes agree on
+// String record IS one.** `stdlib/Print.maxon` hands over `value.addressableBytes()`, which is the
+// receiver's own record; the two shapes agree on
 // `buffer@0`/`length@8`, which is all this reads. The bytes are BORROWED: this reads through them and
 // never frees, so a literal argument needs no decref.
 function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStream)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -763,7 +717,7 @@ end 'buildStreamWrite'
 // helper. It allocates nothing. Empty strings: length 0 == length 0 → the loop runs zero times →
 // return 1. The byte loop itself is `emitByteRangeCompareLoop` — shared with `__managed_eq`; see that emitter
 // for why it is a shared EMITTER and not a shared CALL.
-// ⭐ **IT RETURNS `bool`, NOT A MACHINE WORD, AND THE WITNESS SLOT IS WHY** (P1.7a slice 2b-iv-B). Under the
+// ⭐ **IT RETURNS `bool`, NOT A MACHINE WORD, AND THE WITNESS SLOT IS WHY**. Under the
 // `String.equals` name this graph lands in an `Equatable` witness table, whose slot every dispatch site types
 // from `Equatable.equals(other Self) returns bool` — so its declared result must be the one
 // `builtinProtocolResultStdType` gives that declaration, an `i1`. Declared `i64` it agreed on the register
@@ -772,7 +726,7 @@ end 'buildStreamWrite'
 // the operator path already types its result `boolean` at the call site (`Parser.emitStringEquality`), so
 // this is the type it was always claiming to return.
 export function buildStrEq(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -809,9 +763,7 @@ end 'buildStrEq'
 // after a length check, and `Array.equals` compares two element buffers after the same length check
 // (array-hashable — an array's equality IS a byte compare, `stdlib/Array.maxon:643-663`). They were one loop
 // written twice, with nothing making them agree — a widened load or a changed bound in one would silently
-// leave the other reading a byte at a time on exactly one of the paths. (A THIRD consumer,
-// `__str_range_eq`, retired with the P1.8 Slice C searches at W49 wave 5; the sharing outlives it because
-// the two that remain are still two.)
+// leave the other reading a byte at a time on exactly one of the paths.
 //
 // ⚠ It stays a shared EMITTER and does NOT become a shared CALL: `==` on Strings is what the operator
 // lowers to, and routing it through a call would buy this dedup at the price of a call per comparison. The
@@ -886,7 +838,7 @@ end 'RenderedSign'
 // blocks those dominate; only the loop-variant `digits`/`v`/`pos` ride block-args. `len` is computed once
 // in `writeSetup`, which dominates `done`.
 function buildIntegerToString(module StdModule, signedness IntegerSignedness)
-	var func = IrFunction.createFromStd(integerToStringName(signedness), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(integerToStringName(signedness), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1076,7 +1028,7 @@ end 'emitI64BinOp'
 // returns its length. The last value minted in each branch is the length const (returned, so materialized),
 // never the entry `cmp`, so the value-class column is sized right (see `buildIntToString`'s header).
 function buildBoolToString(module StdModule)
-	var func = IrFunction.createFromStd(BoolToStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(BoolToStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1119,33 +1071,27 @@ end 'buildBoolToString'
 // so a struct box and a raw scratch buffer still drop through `__mm_decref`; only a String record, which
 // alone carries the buffer-ownership encoding, drops through here.
 //
-// ⭐ **STATIC DISPATCH, NOT A DESTRUCTOR POINTER.** The record stores NO destructor — the parser knows the
-// static type at every drop, so there is nothing to dispatch dynamically, and `funcAddr`/`callIndirect`
-// stay deferred until a struct/array FIELD can hold a String (P1.4+), where a box's own `__mm_free` must
-// reach a destructor it cannot name. Shipping the indirect-call vocabulary now would be vocabulary ahead
-// of its forcing consumer — the mistake `__mm_incref` and `mintPhi` are the standing warnings against.
+// ⭐ **STATIC DISPATCH, NOT A DESTRUCTOR POINTER.** The record's header destructor is trivial — the
+// parser knows the static type at every drop and routes it here by tag, and a String held in a
+// struct or array field is released by that container's cascade or element destructor naming this
+// function.
 //
 // ⭐⭐ **ITS FIRST QUESTION IS WHETHER THE RECORD IS COUNTABLE AT ALL, AND THAT ARM IS `__managed_decref`'s,
-// SPELLED THE SAME WAY (W157 review).** A String and a Character LITERAL are `.rdata` records — blob and
+// SPELLED THE SAME WAY.** A String and a Character LITERAL are `.rdata` records — blob and
 // record both — and the PE writer maps that section READ-ONLY, so the refcount read-modify-write below is an
 // access violation rather than a miscount, and the last-owner path would `__mm_free` an image address.
 //
-// ⚠⚠ **IT GUARDS A DIVERGENCE, NOT A MEASURED CRASH — AND SAYING SO IS THE POINT.** No legal program
-// reaches it: MEASURED by building this function with an `osExit(75)` in this arm's place and finding **zero
-// hits across 1,636 spec cases** (string, ownership, arrays, managed-memory, character, file, slice, closure)
-// **and ten hand-written literal-ownership shapes** — array element, struct field, field reassignment,
-// parameter-into-field, union payload, tuple, `var` reassignment, array literal, module-level `let`, ternary.
-// `return "literal"` COPIES into a fresh inline record (read out of the emitted IR: `__mm_alloc(len + 57)`,
-// `capacity@16 = -3`), and `__str_retain` clones an immortal at every other door.
-// ✅ The probe was proved LIVE by INVERTING its polarity — an ordinary interpolated String's drop then exits
-// 75 — so the zero is an absence and not a mis-wired branch.
+// ⚠⚠ **IT GUARDS A DIVERGENCE, NOT A CRASH ANYONE HAS SEEN.** No legal program in the suite reaches
+// it: `return "literal"` COPIES into a fresh inline record (`capacity@16 = -3`), and `__str_retain`
+// clones an immortal at every other door.
 //
-// ⇒ **WHAT IT BUYS IS THAT TWO DECREFS OVER ONE RECORD SHAPE STOP DISAGREEING.** Since W157 a String record
-// IS a buffer record, so one record can be handed to `__managed_decref` (through `addressableBytes()`) or to
-// this one, and `__managed_decref` skips an immortal. An asymmetry there is safe only by REACHABILITY, which
-// is a premise about the corpus rather than an invariant. The arm answers `retVoid` and deliberately NOT an
-// abort, for the same reason: its twin answers `retVoid`, and two drops of one record disagreeing about the
-// ANSWER is the defect being closed, not a stricter check to add.
+// ⇒ **WHAT IT BUYS IS THAT TWO DECREFS OVER ONE RECORD SHAPE CANNOT DISAGREE.** A String record IS
+// a buffer record, so one record can be handed to `__managed_decref` (through `addressableBytes()`)
+// or to this one, and `__managed_decref` skips an immortal. An asymmetry there is safe only by
+// REACHABILITY, which is a premise about the corpus rather than an invariant. The arm answers
+// `retVoid` and deliberately NOT an abort, for the same reason: its twin answers `retVoid`, and two
+// drops of one record disagreeing about the ANSWER is the defect being closed, not a stricter check
+// to add.
 //
 // The refcount read-modify-write is the shared `emitRefcountCheckToLastOwner` (load rc; `== 0` ⇒ last
 // owner; else lower and keep) — the ONE home of the refcount protocol, so a String and a struct box
@@ -1153,7 +1099,7 @@ end 'buildBoolToString'
 // than calling `__mm_decref` at runtime, because it must read `parent`/`buffer` out of the record on
 // the last-owner path BEFORE that record is freed — the generic decref would reclaim the box first.
 function buildStrDecref(module StdModule)
-	var func = IrFunction.createFromStd(StrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(StrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1212,13 +1158,12 @@ export function emitBuildOwnedInlineString(module StdModule, block IrBlock, ids 
 end 'emitBuildOwnedInlineString'
 
 // ⭐ **THE RECORD HALF of `emitBuildOwnedInlineString`, split out for the producers that do NOT have one
-// contiguous source to copy from.** `__str_replace` was the original — it assembled its result from
-// alternating slices of the receiver and of the replacement — and it retired onto `stdlib/String.maxon` in
-// W49 wave 2; `GraphemeRuntime.emitCharRecordBuffer` is the reader that remains, and it writes a codepoint's
-// UTF-8 bytes one at a time. Both need the box PUBLISHED and the bytes left to them. Everything about the
-// record is settled here — its size (`byteLen` + record + NUL), its `buffer@0`, and the whole buffer-ownership
-// encoding (`capacity@16 = InlineBufferCapacity`, `parent@32` left 0 by the slab's zeroing contract) — so a
-// caller that fills the bytes itself cannot publish a record that differs from a cloned one by a field.
+// contiguous source to copy from.** `GraphemeRuntime.emitCharRecordBuffer` writes a codepoint's
+// UTF-8 bytes one at a time, so it needs the box PUBLISHED and the bytes left to it. Everything
+// about the record is settled here — its size (`byteLen` + record + NUL), its `buffer@0`, and the
+// whole buffer-ownership encoding (`capacity@16 = InlineBufferCapacity`, `parent@32` left 0 by the
+// slab's zeroing contract) — so a caller that fills the bytes itself cannot publish a record that
+// differs from a cloned one by a field.
 export function emitAllocOwnedInlineString(module StdModule, block IrBlock, ids ValueMinter, byteLen ValueId, singleByteGraphemes ValueId) returns ValueId
 	// One `__mm_alloc` for the record + the bytes + a trailing NUL (the slab zeroes it), sized exactly as an
 	// interpolation of a single part is (`StringInterpOverheadBytes` = record + NUL).
@@ -1251,7 +1196,7 @@ export function emitInlineStringBuffer(module StdModule, block IrBlock, ids Valu
 	return emitBin(module, block: block, a: record, b: recordBytes, opcode: StdBinOpcode.add, ids: ids)
 end 'emitInlineStringBuffer'
 
-// ⭐ **`__str_clone(src) -> newStr` — A STRING'S DEEP CLONE (P1.7 slice 3b-vi-b).** A fresh OWNED heap String,
+// ⭐ **`__str_clone(src) -> newStr` — A STRING'S DEEP CLONE.** A fresh OWNED heap String,
 // an independent copy of `src` that `__str_decref` reclaims without touching `src`. It is the SAME single-
 // `__mm_alloc` fused-record path an interpolation builds (`Parser.emitStringInterp` / `promoteToOwnedString`,
 // with the source as its one part), packaged as a runtime function so the managed array/struct clone walk can
@@ -1265,7 +1210,7 @@ end 'emitInlineStringBuffer'
 // identical path: its bytes are COPIED into the new inline box, so the clone frees its own copy and never the
 // immortal blob. `singleByteGraphemes@48` is carried over from the source, an accurate copy at no extra cost.
 function buildStrClone(module StdModule)
-	var func = IrFunction.createFromStd(StrCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(StrCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1292,7 +1237,7 @@ end 'buildStrClone'
 // exists for. Asking the wider question would clone every owned String reaching a merge, which is a lost
 // write, not merely a cost. This is the one provenance test that wants a specific value rather than a sign.
 function buildStrRetain(module StdModule)
-	var func = IrFunction.createFromStd(StrRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(StrRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1326,34 +1271,23 @@ function buildStrRetain(module StdModule)
 	module.functions.push(func)
 end 'buildStrRetain'
 
-// ⚠ **THE `--- P1.8 Slice C ---` SECTION WAS HERE AND IS EMPTY** (W49 wave 5). It held `__str_range_eq`
-// and `__str_find` to the end: the raw byte-range compare and the positioned search that `startsWith`,
-// `endsWith`, `contains`, `split` and the two `StringIndex` searches were all built on. Every one of those
-// members is `stdlib/String.maxon`'s now, and the corpus reaches the same two answers through its own
-// `bytesEqual`/`findIn` — which these graphs were transcribed from. See the P1.8 Slice C grave at the head
-// of this file for why they could not be deleted one wave sooner.
-
 // ⭐ **`__str_from_bytes(arr) -> newStr` — the fused-wrapper literal whose declaration carries NO flag
 // field to pass (`Character{managed: X}`); see the constant's header.** The argument's buffer holds exactly
 // the UTF-8 bytes the record is to have, so the whole of the work is the classification below and the same
 // fused-record build every other owned String is born through.
 //
-// ⚠ **WHY IT COPIES IS STATED ONCE, AT `StrOfBufferName`, AND THE VERSION THAT USED TO BE HERE IS
-// RETRACTED.** This paragraph read *"the compiler has no shared-ownership relationship between an `Array` record
-// and a `String` record"*; `buildStrBytesView` established exactly that relationship at the P1.7 COW slice,
-// so the divergence is a CHOICE with a failure mode behind it, not a thing the compiler cannot do. Two headers
-// arguing one point is how one of them came to be false for a whole slice without anything noticing.
+// ⚠ **WHY IT COPIES IS STATED ONCE, AT `StrOfBufferName`.**
 //
-// ⚠ **AND THE PER-BYTE COST OF THE MEMBER THIS GRAPH USED TO SERVE MOVED WITH THE BODY — RECORDED, NOT
-// CURED** (W55, and the same ruling the `findIn`/`sliceBytes` note at the head of this file carries). The
-// corpus's `scanSingleByteGraphemes` (`stdlib/String.maxon:1056-1071`) asks `managed.byteAt(i)` — a
-// throwing, bounds-checked accessor lowering to a `__managed_byte_at` CALL — once per byte, where the loop
-// below walks the same bytes with an inline indexed load. The compiler has no inliner, so that is a real call per
-// byte for every `String.from(bytes)` and every `String.init(managed)` in a program. ⛔ **THE LADDER
-// CANNOT SEE IT AND A Δ0 FROM IT IS NOT EVIDENCE**: the generated scale corpus emits neither call, so every
+// ⚠ **THE CORPUS PATH PAYS A CALL PER BYTE — RECORDED, NOT CURED** (the ruling the
+// `findIn`/`sliceBytes` note at the head of this file carries). The corpus's
+// `scanSingleByteGraphemes` (`stdlib/String.maxon:1056-1071`) asks `managed.byteAt(i)` — a
+// throwing, bounds-checked accessor lowering to a `__managed_byte_at` CALL — once per byte, where
+// the loop below walks the same bytes with an inline indexed load: a call per byte for every
+// `String.from(bytes)` and every `String.init(managed)` in a program. ⛔ **THE LADDER CANNOT SEE IT
+// AND A Δ0 FROM IT IS NOT EVIDENCE**: the generated scale corpus emits neither call, so every
 // column reads flat — the CORPUS blind spot, which the CPU column does not cure.
 function buildStrFromBytes(module StdModule)
-	var func = IrFunction.createFromStd(StrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(StrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1425,7 +1359,7 @@ end 'buildStrFromBytes'
 // says in so many words that *"the two sets coincide today and nothing here relies on that"* — so reading a
 // buffer through the buffer record's own constants is what keeps that true.
 function buildStrOfBuffer(module StdModule)
-	var func = IrFunction.createFromStd(StrOfBufferName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(StrOfBufferName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1463,7 +1397,7 @@ end 'buildStrOfBuffer'
 // stated rather than assumed: a String LITERAL never reaches the write below because its blob is
 // NUL-terminated by construction.
 function buildMmToCString(module StdModule)
-	var func = IrFunction.createFromStd(MmToCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmToCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1513,7 +1447,7 @@ end 'buildMmToCString'
 // must copy. One block of its own: the strlen walk and the copy add their own, and `emitCStringToManaged`
 // hands back the block execution continues in.
 function buildMmFromCString(module StdModule)
-	var func = IrFunction.createFromStd(MmFromCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmFromCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1548,16 +1482,16 @@ end 'buildMmFromCString'
 // so nothing needs to hold it. Its dual is in `__managed_decref`, which skips the whole drop on the same
 // `ImmortalRecordCapacity` test — the two are one decision and must move together.
 //
-// ⛔⛔ **A WRITE THROUGH THIS BUFFER REACHES THE STRING NOW, WHERE THROUGH THE OLD VIEW IT WAS LOST.** The
-// view's `capacity@16 = ViewBufferCapacity` sent every in-place mutator through `__managed_cow_detach`,
-// which gave the CALLER a private copy that died at statement end — so the write silently vanished (the
-// defect W49 wave 2 measured, when every case conversion in the suite returned its receiver verbatim). The
-// receiver's own record detaches onto a buffer the STRING keeps, which is the same answer `String.setByte`
-// already gets by taking the record. ⚠ An IMMORTAL receiver is the exception and it is a FAULT, not a lost
-// write: `__managed_cow_detach` republishes `buffer@0`/`capacity@16`/`parent@32` into the record, and that
-// record is read-only. The parser promotes a `var` String at its declaration and a `let` binding refuses
-// the mutation, which is what keeps a literal off every writing path — the same guard that already stood
-// between a literal and `String.setByte`.
+// ⛔⛔ **A WRITE THROUGH THIS BUFFER REACHES THE STRING.** A minted view
+// (`capacity@16 = ViewBufferCapacity`) would send every in-place mutator through
+// `__managed_cow_detach`, giving the CALLER a private copy that dies at statement end, so the write
+// would silently vanish. The receiver's own record detaches onto a buffer the STRING keeps, which
+// is the same answer `String.setByte` already gets by taking the record. ⚠ An IMMORTAL receiver is
+// the exception and it is a FAULT, not a lost write: `__managed_cow_detach` republishes
+// `buffer@0`/`capacity@16`/`parent@32` into the record, and that record is read-only. The parser
+// promotes a `var` String at its declaration and a `let` binding refuses the mutation, which is
+// what keeps a literal off every writing path — the same guard that already stood between a literal
+// and `String.setByte`.
 //
 // ⚠ **LIFETIME: the caller holds a REFERENCE COUNT on the record, which is one guarantee STRONGER than the
 // view gave.** The view counted the allocation the bytes live in and left the record to fend for itself;
@@ -1565,7 +1499,7 @@ end 'buildMmFromCString'
 // buffer either (`__str_decref` reaches that release only as the last owner). That is one more guarantee
 // than a bare `return managed` gives, which relies on the caller keeping the String alive.
 function buildStrBytesView(module StdModule)
-	var func = IrFunction.createFromStd(StrBytesViewName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(StrBytesViewName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

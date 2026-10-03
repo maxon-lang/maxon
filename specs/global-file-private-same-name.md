@@ -34,9 +34,8 @@ correct is `8 + 110 = 118`; aliasing onto featA's 7 gives `8 + 18 = 26`; aliasin
 100 gives `101 + 111 = 212`, which is the aliasing this case exists to catch: `bumpA()` reading
 featB's slot and answering 101.
 
-`Num` is declared in BOTH files rather than once, because a `typealias` does not resolve across
-files in the reference compiler (`E2003: Unknown type: Num`). The repetition is load-bearing, not
-an oversight.
+`Num` is declared in BOTH files rather than once, because a `typealias` without `export` is
+file-private. The repetition is load-bearing, not an oversight.
 ```maxon
 // --- file: featA/a.maxon
 export typealias Num = int(i64.min to i64.max)
@@ -71,15 +70,15 @@ end 'main'
 <!-- test: error.exported-global-in-two-directories -->
 The INVERSE of the rule above, and the reason that rule needs the word "file-private". An
 `export`ed top-level binding is ONE name for the whole program — there is no directory-qualified
-spelling of a global in either reference compiler — so two files that each `export let LIMIT`
+spelling of a global — so two files that each `export let LIMIT`
 are declaring one name twice, and the second is refused wherever it sits.
 
 Two DIRECTORIES are used deliberately: namespacing scopes typealiases and functions, and it
 would be an easy mistake to extend it to bindings, where neither reference does. A reader would
 then get whichever declaration was folded first, silently.
 
-MEASURED before this was refused: the program below compiled clean and exited **42** — `alpha`'s
-declaration won and `beta`'s 34 was unreachable — where the same program is a hard duplicate in
+Without the refusal the program below would compile clean and exit **42** — `alpha`'s
+declaration winning and `beta`'s 34 unreachable — where the same program is a hard duplicate in
 the self-hosted reference (`reportDuplicateConstant`).
 ```maxon
 // --- file: alpha/a.maxon

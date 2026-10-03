@@ -11,23 +11,23 @@ category: diagnostics
 
 A program names a type through five declarations — `type`, `enum`, `union`, `interface`, and
 `typealias` — and every one of them files the name in a **whole-program map keyed by the bare name**.
-Nothing checked that two of them had not claimed the same name, so a program that declared one twice
-compiled, and a **fixed resolution cascade** picked the winner rather than the author.
+Without a check that two of them have not claimed the same name, a program that declares one twice
+compiles, and a **fixed resolution cascade** picks the winner rather than the author.
 
 That is a wrong ANSWER, and its shape depends on which declaration the cascade happens to reach first:
 
-- `type Box` and then `typealias Box = int(0 to 10)` compiled **completely clean**. The alias was
-  discarded without a word, and every `Box` in the program meant the struct.
-- The same two declarations in the opposite order compiled to the same thing, so the alias's range
-  never applied and a cast into it was reported as `E3009: Cannot cast from int to struct` — a
+- `type Box` and then `typealias Box = int(0 to 10)` would compile **completely clean**. The alias
+  would be discarded without a word, and every `Box` in the program would mean the struct.
+- The same two declarations in the opposite order would compile to the same thing, so the alias's range
+  would never apply and a cast into it would be reported as `E3009: Cannot cast from int to struct` — a
   consequence of the collision, describing nothing the author could act on.
 - Across files it is worse than order-dependent, it is unconditional: a `type Box` in **any** file
-  beat a `typealias Box` in the reader's **own** file, because the struct registry is consulted bare
+  would beat a `typealias Box` in the reader's **own** file, because the struct registry is consulted bare
   and first while the alias registry is the only one that is file-scoped.
 
-**The rule: a type name is declared exactly once.** A collision is reported at the **later**
+**The rule: a type name is declared exactly once in any one scope.** A collision is reported at the **later**
 declaration — its own file, its own name token — naming the kind the incumbent declared, which is the
-half the author cannot see. The incumbent is the line that was fine.
+half the author cannot see. The incumbent is the line that is fine.
 
 Two typealiases of the same name are covered by their own code, **E3061**; everything else is
 **E3006**, the code a name declared twice already carries for functions and for top-level
@@ -35,59 +35,50 @@ Two typealiases of the same name are covered by their own code, **E3061**; every
 sharing one name collide *regardless of which keyword introduced them*, the same kind-independence
 this rule states for types).
 
-## The ONE exception: a typealias of the SAME FORM in ANOTHER file
+## Which pairs are in ONE scope
 
-A non-exported `typealias` is **file-local** (`specs/duplicate-typealias.md`), so two files may each
-declare `Limit` and neither disturbs the other. That case is `specs/typealias-file-scope.md` and
-it stays legal — `stdlib/` depends on it in two forms at once: seven files privately declare
-`Byte = int(0 to u8.max)` (a **ranged** alias) and five declare `ByteArray = Array with Byte`
-(a **generic-instance** alias).
+Two declarations of one name are a collision when some qualified or bare spelling could not tell them
+apart. Every `typealias` form — ranged, function, generic-instance, tuple — is scoped by its file and
+directory, so the scope of a declaration is decided by where it sits and how visible it is:
 
-The carve-out is per alias FORM, not per keyword, because the three forms of `typealias` denote three
-different things:
+| the pair | outcome |
+|---|---|
+| two declarations in ONE file, any kinds | E3061 for two aliases, E3006 otherwise |
+| two NAMEABLE declarations (`export`, `public`, `module`, or any nominal) in two files of ONE directory | E3061 for two aliases, E3006 otherwise — both would be spelled `dir.Name` |
+| a FILE-PRIVATE alias and any declaration in another file | legal — the alias is visible in its own file alone |
+| two aliases in two directories, of any forms | legal — each is `dir.Name` |
+| a nominal declaration and a nameable alias in two directories | legal |
+| two nominal declarations (`type` / `enum` / `union` / `interface`) of an author program | E3006, wherever they sit |
+| an author declaration and a standard-library one | legal — each is named, `dir.Name` and `stdlib.Name` |
 
-| declaration | denotes | registry |
-|---|---|---|
-| `typealias N = int(lo to hi)` | a **ranged** alias — erases to `int`/`float` | file-scoped (`RangedAliasRegistry`) |
-| `typealias N = function(…)` | a **function** alias — mints a nominal `function` type | file-scoped (`FunctionAliasRegistry`) |
-| `typealias N = Base with Args` | a **generic-instance** alias — mints an instance | file-scoped (per declaring file) |
+What a legal pair costs is paid at the READ: a file that declares the name means its own; a file that
+declares none and sees two is E3063 and qualifies (`specs/typealias-collision.md`). Two declarations of one
+name that denote different KINDS are kept apart the same way, so a file whose only `Handler` is
+`typealias Handler = int(0 to 10)` casts `5 as Handler` against its own alias, whatever another directory's
+`Handler` is.
 
-So two *ranged* aliases in two files are legal, two *function* aliases in two files are legal, and two
-*generic-instance* aliases in two files are legal — but two declarations of one name that denote
-different KINDS are not, because a name that is a `function` type in one file and an integer in another
-has no reading a third file could be given. Measured where the kinds were not held apart: a file whose
-only `Handler` is `typealias Handler = int(0 to 10)` had its own `5 as Handler` rejected with
-`Cannot cast from int to function`, against a declaration in a file it never mentions.
-
-The exception is **cross-file and nothing more.** One file declaring the name twice is E3061 whether
-or not other files declare it too, and that is a property of *which* declaration a newcomer is judged
-against: the one that **most recently claimed the name**, never the first one. A registry keeping the
-first would measure both of a file's two declarations against the far file, find each of them the
-legal cross-file case, and accept the duplicate in silence — for every name in `stdlib/`'s shape.
-
-**Out of scope**, and unchanged: two *same-form* aliases in two files that do not AGREE — two function
-aliases with different signatures, or two generic-instance aliases over different instances — are
-still resolved last-wins. Making those agree is cross-file name resolution, the rung that also owns
-E3063; the ranged form's half of it is already enforced (E3105).
+A same-file duplicate is E3061 whether or not other files declare the name too: a newcomer is judged
+against every declaration of its own file, and a cross-file pair that is legal never stands in for the
+same-file one.
 
 ## The COMPILED name of a generic instantiation lives in the RESERVED namespace
 
 A generic instantiation has no source-level name of its own, so the compiler builds one: `Box with
 String` becomes **`Box_String`**, the base name joined to each argument's name. Every per-type symbol
 the backend emits is derived from that string — `__destruct_Box_String`, `__layout_Box_String` — and a
-declared `type Box_String` derives *its* symbols from the identical string. **There was one namespace,
-and two producers wrote into it with nothing comparing them.**
+declared `type Box_String` derives *its* symbols from the identical string. **Left as one namespace, two
+producers would write into it with nothing comparing them.**
 
-The consequence is not a resolution ambiguity, which the author might at least see: both claimants are
-installed as functions of the same name, and the last one linked wins.
+The consequence would not be a resolution ambiguity, which the author might at least see: both claimants
+would be installed as functions of the same name, and the last one linked would win.
 
 - **A LEAK.** `type Box_String` with two `String` fields, plus a `Box with String` anywhere in the
-  program: the instance's one-field cascade services both, the struct's second `String` is never
-  released, and the program exits **101** with a clean build and not one diagnostic.
+  program: the instance's one-field cascade would service both, the struct's second `String` would never
+  be released, and the program would exit **101** with a clean build and not one diagnostic.
 - **Worse, a SILENT SUCCESS.** When the two layouts happen to agree, the surviving destructor is
   *plausible* for the type it was never written for — a `Holder`-field struct destroyed through
-  `__str_decref` — and the program returns the right answer. Nothing is ever reported, and the
-  type confusion is invisible until a field moves.
+  `__str_decref` — and the program returns the right answer. Nothing would ever be reported, and the
+  type confusion would be invisible until a field moved.
 
 **The rule: the two halves of that namespace are DISJOINT, so there is nothing to compare.** `__` is
 already reserved — a declaration whose name starts with it is `E2051` — so when the string an
@@ -96,8 +87,7 @@ minted **behind that prefix instead**: `Box with String` beside a `type Box_Stri
 `__Box_String`, and its cascade is `__destruct___Box_String`. Both types exist, both run, and neither
 can reach the other's symbols.
 
-The prefix is applied **on contest only** — a name nothing else claims is spelled bare, exactly as it
-always was — and it is applied where the name is BUILT rather than at a later check, because the
+The prefix is applied **on contest only** — a name nothing else claims is spelled bare — and it is applied where the name is BUILT rather than at a later check, because the
 compiled name is baked into emitted code (a scope-exit drop calls `__destruct_<mangled>` directly).
 
 Two properties make one re-mint enough, and they are different properties:
@@ -112,11 +102,10 @@ Two properties make one re-mint enough, and they are different properties:
   reserve would break exactly this half in silence: `XBox_String` is a name `XBox with String` compiles
   to on its own, and a legal program would earn a spurious E3006.
 
-Rejecting the contest instead is what the compiler used to do, and it was wrong in a way that reached programs
-nobody would call unusual: an `[Foo, Foo]` array literal interns `Array with Foo` without naming it, so
-a program whose only crime was declaring `type Array_Foo` — a perfectly legal type name — was refused
-with an error naming an instantiation that appears **nowhere in its source**. The element type did not
-even have to match: the sweep cannot see a local's type, so a `[Bar, Bar]` literal interns
+Rejecting the contest instead would be wrong in a way that reaches programs nobody would call unusual:
+an `[Foo, Foo]` array literal interns `Array with Foo` without naming it, so a program whose only crime
+is declaring `type Array_Foo` — a perfectly legal type name — would be refused with an error naming an
+instantiation that appears **nowhere in its source**. The element type does not even have to match: the sweep cannot see a local's type, so a `[Bar, Bar]` literal interns
 `Array with Foo` too, for every declared aggregate in the file.
 
 ⚠ **A `typealias` claims nothing, and neither does an `interface`.** An alias mints no symbol of its
@@ -126,11 +115,10 @@ displaces anything. An `interface`'s only emitted artifact is `__witness_<confor
 whose head is the *conformer*, so it shares no symbol with an instance either. Only the declarations
 that mint `__destruct_<name>` — `type`, `enum`, `union` — can contest.
 
-That claim is about the DECLARED half of the namespace and it is unchanged. What changed is the
-separator it is written with, and it carries a second guarantee the old spelling did not: a `.` occurs
-in no source identifier and therefore in no compiled instance name, so a witness label can no longer be
-spelled by a DIFFERENT conformer/interface pair either. That half was silently untrue, and an
-`interface` is exactly where it bit — see *The WITNESS-TABLE label joins TWO names* below.
+That claim is about the DECLARED half of the namespace. The separator it is written with, `.`, carries
+a second guarantee: a `.` occurs in no source identifier and therefore in no compiled instance name, so
+a witness label cannot be spelled by a DIFFERENT conformer/interface pair either. An `interface` is
+exactly where that matters — see *The WITNESS-TABLE label joins TWO names* below.
 
 ## Two INSTANTIATIONS that compile to one name are still E3006
 
@@ -139,7 +127,7 @@ Two instantiations that build the same string have no such asymmetry, and the jo
 its own: `_` is a legal character in a type name, so the join is **not injective** — `Pair with
 (Box_Int, Str)` and `Pair with (Box, Int_Str)` both compile to `Pair_Box_Int_Str`. One
 `__destruct_Pair_Box_Int_Str` survives and each pair's fields are released through the OTHER pair's
-per-field callees. Measured on the compiler before this rule: build exit 0, no diagnostic, **SIGSEGV**.
+per-field callees. Without this rule: build exit 0, no diagnostic, **SIGSEGV**.
 
 **That is E3006**, reported at the `typealias` that names the later of the two — the line the author
 wrote last, the same choice every collision in this file makes. The claimant that SETTLES a name is the
@@ -169,9 +157,9 @@ diagnose.** Two instantiations are two interned declarations a front-end check c
 table is minted during LOWERING, from a memo keyed on the LABEL, so the second pair does not *collide*
 with the first — it silently *becomes* it: the mint finds its label already emitted, hands it back, and
 the dispatch site takes the address of a table built for the other pair. Every method slot then
-resolves to the other conformer's implementation, with the other conformer's `self`. Measured before
-this rule, on the two-pair program below: build exit 0, no diagnostic, and the program returned **33**
-where the answer is **43** — both dispatches reached `A_B.idc`.
+resolves to the other conformer's implementation, with the other conformer's `self`. Under a `_` join
+the two-pair program below builds with exit 0 and no diagnostic, and returns **33** where the answer is
+**43** — both dispatches reach `A_B.idc`.
 
 Which pair wins is not which one is declared first; it is **which dispatch is lowered first**, so the
 same two declarations return 33 or 44 depending only on the order two calls appear in an expression.
@@ -200,8 +188,8 @@ writes at a call site, and a witness label is a name no source can spell.
 ## Tests
 
 <!-- test: error.type-then-typealias -->
-The silent case. `Box` is declared as a `type` and then as a ranged `typealias`; the alias was
-discarded with no diagnostic at all and this program compiled and returned 7.
+The silent case. `Box` is declared as a `type` and then as a ranged `typealias`; without the rule the
+alias is discarded with no diagnostic at all and this program compiles and returns 7.
 ```maxon
 typealias Small = int(0 to 100)
 
@@ -226,7 +214,7 @@ error E3006: <fragment>:11:11: duplicate definition of 'Box' — already declare
 
 <!-- test: error.typealias-then-type -->
 The same collision written the other way round. It is reported at the `type`, which is the later
-declaration here — never at the alias, which was fine when it was written.
+declaration here — never at the alias, which is fine on its own.
 ```maxon
 typealias Small = int(0 to 100)
 typealias Box = int(0 to 10)
@@ -245,16 +233,15 @@ error E3006: <fragment>:5:6: duplicate definition of 'Box' — already declared 
 
 
 <!-- test: crossfile-type-and-file-private-typealias-coexist -->
-Across files, with a FILE-PRIVATE alias — and this is the direction file scoping now does rescue.
-`b.maxon`'s own `typealias Box` used to be unreachable from `b.maxon` itself, because the struct
-registry is bare and is consulted first: the cast below was rejected with `E3009: Cannot cast from int
-to struct`, against a `type` declared in a file it never names, and an `E3006` blamed the pair as a
-duplicate.
+Across files, with a FILE-PRIVATE alias — and this is the direction file scoping rescues. The struct
+registry is bare, so if it were consulted first `b.maxon`'s own `typealias Box` would be unreachable
+from `b.maxon` itself: the cast below would be rejected with `E3009: Cannot cast from int to struct`,
+against a `type` declared in a file it never names, and an `E3006` would blame the pair as a duplicate.
 
 **Neither declaration is a duplicate of anything.** A non-exported `typealias` is file-local, so
 `a.maxon`'s `export type Box` cannot see it and it cannot see the struct — the two names never meet.
 `b.maxon`'s cast resolves against `b.maxon`'s own alias, which is the reader-file rule the ranged
-registry has always applied, now applied to the CASCADE that picks which registry answers. The
+registry applies, applied to the CASCADE that picks which registry answers. The
 exported pair that genuinely does collide is the next test.
 
 `main.maxon` names `Box` too, and means the STRUCT — a's declaration is the only one it can see — while
@@ -300,10 +287,9 @@ end 'main'
 
 
 <!-- test: error.crossfile-type-and-exported-typealias -->
-The boundary the previous test does not cross: `b.maxon`'s alias is `export`ed, so it IS visible to
-`a.maxon`, the two declarations genuinely claim one name in one scope, and the pair stays a duplicate.
-File scoping rescues a pair that never meets; it does not merge two that do. A `type` and a `typealias`
-of one name, both reachable from one file, is exactly what no qualification could disambiguate.
+The boundary the previous test does not cross: `b.maxon`'s alias is `export`ed, and it sits in the same
+directory as `a.maxon`'s `type`, so both would be spelled `export.Score` — one name in one scope, and the
+pair is a duplicate. File scoping rescues a pair that never meets; it does not merge two that do.
 ```maxon
 // --- file: a.maxon
 typealias Small = int(0 to 100)
@@ -330,9 +316,38 @@ error E3006: <fragment>:10:18: duplicate definition of 'Score' — already decla
 ```
 
 
+<!-- test: cross-directory-type-and-exported-typealias-coexist -->
+A `type` and an exported `typealias` of one name in two DIRECTORIES coexist: each is named by its directory, so
+no reader has to guess which one a spelling means.
+```maxon
+// --- file: a/score.maxon
+export type Score
+	export let v as ExitCode
+
+	export static function make() returns Score
+		return Score{v: 40}
+	end 'make'
+end 'Score'
+
+// --- file: b/score.maxon
+export typealias Score = int(0 to 10)
+
+// --- file: app/main.maxon
+function total(s a.Score, n b.Score) returns ExitCode
+	return s.v + (n as ExitCode)
+end 'total'
+
+function main() returns ExitCode
+	return total(a.Score.make(), n: 2)
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: error.duplicate-type-same-file -->
-Two `type` declarations of one name in one file. Nothing diagnosed this either: the second layout
-simply replaced the first in the registry, so a field the first declared vanished.
+Two `type` declarations of one name in one file. Undiagnosed, the second layout would simply replace
+the first in the registry, so a field the first declared would vanish.
 ```maxon
 typealias Small = int(0 to 100)
 
@@ -471,10 +486,9 @@ error E3061: <fragment>:3:11: Duplicate typealias 'Handler'
 The carve-out is per PAIR, and the pair that matters is the newcomer against the declaration that
 most recently claimed the name — **never** against the first one. `a.maxon` declares `L` and `b.maxon`
 declares it twice: `b.maxon`'s second `L` is a same-file duplicate and stays E3061, exactly as it
-would if `a.maxon` did not exist. Measured against a registry that kept the FIRST declaration
-instead: each of `b.maxon`'s two was compared with `a.maxon`'s, found to be the legal cross-file case,
-and accepted — the duplicate compiled in silence. That is `stdlib/`'s own shape (seven files declare
-`Byte`), so it would have been open for every name the rule exists to protect.
+would if `a.maxon` did not exist. Against a registry that kept the FIRST declaration instead, each of
+`b.maxon`'s two would be compared with `a.maxon`'s, found to be the legal cross-file case, and accepted —
+the duplicate would compile in silence.
 ```maxon
 // --- file: a.maxon
 export typealias L = int(0 to 10)
@@ -498,9 +512,8 @@ error E3061: <fragment>:11:11: Duplicate typealias 'L'
 
 
 <!-- test: error.duplicate-generic-alias-same-file-while-another-file-declares-it -->
-The same hole for the GENERIC-INSTANCE form, which is the half of the carve-out `stdlib/` exercises
-with `ByteArray = Array with Byte` in five files. Nothing checked a generic alias for duplication
-before this rule existed, so the file-local carve-out must not hand it a way to stay unchecked.
+The same hole for the GENERIC-INSTANCE form. The file-local carve-out must not hand a generic alias
+a way to stay unchecked for duplication.
 ```maxon
 // --- file: base.maxon
 
@@ -529,21 +542,21 @@ error E3062: <fragment>:10:11: unused typealias: 'G'
 
 
 <!-- test: crossfile-ranged-and-function-alias-coexist -->
-Two files, one name, two alias FORMS — and the carve-out now covers it, because the property that
-makes a pair legal is that neither declaration can see the other, not that they happen to be spelled
-alike. The function-alias registry was bare and whole-program, so it answered for `a.maxon` too, and
-`a.maxon`'s own `5 as Handler` was rejected with `Cannot cast from int to function` — a diagnostic in
-a file whose only `Handler` is an `int` alias, naming a declaration it never mentions. Both aliases
-are file-private, so each answers for its own file and neither is a duplicate.
+Two directories, one exported name, two alias FORMS — legal, because each is named by its own
+directory (`alpha.Handler`, `beta.Handler`) and the forms do not decide it. Each declaring file means its
+own: `alpha/a.maxon`'s `useA` returns its `int` alias and `beta/b.maxon`'s `useB` takes its function alias.
+A bare, whole-program function-alias registry would answer for `alpha/a.maxon` too, rejecting its own
+`Handler` with `Cannot cast from int to function` — a diagnostic in a file whose only `Handler` is an `int`
+alias, naming a declaration it never mentions.
 ```maxon
-// --- file: a.maxon
+// --- file: alpha/a.maxon
 export typealias Handler = int(0 to 10)
 
 export function useA() returns Handler
 	return 5
 end 'useA'
 
-// --- file: b.maxon
+// --- file: beta/b.maxon
 export typealias Handler = function() returns Integer
 
 export function useB(h Handler) returns ExitCode
@@ -567,9 +580,8 @@ typealias Integer = int(i64.min to i64.max)
 
 
 <!-- test: crossfile-generic-alias-same-name-still-legal -->
-The guard against overreach, and it is not hypothetical: this is exactly the shape `stdlib/` already
-holds, where FIVE files each declare `typealias ByteArray = Array with Byte`. Two files declaring one
-generic-instance alias is the file-local case, the same as two ranged aliases, and it stays legal.
+The guard against overreach: two files each declaring one FILE-PRIVATE generic-instance alias is the
+file-local case, the same as two ranged aliases, and it is legal.
 ```maxon
 // --- file: base.maxon
 
@@ -612,15 +624,15 @@ end 'main'
 
 
 <!-- test: crossfile-generic-alias-same-name-with-an-overloaded-parameter -->
-The legal pair above with ONE thing added — the callee is OVERLOADED — and that addition was a FALSE
-REFUSAL of a program nothing is wrong with. `a.maxon` and `b.maxon` each declare a generic-instance
-alias `Thing` denoting a different instance, which the case above establishes is allowed; `b.maxon`
-holds a value `a.maxon` made and hands it to `a.maxon`'s `take`, whose parameter is declared with
-`a.maxon`'s `Thing`. An overload candidate's parameter type is the whole-program sweep's, repaired at
-the call — and the repair GATED on the candidate's declaring file while RESOLVING the instance in the
-CALLING file. One name, one door, two files: `take`'s `Bx with Small` parameter was scored as
-`b.maxon`'s `Bx with String`, so no candidate fitted, the overload went unsettled, and the call's
-result was typed from the single return type the index keeps per NAME — the OTHER overload's. It was
+The legal pair above with ONE thing added — the callee is OVERLOADED — and a program nothing is wrong
+with, which a repair that names two files would falsely refuse. `a.maxon` and `b.maxon` each declare a
+generic-instance alias `Thing` denoting a different instance, which the case above establishes is
+allowed; `b.maxon` holds a value `a.maxon` made and hands it to `a.maxon`'s `take`, whose parameter is
+declared with `a.maxon`'s `Thing`. An overload candidate's parameter type is the whole-program sweep's,
+repaired at the call — and a repair that GATED on the candidate's declaring file while RESOLVING the
+instance in the CALLING file would score `take`'s `Bx with Small` parameter as `b.maxon`'s
+`Bx with String`. No candidate would fit, the overload would go unsettled, and the call's result would
+be typed from the single return type the index keeps per NAME — the OTHER overload's:
 **`E3005: Cannot return 'String' from function declared to return 'int'`**, naming a type this call
 never meant.
 ```maxon
@@ -689,9 +701,9 @@ ab
 The same defect with an `int` type argument on both sides, because resolving an instance in the wrong
 file is not a managed-type effect and a case that only ever showed it through a `String` would let a
 repair that special-cases one look complete. Nothing here is a `String`: `a.maxon` means
-`Bx with Small` and `b.maxon` means `Bx with Wide`, two ranged aliases over the same primitive. The
-parameter was still scored in the calling file's scope, still fitted nothing, and the same borrowed
-return type came back.
+`Bx with Small` and `b.maxon` means `Bx with Wide`, two ranged aliases over the same primitive. A
+parameter scored in the calling file's scope would still fit nothing, and the same borrowed return type
+would come back.
 ```maxon
 // --- file: base.maxon
 
@@ -760,7 +772,7 @@ The BOUND on that repair, and the condition it isolates. This is the same disagr
 one alias name, two different instances, a value crossing from the file that made it into the file
 that means the other one — with the overload and nothing else removed. A callee's recorded RETURN type
 is re-scoped into its DECLARING file before any file is parsed, so a crossing that goes through a
-declared signature was never wrong here and may not become wrong: `take` is resolved by name, its
+declared signature is right here and may not become wrong: `take` is resolved by name, its
 parameter is checked against the signature it actually has, and 7 comes back. What the overload set
 adds is a SWEPT parameter type read at the call site, in front of a repair that has to name one file
 throughout; a repair that reached further than that would turn this case red.
@@ -907,16 +919,11 @@ error E3062: <fragment>:16:11: unused typealias: 'Thing'
 
 
 <!-- test: error.crossfile-generic-and-ranged-alias-a-third-file-spells-it -->
-The case that actually reaches the tie-break. In both pairs above the file that spells `Thing` also
-declares one of the two forms, so the contest is settled in the reader's own file and the ranking is
-never consulted. Here `c.maxon` declares neither: both claims are file-private and invisible to it,
-both arrive at the hidden fallback tier, and which declaration a stranger means falls out of the
-order the claims were pushed. `c.maxon` must mean `a.maxon`'s generic instance — `Thing.create`
-resolves through it to `Bx with Small` — and the credit that spelling earns must land on the same
-declaration the call resolved to, leaving `b.maxon`'s ranged `Thing` the only unused one. Change the
-order the alias kinds are pushed in and the credit moves to the other declaration, turning a true
-E3062 into a dropped one and an honest declaration into a false one, with nothing else in the suite
-noticing.
+In both pairs above the file that spells `Thing` also declares one of the two forms, so the reader's
+own declaration answers. Here `c.maxon` declares neither, and both declarations are file-private, so
+no declaration of `Thing` is visible to it. A non-exported alias is unreachable from another file:
+the spelling in `c.maxon` is refused with the hidden-name refusal, it credits neither declaration,
+and both are reported unused.
 ```maxon
 // --- file: base.maxon
 
@@ -957,16 +964,18 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3062: <fragment>:16:11: unused typealias: 'Thing'
 error E3062: <fragment>:23:11: unused typealias: 'Thing'
+error E3008: <fragment>:31:10: typealias 'Thing' is not exported
 ```
 
 
 <!-- test: instantiation-compiles-onto-declared-type -->
-The LEAK, now legal. `Box with String` would compile to `Box_String`, and so does the `type Box_String`
-below — `installGenericInstanceDestructors` and `installStructDestructors` each emitted a
-`__destruct_Box_String` and the later install won. The struct's SECOND `String` was then never
-released: the build exited 0 with no diagnostic whatever and the program exited **101**, the leak-check
-code. Under the reserved prefix the instance is `__Box_String` instead, so the two cascades are
+The LEAK shape, legal. Without the reserved prefix `Box with String` would compile to `Box_String`, and
+so does the `type Box_String` below — `installGenericInstanceDestructors` and `installStructDestructors`
+would each emit a `__destruct_Box_String` and the later install would win. The struct's SECOND `String`
+would then never be released: the build exits 0 with no diagnostic whatever and the program exits
+**101**, the leak-check code. Under the reserved prefix the instance is `__Box_String` instead, so the two cascades are
 different functions; both objects are built, both are dropped, and each answers for itself.
 ```maxon
 typealias Num = int(0 to 100)
@@ -1006,11 +1015,11 @@ end 'main'
 
 
 <!-- test: instantiation-compiles-onto-declared-type-matching-layout -->
-The SILENT SUCCESS, which was the more dangerous half. The two claimants have the SAME layout — one
-pointer field — so the surviving cascade was *plausible* for the type it was never written for: the
-struct's `Holder` box was released through the instance's `__str_decref`, which lands on a refcount
-header that is really there. The program returned the right answer and leaked nothing, nothing was
-reported, and nothing would be until a field moved. Disjointness does not look at layouts, so this
+The SILENT SUCCESS, which is the more dangerous half. The two claimants have the SAME layout — one
+pointer field — so a surviving shared cascade would be *plausible* for the type it was never written for:
+the struct's `Holder` box would be released through the instance's `__str_decref`, which lands on a
+refcount header that is really there. The program would return the right answer and leak nothing, and
+nothing would be reported until a field moved. Disjointness does not look at layouts, so this
 shape and the leaking one are cured identically — and the leak check still runs, so a cascade servicing
 the wrong type would show up here as an exit **101** rather than as a plausible answer.
 ```maxon
@@ -1060,8 +1069,8 @@ end 'main'
 No declared type is involved at all: the base name and the arguments are joined with `_`, and `_` is a
 legal character in a type name, so the join is **not injective**. `Pair with (Box_Int, Str)` and `Pair
 with (Box, Int_Str)` both compile to `Pair_Box_Int_Str`, one `__destruct_Pair_Box_Int_Str` survives,
-and each pair's two fields are released through the OTHER pair's per-field callees. Measured on the
-compiler before this rule: build exit 0, no diagnostic, **SIGSEGV**. It is reported at the `typealias`
+and each pair's two fields are released through the OTHER pair's per-field callees. Without the
+rule: build exit 0, no diagnostic, **SIGSEGV**. It is reported at the `typealias`
 that names the later instantiation, for the reason the whole file reports at the later declaration.
 ```maxon
 type Str
@@ -1369,8 +1378,6 @@ end 'Box'
 export typealias SBox = Box with String
 
 // --- file: b.maxon
-export typealias Num = int(0 to 100)
-
 export type Box_String
 	export var a as String
 	export static function make() returns Self
@@ -1394,12 +1401,12 @@ end 'main'
 
 
 <!-- test: array-literal-instance-onto-declared-type -->
-The shape that made this a defect rather than a corner. Nothing here writes a generic instantiation at
+The shape that makes this a defect rather than a corner. Nothing here writes a generic instantiation at
 all: `[Foo.create(1), Foo.create(2)]` is an array literal, and the declaration sweep interns
-`Array with Foo` behind it because that is the only way the parser can name the literal's type. So a
-program whose author wrote one perfectly ordinary type name — `Array_Foo` — was refused with an error
-naming `Array with Foo`, an instantiation that appears **nowhere in its source**. The bootstrap accepts
-it and returns 9, because its instance was `__Array_Foo` all along.
+`Array with Foo` behind it because that is the only way the parser can name the literal's type. So
+refusing the contest would refuse a program whose author wrote one perfectly ordinary type name —
+`Array_Foo` — with an error naming `Array with Foo`, an instantiation that appears **nowhere in its
+source**. The program builds and returns 9.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -1517,15 +1524,14 @@ end 'main'
 <!-- test: declared-type-owning-a-string-named-like-an-array-instance -->
 The declared type is the one that OWNS the `String` here, and that is a different question from the
 case above: a managed struct puts `__destruct_Array_Foo` into the needed-destructor set, and that set is
-keyed by NAME, so the name once pulled the base-less `Array with Foo` instance in behind it and the
-compiler died — `panic ProgramSignatures.baseLayoutOf: base struct 'Array' is not declared`, a stack
-trace with no diagnostic at all.
+keyed by NAME, so the name can pull the base-less `Array with Foo` instance in behind it and kill the
+compiler — `panic ProgramSignatures.baseLayoutOf: base struct 'Array' is not declared`, a stack trace
+with no diagnostic at all.
 
-⚠ **THIS CASE PINS THE BUILTIN GUARD, NOT DISJOINTNESS**, and the difference is measured rather than
-argued: the guard (`genericInstanceHasStringField` / `genericInstanceHasManagedField` /
-`addNestedInstanceDestructors` returning early for an `Array`/`Set` instance) landed before the reserved
-prefix did, and with `claimsCompiledTypeName` forced to answer *no* — every other declaration-contest
-case in this file failing — **this one still passes.** Disjointness is the OUTER defence: the instance
+⚠ **THIS CASE PINS THE BUILTIN GUARD, NOT DISJOINTNESS**: the guard (`genericInstanceHasStringField` /
+`genericInstanceHasManagedField` / `addNestedInstanceDestructors` returning early for an `Array`/`Set`
+instance) is independent of the reserved prefix, and with `claimsCompiledTypeName` forced to answer
+*no* — every other declaration-contest case in this file failing — **this one still passes.** Disjointness is the OUTER defence: the instance
 is `__Array_Foo`, so the struct's cascade names only itself and the guard is never reached. Both are
 real and neither is a substitute for the other; a case that credited the wrong one would go on passing
 after the one doing the work was deleted.
@@ -1719,7 +1725,7 @@ The `enum` half, written as a PAYLOAD-FREE enum on purpose: it mints no per-type
 nothing about this program would break if the roster dropped it — which is precisely why it needs a case
 rather than an argument. The roster is one predicate over one registry (`enum` and `union` share it), and
 this pins that the payload-free spelling reaches the same answer as the managed one above rather than
-some third path. The bootstrap accepts it and returns 9.
+some third path. The program builds and returns 9.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -1755,15 +1761,14 @@ end 'main'
 
 
 <!-- test: interface-named-like-a-compiled-instance-name -->
-The other side of the roster: an `interface` is NOT a claimant, and it used to be one. Its only emitted
-artifact is `__witness_<conformer>.<interface>`, whose head is the CONFORMER, so it shares no symbol with
-an instance and there is nothing to move out of the way — the instance keeps the bare `Box_String` and
-the interface keeps its name. The compiler rejected this program with E3006 before the roster shrank; the
-bootstrap has always built it and returned 9.
+The other side of the roster: an `interface` is NOT a claimant. Its only emitted artifact is
+`__witness_<conformer>.<interface>`, whose head is the CONFORMER, so it shares no symbol with an instance
+and there is nothing to move out of the way — the instance keeps the bare `Box_String` and the interface
+keeps its name. The program builds and returns 9.
 
-The separator moved from `_` to `.` under this case and it must still return 9 — and the disjointness
-it pins got STRONGER, not weaker: a `.` occurs in no compiled instance name, so `__witness_Pen.Box_String`
-is now unreachable from the instance side by the character class as well as by its head.
+The `.` separator makes the disjointness this case pins stronger: a `.` occurs in no compiled instance
+name, so `__witness_Pen.Box_String` is unreachable from the instance side by the character class as well
+as by its head.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -1833,10 +1838,9 @@ error E2051: <fragment>:4:6: identifier '__Array_Foo' is reserved: declarations 
 
 <!-- test: witness-label-two-pairs-that-underscore-join-alike -->
 The witness half of the same non-injective join, and the one with no diagnostic to fall back on.
-`(A_B, C)` and `(A, B_C)` both spelled `__witness_A_B_C`, so the second pair's mint found the first
-pair's table already emitted and handed it back: `HoldB.go` dispatched through `HoldC`'s table and
-reached `A_B.idc`. Measured before the separator moved: build exit 0, no diagnostic, **33** — where
-`3 + 4 * 10` is 43.
+Under a `_` join `(A_B, C)` and `(A, B_C)` both spell `__witness_A_B_C`, so the second pair's mint finds
+the first pair's table already emitted and hands it back: `HoldB.go` dispatches through `HoldC`'s table
+and reaches `A_B.idc` — build exit 0, no diagnostic, **33** — where `3 + 4 * 10` is 43.
 ```maxon
 typealias Integer = int(0 to u32.max)
 
@@ -1903,11 +1907,11 @@ end 'main'
 
 
 <!-- test: witness-label-the-other-pair-settles-the-label-first -->
-The same two pairs with the OTHER one settling the shared label, which is what shows the old answer was
-not merely wrong but arbitrary. The declarations are in the opposite order AND the two dispatches are
-evaluated in the opposite order — and it is the DISPATCH order that decided, because the table is minted
-where a call materializes its witness argument, not where a type is declared. Measured before the
-separator moved: **44**, both dispatches reaching `A.idb`, against 33 for the identical program with the
+The same two pairs with the OTHER one settling the shared label, which is what shows a `_` join's answer
+is not merely wrong but arbitrary. The declarations are in the opposite order AND the two dispatches are
+evaluated in the opposite order — and it is the DISPATCH order that decides, because the table is minted
+where a call materializes its witness argument, not where a type is declared. Under a `_` join this
+program answers **44**, both dispatches reaching `A.idb`, against 33 for the identical program with the
 two calls swapped. The answer is 43 either way.
 ```maxon
 typealias Integer = int(0 to u32.max)
@@ -1976,9 +1980,9 @@ end 'main'
 
 <!-- test: witness-label-three-pairs-that-underscore-join-alike -->
 The witness twin of `error.three-instantiations-compile-to-one-name`: `_` splits `A_B_C_D` three ways, so
-`(A_B_C, D)`, `(A_B, C_D)` and `(A, B_C_D)` all spelled one label. Unlike the instantiation trio — which
-is reported twice and never compiles — this one built clean and returned **111**: three distinct
-interfaces, three distinct conformers, one table, every dispatch landing on `A_B_C.d`. Each of the three
+`(A_B_C, D)`, `(A_B, C_D)` and `(A, B_C_D)` would all spell one label. Unlike the instantiation trio —
+which is reported twice and never compiles — under a `_` join this one builds clean and returns **111**:
+three distinct interfaces, three distinct conformers, one table, every dispatch landing on `A_B_C.d`. Each of the three
 must reach its own conformer, which the digits of 123 read off individually.
 ```maxon
 typealias Small = int(0 to 100)
@@ -2075,10 +2079,9 @@ end 'main'
 ONE conformer with TWO interfaces, which is the pair the head-is-the-conformer argument alone does not
 separate. `A implements B, B_C` needs two tables — `__witness_A.B` and `__witness_A.B_C` — and they stay
 distinct under either separator, because their heads agree and only the tails differ. The third pair is
-what breaks: `(A_B, C)` joined to the SAME `__witness_A_B_C` as `(A, B_C)`, so `HoldC.go` dispatched
-`A_B.c` through `A`'s table and reached `A.bc`. Measured before the separator moved: **144**, where the
-answer is 142 — the first digit already correct, which is why the two-interface half has to be in the
-program to prove it was never at risk.
+what breaks: under a `_` join `(A_B, C)` spells the SAME `__witness_A_B_C` as `(A, B_C)`, so `HoldC.go`
+dispatches `A_B.c` through `A`'s table and reaches `A.bc` — **144**, where the answer is 142 — the first
+digit correct, which is why the two-interface half has to be in the program to prove it is not at risk.
 ```maxon
 typealias Small = int(0 to 100)
 
@@ -2167,13 +2170,13 @@ end 'main'
 ⭐⭐ **A CALLEE'S RETURN TYPE IS A SLOT OF THE FILE THAT DECLARED IT, NEVER OF THE FILE CALLING IT** —
 the shape neither of the coexistence cases above reaches, and the one where getting it wrong is SILENT.
 `a.maxon` means a file-private `int(0 to 5)` by `Widget` and `b.maxon` an `export type` of the same name;
-the two coexist because neither declaration can see the other. `main.maxon` declares NEITHER, and the
+the two coexist because the alias is visible in `a.maxon` alone, where it wins. `main.maxon` declares NEITHER, and the
 RECORD `fromB` hands it has to be read as `b.maxon`'s `Widget` — a name folded whole-program, or resolved
 in the caller's scope, would give `main.maxon` the integer meaning and dereference a record through it.
 
-Read with the caller's file it was **`E3005: Cannot return 'struct' from function declared to return
-'int'`**, and through the field read below it dereferenced the integer as a record — **exit 139, clean
-compile, no diagnostic.**
+Read with the caller's file it would be **`E3005: Cannot return 'struct' from function declared to return
+'int'`**, and through the field read below it would dereference the integer as a record — **exit 139,
+clean compile, no diagnostic.**
 
 ⚠ A file-private type may not be named in a signature another file calls (E3167), so the file whose meaning is private reads its own name INSIDE the body and hands the boundary an `ExitCode`. The contested pair is unchanged: one name, two files, two meanings.
 ```maxon
@@ -2217,8 +2220,8 @@ end 'main'
 The same rule through the arm that has no nominal declaration in it at all — a RANGED alias in one file
 against a TUPLE alias in another. It is a different code path (a tuple alias resolves to the tuple's own
 `structRef`, not to a declared `type`), so narrowing only the nominal side of the cascade leaves it open:
-the tuple `fromB` returns was read as `main.maxon`'s meaning of `Pair`, and a caller that folded the name
-would bind an integer to a two-slot destructuring.
+the tuple `fromB` returns would be read as `main.maxon`'s meaning of `Pair`, and a caller that folded the
+name would bind an integer to a two-slot destructuring.
 
 ⚠ A file-private type may not be named in a signature another file calls (E3167), so the file whose meaning is private reads its own name INSIDE the body and hands the boundary an `ExitCode`. The contested pair is unchanged: one name, two files, two meanings.
 ```maxon
@@ -2404,9 +2407,9 @@ end 'main'
 
 <!-- test: crossfile-float-alias-against-a-nominal-declaration -->
 A FLOAT ranged alias in the contest. `resolveFloatAliasType` reaches the ranged registry through
-`aliasOf`, which is reader-aware about the RANGE and was blind to the KIND — so `b.maxon`'s own
-`returns Level` was resolved against `a.maxon`'s float alias, and the refusal landed **inside `b.maxon`,
-about a declaration its author never saw.**
+`aliasOf`, which is reader-aware about the RANGE and must be about the KIND too — otherwise `b.maxon`'s
+own `returns Level` would be resolved against `a.maxon`'s float alias, and the refusal would land
+**inside `b.maxon`, about a declaration its author never saw.**
 ```maxon
 // --- file: a.maxon
 typealias Level = float(0.0 to 5.0)
@@ -2497,8 +2500,8 @@ end 'main'
 NEITHER claimant and mentions `Container` only in `relay`'s signature — a function nothing calls — so the
 boxed union arrives as a DISCARDED owned temporary and every check that would have refused it is bypassed.
 
-The fault was not in `main.maxon` at all: `a.maxon`'s `return 2 as Container` had its value classified by
-the whole-program enum registry, which found `b.maxon`'s BOXED union, and the return path emitted
+The fault this guards is not in `main.maxon` at all: were `a.maxon`'s `return 2 as Container` classified
+by the whole-program enum registry, it would find `b.maxon`'s BOXED union, and the return path would emit
 **`__mm_retain` on the integer 2** — `x64.movRegImm32 rcx, 2` / `x64.callDirect __mm_retain`, in a function
 whose own file has no union in it. **Exit 139, clean compile, no output**, against a control that differs
 only in the name.
@@ -2558,11 +2561,11 @@ parameter's declared type, an indirect call. Here `a.maxon` reassigns its OWN by
 the fault is entirely inside `a.maxon` — the value never leaves it.
 
 A reassigned parameter is a CELL, and the cell asks the memory-management tier whether its content is
-managed. That tier had no reading file, so it answered off `b.maxon`'s declaration: `useA(c Container)`
-doing `c = 4` emitted **`__mm_incref` on the literal 4** and `__mm_decref` on a header at address **2** —
-exit **139** against a control of 7. The panic string two blocks up in the same function still read
-*"outside typealias 'Container'"*: the compiler knew it was a ranged alias while the tier disagreed,
-inside one function body.
+managed. A tier with no reading file would answer off `b.maxon`'s declaration: `useA(c Container)`
+doing `c = 4` would emit **`__mm_incref` on the literal 4** and `__mm_decref` on a header at address
+**2** — exit **139** against a control of 7 — while the panic string two blocks up in the same function
+reads *"outside typealias 'Container'"*: the compiler knowing it is a ranged alias while the tier
+disagrees, inside one function body.
 ```maxon
 // --- file: a.maxon
 typealias Container = int(0 to 5)
@@ -2604,7 +2607,7 @@ end 'main'
 
 <!-- test: crossfile-reassigned-parameter-against-a-struct-claimant -->
 The same local shape with a `type` claimant rather than a union, because the two reach the managed
-classifier through different arms of it and only one of them was measured the first time.
+classifier through different arms of it.
 ```maxon
 // --- file: a.maxon
 typealias Widget = int(0 to 5)
@@ -2647,10 +2650,10 @@ end 'main'
 <!-- test: error.crossfile-a-contested-name-does-not-credit-the-other-declaration -->
 ⭐ **THE UNUSED-EXPORT AUDIT MUST NOT COUNT ONE FILE'S USES OF ITS OWN ALIAS AS REFERENCES TO ANOTHER
 FILE'S EXPORT.** `b.maxon`'s `export union Container` is named by nobody outside `b.maxon`, so it earns
-E3092 — and it did, until `a.maxon`'s file-private `typealias Container` was given the same spelling.
-The reference walk credited EVERY tracked declaration wearing the name, so `a.maxon`'s uses of its own
-alias silently satisfied the export and **the diagnostic vanished.** Not memory-unsafe, but it made this
-audit's answer depend on an unrelated file's choice of word.
+E3092, whatever spelling `a.maxon`'s file-private `typealias Container` shares with it. A reference walk
+crediting EVERY tracked declaration wearing the name would let `a.maxon`'s uses of its own alias silently
+satisfy the export and **the diagnostic would vanish.** Not memory-unsafe, but it would make this audit's
+answer depend on an unrelated file's choice of word.
 ```maxon
 // --- file: a.maxon
 typealias Container = int(0 to 5)
@@ -2692,14 +2695,14 @@ surface, so whoever spawns a `Calc` has to be able to name what the message take
 and `b.maxon` writes all three over declarations of its own that no other file can see. Four positions,
 four diagnostics, in signature order: the two parameters, the return type, then the throws clause.
 
-⛔ **THE E3113 ROAD THIS CASE USED TO PIN IS NO LONGER REACHABLE FROM A LEGAL PROGRAM.** The same program
-asked a sharper question — `b.maxon`'s ranged `Fault` names no enum or union, while `a.maxon`'s `enum
-Fault` is a declaration `b.maxon` cannot name, so the clause was refused E3113 even though an `enum Fault`
-exists in the program. E3167 now stands in front of that refusal, and the shape cannot be rebuilt: an
-EXPORTED `typealias Fault` beside an `enum Fault` anywhere in the program is a duplicate definition
-(E3006, measured, in one directory and in two), so the throws clause cannot name a visible ranged `Fault`
-while the enum exists. `ServiceCompanions.mintServiceReplyErrorType` asks the same reader and is harmless
-only while a refusal holds here; the refusal is now E3167's.
+⛔ **E3167 STANDS IN FRONT OF E3113 HERE, AND THE E3113 ROAD IS NOT REACHABLE FROM A LEGAL PROGRAM.**
+`b.maxon`'s ranged `Fault` names no enum or union, while `a.maxon`'s `enum Fault` is a declaration
+`b.maxon` cannot name, so E3113 would refuse the clause even though an `enum Fault` exists in the
+program. That shape cannot be rebuilt around E3167 in one directory: an EXPORTED `typealias Fault` beside
+an `enum Fault` there is a duplicate definition (E3006), so the throws clause cannot name a visible ranged
+`Fault` while the enum exists.
+`ServiceCompanions.mintServiceReplyErrorType` asks the same reader and is harmless only while a refusal
+holds here; the refusal is E3167's.
 ```maxon
 // --- file: a.maxon
 export enum Fault implements Error
@@ -2736,6 +2739,156 @@ error E3167: <fragment>:19:18: exported function 'Calc.divide' names file-privat
 error E3167: <fragment>:19:18: exported function 'Calc.divide' names file-private typealias 'Integer' in the type of parameter 'by'
 error E3167: <fragment>:19:18: exported function 'Calc.divide' names file-private typealias 'Integer' in its return type
 error E3167: <fragment>:19:18: exported function 'Calc.divide' names file-private typealias 'Fault' in its throws clause
+```
+
+<!-- test: a-service-throws-an-enum-qualified-past-another-directorys-alias -->
+An exported `typealias Fault` in `calc/` and an `enum Fault` in `faults/` coexist, because each is named by
+its directory. `calc/`'s service message writes `throws faults.Fault`, which is the enum, so the reply
+carries the enum's case back to the awaiting caller.
+```maxon
+// --- file: calc/alias.maxon
+export typealias Fault = int(0 to 10)
+
+// --- file: faults/fault.maxon
+export enum Fault implements Error
+	broke
+end 'Fault'
+
+// --- file: calc/calc.maxon
+export typealias Count = int(i64.min to i64.max)
+
+export type Calc
+	var count as Count
+
+	export static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n Count, by Count) returns Count throws faults.Fault
+		if by == 0 'zero'
+			throw faults.Fault.broke
+		end 'zero'
+
+		return n + by + self.count
+	end 'divide'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let v = try await h.divide(10, by: 2) otherwise return 70
+	print("{v}\n")
+
+	let w = try await h.divide(1, by: 0) otherwise return 3
+	return w as ExitCode
+end 'main'
+```
+```stdout
+12
+```
+```exitcode
+3
+```
+
+<!-- test: error.a-service-throws-the-alias-its-own-directory-declares -->
+<!-- unsupported-targets: wasm32-wasi -->
+The same pair, with the message's clause naming `calc.Fault` — the ranged alias. That names no enum or union,
+so the clause is refused, whatever `faults/` declares under the same name.
+```maxon
+// --- file: calc/alias.maxon
+export typealias Fault = int(0 to 10)
+
+// --- file: faults/fault.maxon
+export enum Fault implements Error
+	broke
+end 'Fault'
+
+// --- file: calc/calc.maxon
+export typealias Count = int(i64.min to i64.max)
+
+export type Calc
+	var count as Count
+
+	export static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n Count, by Count) returns Count throws calc.Fault
+		return n + by + self.count
+	end 'divide'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let v = try await h.divide(10, by: 2) otherwise return 70
+	return v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3113: calc/<fragment>:20:18: 'throws calc.Fault' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into
+```
+
+<!-- test: error.a-service-throws-a-bare-name-two-directories-declare -->
+The same pair, with the clause written bare in a file that declares neither: it sees two `Fault`s and must
+say which.
+```maxon
+// --- file: calc/alias.maxon
+export typealias Fault = int(0 to 10)
+
+// --- file: faults/fault.maxon
+export enum Fault implements Error
+	broke
+end 'Fault'
+
+// --- file: calc/calc.maxon
+export typealias Count = int(i64.min to i64.max)
+
+export type Calc
+	var count as Count
+
+	export static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n Count, by Count) returns Count throws Fault
+		return n + by + self.count
+	end 'divide'
+end 'Calc'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let v = try await h.divide(10, by: 2) otherwise return 70
+	return v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3063: calc/<fragment>:20:65: Ambiguous type name 'Fault': more than one visible declaration matches it. Qualify it as one of: calc.Fault, faults.Fault
+```
+
+<!-- test: error.two-nominal-declarations-in-two-directories-collide -->
+Two author NOMINAL declarations of one name collide wherever they sit: a `type`, `enum`, `union` or
+`interface` name is whole-program, so a second directory does not make room for it.
+```maxon
+// --- file: shapes/box.maxon
+export type Box
+	export var side as ExitCode
+end 'Box'
+
+// --- file: crates/box.maxon
+export enum Box
+	open
+	shut
+end 'Box'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: crates/<fragment>:8:13: duplicate definition of 'Box' — already declared as `type Box`
 ```
 
 <!-- test: error.extension-alias-pair-compiling-to-one-name -->
@@ -2847,4 +3000,640 @@ end 'main'
 ```
 ```maxoncstderr
 error E3006: <fragment>:53:12: duplicate definition of 'Pair_A_B_C' — the generic instantiations `Pair with (A_B, C)` and `Pair with (A, B_C)` compile to that same name
+```
+
+<!-- test: error.an-ambiguous-throws-clause-is-refused -->
+A user `ParseError` exported beside the library's: a bare `throws ParseError` in a third file names an error
+type two declarations hold.
+```maxon
+// --- file: lib/errors.maxon
+export enum ParseError implements Error
+	malformed
+end 'ParseError'
+
+// --- file: app/main.maxon
+function check(n ExitCode) returns ExitCode throws ParseError
+	return n
+end 'check'
+
+function main() returns ExitCode
+	return try check(1) otherwise 2
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:8:52: Ambiguous type name 'ParseError': more than one visible declaration matches it. Qualify it as one of: lib.ParseError, stdlib.ParseError
+```
+
+<!-- test: error.a-throws-clause-naming-a-type-the-library-keeps-private-is-refused -->
+`stdlib/FilePath.maxon`'s `ParentComponentRule` carries no `public`, so a `throws` clause cannot name it.
+```maxon
+function check(n ExitCode) returns ExitCode throws ParentComponentRule
+	return n
+end 'check'
+
+function main() returns ExitCode
+	return try check(1) otherwise 2
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:2:52: type 'ParentComponentRule' is not exported
+```
+
+<!-- test: error.an-ambiguous-implemented-interface-is-refused -->
+A user `Parsable` exported beside the library's: a bare `implements Parsable` in a third file names an interface
+two declarations hold.
+```maxon
+// --- file: lib/parsable.maxon
+export interface Parsable
+	function parse() returns bool
+end 'Parsable'
+
+// --- file: app/main.maxon
+type Doc implements Parsable
+	export function parse() returns bool
+		return true
+	end 'parse'
+end 'Doc'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:8:21: Ambiguous type name 'Parsable': more than one visible declaration matches it. Qualify it as one of: lib.Parsable, stdlib.Parsable
+```
+
+<!-- test: error.an-ambiguous-constraint-interface-is-refused -->
+The same pair named by a `where` constraint.
+```maxon
+// --- file: lib/parsable.maxon
+export interface Parsable
+	function parse() returns bool
+end 'Parsable'
+
+// --- file: app/main.maxon
+function parsed(x T) uses T returns bool where T is Parsable
+	return x.parse()
+end 'parsed'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:8:53: Ambiguous type name 'Parsable': more than one visible declaration matches it. Qualify it as one of: lib.Parsable, stdlib.Parsable
+```
+
+<!-- test: error.an-ambiguous-parent-interface-is-refused -->
+The same pair named by an `extends` clause.
+```maxon
+// --- file: lib/parsable.maxon
+export interface Parsable
+	function parse() returns bool
+end 'Parsable'
+
+// --- file: app/main.maxon
+interface Fancy extends Parsable
+	function shine() returns bool
+end 'Fancy'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:8:25: Ambiguous type name 'Parsable': more than one visible declaration matches it. Qualify it as one of: lib.Parsable, stdlib.Parsable
+```
+
+<!-- test: error.an-interface-the-library-keeps-private-cannot-be-implemented -->
+A library interface without `public` is hidden from author code, exactly as a library type is.
+```maxon
+// --- stdlib-overlay: helpers/string/hash.maxon
+interface OverlayPrivateProtocol
+	function poke() returns bool
+end 'OverlayPrivateProtocol'
+// --- file: main.maxon
+type Doc implements OverlayPrivateProtocol
+	export function poke() returns bool
+		return true
+	end 'poke'
+end 'Doc'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:7:21: type 'OverlayPrivateProtocol' is not exported
+```
+
+<!-- test: error.a-module-scoped-library-interface-cannot-constrain-an-author-function -->
+A `module` library interface is visible inside its own directory of the library and nowhere else.
+```maxon
+// --- stdlib-overlay: helpers/string/hash.maxon
+module interface OverlayModuleProtocol
+	function poke() returns bool
+end 'OverlayModuleProtocol'
+// --- file: main.maxon
+function poked(x T) uses T returns bool where T is OverlayModuleProtocol
+	return x.poke()
+end 'poked'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3088: <fragment>:7:52: type 'OverlayModuleProtocol' is module-scoped and not visible from this directory
+```
+
+<!-- test: error.a-hidden-qualified-construction-head-is-refused-at-top-level -->
+A file-private typealias named through its directory as the head of a top-level `from` construction: the qualified spelling reaches the declaration without making it visible.
+```maxon
+// --- file: lib/codes.maxon
+typealias Codes = Array with Byte
+
+export function probeCodes() returns ExitCode
+	let held = Codes from [1]
+	return 0 if held.isEmpty() else 1
+end 'probeCodes'
+
+// --- file: app/main.maxon
+let C = lib.Codes from [1, 2]
+
+function main() returns ExitCode
+	return lib.probeCodes()
+end 'main'
+```
+```maxoncstderr
+error E3008: app/<fragment>:11:9: typealias 'lib.Codes' is not exported
+```
+
+<!-- test: error.an-ambiguous-literal-init-head-is-refused-at-top-level -->
+A directory exports a `FilePath` that initializes from a string literal beside the library's; a top-level
+`FilePath from "x"` in another directory names a type two declarations hold.
+```maxon
+// --- file: lib/path.maxon
+export type FilePath implements InitableFromStringLiteral
+	export let text as String
+
+	export static function init(value String) returns FilePath
+		return Self{text: value}
+	end 'init'
+end 'FilePath'
+
+// --- file: app/main.maxon
+let p = FilePath from "x"
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:12:9: Ambiguous type name 'FilePath': more than one visible declaration matches it. Qualify it as one of: lib.FilePath, stdlib.FilePath
+```
+
+<!-- test: error.a-hidden-literal-init-head-is-refused-at-top-level -->
+A library type without `public` that initializes from a string literal, constructed at the top level of an
+author's file.
+```maxon
+// --- stdlib-overlay: helpers/string/hash.maxon
+type OverlayPrivateTag implements InitableFromStringLiteral
+	export let text as String
+
+	static function init(value String) returns OverlayPrivateTag
+		return Self{text: value}
+	end 'init'
+end 'OverlayPrivateTag'
+// --- file: main.maxon
+let t = OverlayPrivateTag from "x"
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:11:9: type 'OverlayPrivateTag' is not exported
+```
+
+<!-- test: error.an-ambiguous-enum-case-is-refused-at-top-level -->
+A directory exports a `ParseError` beside the library's; a top-level constant naming one of its cases in another
+directory names a type two declarations hold.
+```maxon
+// --- file: lib/errors.maxon
+export enum ParseError implements Error
+	malformed
+end 'ParseError'
+
+// --- file: app/main.maxon
+let e = ParseError.malformed
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:8:9: Ambiguous type name 'ParseError': more than one visible declaration matches it. Qualify it as one of: lib.ParseError, stdlib.ParseError
+```
+
+<!-- test: error.a-hidden-enum-case-is-refused-at-top-level -->
+A library enum without `public`, its case named as a top-level constant in an author's file.
+```maxon
+// --- stdlib-overlay: helpers/string/hash.maxon
+enum OverlayPrivateMode
+	first
+	second
+end 'OverlayPrivateMode'
+// --- file: main.maxon
+let m = OverlayPrivateMode.first
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:8:9: type 'OverlayPrivateMode' is not exported
+```
+
+<!-- test: error.an-ambiguous-union-case-construction-is-refused-at-top-level -->
+A directory exports a union `ParseError` beside the library's enum; a top-level construction of one of its cases
+in another directory names a type two declarations hold.
+```maxon
+// --- file: lib/errors.maxon
+export union ParseError
+	malformed(at Byte)
+	quiet
+end 'ParseError'
+
+// --- file: app/main.maxon
+let h = ParseError.malformed(7)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:9:9: Ambiguous type name 'ParseError': more than one visible declaration matches it. Qualify it as one of: lib.ParseError, stdlib.ParseError
+```
+
+<!-- test: error.a-hidden-union-case-construction-is-refused-at-top-level -->
+A library union without `public`, its payload case constructed by a top-level constant in an author's file.
+```maxon
+// --- stdlib-overlay: helpers/string/hash.maxon
+union OverlayPrivateOp
+	add(n Byte)
+	nop
+end 'OverlayPrivateOp'
+// --- file: main.maxon
+let h = OverlayPrivateOp.add(7)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:8:9: type 'OverlayPrivateOp' is not exported
+```
+
+<!-- test: error.an-ambiguous-payload-free-union-case-is-refused-at-top-level -->
+The payload-free case of a payload-carrying union is a box rather than a tag, and its type name is judged like
+every other position's.
+```maxon
+// --- file: lib/errors.maxon
+export union ParseError
+	malformed(at Byte)
+	quiet
+end 'ParseError'
+
+// --- file: app/main.maxon
+let u = ParseError.quiet
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:9:9: Ambiguous type name 'ParseError': more than one visible declaration matches it. Qualify it as one of: lib.ParseError, stdlib.ParseError
+```
+
+<!-- test: error.a-hidden-payload-free-union-case-is-refused-at-top-level -->
+The payload-free case of a library union without `public`, named by a top-level constant in an author's file.
+```maxon
+// --- stdlib-overlay: helpers/string/hash.maxon
+union OverlayPrivateOp
+	add(n Byte)
+	nop
+end 'OverlayPrivateOp'
+// --- file: main.maxon
+let u = OverlayPrivateOp.nop
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:8:9: type 'OverlayPrivateOp' is not exported
+```
+
+<!-- test: error.an-ambiguous-factory-type-is-refused-at-top-level -->
+A directory exports a `FilePath` with a `create()` factory beside the library's; a top-level `FilePath.create()`
+in another directory names a type two declarations hold.
+```maxon
+// --- file: lib/path.maxon
+export type FilePath
+	export let size as ExitCode
+
+	export static function create() returns FilePath
+		return Self{size: 1}
+	end 'create'
+end 'FilePath'
+
+// --- file: app/main.maxon
+let g = FilePath.create()
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:12:9: Ambiguous type name 'FilePath': more than one visible declaration matches it. Qualify it as one of: lib.FilePath, stdlib.FilePath
+```
+
+<!-- test: error.a-hidden-factory-type-is-refused-at-top-level -->
+A library type without `public` whose factory is `public`, called by a top-level constant in an author's file:
+the type is named, and naming it is what its tier refuses.
+```maxon
+// --- stdlib-overlay: helpers/string/hash.maxon
+type OverlayPrivateThing
+	export let size as Byte
+
+	public static function create() returns OverlayPrivateThing
+		return Self{size: 1}
+	end 'create'
+end 'OverlayPrivateThing'
+// --- file: main.maxon
+let g = OverlayPrivateThing.create()
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:11:9: type 'OverlayPrivateThing' is not exported
+```
+
+<!-- test: error.a-module-type-named-through-its-directory-in-a-signature-is-refused -->
+A `module` type written through its directory in a parameter and a return type, from outside that directory: the
+qualified spelling reaches the declaration without making it visible.
+```maxon
+// --- file: b/thing.maxon
+module type Thing
+	export let size as ExitCode
+
+	module static function create() returns Thing
+		return Self{size: 1}
+	end 'create'
+end 'Thing'
+
+// --- file: a/main.maxon
+function keep(t b.Thing) returns b.Thing
+	return t
+end 'keep'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3088: a/<fragment>:12:17: type 'b.Thing' is module-scoped and not visible from this directory
+error E3088: a/<fragment>:12:34: type 'b.Thing' is module-scoped and not visible from this directory
+```
+
+<!-- test: error.a-file-private-type-named-through-its-directory-as-a-call-base-is-refused -->
+A file-private type written through its directory as the base of a static call, from another directory.
+```maxon
+// --- file: b/thing.maxon
+type Thing
+	export static function answer() returns ExitCode
+		return 7
+	end 'answer'
+end 'Thing'
+
+// --- file: a/main.maxon
+function main() returns ExitCode
+	return b.Thing.answer()
+end 'main'
+```
+```maxoncstderr
+error E3008: a/<fragment>:11:9: type 'b.Thing' is not exported
+```
+
+<!-- test: error.a-module-type-named-through-its-directory-is-refused-at-top-level -->
+A `module` type written through its directory as a top-level factory head, from outside that directory.
+```maxon
+// --- file: b/thing.maxon
+module type Thing
+	export let size as ExitCode
+
+	module static function create() returns Thing
+		return Self{size: 1}
+	end 'create'
+end 'Thing'
+
+// --- file: a/main.maxon
+let t = b.Thing.create()
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3088: a/<fragment>:12:9: type 'b.Thing' is module-scoped and not visible from this directory
+```
+
+<!-- test: error.a-module-type-named-bare-outside-its-subtree-is-refused -->
+The bare name is held to the same tier as the qualified one.
+```maxon
+// --- file: b/thing.maxon
+module type Thing
+	export let size as ExitCode
+
+	module static function create() returns Thing
+		return Self{size: 1}
+	end 'create'
+end 'Thing'
+
+// --- file: a/main.maxon
+function keep(t Thing) returns Thing
+	return t
+end 'keep'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3088: a/<fragment>:12:17: type 'Thing' is module-scoped and not visible from this directory
+error E3088: a/<fragment>:12:32: type 'Thing' is module-scoped and not visible from this directory
+```
+
+<!-- test: a-module-type-named-through-its-directory-is-reachable-from-a-subdirectory -->
+Inside the declaring directory's subtree the qualified spelling of a `module` type reaches it.
+```maxon
+// --- file: b/thing.maxon
+module type Thing
+	export let size as ExitCode
+
+	module static function create() returns Thing
+		return Self{size: 1}
+	end 'create'
+end 'Thing'
+
+// --- file: b/inner/main.maxon
+function main() returns ExitCode
+	let t = b.Thing.create()
+	print("{t.size}\n")
+	return 0
+end 'main'
+```
+```stdout
+1
+```
+
+<!-- test: a-directory-qualified-alias-is-a-top-level-cast-target -->
+Two directories export a `Score`; a top-level constant casts to each through its directory, which is the spelling
+E3063 prescribes.
+```maxon
+// --- file: api/score.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/score.maxon
+export typealias Score = int(0 to 50)
+
+// --- file: app/main.maxon
+let a = 70 as api.Score
+let b = 20 as legacy.Score
+
+function main() returns ExitCode
+	print("{a} {b}\n")
+	return 0
+end 'main'
+```
+```stdout
+70 20
+```
+
+<!-- test: error.a-top-level-cast-to-a-directory-qualified-alias-checks-its-range -->
+The qualified cast target is that declaration's range, not the other directory's.
+```maxon
+// --- file: api/score.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/score.maxon
+export typealias Score = int(0 to 50)
+
+// --- file: app/main.maxon
+let a = 70 as api.Score
+let b = 70 as legacy.Score
+
+function main() returns ExitCode
+	print("{a} {b}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: app/<fragment>:10:12: Value 70 is outside the range of 'legacy.Score' (int(0 to 50))
+```
+
+<!-- test: error.a-hidden-directory-qualified-alias-is-refused-as-a-top-level-cast-target -->
+A file-private typealias named through its directory as a top-level cast target, from another directory.
+```maxon
+// --- file: lib/score.maxon
+typealias Score = int(0 to 100)
+
+export function probeScore() returns ExitCode
+	let s = 5 as Score
+	return s
+end 'probeScore'
+
+// --- file: app/main.maxon
+let a = 5 as lib.Score
+
+function main() returns ExitCode
+	return lib.probeScore()
+end 'main'
+```
+```maxoncstderr
+error E3008: app/<fragment>:11:14: typealias 'lib.Score' is not exported
+```
+
+<!-- test: error.an-ambiguous-enum-case-beside-an-alias-is-refused-at-top-level -->
+A directory exports a typealias `Ordering` beside the library's enum; a top-level constant naming one of the
+enum's cases is ambiguous, whichever of the two declarations has the case.
+```maxon
+// --- file: lib/order.maxon
+export typealias Ordering = int(0 to 9)
+
+// --- file: app/main.maxon
+let o = Ordering.lessThan
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:6:9: Ambiguous type name 'Ordering': more than one visible declaration matches it. Qualify it as one of: lib.Ordering, stdlib.Ordering
+```
+
+<!-- test: error.an-ambiguous-union-case-construction-beside-an-alias-is-refused-at-top-level -->
+A directory exports a typealias `LogValue` beside the library's union; a top-level construction of a payload case
+is ambiguous.
+```maxon
+// --- file: lib/value.maxon
+export typealias LogValue = int(0 to 9)
+
+// --- file: app/main.maxon
+let v = LogValue.boolean(true)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:6:9: Ambiguous type name 'LogValue': more than one visible declaration matches it. Qualify it as one of: lib.LogValue, stdlib.LogValue
+```
+
+<!-- test: error.an-ambiguous-payload-free-union-case-beside-an-alias-is-refused-at-top-level -->
+A directory exports a typealias `StatusCode` beside the library's payload-carrying union; a top-level constant
+naming a payload-free case is ambiguous.
+```maxon
+// --- file: lib/status.maxon
+export typealias StatusCode = int(0 to 9)
+
+// --- file: app/main.maxon
+let s = StatusCode.ok
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:6:9: Ambiguous type name 'StatusCode': more than one visible declaration matches it. Qualify it as one of: lib.StatusCode, stdlib.StatusCode
+```
+
+<!-- test: error.an-ambiguous-factory-type-beside-an-alias-is-refused-at-top-level -->
+A directory exports a typealias `Console` beside the library's type; a top-level `Console.stdin()` is ambiguous.
+```maxon
+// --- file: lib/console.maxon
+export typealias Console = int(0 to 9)
+
+// --- file: app/main.maxon
+let c = Console.stdin()
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:6:9: Ambiguous type name 'Console': more than one visible declaration matches it. Qualify it as one of: lib.Console, stdlib.Console
 ```

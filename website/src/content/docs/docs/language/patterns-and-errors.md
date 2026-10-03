@@ -224,13 +224,20 @@ arr.push("world")             // E3070: cannot mutate 'arr' via 'push' while it 
 print("{s}\n")
 ```
 
-**A closure escaping its frame**
+**Reading a local a closure captured**
 
 ```maxon
-function makeAdder(bump Score) returns UnaryOp
-	let f = function(n Score) gives n + bump
-	return f                  // E3099: cannot return a closure that captures
-end 'makeAdder'
+let word = "a word padded long enough to heap allocate {1}"
+let f = function() gives word.byteLength() as Tally
+print("{word}\n")             // E3102: use of moved value 'word': its ownership moved to the closure that captures it
+```
+
+**Storing a closure into what it captures**
+
+```maxon
+export function arm()
+	self.read = function() gives self.n   // E3183: this closure captures 'self' and is stored into a record 'self' holds, …
+end 'arm'
 ```
 
 **A bare primitive type**

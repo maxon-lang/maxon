@@ -86,26 +86,30 @@ end 'typeCycleTargetOf'
 // half of the numbering they answer in.
 typealias TypeCycleNodeMap = Map with (ByteArray, CsrIndex)
 
-// ⭐ **"NO NODE" AS A VALUE, NOT AS A SENTINEL INSIDE THE KEY SPACE.** `CsrIndex` is 0-based and 0 is a real
-// node, so the absence has to sit ABOVE every key any program can mint — which no node count can reach.
-//
-// ⚠ **`i64.max` AND NOT `u64.max`, BECAUSE `CsrIndex` IS A CHECKED QUANTITY.** `u64.max` rides as the
-// wrapped `-1`, a signed-negative, and a quantity's door refuses one — so the sentinel would panic at
-// the first door it crossed. Interning 2^63 nodes is as impossible as 2^64, so the argument for the
-// sentinel is untouched by where it sits.
-let NoTypeCycleNode = i64.max as CsrIndex
+enum TypeCycleNodeLookup implements Error
+	holdsNoNode
+end 'TypeCycleNodeLookup'
 
 // The path separator `/specs/ownership.md` pins — U+2192, the arrow the diagnostic prints.
 let TypeCyclePathArrow = " → "
 
-// ⭐ **THE TYPE-REFERENCE GRAPH, AS PARALLEL EDGE COLUMNS PLUS THE TWO NAME COLUMNS A PATH IS RENDERED
-// FROM.** The name columns hold REFERENCES to names the declarations already own — no string is formatted
-// while the graph is built, because the overwhelming majority of compiles never render one. Formatting is
-// `renderCyclePath`'s, on the error path only, which is `ProgramSignatures.aliasCyclePath`'s own discipline.
+union TypeCycleEdgeLabel
+	element
+	field(member ByteArray)
+	casePayload(caseName ByteArray, member ByteArray)
+end 'TypeCycleEdgeLabel'
+
+typealias TypeCycleEdgeLabelArray = Array with TypeCycleEdgeLabel
+
+// ⭐ **THE TYPE-REFERENCE GRAPH, AS PARALLEL EDGE COLUMNS PLUS THE LABEL COLUMN A PATH IS RENDERED
+// FROM.** The labels hold REFERENCES to names the declarations already own — no string is formatted
+// while the graph is built, because the overwhelming majority of compiles never render one.
+// Formatting is `renderCyclePath`'s, on the error path only, which is
+// `ProgramSignatures.aliasCyclePath`'s own discipline.
 //
-// ⚠ **ONE WALK FILLS ALL FOUR COLUMNS.** The obvious alternative — build (owner, held) here and re-walk the
-// declarations to recover a label when a cycle is found — would be a SECOND spelling of "what does this type
-// hold", free to drift from the first while every green run agreed with it.
+// ⚠ **ONE WALK FILLS ALL THREE COLUMNS.** The obvious alternative — build (owner, held) here and
+// re-walk the declarations to recover a label when a cycle is found — would be a SECOND spelling of
+// "what does this type hold", free to drift from the first while every green run agreed with it.
 type TypeCycleGraph
 	// Aggregate name ⇒ its node. The container node for instance `gid` is `aggregateCount() + gid`, so the
 	// two spaces are disjoint by construction and neither needs a kind bit.
@@ -133,18 +137,10 @@ type TypeCycleGraph
 	var edgeOwners as CsrColumn
 	var edgeHeld as CsrColumn
 
-	// The union CASE an edge leaves through, EMPTY unless it does — `link` in `link.next: Link`. A struct
-	// field and a container element both leave one empty; see `edgeLabel`, where the three shapes are one
-	// formula.
-	var edgeCaseNames as ByteArrayArray
-
-	// The FIELD or PAYLOAD an edge leaves through, EMPTY for a container element — a container owns its
-	// elements in its BUFFER and there is no declared member to name, which is exactly why the spec's path
-	// reads `FolderArray → Folder` with no `:` in it.
-	var edgeMemberNames as ByteArrayArray
+	var edgeLabels as TypeCycleEdgeLabelArray
 
 	static function create(instanceCount GenericInstanceId) returns TypeCycleGraph
-		return Self{nodeOfAggregate: TypeCycleNodeMap.create(), aggregateNames: ByteArrayArray.create(), instanceCount: instanceCount, nodeOfInterface: TypeCycleNodeMap.create(), interfaceNames: ByteArrayArray.create(), edgeOwners: CsrColumn.create(), edgeHeld: CsrColumn.create(), edgeCaseNames: ByteArrayArray.create(), edgeMemberNames: ByteArrayArray.create()}
+		return Self{nodeOfAggregate: TypeCycleNodeMap.create(), aggregateNames: ByteArrayArray.create(), instanceCount: instanceCount, nodeOfInterface: TypeCycleNodeMap.create(), interfaceNames: ByteArrayArray.create(), edgeOwners: CsrColumn.create(), edgeHeld: CsrColumn.create(), edgeLabels: TypeCycleEdgeLabelArray.create()}
 	end 'create'
 
 	function aggregateCount() returns CsrIndex
@@ -189,7 +185,7 @@ type TypeCycleGraph
 		return try self.nodeOfAggregate.get(name) otherwise panic("TypeCycleGraph.nodeOfDeclaredAggregate: '{String.from(name)}' claimed no node — every declared aggregate claims one in the pass before any edge is built")
 	end 'nodeOfDeclaredAggregate'
 
-	// The node `target` denotes, or `NoTypeCycleNode` when it denotes nothing this graph holds — an
+	// The node `target` denotes; it throws when `target` denotes nothing this graph holds — an
 	// undeclared name, or a reference to a type that cannot contain one.
 	//
 	// ⚠ **THE THREE ARMS THAT ANSWER A NODE ANSWER FROM DIFFERENT AUTHORITIES, WHICH IS WHY ONE FALLS BACK,
@@ -201,10 +197,10 @@ type TypeCycleGraph
 	// inside `nodesOnACycle` instead of reporting anything. An EXISTENTIAL names an interface the parser
 	// already resolved — a reference reaches an `interfaceRef` tag no other way — so there is neither a
 	// fallback to take nor an id to check, and the name simply claims its node.
-	function nodeOfTarget(target TypeCycleTarget) returns CsrIndex
+	function nodeOfTarget(target TypeCycleTarget) returns CsrIndex throws TypeCycleNodeLookup
 		match target 'kind'
-			nothing then return NoTypeCycleNode
-			aggregate(name) then return try self.nodeOfAggregate.get(name) otherwise NoTypeCycleNode
+			nothing then throw TypeCycleNodeLookup.holdsNoNode
+			aggregate(name) then return try self.nodeOfAggregate.get(name) otherwise throw TypeCycleNodeLookup.holdsNoNode
 			container(id) then return self.containerNode(id)
 			existential(interfaceName) then return self.interfaceNode(interfaceName)
 		end 'kind'
@@ -219,16 +215,9 @@ type TypeCycleGraph
 		return self.aggregateCount() + (id as CsrIndex)
 	end 'containerNode'
 
-	// Record one ownership edge. `caseName` / `memberName` are EMPTY where the shape has none; the three
-	// legal combinations are stated on the columns themselves.
-	function addEdge(owner CsrIndex, target TypeCycleTarget, caseName ByteArray, memberName ByteArray)
-		let held = self.nodeOfTarget(target)
-
-		if held == NoTypeCycleNode 'referencesNothingThisGraphHolds'
-			return
-		end 'referencesNothingThisGraphHolds'
-
-		self.pushEdge(owner, held: held, caseName: caseName, memberName: memberName)
+	function addEdge(owner CsrIndex, target TypeCycleTarget, label TypeCycleEdgeLabel)
+		let held = try self.nodeOfTarget(target) otherwise return
+		self.pushEdge(owner, held: held, label: label)
 	end 'addEdge'
 
 	// ⭐ **ONE OF AN INTERFACE NODE'S OUT-EDGES: A NODE THE CONFORMANCE REGISTRY FILES UNDER IT.** The hop
@@ -241,21 +230,15 @@ type TypeCycleGraph
 	// ONE.** A generic BASE is filed while only its INSTANCES widen. The graph carries the relation whole
 	// because a missed edge is a leak and a spare one to a node that holds nothing costs a sink.
 	function recordConformerEdge(interfaceName ByteArray, conformer CsrIndex)
-		let owner = try self.nodeOfInterface.get(interfaceName) otherwise NoTypeCycleNode
-
-		if owner == NoTypeCycleNode 'namedByNoReference'
-			return
-		end 'namedByNoReference'
-
-		self.pushEdge(owner, held: conformer, caseName: EmptySourceText, memberName: EmptySourceText)
+		let owner = try self.nodeOfInterface.get(interfaceName) otherwise return
+		self.pushEdge(owner, held: conformer, label: TypeCycleEdgeLabel.element)
 	end 'recordConformerEdge'
 
-	// The one writer of the four parallel edge columns.
-	function pushEdge(owner CsrIndex, held CsrIndex, caseName ByteArray, memberName ByteArray)
+	// The one writer of the three parallel edge columns.
+	function pushEdge(owner CsrIndex, held CsrIndex, label TypeCycleEdgeLabel)
 		self.edgeOwners.push(owner)
 		self.edgeHeld.push(held)
-		self.edgeCaseNames.push(caseName)
-		self.edgeMemberNames.push(memberName)
+		self.edgeLabels.push(label)
 	end 'pushEdge'
 
 	// The adjacency both walks read. Built on demand rather than cached: `nodesOnACycle` asks for it once per
@@ -310,19 +293,14 @@ type TypeCycleGraph
 	// which is the whole difference between `children: FolderArray` and the `Folder` that follows it.
 	function edgeLabel(signatures ProgramSignatures, owner CsrIndex, held CsrIndex) returns String
 		let index = self.edgeIndexBetween(owner, held: held)
-		let caseName = try self.edgeCaseNames.get(index) otherwise panic("TypeCycleGraph.edgeLabel: edgeCaseNames.get OOB at {index} below count {self.edgeCaseNames.count()}")
-		let memberName = try self.edgeMemberNames.get(index) otherwise panic("TypeCycleGraph.edgeLabel: edgeMemberNames.get OOB at {index} below count {self.edgeMemberNames.count()}")
+		let label = try self.edgeLabels.get(index) otherwise panic("TypeCycleGraph.edgeLabel: edgeLabels.get OOB at {index} below count {self.edgeLabels.count()}")
 		let target = String.from(self.displayNameOfNode(signatures, node: held))
 
-		if memberName.isEmpty() 'aContainerElement'
-			return target
-		end 'aContainerElement'
-
-		if caseName.isEmpty() 'aStructField'
-			return "{String.from(memberName)}: {target}"
-		end 'aStructField'
-
-		return "{String.from(caseName)}.{String.from(memberName)}: {target}"
+		return match label 'label'
+			element gives target
+			field(member) gives "{String.from(member)}: {target}"
+			casePayload(caseName, member) gives "{String.from(caseName)}.{String.from(member)}: {target}"
+		end 'label'
 	end 'edgeLabel'
 
 	// The first edge from `owner` to `held`. Linear over the edge list, on the error path only —
@@ -499,7 +477,7 @@ function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) 
 		for index in 0 upto layout.fieldTypes.count() 'eachField'
 			let fieldType = try layout.fieldTypes.get(index) otherwise panic("buildTypeReferenceGraph: fieldTypes.get OOB at {index} below count {layout.fieldTypes.count()}")
 			let fieldName = try layout.fieldNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.fieldTypes.count()} field types against {layout.fieldNames.count()} names — `StructLayout.addField` is the one writer of both")
-			graph.addEdge(owner, target: typeCycleTargetOf(fieldType, typeNames: project.typeNames), caseName: EmptySourceText, memberName: fieldName)
+			graph.addEdge(owner, target: typeCycleTargetOf(fieldType, typeNames: project.typeNames), label: TypeCycleEdgeLabel.field(fieldName))
 		end 'eachField'
 	end 'eachStruct'
 
@@ -511,7 +489,7 @@ function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) 
 			let payloads = try layout.casePayloads.get(index) otherwise panic("buildTypeReferenceGraph: casePayloads.get OOB at {index} below count {layout.casePayloads.count()}")
 
 			for payload in payloads 'eachPayload'
-				graph.addEdge(owner, target: typeCycleTargetOf(payload.declaredType, typeNames: project.typeNames), caseName: caseName, memberName: payload.name)
+				graph.addEdge(owner, target: typeCycleTargetOf(payload.declaredType, typeNames: project.typeNames), label: TypeCycleEdgeLabel.casePayload(caseName, member: payload.name))
 			end 'eachPayload'
 		end 'eachCase'
 	end 'eachEnum'
@@ -526,7 +504,7 @@ function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) 
 		let owner = graph.containerNode(id)
 
 		for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArgument'
-			graph.addEdge(owner, target: signatures.instanceArgCycleTarget(id, position: position), caseName: EmptySourceText, memberName: EmptySourceText)
+			graph.addEdge(owner, target: signatures.instanceArgCycleTarget(id, position: position), label: TypeCycleEdgeLabel.element)
 		end 'eachArgument'
 	end 'eachInstance'
 

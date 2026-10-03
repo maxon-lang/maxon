@@ -386,9 +386,9 @@ end 'main'
 
 <!-- test: ranges.float-bounds-refused -->
 A counted range's loop variable is a counter stepped by 1, so its bounds must be INTEGERS.
-A `float` range is refused at the bound, not at the backend: before this was checked it reached
-the x64 emitter and panicked (*"rax is in the gpr register file where the xmm file is required"*),
-an internal error against a program the runnable oracle refuses cleanly.
+A `float` range is refused at the bound, not at the backend: unchecked, it reaches
+the x64 emitter and panics (*"rax is in the gpr register file where the xmm file is required"*),
+an internal error rather than a diagnostic.
 ```maxon
 function main() returns ExitCode
 	var trips = 0
@@ -403,9 +403,8 @@ error E2015: specs/fragments/ranges/ranges.float-bounds-refused.test:4:11: Unsup
 ```
 
 <!-- test: ranges.bool-bounds-refused -->
-The same for a `bool` range, which was SILENTLY ACCEPTED and ran two trips incrementing a bool.
-Nothing in the lowering rejected it: the other bad domains happened to land on a comparison type
-error, which is `emitCompare` refusing two operands and says nothing about the step.
+The same for a `bool` range. Nothing else in the lowering rejects it: the other bad domains land on a
+comparison type error, which is `emitCompare` refusing two operands and says nothing about the step.
 ```maxon
 function main() returns ExitCode
 	var trips = 0
@@ -438,7 +437,7 @@ error E2015: specs/fragments/ranges/ranges.mixed-bounds-blames-the-float-half.te
 <!-- test: ranges.ranged-alias-parameter-bound-stays-legal -->
 The check is `tagIsIntegral`, not `== integer`, and this is the program that pins the difference: a
 ranged-alias bound arriving as a PARAMETER carries the `named` tag until TypeResolution collapses
-it. The narrow spelling would refuse this legal program (the measured false refusal
+it. The narrow spelling would refuse this legal program (the false refusal
 `requireSetKeyMatchesType` records). A char literal is an integer codepoint here, so it passes too.
 ```maxon
 typealias Row = int(0 to 63)
@@ -466,13 +465,12 @@ end 'main'
 <!-- test: ranges.character-range-encodes-every-utf8-width -->
 ### A character range mints its element through all four UTF-8 encoder widths
 
-⚠ **THE ENCODER HAS FOUR ARMS AND THE COMMITTED CORPUS EXERCISED ONE (BATCH23 review).** A character range
+⚠ **THE ENCODER HAS FOUR ARMS AND EVERY OTHER CHARACTER-RANGE CASE EXERCISES ONE.** A character range
 mints its per-trip element with `__char_from_cp` (`GraphemeRuntime.buildCharFromCodepoint`), which ENCODES a
 codepoint into a fresh owned record — the dual of `__char_at`, which copies bytes that are already UTF-8.
 Every other character-range case in this file and in `character-ownership.md` uses `'a'`…`'z'`, so only the
-ASCII arm ever ran; the 2-, 3- and 4-byte arms — each with its own lead-byte floor, its own shift ladder and
-its own continuation bytes — were emitted and never executed. They are correct (measured), and this is what
-says so, because a lead-byte constant paired with the wrong shift is a wrong ANSWER that no equality walk
+ASCII arm runs there; the 2-, 3- and 4-byte arms — each with its own lead-byte floor, its own shift ladder and
+its own continuation bytes — run only here. This case is what says they are correct, because a lead-byte constant paired with the wrong shift is a wrong ANSWER that no equality walk
 and no golden fragment would name.
 
 It also pins the OWNERSHIP of the wide arms: each trip allocates a record `__str_decref` must reclaim, so a

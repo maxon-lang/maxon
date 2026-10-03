@@ -37,8 +37,7 @@ end 'LspIncoming'
 
 // Read the next framed message off standard input.
 export function readLspMessage() returns LspIncoming
-	var haveContentLength = false
-	var contentLength = 0
+	var statedLength = StatedFrameLength.unstated
 	var inHeaders = true
 
 	while inHeaders 'headers'
@@ -55,15 +54,12 @@ export function readLspMessage() returns LspIncoming
 			// Every other header is ignored, as the protocol requires of a header a peer does not know.
 			if name == ContentLengthHeaderName 'contentLengthField'
 				let raw = (try parts.get(1) otherwise "").trim()
-				contentLength = try parseContentLength(raw) otherwise return LspIncoming.framingError("Content-Length is not a byte count: '{raw}'")
-				haveContentLength = true
+				statedLength = StatedFrameLength.stated(try parseContentLength(raw) otherwise return LspIncoming.framingError("Content-Length is not a byte count: '{raw}'"))
 			end 'contentLengthField'
 		end 'headerField'
 	end 'headers'
 
-	if not haveContentLength 'noContentLength'
-		return LspIncoming.framingError("message header carries no Content-Length")
-	end 'noContentLength'
+	let contentLength = (try statedLength.count() otherwise return LspIncoming.framingError("message header carries no Content-Length")) as ElementIndex
 
 	var body = ByteArray.create()
 
@@ -111,6 +107,18 @@ function readHeaderLine() returns String throws LspFramingError
 
 	return String.from(line)
 end 'readHeaderLine'
+
+union StatedFrameLength
+	unstated
+	stated(count LspContentLength)
+
+	function count() returns LspContentLength throws AbsentError
+		match self 'length'
+			unstated then throw AbsentError.absent
+			stated(count) then return count
+		end 'length'
+	end 'count'
+end 'StatedFrameLength'
 
 // ⚠ `parseInt` reads whatever digits it finds and ignores every other byte, so it answers 40 for `4x0`
 // and 0 for a value with no digit at all. A header value is therefore checked to be a non-empty run of

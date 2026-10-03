@@ -36,7 +36,7 @@ records, and the image base, the `.data` words a debugger reads out of the runni
 geometry it reads them by. `maxon debug` prints it; `maxon profile` and `maxon coverage` read it, and a
 `--coverage` build requires it.
 
-The sidecar format is versioned (version 10), and a reader refuses a sidecar of any other version: after
+The sidecar format is versioned (version 11), and a reader refuses a sidecar of any other version: after
 upgrading the compiler, rebuild before debugging, profiling or reporting coverage.
 
 ## Panics and backtraces
@@ -193,7 +193,8 @@ answer in the transcript, so each event sits where it happened.
 
 A break target is `file.maxon:LINE`, a bare `LINE` in the file that declares `main`, `*0x<offset>`, or a
 function name resolved exact → `Type.method` → leaf name → word prefix. More than one match answers
-`ambiguous` with the candidates; a name nothing answers to names the nearest function.
+`ambiguous` with the candidates; a name nothing answers to names the nearest function. Lines are numbered
+from 1, so line 0, bare or in a file, is an `error` saying so.
 
 - **A file** is named by the most specific spelling given: a full path names that one file; a relative
   path with a directory names the file it reaches from the directory the program was built in, or else
@@ -240,6 +241,10 @@ $ maxon debug --batch --commands="break app.maxon:12;run;locals;next;backtrace;c
 {"event":"backtrace","frames":[{"frame":0,"function":"work","file":"app.maxon","line":13,"col":3,"offset":"0x7e"}]}
 {"event":"exit","code":0}
 ```
+
+A function value's `kind` is `Function` and its `display` is the function it calls. A capturing closure
+displays as the function the compiler lifted its body into (`render$closure_0`), with each captured value
+as a child under the name it was captured by.
 
 **In `--batch`** stdout is pure JSON, one object per line, and the debugged program's own stdout and
 stderr both go to this driver's stderr. The events are `breakpoint`, `stop`, `backtrace`, `locals`,

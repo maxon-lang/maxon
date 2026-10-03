@@ -44,8 +44,11 @@ argument, so `maxon fmt fmt` formats the directory `fmt/`.
 
 An option the driver does not recognize stops the command before it runs, with
 `error: unknown option: <arg>` and the command list. A recognized option given a value it cannot take,
-such as `--workers=0` or an empty `--filter=`, stops it with `error: invalid option value: <arg>`. The
-first such option on the line is the one reported, and the exit code is 1 (2 for `maxon test`).
+such as `--workers=0` or an empty `--filter=`, stops it with `error: invalid option value: <arg>`; an option
+that takes a value takes a non-empty one, so `--output=` and `--target=` are refused this way. The first such
+option on the line is the one reported, and the exit code is 1 (2 for `maxon test`). An empty positional
+argument (`maxon build ""`) stops the command with `error: invalid argument: an empty word names nothing`,
+with the same exit code.
 
 An option that only other commands take stops the command the same way, before an unknown option is
 looked at, with `error: <option> is taken only by <commands>; <command> does not take it` and the
@@ -580,7 +583,8 @@ FAIL  pricing/pricing.maxtest > ten items take the bulk discount
  2 tests across 1 file.   compile 947ms, run 38ms
 ```
 
-The `file:line` on the `FAIL` line is the assertion's own. Correct the expectation to `2250` and the same
+The `file:line` on the `FAIL` line is the assertion's own. Whatever a failing test printed appears in its
+report, indented under its heading, line for line and blank lines included. Correct the expectation to `2250` and the same
 command reports `2 pass`, `0 fail` and exits 0.
 
 ```bash
@@ -874,8 +878,8 @@ without its extension (for a task, the `.maxtasks` file's). The keys the driver 
 |-----|------|---------|
 | `output` | string, required unless `directory` | Where the executable goes, without the extension. The compiler adds `.exe` for Windows, `.wasm` for `wasm32-wasi`, and nothing for Linux and macOS. Relative to the current directory. Empty means `.maxon/<name>`. |
 | `sources` | list of strings, required unless `directory` | The files and directories to compile, in order. An empty list is refused. |
-| `directory` | string | A directory whose own `.maxproj` file describes this build. Stating it alongside `sources` or `rebuild_with_output` is refused. |
-| `target` | string | With `directory`, which of the delegated project's targets to build, as `maxon build` spells it; empty means its sole one. |
+| `directory` | string | A directory whose own `.maxproj` file describes this build. Stating it alongside `sources` or `rebuild_with_output` is refused, and so is an empty string. |
+| `target` | string | With `directory`, which of the delegated project's targets to build, as `maxon build` spells it; without it, its sole one. An empty string is refused. |
 | `debug_info` | `true` or `false` | Whether to write the `.mxdbg` sidecar (default `true`). |
 | `version` | string | A dotted version stamped into the binary: a `VS_VERSIONINFO` resource on Windows and `LC_SOURCE_VERSION` on macOS. Linux and `wasm32-wasi` binaries carry no product version. Without it, the binary reports `0.0.0.0`, and a missing component is 0. A component that is not a number is refused on every target, and one the target's field cannot hold is refused too: each Windows component holds 0 to 65535 (four at most); on macOS the first holds 0 to 16777215 and the next four 0 to 1023. |
 | `defines` | list of `name=value` strings | The same as [`--define=`](#defines) on the command line. |
@@ -1031,14 +1035,48 @@ takes no lock.
 The lock is the file `.maxon-tree.lock` at that root. It is taken by `spec-test`, `scale-test`, and by a
 `build` of a directory without `--output=`. `run`, `test`, `fmt` and builds with `--output=` take none.
 
-A command that finds the lock held prints what holds it and exits **2** without doing anything:
+The lock file is a record of `key=value` lines: the holder's `pid`, a `token`, `sinceUnix`, `heldSeconds`,
+its command line as `argv`, and `host`, an identity of the machine and process namespace it runs in. Every
+change to the record is made under a second file, `.maxon-tree.lock.claim`, which one command at a time
+creates: a command creates the claim, waits a random 10–40 ms, and proceeds only if the claim still holds
+its own token. The record is written to a `.maxon-tree.lock.staged-*` file and renamed over the lock, so a
+reader sees a whole record or none.
+
+A command that finds the lock held prints the record it found, how long ago the holder last made progress,
+and whether its process is still running, then exits **2** without doing anything:
 
 ```text
 error: this checkout is BUSY — another maxon command holds its tree lock, and two of them in one tree corrupt each other's output directories. Nothing was run.
+  lock:  C:\work\maxon\.maxon-tree.lock
+  held by:
+    pid=21480
+    ...
+  last progress: 3 s ago (a live holder refreshes the record every 5000 ms)
+  is it still alive? yes — process 21480 is running
+  Wait for it to finish, or end that process. A holder that refreshes nothing for 60 s, or a holder on this machine whose process has ended, is taken over automatically, with a line saying so.
 ```
 
-A live holder refreshes the lock every 5 seconds. A lock untouched for 60 seconds is treated as
-abandoned: the next command breaks it with a warning and proceeds.
+The same headline, ending `is claiming its tree lock` or `is using its tree lock's claim file`, means another
+command held the claim file for the whole 2 s this one waits for it, backing off a random 20–120 ms between
+attempts. That refusal also exits **2**, and so does `error: the tree lock could not be taken — <reason>`,
+which a command prints when it cannot write the lock's files, for example in a checkout root it may not
+write.
+
+A command takes the lock over, printing a `warning: taking over …` line that quotes the old record, when:
+
+- the record names a process on this machine (the same `host`) that has ended;
+- the record names this command's own process id, which the operating system has reused; or
+- nothing has refreshed the record for 60 seconds. A live holder refreshes it every 5 seconds, and warns once
+  when it has gone 30 seconds without a refresh.
+
+Ages are measured against the filesystem's own clock, read from a `.maxon-tree.lock.claim.probe-*` file the
+command writes beside the lock, the same clock that stamps the files' modification times. A claim file untouched for
+10 seconds belongs to a command that ended mid-claim and is removed, with a warning. The same applies to the
+leftover `.maxon-tree.lock.claim.probe-*`, `.maxon-tree.lock.claim.removing-*` and
+`.maxon-tree.lock.staged-*` files of a command that ended before cleaning up.
+
+A holder that finds its lock taken over by another command says so, stops refreshing the lock, and leaves
+it to the new holder.
 
 ## Debugging and Profiling
 
@@ -1073,7 +1111,7 @@ records, and the image base, the `.data` words a debugger reads out of the runni
 geometry it reads them by. `maxon debug` prints it; `maxon profile` and `maxon coverage` read it, and a
 `--coverage` build requires it.
 
-The sidecar format is versioned (version 10), and a reader refuses a sidecar of any other version: after
+The sidecar format is versioned (version 11), and a reader refuses a sidecar of any other version: after
 upgrading the compiler, rebuild before debugging, profiling or reporting coverage.
 
 ### Panics and backtraces
@@ -1230,7 +1268,8 @@ answer in the transcript, so each event sits where it happened.
 
 A break target is `file.maxon:LINE`, a bare `LINE` in the file that declares `main`, `*0x<offset>`, or a
 function name resolved exact → `Type.method` → leaf name → word prefix. More than one match answers
-`ambiguous` with the candidates; a name nothing answers to names the nearest function.
+`ambiguous` with the candidates; a name nothing answers to names the nearest function. Lines are numbered
+from 1, so line 0, bare or in a file, is an `error` saying so.
 
 - **A file** is named by the most specific spelling given: a full path names that one file; a relative
   path with a directory names the file it reaches from the directory the program was built in, or else
@@ -1277,6 +1316,10 @@ $ maxon debug --batch --commands="break app.maxon:12;run;locals;next;backtrace;c
 {"event":"backtrace","frames":[{"frame":0,"function":"work","file":"app.maxon","line":13,"col":3,"offset":"0x7e"}]}
 {"event":"exit","code":0}
 ```
+
+A function value's `kind` is `Function` and its `display` is the function it calls. A capturing closure
+displays as the function the compiler lifted its body into (`render$closure_0`), with each captured value
+as a child under the name it was captured by.
 
 **In `--batch`** stdout is pure JSON, one object per line, and the debugged program's own stdout and
 stderr both go to this driver's stderr. The events are `breakpoint`, `stop`, `backtrace`, `locals`,
@@ -1872,7 +1915,9 @@ Both params are required (otherwise `-32602`). The result:
 ```
 
 `ir` is the text `maxon build --emit-ir` writes, and is empty when the compile fails. `errors` lists
-every diagnostic with a **1-based** `line` and `column`.
+every diagnostic with a **1-based** `line` and `column`. A diagnostic located in another file is placed at
+line 1, column 1 of the source, and its message is prefixed with where it is: `<path>:<line>:<column>: `,
+or `<path>: ` for one that names a file and no position.
 
 **`maxon/listProjects`** is a Maxon-specific request, not advertised in the capabilities, that lists the
 projects the server holds. It is what the VS Code status bar shows. It takes no params. The open documents
@@ -2183,7 +2228,9 @@ closes on time whatever the traffic. When the server ends, every session still o
 **An argument a tool does not declare is refused** with `invalidParams`, so the arguments listed below
 are exactly the ones that exist. A developer-mode argument sent to a standard-mode server is refused the
 same way, as is an argument of the wrong JSON type, an array argument holding anything but strings, or a
-number outside the range the tool declares.
+number outside the range the tool declares. A string given as `""`, alone or in a list, is refused too: leave it out
+instead. The program-argument lists, `arguments` on `execute` and `args` on `debug_start`, may hold `""`,
+which the program receives as an empty argument.
 
 **`timeoutSeconds`** bounds the `maxon` command a tool runs: `build`, `execute`, `test`, `fmt`, the
 developer tools, and the build `debug_start` makes of a `source`. It is a number of seconds, fractions

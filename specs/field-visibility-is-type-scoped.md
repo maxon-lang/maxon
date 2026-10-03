@@ -19,12 +19,10 @@ unpinned, and a compiler that answered *"am I inside **any** type?"* instead of 
 declaring** type?"* would let every method of every type read every other type's private state — and
 pass the entire corpus.
 
-**That is not hypothetical: it was MEASURED.** Replacing `namesEnclosingType(layout.name)` with
-`not enclosingType.isEmpty()` in `Parser.requireFieldAccessible` leaves `specs` at **392/0**,
-both `error.unexported-field-read` and `error.unexported-field-write` included. The rule was correct
-and enforced by nothing — the shape `OPEN.md` #27 (`isPure`), #23 and #4c all wear: a property held
-for a reason nobody had written down, while the reason everybody HAD written down checked nothing.
-The two cases below are what make the sabotage go red.
+**That is not hypothetical.** Replacing `namesEnclosingType(layout.name)` with
+`not enclosingType.isEmpty()` in `Parser.requireFieldAccessible` leaves every other case green,
+both `error.unexported-field-read` and `error.unexported-field-write` included. The two cases below
+are what make that sabotage go red.
 
 ## Tests
 

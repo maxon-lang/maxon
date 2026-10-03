@@ -28,15 +28,13 @@ two shapes escape it: the by-ref deref is `borrowed` (case (c) only considers
 `incomingOwner`), and a module global mints a FRESH `global_addr` SSA per access so the
 read's and the write's addresses differ.
 
-The refcount inserter now pairs read ↔ reassignment by the STABLE base identity (the
+The refcount inserter pairs read ↔ reassignment by the STABLE base identity (the
 pointer param value, the `loadSlot` slot id, or the global symbol) and, when the
 borrow is live past a reassignment of that base, reclassifies it `incomingOwner` and
 grants the case-(c) acquire (its own `+1` at the load, released at last use). The
 reassignment's decref-old then releases the borrow's peer reference, never the live
-read. This mirrors the C# oracle, whose by-ref bindings incref and whose global loads
-incref into owned temps. A borrow whose base is NEVER reassigned (a plain read, a
-static global getter forward) matches nothing and keeps the pre-existing borrow
-contract.
+read. A borrow whose base is NEVER reassigned (a plain read, a static global getter
+forward) matches nothing and keeps the plain borrow contract.
 
 Each test exits with the borrowed field's value. Without the acquire, the displaced
 object is freed under the borrow: on a plain build the freed slot may still coincidentally

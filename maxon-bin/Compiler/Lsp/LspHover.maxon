@@ -288,6 +288,23 @@ enum HoverLookupError implements Error
 	noTokenAtTheCursor
 end 'HoverLookupError'
 
+type HoverNaming
+	export let spellings as StdlibShadowSpellingArray
+	export let respellsLibraryNames as bool
+	export let compilerRespellings as ShadowRespellingArray
+
+	static function of(corpus LspCorpus, consultedLibrary bool) returns HoverNaming
+		match corpus 'held'
+			loaded(project, signatures, readerPath) then return Self.read(signatures.shadowSpellings(), reader: shadowSpellingReaderOf(project, path: readerPath), consultedLibrary: consultedLibrary)
+			unavailable then return Self{spellings: StdlibShadowSpellingArray.create(), respellsLibraryNames: false, compilerRespellings: ShadowRespellingArray.create()}
+		end 'held'
+	end 'of'
+
+	static function read(spellings StdlibShadowSpellingArray, reader ShadowSpellingReader, consultedLibrary bool) returns HoverNaming
+		return Self{spellings: spellings, respellsLibraryNames: consultedLibrary and reader == ShadowSpellingReader.authorCode, compilerRespellings: shadowRespellings(spellings, reader: reader, written: WrittenMintSet.create())}
+	end 'read'
+end 'HoverNaming'
+
 // One buffer, prepared for the questions a hover asks of it: its bytes (to slice source text out of),
 // its tokens, and the line index that turns an LSP position into a byte offset.
 //
@@ -301,6 +318,10 @@ module type HoverDocument
 	let lines as LspLineIndex
 	let keywords as KeywordTable
 	let corpus as LspCorpus
+	// A stdlib document read to answer a hover elsewhere. Its bare names are the library's own, and a
+	// shadowed one is spelled differently for the compiler and for an author (`StdlibShadowSpelling`).
+	let consultedLibrary as bool
+	let naming as HoverNaming
 
 	static function of(text String, keywords KeywordTable, corpus LspCorpus) returns HoverDocument throws LexerError
 		return Self.ofTokens(text, tokens: try tokenize(text, keywords: keywords), keywords: keywords, corpus: corpus)
@@ -309,12 +330,63 @@ module type HoverDocument
 	// Tokens the caller already holds, so a declaring file is rendered out of `queryActiveTokens`'
 	// memo rather than lexed again on every hover.
 	module static function ofTokens(text String, tokens TokenArray, keywords KeywordTable, corpus LspCorpus) returns HoverDocument
-		return Self{text: text, bytes: text.toByteArray(), tokens: tokens, lines: LspLineIndex.build(text), keywords: keywords, corpus: corpus}
+		return Self.assembled(text, bytes: text.toByteArray(), tokens: tokens, lines: LspLineIndex.build(text), keywords: keywords, corpus: corpus, consultedLibrary: false)
 	end 'ofTokens'
 
+	static function assembled(text String, bytes ByteArray, tokens TokenArray, lines LspLineIndex, keywords KeywordTable, corpus LspCorpus, consultedLibrary bool) returns HoverDocument
+		return Self{text: text, bytes: bytes, tokens: tokens, lines: lines, keywords: keywords, corpus: corpus, consultedLibrary: consultedLibrary, naming: HoverNaming.of(corpus, consultedLibrary: consultedLibrary)}
+	end 'assembled'
+
 	module function withCorpus(swept LspCorpus) returns HoverDocument
-		return Self{text: self.text, bytes: self.bytes, tokens: self.tokens, lines: self.lines, keywords: self.keywords, corpus: swept}
+		return Self.assembled(self.text, bytes: self.bytes, tokens: self.tokens, lines: self.lines, keywords: self.keywords, corpus: swept, consultedLibrary: self.consultedLibrary)
 	end 'withCorpus'
+
+	function consultedAsLibrary() returns HoverDocument
+		return Self.assembled(self.text, bytes: self.bytes, tokens: self.tokens, lines: self.lines, keywords: self.keywords, corpus: self.corpus, consultedLibrary: true)
+	end 'consultedAsLibrary'
+
+	function compilerNameOf(name ByteArray) returns ByteArray
+		return match corpus 'held'
+			loaded(_, signatures, _) gives signatures.stdlibShadowRenameOf(name)
+			unavailable gives name
+		end 'held'
+	end 'compilerNameOf'
+
+	function spelledInThisDocument(name ByteArray) returns ByteArray
+		return bareSpellingOf(name, spellings: self.naming.spellings) if self.consultedLibrary else name
+	end 'spelledInThisDocument'
+
+	function writtenType(name ByteArray, rendered String) returns HoverType
+		if not self.naming.respellsLibraryNames 'shownAsWritten'
+			return HoverType.named(name, rendered: rendered, written: name)
+		end 'shownAsWritten'
+
+		let compiled = self.compilerNameOf(name)
+		return HoverType.named(compiled, rendered: respelledText(rendered, respellings: libraryNameRespellings(self.naming.spellings)), written: compiled)
+	end 'writtenType'
+
+	function writtenNamedType(name ByteArray) returns HoverType
+		return self.writtenType(name, rendered: String.from(name))
+	end 'writtenNamedType'
+
+	function compilerNamedType(name ByteArray) returns HoverType
+		return HoverType.named(name, rendered: respelledText(String.from(name), respellings: self.naming.compilerRespellings), written: name)
+	end 'compilerNamedType'
+
+	function hoverMarkdownHere(code String, prose StringArray) returns String
+		if not self.naming.respellsLibraryNames 'shownAsWritten'
+			return hoverMarkdown(code, prose: prose)
+		end 'shownAsWritten'
+
+		let respellings = libraryNameRespellings(self.naming.spellings)
+		var respelled = StringArray.create()
+
+		for paragraph in prose 'eachParagraph'
+			respelled.push(respelledText(paragraph, respellings: respellings))
+		end 'eachParagraph'
+
+		return hoverMarkdown(code, prose: respelled)
+	end 'hoverMarkdownHere'
 
 	// --- The stream, and the cursor in it -----------------------------------------------------
 
@@ -606,7 +678,7 @@ module type HoverDocument
 		let start = declarationStart(keyword)
 		var prose = StringArray.create()
 		appendDocComment(prose, above: start)
-		return HoverRendering.present(hoverMarkdown(headText(start), prose: prose))
+		return HoverRendering.present(self.hoverMarkdownHere(headText(start), prose: prose))
 	end 'declarationHeadRendering'
 
 	// `bindingNote` is handed the type rather than asked for it again: this rendering needs the same
@@ -619,7 +691,7 @@ module type HoverDocument
 		appendDocComment(prose, above: start)
 		prose.push(bindingNote(keyword, inferred: inferred))
 
-		let markdown = hoverMarkdown(headText(start), prose: prose)
+		let markdown = self.hoverMarkdownHere(headText(start), prose: prose)
 
 		match inferred 'typed'
 			named then return HoverRendering.present(markdown)
@@ -630,7 +702,7 @@ module type HoverDocument
 	function parameterRendering(functionIndex ElementIndex, nameIndex ElementIndex) returns HoverRendering
 		var prose = StringArray.create()
 		prose.push("Parameter of {routineNamePhrase(functionIndex)}.")
-		return HoverRendering.present(hoverMarkdown(parameterText(nameIndex), prose: prose))
+		return HoverRendering.present(self.hoverMarkdownHere(parameterText(nameIndex), prose: prose))
 	end 'parameterRendering'
 
 	// What a binding IS, in words: where it lives, whether it can change, and its type.
@@ -763,7 +835,7 @@ module type HoverDocument
 
 		let base = sourceBetween(opening.startByte, endByte: tokenAt(dottedNameEnd(index)).endByte).toByteArray()
 
-		return HoverType.named(base, rendered: sourceBetween(opening.startByte, endByte: typeEndByte(index)), written: base)
+		return self.writtenType(base, rendered: sourceBetween(opening.startByte, endByte: typeEndByte(index)))
 	end 'declaredTypeAt'
 
 	function dottedNameEnd(index ElementIndex) returns ElementIndex
@@ -889,10 +961,10 @@ module type HoverDocument
 
 		// `Point{x: 1, y: 2}` — a struct literal names its own type.
 		if tok.kind == TokenKind.identifier and tokenAt(index + 1).kind == TokenKind.leftBrace 'structLiteral'
-			return bracketedValue(index + 1, inferred: nominalType(tok.value))
+			return bracketedValue(index + 1, inferred: self.writtenNamedType(tok.value))
 		end 'structLiteral'
 
-		return callValueAt(index, reach: reach)
+		return namedValueAt(index, reach: reach)
 	end 'valueAt'
 
 	function afterStringValue(index ElementIndex) returns ElementIndex
@@ -951,10 +1023,11 @@ module type HoverDocument
 	end 'afterBracketedGroup'
 
 	// `f(…)`, `String.from(…)`, `path.cstr(…)` — a call, and the type its callee is DECLARED to answer.
-	function callValueAt(index ElementIndex, reach HoverReceiverReach) returns HoverValue
-		if not tokenCanBeAName(tokenAt(index)) 'notACalleeName'
+	// A name or path with no call after it is a read, and answers what the name is bound to.
+	function namedValueAt(index ElementIndex, reach HoverReceiverReach) returns HoverValue
+		if not tokenCanBeAName(tokenAt(index)) 'notAName'
 			return HoverValue.none
-		end 'notACalleeName'
+		end 'notAName'
 
 		var lastSegment = index
 
@@ -962,14 +1035,22 @@ module type HoverDocument
 			lastSegment = lastSegment + 2
 		end 'pathSegment'
 
-		if tokenAt(lastSegment + 1).kind != TokenKind.leftParen 'notACall'
-			return HoverValue.none
-		end 'notACall'
+		if tokenAt(lastSegment + 1).kind != TokenKind.leftParen 'aRead'
+			return readValueEndingAt(lastSegment, reach: reach)
+		end 'aRead'
 
 		let after = try afterBracketedGroup(lastSegment + 1) otherwise return HoverValue.none
 
 		return HoverValue.spans(calleeResultType(lastSegment, reach: reach), after: after)
-	end 'callValueAt'
+	end 'namedValueAt'
+
+	function readValueEndingAt(last ElementIndex, reach HoverReceiverReach) returns HoverValue
+		match bareReceiverEndingAt(last, reach: reach) 'read'
+			value(inferred) then return HoverValue.spans(inferred, after: last + 1)
+			typeSurface or
+				nothing then return HoverValue.none
+		end 'read'
+	end 'readValueEndingAt'
 
 	function calleeResultType(nameIndex ElementIndex, reach HoverReceiverReach) returns HoverType
 		if not memberAccessAt(nameIndex) 'bareName'
@@ -1128,7 +1209,7 @@ module type HoverDocument
 
 	function typeArgumentAt(position ElementIndex, written ByteArray) returns HoverType
 		match aliasArgumentHere(written, position: position) 'inThisDocument'
-			at(argument) then return nominalType(tokenAt(argument).value)
+			at(argument) then return self.writtenNamedType(tokenAt(argument).value)
 			none then return corpusTypeArgument(written, position: position)
 		end 'inThisDocument'
 	end 'typeArgumentAt'
@@ -1180,7 +1261,7 @@ module type HoverDocument
 	// ⚠ `instanceArgsAreFullyConcrete` is what keeps this from reopening the leak one level down:
 	// `instanceArgDisplayName` hands back a type parameter's own name for an argument that is still one.
 	function declaredTypeArgument(signatures ProgramSignatures, written ByteArray, position ElementIndex, readerPath FilePath) returns HoverType
-		if not signatures.isGenericAliasInAnyFile(written) 'namesNoInstance'
+		if not signatures.isGenericAliasFor(written, readerFilePath: readerPath) 'namesNoInstance'
 			return HoverType.unknown
 		end 'namesNoInstance'
 
@@ -1194,13 +1275,13 @@ module type HoverDocument
 			return HoverType.unknown
 		end 'boundByNothing'
 
-		return nominalType(signatures.instanceArgDisplayName(instance, position: position))
+		return self.compilerNamedType(signatures.instanceArgDisplayName(instance, position: position))
 	end 'declaredTypeArgument'
 
 	// Asked of the document that DECLARES the member, which is the same document that declares the
 	// parameter list — so the position cannot disagree with the signature the rendering shows.
 	function typeParamSiteIn(owner ByteArray, name ByteArray) returns HoverTypeParamSite
-		match declarationOf(owner, near: FirstToken, scope: HoverDeclarationScope.everyDeclaration) 'declared'
+		match declarationOf(self.spelledInThisDocument(owner), near: FirstToken, scope: HoverDeclarationScope.everyDeclaration) 'declared'
 			typeName(head) then return typeParamPositionAt(head, name: name)
 			binding or
 				parameter or
@@ -1328,7 +1409,7 @@ module type HoverDocument
 			return HoverMemberType.ownersTypeParameter(owning.position)
 		end 'aParameterOfTheOwner'
 
-		return HoverMemberType.bound(nominalType(signatures.denotedGenericBaseName(brand, readerFilePath: declFilePath)))
+		return HoverMemberType.bound(self.compilerNamedType(signatures.denotedGenericBaseName(brand, readerFilePath: declFilePath)))
 	end 'brandedNameMemberType'
 
 	function resolvedReceiver(receiver HoverReceiver) returns HoverReceiver
@@ -1420,7 +1501,7 @@ module type HoverDocument
 			parameter(_, nameIndex) then return HoverReceiver.value(parameterType(nameIndex))
 			typeName(head) then return HoverReceiver.typeSurface(declaredTypeNameAt(head))
 			routine then return HoverReceiver.nothing
-			none then return HoverReceiver.typeSurface(nominalType(name))
+			none then return HoverReceiver.typeSurface(self.writtenNamedType(name))
 		end 'resolved'
 	end 'receiverOf'
 
@@ -1455,7 +1536,7 @@ module type HoverDocument
 			return HoverType.unknown
 		end 'unnamed'
 
-		return nominalType(named.value)
+		return self.writtenNamedType(named.value)
 	end 'declaredTypeNameAt'
 
 	function methodRendering(receiver ByteArray, method ByteArray) returns HoverRendering
@@ -1513,7 +1594,7 @@ module type HoverDocument
 
 	function memberDeclaredHere(owner ByteArray, member ByteArray) returns HoverDeclaration
 		let blocks = lspDocumentBlocks(tokens)
-		let declaring = lspBlocksDeclaring(blocks, typeName: String.from(owner))
+		let declaring = lspBlocksDeclaring(blocks, typeName: String.from(self.spelledInThisDocument(owner)))
 
 		if declaring.isEmpty() 'noBodyOfThatName'
 			return HoverDeclaration.none
@@ -1620,7 +1701,7 @@ module type HoverDocument
 
 	function stdlibDocumentFor(owner ByteArray) returns HoverDeclaringDocument
 		let directory = try locateStdlibDir() otherwise return HoverDeclaringDocument.none
-		let path = directory.join("{String.from(owner)}{MaxonSourceExtension}")
+		let path = directory.join("{String.from(bareSpellingOf(owner, spellings: self.naming.spellings))}{MaxonSourceExtension}")
 
 		if not File.exists(path) 'notALibraryType'
 			return HoverDeclaringDocument.none
@@ -1629,7 +1710,7 @@ module type HoverDocument
 		let source = try File.readText(path) otherwise return HoverDeclaringDocument.none
 		let module = try Self.of(source, keywords: keywords, corpus: corpus) otherwise return HoverDeclaringDocument.none
 
-		return HoverDeclaringDocument.at(module)
+		return HoverDeclaringDocument.at(module.consultedAsLibrary())
 	end 'stdlibDocumentFor'
 
 	// --- Source text --------------------------------------------------------------------------
@@ -1778,7 +1859,9 @@ extension Project
 		let declTokens = try queryActiveTokens(self, path: path) otherwise return HoverDeclaringDocument.none
 		let entry = try sourceEntryOf(self, path: path) otherwise return HoverDeclaringDocument.none
 
-		return HoverDeclaringDocument.at(HoverDocument.ofTokens(entry.content, tokens: declTokens, keywords: reading, corpus: corpus))
+		let declaring = HoverDocument.ofTokens(entry.content, tokens: declTokens, keywords: reading, corpus: corpus)
+
+		return HoverDeclaringDocument.at(declaring.consultedAsLibrary() if isStdlibSourceFile(self, path: path) else declaring)
 	end 'hoverDocumentOf'
 end 'Project'
 

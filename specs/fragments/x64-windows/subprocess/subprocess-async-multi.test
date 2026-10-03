@@ -19,7 +19,7 @@ function main() returns ExitCode
 		argv.push("echo")
 		#endif
 		argv.push("child-{i}")
-		promises.push(async Subprocess.run(exe, arguments: argv))
+		promises.push(async Subprocess.run(exe.clone(), arguments: argv))
 		i = i + 1
 	end 'spawn'
 
@@ -207,16 +207,14 @@ func @main {
     x64.movRegReg rdx, rbx
     x64.callDirect __managed_push
     x64.loadRegSlot rcx, slot6
-    x64.callDirect __mm_incref
-    x64.loadRegSlot rcx, slot7
-    x64.callDirect __managed_retain
+    x64.callDirect __clone_Executable
     x64.movRegReg rbx, r8
     x64.leaRegFunc rcx, [rip + Subprocess.run]
     x64.callDirect __gt_spawn
     x64.movRegReg r12, r8
-    x64.loadRegSlot rax, slot6
-    x64.storeBaseDispReg.word64 [r12 + 200], rax
-    x64.storeBaseDispReg.word64 [r12 + 208], rbx
+    x64.storeBaseDispReg.word64 [r12 + 200], rbx
+    x64.loadRegSlot rax, slot7
+    x64.storeBaseDispReg.word64 [r12 + 208], rax
     x64.leaRegFunc rax, [rip + __gt_release_Subprocess.run]
     x64.storeBaseDispReg.word64 [r12 + 176], rax
     x64.movRegReg rcx, r12
@@ -225,9 +223,8 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect __managed_push
     x64.loadRegSlot rax, slot3
-    x64.leaRegRegImm32 rbx, rax, 1
-    x64.loadRegSlot rcx, slot7
-    x64.callDirect __managed_decref
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg rbx, rax
   whilehdr:
     x64.storeSlotReg slot3, rbx
     x64.cmpRegImm32 rbx, 4

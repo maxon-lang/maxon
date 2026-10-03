@@ -293,7 +293,11 @@ function failureDetail(path FilePath, result UnitTestResult, color bool) returns
 
 	if not result.output.isEmpty() 'itWroteSomething'
 		for line in result.output.split("\n") 'eachLine'
-			detail.append("{ReportIndent}{line}\n")
+			if not line.isEmpty() 'hasText'
+				detail.append(ReportIndent)
+			end 'hasText'
+
+			detail.append("{line}\n")
 		end 'eachLine'
 
 		return detail
@@ -385,6 +389,11 @@ end 'testEmptyRunNote'
 // JSON
 // ============================================================================================
 
+export union TestRunEmptiness
+	hasResults
+	nothingRan(reason String)
+end 'TestRunEmptiness'
+
 // ⭐ **THE WHOLE RUN AS JSON, emitted once at the end rather than streamed** — it is one document and
 // cannot be written in pieces.
 //
@@ -392,17 +401,17 @@ end 'testEmptyRunNote'
 // making stdout REPRODUCIBLE, and a JSON consumer diffing two runs needs that as much as a fixture
 // does; honouring it in one face only would make the flag mean different things by output format.
 //
-// `emptyReason` says WHY a run has no results, when it has none — EMPTY meaning it has some, which is
-// this driver's convention for an absent optional. It is carried because the text face says it and this
+// `emptiness` says WHY a run has no results, when it has none. It is carried because the text face says it and this
 // must not say less: "no tests exist" and "no test matched the filter" are different problems with the
 // same exit code, and a machine reader that cannot tell them apart cannot act.
-export function testRunJson(report TestRunReport, showTiming bool, emptyReason String = "") returns String
+export function testRunJson(report TestRunReport, showTiming bool, emptiness TestRunEmptiness) returns String
 	var doc = JsonDoc.create()
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
 
-	if not emptyReason.isEmpty() 'nothingRan'
-		pushJsonString(doc, keys: keys, children: children, key: "reason", value: emptyReason)
+	match emptiness 'nothingRan'
+		hasResults then break 'nothingRan'
+		nothingRan(reason) then pushJsonString(doc, keys: keys, children: children, key: "reason", value: reason)
 	end 'nothingRan'
 
 	let tally = tallyTestRun(report.files)

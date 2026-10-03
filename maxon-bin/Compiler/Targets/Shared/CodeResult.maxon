@@ -145,11 +145,12 @@ end 'buildDebugSymbolIndex'
 // does and can take this bake.)
 //
 // The two backends that are NOT fixed-base bake the same slots with a different VALUE, since the blob layout
-// is target-agnostic: wasm writes the callee's funcref-TABLE INDEX (`StdToWasm.bakeFuncTableIndexRelocs`,
-// slice 2b-iv-B), and Mach-O — always PIE on Apple Silicon — writes a dyld CHAINED-FIXUP REBASE holding the
-// target's image-base-relative offset (`MachOWriter.writeMachoRdataRebases`, slice 2b-iv-C). Neither reaches
-// here. A `funcName` in no debug symbol is a DCE-root gap — the target function was not installed — which
-// panics LOUD rather than baking a stale VA into freed code.
+// is target-agnostic: wasm writes the callee's funcref-TABLE INDEX
+// (`StdToWasm.bakeFuncTableIndexRelocs`), and Mach-O — always PIE on Apple Silicon — writes a dyld
+// CHAINED-FIXUP REBASE holding the target's image-base-relative offset
+// (`MachOWriter.writeMachoRdataRebases`). Neither reaches here. A `funcName` in no debug symbol is
+// a DCE-root gap — the target function was not installed — which panics LOUD rather than baking a
+// stale VA into freed code.
 export function bakeFuncAbs64Relocs(rdata ByteArray, globalData GlobalDataTable, debugSymbols DebugSymbolArray, textBaseVa MachineWord)
 	if globalData.pendingRdataRelocs.count() == 0 'none'
 		return
@@ -449,21 +450,17 @@ export type DebugLocalCodeRange
 end 'DebugLocalCodeRange'
 
 export typealias DebugLocalCodeRangeArray = Array with DebugLocalCodeRange
-
-typealias DebugRunOffsetColumn = Array with CodeOffset
-
-let NoDebugRunOffset = 0 as CodeOffset
-let DebugRunOffsetBias = 1 as CodeOffset
+typealias CodeOffsetColumn = OptionalIndexColumn with CodeOffset
 
 export type DebugRunOffsets
 	var base as ElementIndex
-	var starts as DebugRunOffsetColumn
-	var ends as DebugRunOffsetColumn
+	var starts as CodeOffsetColumn
+	var ends as CodeOffsetColumn
 	var armed as bool
 
 	export static function forFunction(func IrFunction, armed bool) returns DebugRunOffsets
 		if not armed or func.debugLocalRanges.count() == 0 'nothingToResolve'
-			return Self{base: 0, starts: DebugRunOffsetColumn.create(), ends: DebugRunOffsetColumn.create(), armed: false}
+			return Self{base: 0, starts: CodeOffsetColumn.create(), ends: CodeOffsetColumn.create(), armed: false}
 		end 'nothingToResolve'
 
 		let opening = (try func.debugLocalRanges.get(0) otherwise panic("DebugRunOffsets.forFunction: the roster was asked non-empty before this call")).first
@@ -481,12 +478,8 @@ export type DebugRunOffsets
 			high = debugRunHigher(high, other: range.last)
 		end 'eachRun'
 
-		var starts = DebugRunOffsetColumn.create()
-		starts.refill((high - low + 1) as ElementIndex, value: NoDebugRunOffset)
-		var ends = DebugRunOffsetColumn.create()
-		ends.refill((high - low + 1) as ElementIndex, value: NoDebugRunOffset)
-
-		return Self{base: low, starts: starts, ends: ends, armed: true}
+		let window = (high - low + 1) as ElementIndex
+		return Self{base: low, starts: CodeOffsetColumn.absent(window), ends: CodeOffsetColumn.absent(window), armed: true}
 	end 'forFunction'
 
 	export function note(opIdx ElementIndex, codeStart CodeOffset, codeEnd CodeOffset)
@@ -500,8 +493,8 @@ export type DebugRunOffsets
 			return
 		end 'pastTheWindow'
 
-		try self.starts.set(slot, value: codeStart + DebugRunOffsetBias) otherwise panic("DebugRunOffsets.note: starts.set OOB at {slot} inside a window of {self.starts.count()}")
-		try self.ends.set(slot, value: codeEnd + DebugRunOffsetBias) otherwise panic("DebugRunOffsets.note: ends.set OOB at {slot} inside a window of {self.ends.count()}")
+		self.starts.set(slot, value: codeStart)
+		self.ends.set(slot, value: codeEnd)
 	end 'note'
 
 	export function resolve(func IrFunction, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable) returns DebugLocalCodeRangeArray
@@ -528,23 +521,25 @@ export type DebugRunOffsets
 	end 'resolve'
 
 	function startOf(opIdx ElementIndex, orElse CodeOffset) returns CodeOffset
-		let at = self.offsetOf(self.starts, opIdx: opIdx)
-
-		return orElse if at == NoDebugRunOffset else at - DebugRunOffsetBias
+		return try self.offsetOf(self.starts, opIdx: opIdx) otherwise orElse
 	end 'startOf'
 
 	function endOf(opIdx ElementIndex, orElse CodeOffset) returns CodeOffset
-		let at = self.offsetOf(self.ends, opIdx: opIdx)
-
-		return orElse if at == NoDebugRunOffset else at - DebugRunOffsetBias
+		return try self.offsetOf(self.ends, opIdx: opIdx) otherwise orElse
 	end 'endOf'
 
-	function offsetOf(column DebugRunOffsetColumn, opIdx ElementIndex) returns CodeOffset
+	function offsetOf(column CodeOffsetColumn, opIdx ElementIndex) returns CodeOffset throws AbsentError
 		if opIdx < self.base 'beforeTheWindow'
 			panic("DebugRunOffsets.offsetOf: op {opIdx} lies below the window at {self.base}, which was opened over both ends of every run")
 		end 'beforeTheWindow'
 
-		return try column.get((opIdx - self.base) as ElementIndex) otherwise panic("DebugRunOffsets.offsetOf: op {opIdx} lies past the {column.count()}-op window at {self.base}, which was opened over both ends of every run")
+		let slot = (opIdx - self.base) as ElementIndex
+
+		if slot >= column.count() 'pastTheWindow'
+			panic("DebugRunOffsets.offsetOf: op {opIdx} lies past the {column.count()}-op window at {self.base}, which was opened over both ends of every run")
+		end 'pastTheWindow'
+
+		return try column.get(slot)
 	end 'offsetOf'
 end 'DebugRunOffsets'
 

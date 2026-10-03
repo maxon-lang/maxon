@@ -119,8 +119,8 @@ Some consequences:
   then `acc.add(10)` is legal.
 - A record whose type declares every field `let` can never be written, so none of these checks apply to it.
 - `String` and `Character` values a name does not own are copied when bound to a `var` or stored.
-- A `let` lent to a [service](/docs/language/async/#services--spawn) is frozen from the send onwards
-  (**E3160**).
+- A `let` or `var` sent to a [service](/docs/language/async/#services--spawn), passed to [`async`](/docs/language/async/#starting-a-coroutine) or
+  captured by a [closure](/docs/language/functions/#closures) is moved, and reading it afterwards is **E3102**.
 - The analysis tracks records made and used within one function. Two fields of a record received from
   elsewhere — a parameter, module storage — are assumed to hold different records.
 
@@ -181,6 +181,10 @@ end 'main'
 ```
 
 Borrows end at the borrowing variable's **last use**, not at the end of its scope.
+
+A field read into a binding borrows from its record the same way. While a borrow is still read, the record
+it came from may not be moved — into a message argument, an `async` call, or the value a `match` or ternary
+branch gives — and a binding it was moved into may not be dropped at the end of its block (**E3070**).
 
 ### Stack Promotion
 

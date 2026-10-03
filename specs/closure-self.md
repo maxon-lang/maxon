@@ -8,7 +8,7 @@ category: functions
 
 ## Documentation
 
-A closure declared inside an instance method may reference `self` (and therefore `self.field` and `self.method(...)`) inside its body. `self` is captured the same way any other struct local is — by reference to the slot holding the heap pointer — so the closure observes the current state of the instance when it runs.
+A closure declared inside an instance method may reference `self` (and therefore `self.field` and `self.method(...)`) inside its body. The closure RETAINS `self`: it holds a counted reference to the receiver's record, not a copy of it, so it observes the current state of the instance when it runs, and the method keeps using `self` after the closure is built. A field named inside the closure is read through the captured `self`.
 
 ```text
 type Counter
@@ -130,8 +130,8 @@ end 'main'
 ```
 
 <!-- test: error-self-in-free-function-closure -->
-### `self` in a free-function closure still errors
-The fix only enables `self` capture when the enclosing function actually has `self`. A closure inside a free function must still be rejected with E2001.
+### `self` in a free-function closure errors
+`self` capture is enabled only when the enclosing function actually has `self`. A closure inside a free function is rejected with E2001.
 ```maxon
 function main() returns ExitCode
 	let f = function() gives self

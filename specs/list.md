@@ -372,10 +372,8 @@ end 'main'
 <!-- test: insert.out-of-bounds -->
 
 An index past `count` is out of bounds and throws `ArrayError.indexOutOfBounds`.
-Regression: `insert` previously took the append branch for any `at >= count`,
-silently clamping an out-of-bounds index to the tail (growing the list) instead
-of throwing. Only `at == count` may append; `at > count` must throw and leave
-the list unchanged.
+Only `at == count` may append; `at > count` must throw and leave the list
+unchanged, rather than clamp the index to the tail and grow the list.
 
 ```maxon
 function main() returns ExitCode
@@ -702,7 +700,7 @@ end 'main'
 
 <!-- test: memory.value-survives-clear-and-return -->
 ### The value survives the clear, in a helper function too
-The helper twin of `memory.value-survives-clear`, and it carries the same W160 ruling: `first()` is
+The helper twin of `memory.value-survives-clear`, and it carries the same ruling: `first()` is
 corpus-served, so the value it returns is the callee's `+1` and outlives the `clear()` that follows —
 across a function boundary as much as inside one.
 ```maxon
@@ -731,7 +729,7 @@ hello world!!!!!!!!!!!!!!
 
 <!-- test: memory.value-survives-clear-error -->
 ### The value survives a clear one indirection out
-The third shape of the same W160 ruling — the mutation happens inside a callee that takes the list as a
+The third shape of the same ruling — the mutation happens inside a callee that takes the list as a
 parameter. The route to the `clear()` changes nothing, because the safety was established at the `first()`:
 `val` is an owned `String`, and no path can free it out from under the print.
 ```maxon
@@ -759,19 +757,15 @@ hello world!!!!!!!!!!!!!!
 
 <!-- test: memory.value-survives-clear -->
 ### The value survives the clear
-⚖ **RULED 2026-08-18 (W160), AND THE CASE NAME WAS ALWAYS THE ACCEPTING ANSWER.** These three cases pinned
-`E3070` while `List.first()` was COMPILER-MINTED and handed back a borrow of the chain's element. `W153`
-retired the synthesized `List`, so `first()` is now served from `stdlib/List.maxon` and discharges a real
-`+1` through `coOwnBorrowedOpaque` — the value is OWNED, the `clear()` cannot reach it, and all three
-programs run correctly at exit 0 with no leak (measured).
+⚖ **RULED: THE VALUE `first()` RETURNS IS OWNED, AND THE CASE NAME IS THE ACCEPTING ANSWER.** `first()` is
+served from `stdlib/List.maxon` and discharges a real `+1` through `coOwnBorrowedOpaque` — the value is
+OWNED, the `clear()` cannot reach it, and all three programs run correctly at exit 0 with no leak.
 
-⚠ **THIS IS A DIVERGENCE FROM THE ORACLE, RECORDED RATHER THAN HIDDEN.** The bootstrap still raises
-`E3070` on all three; it RETAINS too and refuses anyway, so what the compiler is missing is a LANGUAGE RULE and
-not a reference. It is the divergence `BorrowCheck.maxon` already documents for `arr.last()` — *"a borrow
-composes through a borrow, and NOT through a call"* — and retiring `List` moved `first`/`get`/`clear` from
-compiler-minted to corpus-served, which is what joined them to it. **`arr.get(0)` + `arr.clear()` is still
-refused** (the compiler's own `dispatchArrayMethod` mints that borrow), so the refusal itself is intact and
-what moved is which containers reach it.
+⚠ **NO `E3070` HERE.** The borrow rule `BorrowCheck.maxon` documents for `arr.last()` — *"a borrow
+composes through a borrow, and NOT through a call"* — applies: `List`'s `first`/`get`/`clear` are corpus-served,
+not compiler-minted, so no borrow ties `val` to the list. **`arr.get(0)` + `arr.clear()` is refused** (the
+compiler's own `dispatchArrayMethod` mints that borrow), so the refusal itself is intact; it reaches only the
+containers whose accessors the compiler mints.
 ```maxon
 typealias StringList = List with String
 
@@ -834,22 +828,14 @@ sum=660
 
 <!-- test: memory.mutating-the-list-inside-for-in-ends-the-loop -->
 ### Clearing a list from inside `for … in` ends the walk instead of being refused
-⭐ **`W153` CHANGED THIS PROGRAM'S ANSWER, AND THE CAUSE IS THE `E3019` RULING RATHER THAN THE BORROW
-CHECKER — MEASURED ON BOTH SIDES, NOT REASONED.** Built with the retirement NOT applied this program is
-**REFUSED**:
+⭐ **`l.clear()` UNDER A LIVE WALK COMPILES.** `List with T` is a declaration (`stdlib/List.maxon`), `l`
+is a `var`, and `clear` is an ordinary mutating method on it; neither `E3019` (a mutating call on an
+immutable receiver) nor the borrow checker refuses it.
 
-    error E3019: cannot pass 'l' to function that mutates parameter 'self' (in main)
-
-Built with the retirement it compiles and runs. ⇒ **This is `E3019` behaving exactly as it was ruled
-to (2026-08-14): it is a BUILTIN-SURFACE rule, and a DECLARED type is exempt.** While `List` was
-synthesized, `l.clear()` under a live walk met that builtin rule; retiring the container makes
-`List with T` a declaration, which the ruling excludes. Nothing about the borrow checker moved, and
-reading this as the `E3070` family would attribute it to the wrong mechanism.
-
-⭐ **IT IS SAFE FOR A REASON THAT PREDATES THIS RUNG: `W138` MADE THE NODES REFCOUNTED.** The cursor
-holds a `+1` on the node it is parked at, so `clear()` cannot free it underneath the walk. The
-observable answer is that the iterator finds no successor and the loop simply ends: the first element
-prints, the `clear()` takes effect, and `count()` is 0. **Measured: exit 0, no leak, no fault.**
+⭐ **IT IS SAFE BECAUSE THE NODES ARE REFCOUNTED.** The cursor holds a `+1` on the node it is parked at,
+so `clear()` cannot free it underneath the walk. The observable answer is that the iterator finds no
+successor and the loop simply ends: the first element prints, the `clear()` takes effect, and `count()`
+is 0. **Exit 0, no leak, no fault.**
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntList = List with Int
@@ -877,17 +863,11 @@ count=0
 
 <!-- test: an-all-scalar-struct-element -->
 ### A `List` element may be a plain struct
-⚠⚠ **THIS CASE IS PLAIN COVERAGE, NOT A `W153` GUARD, AND THE DIFFERENCE WAS MEASURED RATHER THAN
-ASSUMED.** It was added at `W153` on the belief that retiring the container OPENED this surface —
-that `requireListElementType` had gated the element type and no longer stands. **That belief is
-FALSE.** Built with the retirement NOT applied, this program
-compiles and prints `[3,4] count=2` at exit 0: the identical answer. The gate never refused an
-all-scalar struct.
+⚠⚠ **THIS CASE IS PLAIN COVERAGE, NOT A GUARD.** No gate refuses an all-scalar struct element — the
+chain's element gate (`requireListElementType`) admits any managed or word-sized element.
 
-⇒ **It is kept because nothing covered the shape, and it is documented as unable to fail from the
-retirement** so that a later reader does not mistake it for a guard on one. A case whose answer is the
-same on both sides of a change pins the language, not the change — and saying so is cheaper than
-letting someone re-derive it.
+⇒ **It is kept because nothing else covers the shape**, and it is documented as coverage so that a
+reader does not mistake it for a guard.
 
 ⚠ **The element here owns no heap**, which is deliberately the EASY half — a managed-element struct
 walks `element_drop@24` and is covered by the `array-clone-managed-elements` and
@@ -921,4 +901,27 @@ end 'main'
 ```
 ```stdout
 [3,4] count=2
+```
+
+<!-- test: error.a-list-from-head-another-file-keeps-private-is-refused -->
+A `List` instance alias at the head of `from […]` is a type name, and another file's file-private one is refused.
+```maxon
+// --- file: probe.maxon
+typealias Readings = List with ExitCode
+
+export function probeReadings() returns ExitCode
+	let r = Readings from [1, 2]
+	print("{r.count()}")
+	return 0
+end 'probeReadings'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let r = Readings from [3]
+	print("{r.count()}")
+	return probeReadings()
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:13:10: typealias 'Readings' is not exported
 ```

@@ -2047,6 +2047,114 @@ function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute 
 	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
 end 'appendX64WindowsRuntimeChunks'
 
+export let WindowsProcessNamespaceName = b"mrt_win_proc_ns"
+
+let HkeyLocalMachine = 0xFFFFFFFF80000002 as MachineWord
+let MachineGuidSubKey = "SOFTWARE\\Microsoft\\Cryptography"
+let MachineGuidValueName = "MachineGuid"
+let RegistryReadStringFlags = 0x10002 as MachineWord
+let RegistryErrorMoreData = 234 as Imm32
+let AsciiHighest = 0x7F as Imm32
+let Utf16UnitShift = 1 as ShiftCount
+let Utf16HighByteOffset = 1 as Imm32
+let RegistryTypeOutArgSlot = 0 as MachineWord
+let RegistryDataOutArgSlot = 1 as MachineWord
+let RegistryBytesOutArgSlot = 2 as MachineWord
+
+function utf16LittleEndian(text String) returns ByteArray
+	var wide = ByteArray.create()
+
+	for byte in text.bytes() 'eachByte'
+		wide.push(byte)
+		wide.push(0)
+	end 'eachByte'
+
+	wide.push(0)
+	return wide
+end 'utf16LittleEndian'
+
+// `RegGetValueW` fills the caller's buffer with UTF-16, narrowed to ASCII in place: unit `i` is
+// read at byte `2i` before byte `i` is written, so the narrowing never overwrites a unit it has yet
+// to read.
+function buildWindowsProcessNamespaceChunk(usesGt bool) returns FunctionCodeChunk
+	let SlotBuffer = 0 as StackSize
+	let SlotCapacity = 1 as StackSize
+	let SlotBytes = 2 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(3, outgoingStackArgBytes: ((RegGetValueStackArgWords * SpillSlotBytes) as StackSize))
+
+	let read = asm.newLabel()
+	let tooSmall = asm.newLabel()
+	let refused = asm.newLabel()
+	let narrow = asm.newLabel()
+	let terminate = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBuffer), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCapacity), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBytes), srcReg: X64Register.rdx, wide: true)
+
+	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: HkeyLocalMachine)
+	emitLeaString(asm, dest: X64Register.rdx, bytes: utf16LittleEndian(MachineGuidSubKey))
+	emitLeaString(asm, dest: X64Register.r8, bytes: utf16LittleEndian(MachineGuidValueName))
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: RegistryReadStringFlags)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(RegistryTypeOutArgSlot), srcReg: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBuffer), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(RegistryDataOutArgSlot), srcReg: X64Register.rax, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBytes))
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(RegistryBytesOutArgSlot), srcReg: X64Register.rax, wide: true)
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.RegGetValueW), usesGt: usesGt)
+	encodeImportAnswerWidth(asm.code, slot: IatSlot.RegGetValueW)
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: read)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: RegistryErrorMoreData)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: tooSmall)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: refused)
+
+	asm.placeLabel(tooSmall)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotCapacity), wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(read)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotBytes), wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShr, reg: X64Register.r9, count: Utf16UnitShift)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotBuffer), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+
+	asm.placeLabel(narrow)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.r9, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: terminate)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rcx, disp: Utf16HighByteOffset, index: X64Register.rax, indexScale: MemoryIndexScale.byTwo)
+	emitCmpRegImm(asm, reg: X64Register.r11, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: refused)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rcx, disp: 0, index: X64Register.rax, indexScale: MemoryIndexScale.byTwo)
+	emitCmpRegImm(asm, reg: X64Register.r11, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: terminate)
+	emitCmpRegImm(asm, reg: X64Register.r11, imm: AsciiHighest)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.above, targetBlockId: refused)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r11, index: X64Register.rax)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: narrow)
+
+	asm.placeLabel(terminate)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.r11, src: X64Register.r11, wide: true)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r11, index: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(refused)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(WindowsProcessNamespaceName)
+end 'buildWindowsProcessNamespaceChunk'
+
+export function appendX64WindowsHostSurfaceChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage)
+	if usage.usesProcessNamespace 'processNamespace'
+		chunks.push(buildWindowsProcessNamespaceChunk(usage.usesGt))
+	end 'processNamespace'
+end 'appendX64WindowsHostSurfaceChunks'
+
 // The Linux-ONLY half: the rt_sigaction `runtime_init`, the signal-stack sizing it calls, the signal-stack
 // install it and every worker machine call, the sigreturn trampoline and the signal `fault_handler`, over a
 // `write`-syscall stderr writer published under the same `mrt_write_cstr_stderr` label the Windows writer uses — which is what lets the shared chunks

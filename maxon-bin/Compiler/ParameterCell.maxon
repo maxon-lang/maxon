@@ -1,0 +1,35 @@
+module let ParameterCellValueOffset = 0 as ByteOffset
+
+module let ParameterCellWitnessOffset = ParameterCellValueOffset + InterfaceWitnessHalfOffset
+
+module let ParameterCellBytes = (ParameterCellWitnessOffset + MachineWordBytes) as ParsedInt
+
+module let ParameterCellAllocName = b"__mm_param_cell"
+
+module function parameterCellCrossesASpawn(tag ValueTypeTag) returns bool
+	return tag != ValueTypeTag.typeParameter
+end 'parameterCellCrossesASpawn'
+
+module function parameterRidesACellIntoASpawn(byReference ParamPositionMask, param ParamCount, paramType MaxonType) returns bool
+	return maskHasParam(byReference, param: param) and parameterCellCrossesASpawn(maxonTypeTag(paramType))
+end 'parameterRidesACellIntoASpawn'
+
+module function parameterCellHoldsAWitness(cellType MaxonType) returns bool
+	return maxonTypeTag(cellType) == ValueTypeTag.interfaceRef
+end 'parameterCellHoldsAWitness'
+
+module function byReferenceMaskOf(byRef ByRefConvention, paramCount ParamCount) returns ParamPositionMask
+	var mask = NoParamPositions
+
+	if not byRef.statesAnything() 'everyParameterByValue'
+		return mask
+	end 'everyParameterByValue'
+
+	for i in 0 upto paramCount 'eachParam'
+		if byRef.paramIsByRef(i) 'arrivesAsACellAddress'
+			mask = maskWithParam(mask, param: i)
+		end 'arrivesAsACellAddress'
+	end 'eachParam'
+
+	return mask
+end 'byReferenceMaskOf'

@@ -180,20 +180,16 @@
 # path is asserted to reach no worker M.
 #
 # ⭐⭐ AND IT STAYS AN `async` PROGRAM, BECAUSE THE SERVICE FORM OF IT DOES NOT
-# COMPILE (SV1 wave 4). It hands ONE heap `String` to twelve tasks; a send is a
-# MOVE, so the second hand-over asks this frame to give up a reference the first
-# already took. `refcount-service-refused.maxon` is that program, and it is in
+# COMPILE. Its twelve tasks read ONE module-level heap `String`; a service would have
+# to be HANDED the box, and a send is a MOVE, so a second hand-over asks the sending
+# frame to give up a reference the first already took.
+# `refcount-service-refused.maxon` is that program, and it is in
 # `REFUSED_PROGRAMS` rather than `PROGRAMS`: the driver asserts the BUILD FAILS and
 # fails with **E3102** specifically — `use of moved value`, which is sharper than the
 # transferability refusal E3138 because the first send did not merely threaten a
 # second owner, it TOOK the reference. The refusal is a fact about the move that no
-# RUN can assert, so it lives beside the program it mirrors.
-#
-# ⚠ CHECKING THE CODE IS NOT PEDANTRY — IT CAUGHT THE FIRST CUT OF THAT FILE. Written
-# as a loop over twelve services it was refused by `E2015` instead, a path-sensitivity
-# limit on moving a value declared outside a loop, which says nothing whatever about
-# transfer. A must-not-compile program that fails for the wrong reason asserts nothing,
-# and this check went red on its first run rather than passing quietly.
+# RUN can assert, so it lives beside the program it mirrors. The CODE is checked
+# because a must-not-compile program that fails for the wrong reason asserts nothing.
 #
 # ⭐⭐ service-fanin-torture IS THE MAILBOX'S OTHER SIDE. `service-torture` is ONE
 # sender and twelve mailboxes; this is twelve SENDER SERVICES and one, so the
@@ -335,8 +331,8 @@ PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-tort
 LEAK_READING_PROGRAMS="${LEAK_READING_PROGRAMS:-drop-running-torture}"
 
 # ⭐⭐ PROGRAMS THAT MUST NOT COMPILE, AND THE CODE EACH MUST BE REFUSED WITH.
-# `refcount-torture.maxon` hands ONE heap `String` to twelve tasks — the shape its
-# own header's 96-run table is about — and the same program written with SERVICES is
+# `refcount-torture.maxon` has twelve tasks read ONE module-level heap `String` — the
+# shape its own header's 96-run table is about — and handing one box to two SERVICES is
 # a compile-time refusal, because a send is a MOVE and the second one asks this frame
 # to give up a reference the first one already took. That refusal is a fact about the
 # transfer rule with nowhere else to live: no run can assert it, so this driver

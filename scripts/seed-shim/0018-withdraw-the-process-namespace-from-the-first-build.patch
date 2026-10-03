@@ -1,0 +1,29 @@
+# The published seed has no `__Builtins.processNamespace`, so it refuses the tree at each of
+# `TreeLock.thisLockHost`'s three calls. Each is withdrawn for an empty part, which `lockHostNamed` reads as a
+# host that names itself nowhere: `C1` records no host in a lock it takes and never probes a holder's pid, so
+# it leaves every held lock to its heartbeat. `C1` knows the intrinsic and compiles the unshimmed tree into `C2`.
+diff --git a/maxon-bin/Compiler/TreeLock.maxon b/maxon-bin/Compiler/TreeLock.maxon
+index 388c977..636c04d 100644
+--- a/maxon-bin/Compiler/TreeLock.maxon
++++ b/maxon-bin/Compiler/TreeLock.maxon
+@@ -140,17 +140,17 @@ end 'LockHost'
+ function thisLockHost() returns LockHost
+ 	#if os(Windows)
+ 		let hostName = try Process.environmentVariable(HostNameVariable) otherwise return LockHost.unknown
+-		return lockHostNamed([hostName, String.init(__Builtins.processNamespace())])
++		return lockHostNamed([hostName, ""])
+ 	#endif
+ 
+ 	#if os(Linux)
+ 		let kernelName = try firstNamedIn([KernelHostNamePath]) otherwise return LockHost.unknown
+ 		let machineId = try firstNamedIn([MachineIdPath, DbusMachineIdPath]) otherwise return LockHost.unknown
+-		return lockHostNamed([kernelName, machineId, String.init(__Builtins.processNamespace())])
++		return lockHostNamed([kernelName, machineId, ""])
+ 	#endif
+ 
+ 	#if os(Macos)
+-		return lockHostNamed([String.init(__Builtins.processNamespace())])
++		return lockHostNamed([""])
+ 	#endif
+ 
+ 	#if os(Wasi)

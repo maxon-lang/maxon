@@ -1,7 +1,6 @@
 ---
 feature: enum-narrow-storage
 status: selfhosted
-status-reason: all 6 cases fail here on RequiredRdata mismatches - this compiler does not narrow enum storage in .rdata the way they pin (measured 2026-08-06, BATCH29/A3a). The compiler cannot take them either: all 6 fail there on E2015 for a field access on an `int`-declared value.
 keywords: [enum, storage, rdata, width, narrow, sign-extension]
 category: codegen
 ---

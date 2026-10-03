@@ -1,0 +1,46 @@
+# The published seed's runtime throws neither `alreadyExists` nor `busy`, and its total ordinal check over
+# `__ManagedFileError` refuses a declaration carrying cases it does not transcribe. Both are withdrawn, with the
+# two `fileFailureOf` arms that name them, so in `C1` a sharing violation is an ordinary failure. The seed's
+# `__ManagedFile` has no `readAppending` either, so `File.readAll` reads each chunk into a buffer of its own and
+# appends it. `C1` compiles the unshimmed tree into `C2`.
+diff --git a/stdlib/Builtins.maxon b/stdlib/Builtins.maxon
+--- a/stdlib/Builtins.maxon
++++ b/stdlib/Builtins.maxon
+@@ -221,8 +221,6 @@
+ 	invalidStatBuffer  // statField/statFree with bad buffer
+ 	invalidStatIndex  // statField with out-of-range index
+ 	closed  // operation on already-closed file
+-	alreadyExists
+-	busy
+ end '__ManagedFileError'
+ 
+ // __ManagedDirectoryError - errors for __ManagedDirectory builtin operations
+diff --git a/stdlib/File.maxon b/stdlib/File.maxon
+--- a/stdlib/File.maxon
++++ b/stdlib/File.maxon
+@@ -97,10 +97,15 @@
+ 				try managed.grow(managed.length() + ReadChunkBytes) otherwise panic("File.readAll: grow — the new capacity is above the current one")
+ 			end 'roomForAChunk'
+ 
+-			let got = try file.readAppending(managed, managed.capacity() - managed.length()) otherwise (e) 'readFailed'
++			var chunk = try __ManagedMemory.create(managed.capacity() - managed.length(), 1) otherwise panic("File.readAll: create — the room is positive")
++
++			let got = try file.read(chunk, managed.capacity() - managed.length()) otherwise (e) 'readFailed'
+ 				throw readFailureOf(e)
+ 			end 'readFailed'
+ 
++			try chunk.setLength(got) otherwise panic("File.readAll: setLength — file.read answers at most the chunk's capacity")
++			managed.append(chunk)
++
+ 			if got == 0 'endOfFile'
+ 				break
+ 			end 'endOfFile'
+@@ -270,8 +275,6 @@
+ 	return match cause 'cause'
+ 		notFound gives FileFailure.notFound
+ 		accessDenied gives FileFailure.accessDenied
+-		alreadyExists gives FileFailure.alreadyExists
+-		busy gives FileFailure.busy
+ 		openFailed or
+ 			readFailed or
+ 			writeFailed or

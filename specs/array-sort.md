@@ -396,10 +396,10 @@ A 100-element fill via `for i in 0 upto 100 { a.push(formula(i)) }` followed by
 `sortUnstable` exercises the register allocator's remat-cycle handling: every
 iteration of the spill/color loop the pre-sort fill leaves a constant `2`
 (from the loop's increment after a multiplication) un-rematerializable at
-its use site inside pdqsort's inlined partition body. Before the
-`all-remat-stuck` detection landed in `runSpillColorLoop`, this pattern spun
-the spill loop to its iteration cap silently leaving a fresh `movRegImm`-defined
-vreg uncolored — `applyColoring` then panicked downstream in `colorLookupGpr`.
+its use site inside pdqsort's inlined partition body. Without the
+`all-remat-stuck` detection in `runSpillColorLoop`, this pattern spins
+the spill loop to its iteration cap, silently leaving a fresh `movRegImm`-defined
+vreg uncolored — `applyColoring` then panics downstream in `colorLookupGpr`.
 The test compiles only when the cycle detector demotes the rematerializable
 to a real spill on the next-to-last iteration.
 ```maxon
@@ -1193,6 +1193,10 @@ function counted(x Integer, y Integer, tally CompareTally) returns Ordering
 	return x.compare(y)
 end 'counted'
 
+function sortCounting(a IntArray, tally CompareTally)
+	a.sort(function(x Integer, y Integer) gives counted(x, y: y, tally: tally))
+end 'sortCounting'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	var r = 2463534242
@@ -1202,8 +1206,8 @@ function main() returns ExitCode
 		a.push(r and 0xFFFFF)
 	end 'fill'
 
-	let tally = CompareTally.create()
-	a.sort(function(x Integer, y Integer) gives counted(x, y: y, tally: tally))
+	var tally = CompareTally.create()
+	sortCounting(a, tally: tally)
 
 	var ordered = true
 
@@ -1298,6 +1302,10 @@ function adversarial(x Integer, y Integer, adversary Adversary) returns Ordering
 	return adversary.compare(x, y: y)
 end 'adversarial'
 
+function sortAgainst(items IntArray, adversary Adversary)
+	items.sort(function(x Integer, y Integer) gives adversarial(x, y: y, adversary: adversary))
+end 'sortAgainst'
+
 function main() returns ExitCode
 	var items = IntArray.create()
 
@@ -1306,7 +1314,7 @@ function main() returns ExitCode
 	end 'fill'
 
 	let adversary = Adversary.create(Items)
-	items.sort(function(x Integer, y Integer) gives adversarial(x, y: y, adversary: adversary))
+	sortAgainst(items, adversary: adversary)
 
 	var ordered = true
 

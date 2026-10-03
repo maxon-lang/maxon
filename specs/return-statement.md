@@ -3,7 +3,6 @@ feature: return-statement
 status: selfhosted
 keywords: [return, control-flow]
 category: statements
-milestone: M4a
 ---
 
 # Return Statement
@@ -11,9 +10,8 @@ milestone: M4a
 ## Documentation
 
 `return <expression>` exits the current function, handing the value back to the
-caller (in the M4a slice, `main` returns its `ExitCode` in R8). A `return` also
-terminates its block: at M4a it may sit in the function body OR in an `if`/`else`
-branch, and each branch that returns emits its own `ret`.
+caller. A `return` also terminates its block, and each branch that returns emits
+its own `ret`.
 
 ### Syntax
 
@@ -131,10 +129,9 @@ false path. Written with an ordinary statement — not a second `return` — aft
 so the case fails if the refusal is widened from "the same straight-line block" to "any
 block that has already returned".
 
-Both exits are executed, and the false path's answer is the one that pins the bug W118
-found: before it, the early `return` in a straight-line body was DISCARDED because
-`setTerminator` silently overwrote it. Here the `return` is in its own block, so nothing
-overwrites it — and the trailing statement proves the continuation still runs.
+Both exits are executed, and the false path's answer pins that an early `return` is never
+DISCARDED by `setTerminator` overwriting it. Here the `return` is in its own block, so nothing
+overwrites it — and the trailing statement proves the continuation runs.
 ```maxon
 function pick(x ExitCode) returns ExitCode
 	if x > 0 'positive'

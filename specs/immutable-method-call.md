@@ -10,9 +10,9 @@ category: semantics
 
 Calling a receiver-writing method on an immutable (`let`) binding is a compile-time error. The receiver-writing methods are, exactly: `append` on a `String`, and `push`, `set`, `insert`, `append`, `reserve`, `resize`, `clear`, `pop` and `remove` on an `Array`. Every other method only reads its receiver and is legal on a `let`.
 
-⚠⚠ **THE RULE IS A BUILTIN-SURFACE ONE, AND A DECLARED TYPE IS EXEMPT (USER RULING 2026-08-14).** It lives in the parser's hand-written `arrayMethodMutatesReceiver` / `setMethodMutatesReceiver` rosters and is read only through the BUILTIN dispatchers, so a type the compiler compiles rather than synthesizes never reaches it — `let c = Counter.create(); c.bump()` compiles today for any user `type Counter`. `Set` used to be on this list and left it when `stdlib/Set.maxon` was listed (W90): the three cases below that once pinned E3019 on a `Set` are value-asserting `ok` cases now, so the drop is RECORDED rather than silently inherited. It was RULED, not drifted.
+⚠⚠ **THE RULE IS A BUILTIN-SURFACE ONE, AND A DECLARED TYPE IS EXEMPT (USER RULING).** It lives in the parser's hand-written `arrayMethodMutatesReceiver` / `setMethodMutatesReceiver` rosters and is read only through the BUILTIN dispatchers, so a type the compiler compiles rather than synthesizes never reaches it — `let c = Counter.create(); c.bump()` compiles for any user `type Counter`. `Set` is such a type (`stdlib/Set.maxon` declares it), so the three `Set` cases below are value-asserting `ok` cases, and the exemption is RECORDED rather than silently inherited.
 
-⚠ The `Array` and `String` cases are unaffected and stay green: both are still builtin-dispatched.
+⚠ The `Array` and `String` cases are builtin-dispatched, so the rule reaches them.
 
 A **parameter** is exempt, and that is not a loophole: `mutable` asks whether the NAME may be rebound (a parameter's answer is no), while this rule asks whether the CONTAINER the name denotes may be written — and a parameter is a borrowed reference to the caller's record, so `dest.append(src)` inside a helper is ordinary Maxon. A `let` that merely *aliases* a parameter is still a `let`, and is still refused.
 
@@ -85,10 +85,9 @@ nicety: accepted, the program writes into the literal's read-only `.rdata` recor
 VIOLATION on x64, and on wasm32-wasi the same write succeeds into a record shared by every use of that
 literal.
 
-⚠ **The compiler NAMES THE BINDING** (user ruling). The bootstrap prints `immutable 'let' variable` here, but that
-is its FALLBACK for having lost the name — `2-Parser.cs` keeps `_lastExprWasMutableVar` set while it clears
-`_lastExprVarName` — and every other E3019 in the canonical corpus names the binding, this file's own
-`push-on-let-array-error` and `append-on-let-string-error` included.
+⚠ **The compiler NAMES THE BINDING** (⚖ user ruling): the merge does not lose the name, and every other
+E3019 in the canonical corpus names the binding, this file's own `push-on-let-array-error` and
+`append-on-let-string-error` included.
 ```maxon
 function grow(s String)
 	s.append("XY")
@@ -111,7 +110,7 @@ error E3019: specs/fragments/immutable-method-call/pass-let-string-through-inlin
 The merge doors are shared, so `try … otherwise` must refuse exactly where the inline `if` does. ⚠ Reaching
 the borrowed merge takes care: `emitOwnedValueReturn` promotes at a `return`, so a String-returning throwing
 function gives an OWNED try edge and `promoteBorrowedMergeEdge` then promotes the fallback to match — a
-shape that was always safe. It takes a try edge that is itself a borrow, like the `Array with String`
+shape that is safe. It takes a try edge that is itself a borrow, like the `Array with String`
 element `get` hands back without copying, for the merge to stay borrowed all the way to the callee.
 ```maxon
 typealias StringArray = Array with String
@@ -155,12 +154,11 @@ error E3019: specs/fragments/immutable-method-call/push-on-let-alias-of-paramete
 ```
 
 <!-- test: insert-on-let-set-ok -->
-⭐⭐ **A `Set` RECEIVER NO LONGER OBEYS THIS RULE, AND THAT IS THE RULING RATHER THAN A REGRESSION (W90).**
-This case pinned E3019 for as long as `Set` was a synthesized builtin. With `stdlib/Set.maxon` listed, `Set`
-is a type the compiler COMPILES, `insert` is an ordinary declared method, and the parser's builtin
-`setMethodMutatesReceiver` roster is never reached — exactly as it is never reached for any user type. It is
-kept as a VALUE-asserting case rather than deleted, so the surface it used to refuse is still executed and
-the day something re-refuses it, this goes red.
+⭐⭐ **A `Set` RECEIVER DOES NOT OBEY THIS RULE, AND THAT IS THE RULING RATHER THAN A DEFECT.**
+`stdlib/Set.maxon` declares `Set`, so it is a type the compiler COMPILES, `insert` is an ordinary declared
+method, and the parser's builtin `setMethodMutatesReceiver` roster is never reached — exactly as it is never
+reached for any user type. This VALUE-asserting case executes the surface, so the day something refuses it,
+this goes red.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -199,12 +197,8 @@ end 'main'
 <!-- test: contains-on-let-set-ok -->
 A read-only `Set` method on a `let` receiver is fine.
 
-⚠ **THE PARENTHETICAL THAT STOOD HERE WENT STALE AT W90 AND IS DELETED RATHER THAN REWORDED.** It read
-*"the `let`-receiver ERROR cases above are refused before any of that, so they carry no restriction"* — and
-those two cases COMPILE a set now (the ruling above), so all three of this file's `Set` cases stand or fall
-together on whatever a `Set` instance's descriptor costs a target. None of them carries a `unsupported-targets:` marker
-and none ever did, so nothing in this file was ever encoding that restriction; saying so once here is more
-honest than a sentence about a distinction that no longer exists.
+⚠ All three of this file's `Set` cases COMPILE a set (the ruling above), so they stand or fall together on
+whatever a `Set` instance's descriptor costs a target. None of them carries an `unsupported-targets:` marker.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -281,8 +275,8 @@ end 'main'
 <!-- test: read-on-var-self-field-array-ok -->
 A bare self-field name used as a method RECEIVER must load the FIELD, not the receiver. A self-field
 alias carries no SSA value (`VarInfo.boundValue` is left 0 — and ValueId 0 IS the receiver), so
-dispatching on it addressed the enclosing struct's box as if it were the array: `items.count()` read the
-Bag's second word and answered 0 for an array holding one element, with no diagnostic anywhere.
+dispatching on it would address the enclosing struct's box as if it were the array: `items.count()` would
+read the Bag's second word and answer 0 for an array holding one element, with no diagnostic anywhere.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -378,7 +372,7 @@ end 'main'
 ```
 
 <!-- test: push-on-let-self-field-array-error -->
-A `let` FIELD refuses the write, blaming the field's own name — byte-identical to the runnable oracle.
+A `let` FIELD refuses the write, blaming the field's own name.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -413,17 +407,17 @@ error E3019: specs/fragments/immutable-method-call/push-on-let-self-field-array-
 ⭐⭐ **AND A CHAIN THROUGH A MODULE-LEVEL `let` REFUSES IT TOO, WHICH IS THE HALF NO DOOR COULD SEE.** The
 case above is a `let` FIELD reached from inside the type; this is a `let` GLOBAL reached through a field
 chain, where the receiver of the mutating call is the field's own record rather than the binding's.
-`SharedFacts.counts` is three tokens, so the bare-name test says nothing about it, and the chain asked only
-whether an enclosing `for` had locked the base — so the write compiled. When such a global's every field is
+`SharedFacts.counts` is three tokens, so the bare-name test says nothing about it, and a chain test that asked
+only whether an enclosing `for` had locked the base would compile the write. When such a global's every field is
 image data the record is `.rdata`: the push reaches `__mm_cow_detach` and writes a page mapped read-only,
 which is a fault on x64 and, on wasm32-wasi, a silent rewrite of the constant.
 
-⛔ **THE RULE IS ASKED OF A TOP-LEVEL BASE ONLY, AND THAT BOUND IS MEASURED.** The runnable oracle judges a
-CHAIN more narrowly than a BINDING: `let e = try xs.get(0)` then `e.counts.push(1)` is E3019 there, while
-`e.counts.set(0, value: 9)` COMPILES — a chain turns on whether the callee REPUBLISHES the receiver's
-record, a split the compiler's mutation summary does not carry. Applied to every local `let`, the rule refuses
-`IrModule.rewriteFuncBlockRefs`' own `func.blockRefs.set(…)`, which the oracle compiles. A top-level
-immutable base needs no such split: no callee may write an imaged record at all.
+⛔ **THE RULE IS ASKED OF A TOP-LEVEL BASE ONLY.** Off a local `let` a CHAIN is judged more narrowly than
+a BINDING: after `let e = try xs.get(0)`, whether `e.counts.push(1)` or `e.counts.set(0, value: 9)` is a
+write turns on whether the callee REPUBLISHES the receiver's record, a split the compiler's mutation summary
+does not carry. Applied to every local `let`, the rule would refuse `IrModule.rewriteFuncBlockRefs`' own
+`func.blockRefs.set(…)`, which is legal. A top-level immutable base needs no such split: no callee may write
+an imaged record at all.
 
 ⚠ **A `self`-ROOTED CHAIN AND A LOCAL ARE BOTH UNTOUCHED** — `self` is a parameter, a borrowed reference to
 the caller's record, so `self.items.push(v)` inside the type's own method stays legal, which is what

@@ -40,10 +40,9 @@ own type, in parameter and return position alike.
 ### ⭐ A DECLARED body BEATS the compiler's own
 
 the compiler synthesizes a conformance surface for the primitives — `hash`, `equals`, `compare` come from a
-generated impl, and `toString` and `clone` are lowered **inline**, calling no symbol at all. That
-surface exists precisely *because* there was no `extension` mechanism to hang a body on.
+generated impl, and `toString` and `clone` are lowered **inline**, calling no symbol at all.
 
-Now that there is one, a declaration wins. This is the rule that matters, and it is the one a test
+A declaration in an `extension` wins over that surface. This is the rule that matters, and it is the one a test
 where the two AGREE cannot check: the cases below deliberately declare bodies that return something
 the synthesized surface never would, so a passing test can only mean the declared body ran.
 
@@ -171,7 +170,7 @@ end 'main'
 ```
 
 <!-- test: a-declared-hash-agrees-through-a-witness -->
-⭐⭐ **THE TWO ROADS TO ONE DECLARED BODY, PINNED AGAINST EACH OTHER (W133 review).** The case above
+⭐⭐ **THE TWO ROADS TO ONE DECLARED BODY, PINNED AGAINST EACH OTHER.** The case above
 proves the DIRECT call reaches the declaration; it says nothing about the WITNESS. Those are two
 separate mechanisms — the direct call is `Parser.dispatchBuiltinConformanceMethod`'s `declaresCallee`
 peek, while the witness road is a table `BuiltinConformanceRuntime` fills by declining to synthesize an
@@ -212,10 +211,10 @@ direct=77 witness=77
 ```
 
 <!-- test: a-declared-conformance-supplies-a-protocol-the-primitive-lacks -->
-⭐⭐ **A DECLARATION DOES NOT MERELY *BEAT* THE SYNTHESIZED SURFACE — IT CAN EXTEND IT (W133 review).**
+⭐⭐ **A DECLARATION DOES NOT MERELY *BEAT* THE SYNTHESIZED SURFACE — IT CAN EXTEND IT.**
 `bool` has no intrinsic `Hashable` at all: `IrInterface.isIntrinsicBuiltinConformance` grants it
 `Comparable` and nothing else, so a bare `t.hash()` is **`E2015 'bool' has no method named 'hash' — a
-builtin-typed receiver supplies `compare`, `toString`, `clone``** (measured on this tree). That makes
+builtin-typed receiver supplies `compare`, `toString`, `clone``**. That makes
 this the case where the declared body is not competing with a compiler answer but is the *only* one,
 and it is the sharper test of the witness road: the table cannot be inherited from a synthesized impl,
 because there is none to inherit. Both roads are compared in one program for the case above's reason.
@@ -313,8 +312,7 @@ error E2015: <fragment>:5:2: Unsupported: a `var` declaration in an `extension` 
 the point.** That predicate names the set with STATICS (`byte.fromString`); this door needs the set with
 VALUES. `byte` names no type in the compiler — a byte-sized value is an `int` range (`typealias Byte = int(0 to
 u8.max)`) reaching every receiver door tagged `integer` — so an `extension byte` body would publish
-`byte.<method>` symbols nothing could ever dispatch: a silent declaration, the exact shape this rung
-closes. **Refused with a position rather than compiled to nothing**, which is what it did before.
+`byte.<method>` symbols nothing could ever dispatch: a silent declaration. **Refused with a position rather than compiled to nothing.**
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -334,9 +332,7 @@ error E2015: <fragment>:4:11: Unsupported: `extension byte` — `byte` is the qu
 
 <!-- test: error.self-in-a-primitive-extension-has-no-fields -->
 ⭐ A primitive **is** its value. `self` in these bodies is the `int` itself, so there is nothing for a
-field access to read — and reaching for one used to take the compiler down at `enclosingLayout`,
-blaming the pre-scan for a `type int` no program wrote. It is a positioned refusal, mirroring the enum
-arm.
+field access to read. Reaching for one is a positioned refusal, mirroring the enum arm.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -356,13 +352,13 @@ error E2015: <fragment>:6:10: Unsupported: a field access through `self` in a me
 ```
 
 <!-- test: error.an-interface-extension-publishes-nothing-onto-a-primitive -->
-⭐⭐ **THE BOUNDARY OF THIS RUNG, PINNED SO IT CANNOT DRIFT INTO A WRONG ANSWER (W133 review).** A
+⭐⭐ **THE BOUNDARY OF PRIMITIVE EXTENSIONS, PINNED SO IT CANNOT DRIFT INTO A WRONG ANSWER.** A
 primitive may be an extension TARGET, and this case's `extension int implements Doubler` is accepted and
 conformance-checked. It may NOT be an interface CONFORMER: `ProgramSignatures.conformersOf` builds its
 list by walking `structNamesInDeclOrder`, so `int` is in no interface's conformer set and an
 `extension Doubler` body is expanded onto every declared conforming `type` and onto no primitive.
 ⚠ **The guarantee worth pinning is that this is a REFUSAL rather than silence** — the same shape
-`conformersOf` already documents for `enum` and `union`. A capability this rung did not build, stated by
+`conformersOf` already documents for `enum` and `union`. A capability the compiler does not have, stated by
 a case instead of by a comment nobody reruns.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

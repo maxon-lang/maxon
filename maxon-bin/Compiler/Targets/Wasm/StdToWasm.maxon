@@ -5,17 +5,11 @@
 // that: wasm's operand stack has an unbounded local file, so every SSA `ValueId` simply
 // IS a wasm local, there is no register pressure to allocate for, and
 // there is no Target dialect to lower into. This file consumes the `StdModule` directly and
-// emits the byte-encoded module through A1's `WasmBinary` seam. That is why the `wasm32`
+// emits the byte-encoded module through the `WasmBinary` seam. That is why the `wasm32`
 // arms in RegisterAllocator/RegBits/SsaDestruction/TargetPrinter stay dead-but-exhaustive:
 // the wasm path never reaches them.
 //
 // ⭐ WHAT IS DELIBERATELY NOT REUSED FROM the compiler's SHARED BACKEND CODE, AND WHY:
-//   • `SsaDestruction.sequenceParallelCopy` — it is module-private (not exported), typed on
-//     physical `RegNum`s (this tier has only `ValueId`s), and breaks copy cycles with `xchg`,
-//     which wasm has no instruction for. wasm breaks a cycle by staging through a SCRATCH
-//     local per valtype, so the algorithm is re-implemented here over local indices with
-//     scratch-local cycle breaking — the SAME standard parallel-move algorithm, a different
-//     cycle primitive.
 //   • `PhiEdgeView.resolve` — its `PhiEdgeConsumer` context enum names only the three
 //     register-allocator consumers; the edge/arg pairing is resolved locally instead so a
 //     wasm arity mismatch reports against wasm, not a mislabelled `ssaDestruction`.
@@ -50,7 +44,7 @@
 // exhaustive matches below — unreachable given the spec-runner gating, mirroring the dead-but-exhaustive
 // native target arms.
 
-// Wasm indices/counts are u32 in the format; this backend uses A1's exported `Wasm32Index`
+// Wasm indices/counts are u32 in the format; this backend uses the exported `Wasm32Index`
 // (= int(0 to u32.max)) and `Wasm32IndexArray` for every function/type/local/dispatch index,
 // so the values flow into the `WasmBinary` seam's params with no cast. The narrowings are the two
 // places a value crosses in from an IR-tier id space: the `ValueId → local index` boundary, and
@@ -66,8 +60,8 @@ typealias PhiValTypeSet = Set with WasmValType
 
 // Callee name → its parameter valtypes, in declaration order. The one per-callee map this backend
 // still builds: `funcParamValTypes` FOLDS a signature into a fresh array, so memoizing it is a real
-// saving, where a map of func INDICES or of RETURN TYPES was storing something `FunctionNameIndex`
-// already answers in two O(1) steps (see `wasmFuncIdxOf` — both are gone, A2l).
+// saving, where a map of func INDICES or of RETURN TYPES would store something `FunctionNameIndex`
+// already answers in two O(1) steps (see `wasmFuncIdxOf`).
 typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
 
 // An indirect call's ENCODED FUNCTYPE (its `encodeFuncType` bytes) → the interned wasm functype index for
@@ -75,7 +69,7 @@ typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
 // `(f64) -> f64` and `(i64) -> i64` are distinct functypes of the same arity, and
 // `call_indirect` runtime-checks the funcref against exactly the declared type. Each call's signature comes
 // from the `resultType`/`argFloatMask` the Std op carries (`indirectCallArgValType` reads the one
-// per-argument bit; the trailing uniform-ABI env pointer is a plain i64), plus the trailing i64
+// per-argument bit; the trailing function record is a plain i64), plus the trailing i64
 // error flag for a THROWING one. THREE ops
 // populate it: `callIndirect`, and the two fused witness calls, whose callee is a
 // table index loaded out of a witness-table method slot. Built once per module — pre-interned into the
@@ -83,7 +77,10 @@ typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
 // key without mutating the shared builder mid-emit.
 typealias IndirectCallTypeIdxMap = Map with (ByteArray, Wasm32Index)
 
-// FOUR functions are imported, in this fixed order — so their func indices are the constants
+typealias InlinePositionBySite = Map with (ElementIndex, Wasm32Index)
+typealias InlineSiteIndexArray = Array with ElementIndex
+
+// FIVE functions are imported, in this fixed order — so their func indices are the constants
 // below and every DEFINED function is offset by `WasmImportCount`. `buildWasmCoreModule` MUST
 // `addImportFunc` them in exactly this order for the indices to hold; `wasmFuncIdxOf`
 // derives each defined function's index as `WasmImportCount + position` on the same assumption. The
@@ -93,17 +90,19 @@ typealias IndirectCallTypeIdxMap = Map with (ByteArray, Wasm32Index)
 //   1  wasi:cli/stdout@0.2.6 get-stdout                               () -> (result i32)
 //   2  wasi:io/streams@0.2.6 [method]output-stream.blocking-write-and-flush  (i32,i32,i32,i32) -> ()
 //   3  wasi:cli/stderr@0.2.6 get-stderr                               () -> (result i32)
+//   4  wasi:random/random@0.2.6 get-random-u64                         () -> (result i64)
 //
 // ⚠ `get-stderr` is APPENDED, not slotted in beside its stdout twin, for the reason a `StdOp` variant
-// is appended at the end of its band: the three indices above are read from a dozen emit sites and a
+// is appended at the end of its band: the indices above it are read from a dozen emit sites and a
 // renumber is invisible at every one of them — the module would still validate and would call the
 // wrong import. Appending costs only the ONE derived offset (`WasmImportCount`), which every defined
 // function's index already goes through.
-let WasmImportCount = 4 as Wasm32Index
+let WasmImportCount = 5 as Wasm32Index
 let ExitImportFuncIdx = 0 as Wasm32Index
 let GetStdoutImportFuncIdx = 1 as Wasm32Index
 let BlockingWriteFlushImportFuncIdx = 2 as Wasm32Index
 let GetStderrImportFuncIdx = 3 as Wasm32Index
+let GetRandomU64ImportFuncIdx = 4 as Wasm32Index
 
 // ⭐ The wasm half of `StdLoweringShared.posixStreamFd` — which `wasi:cli` accessor hands over the
 // output-stream a write targets. Exhaustive over `OsOutputStream` for that door's reason: a third
@@ -194,6 +193,21 @@ let WasiBlockingWriteFlushFieldName = b"[method]output-stream.blocking-write-and
 let WasiStderrModuleName = b"wasi:cli/stderr@0.2.6"
 let WasiGetStderrFieldName = b"get-stderr"
 
+let WasiRandomModuleName = b"wasi:random/random@0.2.6"
+let WasiGetRandomU64FieldName = b"get-random-u64"
+let WasmRandomWordBytes = 8 as ParsedInt
+let WasmRandomByteStep = 1 as ParsedInt
+let WasmRandomFillNothingFilled = 0 as ParsedInt
+let WasmRandomFillSucceeded = 0 as ParsedInt
+let WasmRandomFillStoreOffset = 0 as Wasm32Index
+let WasmRandomFillLoopDepth = 0 as Wasm32Index
+let WasmRandomFillExitDepth = 1 as Wasm32Index
+
+enum WasmRandomFillUnit
+	word
+	byte
+end 'WasmRandomFillUnit'
+
 // The imports' backtrace names. A WIT field name is not one —
 // `[method]output-stream.blocking-write-and-flush` is an interface path, and wasmtime would print it
 // verbatim in the frame line of an engine trap (a fault, a stack overflow) — so each import carries a
@@ -202,6 +216,7 @@ let WasiExitDebugName = b"exit"
 let WasiGetStdoutDebugName = b"get_stdout"
 let WasiBlockingWriteFlushDebugName = b"blocking_write_and_flush"
 let WasiGetStderrDebugName = b"get_stderr"
+let WasiGetRandomU64DebugName = b"get_random_u64"
 
 // The `.rdata` image (String-literal records + blobs) is laid in linear memory immediately
 // after the `.data` image, rounded up to 8 so every 8-byte record field lands naturally
@@ -218,7 +233,7 @@ let WasmRdataAlignment = 8 as BytePos
 // model, synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call
 // $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
 // by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
-export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, releasesRegistry bool, funcNames FunctionNameIndex, entryFunction ByteArray) returns ByteArray
+export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, releasesRegistry bool, funcNames FunctionNameIndex, entryFunction ByteArray, spellings StdlibShadowSpellingArray) returns ByteArray
 	let calleeParamTypes = buildCalleeParamTypesMap(funcNames)
 
 	var builder = WasmModuleBuilder.create()
@@ -260,7 +275,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	var rdataImage = globalData.rdataImage()
 	applyRdataAbsRelocs(rdataImage, globalData: globalData, rdataBase: rdataBase)
 	bakeFuncTableIndexRelocs(rdataImage, globalData: globalData, funcNames: funcNames)
-	let frames = WasmFrameStack.above((rdataBase as BytePos) + rdataImage.count() as BytePos)
+	let frames = WasmFrameStack.above((rdataBase as BytePos) + rdataImage.count() as BytePos, spellings: spellings)
 
 	// The WASI imports were added FIRST (above), in the order the `*ImportFuncIdx` constants fix, so every
 	// defined function gets the index `wasmFuncIdxOf` computes (`WasmImportCount + position`). Order
@@ -270,10 +285,18 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// Defined functions in the order `wasmFuncIdxOf` assumes — walked off the INDEX'S OWN ARRAY rather than
 	// the module's, so the order the func indices are DERIVED from and the order they are EMITTED in are the
 	// same array rather than two that must be kept in step.
+	var inlinePositions = ByteArrayArray.create()
+
 	for (iter, func) in funcNames.functions.withIterator() 'eachFunc'
 		let funcIdx = (WasmImportCount + iter.index()) as Wasm32Index
-		var emitter = WasmFuncEmitter.create(module, func: func, funcIdx: funcIdx, frames: frames, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, funcNames: funcNames, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)
+		let firstPosition = (wasmFirstInlinePosition(funcNames) + inlinePositions.count()) as Wasm32Index
+		var emitter = WasmFuncEmitter.create(module, func: func, funcIdx: funcIdx, frames: frames, firstPosition: firstPosition, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, funcNames: funcNames, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)
 		emitter.emit()
+
+		for position in emitter.inlinePositionLines() 'eachPosition'
+			inlinePositions.push(position)
+		end 'eachPosition'
+
 		let typeIdx = builder.internFuncType(funcParamValTypes(func), results: funcSignatureResultValTypes(func))
 		let addedIdx = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes(), debugName: func.name)
 
@@ -286,7 +309,13 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// (its index is read by every panic site, which was emitted above), then the entry stub.
 	appendPanicRuntime(builder, funcNames: funcNames, frames: frames)
 	let runFuncIdx = appendRunEntry(builder, module: module, funcNames: funcNames, frames: frames, checkLeaks: checkLeaks, initGlobals: initGlobals, releasesRegistry: releasesRegistry, entryFunction: entryFunction)
-	let frameImage = frames.image(builder.functionDebugNames())
+	let functionNames = builder.functionDebugNames()
+
+	if functionNames.count() != wasmFirstInlinePosition(funcNames) 'positionDrift'
+		panic("buildWasmCoreModule: the module holds {functionNames.count()} functions, but every inline position was numbered from {wasmFirstInlinePosition(funcNames)} — a position would print another function's frame line")
+	end 'positionDrift'
+
+	let frameImage = frames.image(functionNames, inlinePositions: inlinePositions)
 
 	// The memory must cover every image; the frame region sits above `.rdata`, which sits above
 	// `.data`, so the frame region's end is the high-water mark (and it is past `WasmDataBaseOffset`
@@ -310,16 +339,18 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	return builder.finish()
 end 'buildWasmCoreModule'
 
-// Add the four WASI imports in the order the `*ImportFuncIdx` constants pin: `exit-with-code`
-// (0), `get-stdout` (1), `blocking-write-and-flush` (2), `get-stderr` (3). `exit-with-code` takes one
-// i32 (the status) and returns nothing; each stream accessor takes nothing and returns the i32 stream
-// handle; `blocking-write-and-flush` takes (handle, ptr, len, retArea) — four i32 — and returns nothing.
+// Add the five WASI imports in the order the `*ImportFuncIdx` constants pin: `exit-with-code`
+// (0), `get-stdout` (1), `blocking-write-and-flush` (2), `get-stderr` (3), `get-random-u64` (4).
+// `exit-with-code` takes one i32 (the status) and returns nothing; each stream accessor takes
+// nothing and returns the i32 stream handle; `blocking-write-and-flush` takes (handle, ptr, len,
+// retArea) — four i32 — and returns nothing; `get-random-u64` takes nothing and returns an i64.
 //
-// All four are imported UNCONDITIONALLY, including by a program that never panics and never prints. A
-// wasm import costs a name pair in the import section and nothing at run time (the host resolves it
-// whether or not a `call` reaches it), whereas making one conditional would put the `*ImportFuncIdx`
-// constants — and therefore `WasmImportCount`, and therefore EVERY defined function's index and every
-// funcref-table slot baked into `.rdata` — behind a whole-module scan for a single op.
+// All five are imported UNCONDITIONALLY, including by a program that never panics and never prints.
+// A wasm import costs a name pair in the import section and nothing at run time (the host resolves
+// it whether or not a `call` reaches it), whereas making one conditional would put the
+// `*ImportFuncIdx` constants — and therefore `WasmImportCount`, and therefore EVERY defined
+// function's index and every funcref-table slot baked into `.rdata` — behind a whole-module scan
+// for a single op.
 function appendWasiImports(builder WasmModuleBuilder)
 	let exitTypeIdx = builder.internFuncType(singletonValTypes(WasmValType.i32), results: WasmValTypeArray.create())
 	_ = builder.addImportFunc(WasiExitModuleName, fieldName: WasiExitFieldName, typeIdx: exitTypeIdx, debugName: WasiExitDebugName)
@@ -339,6 +370,9 @@ function appendWasiImports(builder WasmModuleBuilder)
 	_ = builder.addImportFunc(WasiStreamsModuleName, fieldName: WasiBlockingWriteFlushFieldName, typeIdx: writeFlushTypeIdx, debugName: WasiBlockingWriteFlushDebugName)
 
 	_ = builder.addImportFunc(WasiStderrModuleName, fieldName: WasiGetStderrFieldName, typeIdx: getStreamTypeIdx, debugName: WasiGetStderrDebugName)
+
+	let getRandomTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i64))
+	_ = builder.addImportFunc(WasiRandomModuleName, fieldName: WasiGetRandomU64FieldName, typeIdx: getRandomTypeIdx, debugName: WasiGetRandomU64DebugName)
 end 'appendWasiImports'
 
 // Bake every `.rdata` slot naming another `.rdata` payload (see `PendingRdataAbsReloc`) into the `.rdata`
@@ -417,10 +451,10 @@ end 'wasmRdataBase'
 // The MESSAGE contract is byte-identical to theirs, which is what lets the two panic ops share this
 // one entry point: both a baked `.rdata` blob (`StringRuntime.stringBlobBytes` NUL-terminates it)
 // and an interpolated buffer (`Parser.renderedPanicMessagePointer` — the slab zeroes the byte past
-// the payload) arrive as a C string. ⚠ **THE INLINE FRAME TABLES HAVE NO WASM HALF.** The inliner
-// still runs for this target and its blocks still carry their inline sites (`IrBlock.inlineSite`),
-// but the frame stack records FUNCTIONS, so nothing consumes `__inlframes` here: a spliced body
-// prints as the enclosing function's frame.
+// the payload) arrive as a C string. ⚠ **THE INLINE FRAME TABLES HAVE NO WASM HALF.** Nothing
+// consumes `__inlframes` here; instead a call inside a spliced body stores its inline position in
+// the frame's ring slot (`WasmInlinePositions`), whose line names the spliced callees above the
+// enclosing function.
 function appendPanicRuntime(builder WasmModuleBuilder, funcNames FunctionNameIndex, frames WasmFrameStack)
 	var body = WasmBody.create()
 
@@ -486,6 +520,14 @@ function wasmPanicFuncIdx(funcNames FunctionNameIndex) returns Wasm32Index
 	return (WasmImportCount + funcNames.functions.count()) as Wasm32Index
 end 'wasmPanicFuncIdx'
 
+function wasmRunFuncIdx(funcNames FunctionNameIndex) returns Wasm32Index
+	return (wasmPanicFuncIdx(funcNames) + 1) as Wasm32Index
+end 'wasmRunFuncIdx'
+
+function wasmFirstInlinePosition(funcNames FunctionNameIndex) returns Wasm32Index
+	return (wasmRunFuncIdx(funcNames) + 1) as Wasm32Index
+end 'wasmFirstInlinePosition'
+
 // `mrt_panic`'s locals. Local 0 is its one parameter (identity-local model: a wasm function's params
 // occupy the first local indices), local 1 the scan cursor, the rest the frame walk's.
 let WasmPanicMsgPtrLocal = 0 as Wasm32Index
@@ -540,10 +582,7 @@ function emitFrameWalk(body WasmBody, frames WasmFrameStack)
 	body.i32Sub()
 	body.localGet(WasmPanicFrameLocal)
 	body.i32Sub()
-	body.i32Const(frames.ringMask)
-	body.i32And()
-	body.i32Const(WasmFrameSlotShift)
-	body.i32Shl()
+	emitFrameSlotOffset(body, frames: frames)
 	body.i32Load(frames.ringBase)
 	body.i32Const(WasmFrameLineEntryShift)
 	body.i32Shl()
@@ -570,10 +609,7 @@ function emitFramePush(body WasmBody, frames WasmFrameStack, funcIdx Wasm32Index
 	body.i32Const(frames.depthAddress)
 	body.i32Load(WasmFrameWordDisplacement)
 	body.localTee(savedDepthLocal)
-	body.i32Const(frames.ringMask)
-	body.i32And()
-	body.i32Const(WasmFrameSlotShift)
-	body.i32Shl()
+	emitFrameSlotOffset(body, frames: frames)
 	body.i32Const(funcIdx as Imm32)
 	body.i32Store(frames.ringBase)
 
@@ -583,6 +619,19 @@ function emitFramePush(body WasmBody, frames WasmFrameStack, funcIdx Wasm32Index
 	body.i32Add()
 	body.i32Store(WasmFrameWordDisplacement)
 end 'emitFramePush'
+
+function emitFrameSlotOffset(body WasmBody, frames WasmFrameStack)
+	body.i32Const(frames.ringMask)
+	body.i32And()
+	body.i32Const(WasmFrameSlotShift)
+	body.i32Shl()
+end 'emitFrameSlotOffset'
+
+function emitFramePosition(body WasmBody, frames WasmFrameStack, slotOffsetLocal Wasm32Index, position Wasm32Index)
+	body.localGet(slotOffsetLocal)
+	body.i32Const(position as Imm32)
+	body.i32Store(frames.ringBase)
+end 'emitFramePosition'
 
 function emitFramePop(body WasmBody, frames WasmFrameStack, savedDepthLocal Wasm32Index)
 	body.i32Const(frames.depthAddress)
@@ -616,8 +665,9 @@ type WasmFrameStack
 	export let elidedLength as Imm32
 	export let lineTableBase as Wasm32Index
 	let prefix as ByteArray
+	let spellings as StdlibShadowSpellingArray
 
-	static function above(rdataEnd BytePos) returns Self
+	static function above(rdataEnd BytePos, spellings StdlibShadowSpellingArray) returns Self
 		let base = alignUp(rdataEnd, alignment: WasmRdataAlignment) as Wasm32Index
 		let ringSlots = roundUpToPowerOfTwo(MaxBacktraceFrames)
 		var prefix = ByteArray.create()
@@ -644,23 +694,27 @@ type WasmFrameStack
 			elidedAddress: wasmLinearAddress(base, byteOffset: elidedOffset as ByteOffset),
 			elidedLength: ElidedFramesLine.count() as Imm32,
 			lineTableBase: wasmLinearAddress(base, byteOffset: prefix.count() as ByteOffset) as Wasm32Index,
-			prefix: prefix
+			prefix: prefix,
+			spellings: spellings
 		}
 	end 'above'
 
-	function image(functionNames ByteArrayArray) returns ByteArray
+	function image(functionNames ByteArrayArray, inlinePositions ByteArrayArray) returns ByteArray
 		var image = self.prefix.clone()
 		var lines = ByteArray.create()
-		let linesOffset = image.count() + (functionNames.count() shl WasmFrameLineEntryShift)
+		let linesOffset = image.count() + ((functionNames.count() + inlinePositions.count()) shl WasmFrameLineEntryShift)
 
 		for name in functionNames 'eachName'
 			let lineStart = lines.count()
-			lines.append(FrameLinePrefix)
-			lines.append(name)
-			lines.append(FrameLineTerminator)
-			writeDword(image, value: wasmLinearAddress(self.base, byteOffset: (linesOffset + lineStart) as ByteOffset) as MachineWord)
-			writeDword(image, value: (lines.count() - lineStart) as MachineWord)
+			self.appendFrameLine(lines, name: name)
+			self.writeLineEntry(image, linesOffset: linesOffset, lineStart: lineStart, lineEnd: lines.count())
 		end 'eachName'
+
+		for position in inlinePositions 'eachPosition'
+			let lineStart = lines.count()
+			lines.append(position)
+			self.writeLineEntry(image, linesOffset: linesOffset, lineStart: lineStart, lineEnd: lines.count())
+		end 'eachPosition'
 
 		if image.count() != linesOffset 'tableDrift'
 			panic("WasmFrameStack.image: the frame-line table ends at byte {image.count()}, but every line address was written for lines starting at {linesOffset}")
@@ -669,7 +723,42 @@ type WasmFrameStack
 		image.append(lines)
 		return image
 	end 'image'
+
+	function appendFrameLine(lines ByteArray, name ByteArray)
+		lines.append(FrameLinePrefix)
+		lines.append(authorSpelledName(name, spellings: self.spellings))
+		lines.append(FrameLineTerminator)
+	end 'appendFrameLine'
+
+	function writeLineEntry(image ByteArray, linesOffset ElementIndex, lineStart ElementIndex, lineEnd ElementIndex)
+		writeDword(image, value: wasmLinearAddress(self.base, byteOffset: (linesOffset + lineStart) as ByteOffset) as MachineWord)
+		writeDword(image, value: (lineEnd - lineStart) as MachineWord)
+	end 'writeLineEntry'
 end 'WasmFrameStack'
+
+// An inline position shares the frame-line index space with the function indices, numbered past
+// all of them (`wasmFirstInlinePosition`), so one ring slot holds either and one line table
+// answers both.
+type WasmInlinePositions
+	let first as Wasm32Index
+	var bySite as InlinePositionBySite
+	export var sites as InlineSiteIndexArray
+
+	static function startingAt(first Wasm32Index) returns Self
+		return Self{first: first, bySite: InlinePositionBySite.create(), sites: InlineSiteIndexArray.create()}
+	end 'startingAt'
+
+	function positionOf(siteIndex ElementIndex) returns Wasm32Index
+		if let known = try self.bySite.get(siteIndex) 'known'
+			return known
+		end 'known'
+
+		let position = (self.first + self.sites.count()) as Wasm32Index
+		self.sites.push(siteIndex)
+		self.bySite.upsert(siteIndex, value: position)
+		return position
+	end 'positionOf'
+end 'WasmInlinePositions'
 
 // Synthesize the component entry `wasi:cli/run@0.2.6#run() -> i32`: run the entry function, hand its
 // exit code to `exit-with-code`, and leave the ok-discriminant on the stack. Returns the
@@ -682,7 +771,7 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames F
 	let entryName = String.from(entryFunction)
 	let mainFuncIdx = try wasmFuncIdxOf(funcNames, callee: entryFunction) otherwise panic("buildWasmCoreModule: no `{entryName}` function in the module — the wasm `run` entry has nothing to call")
 	let mainReturnValType = mainReturnValueType(module, entryFunction: entryFunction)
-	let runFuncIdx = (wasmPanicFuncIdx(funcNames) + 1) as Wasm32Index
+	let runFuncIdx = wasmRunFuncIdx(funcNames)
 
 	var runBody = WasmBody.create()
 	emitFramePush(runBody, frames: frames, funcIdx: runFuncIdx, savedDepthLocal: WasmRunSavedDepthLocal)
@@ -826,7 +915,7 @@ end 'mainReturnValueType'
 // Module-level maps (built once, looked up O(1) — never iterated for output)
 // ==========================================================================
 
-// ⭐⭐ **A DEFINED FUNCTION'S WASM FUNCTION INDEX — DERIVED, NOT STORED (A2l).** Defined functions land at
+// ⭐⭐ **A DEFINED FUNCTION'S WASM FUNCTION INDEX — DERIVED, NOT STORED.** Defined functions land at
 // `WasmImportCount + position` because `buildWasmCoreModule` adds the imports first and then the functions
 // in `module.functions` order, so the index a `call` needs IS the position `FunctionNameIndex` already
 // resolves, plus a constant.
@@ -953,6 +1042,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -986,6 +1077,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or
@@ -1065,9 +1157,10 @@ end 'indirectCallParamValTypes'
 // local declared.
 //
 // ⚠ **THERE IS NO REFUSAL HERE, AND THERE MUST NOT BE ONE.** Rejecting a program with a `bool`/`ExitCode`
-// parameter reachable through a `.rdata` function slot covers less than it looks like it does — a lifted
-// CLOSURE's address is a `.text` `funcAddr` in no `.rdata` slot, so `function(loud bool) gives …` called
-// through a `function(bool) returns int` typealias walks straight past it and traps anyway. The
+// parameter reachable through a `.rdata` function slot covers less than it looks like it does — a capturing
+// closure's code address is stored into its HEAP record at run time, in no `.rdata` slot, so
+// `function(loud bool) gives …` called through a `function(bool) returns int` typealias walks straight past
+// it and traps anyway. The
 // machine-word ABI closes both halves at once, because NO function's wasm signature carries a narrow
 // integer for a caller to disagree with.
 //
@@ -1531,6 +1624,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		tlsAlloc(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		tlsSlotLoad(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osEnterBackgroundPriority(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osRandomFill(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
 		// No valtype: these define no value, or have no wasm lowering and so never have a def recorded.
 		condBranch or
@@ -1582,6 +1676,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
 			osHandleSetInherit or
 			osSocketFreeAddrInfo or
 			osSocketClose or
@@ -1596,6 +1691,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 			tlsSetValue or
 			osSetEvent or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			osHandleFileType or
@@ -1687,7 +1783,7 @@ type WasmFuncEmitter
 	var valtypes as WasmValTypeArray
 
 	// The instruction-byte accumulator (no local decls, no trailing 0x0B — the module builder
-	// frames the body around A2's bytes). Exported: `buildWasmCoreModule` reads `body.bytes()`.
+	// frames the body around these bytes). Exported: `buildWasmCoreModule` reads `body.bytes()`.
 	export var body as WasmBody
 
 	// The valtypes of the declared locals (indices paramCount..lastLocal), in index order:
@@ -1715,8 +1811,11 @@ type WasmFuncEmitter
 	let ownFuncIdx as Wasm32Index
 	let frames as WasmFrameStack
 	let savedDepthLocal as Wasm32Index
+	var slotOffsetLocal as Wasm32Index
+	var positions as WasmInlinePositions
+	var currentSite as InlineSiteRef
 
-	static function create(module StdModule, func IrFunction, funcIdx Wasm32Index, frames WasmFrameStack, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, funcNames FunctionNameIndex, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
+	static function create(module StdModule, func IrFunction, funcIdx Wasm32Index, frames WasmFrameStack, firstPosition Wasm32Index, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, funcNames FunctionNameIndex, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
 		let valtypes = buildValtypeTable(module, func: func, funcNames: funcNames)
 		let useDispatcher = decideDispatcher(module, func: func)
 
@@ -1738,7 +1837,10 @@ type WasmFuncEmitter
 			blockDispatchById: module.blockIndexById(func),
 			ownFuncIdx: funcIdx,
 			frames: frames,
-			savedDepthLocal: valtypes.count() as Wasm32Index
+			savedDepthLocal: valtypes.count() as Wasm32Index,
+			slotOffsetLocal: 0,
+			positions: WasmInlinePositions.startingAt(firstPosition),
+			currentSite: InlineSiteRef.none
 		}
 
 		emitter.buildLocalDeclarations()
@@ -1760,12 +1862,19 @@ type WasmFuncEmitter
 		end 'valueLocals'
 
 		self.localTypes.push(WasmValType.i32)
+		var nextLocal = (self.savedDepthLocal + 1) as Wasm32Index
+
+		if self.tracksInlinePositions() 'slotOffset'
+			self.slotOffsetLocal = nextLocal
+			self.localTypes.push(WasmValType.i32)
+			nextLocal = (nextLocal + 1) as Wasm32Index
+		end 'slotOffset'
 
 		if not self.useDispatcher 'noDispatcher'
 			return
 		end 'noDispatcher'
 
-		self.dispatchLocal = (self.savedDepthLocal + 1) as Wasm32Index
+		self.dispatchLocal = nextLocal
 		self.localTypes.push(WasmValType.i32)
 
 		var nextScratch = (self.dispatchLocal + 1) as Wasm32Index
@@ -1810,6 +1919,12 @@ type WasmFuncEmitter
 
 		emitFramePush(self.body, frames: self.frames, funcIdx: self.ownFuncIdx, savedDepthLocal: self.savedDepthLocal)
 
+		if self.tracksInlinePositions() 'slotOffset'
+			self.body.localGet(self.savedDepthLocal)
+			emitFrameSlotOffset(self.body, frames: self.frames)
+			self.body.localSet(self.slotOffsetLocal)
+		end 'slotOffset'
+
 		if self.useDispatcher 'dispatch'
 			self.emitDispatcher(blockCount)
 		end 'dispatch' else 'single'
@@ -1822,6 +1937,7 @@ type WasmFuncEmitter
 	function emitSingleBlock()
 		let blockRef = try self.func.blockRefs.get(0) otherwise panic("emitSingleBlock: blockRefs.get(0) OOB")
 		let block = try self.module.blocks.get(blockRef) otherwise panic("emitSingleBlock: blockRef {blockRef} not in module.blocks")
+		self.currentSite = copiedInlineSite(block.inlineSite)
 
 		for opIdx in block.opRefs 'eachOp'
 			self.emitBodyOp(try self.module.ops.get(opIdx) otherwise panic("emitSingleBlock: opIdx {opIdx} not in module.ops"))
@@ -1887,7 +2003,7 @@ type WasmFuncEmitter
 				osCancelIo or
 				osGetPid or
 				osPipeCreateOutbound or
-				osWriteFile then panic("emitStraightLineTerminator: a P1.5 IOCP op is a body op, never a terminator")
+				osWriteFile then panic("emitStraightLineTerminator: an IOCP op is a body op, never a terminator")
 			osReadWallClock then panic("emitStraightLineTerminator: an `osReadWallClock` is a body op, never a terminator")
 			osFileOpenRead or
 				osFileClose or
@@ -1903,11 +2019,14 @@ type WasmFuncEmitter
 				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes or
+				osFileOpenCreateNew or
 				osFileOpenWriteExecutable then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
 			osPanicValue then panic("emitStraightLineTerminator: an `osPanicValue` is a body op, never a terminator")
 			osCommandLine then panic("emitStraightLineTerminator: an `osCommandLine` is a body op, never a terminator")
 			osStdHandle then panic("emitStraightLineTerminator: an `osStdHandle` is a body op, never a terminator")
 			osExecutablePath then panic("emitStraightLineTerminator: an `osExecutablePath` is a body op, never a terminator")
+			osProcessNamespace then panic("emitStraightLineTerminator: an `osProcessNamespace` is a body op, never a terminator")
+			osRandomFill then panic("emitStraightLineTerminator: an `osRandomFill` is a body op, never a terminator")
 			osWriteStderr then panic("emitStraightLineTerminator: an `osWriteStderr` is a body op, never a terminator")
 			stackRecordAddr then panic("emitStraightLineTerminator: a `stackRecordAddr` is a body op, never a terminator")
 			osOpenNamedSegment or
@@ -1987,6 +2106,7 @@ type WasmFuncEmitter
 
 			let blockRef = try self.func.blockRefs.get(i) otherwise panic("emitDispatcher: blockRefs.get OOB at {i}")
 			let block = try self.module.blocks.get(blockRef) otherwise panic("emitDispatcher: blockRef {blockRef} not in module.blocks")
+			self.currentSite = copiedInlineSite(block.inlineSite)
 
 			for opIdx in block.opRefs 'eachOp'
 				self.emitBodyOp(try self.module.ops.get(opIdx) otherwise panic("emitDispatcher: opIdx {opIdx} not in module.ops"))
@@ -2061,7 +2181,7 @@ type WasmFuncEmitter
 				osCancelIo or
 				osGetPid or
 				osPipeCreateOutbound or
-				osWriteFile then panic("emitDispatcherTerminator: a P1.5 IOCP op is a body op, never a terminator")
+				osWriteFile then panic("emitDispatcherTerminator: an IOCP op is a body op, never a terminator")
 			osReadWallClock then panic("emitDispatcherTerminator: an `osReadWallClock` is a body op, never a terminator")
 			osFileOpenRead or
 				osFileClose or
@@ -2077,11 +2197,14 @@ type WasmFuncEmitter
 				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes or
+				osFileOpenCreateNew or
 				osFileOpenWriteExecutable then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
 			osPanicValue then panic("emitDispatcherTerminator: an `osPanicValue` is a body op, never a terminator")
 			osCommandLine then panic("emitDispatcherTerminator: an `osCommandLine` is a body op, never a terminator")
 			osStdHandle then panic("emitDispatcherTerminator: an `osStdHandle` is a body op, never a terminator")
 			osExecutablePath then panic("emitDispatcherTerminator: an `osExecutablePath` is a body op, never a terminator")
+			osProcessNamespace then panic("emitDispatcherTerminator: an `osProcessNamespace` is a body op, never a terminator")
+			osRandomFill then panic("emitDispatcherTerminator: an `osRandomFill` is a body op, never a terminator")
 			osWriteStderr then panic("emitDispatcherTerminator: an `osWriteStderr` is a body op, never a terminator")
 			stackRecordAddr then panic("emitDispatcherTerminator: a `stackRecordAddr` is a body op, never a terminator")
 			osOpenNamedSegment or
@@ -2265,6 +2388,7 @@ type WasmFuncEmitter
 				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes or
+				osFileOpenCreateNew or
 				osFileOpenWriteExecutable then panic("emitBodyOp: the file-IO ops have no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 
 			// The rendered message is a POINTER where the baked form names a label; both reach the one
@@ -2281,6 +2405,8 @@ type WasmFuncEmitter
 			// analogue of `osExecutablePath` at all: `args_get[0]` is whatever the host passed, not a
 			// resolved path, and answering it would be a plausible wrong answer.
 			osStdHandle then panic("emitBodyOp: `osStdHandle` has no wasm32-wasi lowering, and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osRandomFill(resultId, bufPtrId, lenId) then self.emitOsRandomFill(resultId, bufPtrId: bufPtrId, lenId: lenId)
+			osProcessNamespace then panic("emitBodyOp: `osProcessNamespace` has no wasm32-wasi lowering — a component has no pid space to name — and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			osExecutablePath then panic("emitBodyOp: `osExecutablePath` has no wasm32-wasi lowering — WASI has no executable-path primitive at all — and SemanticCheck refuses such a program at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 
 			// The same emitter as the stdout write, one `wasi:cli` accessor over. Unlike its two
@@ -2953,8 +3079,57 @@ type WasmFuncEmitter
 		end 'eachArg'
 
 		let funcIdx = try wasmFuncIdxOf(self.funcNames, callee: callee) otherwise panic("emitCall: no wasm function index for callee '{String.from(callee)}'")
+		self.recordFramePosition()
 		self.body.call(funcIdx)
 	end 'emitCallArgsAndCall'
+
+	function tracksInlinePositions() returns bool
+		return self.func.inlineSites.count() != 0
+	end 'tracksInlinePositions'
+
+	function recordFramePosition()
+		if not self.tracksInlinePositions() 'ownFrameOnly'
+			return
+		end 'ownFrameOnly'
+
+		let position = match self.currentSite 'site'
+			none gives self.ownFuncIdx
+			site(index) gives self.positions.positionOf(index)
+		end 'site'
+
+		emitFramePosition(self.body, frames: self.frames, slotOffsetLocal: self.slotOffsetLocal, position: position)
+	end 'recordFramePosition'
+
+	function inlinePositionLines() returns ByteArrayArray
+		var lines = ByteArrayArray.create()
+
+		for siteIndex in self.positions.sites 'eachSite'
+			lines.push(self.renderInlinePosition(siteIndex))
+		end 'eachSite'
+
+		return lines
+	end 'inlinePositionLines'
+
+	function renderInlinePosition(siteIndex ElementIndex) returns ByteArray
+		var lines = ByteArray.create()
+		var at = InlineSiteRef.site(siteIndex)
+
+		while true 'chain'
+			match at 'level'
+				none then break 'chain'
+				site(index) then at = self.appendInlineSiteLine(lines, siteIndex: index)
+			end 'level'
+		end 'chain'
+
+		self.frames.appendFrameLine(lines, name: self.func.name)
+		return lines
+	end 'renderInlinePosition'
+
+	function appendInlineSiteLine(lines ByteArray, siteIndex ElementIndex) returns InlineSiteRef
+		let site = try self.func.inlineSites.get(siteIndex) otherwise panic("renderInlinePosition: '{String.from(self.func.name)}' has a block under inline site {siteIndex} but records {self.func.inlineSites.count()} site(s)")
+		self.frames.appendFrameLine(lines, name: site.calleeName)
+		return copiedInlineSite(site.parent)
+	end 'appendInlineSiteLine'
 
 	// A plain (non-throwing) call: marshal the args, call, and store the single result only when the
 	// callee returns a value (a void callee pushes nothing — a `local.set` would underflow).
@@ -3049,6 +3224,7 @@ type WasmFuncEmitter
 		let params = indirectCallParamValTypes(argFloatMask, argCount: argCount)
 		let sigKey = encodeFuncType(params, results: indirectCallResultValTypes(resultType, usesSecondarySlot: isThrowing))
 		let typeIdx = try self.indirectCallTypeIdx.get(sigKey) otherwise panic("{what}: no interned functype for this {argCount}-argument indirect call signature — buildIndirectCallTypeIdxMap missed it")
+		self.recordFramePosition()
 		self.body.callIndirect(typeIdx)
 	end 'emitIndirectCallOp'
 
@@ -3206,6 +3382,7 @@ type WasmFuncEmitter
 	// arity. An `unreachable` makes the stack polymorphic and it does. This is the same instruction,
 	// for the same reason, that `emitOsExit` puts after `exit-with-code`.
 	function emitPanicCall()
+		self.recordFramePosition()
 		self.body.call(wasmPanicFuncIdx(self.funcNames))
 		self.body.unreachable()
 	end 'emitPanicCall'
@@ -3395,6 +3572,60 @@ type WasmFuncEmitter
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitOsWriteStream'
 
+	// The result local doubles as the fill cursor, and ends as success unconditionally:
+	// `get-random-u64` has no failure to report.
+	function emitOsRandomFill(resultId ValueId, bufPtrId ValueId, lenId ValueId)
+		let filled = resultId as Wasm32Index
+		self.body.i64Const(WasmRandomFillNothingFilled)
+		self.body.localSet(filled)
+
+		self.emitRandomFillRun(bufPtrId, lenId: lenId, filled: filled, unit: WasmRandomFillUnit.word)
+		self.emitRandomFillRun(bufPtrId, lenId: lenId, filled: filled, unit: WasmRandomFillUnit.byte)
+
+		self.body.i64Const(WasmRandomFillSucceeded)
+		self.body.localSet(filled)
+	end 'emitOsRandomFill'
+
+	function emitRandomFillRun(bufPtrId ValueId, lenId ValueId, filled Wasm32Index, unit WasmRandomFillUnit)
+		let step = match unit 'step'
+			word gives WasmRandomWordBytes
+			byte gives WasmRandomByteStep
+		end 'step'
+
+		self.body.beginBlock()
+		self.body.beginLoop()
+		self.pushOperandAt(lenId, targetVt: WasmValType.i64)
+		self.body.localGet(filled)
+		self.body.i64Sub()
+		self.body.i64Const(step)
+		self.body.i64LtS()
+		self.body.brIf(WasmRandomFillExitDepth)
+
+		self.pushOperandAt(bufPtrId, targetVt: WasmValType.i64)
+		self.body.localGet(filled)
+		self.body.i64Add()
+		self.body.i32WrapI64()
+		self.body.call(GetRandomU64ImportFuncIdx)
+
+		match unit 'store'
+			word then self.body.i64Store(WasmRandomFillStoreOffset)
+			byte then self.storeRandomByte()
+		end 'store'
+
+		self.body.localGet(filled)
+		self.body.i64Const(step)
+		self.body.i64Add()
+		self.body.localSet(filled)
+		self.body.br(WasmRandomFillLoopDepth)
+		self.body.endOp()
+		self.body.endOp()
+	end 'emitRandomFillRun'
+
+	function storeRandomByte()
+		self.body.i32WrapI64()
+		self.body.i32Store8(WasmRandomFillStoreOffset)
+	end 'storeRandomByte'
+
 	// ----------------------------------------------------------------------
 	// Dispatcher terminators: branch / cond-branch (with phi copies)
 	// ----------------------------------------------------------------------
@@ -3578,7 +3809,7 @@ type WasmFuncEmitter
 	// ----------------------------------------------------------------------
 
 	// Copy the values `currentBlock` passes on its edge to `targetBlockId` into that block's
-	// block-arg locals, as a SEQUENTIALIZED parallel copy (§4.1). The incoming values live on
+	// block-arg locals, as a SEQUENTIALIZED parallel copy. The incoming values live on
 	// the predecessor's `branchEdges` entry for the target; the destinations are the target's
 	// `blockArgs`. A target with block-args must have a matching edge from every predecessor
 	// (IrBlock's phi-model contract), so a missing edge is only valid when the target has none.
@@ -3606,20 +3837,15 @@ type WasmFuncEmitter
 			panic("emitPhiCopyForEdge: edge '{String.from(currentBlock.label)}' → '{String.from(targetBlock.label)}' carries {edge.argIds.count()} args but the block has {targetBlock.blockArgs.count()} block-args")
 		end 'arity'
 
-		var dsts = ValueIdArray.create()
-		var srcs = ValueIdArray.create()
+		var copy = ParallelCopy.create()
 
 		for k in 0 upto targetBlock.blockArgs.count() 'eachPhi'
 			let dst = (try targetBlock.blockArgs.get(k) otherwise panic("emitPhiCopyForEdge: blockArgs.get OOB at {k}")).valueId
 			let src = try edge.argIds.get(k) otherwise panic("emitPhiCopyForEdge: argIds.get OOB at {k}")
-
-			if dst != src 'realMove'
-				dsts.push(dst)
-				srcs.push(src)
-			end 'realMove'
+			copy.add(dst, src: src)
 		end 'eachPhi'
 
-		self.sequenceParallelCopy(dsts, srcs: srcs)
+		copy.sequence(WasmPhiCopies.create(self.body, valtypes: self.valtypes, scratchLocalByValType: self.scratchLocalByValType))
 	end 'emitPhiCopyForEdge'
 
 	function blockById(blockId BlockId) returns IrBlock
@@ -3627,45 +3853,32 @@ type WasmFuncEmitter
 		let blockRef = try self.func.blockRefs.get(idx) otherwise panic("blockById: blockRefs.get OOB at {idx}")
 		return try self.module.blocks.get(blockRef) otherwise panic("blockById: blockRef {blockRef} not in module.blocks")
 	end 'blockById'
+end 'WasmFuncEmitter'
 
-	// Sequence a parallel copy (`dsts[k]` ← `srcs[k]`, dsts distinct) into ordered local copies.
-	// Repeatedly emit a leaf (a dst that is no other move's source); when only cycles remain,
-	// break one by exchanging its two locals through a valtype-matched scratch local (wasm has
-	// no `xchg`) and rewrite the remaining sources through the exchange. Consumes `dsts`/`srcs`
-	// as worklists. The standard parallel-move algorithm, with a scratch-staged swap in place of
-	// the register backends' `xchg`.
-	function sequenceParallelCopy(dsts ValueIdArray, srcs ValueIdArray)
-		while dsts.count() > 0 'seq'
-			removeSatisfiedMoves(dsts, srcs: srcs)
+type WasmPhiCopies implements ParallelCopyEmitter
+	let body as WasmBody
+	let valtypes as WasmValTypeArray
+	let scratchLocalByValType as ScratchLocalMap
 
-			if dsts.count() == 0 'done'
-				break
-			end 'done'
+	static function create(body WasmBody, valtypes WasmValTypeArray, scratchLocalByValType ScratchLocalMap) returns WasmPhiCopies
+		return Self{body: body, valtypes: valtypes, scratchLocalByValType: scratchLocalByValType}
+	end 'create'
 
-			if let leaf = try findLeafMove(dsts, srcs: srcs) 'foundLeaf'
-				let d = try dsts.get(leaf) otherwise panic("sequenceParallelCopy: dsts.get OOB at leaf {leaf}")
-				let s = try srcs.get(leaf) otherwise panic("sequenceParallelCopy: srcs.get OOB at leaf {leaf}")
-				self.emitLocalCopy(d as Wasm32Index, srcLocal: s as Wasm32Index, fromVt: getValtype(self.valtypes, v: s), toVt: getValtype(self.valtypes, v: d))
-				removeMoveAt(dsts, srcs: srcs, idx: leaf)
-			end 'foundLeaf' else 'cycle'
-				let a = try dsts.get(0) otherwise panic("sequenceParallelCopy: dsts.get(0) OOB")
-				let b = try srcs.get(0) otherwise panic("sequenceParallelCopy: srcs.get(0) OOB")
-				let aVt = getValtype(self.valtypes, v: a)
-				let bVt = getValtype(self.valtypes, v: b)
-				let scratch = self.scratchFor(aVt)
+	function emitCopy(dst ElementIndex, src ElementIndex)
+		self.emitLocalCopy(dst as Wasm32Index, srcLocal: src as Wasm32Index, fromVt: getValtype(self.valtypes, v: src as ValueId), toVt: getValtype(self.valtypes, v: dst as ValueId))
+	end 'emitCopy'
 
-				// Exchange a and b via scratch, satisfying (a ← b): scratch←a; a←b; b←scratch. Each leg
-				// coerces to the DESTINATION local's width: a and b are block-args whose declared
-				// valtypes can differ (see emitLocalCopy), so a width-mixing swap round-trips through the
-				// scratch (typed as a's width) with the same coercions a sequential assignment pair would.
-				self.emitLocalCopy(scratch, srcLocal: a as Wasm32Index, fromVt: aVt, toVt: aVt)
-				self.emitLocalCopy(a as Wasm32Index, srcLocal: b as Wasm32Index, fromVt: bVt, toVt: aVt)
-				self.emitLocalCopy(b as Wasm32Index, srcLocal: scratch, fromVt: aVt, toVt: bVt)
-				removeMoveAt(dsts, srcs: srcs, idx: 0)
-				rewriteSourcesThroughSwap(srcs, a: a, b: b)
-			end 'cycle'
-		end 'seq'
-	end 'sequenceParallelCopy'
+	// Each leg coerces to the DESTINATION local's width: a and b are block-args whose declared
+	// valtypes can differ (see `emitLocalCopy`), so a width-mixing swap round-trips through the
+	// scratch (typed as a's width) with the same coercions a sequential assignment pair would.
+	function emitSwap(a ElementIndex, b ElementIndex)
+		let aVt = getValtype(self.valtypes, v: a as ValueId)
+		let bVt = getValtype(self.valtypes, v: b as ValueId)
+		let scratch = self.scratchFor(aVt)
+		self.emitLocalCopy(scratch, srcLocal: a as Wasm32Index, fromVt: aVt, toVt: aVt)
+		self.emitLocalCopy(a as Wasm32Index, srcLocal: b as Wasm32Index, fromVt: bVt, toVt: aVt)
+		self.emitLocalCopy(b as Wasm32Index, srcLocal: scratch, fromVt: aVt, toVt: bVt)
+	end 'emitSwap'
 
 	// Copy one local to another, coercing the source's valtype to the destination's when they
 	// differ. The native backends never need this — every value sits in a 64-bit register — but a
@@ -3684,10 +3897,10 @@ type WasmFuncEmitter
 	function scratchFor(vt WasmValType) returns Wasm32Index
 		return try self.scratchLocalByValType.get(vt) otherwise panic("scratchFor: no cycle-break scratch local reserved for valtype {vt.name} — collectPhiValTypes missed a block-arg type")
 	end 'scratchFor'
-end 'WasmFuncEmitter'
+end 'WasmPhiCopies'
 
 // ==========================================================================
-// Free helpers: constant narrowing, dispatcher decision, parallel-copy worklist
+// Free helpers: constant narrowing, dispatcher decision
 // ==========================================================================
 
 // The low 32 bits of `value`, reinterpreted as a signed i32 — what a wasm `i32.const` (an
@@ -3722,10 +3935,10 @@ function wasmMemAccessType(valueType StdType, what String) returns WasmValType
 		f64 then return WasmValType.f64
 		i8 or
 			i16 or
-			i32 then panic("wasm: {what} of {valueType.name} — a narrow signed integer needs the `as` cast (P1.9), whose signedness picks the sign/zero-extending load; only i1/u8 (byte) and i64/f64 (word) are lowered, mirroring the native accessWidthFor")
+			i32 then panic("wasm: {what} of {valueType.name} — a narrow signed integer needs the `as` cast, whose signedness picks the sign/zero-extending load; only i1/u8 (byte) and i64/f64 (word) are lowered, mirroring the native accessWidthFor")
 		u16 or
 			u32 or
-			u64 then panic("wasm: {what} of {valueType.name} — an unsigned integer wider than a byte needs the `as` cast (P1.9); only u8 (byte) and i64/f64 (word) are lowered")
+			u64 then panic("wasm: {what} of {valueType.name} — an unsigned integer wider than a byte needs the `as` cast; only u8 (byte) and i64/f64 (word) are lowered")
 		f32 then panic("wasm: {what} of an f32 — Maxon's `float` is f64, so nothing produces an f32")
 	end 'w'
 end 'wasmMemAccessType'
@@ -3833,7 +4046,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			osCancelIo or
 			osGetPid or
 			osPipeCreateOutbound or
-			osWriteFile then panic("decideDispatcher: a P1.5 IOCP op is a body op, never a terminator")
+			osWriteFile then panic("decideDispatcher: an IOCP op is a body op, never a terminator")
 		osReadWallClock then panic("decideDispatcher: an `osReadWallClock` is a body op, never a terminator")
 		osFileOpenRead or
 			osFileClose or
@@ -3849,11 +4062,14 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			osDirRemove or
 			osDirCurrentPath or
 			osFileAttributes or
+			osFileOpenCreateNew or
 			osFileOpenWriteExecutable then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
 		osPanicValue then panic("decideDispatcher: an `osPanicValue` is a body op, never a terminator")
 		osCommandLine then panic("decideDispatcher: an `osCommandLine` is a body op, never a terminator")
 		osStdHandle then panic("decideDispatcher: an `osStdHandle` is a body op, never a terminator")
 		osExecutablePath then panic("decideDispatcher: an `osExecutablePath` is a body op, never a terminator")
+		osProcessNamespace then panic("decideDispatcher: an `osProcessNamespace` is a body op, never a terminator")
+		osRandomFill then panic("decideDispatcher: an `osRandomFill` is a body op, never a terminator")
 		osWriteStderr then panic("decideDispatcher: an `osWriteStderr` is a body op, never a terminator")
 		stackRecordAddr then panic("decideDispatcher: a `stackRecordAddr` is a body op, never a terminator")
 		osOpenNamedSegment or
@@ -3907,63 +4123,3 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 
 	return false
 end 'decideDispatcher'
-
-// Index of a move whose dst is not any pending move's source (safe to emit now). It throws when every
-// remaining dst is still needed as a source: the moves left form a pure cycle.
-function findLeafMove(dsts ValueIdArray, srcs ValueIdArray) returns ElementIndex throws MapError
-	for i in 0 upto dsts.count() 'each'
-		let d = try dsts.get(i) otherwise panic("findLeafMove: dsts.get OOB at {i}")
-
-		if not isAnySource(srcs, valueId: d) 'leaf'
-			return i
-		end 'leaf'
-	end 'each'
-
-	throw MapError.keyNotFound
-end 'findLeafMove'
-
-function isAnySource(srcs ValueIdArray, valueId ValueId) returns bool
-	for s in srcs 'each'
-		if s == valueId 'match'
-			return true
-		end 'match'
-	end 'each'
-
-	return false
-end 'isAnySource'
-
-// Remove every move already satisfied (dst == src) — the self-copies a preceding scratch swap
-// just fulfilled (a source rewritten through the exchange now equals its dst). Scans back-to-
-// front so removals do not shift not-yet-visited indices.
-function removeSatisfiedMoves(dsts ValueIdArray, srcs ValueIdArray)
-	let n = dsts.count()
-
-	for ri in 0 upto n 'each'
-		let i = n - 1 - ri
-		let d = try dsts.get(i) otherwise panic("removeSatisfiedMoves: dsts.get OOB at {i}")
-		let s = try srcs.get(i) otherwise panic("removeSatisfiedMoves: srcs.get OOB at {i}")
-
-		if d == s 'satisfied'
-			removeMoveAt(dsts, srcs: srcs, idx: i as ValueId)
-		end 'satisfied'
-	end 'each'
-end 'removeSatisfiedMoves'
-
-function removeMoveAt(dsts ValueIdArray, srcs ValueIdArray, idx ElementIndex)
-	_ = try dsts.remove(idx) otherwise panic("removeMoveAt: dsts.remove OOB at {idx}")
-	_ = try srcs.remove(idx) otherwise panic("removeMoveAt: srcs.remove OOB at {idx}")
-end 'removeMoveAt'
-
-// After exchanging locals a and b, a pending move reading a now finds its value in b and
-// vice-versa.
-function rewriteSourcesThroughSwap(srcs ValueIdArray, a ValueId, b ValueId)
-	for i in 0 upto srcs.count() 'each'
-		let s = try srcs.get(i) otherwise panic("rewriteSourcesThroughSwap: srcs.get OOB at {i}")
-
-		if s == a 'wasA'
-			try srcs.set(i, value: b) otherwise panic("rewriteSourcesThroughSwap: srcs.set OOB at {i}")
-		end 'wasA' else if s == b 'wasB'
-			try srcs.set(i, value: a) otherwise panic("rewriteSourcesThroughSwap: srcs.set OOB at {i}")
-		end 'wasB'
-	end 'each'
-end 'rewriteSourcesThroughSwap'

@@ -188,13 +188,9 @@ end 'main'
 0
 ```
 
-⭐⭐ **compiler-authored, and THIS FILE'S NOTES NEEDED NO RETRACTION ON THE NON-POSITIVE BEHAVIOUR — which
-is the strongest evidence the ruling matches what the language always intended.** The Notes at the top
-already say *"returns NaN for negative values"* and *"`log10(0.0)` returns negative infinity"*. **Both
-sentences were FALSE when they were written** — the implementation returned the sentinel `0.0` for
-every non-positive input, exactly as `log.md` and `log2.md` admitted in their own Notes — and both
-**become true with this change**. On that question the code was wrong about the prose, and for once
-the spec is the party that does not have to move.
+⭐⭐ **This is the pin on THIS FILE'S NOTES ON THE NON-POSITIVE BEHAVIOUR.** The Notes
+at the top say *"returns NaN for negative values"* and *"`log10(0.0)` returns negative infinity"*, and
+this case holds the implementation to both sentences.
 
 The special answers are `log`'s: a zero of either sign is `-inf` and a negative input is `nan`, so
 `log.md`, `log2.md` and this file agree on every input outside the positive reals.

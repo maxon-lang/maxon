@@ -3,7 +3,6 @@ feature: float-compare-branch
 status: selfhosted
 keywords: [float, f64, ucomisd, unordered, nan, parity, phi, ssa-destruction, block-args]
 category: codegen
-milestone: P1.0d.4
 ---
 
 # Float compare, branch, and the unordered edge
@@ -19,8 +18,7 @@ the OF/SF pair it leaves behind. `ucomisd a, b` leaves OF=SF=AF=0 always, and an
 **ZF/PF/CF** — the same three flags an UNSIGNED compare writes. So a float compare's branch
 is the `jb`/`jae`/`jbe`/`ja` family, and lowering one to `jl` would read flags `ucomisd`
 never wrote. `condCodeForPred` therefore takes the compare's OPERAND TYPE: the predicate
-alone (`StdCmpPred.less`) does not determine the condition code, and never did — it only
-looked that way while every Std compare was a signed i64.
+alone (`StdCmpPred.less`) does not determine the condition code.
 
 ### There is a FOURTH answer, and CF/ZF/PF encode it
 
@@ -53,10 +51,9 @@ which is a SECOND condition, which is a second conditional jump.
 
 ### ⚠ The second jump is a second BLOCK, not a second jump in one block
 
-This is the hazard the whole file exists for, and v1 shipped it as a **silent wrong answer**
-(`project_x64_f64_compare_phi_copy_fix`; the case is preserved in `specs/float-type.md`'s
-`float-print-negative-and-repeat`, whose formatted output made it visible). v1 lowered
-`a == b` into ONE block ending in TWO conditional jumps:
+This is the hazard the whole file exists for, and it is a **silent wrong answer**
+(`specs/float-type.md`'s `float-print-negative-and-repeat` makes it visible in formatted output):
+lowering `a == b` into ONE block ending in TWO conditional jumps:
 
 ```
 	ucomisd a, b
@@ -65,11 +62,11 @@ This is the hazard the whole file exists for, and v1 shipped it as a **silent wr
 	jmp  then
 ```
 
-The IR said that block had one conditional branch and therefore ONE else edge. The machine
-code had **two**. SSA destruction places a phi's copies on an edge by rewriting the jump
-that takes it — so it found and rewired one of those jumps, and the other kept its original
-target and **bypassed the copies entirely**. A phi whose value arrived on the `jp` path was
-simply never written.
+The IR would say that block has one conditional branch and therefore ONE else edge. The machine
+code has **two**. SSA destruction places a phi's copies on an edge by rewriting the jump
+that takes it — so it would rewire one of those jumps, and the other would keep its original
+target and **bypass the copies entirely**. A phi whose value arrives on the `jp` path would
+simply never be written.
 
 The compiler does not emit that shape. `lowerFloatEqualityBranch` **splits the compare into two
 blocks**, each ending in exactly one conditional branch:
@@ -79,11 +76,11 @@ blocks**, each ending in exactly one conditional branch:
 	ordered:               je -> then          ; fallthrough -> else
 ```
 
-The machine code is the same three jumps. The difference is that the IR now **says what the
+The machine code is the same three jumps. The difference is that the IR **says what the
 machine code does**: two edges reach `else`, from two different blocks, and they are two
 edges in the CFG. SSA destruction needs no float-specific case — it places copies on both,
 because both are edges, and `IrBlock.CondBranch`'s one-conditional-branch-per-block
-invariant is never bent. The bug is not fixed here; it is made **unrepresentable**.
+invariant is never bent. The hazard is made **unrepresentable**.
 
 The tests below put a phi on the edge each of those jumps takes, and check the value that
 arrives.
@@ -149,8 +146,8 @@ end 'main'
 
 <!-- test: eq-ordered-else-edge-phi -->
 `==` on two ORDERED, unequal operands: the `jp` is not taken, the `je` is not taken, and the
-else edge is reached by the fallthrough out of the SECOND block. That is the edge v1 got
-right. `r`'s incoming `7` must arrive on it.
+else edge is reached by the fallthrough out of the SECOND block. `r`'s incoming `7` must
+arrive on it.
 ```maxon
 function main() returns ExitCode
 	var r = 7
@@ -184,23 +181,20 @@ end 'main'
 ```
 
 <!-- test: eq-nan-else-edge-phi -->
-⭐ **THE REGRESSION.** `nan == nan` is FALSE, and it is decided by the `jp` in the FIRST
-block — the edge v1's SSA destruction never rewired. `r`'s incoming `7` must arrive on it;
-v1's bug is exactly the case where it does not, and the value that arrives is whatever the
-register happened to hold.
+⭐ **THE HAZARD ITSELF.** `nan == nan` is FALSE, and it is decided by the `jp` in the FIRST
+block — the edge a one-block lowering leaves unrewired. `r`'s incoming `7` must arrive on it;
+when it does not, the value that arrives is whatever the register happens to hold.
 
 The NaN is computed at RUNTIME from a global, not written as a literal: a folded NaN would
 reach the backend as a constant, a folded compare emits no `ucomisd` and no `jp` at all, and
 the test would pass while testing nothing.
 
-⚠ **THE SOURCE IS OVERFLOW (`inf - inf`), NOT `0.0 / 0.0` (A1)** — and that is the corpus's own
+⚠ **THE SOURCE IS OVERFLOW (`inf - inf`), NOT `0.0 / 0.0`** — and that is the corpus's own
 resolution, not a workaround: `specs/primitive-comparable.md:169` and
-`specs/primitive-hashable.md`'s `float.hash.nan` already build their NaN this way, each
-saying why. Division by zero is now a language-level error (a constant zero divisor is E3103,
+`specs/primitive-hashable.md`'s `float.hash.nan` build their NaN this way, each
+saying why. Division by zero is a language-level error (a constant zero divisor is E3103,
 a possibly-zero one throws), so there is no route from a divide to a NaN at all. Overflow to
-`inf` and `inf - inf` remain silent, which is exactly what this case needs — and the subject,
-the `ucomisd`/`jp` compare-branch path, is untouched: only where the unordered value came from
-has changed.
+`inf` and `inf - inf` are silent, which is exactly what this case needs.
 ```maxon
 var big = 1.0e308
 
@@ -338,13 +332,13 @@ A compare's boolean may be tested by MORE THAN ONE branch, and only the branch t
 actually reach may be fused with it.
 
 `small` is tested twice: once immediately after `x < 10` (where the `cmp` is the last flag-writer, so
-the `jcc` may read its flags) and once after a loop that has written flags many times over. The
-fusion record used to be keyed by the compare's VALUE, so the entry proved for the FIRST branch
-answered for the second one too: the later branch was emitted as a bare `jcc` with no `cmp` at all,
-reading whatever the loop's own `i < n` had left — and because both uses were then classified as
-flag reads rather than register reads, no `setcc` was emitted anywhere and the boolean existed in no
-register. It is keyed by the branching BLOCK now, which is the pair the fusion is a fact about; a
-block has exactly one terminator, so the key cannot be lossy.
+the `jcc` may read its flags) and once after a loop that has written flags many times over. A
+fusion record keyed by the compare's VALUE would let the entry proved for the FIRST branch answer
+for the second one too: the later branch would be a bare `jcc` with no `cmp` at all, reading
+whatever the loop's own `i < n` had left, and with both uses classified as flag reads no `setcc`
+would be emitted and the boolean would exist in no register. The record is keyed by the branching
+BLOCK, which is the pair the fusion is a fact about; a block has exactly one terminator, so the key
+cannot be lossy.
 
 `small` is true, so the answer is `1 + (0+1+2+3) + 100` = **107**. Reading the loop's exit flags
 instead answers 7.

@@ -25,11 +25,11 @@ container afterward is a use-after-free.
 This is the reduced form of the self-hosted compiler's own `emitFunctionChunk`
 chunk-cache dangle: `backend.emitFunctionChunk(func)` is a witness call returning
 a managed `FunctionCodeChunk`, stamped into the persisted `db.codePerFunc` memo
-AND pushed into a transient `chunks` array. Before the witness result was
-classified, `chunks`'s teardown freed the chunk while the persisted memo still
-referenced it — surfacing as a poison read in `encodeUserChunkRecord`. The fix
-classifies a plain (non-fat, non-throwing) managed witness return as
-`callReturnRc1` so both stores incref and the reference is balanced.
+AND pushed into a transient `chunks` array. With the witness result unclassified,
+`chunks`'s teardown would free the chunk while the persisted memo still references
+it — a poison read in `encodeUserChunkRecord`. A plain (non-fat, non-throwing)
+managed witness return is classified `callReturnRc1`, so both stores incref and the
+reference is balanced.
 
 These tests run under the suite's leak gate AND `--rc-sanitize`, so a missing
 store-incref (dangle / double-free) or a skipped decref-old (leak) fails them.
@@ -41,11 +41,11 @@ A managed struct returned from a witness-dispatched interface method, stored int
 a long-lived field AND pushed into a transient local array that is torn down at
 the method's scope exit. The persisted field is read AFTER the transient array is
 gone: without a store-incref on the field write, the array's teardown frees the
-struct and the read dangles (pre-fix: `__mm_decref: over-release` in
+struct and the read dangles (`__mm_decref: over-release` in
 `__destruct_Store`).
 
-Restricted to the register-frame targets. The fix (classifying the witness
-result as owning its `+1`) is target-independent IR, but it inserts an
+Restricted to the register-frame targets. Classifying the witness result as
+owning its `+1` is target-independent IR, but it inserts an
 `__mm_incref` between the witness-call result and its SECOND use (the transient
 push). On `wasm32-wasi` the witness-call result lands in an unpromoted
 linear-memory slot from the ONE shared slot region, and the intervening incref

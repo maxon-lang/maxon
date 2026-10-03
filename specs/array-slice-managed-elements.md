@@ -192,7 +192,7 @@ end 'main'
 
 <!-- test: trivial-slice-still-cow-byte-identical -->
 ### Trivial-element slice still takes the O(1) COW path
-A slice of a TRIVIAL-element array is unchanged by the managed deep-clone rung — it stays the O(1)
+A slice of a TRIVIAL-element array does not deep-clone — it is the O(1)
 zero-copy view (`__managed_slice`). This is the contrast case pinning that only MANAGED elements route to the
 deep-clone path.
 ```maxon

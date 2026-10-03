@@ -183,6 +183,39 @@ export union DebugBreakRequest
 	conditional(target String, condition String)
 end 'DebugBreakRequest'
 
+export union DebugBreakCondition
+	unconditional
+	when(text String)
+
+	export function sameAs(other DebugBreakCondition) returns bool
+		return match self 'own'
+			unconditional gives not other.isConditional()
+			when(text) gives other.isWhen(text)
+		end 'own'
+	end 'sameAs'
+
+	export function isConditional() returns bool
+		return match self 'own'
+			unconditional gives false
+			when gives true
+		end 'own'
+	end 'isConditional'
+
+	function isWhen(text String) returns bool
+		return match self 'own'
+			unconditional gives false
+			when(own) gives own == text
+		end 'own'
+	end 'isWhen'
+
+	export function text() returns String throws AbsentError
+		match self 'own'
+			unconditional then throw AbsentError.absent
+			when(text) then return text
+		end 'own'
+	end 'text'
+end 'DebugBreakCondition'
+
 export function debugBreakRequestIn(argument String, conditionWord String) returns DebugBreakRequest
 	let pieces = argument.split(conditionWord)
 

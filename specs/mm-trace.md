@@ -47,12 +47,10 @@ A `StringBuilder` must not allocate a record **per `append`**. It holds one grow
 costs the builder's buffer, the builder, the `String`, and the builder's fresh reset buffer. Nothing
 scales with the number of appends.
 
-This golden exists because it did not: through the envelope-collapse series (Stages 1–3) each
-`sb.append(...)` quietly paid a 40-byte `ByteArray` record, because `appendBytes` wrapped its piece in
-`ByteArray.init(piece)` purely to hand it to `Array.append`, which only ever read `.managed` back out
-again. Since the collapse an `Array` **is** its `__ManagedMemory`, so that wrapper stopped being free —
-it became an allocation per append, and no test could see it. `Array.appendMemory` takes the memory
-directly. **If a `ByteArray` line appears here once per `append`, that regression is back.**
+An `Array` **is** its `__ManagedMemory`, so wrapping each piece in `ByteArray.init(piece)` purely to hand
+it to `Array.append` would cost a 40-byte `ByteArray` record per append, and no other test can see it.
+`Array.appendMemory` takes the memory directly. **If a `ByteArray` line appears here once per `append`,
+that is the defect this golden exists to catch.**
 <!-- MmTrace -->
 ```maxon
 function main() returns ExitCode
@@ -140,13 +138,11 @@ end 'main'
 An interpolated `String` costs ONE record: one `mm_alloc`, one `mm_free`, and a balanced refcount
 column in between. That is what this pins — the allocation count, not the retain count.
 
-The middle `incref`/`decref` pair belongs to `print`. Since Stage 4c of the SSO plan `print` reaches
+The middle `incref`/`decref` pair belongs to `print`. `print` reaches
 the bytes through `value.addressableBytes()` rather than the raw `.managed` field, and a callee that
 returns a value hands its caller an OWNED reference — so it increfs on the way out and `print`
-releases at scope end, where a field read was a borrow and did neither. It buys the thing Stage 4b
-needs: one named call site per materialization, which is where a short string's allocation will
-appear once its bytes live inline in a register. **If an `mm_alloc` line appears here per `print`,
-that is the regression to chase — not this pair.**
+releases at scope end. That gives one named call site per materialization. **If an `mm_alloc` line
+appears here per `print`, that is the defect to chase — not this pair.**
 <!-- MmTrace -->
 ```maxon
 function main() returns ExitCode
@@ -178,7 +174,7 @@ What makes that a claim worth pinning is a global with no storage. With `hasStor
 is INLINED at each read, and every inlined read is a fresh `constArrayLiteral` — a 48-byte managed record
 allocated, four fields stamped into it, then decref'd and freed at the end of the statement. One heap
 record per dynamic read of a constant, which on a hot path is the dominant allocation in the program.
-These same three reads cost exactly this per read while the binding had no storage:
+Without storage, these same three reads would cost exactly this:
 
     mm_alloc ArrayRecord #1 size=48
     mm_decref ArrayRecord #1 rc=0
@@ -190,7 +186,7 @@ These same three reads cost exactly this per read while the binding had no stora
     mm_decref ArrayRecord #3 rc=0
     mm_free ArrayRecord #3
 
-**Any line at all below is that regression**, and three `size=48` records for three reads is the exact
+**Any line at all below is that defect**, and three `size=48` records for three reads is the exact
 shape of it.
 
 <!-- MmTrace -->
@@ -293,7 +289,7 @@ test that read it would be comparing a field against a sentinel. The mark for a 
 has to live OUTSIDE the record, in the allocation header every managed box is addressed through, which for
 image data costs bytes in `.rdata` and nothing at run time because there is no allocator on that path.
 
-Measured, before the record moved into the image, for the single global below:
+Built at run time rather than imaged, the single global below would cost:
 
     mm_alloc Minter #1 size=8
     mm_decref Minter #1 rc=0
@@ -305,7 +301,7 @@ never read.
 ⚠ **The field is declared `var` deliberately, and reaching it for a write is already refused.** A mutable
 field on an immortal record is the shape that would write to a read-only page — and `var mine = Seed;
 mine.next = 9` does not compile: **E2015**, *"an aggregate has no owning COPY in the compiler, so the write would
-reach the global's own record"*. That refusal predates imaging and is what makes a `var` field on this
+reach the global's own record"*. That refusal is what makes a `var` field on this
 record safe to place in `.rdata` rather than merely lucky.
 <!-- MmTrace -->
 ```maxon
@@ -345,7 +341,7 @@ DISTANCE rather than an address, because a distance is the same number in every 
 is a base relocation on PE, an `R_X86_64_RELATIVE` on ELF, a chained rebase on Mach-O and nothing at all on
 wasm.
 
-Measured before this global reached the image — **four** allocations for two headings:
+Built at run time rather than imaged, this global would cost **four** allocations for two headings:
 
     mm_alloc ArrayRecord #1 size=48
     mm_alloc StringRecord #2 size=68
@@ -354,7 +350,7 @@ Measured before this global reached the image — **four** allocations for two h
 
 ⚠ **Two of those four are the surprise, and they are the reason a reader should not assume "the literals
 were already immortal, so only the array cost anything".** `"## Deferred"` has an immortal `.rdata` record
-of its own — and storing it into the array `__str_clone`d it into a fresh heap String anyway, because a
+of its own — and storing it into a run-time array `__str_clone`s it into a fresh heap String anyway, because a
 durable store of a constant takes a private copy (`reference-identity.a-durable-store-of-a-constant-copies-it`).
 Imaging the table removes the copies with it: the slots address the literals' own records, and a constant
 addressed from a constant needs no copy because neither can be written.
@@ -381,7 +377,7 @@ An empty `Map` and an empty `Set` at module scope are constants, and must cost n
 ⭐ **THIS IS THE SHAPE WHOSE COST IS NOT ITS OWN RECORD.** `Map.create()` is `return Self{}` — as trivial as
 a factory gets — but a `Map` is a struct whose four container fields carry DEFAULTS, so constructing one
 builds four empty column arrays and then the struct that points at them. A `Set` builds three and its own.
-Measured, for the two globals below:
+Built at run time, the two globals below would cost:
 
     mm_alloc ArrayRecord #1 size=48      keys
     mm_alloc ArrayRecord #2 size=48      values
@@ -393,14 +389,13 @@ Measured, for the two globals below:
     mm_alloc ArrayRecord #8 size=48
     mm_alloc Set #9 size=48
 
-**Nine records, freed nine times, in a program that reads two counts.** The compiler's own source declares
-22 such maps and 18 such sets, so this shape alone is 182 allocations before `main` and 182 frees after it.
+**Nine records, freed nine times, in a program that reads two counts.**
 
-⚠ **Nothing here is a new mechanism; it is the first shape that needs three of them at once.** The mark
+⚠ **Nothing here is a new mechanism; it is a shape that needs three of them at once.** The mark
 cannot live in the record (a `Map`'s offset 16 is a field, not a capacity) so it needs the header. The
 struct's four slots address other image objects, so it needs the absolute data-to-data relocation. And the
 bytes are not in the source the way a literal's are — `Self{}` names four factory calls — so the compiler
-has to EVALUATE the construction rather than transcribe it. The first two shipped; this pins the third.
+has to EVALUATE the construction rather than transcribe it. This case pins the third.
 <!-- MmTrace -->
 ```maxon
 typealias Key = int(0 to 1000)
@@ -426,11 +421,9 @@ end 'main'
 holds a tag and no payload, so every value of it is the same value — there is nothing to construct and
 nothing a holder could write. It must cost no allocation, and the golden is EMPTY.
 
-⚠ **THIS IS THE LARGEST REMAINING CLASS, AND IT IS THE ONE THE OTHER RETIREMENTS CREATE.** A field whose
-"nothing yet" state used to be a shared empty container now names a payload-free case instead, which is
-why the compiler's own source holds 27 of these. Each is cheaper than the container it replaced — one
-16-byte box against a `Map`'s five records — but one box is not none, and the rule is that a `let` is
-never created at runtime:
+⚠ **A FIELD'S "NOTHING YET" STATE CAN NAME A PAYLOAD-FREE CASE RATHER THAN A SHARED EMPTY CONTAINER.**
+One 16-byte box is cheaper than a `Map`'s five records, but one box is not none, and the rule is that a
+`let` is never created at runtime. Built at run time, it would cost:
 
     mm_alloc Column #1 size=16
     mm_decref Column #1 rc=0
@@ -440,10 +433,10 @@ never created at runtime:
 `entries` case carries an array. What is constant is the VALUE `Column.unwritten`, whose record holds a
 tag and nothing else, and a `let` bound to it can never become an `entries`. So the admission rule reads
 the case a module-level `let` names, never the union it belongs to, and a `let` bound to a case that
-does carry a payload is refused exactly as it is today.
+does carry a payload is refused.
 
-**There are no fields to fold**, so this needs none of the const-evaluation the container images needed
-— the record's bytes are the tag. The gap is the refusal itself.
+**There are no fields to fold**, so this needs none of the const-evaluation the container images need
+— the record's bytes are the tag.
 <!-- MmTrace -->
 ```maxon
 typealias Count = int(0 to 100)
@@ -527,7 +520,7 @@ mm_free Slot #1
 <!-- test: module-let-struct-of-empty-containers-costs-no-allocation -->
 ⭐ **A RECORD WHOSE EVERY FIELD IS IMAGE DATA IS ITSELF IMAGE DATA.** Each empty container here already
 images on its own — that is what `module-let-array-globals-cost-no-allocation-at-all` holds — and the struct
-adds nothing but two slots pointing at them. Measured, for the one global below:
+adds nothing but two slots pointing at them. Built at run time, the one global below would cost:
 
     mm_alloc ArrayRecord #1 size=48
     mm_alloc ArrayRecord #2 size=48
@@ -536,12 +529,12 @@ adds nothing but two slots pointing at them. Measured, for the one global below:
 **Three records for a binding that computes nothing**, and the shape is the compiler's own:
 `Parser.sharedEmptyBorrowFacts` is a struct of five empty `Array` fields.
 
-⚠ **THE ADMISSION RULE IS THE THING TO GET RIGHT, AND "SCALAR" IS THE WRONG WORD FOR IT.** A struct is
-admitted today only when every field folds to a SCALAR, which is a sufficient condition mistaken for the
-necessary one: what an image needs is that every field's own bytes are decided at compile time, and an
-imaged field satisfies that exactly as a scalar does. A field that must be BUILT — anything that runs user
-code, or a container with members — keeps the whole record on the runtime path, because a half-imaged
-record is not a thing that can exist.
+⚠ **THE ADMISSION RULE IS "EVERY FIELD'S OWN BYTES ARE DECIDED AT COMPILE TIME", AND AN IMAGED FIELD
+MEETS IT EXACTLY AS A SCALAR DOES.** A managed field holds an address, and one `.rdata` object's address
+written into another is a data-to-data relocation, so an empty container, a nested construction and a
+payload-free union case are each admitted as a slot (`ProgramSignatures.constStructIsImageData`). A field
+that must be BUILT — anything that runs user code, or a container with members — keeps the whole record
+on the runtime path, because a half-imaged record is not a thing that can exist.
 <!-- MmTrace -->
 ```maxon
 typealias Count = int(0 to 1000)

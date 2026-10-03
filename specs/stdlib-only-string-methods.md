@@ -19,57 +19,30 @@ forced the first two, `stdlib/helpers/string/{utf8,hash,grapheme}.maxon` forced 
 `String.mapAsciiCase` is `setByte`'s one caller — and none is part of the language a user program may
 write.
 
-⭐⭐ **ALL FIVE ARE REFUSED BY ONE MECHANISM AGAIN, AND THAT IS W49 WAVE 9 — THE SPLIT THIS FILE
-DESCRIBED IS CLOSED.** Every one of them is `E3088`, raised by `SemanticCheck` off the corpus's own
-`module` keyword. Between waves 7 and 9 there were two mechanisms: four members had retired onto the
-corpus while `setByte` was still `E2015` from a parser arm reading the calling file's LOCATION. The
-reason for that split was never that four were tidied and one was missed:
+⭐⭐ **ALL FIVE ARE REFUSED BY ONE MECHANISM.** Every one of them is `E3088`, raised by `SemanticCheck`
+off the corpus's own `module` keyword: each is an ordinary call to an ordinary declared function, and
+`SemanticCheck.calleeVisibleFrom` -> `ProgramSignatures.isVisibleFrom` applies the visibility the
+corpus WROTE. No second statement of it exists to disagree, and no refusal sentence enumerates the
+members, so none can omit one.
 
-* A member the compiler SYNTHESIZES is answered by an arm that runs *ahead* of the corpus (`memberBelongsToTheCorpus`
-  is consulted only for names the roster does NOT carry), so the declaration whose `module` keyword
-  could have answered is never reached. Such a member needs a location gate or it has no gate at all.
-* A member RETIRED onto the corpus is an ordinary call to an ordinary declared function, and
-  `SemanticCheck.calleeVisibleFrom` -> `ProgramSignatures.isVisibleFrom` applies the visibility the
-  corpus WROTE. No second statement of it exists to disagree.
+A member the compiler SYNTHESIZES would be answered by an arm that runs *ahead* of the corpus
+(`memberBelongsToTheCorpus` is consulted only for names the roster does NOT carry), so the declaration
+whose `module` keyword could answer would never be reached. Such a member needs a location gate or it
+has no gate at all. None of the five is synthesized.
 
-Wave 7 retired the four READ doors, so they moved from the first case to the second. **Wave 9 moved
-`setByte` after them, and the interesting part is how long a WRONG reason kept it back.**
+`setByte` WRITES its receiver, and `Parser.receiverOwnerMask` derives that bit from the ENVELOPE
+COLLAPSE (a fused wrapper's inline `managed` IS the receiver's record, so writing it writes the
+caller's own) — so a `let` receiver is still refused: `let s = "hello"; s.append(" world")` is E3019.
+Its one caller, `mapAsciiCase`, names the second argument (`work.setByte(i, value: …)`):
+`specs/parameter-labels.md` rules that every argument after the first must be named, and the compiler
+enforces it (E2053), so a positional one would make `stdlib/` refuse itself.
 
-The reason this file first gave was: *"it WRITES its receiver, and the compiler derives no `writtenParamMask`
-for a method writing its own receiver's data, so routed to the corpus today it would admit
-`let s = "abc"; s.setByte(0, value: 65)`"* — with `append` held back on the same sentence. Wave 8
-discharged it: `Parser.receiverOwnerMask` derives the bit from the ENVELOPE COLLAPSE (a fused wrapper's
-inline `managed` IS the receiver's record, so writing it writes the caller's own), `append` retired on
-it, and `let s = "hello"; s.append(" world")` is still E3019.
+⇒ The corpus body's `managed.setByte(…)` on a fused record reaches `__managed_set_byte` with the
+receiver's own RECORD — a String record and an Array record agree on all five slots that entry reads,
+and it touches `@40` nowhere.
 
-What ACTUALLY held `setByte` back was one token in the corpus, and it was not about ownership or
-lowering at all: `stdlib/String.maxon:675`, where `mapAsciiCase` wrote `try work.setByte(i, b + delta)`
-with the second argument POSITIONAL. `specs/parameter-labels.md` rules that every argument after the
-first must be named, and the compiler enforces it (E2053) — so the declared
-`String.setByte` could not serve its own only caller, and `stdlib/` would have refused itself. Writing
-`value:` closed it, and the parser arm went in the same edit.
-
-⇒ **The lowering did not change; it moved one frame down.** The arm handed the receiver's own RECORD to
-`__managed_set_byte`, and the corpus body's `managed.setByte(…)` on a fused record reaches the identical
-callee with the identical bound — a String record and an Array record agree on all five slots that
-entry reads, and it touches `@40` nowhere.
-
-⚠ **THE COUNT SAID "FOUR" UNTIL W49 WAVE 2, IN THIS FILE AND IN THE REFUSAL ITSELF, WHILE FIVE ARMS TOOK
-THE GATE.** `setByte` was the missing one — and it had no case here either, so a user who wrote it was
-refused by a sentence enumerating four OTHER members and never their own. Wave 2 is what surfaced it:
-retiring `toLower`/`toUpper` onto the corpus gave `setByte` its first caller, and the member nobody had
-called turned out to be the member nobody had described.
-
-⭐ **AND WAVE 7 DISCHARGED THAT OBLIGATION BY CONSTRUCTION RATHER THAN BY MAINTAINING IT.** The shared
-gate went first: with one arm left, its sentence sat INSIDE that arm, so it could not enumerate a member
-it was not about and could not omit the member it was. A rule that says "keep this list in step" is a
-rule that gets broken; a sentence with one possible subject is not. Wave 9 then deleted the arm and the
-sentence together, which is the same cure taken one step further: with no arm at all, there is nothing
-left to keep in step with anything.
-
-⚠ The case names below say "pair", which is what the set was when they were written. They are IDs, and
-an id is renamed at the cost of orphaning a golden in every target directory; the count that matters is
-what the refusals themselves render.
+⚠ Some case names below say "pair". They are IDs, and an id is renamed at the cost of orphaning a
+golden in every target directory; the count that matters is what the refusals themselves render.
 
 A user call to any of the five is refused as module-scoped and not visible from this directory
 (`E3088`).
@@ -82,18 +55,16 @@ enum has no member to derive the spelling from.
 User code that wants a string's bytes uses `toByteArray()`, which COPIES, so nothing it is handed can
 alias the string.
 
-⚠⚠ **THE `String` MEMBER ROSTER NO LONGER NAMES A SINGLE MEMBER THE COMPILER SYNTHESIZES, AND `setByte` WAS THE
-LAST ONE (W49 wave 9).** What remains on it is `hash`/`equals` — the builtin CONFORMANCES, whose impls
-the corpus already defines and which the dispatch reaches by SYMBOL rather than by re-synthesizing —
-so the unknown-member refusal below renders `the compiler provides hash/equals`. The roster has never claimed
-to list what a `String` HAS, only what the synthesized dispatch serves; every one of the twenty-two
-names that have left it is served by `stdlib/String.maxon` through the corpus door instead.
+⚠⚠ **THE `String` MEMBER ROSTER NAMES NO MEMBER THE COMPILER SYNTHESIZES.** What is on it is
+`hash`/`equals` — the builtin CONFORMANCES, whose impls the corpus defines and which the dispatch
+reaches by SYMBOL rather than by re-synthesizing — so the unknown-member refusal below renders `the
+compiler provides hash/equals`. The roster lists only what the synthesized dispatch serves, never what
+a `String` HAS; every other member is served by `stdlib/String.maxon` through the corpus door.
 
-⚠ The location gate this file used to describe (`livesUnderStdlibDirectory`, deliberately not
-`isStdlibSource`) is now reached only by the two `__ManagedMemory` members that keep synthesized arms.
-Its argument is unchanged and lives with them: gated on `isStdlibSource` instead,
+⚠ The location gate (`livesUnderStdlibDirectory`, deliberately not `isStdlibSource`) is reached only
+by the two `__ManagedMemory` members that keep synthesized arms. Gated on `isStdlibSource` instead,
 `maxon build stdlib/URL.maxon` — the command that checks whether a module compiles standalone
-— was told `stdlib\URL.maxon` "is not stdlib source". The spec suite cannot reach that case
+— would be told `stdlib\URL.maxon` "is not stdlib source". The spec suite cannot reach that case
 (it stages every test's sources under `specs/.spec-tmp/`, and the multi-file marker deliberately
 refuses the `..` that would escape), so the cases below pin the USER half only; the stdlib half is
 pinned by every `url` case, which compiles `stdlib/URL.maxon` through the loader.
@@ -177,35 +148,27 @@ error E3088: <fragment>:5:12: function 'String.addressableBytes' is module-scope
 ```
 
 A NEAR MISS of a served member — `addressableByte` for `addressableBytes` — is a typo and must be
-answered as one, and wave 7 changed WHICH sentence answers it without changing that it is a typo. Both
-spellings are off the roster now, so both fall through to the corpus door, which does not find either;
-the roster refusal is what a reader gets, and nobody is told they lack permission for a method nobody
-has.
+answered as one. Both spellings are off the roster, so both fall through to the corpus door, which
+does not find either; the roster refusal is what a reader gets, and nobody is told they lack permission
+for a method nobody has.
 
-⚠ **THE ROSTER NO LONGER NAMES `startsWith`, `endsWith`, `count`, `toLower`, `toUpper`, `replace`,
+⚠ **THE ROSTER DOES NOT NAME `startsWith`, `endsWith`, `count`, `toLower`, `toUpper`, `replace`,
 `replaceFirst`, `contains`, `slice`, `split`, `bytes`, `toByteArray`, `codepoints`, `utf16`,
 `byteLength`, `isEmpty`, `clone`, `addressableBytes`, `byteAt`, `byteAtOrPanic` OR
-`hasSingleByteGraphemes`, AND THAT IS NOT AN OMISSION — IT IS THE RETIREMENT.** Every one is served by
-`stdlib/String.maxon` now (W49 waves 1 through 7): struck from the roster, each falls through to the
-corpus door that is consulted for exactly the names the roster does not carry, and becomes an ordinary
-call to the ordinary declared function the corpus already had. The list therefore says what it has
-always said — *what the synthesized surface serves* — and a name leaving it means the corpus took the
-member over, never that the member vanished. `startsWith("x")`, `toLower()`, `byteLength()` and
-`isEmpty()` all still work; `string-methods-ascii`, `string-type` and `string-type-2` pin that they
-answer the same.
+`hasSingleByteGraphemes`, AND THAT IS NOT AN OMISSION.** Every one is served by `stdlib/String.maxon`:
+off the roster, each falls through to the corpus door that is consulted for exactly the names the
+roster does not carry, and is an ordinary call to the ordinary declared function the corpus has. The
+list says *what the synthesized surface serves*, never what a `String` has. `startsWith("x")`,
+`toLower()`, `byteLength()` and `isEmpty()` all work; `string-methods-ascii`, `string-type` and
+`string-type-2` pin their answers.
 
-⚠⚠ **WAVE 6 IS THE ONE THAT CHANGED A RETURN TYPE, SO "ANSWERS THE SAME" IS NARROWER THERE AND THE
-DIFFERENCE IS DELIBERATE.** `bytes()`/`codepoints()`/`utf16()` were MATERIALIZED `Array`s and are now the
-corpus's LAZY `ByteView`/`CodepointView`/`UTF16View` (`stdlib/helpers/string/views.maxon`), which hold the
-`String` rather than a copy of its bytes. `.count()` and `for x in <view>` answer identically — that is
-what the ported cases pin — but a view is not assignable at an `Array with Byte` position, and
-`bytearray-element-size` is where that is pinned rather than here.
+⚠⚠ **`bytes()`/`codepoints()`/`utf16()` RETURN THE CORPUS'S LAZY `ByteView`/`CodepointView`/`UTF16View`**
+(`stdlib/helpers/string/views.maxon`), which hold the `String` rather than a copy of its bytes.
+`.count()` and `for x in <view>` answer as a materialized `Array` would, but a view is not assignable at
+an `Array with Byte` position, and `bytearray-element-size` is where that is pinned rather than here.
 
-⚠ **THE LIST IS WHAT A RETIREMENT MOVES, SO IT IS ALSO WHAT A RETIREMENT MUST RE-READ.** `setByte` is on
-it and stays there, and wave 2 is what first gave it a caller: the corpus `mapAsciiCase` behind
-`toLower`/`toUpper` is the only body in `stdlib/` that writes a byte. It had been served by a lowering
-that wrote through a non-owning view and lost the write, which nothing could observe while the member
-above it was synthesized.
+⚠ **`mapAsciiCase`, the corpus body behind `toLower`/`toUpper`, is the only body in `stdlib/` that
+writes a byte**, and it writes through `setByte` on the owning `String`, so the write lands.
 
 <!-- test: unknown-string-method-still-gets-the-roster -->
 ```maxon

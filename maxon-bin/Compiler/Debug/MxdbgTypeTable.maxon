@@ -66,16 +66,35 @@ end 'MxdbgFieldDesc'
 
 typealias MxdbgFieldDescArray = Array with MxdbgFieldDesc
 
+union MxdbgElementType
+	none
+	of(typeName ByteArray)
+
+	function typeName() returns ByteArray throws AbsentError
+		match self 'element'
+			none then throw AbsentError.absent
+			of(typeName) then return typeName
+		end 'element'
+	end 'typeName'
+
+	function isOf() returns bool
+		return match self 'element'
+			none gives false
+			of gives true
+		end 'element'
+	end 'isOf'
+end 'MxdbgElementType'
+
 type MxdbgTypeDesc
 	export var kind as MxdbgIndex
 	export var size as MxdbgIndex
 	export var align as MxdbgIndex
 	export var fields as MxdbgFieldDescArray
-	export var elementTypeName as ByteArray
+	export var element as MxdbgElementType
 	export var flags as MxdbgIndex
 
-	static function create(kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fields MxdbgFieldDescArray, elementTypeName ByteArray = ByteArray.create(), flags MxdbgIndex = 0) returns MxdbgTypeDesc
-		return Self{kind: kind, size: size, align: align, fields: fields, elementTypeName: elementTypeName, flags: flags}
+	static function create(kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fields MxdbgFieldDescArray, element MxdbgElementType = MxdbgElementType.none, flags MxdbgIndex = 0) returns MxdbgTypeDesc
+		return Self{kind: kind, size: size, align: align, fields: fields, element: element, flags: flags}
 	end 'create'
 end 'MxdbgTypeDesc'
 
@@ -99,6 +118,8 @@ typealias MxdbgTypePositionMap = Map with (ByteArray, ElementIndex)
 
 typealias MxdbgArrayElementMap = Map with (ByteArray, ByteArray)
 
+typealias MxdbgClosureEnvMap = Map with (ByteArray, MxdbgFieldDescArray)
+
 export type MxdbgTypeTable
 	// Discovery order until `seal`, name order after it — and a sealed entry's position IS the type id
 	// every field and every local record carries.
@@ -112,10 +133,23 @@ export type MxdbgTypeTable
 	var sealed as bool
 
 	var arrayElements as MxdbgArrayElementMap
+	var closureEnvs as MxdbgClosureEnvMap
 
 	export static function create() returns MxdbgTypeTable
-		return Self{entries: MxdbgTypeEntryArray.create(), positionByName: MxdbgTypePositionMap.create(), sealed: false, arrayElements: MxdbgArrayElementMap.create()}
+		return Self{entries: MxdbgTypeEntryArray.create(), positionByName: MxdbgTypePositionMap.create(), sealed: false, arrayElements: MxdbgArrayElementMap.create(), closureEnvs: MxdbgClosureEnvMap.create()}
 	end 'create'
+
+	export function closeClosureEnv(project Project, signatures ProgramSignatures, closure IrFunction)
+		var fields = MxdbgFieldDescArray.create()
+		fields.reserve(closure.closureEnvFields.count())
+
+		for field in closure.closureEnvFields 'eachCapture'
+			fields.push(MxdbgFieldDesc.create(field.name, offset: envSlotOffset(field.slot) as MxdbgIndex, typeName: mxdbgTypeNameOf(project, signatures: signatures, ref: field.declaredType)))
+		end 'eachCapture'
+
+		self.closureEnvs.upsert(closure.name, value: fields)
+		self.close(project, signatures: signatures, name: closure.name)
+	end 'closeClosureEnv'
 
 	// Every type the program DECLARES. Seeded whatever reaches a local, because an enum is erased to its
 	// tag by the time a binding carries one and would otherwise be in no table a renderer could match a
@@ -174,7 +208,7 @@ export type MxdbgTypeTable
 
 			// ⚠ The names this one refers to are collected FIRST and appended only past `next`'s last use:
 			// `next` is an element borrow of the worklist, and growing the worklist under it is E3070.
-			let desc = mxdbgDescribeType(project, signatures: signatures, name: next, elementName: try self.arrayElements.get(next) otherwise ByteArray.create())
+			let desc = try self.closureEnvDescOf(next) otherwise mxdbgDescribeType(project, signatures: signatures, name: next, element: self.arrayElementOf(next))
 			var referenced = ByteArrayArray.create()
 			referenced.reserve(desc.fields.count())
 
@@ -182,8 +216,8 @@ export type MxdbgTypeTable
 				referenced.push(field.typeName)
 			end 'eachFieldType'
 
-			if not desc.elementTypeName.isEmpty() 'describesItsElement'
-				referenced.push(desc.elementTypeName)
+			if let elementTypeName = try desc.element.typeName() 'describesItsElement'
+				referenced.push(elementTypeName)
 			end 'describesItsElement'
 
 			self.append(next, desc: desc)
@@ -216,12 +250,28 @@ export type MxdbgTypeTable
 		return mxdbgTypeKindIsIndirect(entry.desc.kind)
 	end 'holdsAPointer'
 
-	export function writeInto(writer MxdbgWriter)
+	function closureEnvDescOf(name ByteArray) returns MxdbgTypeDesc throws AbsentError
+		return mxdbgFunctionRecordDesc(try self.closureEnvs.get(name) otherwise throw AbsentError.absent)
+	end 'closureEnvDescOf'
+
+	function arrayElementOf(name ByteArray) returns MxdbgElementType
+		let elementName = try self.arrayElements.get(name) otherwise return MxdbgElementType.none
+		return MxdbgElementType.of(elementName)
+	end 'arrayElementOf'
+
+	function elementTypeIdOf(element MxdbgElementType) returns MxdbgIndex
+		return match element 'element'
+			none gives MxdbgNoElementType
+			of(typeName) gives self.idOf(typeName)
+		end 'element'
+	end 'elementTypeIdOf'
+
+	export function writeInto(writer MxdbgWriter, spellings StdlibShadowSpellingArray)
 		self.seal()
 
 		for i in 0 upto self.entries.count() 'eachType'
 			let entry = try self.entries.get(i) otherwise panic("MxdbgTypeTable.writeInto: entries.get OOB at {i} despite the upto bound")
-			writer.addType(String.from(entry.name), kind: entry.desc.kind, size: entry.desc.size, align: entry.desc.align, elementTypeId: MxdbgNoElementType if entry.desc.elementTypeName.isEmpty() else self.idOf(entry.desc.elementTypeName), flags: entry.desc.flags)
+			writer.addType(String.from(authorSpelledName(entry.name, spellings: spellings)), kind: entry.desc.kind, size: entry.desc.size, align: entry.desc.align, elementTypeId: self.elementTypeIdOf(entry.desc.element), flags: entry.desc.flags)
 
 			for field in entry.desc.fields 'eachField'
 				writer.addField(String.from(field.name), offset: field.offset, typeId: self.idOf(field.typeName))
@@ -307,12 +357,12 @@ end 'mxdbgInternedName'
 
 // What the bytes under `name` are, in the order the registries can answer it: the language's own fused
 // records, then a declared struct, then a declared enum or union, then a ranged alias, then a machine
-// primitive. A name in none of them is a record reached through a pointer, described as exactly that —
-// which is what gives a field or a local of such a type a truthful entry to point at instead of landing
-// on an unrelated one.
-function mxdbgDescribeType(project Project, signatures ProgramSignatures, name ByteArray, elementName ByteArray) returns MxdbgTypeDesc
-	if not elementName.isEmpty() 'aFusedArrayRecord'
-		return MxdbgTypeDesc.create(MxdbgTypeKindArray, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create(), elementTypeName: elementName)
+// primitive, then a function. A name in none of them is a record reached through a pointer,
+// described as exactly that — which is what gives a field or a local of such a type a truthful
+// entry to point at instead of landing on an unrelated one.
+function mxdbgDescribeType(project Project, signatures ProgramSignatures, name ByteArray, element MxdbgElementType) returns MxdbgTypeDesc
+	if element.isOf() 'aFusedArrayRecord'
+		return MxdbgTypeDesc.create(MxdbgTypeKindArray, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create(), element: element)
 	end 'aFusedArrayRecord'
 
 	if name.equals(MxdbgStringName) or name.equals(MxdbgCharacterName) 'aFusedByteRecord'
@@ -337,8 +387,16 @@ function mxdbgDescribeType(project Project, signatures ProgramSignatures, name B
 		width(bytes, signed) then return MxdbgTypeDesc.create(MxdbgTypeKindPrimitive, size: bytes as MxdbgIndex, align: mxdbgPrimitiveAlign(bytes), fields: MxdbgFieldDescArray.create(), flags: MxdbgTypeFlagSigned if signed else 0)
 	end 'primitive'
 
+	if project.funcSignatures.contains(name) or signatures.isFunctionAliasInAnyFile(name) 'aFunctionValue'
+		return mxdbgFunctionRecordDesc(MxdbgFieldDescArray.create())
+	end 'aFunctionValue'
+
 	return MxdbgTypeDesc.create(MxdbgTypeKindManagedRecord, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create())
 end 'mxdbgDescribeType'
+
+function mxdbgFunctionRecordDesc(captures MxdbgFieldDescArray) returns MxdbgTypeDesc
+	return MxdbgTypeDesc.create(MxdbgTypeKindFunction, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: captures)
+end 'mxdbgFunctionRecordDesc'
 
 // A struct's fields in DECLARATION order, at the very offsets codegen laid them out at.
 function mxdbgDescribeStruct(project Project, signatures ProgramSignatures, layout StructLayout) returns MxdbgTypeDesc

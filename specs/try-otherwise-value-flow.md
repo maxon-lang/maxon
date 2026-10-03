@@ -133,8 +133,8 @@ end 'main'
 
 <!-- test: try-otherwise-value-flow.nested-try-in-arg -->
 Nested `try ... otherwise X` in an argument position: the inner try's
-result must be visible to the outer call's argument list. Reproduces the
-`unresolved value name '$tN'` parser binding bug.
+result must be visible to the outer call's argument list; a parser binding that
+lost it would report `unresolved value name '$tN'`.
 ```maxon
 enum E
 	bad
@@ -167,10 +167,10 @@ end 'main'
 Regression guard: a method call chained onto a `(try CALL otherwise diverge)`
 receiver, followed by another statement in the same block. The receiver's try
 moves control flow onto its merge block; the chained method call (and its arg
-parse) must emit there, not back on the pre-try block. Previously the method's
-argument parse re-seeded the emit block to the statement's entry block, leaving
-the receiver's try-merge block unterminated (assertAllBlocksTerminated panic).
-Two such statements in one block expose it — the second try overwrote the
+parse) must emit there, not back on the pre-try block. An argument parse that
+re-seeded the emit block to the statement's entry block would leave the
+receiver's try-merge block unterminated (assertAllBlocksTerminated panic).
+Two such statements in one block expose it — the second try would overwrite the
 entry block's terminator, orphaning the first try's merge.
 ```maxon
 function swapFirstTwo(rows StringArray, doSwap bool)
@@ -271,11 +271,10 @@ Regression guard: a FIELD access (not a method call) chained onto a
 `(try pairs.get(j) otherwise break).label.count()` inside a loop. The receiver's
 `otherwise break` moves control flow onto the try's merge block, where the
 receiver value is defined; the chained `.label` fieldLoad must emit on THAT
-merge block, not the pre-try block. Previously the postfix field-load arm emitted
-into its stale `block` parameter while the method-call arm correctly used
-`currentBlock`, so the fieldLoad referenced the receiver value before its
-defining op, leaving the producer type unresolved and crashing the cmp operand
-typing (`pickOperandType` panic). Mirrors the compiler's own
+merge block, not the pre-try block. A postfix field-load arm that emitted into a
+stale `block` parameter, where the method-call arm uses `currentBlock`, would
+reference the receiver value before its defining op, leaving the producer type
+unresolved and crashing the cmp operand typing (`pickOperandType` panic). Mirrors the compiler's own
 `sortSanitizedPairsByLengthDesc`.
 ```maxon
 type Row
@@ -315,12 +314,10 @@ end 'main'
 
 <!-- test: try-otherwise-value-flow.borrowed-aggregate-fallback -->
 A BORROWED struct fallback merges with the try's owned result through the same door a borrowed `return`
-and a borrowed `gives` arm take (S5): the phi owns one reference on both edges, so the fallback is
+and a borrowed `gives` arm take: the phi owns one reference on both edges, so the fallback is
 increfed on the error edge while the caller's `f` keeps its own. Both paths are exercised in one program
 — the error path takes the fallback (5) and the ok path takes the fresh result (7) — and exit `12` is the
-sum, which distinguishes a working merge from either arm silently winning. The value oracle runs it and
-answers 12. This was refused before S5, on the premise that consuming a borrowed aggregate needed the
-cross-call consume; it needs an incref, which the tree already had.
+sum, which distinguishes a working merge from either arm silently winning. Merging a borrowed aggregate needs an incref, not a cross-call consume.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

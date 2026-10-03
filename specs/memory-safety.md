@@ -164,9 +164,7 @@ end 'main'
 ### A cloned Array of STRUCTS is independent under both mutation and growth
 Growth is the half that a shared element makes fatal rather than merely wrong: pushing past the
 clone's capacity copies its buffer, and a buffer of element pointers nobody owns twice is freed
-twice. Measured before the fix, this program printed the wrong first line and then DIED tearing
-the array down — `mm_decref: refcount underflow (already zero)`, through
-`mm_decref_managed_elements`, exit 1.
+twice.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -314,8 +312,8 @@ original word long enough for a heap record and a tail
 <!-- test: clone-of-union-array-copies-the-payload -->
 ### Cloning an Array of UNIONS copies each live case's payload
 A union with a payload is a heap box holding heap pointers, so a copied element slot is a second
-name for the SAME box and the same payload record. Writing through the clone's payload was a
-write to the original's.
+name for the SAME box and the same payload record; uncopied, a write through the clone's payload
+would be a write to the original's.
 ```maxon
 type Item
 	export var label as String

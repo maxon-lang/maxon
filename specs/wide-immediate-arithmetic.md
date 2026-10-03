@@ -47,12 +47,12 @@ not a literal. A constant on BOTH sides is EVALUATED — by the parser when it i
 two literals, and by `foldConstants` (EC12) when inlining makes it one — and the arithmetic
 then never reaches an immediate form at all, so the test would pin nothing about encoding.
 
-⛔ **IT USED TO BE THE RETURN OF A ONE-LINE `base(p)` HELPER, AND THAT STOPPED WORKING.**
-`base` is a tiny leaf, so `inlineLeaves` (EC5) splices its body into the caller and the
-argument literal lands where the parameter was; `foldConstants` then evaluates the whole
-chain and every case below collapses to `return 0` — still GREEN, and pinning nothing. What
-replaces it is not another call but a MEMORY READ, because that rests on a rule the compiler
-states rather than on a pass's current inlining policy: a load's result is never a
+⛔ **THE RETURN OF A ONE-LINE `base(p)` HELPER WOULD NOT DO.** `base` would be a tiny leaf,
+so `inlineLeaves` splices its body into the caller and the argument literal lands where the
+parameter was; `foldConstants` then evaluates the whole chain and every case below collapses
+to `return 0` — still GREEN, and pinning nothing. The operand is not another call but a
+MEMORY READ, because that rests on a rule the compiler states rather than on a pass's current
+inlining policy: a load's result is never a
 compile-time constant, however constant the initializer looks, since any store since could
 have replaced it (`FoldConstOperands.classifyFoldableDef`, memory band). The `try … otherwise`
 merge makes the value a phi as well, which no constant domain here looks through either.
@@ -72,8 +72,8 @@ past the twenty-six GPRs the arm64 pool offers (x0..x15 ∪ x19..x28), so the al
 genuinely spilling and reloading around the materialisations rather than merely having
 room to spare. A spill store or reload placed BETWEEN the `movz`/`movk` and its consumer
 would destroy the constant and the sum would come out wrong rather than the program
-crashing — which is the shape of defect BATCH15's own A5b was (a value written into a
-register another value already held, between a producer and its consumer).
+crashing — a value written into a register another value already holds, between a
+producer and its consumer.
 
 ⚠ A case that merely holds a dozen values live pins nothing here: with a twenty-six
 register pool the allocator never approaches exhaustion, so no spill code is emitted at

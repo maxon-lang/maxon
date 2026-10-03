@@ -40,7 +40,7 @@ rounds toward NEGATIVE INFINITY, so `-7 / 2` is `-3` for the language and `-4` f
 every negative dividend the divisor does not divide exactly is off by one without the bias
 correction.
 
-⛔⛔ **THEY CATCH NOTHING IN THE DERIVATION, AND THAT WAS MEASURED RATHER THAN ASSUMED.** With the
+⛔⛔ **THEY CATCH NOTHING IN THE DERIVATION.** With the
 `anc` in `deriveSignedMagic` halved — or replaced by `i64.max` — every one of those cases stays
 GREEN. A fixed-point reciprocal that is a little too coarse is right for almost every dividend and
 wrong only near `anc`, the largest positive `n` that is `-1` modulo the divisor, which is exactly the
@@ -57,15 +57,11 @@ That is sound only where the fault provably cannot happen:
 - **`|K| == 1`** — an algebraic identity rather than a strength reduction, and `x / -1` must keep
   faulting at `i64.min`, which `specs/division.md` pins as deliberate.
 - **`i64.min`** — the derivation works in `|K|`, which is not representable.
-- **an UNSIGNED divisor that is not a power of two** — the unsigned magic sequence needs a 65-bit
-  multiplier and a fixup this rung did not build. Its answers must still be right, which is what the
-  unsigned case below checks by including `10` beside `2` and `32`.
 - ⛔ **an UNSIGNED divisor at or above `2^63`** — and this one is not about a deleted fault at all, it
   is the only refusal here that stands between the pass and a WRONG ANSWER. The pass reads a divisor
   as a signed `ParsedInt`, so `18446744073709551600` arrives as `-16`, whose *magnitude* is a power of
-  two. `x /u 18446744073709551600` is `0` for every dividend below it; `x shrLogical 4` is not. FOUND
-  by review rather than by any gate, and the case below is its pin — it was a live wrong answer, not a
-  hypothetical, and it is reachable from source through a `let` whose declared type is
+  two. `x /u 18446744073709551600` is `0` for every dividend below it; `x shrLogical 4` is not. The
+  case below is its pin, and the shape is reachable from source through a `let` whose declared type is
   `int(0 to u64.max)` and whose folded value has wrapped past `i64.max`.
 
 ### What the emitted code looks like
@@ -77,7 +73,7 @@ one `shr`; `x modu 8` is one `and`; `x / 10` is `mov rax, 7378697629483820647` /
 A `mod` is derived from its own quotient (`x - (x / |K|) * |K|`), so the two can never disagree about
 a sign or an edge — and where a program computes BOTH by a power of two, the quotient chain is emitted
 ONCE because CSE merges them. ⚠ **That merge does NOT happen for a magic divisor**, and the reason is
-`EC13`'s filed one: there is no constant interning, so two sites mint two `const` ops for one 64-bit
+CSE's own: there is no constant interning, so two sites mint two `const` ops for one 64-bit
 multiplier and no expression comparison can call the two `mulHighSigned`s equal.
 
 ## Tests
@@ -193,16 +189,16 @@ end 'main'
 ```
 
 <!-- test: the-hardest-dividend-for-a-divisor-is-the-one-the-derivation-is-ABOUT -->
-⛔⛔ **THE CASE THAT WAS ADDED BECAUSE THE GATE ABOVE COULD NOT SEE A MIS-DERIVED MAGIC.** HALVE
-`deriveSignedMagic`'s `anc` and every one of the other six cases stays GREEN — six cases over twelve
-dividends and eleven divisors, all passing on a reciprocal that is provably too coarse. The reason is
+⛔⛔ **THE GATE ABOVE CANNOT SEE A MIS-DERIVED MAGIC; THIS CASE CAN.** HALVE `deriveSignedMagic`'s
+`anc` and every other case in this file stays GREEN, all passing on a reciprocal that is provably too
+coarse. The reason is
 exact: a fixed-point reciprocal that is slightly wrong is still right for almost every dividend, and
 wrong only near the value the derivation is stated in terms of — **`anc`, the largest positive `n`
 that is `-1` modulo the divisor.** A dividend list that does not contain it tests the EMITTED SEQUENCE
 and takes the CONSTANT it carries on trust.
 
 ⚠ **AND THE OTHER DIRECTION IS NOT A BUG, WHICH IS WHY THE SABOTAGE HAS TO BE THE HALVING ONE.**
-Setting `anc` to `i64.max` — too LARGE — leaves all seven cases green, and that is correct rather than
+Setting `anc` to `i64.max` — too LARGE — leaves every case green, and that is correct rather than
 missed: the refinement then runs longer and stops at a LATER `p`, whose multiplier is still exact (the
 loop finds the SMALLEST such `p`, not the only one), or it trips the `q1` bound and the site simply
 declines. Only a too-SMALL `anc` exits early, and only an early exit is a wrong answer.
@@ -343,7 +339,8 @@ end 'main'
 `and` — and its whole risk is the OTHER direction: a dividend above `i64.max` has its top bit set, so
 answering it with the SIGNED sequence would give a negative quotient. The three dividends past
 `i64.max` are built by wrapping arithmetic, because an integer literal is signed 64-bit and cannot
-name them. `10` is included to check the divisor the pass REFUSES on this path still divides right.
+name them. `10` is included to check that a magic divisor on this path divides right over the same
+dividends.
 ```maxon
 typealias Unsigned = bits(64)
 typealias UnsignedArray = Array with Unsigned
@@ -381,9 +378,9 @@ function main() returns ExitCode
 		if u mod 32 != refUMod(u, d: 32) 'modThirtyTwo'
 			return 4
 		end 'modThirtyTwo'
-		if u / 10 != refUDiv(u, d: 10) 'divTenIsRefused'
+		if u / 10 != refUDiv(u, d: 10) 'divTenMatches'
 			return 5
-		end 'divTenIsRefused'
+		end 'divTenMatches'
 	end 'each'
 	return 0
 end 'main'
@@ -393,8 +390,8 @@ end 'main'
 ```
 
 <!-- test: an-unsigned-divisor-above-the-signed-range-is-refused -->
-⛔ **THE CASE THAT WAS A LIVE WRONG ANSWER.** `huge` is `2^64 - 16`; a `ParsedInt` holds it as `-16`,
-whose magnitude is `16` — a power of two the pass would have answered with `shrLogical 4`. The right
+⛔ **THE REFUSAL THAT PREVENTS A WRONG ANSWER.** `huge` is `2^64 - 16`; a `ParsedInt` holds it as `-16`,
+whose magnitude is `16` — a power of two a reduction would answer with `shrLogical 4`. The right
 answer is `0`, because the dividend is smaller than the divisor. Both operands' declared types are
 `int(0 to u64.max)`, so the division is genuinely UNSIGNED, and the divisor is folded, so it genuinely
 reaches the classifier as a constant. Restore the reduction for a negative unsigned divisor and this
@@ -614,7 +611,7 @@ end 'main'
 ```
 
 <!-- test: the-hardest-unsigned-dividend-for-a-divisor -->
-⛔⛔ **THE UNSIGNED ANALOGUE OF `anc`, AND IT EXISTS FOR THE SAME MEASURED REASON.** The gate above tests
+⛔⛔ **THE UNSIGNED ANALOGUE OF `anc`, AND IT EXISTS FOR THE SAME REASON.** The gate above tests
 the EMITTED SEQUENCE and takes the CONSTANT that sequence carries on trust. A fixed-point reciprocal that
 is slightly too coarse is still right for almost every dividend in a 64-bit space — it is wrong only in a
 narrow band around the value the derivation's exit condition is stated in terms of, and a dividend list

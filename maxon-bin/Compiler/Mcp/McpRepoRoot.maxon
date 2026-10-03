@@ -110,9 +110,7 @@ end 'findRepoRoot'
 // The tree a dev-mode tool acts in: the caller's `repoRoot` when it names one, otherwise the checkout
 // this server's own binary sits in.
 export function resolveTargetRepoRoot(reqDoc JsonDoc, args OptionalNode, exePath FilePath) returns ResolvedRoot
-	let raw = getOptionalStringArg(reqDoc, args: args, key: "repoRoot", defaultVal: "")
-
-	if raw.isEmpty() 'noExplicit'
+	let raw = try statedStringArg(reqDoc, args: args, key: "repoRoot") otherwise 'noExplicit'
 		let discovered = try findRepoRoot(exePath) otherwise 'noDisc'
 			return ResolvedRoot.refused("no `repoRoot` was given and this compiler does not sit inside a Maxon checkout, so there is no tree to act on. Pass `repoRoot` as an absolute path.")
 		end 'noDisc'
@@ -140,9 +138,8 @@ function compilerBinaryPath(repoRoot FilePath) returns FilePath
 	return childPath(repoRoot, segment: "{CompilerSlotStem}{hostExecutableExtension()}")
 end 'compilerBinaryPath'
 
-// A tree's compiler, refusing when the slot is empty. A FAILED build leaves it empty rather than
-// reinstating anything, so "not built yet" and "the last build failed" arrive here the same way and
-// both want the same answer: build it.
+// A tree's compiler, refusing when the slot is empty. A failed build keeps the compiler the slot held, so an
+// empty slot is a tree whose compiler was never built there.
 export function compilerBinary(repoRoot FilePath) returns FilePath throws McpError
 	let path = compilerBinaryPath(repoRoot)
 
@@ -154,7 +151,7 @@ export function compilerBinary(repoRoot FilePath) returns FilePath throws McpErr
 end 'compilerBinary'
 
 export function compilerBinaryMissingReason(repoRoot FilePath) returns String
-	return "{compilerBinaryPath(repoRoot).path} does not exist — that tree's compiler has not been built, or its last build failed and left the slot empty. Build it with the `build` tool first."
+	return "{compilerBinaryPath(repoRoot).path} does not exist — that tree's compiler has not been built. Build it with the `build` tool first."
 end 'compilerBinaryMissingReason'
 
 export function formatArgv(exePath FilePath, argv StringArray) returns String

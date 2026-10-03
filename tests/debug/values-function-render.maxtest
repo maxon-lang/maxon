@@ -1,0 +1,34 @@
+let FunctionValuesCaseLabel = "values-function-render"
+
+let PlainLocalRendering = "plain=twice"
+let AdderLocalName = "adder"
+let AdderClosureName = "render$closure_0"
+let BaseCaptureRendering = "base=41"
+let LabelCaptureRendering = "label=\"closure label 1\" (len=15)"
+
+test 'a function value renders as the function it calls, and a closure lists what it captured'
+	let staged = builtFixture(FunctionValuesCaseLabel, fixture: ClosuresFixtureName)
+	let renderedAt = anchorLine(staged, anchor: "rendered")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(renderedAt)}", RunCommand, LocalsCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let listings = eventsOfKind(events, kind: LocalsEventName)
+
+	Expect.equal(listings.count(), expected: 1, message: "`{LocalsCommand}` at a stop printed no `{LocalsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let listed = eventAt(listings, index: 0)
+	let rows = renderedRows(valueRows(listed, node: listed.root, key: LocalsKey))
+
+	Expect.contains(rows, needle: PlainLocalRendering, message: "a plain function value renders as the function it names, read out of its record's code word. The locals were: {rows}. {said}")
+
+	let adderValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: AdderLocalName)
+	Expect.equal(adderValues.count(), expected: 1, message: "the closure local `{AdderLocalName}` is not in the listing. The locals were: {rows}. {said}")
+
+	let adder = nodeAt(adderValues, index: 0)
+	Expect.contains(textOf(listed, node: adder, key: DisplayKey), needle: AdderClosureName, message: "a capturing closure renders as the lifted function its record calls. The locals were: {rows}. {said}")
+
+	let captures = renderedRows(valueRows(listed, node: adder, key: ChildrenKey))
+	Expect.contains(captures, needle: BaseCaptureRendering, message: "a closure lists what it captured as children, each under the name it was captured by. `{AdderLocalName}`'s children were: {captures}. {said}")
+	Expect.contains(captures, needle: LabelCaptureRendering, message: "a captured String renders as its text. `{AdderLocalName}`'s children were: {captures}. {said}")
+end 'a function value renders as the function it calls, and a closure lists what it captured'

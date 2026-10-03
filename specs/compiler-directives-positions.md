@@ -10,8 +10,7 @@ category: language
 
 `specs/compiler-directives.md` declares that `#if` / `#else` / `#endif` are valid at top level,
 inside a `type`, `enum`, `union`, `interface` or `extension` body, and inside a function body — but
-its five cases are **all statement-position**. Every other position had zero coverage. This file
-covers them, plus the condition grammar's precedence and the two failure modes the compiler refuses.
+its five cases are **all statement-position**. This file covers every other position, plus the condition grammar's precedence and the two failure modes the compiler refuses.
 
 ### Three positions the compiler settles deliberately
 
@@ -96,11 +95,11 @@ end 'main'
 ```
 
 <!-- test: directives.type-body-field-pair -->
-⭐ **A `#if`-gated FIELD PAIR — the case that decided where conditional compilation lives in the compiler.**
+⭐ **A `#if`-gated FIELD PAIR — the case that pins where conditional compilation lives in the compiler.**
 
 A struct's fields are recorded by the whole-program declaration SWEEP
-(`Parser.recordScannedType`), which is a raw token walk and not the parser's. Had directives been
-taught to the parse loops alone, the sweep would have recorded BOTH `first` and `unwanted`, laying
+(`Parser.recordScannedType`), which is a raw token walk and not the parser's. If directives were
+honoured by the parse loops alone, the sweep would record BOTH `first` and `unwanted`, laying
 `second` at the wrong offset — with no diagnostic anywhere. `32` is only reachable if exactly one
 arm became a field.
 ```maxon
@@ -283,7 +282,7 @@ of this `#if` been taken?" is not enough on its own, because no arm of the inner
 offered. Every other nested case in this file and in `specs/compiler-directives.md` has a LIVE outer
 branch, so none of them can tell a correct implementation from one that resurrects the inner `#else`.
 
-Found by deliberately breaking the filter and watching which tests did not notice. If the inner
+If the inner
 `#else` went live, `ghostB` would be parsed and its undefined callee reported.
 ```maxon
 #if testing(true)
@@ -413,11 +412,9 @@ error E2063: specs/fragments/compiler-directives-positions/error.orphan-else.tes
 
 <!-- test: error.trailing-condition-tokens -->
 ⭐⭐ **TEXT AFTER A CONDITION IS REFUSED, AND THE REASON IS THAT ACCEPTING IT WAS TARGET-DEPENDENT.**
-Found by review, by probing rather than by any committed test.
-
 The condition grammar stops at the first token no production wants, and the filter resumes its walk
-from exactly there — so before this refusal existed, `os ( Linux )` here was emitted **into the
-program as code**. It failed with an `E2015` about a top-level identifier on Windows, and compiled
+from exactly there — so without this refusal, `os ( Linux )` here would be emitted **into the
+program as code**. It would fail with an `E2015` about a top-level identifier on Windows, and compile
 **clean** on a target where `os(Windows)` is false, because the region is dead and the junk is
 skipped along with it. The same file, accepted or rejected according to who is building it, and
 neither answer mentioning a directive.
@@ -435,9 +432,9 @@ error E2065: specs/fragments/compiler-directives-positions/error.trailing-condit
 ```
 
 <!-- test: error.malformed-condition -->
-The OTHER shape E2065 answers, and the one that had no test at all: a condition that does not parse.
+The OTHER shape E2065 answers: a condition that does not parse.
 A missing `)` is not an unknown predicate — the name `os` is perfectly good — which is why these two
-faults no longer share E2064, whose registry text promises the reader that a predicate name is
+faults do not share E2064, whose registry text promises the reader that a predicate name is
 wrong.
 
 Positioned at the token that had no reading, which for a condition running off the end of its line is
@@ -457,7 +454,7 @@ error E2065: specs/fragments/compiler-directives-positions/error.malformed-condi
 **A DEAD BRANCH IS STILL LEXED.** The whole file is tokenized before this pass runs at all, so
 lexical garbage in a branch nobody will parse is still an error — `E1002`, from the lexer, not from
 the filter. That is the boundary that makes the rest of this file's behaviour coherent: a dead branch escapes PARSING and NAME RESOLUTION,
-never TOKENIZATION. It had no test.
+never TOKENIZATION.
 ```maxon
 #if testing(true)
 	let x = "unterminated

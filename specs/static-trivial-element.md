@@ -8,12 +8,12 @@ category: codegen
 
 ## Documentation
 
-`InlineManagedPrimitives` (EC1) puts the fast path of `__managed_get` and `__managed_set` inline at
+`InlineManagedPrimitives` puts the fast path of `__managed_get` and `__managed_set` inline at
 every array read and write. Both arms ask `element_destroy@40` — a **runtime** field of the array
 record — whether the element owns anything: the write arm refuses a managed element outright (the
 occupant it would overwrite is the runtime's to destroy), and the read arm sends a loaded `0` through
-an extra `__im_empty` block to distinguish an empty managed slot from a genuine zero. Until this row an
-`Array with Integer` element access paid, per access:
+an extra `__im_empty` block to distinguish an empty managed slot from a genuine zero. Without the static fact an
+`Array with Integer` element access pays, per access:
 
 ```
 mov rdx, [rbx + 40]      ; element_destroy@40
@@ -47,13 +47,13 @@ immortal empty container stamps `columnDestroyStamp`, decided by `slotTypeIsMana
 `clone`) copies its source record's field. Those are three deciders (`typeOwesDrop` at a concrete site,
 the descriptor's ownership protocol, `slotTypeIsManaged`), not one, and they agree in the direction that
 matters: where `typeOwesDrop` is false the other two answer nothing. So a record typed over an element
-that owes no drop carries `0` wherever it was born. The W57 trap that makes a BYTE stride untrustworthy — a record
+that owes no drop carries `0` wherever it was born. The trap that makes a BYTE stride untrustworthy — a record
 created at the machine-word slot of a shared body and read back under a substituted type — does not
 arise here: the slot's WIDTH is the body's, but the element's OWNERSHIP is the instantiation's, and the
 descriptor carries that per instantiation.
 
 The refusal direction is the same as the stride's: an opaque `T` inside the shared body records
-nothing, and such a site keeps both guards exactly as before.
+nothing, and such a site keeps both guards.
 
 ### What the two arms drop
 
@@ -62,16 +62,16 @@ nothing, and such a site keeps both guards exactly as before.
 - **Read** (`emitCheckedGetTail`): the `@40` load, the compare, the `__im_empty` block and its
   `cmp value, 0` — the continuation is reached by one unconditional edge carrying `(value, noError)`.
 
-⚠ A green case here proves nothing on its own — the change removes a guard the fast arm never took on
-these programs. The evidence is the committed fragment (no `[<rec> + 40]` in the two first cases) and
-the three CONTROLS below, measured under sabotage (the stamp applied to every typed array site,
+⚠ A green case here proves nothing on its own — the specialization removes a guard the fast arm never
+takes on these programs. The evidence is the committed fragment (no `[<rec> + 40]` in the two first cases) and
+the three CONTROLS below, which fail under sabotage (the stamp applied to every typed array site,
 ignoring `containerElementOwesDrop`): the write control and the substituted-field control exit **101**
 (a leak), the read control exits **0** where 42 is the answer.
 
 ## Tests
 
 <!-- test: an-integer-element-read-asks-no-destructor-question -->
-The shape the row was opened for. A checked `get` over `Array with Integer`: the fast arm is the
+The shape this specialization exists for. A checked `get` over `Array with Integer`: the fast arm is the
 bound, the buffer load, the element load and the edge to the continuation. No `[<rec> + 40]` load, no
 `__im_empty` block, no `cmpRegImm32 …, 0` on the loaded element.
 ```maxon

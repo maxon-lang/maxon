@@ -213,18 +213,15 @@ end 'main'
 ```
 
 
-## the compiler additions
-
-The case below is a **The compiler addition**, not part of the canonical `/specs` file.
+## The rest of the type-qualified surface
 
 ### The whole type-qualified surface on a payload-bearing case
 
 `TestOp.mul.latency` above is answered from the case's TAG, which is a compile-time constant — no box is
 built, which is the only reason a case whose construction would demand `dest` and `src` can be read at all.
 That route serves `name`, `ordinal` and `rawValue.<field>` by the same door and in the same act, and none of
-those three is written by the canonical file. Pinned here because the door is one rule: a regression in it
-would leave the canonical cases green while silently dropping the rest of the surface. The bootstrap prints
-the identical line (MEASURED).
+those three is written by the cases above. Pinned here because the door is one rule: a regression in it
+would leave the cases above green while silently dropping the rest of the surface.
 
 <!-- test: union-backing-type-qualified-surface -->
 ```maxon

@@ -409,19 +409,16 @@ end 'main'
 ```
 
 
-## the compiler additions — reads the canonical file does not write
+## Backing-field reads through a type-qualified case and a selected field
 
-The two cases below are **The compiler additions**, not part of the canonical `/specs` file. Both pin spellings that
-were REFUSED until `/specs/union-struct-backing.md` forced the type-qualified read to be built, and both are
-served by the same one door as the spellings above — so an unpinned half here is exactly how such a fix
-becomes regressible in one edit.
+The two cases below pin spellings served by the same one door as the spellings above — so an unpinned
+half here would make that door regressible in one edit.
 
 ### A backing field read off a case named through its TYPE
 
 `Preset.large.width` reads the metadata without ever binding a value, which is `p.width` with the receiver
-written as `<Enum>.<case>` instead of as a local. It used to report `E2010 Expected '(' but got 'newline'`,
-because the type-qualified door admitted only `name`/`ordinal`/`rawValue` while the binding door already
-admitted a backing FIELD. The bootstrap compiles it and answers 9 (MEASURED).
+written as `<Enum>.<case>` instead of as a local. The type-qualified door admits a backing FIELD as well as
+`name`/`ordinal`/`rawValue`, exactly as the binding door does.
 
 <!-- test: struct-backing-type-qualified-field -->
 ```maxon
@@ -447,17 +444,9 @@ end 'main'
 ### A field of a backing field's own backing
 
 `t.size.width` continues the chain through a field that is ITSELF a struct-backed enum: `Theme.bold`'s
-`size` is `Size.large`, whose backing declares `width`. The hop past a selected enum-typed field admitted
-only the three accessors before this, so `.ordinal` worked and `.width` did not — one rule for two doors
-closes that.
-
-⛔ **WRITING THIS CASE TOOK THE C# BOOTSTRAP DOWN, and that defect is fixed in the same commit.** Every
-spelling below crashed it with `E9001 Value cannot be null. (Parameter 'key')` in `ParseFieldAccessChain`
-— including with a payload-free `Size`, so it was never about struct backing twice over. The SHORTHAND
-`t.size` computed its result type name with a hand-rolled `is IrStructType ? .Name : null`, a one-arm copy
-of `GetFieldStructName`, so an ENUM-typed backing field was minted as a `MaxonEnum` with a null `TypeName`.
-The long spelling `t.rawValue.size.ordinal` routes elsewhere and is pinned by the canonical file, which is
-why the suite never saw it. Both compilers now print `9 1 3`.
+`size` is `Size.large`, whose backing declares `width`. The hop past a selected enum-typed field admits a
+backing field as well as the three accessors, so `.ordinal` and `.width` both work — one rule for two doors.
+The long spelling `t.rawValue.size.ordinal` routes elsewhere.
 
 <!-- test: struct-backing-enum-field-chain -->
 ```maxon
@@ -494,16 +483,15 @@ end 'main'
 
 ## the compiler refusals
 
-The cases below are **The compiler additions**, not part of the canonical `/specs` file. Each pins a refusal this
-compiler's declaration door raises, and each exists because the behaviour it replaces was measured: a struct
-backing whose field type or field list the constant column cannot represent used to compile CLEANLY and fail
-at run time or crash the compiler. A green suite said nothing about any of them, so they are pinned here.
+Each case below pins a refusal this compiler's declaration door raises: a struct backing whose field type
+or field list the constant column cannot represent would otherwise compile CLEANLY and fail at run time or
+crash the compiler.
 
 ### Error: a field type no constant column can hold
 
 The backing struct's fields become per-case CONSTANTS selected as one i64, so a field whose declared type is
-a heap value has no constant to be. Before this refusal, `Meta{label: 1}` on a `String` field compiled and
-ACCESS-VIOLATED at run time, dereferencing a `String` record address of 1.
+a heap value has no constant to be. Without this refusal, `Meta{label: 1}` on a `String` field would compile
+and dereference a `String` record address of 1 at run time.
 
 <!-- test: error.struct-backing-field-type -->
 ```maxon

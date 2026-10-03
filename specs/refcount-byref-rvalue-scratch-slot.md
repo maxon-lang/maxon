@@ -1,7 +1,6 @@
 ---
 feature: refcount-byref-rvalue-scratch-slot
 status: selfhosted
-status-reason: 1 of its 2 cases does not compile here (E3019: cannot pass an immutable `let` to a by-reference parameter), so this compiler and the spec disagree about what a reassigned parameter accepts (measured 2026-08-06, BATCH29/A3a). The compiler fails both, on E2013 for the same shape.
 keywords: [refcount, byref, pass-by-reference, rvalue, scratch, slot, managed, memory]
 category: memory-safety
 ---
@@ -11,54 +10,39 @@ category: memory-safety
 ## Documentation
 
 A parameter that a callee REASSIGNS (`p = ...`) is passed by reference: the caller
-hands the callee the ADDRESS of the argument's storage so the write lands in the
-caller's frame. When the argument is a plain local the caller passes that local's
-slot address. But when the argument is an R-VALUE — a literal, an expression, or a
-fresh call result like `Node.create(1)` — it has no caller-visible backing slot, so
-the caller materializes a fresh SCRATCH slot, spills the r-value into it, and passes
-that slot's address (`LowerMaxonToStd.byRefArgAddress` / `allocByRefScratchSlot`).
+hands the callee a CELL holding the argument, so the write lands where the caller can
+see it. When the argument is an R-VALUE — a literal, an expression, or a fresh call
+result like `Node.create(1)` — it has no caller-side binding and therefore no cell, so
+the caller materializes a fresh anonymous SCRATCH cell, spills the r-value into it, and
+passes that cell (`Parser.materializeByRefScratchCell`).
 
-For a SCALAR by-reference parameter the scratch slot holds a bare i64 — no reference
-to maintain. For a MANAGED by-reference struct the r-value's `+1` is MOVED into the
-scratch slot, and after the call the slot's FINAL occupant is caller-owned:
+For a SCALAR by-reference parameter the cell holds a bare word — no reference to
+maintain. For a MANAGED by-reference struct the r-value's `+1` is MOVED into the cell,
+and after the call the cell's FINAL occupant is caller-owned:
 
-- if the callee reassigned the parameter, the slot holds the reassigned value, whose
-  `+1` the callee's write-back transferred into the slot (and the callee released the
-  original r-value once via its decref-old); or
-- if the callee did not reassign it, the slot still holds the original r-value.
+- if the callee reassigned the parameter, the cell holds the reassigned value, and the
+  callee released the original r-value once when it replaced it; or
+- if the callee did not reassign it, the cell still holds the original r-value.
 
-Either way the caller owns exactly one reference and must release it once at scope
-exit. Because the scratch slot's `stack_addr` makes it address-taken, the moved-in
-value's ordinary SSA-store release is suppressed (the value lives in the slot, read
-by-reference during the call), so the ONLY correct release is a scope-exit drop of
-the slot's content.
+Either way the caller owns exactly one reference and must release it once. The scratch
+cell is an owned binding on the enclosing block's binding stack, so the block's scope
+drop releases the cell's occupant and then the cell, exactly once, whichever value it
+holds. The spill writes the cell before anything can read it, so there is no prior
+occupant to release.
 
-Two properties make the scratch slot different from a closure-captured slot, and the
-refcount inserter (`isByRefRvalueScratchSlot`) handles both:
+The drop happens at the enclosing BLOCK's exit rather than at the statement's: the callee
+may have stored the argument somewhere the caller still reads through this statement.
+A managed r-value whose final occupant were never released would trip the process-exit
+leak gate (exit 101) once per call.
 
-- It is written EXACTLY ONCE (the caller's spill), with no prior occupant, and — unlike
-  a real scope slot — it is NOT zero-initialized at function entry (it is seeded past
-  `slotMaxonTypes.count()`, which the entry zero-init loop bounds on). So the
-  release-before-store sweep must SKIP it, otherwise it would decref the slot's
-  uninitialized stack before the single store.
-- Its id is past `slotMaxonTypes.count()`, so the scope-exit drop sweep must widen its
-  bound to the address-taken-slot bitmap to cover it; otherwise the moved-in `+1`
-  leaks (nothing else releases it).
-
-Without the fix a managed r-value routed through the scratch slot leaked its final
-occupant once per call (the process-exit leak gate trips: exit 101) and, on a
-non-zero entry stack, could decref uninitialized stack.
-
-Unlike the consumed-interface-param slot, this slot is written THROUGH the pointer by
-the callee rather than re-read as a bare interface value, so it behaves exactly like
-the already-supported slot-backed pass-by-reference and is sound on every target,
-`wasm32-wasi` included.
+The scratch cell behaves exactly like the cell a by-reference local is passed in, and
+is sound on every target, `wasm32-wasi` included.
 
 ## Tests
 
 <!-- test: rvalue-reassigned-byref-managed-param -->
 A fresh managed r-value passed directly to a parameter-reassigning function goes
-through a by-reference scratch slot. The reassignment releases the original r-value
+through a by-reference scratch cell. The reassignment releases the original r-value
 once and the reassigned value is dropped once at scope exit — no leak, no double-free.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -91,7 +75,7 @@ r=100
 
 <!-- test: rvalue-byref-managed-param-not-reassigned -->
 When the by-reference parameter is reassigned only on a path that does not fire at
-runtime, the scratch slot still holds the ORIGINAL r-value, which must be dropped
+runtime, the scratch cell still holds the ORIGINAL r-value, which must be dropped
 exactly once at scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

@@ -116,15 +116,13 @@ end 'main'
 <!-- test: round.a-declaration-takes-the-name-back -->
 ⭐⭐ **A FILE THAT DECLARES `round` OWNS THE NAME.** The eight bare math intrinsics have no declaration of
 their own, so nothing downstream can notice that a user's `function round` was never linked: the call
-emitted the machine instruction, the declaration sat unreachable, and there was no diagnostic anywhere.
-The declaration wins, and every bare-name builtin follows the same rule from one gate in
+would emit the machine instruction, the declaration would sit unreachable, and there would be no
+diagnostic anywhere. The declaration wins, and every bare-name builtin follows the same rule from one gate in
 `Parser.parseCallNamed` — the ordinary argument-label rule comes back with it, since a declaration has
 real parameters for a label to name.
 
-⚠ **BOTH REFERENCE COMPILERS RESERVE THE NAME UNCONDITIONALLY** and leave the shadowed declaration
-unreachable and undiagnosed; this is a deliberate divergence, taken because a shadowed declaration has no
-other symptom. A QUALIFIED callee was never affected — `Point.round` is not `round` — and nothing in
-`stdlib/`, `specs/` or `specs/` declares one of the eight, so no working program moves.
+⚠ **THE NAME IS NOT RESERVED UNCONDITIONALLY**, because a shadowed declaration left unreachable and
+undiagnosed has no other symptom. A QUALIFIED callee is unaffected — `Point.round` is not `round`.
 ```maxon
 typealias Tally = int(0 to 1000)
 

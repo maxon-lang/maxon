@@ -14,10 +14,9 @@ its **receiver** is, which that spec never exercises: an enum's `self` is its i6
 or a pointer to its box (a union with payloads), and it arrives as **parameter 0**, **borrowed** —
 exactly as an `enum`-typed parameter does.
 
-Every case in this file was a **hand probe first** (D1, 2026-07-29; the second section's cases are the
-independent review's, same day). Some of them found nothing, and they are here because a probe that found
-nothing is worth exactly as much as one that found something: next rung, only a committed case still runs.
-The refusals are here because a refusal nobody pinned is a refusal the next rung deletes by accident.
+Some cases here pin behaviour nothing has broken, and they are worth exactly as much as the rest: only a
+committed case keeps running. The refusals are here because a refusal nobody pinned is a refusal a later
+change deletes by accident.
 
 The three receiver cases each carry a payload long enough to force a heap allocation, so the leak gate
 has something to catch: `managed-payload-receiver-never-bound` is the `TestOutcome` shape (the payload
@@ -26,9 +25,9 @@ once, so a receiver consumed by the first call would make the second a use-after
 INCREF'd per call would leak; `self-passed-to-a-free-function` hands `self` on as an ordinary borrowed
 argument, which is what proves the receiver is parameter 0 and nothing more.
 
-## Binding the receiver's MANAGED PAYLOAD (D1b)
+## Binding the receiver's MANAGED PAYLOAD
 
-The cases above never bind the payload; the four beside them now do, because that is what the harness
+The cases above never bind the payload; the four beside them do, because that is what the harness
 itself wants (`PeReadError.displayReason` reads one, `WorkerRecord.spec` RETURNS one). The receiver is
 the CALLER's box, so the payload cannot be MOVED out of it — it is **RETAINED** at the bind
 (`__mm_incref`), the binding owns that second reference and drops it at the arm's own exit, and **the
@@ -41,49 +40,41 @@ caught by the other cases: `receiver-still-owns-its-payload-after-a-bind` asks t
 which a slot-nulling implementation fails; `managed-payload-receiver-bind-leak-free` binds 300 times, so
 an unbalanced refcount is a certainty (exit 101) rather than a coin flip.
 
-⚠ **`return self` is REFUSED, and that refusal is the whole safety argument for letting bare `self`
-be a value at all.** A boxed union's receiver is a pointer the CALLER's binding owns; returning it
-would have the caller adopt and free a box whose own owner frees it too. It is refused by the
-*ordinary borrowed-return rule* reaching parameter 0 — not by an enum-specific check — which is why
-allowing `self` as a value does not create a case, it stops hiding one.
+⚠ **`return self` CO-OWNS the receiver.** A boxed union's receiver is a pointer the CALLER's binding
+owns, so handing it back untouched would give one box two owners. The *ordinary borrowed-return rule*
+reaching parameter 0 — not an enum-specific check — retains it on the way out
+(`Parser.emitOwnedValueReturn` → `promoteBorrowedToOwned` → `retainBorrowedAggregate`): the caller adopts a second reference, each
+owner drops its own, and the box is freed exactly once (`return-self-from-a-boxed-union`).
 
-⚠ **The oracle is WORSE on statics, which is why they are pinned.** The bootstrap makes an `enum`
-static a bare parse error (`E2010`), and a `union` static it **accepts and then misreads** — `static`
-is silently dropped, so the call fails with `E3036 missing argument for parameter 'self'`, blaming the
-call site for a declaration the compiler mis-parsed. A positioned refusal at the declaration is the
-better answer, and it costs nothing: no `union`/`enum` in `stdlib/` declares a static method.
+⚠ **A static method on an `enum` or `union` is refused at its declaration**, with a position, and it
+costs nothing: no `union`/`enum` in `stdlib/` declares one.
 
-⚠ **Known cosmetic debt, recorded rather than fixed here:** the borrowed-return refusal below renders
-the receiver's type as `` `int` ``, because a declared enum erases to `integer` in `TypeResolution`.
-It is confusing, never wrong at runtime, and its one-place cure is the same display-name funnel for
-compiler-owned and erased types that `__CharacterSet` already needs.
+## An enum BODY has two kinds of member, and THREE readers walk it
 
-## An enum BODY now has two kinds of member, and THREE readers walk it
-
-Three separate walks read an `enum`/`union` body, and a method member is the first construct that makes
-them able to disagree: the **real parse** (`parseEnumDeclaration`), the **tolerant declaration sweep**
+Three separate walks read an `enum`/`union` body, and a method member is what makes them able to
+disagree: the **real parse** (`parseEnumDeclaration`), the **tolerant declaration sweep**
 (`recordScannedEnum`, which builds the whole-program layout and signature index), and the
 **sibling-receiver scan** (`ensureSiblingReceivers`, which resolves a bare `inner()` inside a method).
-The D1 review found all three wrong, each in its own way, and each case below is the measurement:
+Each can go wrong in its own way, and each case below pins one:
 
-- ⚠ **A method's closing `end` carries a LABEL, and the sweep read it as a member.** `end 'bump'` left the
-  sweep's cursor on the charLiteral, which `readEnumCaseInto` reports as a string-backed case and which
-  aborted the scan — so **only the FIRST method of any enum was ever scanned**, and every case declared
-  after a method was silently dropped from the whole-program layout. The second method's return type was
-  therefore `unresolved`: `e.weight()` **panicked in lowering** (`valueTagToStdType`) when it returned a
-  float, and typed its result `unknown` when it returned a String.
-- ⚠ **An enum case may be spelled with a KEYWORD, and a case list is not block structure.** The
-  sibling-receiver scan counted `end`, `while`, `if` and `match` case names as block openers and closers:
-  a case named `end` closed the walk early (a bare sibling call declared after it reported `E3004 call to
-  undefined function`), and a case named `while` over-counted so the walk ran PAST the enum's own `end`
-  and adopted a LATER type's method as a sibling. Both refused legal programs.
-- ⚠ **An `enum`/`union` has no FIELDS, and `self.x` used to take the compiler down.** `self.reason` on a
-  payload-bearing union — the first thing a reader tries — reached `enclosingLayout` and **panicked**,
-  blaming the declaration sweep for a disagreement that never happened. A case's payload is bound by a
-  pattern; the refusal is now positioned, and it is one door for both the read and the write.
+- ⚠ **A method's closing `end` carries a LABEL, and the sweep must not read it as a member.** A cursor left
+  on the charLiteral of `end 'bump'` reaches `readEnumCaseInto`, which reports a string-backed case and
+  aborts the scan — so **only the FIRST method of an enum would be scanned**, every case declared after a
+  method would drop silently from the whole-program layout, and the second method's return type would be
+  `unresolved`: `e.weight()` **panics in lowering** (`valueTagToStdType`) when it returns a float, and
+  types its result `unknown` when it returns a String.
+- ⚠ **An enum case may be spelled with a KEYWORD, and a case list is not block structure.** A
+  sibling-receiver scan that counts `end`, `while`, `if` and `match` case names as block openers and
+  closers closes the walk early at a case named `end` (a bare sibling call declared after it reports
+  `E3004 call to undefined function`), and at a case named `while` over-counts, runs PAST the enum's own
+  `end` and adopts a LATER type's method as a sibling. Both refuse legal programs.
+- ⚠ **An `enum`/`union` has no FIELDS, and `self.x` is refused.** `self.reason` on a payload-bearing
+  union — the first thing a reader tries — must not reach `enclosingLayout`, which **panics**, blaming the
+  declaration sweep for a disagreement that never happened. A case's payload is bound by a pattern; the
+  refusal is positioned, and it is one door for both the read and the write.
 
-⚠ **A case declared AFTER a method is ACCEPTED.** the compiler's real parse always accepted it; making the
-sweep agree is what the fix is, and the permissive direction is deliberate — the two readers agreeing
+⚠ **A case declared AFTER a method is ACCEPTED.** The real parse accepts it and the sweep agrees, and the
+permissive direction is deliberate — the two readers agreeing
 matters more than a restriction neither `stdlib/` nor the corpus relies on.
 
 ## Tests
@@ -373,8 +364,7 @@ end 'main'
 <!-- test: return-self-from-a-boxed-union -->
 A boxed union's `self` is a borrowed heap box, and it escapes through the same door a struct's does: the
 receiver is co-owned by an `__mm_retain` before the `ret`, so the caller's `c` and the receiver's own `b`
-each drop it once and the box is freed exactly once. This case used to pin the borrowed-return REFUSAL,
-whose sentence deferred the copy to "P1.4b" — a milestone that had already shipped.
+each drop it once and the box is freed exactly once.
 ```maxon
 union Boxed
 	one(v Integer)

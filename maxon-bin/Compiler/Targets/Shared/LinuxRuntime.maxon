@@ -38,10 +38,22 @@ export let LinuxAtFdCwd = 0xFFFFFFFFFFFFFF9C
 //
 // ⚠ **THE READ-ONLY FLAG WORD IS NOT HERE.** `O_RDONLY` is 0 on Darwin as well, so it is `PosixRuntime`'s
 // `PosixOpenReadOnly` and not Linux's to state a second time.
-export let LinuxOpenCreateTruncateFlags = 0x241
+let LinuxOpenCreate = 0x40
+let LinuxOpenExclusive = 0x80
+let LinuxOpenTruncate = 0x200
+
+export let LinuxOpenCreateTruncateFlags = PosixOpenWriteOnly or LinuxOpenCreate or LinuxOpenTruncate
+
+export let LinuxOpenCreateExclusiveFlags = PosixOpenWriteOnly or LinuxOpenCreate or LinuxOpenExclusive
 
 // `unlinkat`'s flag word: 0 means "remove a FILE". This op is `DeleteFileA`, which refuses a directory.
 export let LinuxUnlinkFileFlags = 0
+
+export let LinuxGetRandomFlags = 0
+
+// The random-fill chunk's answer when `getrandom` fills zero bytes, which a retry would spin on
+// forever. It must be nonzero: `__rand_fill` reads 0 as "filled".
+export let LinuxRandomFillNoProgress = 1
 
 // ⭐ **`AT_REMOVEDIR` — THE ONE BIT THAT MAKES THE SAME `unlinkat` AN `rmdir`.** `RemoveDirectoryA` has no
 // file-removing spelling and `DeleteFileA` has no directory-removing one, so the two flag words above and
@@ -62,9 +74,8 @@ export let LinuxRemoveDirectoryFlags = 0x200
 //
 // ⚠ **THESE ARE THE ARCH-NEUTRAL THREE** — `O_RDWR` 0x2, `O_CREAT` 0x40, `O_EXCL` 0x80, none of them among
 // the four `asm/fcntl.h` overrides for AArch64 — and they are NOT Darwin's numbers, which spells the latter
-// two 0x200 and 0x800 (`Arm64DarwinRuntime.DarwinShmCreateFlags`). MEASURED on an aarch64 guest: a raw
-// `openat` with this word created the file 0600 and a second one answered `-EEXIST`.
-export let LinuxShmCreateFlags = 0xC2
+// two 0x200 and 0x800 (`Arm64DarwinRuntime.DarwinShmCreateFlags`).
+export let LinuxShmCreateFlags = PosixOpenReadWrite or LinuxOpenCreate or LinuxOpenExclusive
 
 // ⭐ **WHERE A POSIX NAMED SEGMENT LIVES ON LINUX, AND WHY THIS FILE HAS TO KNOW.** `shm_open("/name")`
 // resolves to this `tmpfs` mount; with no libc to consult, the runtime prepends the prefix itself, so the
@@ -300,6 +311,7 @@ export let LinuxClockThreadCpuTime = 3
 // The symlink whose target IS the running image's path — the whole of `osExecutablePath` on Linux, because
 // `_NSGetExecutablePath` has no counterpart here and no call answers the question.
 export let LinuxProcSelfExe = b"/proc/self/exe"
+export let LinuxProcSelfPidNamespace = b"/proc/self/ns/pid"
 
 // ⭐⭐ **`cpu_set_t` IS 128 BYTES, AND `sched_getaffinity` REFUSES A SMALLER ONE.** The kernel demands a size
 // that is a multiple of a word AND large enough for every possible CPU, answering `-EINVAL` otherwise; 128

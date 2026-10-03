@@ -22,12 +22,10 @@
 // where there is nothing to split and the work is instead to capture two registers at entry and keep them.
 // Those are two different mechanisms behind one surface, and the compiler's Std tier is TARGET-NEUTRAL: there is no
 // place in it for a body that is a splitter on one target and an indexed load on another. Serving them
-// honestly means a per-target capture plus a target-neutral surface over it — a rung, not a lowering — so
-// this rung builds the Windows half and REFUSES the rest LOUDLY, which is the one thing that must not be
-// traded for a target that compiles and answers an empty argv.
-// ⚠ wasm is refused for a second, independent reason: WASI does have `args_sizes_get`/`args_get`, but the
-// wasm lane is SCALAR (no heap, no `String`, no `print`) and `args()` answers an `Array with String`. A
-// lowering there would be vocabulary with no reachable consumer.
+// honestly means a per-target capture plus a target-neutral surface over it, not a lowering — so
+// this file builds the Windows half and REFUSES the rest LOUDLY, which is the one thing that must
+// not be traded for a target that compiles and answers an empty argv.
+// ⚠ wasm is refused as well: WASI has `args_sizes_get`/`args_get`, and nothing here lowers to them.
 //
 // ---
 //
@@ -181,7 +179,7 @@ let NulTerminatorSlackBytes = 1 as ParsedInt
 // backslashes to emit, where to resume, and whether a literal `"` follows. So they compute those THREE
 // NUMBERS and share ONE emit loop, rather than each carrying a copy of it.
 function buildCommandLineScanOne(module StdModule)
-	var func = IrFunction.createFromStd(CommandLineScanOneName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(CommandLineScanOneName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -486,7 +484,7 @@ end 'buildCommandLineScanOne'
 // uses, no second ordering to keep in step. It replaces four hand-written per-arity pushers, two of which
 // had already grown misleading parameter names by being reused at a different arity.
 //
-// ⚠ EXPORTED for `ProcessRuntime` (W5), whose grow-and-retry loop carries a (buffer, capacity) pair across
+// ⚠ EXPORTED for `ProcessRuntime`, whose grow-and-retry loop carries a (buffer, capacity) pair across
 // exactly this kind of merge. Exported rather than re-declared, because the whole point of the paragraph
 // above is that ONE constructor builds both a block's parameter list and its predecessors' argument lists —
 // a second copy in another file would immediately be a second ordering to keep in step.
@@ -558,7 +556,7 @@ end 'emitResumeScan'
 // alternative is a `dest == 0` "measure only" mode threaded through the scanner, which puts a branch on the
 // hot byte-copy path of the OTHER caller to save one allocation on a call that happens once per program.
 function buildCommandLineCount(module StdModule)
-	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -614,7 +612,7 @@ end 'buildCommandLineCount'
 // ⚠ NON-throwing. There is no failure available to it — an index outside the range is answered, not
 // refused.
 function buildCommandLineArg(module StdModule)
-	var func = IrFunction.createFromStd(CommandLineArgName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(CommandLineArgName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -702,7 +700,7 @@ end 'emitFoundAnArgument'
 // to a vector the kernel has already split would re-interpret bytes the SHELL has already interpreted: an
 // argument that genuinely contains a `"` would come back with it removed.
 function buildCommandLineVectorCount(module StdModule)
-	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(CommandLineCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -717,7 +715,7 @@ end 'buildCommandLineVectorCount'
 // a wild address rather than the Windows half's walk simply running out. A NEGATIVE index is checked as well
 // as a past-the-end one: the parameter is an ordinary `int`, so `args.get(-1)` reaches this.
 function buildCommandLineVectorArg(module StdModule)
-	var func = IrFunction.createFromStd(CommandLineArgName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(CommandLineArgName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

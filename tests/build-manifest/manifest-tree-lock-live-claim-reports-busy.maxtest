@@ -1,0 +1,9 @@
+test 'a manifest build waits on a live tree lock claim, then reports the checkout busy'
+	let staged = stagedProject("tree-lock-live-claim-reports-busy", fixture: DefaultFixtureName)
+	plantLiveTreeLockClaim(staged)
+
+	requireRefused(staged, options: StringArray.create(), exitCode: NothingRanExitCode, wordings: [TreeLockClaimBusyWording], what: "maxon build")
+
+	Expect.isTrue(File.exists(treeLockClaimOf(staged)), message: "`maxon build` removed a live tree lock claim it did not make.")
+	Expect.isFalse(File.exists(treeLockOf(staged)), message: "`maxon build` wrote a tree lock record without holding the claim.")
+end 'a manifest build waits on a live tree lock claim, then reports the checkout busy'

@@ -44,10 +44,9 @@ carries one that is not this band: Winsock's once-per-process startup sits behin
 It is a real blocking call and sysmon is right to retake it — it simply says nothing about what a parked
 `recv` does to its processor. So the warm-up pays for it, and the four measured round-trips cross a window
 that holds only calls the scheduler waits for on the poller (`a-literal-address-round-trip-enters-no-kernel-bracket`
-counts that). MEASURED: without it, 3 of 25 runs on x64-windows report a retake or a preemption; with it, 20
-of 20 report neither.
+counts that).
 
-⚠ **THE ASSERTION IS EXACTLY ZERO AND MUST STAY SO.** A tolerance would hide the regression this case exists
+⚠ **THE ASSERTION IS EXACTLY ZERO AND MUST STAY SO.** A tolerance would hide the defect this case exists
 to catch — the whole reading is *"the monitor never had to rescue a machine"*, and *"rarely had to"* is the
 symptom, not the cure.
 
@@ -62,11 +61,10 @@ is a socket read holding the machine. `preempt: off` is no answer, because with 
 monitor never had to rescue a machine"* is vacuous. So one ATTEMPT owns its disturbance: a fresh listener,
 its peer, the warm-up, the four round-trips and both counter readings; an attempt the monitor disturbed is
 not tolerated but DISCARDED — its peer awaited, its listener dropped — and repeated, up to `attemptCap`
-times, and only an attempt with EXACTLY ZERO retakes and preemptions prints. A genuine regression fails
+times, and only an attempt with EXACTLY ZERO retakes and preemptions prints. A genuine defect fails
 every attempt, since a `recv` that holds the machine is retaken on each one, and exhausting the cap prints
-the same `stuck=true` the regression would; an attempt with fewer than four echoes is the case's own
-failure and prints at once. CI read `ok=4 stuck=true` at 51833ccd on x64-windows from a single attempt,
-green on the same tree here.
+the same `stuck=true` the defect would; an attempt with fewer than four echoes is the case's own
+failure and prints at once.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -111,7 +109,10 @@ end 'echoOnce'
 // attempt leaves no green thread behind.
 function attempt() returns (Tally, bool) throws Attempt
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise throw Attempt.noListener
+	return try attemptOver(listener)
+end 'attempt'
 
+function attemptOver(listener TcpListener) returns (Tally, bool) throws Attempt
 	let peer = async echoRounds(listener)
 	_ = try echoOnce(listener, n: 0) otherwise 0
 
@@ -144,7 +145,7 @@ function attempt() returns (Tally, bool) throws Attempt
 	end 'noise'
 
 	return (ok, stuck)
-end 'attempt'
+end 'attemptOver'
 
 function main() returns ExitCode
 	var tries = 0
@@ -215,9 +216,7 @@ function echoOnce(listener TcpListener, n Tally) returns Tally throws NetworkErr
 	return 0
 end 'echoOnce'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async echoRounds(listener)
 	_ = try echoOnce(listener, n: 0) otherwise 0
 
@@ -243,6 +242,11 @@ function main() returns ExitCode
 
 	print("ok={ok} brackets={brackets}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -295,9 +299,7 @@ function echoOnce(listener TcpListener, n Tally) returns Tally throws NetworkErr
 	return 0
 end 'echoOnce'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let beforeParks = __Builtins.schedNetpollBlockCount()
 
 	let peer = async echoRounds(listener)
@@ -319,6 +321,11 @@ function main() returns ExitCode
 
 	print("ok={ok} blocked={blocked}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -380,9 +387,7 @@ function readPastTheDeadline(listener TcpListener) returns ExitCode throws Netwo
 	return 0
 end 'readPastTheDeadline'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async holdSilently(listener)
 	let result = try readPastTheDeadline(listener) otherwise 1
 	let held = await peer
@@ -392,6 +397,11 @@ function main() returns ExitCode
 	end 'peer'
 
 	return result
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -682,7 +692,7 @@ box reports 101.
 
 ⚠ **`parked` IS WHAT MAKES THIS A POLLER CASE.** A reader that merely yielded at the I/O point ahead of its
 kernel call is also "not complete" and is also reachable by the drop, so the `gtIsComplete` peek alone reads
-GREEN against a runtime with no poller at all — MEASURED, by running exactly that program. Only the counter
+GREEN against a runtime with no poller at all. Only the counter
 separates a promise dropped off the POLLER from one dropped at a plain I/O yield.
 
 ⚠ **`reader` MUST BE BOUND.** `_ = async stall()` discards the promise at its own statement: `stall` never
@@ -791,10 +801,11 @@ dropped=true
 
 <!-- test: netpoll-socket.a-parked-reader-survives-its-owner-closing-the-socket -->
 <!-- procs: 1 -->
-**AN `async` ARGUMENT CO-OWNS THE SOCKET BOX, SO THE OWNER CAN CLOSE IT WHILE THE COROUTINE IS PARKED ON IT.**
-A coroutine shares its spawner's strand — only one of the two RUNS at a time — but a PARKED coroutine and a
-running owner are exactly the pair that can be alive at once, and the `async` door takes a reference on the box
-rather than a copy of the descriptor (`Parser.coOwnConcreteRecordForSink`). So `client.close()` reaches
+**A PARAMETER HANDED TO `async` CO-OWNS THE SOCKET BOX, SO THE OWNER CAN CLOSE IT WHILE THE COROUTINE IS PARKED
+ON IT.** A coroutine shares its spawner's strand — only one of the two RUNS at a time — but a PARKED coroutine and
+a running owner are exactly the pair that can be alive at once. `client` is `readOver`'s parameter, which a spawn
+cannot consume, so the `async` door takes a reference on the box rather than a copy of the descriptor
+(`Parser.coOwnConcreteRecordForSink`). So `client.close()` reaches
 `__np_pd_release` on a descriptor with a published waiter, which is a state a program can build.
 
 ⭐ **THE RELEASE READIES THE WAITER, IT DOES NOT STRAND IT AND IT DOES NOT ABORT.** A direction word holding a
@@ -833,10 +844,7 @@ function readUntilClosed(client TcpClient) returns ReadOutcome
 	return code
 end 'readUntilClosed'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
-
+function readOver(client TcpClient) returns ExitCode
 	let before = __Builtins.schedNetpollBlockCount()
 	let reader = async readUntilClosed(client)
 	sleep(200)
@@ -847,6 +855,12 @@ function main() returns ExitCode
 
 	print("parked={parked > 0} code={code}\n")
 	return 0
+end 'readOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
+	return readOver(client)
 end 'main'
 ```
 ```stdout
@@ -931,30 +945,36 @@ end 'echoUntilAnswered'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return reuseOver(listener)
+end 'main'
+
+function reuseOver(listener TcpListener) returns ExitCode
 	let peer = async echoUntilAnswered(listener)
-
 	let first = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
-
-	let stale = async readNothing(first)
-	sleep(200)
-	first.close()
-
-	// The lowest free descriptor is the one just closed, so this connection inherits the released record.
-	var second = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
-	_ = try second.send("reuse\n") otherwise return 3
-	let echo = try second.recv(1024) otherwise return 4
-
-	let outcome = await stale
+	let reused = reuseItsDescriptor(first, port: listener.port())
 	let answered = await peer
 
 	if answered != 1 'peer'
 		panic("unreachable: the read that returned was answered by this peer")
 	end 'peer'
 
-	let echoed = echo == "reuse\n"
-	print("echoed={echoed} outcome={outcome}\n")
+	print(reused)
 	return 0
-end 'main'
+end 'reuseOver'
+
+function reuseItsDescriptor(first TcpClient, port NetworkPort) returns String
+	let stale = async readNothing(first)
+	sleep(200)
+	first.close()
+
+	// The lowest free descriptor is the one just closed, so this connection inherits the released record.
+	var second = try TcpClient.connect("127.0.0.1", port: port) otherwise return "the second connect failed\n"
+	_ = try second.send("reuse\n") otherwise return "the send failed\n"
+	let echo = try second.recv(1024) otherwise return "the echo never arrived\n"
+
+	let outcome = await stale
+	return "echoed={echo == "reuse\n"} outcome={outcome}\n"
+end 'reuseItsDescriptor'
 ```
 ```stdout
 echoed=true outcome=1
@@ -1000,10 +1020,7 @@ function readNothing(client TcpClient) returns ReadOutcome
 	return code
 end 'readNothing'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
-
+function readOver(client TcpClient) returns ExitCode
 	let first = async readNothing(client)
 	sleep(200)
 
@@ -1012,6 +1029,12 @@ function main() returns ExitCode
 
 	let unreachable = await first
 	return unreachable as ExitCode
+end 'readOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
+	return readOver(client)
 end 'main'
 ```
 ```exitcode
@@ -1089,10 +1112,7 @@ function cancelFirstReader(client TcpClient) returns ReadOutcome
 	return 0
 end 'cancelFirstReader'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
-
+function readOver(client TcpClient) returns ExitCode
 	let canceller = async cancelFirstReader(client)
 	sleep(200)
 
@@ -1102,6 +1122,12 @@ function main() returns ExitCode
 	let unreachable = await canceller
 	print("second={second} canceller={unreachable}\n")
 	return 0
+end 'readOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
+	return readOver(client)
 end 'main'
 ```
 ```exitcode
@@ -1142,15 +1168,18 @@ function roundTrip(listener TcpListener) returns bool
 	return answer == payload
 end 'roundTrip'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async serveOne(listener)
 	let echoed = roundTrip(listener)
 	let served = await peer
 
 	print("echoed={echoed} served={served}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -1195,9 +1224,7 @@ function dialAfterSettling(listener TcpListener) returns bool
 	return true
 end 'dialAfterSettling'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let beforeParks = __Builtins.schedNetpollBlockCount()
 
 	let acceptor = async acceptOne(listener)
@@ -1211,6 +1238,11 @@ function main() returns ExitCode
 
 	print("served={served} dialled={dialled} parked={parked}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -1257,9 +1289,7 @@ function roundTrip(listener TcpListener, payload String) returns bool
 	return answer == payload
 end 'roundTrip'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async serveBoth(listener)
 	let earlier = async roundTrip(listener, payload: "first payload\n")
 	let later = async roundTrip(listener, payload: "second payload\n")
@@ -1270,6 +1300,11 @@ function main() returns ExitCode
 
 	print("earlier={earlierOk} later={laterOk} served={served}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -1286,7 +1321,7 @@ readability just as a socket does, so a coroutine suspended in `accept` is reach
 its reading sibling is — and a drop that knows about sockets but not about listeners strands a thread nothing
 can ever wake, which the exit's join then waits on forever.
 
-⚠ **THE LISTENER MUST SURVIVE ITS DROPPED ACCEPT.** The coroutine co-owns the listener box, so a drop that
+⚠ **THE LISTENER MUST SURVIVE ITS DROPPED ACCEPT.** `listener` is a parameter, so the coroutine co-owns the listener box, and a drop that
 took the box down with the wait would close a listener its owner is still holding — `bound` asks the listener
 for its port after the drop and gets the same answer it gave before.
 
@@ -1305,8 +1340,7 @@ function stall(listener TcpListener) returns ExitCode throws NetworkError
 	return 0
 end 'stall'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(listener TcpListener) returns ExitCode
 	let port = listener.port()
 
 	let before = __Builtins.schedNetpollBlockCount()
@@ -1318,6 +1352,11 @@ function main() returns ExitCode
 
 	print("dropped={parked > 0 and stillWaiting} bound={stillBound}\n")
 	return cleanExit as ExitCode
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -1354,9 +1393,7 @@ function acceptUntilClosed(listener TcpListener) returns AcceptOutcome
 	return code
 end 'acceptUntilClosed'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let before = __Builtins.schedNetpollBlockCount()
 	let acceptor = async acceptUntilClosed(listener)
 	sleep(200)
@@ -1367,6 +1404,11 @@ function main() returns ExitCode
 
 	print("parked={parked > 0} code={code}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -1398,8 +1440,7 @@ function stall(listener TcpListener) returns ExitCode throws NetworkError
 	return 0
 end 'stall'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(listener TcpListener) returns ExitCode
 	let port = listener.port()
 
 	let acceptor = async stall(listener)
@@ -1409,6 +1450,11 @@ function main() returns ExitCode
 
 	print("dropped={stillWaiting} bound={stillBound}\n")
 	return cleanExit as ExitCode
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout
@@ -1452,9 +1498,7 @@ function acceptNobody(listener TcpListener) returns AcceptOutcome
 	return code
 end 'acceptNobody'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let first = async acceptNobody(listener)
 	sleep(200)
 
@@ -1463,6 +1507,11 @@ function main() returns ExitCode
 
 	let unreachable = await first
 	return unreachable as ExitCode
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```exitcode
@@ -1596,8 +1645,7 @@ function nextRead(client TcpClient) returns String
 	end 'unread'
 end 'nextRead'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async halfClosed(listener)
 
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
@@ -1612,6 +1660,11 @@ function main() returns ExitCode
 	print("{served}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ```
 ```stdout

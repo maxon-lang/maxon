@@ -31,7 +31,7 @@ function main() returns ExitCode
 	let start = Clock.nowMs()
 	var i = 0
 	while i < count 'spawn'
-		promises.push(async Subprocess.run(exe, arguments: pingArgs()))
+		promises.push(async Subprocess.run(exe.clone(), arguments: pingArgs()))
 		i = i + 1
 	end 'spawn'
 	for p in promises 'drain'
@@ -197,18 +197,19 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.callDirect Clock.nowMs
-    x64.storeSlotReg slot1, r8
-    x64.movRegImm32 r13, 0
+    x64.storeSlotReg slot0, r8
+    x64.movRegImm32 rax, 0
     x64.jmp whilehdr
   spawn:
+    x64.movRegReg rcx, r12
+    x64.callDirect __clone_Executable
+    x64.movRegReg r13, r8
     x64.callDirect pingArgs
     x64.movRegReg r14, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
     x64.leaRegFunc rcx, [rip + Subprocess.run]
     x64.callDirect __gt_spawn
     x64.movRegReg r15, r8
-    x64.storeBaseDispReg.word64 [r15 + 200], r12
+    x64.storeBaseDispReg.word64 [r15 + 200], r13
     x64.storeBaseDispReg.word64 [r15 + 208], r14
     x64.leaRegFunc rax, [rip + __gt_release_Subprocess.run]
     x64.storeBaseDispReg.word64 [r15 + 176], rax
@@ -217,9 +218,11 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r15
     x64.callDirect __managed_push
-    x64.leaRegRegImm32 r13, r13, 1
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegImm32 rax, rax, 1
   whilehdr:
-    x64.cmpRegImm32 r13, 4
+    x64.storeSlotReg slot2, rax
+    x64.cmpRegImm32 rax, 4
     x64.jcc less, spawn
   whileexit:
     x64.movRegImm32 r13, 0
@@ -302,15 +305,13 @@ func @main {
     x64.jmp forexit
   matchdead#27:
   forexit:
-    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rcx, slot0
     x64.callDirect Clock.elapsedMs
-    x64.storeSlotReg slot0, r8
+    x64.storeSlotReg slot1, r8
     x64.callDirect Clock.nowMs
     x64.movRegReg r13, r8
     x64.callDirect pingArgs
     x64.movRegReg r14, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
     x64.leaRegFunc rcx, [rip + Subprocess.run]
     x64.callDirect __gt_spawn
     x64.movRegReg r15, r8
@@ -322,18 +323,16 @@ func @main {
     x64.callDirect __gt_ready
     x64.movRegReg rcx, r15
     x64.callDirect __gt_try_await
-    x64.movRegReg r14, r8
+    x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, __il_body#31
   tryerr#15:
-    x64.movRegImm32 r13, 5
+    x64.movRegImm32 r12, 5
     x64.movRegReg rcx, r10
     x64.callDirect __destruct_SubprocessError
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Executable
-    x64.movRegReg r8, r13
+    x64.movRegReg r8, r12
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
@@ -343,7 +342,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __il_body#31:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
   __il_body#33:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.cmpRegImm32 rcx, 0
@@ -364,12 +363,10 @@ func @main {
     x64.jcc equal, ifcont#17
   check-solo:
     x64.movRegImm32 r13, 6
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_CollectedOutput
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Executable
     x64.movRegReg r8, r13
     x64.epilogue 56
     x64.popReg r15
@@ -383,17 +380,15 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect Clock.elapsedMs
     x64.imulRegRegImm32 rax, r8, 2
-    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rcx, slot1
     x64.cmpRegReg rcx, rax
     x64.jcc below, ifcont#19
   check-parallel:
     x64.movRegImm32 r13, 4
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_CollectedOutput
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Executable
     x64.movRegReg r8, r13
     x64.epilogue 56
     x64.popReg r15
@@ -405,12 +400,10 @@ func @main {
     x64.ret
   ifcont#19:
     x64.movRegImm32 r13, 0
-    x64.movRegReg rcx, r14
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_CollectedOutput
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Executable
     x64.movRegReg r8, r13
     x64.epilogue 56
     x64.popReg r15

@@ -182,10 +182,9 @@ legal in accepts one: call it (`h.op(x)`), bind it (`let f = h.op`), pass it
 nothing is called as a statement — which is the shape a table of handlers or
 compiler passes keyed by a struct field takes.
 
-A field holds the function POINTER only. A closure that CAPTURES cannot be stored in
-one: captures are taken by reference, so the environment is bound to the frame that
-built the closure and cannot outlive it. Store a function reference, or a closure that
-captures nothing.
+A field holds a function value, which is one word: the address of a closure record.
+A closure that CAPTURES may be stored in one; the record owns what it captured, and the
+field holds a counted reference to it.
 
 ## Closures
 
@@ -220,6 +219,10 @@ end 'main'
 ```exitcode
 15
 ```
+
+A closure captures the variables it names from its enclosing scope: a managed local moves into it, a
+scalar is copied, and a parameter, `self`, a field or a borrower is retained. `closure-capture.md` states
+the rules.
 
 ## Tests
 
@@ -501,23 +504,16 @@ A function-typed parameter must work even when its typealias is declared
 inside an `extension` block in a SEPARATE file that the loader hasn't reached
 yet. The stdlib loader walks `stdlib/` in whatever order the OS returns from
 `Directory.list`, so the consumer file may parse before the file that
-declares the typealias — exactly the shape that bit
-`helpers/sort/smallSort.maxon` (which uses `cmp SortComparator`) when
-`helpers/sort/insertionSort.maxon` (which declares `SortComparator` inside
-`extension Array`) parses later.
+declares the typealias — the shape `stdlib/helpers/sort/smallSort.maxon` (which
+uses `cmp SortComparator`) has whenever `stdlib/helpers/sort/insertionSort.maxon`
+(which declares `SortComparator` inside `extension Array`) parses later.
 
-The original parser bug: `parseFunctionParametersInner` eagerly stamped the
-parameter type as `MaxonType.named("SortComparator")` at parse time because
-the inner typealias wasn't yet drained into `unresolvedStructTypes["Array"]
-.innerAliases`. Downstream `slotArgsForCall` and the indirect-call lowering
-both consult that stamped type — once it's wrong, the function's ABI shape
-is permanently wrong, the call site fails the H.2 `validateIndirectCallLabels`
-check with E3005, and codegen rejects the call.
-
-The fix should keep the parameter type opaque until after every file in the
-project has been parsed, then let TypeResolution drain the typealias and
-re-stamp the resolved function type. The parser should not be type-aware at
-parameter-declaration time.
+A parameter type stamped at parse time, before the inner typealias is
+drained into the extended type's inner aliases, would be the wrong type —
+and the call-argument slotting and the indirect-call lowering both read the
+parameter's type, so the function's ABI shape would be wrong with it. The
+parameter's function type is therefore settled only once every file in the
+project has been parsed.
 ```maxon
 // --- file: aaa_alias.maxon
 module extension Sorter
@@ -633,13 +629,46 @@ end 'main'
 42 true true false
 ```
 
+<!-- test: first-class-function.an-inner-function-alias-naming-self-is-substituted-per-instance -->
+A function-type alias declared inside a generic type names both `Self` and the type parameter, and a method
+taking it is called on an instance with a closure over that instance's own type.
+```maxon
+type Cell uses T
+	export var v as T
+
+	typealias Pick = function(Self) returns T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function through(p Pick) returns T
+		return p(self)
+	end 'through'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function main() returns ExitCode
+	let c = StrCell.make("picked")
+	print("{c.through(function(x StrCell) gives x.v)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+picked
+```
+
 <!-- test: first-class-function.alias-over-a-type-parameter-bound-to-an-enum -->
 An ENUM type argument is the one binding that turns a slot with NO pre-erasure identity into one that HAS
 one: `Element` carries none where the alias is written, `Shade` erases to a bare `int` at resolution, and
-what tells one erased `int` from another is the identity column beside it. The declared side's column was
-captured at the parse, where the slot was still opaque — so a substitution that moves the TYPE and leaves
-the column behind reports `expected 'fn(int) returns int', got 'fn(Shade) returns Shade'` and refuses this
-program.
+what tells one erased `int` from another is the identity column beside it. The declared side's column is
+captured at the parse, where the slot is still opaque — so a substitution that moved the TYPE and left
+the column behind would report `expected 'fn(int) returns int', got 'fn(Shade) returns Shade'` and refuse this
+program; the substitution moves both.
 ```maxon
 enum Shade
 	light
@@ -1080,10 +1109,9 @@ end 'main'
 
 <!-- test: first-class-function.void-value-called-as-statement -->
 A VOID function value is called at STATEMENT position, for its effect, with no result to bind — the
-call the statement position exists for, and the shape a table of void callbacks is driven by. A void
-function value used to be misreported E3004 ("call to undefined function") because the
-statement-position call path treated the local's name as a direct callee; it now diverts to the same
-indirect-call lowering the expression position uses. The side effect (two increments of a module
+call the statement position exists for, and the shape a table of void callbacks is driven by. The
+statement-position call path sends a function-typed local's name to the same indirect-call lowering the
+expression position uses; treated as a direct callee it would be E3004 ("call to undefined function"). The side effect (two increments of a module
 `var`) proves the call actually RAN, not merely that it compiled — a no-op would return 0.
 ```maxon
 var sideEffect = 0
@@ -1143,16 +1171,15 @@ error E3004: <fragment>:3:2: call to undefined function 'cb'
 
 A function value produced by a POSTFIX expression — a function-typed FIELD read (`h.op`), a field reached
 through a chain (`o.inner.op`), or a call whose result is itself a function (`pick()`) — is called for its
-EFFECT at statement position exactly as a bare-name function value is. The statement dispatcher used to
-parse the postfix expression and then reject the trailing `(` as `( statement`; it now applies the trailing
-`(args)` through the SAME indirect-call lowering the expression position uses. Only a postfix FOLLOWED BY
+EFFECT at statement position exactly as a bare-name function value is. The statement dispatcher parses
+the postfix expression and applies the trailing `(args)` through the SAME indirect-call lowering the expression position uses. Only a postfix FOLLOWED BY
 `(` becomes a call statement — a bare field read (`h.op`) is not a statement and stays an error.
 
 <!-- test: first-class-function.field-void-called-as-statement -->
-A VOID function-typed FIELD called at STATEMENT position, for its effect (#97) — the shape a table of
+A VOID function-typed FIELD called at STATEMENT position, for its effect — the shape a table of
 callbacks or compiler passes keyed by a struct field is driven by, each entry a function value called for
-effect. The statement dispatcher parsed `h.op` as a field load and then rejected the trailing `(` as
-`( statement`; it now applies the trailing call through the indirect-call lowering. The side effect (two
+effect. The statement dispatcher parses `h.op` as a field load and applies the trailing call through the
+indirect-call lowering. The side effect (two
 increments of a module `var`) proves the call RAN — a no-op would return 0.
 ```maxon
 var sideEffect = 0
@@ -1352,8 +1379,8 @@ end 'main'
 
 <!-- test: first-class-function.field-read-statement-still-errors -->
 The over-acceptance guard for a postfix callee: ONLY a postfix FOLLOWED BY `(` becomes a call statement. A
-bare function-typed field READ (`h.op` with no `(`) is not a call and not a statement, so it stays the
-unsupported-statement error it was — the fix widens what compiles, never what is silently accepted.
+bare function-typed field READ (`h.op` with no `(`) is not a call and not a statement, so it is an
+unsupported-statement error.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
@@ -1381,9 +1408,9 @@ error E2015: <fragment>:19:2: Unsupported: identifier statement
 ```
 
 <!-- test: first-class-function.method-call-statement-still-direct -->
-The no-regression anchor: a real instance METHOD called at statement position stays a DIRECT method
-dispatch, not routed through the indirect-call path. `c.tick()` is a method on `Counter`, not a
-function-typed field, so it must keep dispatching exactly as before. Two calls (+3 each) prove it ran.
+The control: a real instance METHOD called at statement position stays a DIRECT method dispatch, not
+routed through the indirect-call path. `c.tick()` is a method on `Counter`, not a function-typed field,
+so it dispatches as a method. Two calls (+3 each) prove it ran.
 ```maxon
 var sideEffect = 0
 
@@ -1454,9 +1481,8 @@ end 'main'
 ```
 
 <!-- test: first-class-function.non-capturing-closure-in-field -->
-A closure that captures NOTHING is a plain function reference — it has no environment to
-lose — so it is stored in a function-typed field and called like any other. This is the
-half of the boundary that must keep working: it is what a table of handlers is built from.
+A closure that captures NOTHING is a plain function reference, so it is stored in a
+function-typed field and called like any other. It is what a table of handlers is built from.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1479,62 +1505,16 @@ end 'main'
 42
 ```
 
-### Capturing closures may not escape their defining frame
+### A capturing closure owns its environment
 
-A closure captures **by reference**: its environment holds the ADDRESSES of the enclosing
-frame's stack slots, so that a read through a capture sees later mutations of the captured
-variable. The environment is therefore meaningful only while that frame is alive. Let a
-capturing closure outlive its frame and every captured read dereferences a dead frame — the
-classic upward-funarg problem, which compiles clean and dies at runtime.
+A function value is one word: the address of a refcounted record holding the function's code and what it
+captured. The record takes a reference of its own to every managed capture and releases it when the last
+holder of the closure drops it. So a capturing closure may be stored in a field, a container or a union
+payload, returned, merged through a ternary, a `match` or an `otherwise`, and handed to a callee that keeps
+it, exactly as a closure that captures nothing may.
 
-So: **a closure that CAPTURES may not ESCAPE its defining frame.** E3099 refuses every
-escape route the compiler can see without interprocedural analysis — returning one out of
-the frame that built it, and storing one in a struct field, a global, a container element,
-or a union's associated-value payload. Each of the latter is one 8-byte slot holding the
-code pointer alone, and each is heap memory outliving every frame, so the store drops the
-environment, the call passes env=0, and the first captured read dereferences null.
-
-A closure that captures NOTHING is unaffected and passes every check **by construction** —
-it lowers to a plain function reference and has no environment to lose. Nothing is carved
-out for it. The accept cases below pin the other half of the boundary: over-rejection would
-be the worse failure, and a capturing closure passed *down* to a callee that only CALLS it
-is perfectly safe.
-
-Making the refused routes work needs escape analysis and by-value capture, which would
-change the by-reference capture semantics the closure tests above pin. It is deliberately
-deferred to the compiler's P1.5, where it co-lands with `async` — a green-thread capture IS an
-escape. One route is deliberately left open for the same reason: a capturing closure passed
-as a CALL ARGUMENT to a callee that then stores it. At that store the value is a
-*parameter*, and whether it carries an environment is a fact about the CALLER, so deciding
-it needs a per-parameter escape summary propagated over the call graph.
-
-### The rule keys on the VALUE, so it must ride every re-mint of one
-
-"Carries an environment" is recorded against the closure's SSA value. Reading a function-typed
-variable in a block other than the one that bound it mints a NEW SSA value for the same
-function, so a read that does not carry the mark across ERASES it — and the escape check stops
-applying to a closure that still very much has an environment. Returning a capturing closure
-from a block other than the one that bound it used to compile clean and nil-deref for exactly
-that reason.
-
-### A ternary is not an escape route — it is worse, and it is refused
-
-A conditional expression merges its two arms through **one slot**, and that slot holds the code
-pointer alone. An environment reaches a callee either as the SSA value its `closure_create`
-produced, or through the `__env_<name>` slot the lowering pairs with a function PARAMETER — and
-a ternary's result temp is neither. So the environment is dropped on EVERY path, whether or not
-the result ever leaves the frame: `let h = f if c else dbl` then `h(2)` compiled and died in
-`_$closure_0` without escaping anything.
-
-That makes it a fact the merge cannot carry rather than merely a place the closure must not go,
-so a capturing closure is refused as an ARM of a ternary. Refusing there also closes the escape
-routes through one, since a capturing closure can no longer reach a return, a global or a field
-by way of a conditional expression either. It inherits the boundary above exactly: a capturing
-closure that arrived as a PARAMETER is not recognizable as one without an escape summary, and is
-not refused here.
-
-<!-- test: first-class-function.capturing-closure-in-field-errors -->
-A capturing closure stored into a function-typed FIELD is refused rather than miscompiled.
+<!-- test: first-class-function.capturing-closure-in-field -->
+A capturing closure stored into a function-typed FIELD is called through it; the field owns the closure.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1559,16 +1539,12 @@ function main() returns ExitCode
 	return h.op(22)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-field-errors.test:21:4: cannot store a closure that captures in field 'op' of 'Handler': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
-<!-- test: first-class-function.capturing-closure-in-struct-construction-errors -->
-A capturing closure stored into a function-typed field at CONSTRUCTION (`Self{op: closure}`) is the
-same heap store as `x.op = closure`, but it reaches the box through a different path — the struct
-literal, not `emitFieldWrite`. Without a check HERE the construction slipped past the escape gate and
-the closure reached lowering, which panicked on its unresolved environment. It is refused with the same
-E3099 the field-write route gives, at the field name in the literal.
+<!-- test: first-class-function.capturing-closure-in-struct-construction -->
+A capturing closure stored at CONSTRUCTION (`Self{op: closure}`) outlives the factory that built it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1587,14 +1563,12 @@ function main() returns ExitCode
 	return h.op(22)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-struct-construction-errors.test:10:15: cannot store a closure that captures in field 'op' of 'Handler': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
-<!-- test: first-class-function.capturing-closure-returned-errors -->
-RETURNING a capturing closure is the idiom people actually write, and it is the route that
-matters most: `makeAdder` compiles clean and then nil-derefs inside `_$closure_0`, because
-the environment it hands back points at `makeAdder`'s dead frame.
+<!-- test: first-class-function.capturing-closure-returned -->
+RETURNING a capturing closure hands its environment to the caller: `makeAdder`'s frame is gone when `add` runs.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1610,24 +1584,15 @@ function main() returns ExitCode
 	return add(22)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-returned-errors.test:8:2: cannot return a closure that captures: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
 <!-- test: first-class-function.capturing-closure-in-global-errors -->
-A global outlives every frame, so a capturing closure stored in one would dangle — but the
-program never gets that far, and the reason is worth stating exactly, because this test used to
-claim otherwise.
-
-A global cannot BE function-typed: it takes no type annotation (`var handler UnaryOp = dbl` is a
-parse error) and a function reference is not a constant initializer, so `handler` here is an
-`int`. The value therefore fails the TYPE rule before the escape rule is ever asked, and E3005 is
-the honest answer: it is the one whose advice works. E3099's — "use a function reference" —
-does NOT fix this program, because `handler = dbl` is refused by the very same type rule.
-
-So the escape rule's GLOBAL route is unreachable while globals cannot hold a function, and the
-rule is carried by the routes that CAN: a struct field, a container, a union payload, a payload
-binding, a return, and a ternary arm — each with its own test above.
+A module-level binding takes its type from its initializer, and `handler` here is initialized with
+`0`, so it holds an `int` and a function value assigned to it is E3005. A module-level `let` or `var`
+initialized with a function, or with a call to a factory that returns one, holds a function value, and
+a capturing closure may be stored there (`closure-capture.module-level-function-values`).
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1644,9 +1609,8 @@ end 'main'
 error E3005: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-global-errors.test:9:2: cannot assign a value of type 'function' to global 'handler', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
-<!-- test: first-class-function.capturing-closure-in-container-errors -->
-A CONTAINER's element block is heap memory that outlives the frame, so a capturing closure
-put into an array or map literal is refused at the element that carries the environment.
+<!-- test: first-class-function.capturing-closure-in-container -->
+A capturing closure in an array literal is owned by the array, beside a plain function reference.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1658,17 +1622,21 @@ end 'double'
 function main() returns ExitCode
 	let bump = 20
 	let ops = [double, function(n Integer) gives n + bump]
-	return 42
+	var total = 0
+
+	for op in ops 'each'
+		total = total + op(11)
+	end 'each'
+
+	return total as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-container-errors.test:11:56: cannot put a closure that captures in a container: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+53
 ```
 
-<!-- test: first-class-function.capturing-closure-in-union-payload-errors -->
-A union's associated-value PAYLOAD is a heap box holding one slot per value, so it drops the
-environment exactly as a struct field does. Without this check the union compiles, runs, and
-carries a closure whose environment is gone.
+<!-- test: first-class-function.capturing-closure-in-union-payload -->
+A capturing closure rides in a union PAYLOAD out of the frame that built it and is called from the match.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1686,20 +1654,17 @@ end 'make'
 function main() returns ExitCode
 	let a = make(20)
 	match a 'go'
-		run then return 42
+		run(op) then return op(22)
 		idle then return 1
 	end 'go'
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-union-payload-errors.test:12:54: cannot store a closure that captures in payload 'op' of case 'run': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
-<!-- test: first-class-function.capturing-closure-in-payload-binding-errors -->
-A payload binding LOOKS like a plain local, but it is an alias INTO the enum's heap box:
-assigning through it writes back. So it is a heap store outliving the frame, not the
-frame-local assignment it resembles — and without this check it compiles, runs, and leaves
-the box holding a closure whose environment is gone.
+<!-- test: first-class-function.capturing-closure-in-payload-binding -->
+Assigning a capturing closure through a payload binding writes it back into the union's box, which owns it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1721,19 +1686,22 @@ function main() returns ExitCode
 		run(op) then op = function(n Integer) gives n + bump
 		idle then return 1
 	end 'go'
-	return 42
+
+	match a 'call'
+		run(op) then return op(22)
+		idle then return 1
+	end 'call'
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-payload-binding-errors.test:19:16: cannot store a closure that captures in payload binding 'op': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
 <!-- test: first-class-function.capturing-closure-used-in-frame -->
-The ACCEPT side: a capturing closure called directly AND passed DOWN to a callee that only CALLS it. The
-env travels with the value across the call boundary — `apply` receives a companion environment parameter,
-and its `f(x)` threads it — so `apply(f, …)` returns the captured `bump` correctly. A callee that only
-calls the closure never persists it, so the pass-down is safe (the reject twins below cover a callee that
-STORES or RETURNS it).
+A capturing closure called directly AND passed DOWN to a callee that only CALLS it. The closure record
+travels as the one-word value, and `apply`'s `f(x)` hands that record to the code as its environment, so
+`apply(f, …)` returns the captured `bump` correctly. The cases below cover a callee that STORES or RETURNS
+it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1754,15 +1722,8 @@ end 'main'
 62
 ```
 
-<!-- test: first-class-function.capturing-closure-stored-by-callee-errors -->
-The INTERPROCEDURAL escape reject (P1.5-A2b-2). Pass-down to a callee that only CALLS the closure is safe
-(above), but a callee that PERSISTS it — here `Handler.create` STORES the parameter into a struct field —
-keeps only the fn-ptr; the captured environment belongs to `main`'s frame and dangles the moment `main`
-returns (a use-after-free, the OPEN #13 interprocedural escape that A2b-1 blocked at the direct routes and
-A2b-2 must re-close now that pass-down is allowed). The whole-program escape summary marks
-`Handler.create`'s parameter escaping (its body stores it), so the capturing closure passed to it is
-refused. A PLAIN function reference at the same position is fine (no env to lose) — see `field-*`. This
-compiled clean and SEGFAULTED (139) until the escape summary landed.
+<!-- test: first-class-function.capturing-closure-stored-by-callee -->
+A callee that STORES the closure it is handed keeps it: the struct field owns a reference of its own.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1783,16 +1744,12 @@ function main() returns ExitCode
 	return h.op(21)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-stored-by-callee-errors.test:17:18: cannot pass a closure that captures to 'Handler.create', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+41
 ```
 
-<!-- test: first-class-function.capturing-closure-returned-by-callee-errors -->
-The other interprocedural escape route: a callee that RETURNS the parameter (`identity(f) → return f`)
-persists it past the passing frame exactly as a store does — the returned fn-ptr outlives `main`'s frame,
-whose environment the closure captured. The escape summary marks `identity`'s parameter escaping (its body
-returns it), so the capturing closure is refused; a plain function reference returned the same way is fine.
-This compiled clean and SEGFAULTED (139) until the escape summary landed.
+<!-- test: first-class-function.capturing-closure-returned-by-callee -->
+A callee that RETURNS the closure it is handed gives the caller a reference of its own.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1809,22 +1766,18 @@ function main() returns ExitCode
 	return g(21)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-returned-by-callee-errors.test:13:10: cannot pass a closure that captures to 'identity', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+41
 ```
 
 <!-- test: first-class-function.capturing-closure-through-a-chain-that-only-calls -->
-The interprocedural summary is TRANSITIVE (W58), so a capturing closure survives an arbitrarily deep
-pass-DOWN chain that never persists it. `ping` hands `f` to `pong`, which hands it back to `ping`, which
+A capturing closure survives an arbitrarily deep pass-DOWN chain. `ping` hands `f` to `pong`, which hands it back to `ping`, which
 eventually CALLS it — a mutually recursive pass-through, which is the shape `stdlib/Array.maxon`'s sort cone
 is written in (`sort()` → `driftsortRange` → `createRun` → `stableQuicksortRange` → `smallSortRange`, all of
 them only calling the comparator).
 
-It is a RUN and not a compile: the answer proves the environment travelled the whole chain, which is what
-`LowerMaxonToStd.appendCalleeEnvArgs` threads at each hop and `Parser.bindClosureEnvParams` receives. Until
-W58 the summary marked a parameter escaping merely for being passed on, so this was
-`E3099: cannot pass a closure that captures to 'ping', which stores or returns it` — about two functions that
-do neither.
+It is a RUN and not a compile: the answer proves the closure record, and the captures it holds, travelled
+the whole chain.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
@@ -1849,13 +1802,8 @@ end 'main'
 19
 ```
 
-<!-- test: first-class-function.capturing-closure-through-a-chain-that-stores-errors -->
-The other half of the transitive summary, and the one that keeps it SOUND: three hops of pure pass-down
-ending in a callee that STORES the parameter. `Handler.create` persists it, so `hop3` does, so `hop2` does,
-so `hop1` does — the least fixpoint carries the escape back up the chain and the closure is refused at the
-call the author wrote. Under the pre-W58 one-hop rule this was refused too, for the weaker reason that
-`hop1` passed its parameter on at all; it is pinned here because the rule that replaced that one has to keep
-answering the same way, and nothing else in this file would notice if it stopped.
+<!-- test: first-class-function.capturing-closure-through-a-chain-that-stores -->
+Three hops of pass-down ending in a callee that stores the closure: the stored closure is called after every hop has returned.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
@@ -1886,15 +1834,12 @@ function main() returns ExitCode
 	return h.op(21) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-through-a-chain-that-stores-errors.test:27:10: cannot pass a closure that captures to 'hop1', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+41
 ```
 
-<!-- test: first-class-function.capturing-closure-through-a-cycle-that-stores-errors -->
-A CYCLE whose escape is inside it. `ping` and `pong` call each other and `ping` also hands `f` to a
-constructor that stores it — so the escaping set is reached only by going round the loop, which is exactly
-what a least fixpoint over the call graph does and what a depth-first "ask the callee" walk would not
-terminate on. The refusal is reported at `pong`, the call the author wrote.
+<!-- test: first-class-function.capturing-closure-through-a-cycle-that-stores -->
+A cycle whose store is inside it: `ping` and `pong` call each other and `ping` stores the closure.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
@@ -1924,22 +1869,19 @@ function main() returns ExitCode
 	return h.op(21) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-through-a-cycle-that-stores-errors.test:26:10: cannot pass a closure that captures to 'pong', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+41
 ```
 
 <!-- test: first-class-function.capturing-closure-called-from-nested-block -->
-The same closure, called from a DIFFERENT block of the same frame. This is not an escape and
-must not be confused with one: the call happens inside `main`, the frame is alive, and nothing
-outlives anything — the only thing that changed is which block the call sits in.
+The same closure, called from a DIFFERENT block of the same frame: the call happens inside `main`,
+the frame is alive, and the only difference is which block the call sits in.
 
 It is a separate test from `capturing-closure-used-in-frame` because that one calls `f` in the
-block that binds it, and a same-block call reuses the SSA value the `closure_create` produced,
-which still knows its environment. Crossing a block boundary forces the value to be re-read from
-the variable, and THAT is the route that was broken: the environment reached a callee only from
-that SSA value or from a slot the lowering paired with a PARAMETER, so a capturing closure bound
-to a LOCAL was called with an environment of 0 and nil-dereffed inside `_$closure_0`. Both arms
-of the `if` are exercised so neither the taken nor the untaken path can hide it.
+block that binds it, where the call reuses the SSA value the closure literal produced. Crossing a
+block boundary forces the value to be re-read from the variable, and THAT is the route this pins:
+the re-read value is the closure record, and the call hands that record to `_$closure_0` as its
+environment. Both arms of the `if` are exercised so neither the taken nor the untaken path can hide it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1976,11 +1918,10 @@ environment across one; `capturing-closure-called-from-nested-block` crosses a b
 scope_end that runs repeatedly.
 
 This asserts the VALUES, not just a clean exit, because the failure it guards is a
-USE-AFTER-FREE and a freed block is not immediately a wrong one: every `maxon.scope_end` sweeps
-every orphan temp in the whole function, so the loop body's scope_end released an environment
-the enclosing scope still owned. The first read after the free still found the old bytes and
-answered correctly; the reads after `print` had recycled the block returned garbage that CHANGED
-per iteration. Exactly two correct iterations, then nonsense.
+USE-AFTER-FREE and a freed block is not immediately a wrong one: if the loop body's
+`maxon.scope_end` released an environment the enclosing scope still owns, the first read after the
+free would still find the old bytes and answer correctly, and the reads after `print` had recycled
+the block would return garbage that changes per iteration.
 
 ⚠ A leak gate cannot see this. `mm_alloc == mm_free` balances perfectly here — the block IS
 freed, exactly once, just far too early. Freed-too-early and never-freed are different faults,
@@ -2018,11 +1959,11 @@ i=4 -> 9
 ```
 
 <!-- test: first-class-function.capturing-closure-bound-outside-loop-passed-down -->
-The same environment, read across iterations through a CALLEE rather than directly. The callee
-receives the closure as a parameter, so its environment arrives as the caller's — borrowed for
-the length of the call. The callee must not release it: its own scope_end cleans a parameter
-named just like a binding, and treating the two alike would free the CALLER's live environment
-on the first call and leave every later iteration reading dead memory.
+The same closure, read across iterations through a CALLEE rather than directly. The callee
+receives the closure as a parameter, borrowed for the length of the call. The callee must not
+release it: its own scope_end cleans a parameter named just like a binding, and treating the two
+alike would free the CALLER's live closure record on the first call and leave every later
+iteration reading dead memory.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2052,13 +1993,8 @@ end 'main'
 
 <!-- test: first-class-function.capturing-closure-passed-to-try-call -->
 A capturing closure handed to a THROWING callee, through `try`. A try-call flattens its arguments
-exactly as a plain call does, but it was never given the maps that say what environment a function
-value carries, so it could only answer 0 — and this failed in ANY block, including the one that
-bound the closure, which is why no loop is needed to show it.
-
-That the plain-call and try-call paths could disagree at all is the point: both ask "what
-environment travels with this value?", and the answer is now written once, in one helper, rather
-than once per call shape.
+exactly as a plain call does, and the closure is one word among them: the record carries its own
+captures, so the callee reads `bump` whichever call shape delivered it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2091,15 +2027,14 @@ end 'main'
 ```
 
 <!-- test: first-class-function.capturing-closure-rebound-in-loop -->
-A closure bound afresh on every iteration and called from a block NESTED inside that loop. The
-environment is per-iteration, so each call must see its OWN `bump` rather than the first or the
-last — a single environment slot reused across iterations would still pass the cross-block test
-above while quietly reading a stale frame here.
+A closure bound afresh on every iteration and called from a block NESTED inside that loop. Each
+iteration builds its own closure record, so each call must see its OWN `bump` rather than the first
+or the last — one record reused across iterations would still pass the cross-block test above while
+quietly reading a stale value here.
 
-It also pins the refcount discipline: the variable's environment slot is a BORROWED alias, and
-the reference stays owned by the temp the `closure_create` allocated. Five iterations therefore
-allocate five environments and free five — an owning alias would double-free them, and a second
-incref would leak them.
+It also pins the refcount discipline: each iteration's record is owned by `f` and released when the
+iteration's scope ends, so five iterations allocate five records and free five — a second release
+would double-free them, and a missing one would leak them.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2127,11 +2062,9 @@ end 'main'
 ```
 
 <!-- test: first-class-function.capturing-closure-name-not-leaked -->
-The check keys on the VALUE, not the name. A variable name means nothing outside the
-function that declared it, so a capturing `op` in one function must not make an unrelated
-parameter `op` in another look like it carries an environment — that would be a FALSE
-rejection, and over-rejection is the worse failure. Here `storeIt` stores a plain function
-reference through a parameter that happens to share the name.
+A variable name means nothing outside the function that declared it: a capturing `op` in one
+function and an unrelated parameter `op` in another are different values. Here `storeIt` stores a
+plain function reference through a parameter that happens to share the name, and both are called.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2171,9 +2104,8 @@ end 'main'
 ```
 
 <!-- test: first-class-function.non-capturing-closure-returned -->
-A closure that captures NOTHING is returned freely: it lowers to a plain function reference
-and has no environment to lose. This is what keeps `makeAdder`'s refusal narrow — the check
-keys on carrying an environment, not on being a closure.
+A closure that captures NOTHING is returned: it lowers to a plain function reference, an immortal
+static record that no drop releases.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2221,11 +2153,8 @@ end 'main'
 42
 ```
 
-<!-- test: first-class-function.capturing-closure-in-ternary-arm-errors -->
-A capturing closure as a ternary ARM is refused. This one also RETURNS the result, which is the
-shape that made the defect visible: it compiled clean and nil-dereffed inside `_$closure_0` —
-the exact failure the escape rule exists to prevent, reached by laundering the closure through a
-merge the rule could not see.
+<!-- test: first-class-function.capturing-closure-in-ternary-arm -->
+A capturing closure as a ternary ARM merges with the other arm and is returned out of its frame.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2242,13 +2171,12 @@ function main() returns ExitCode
 	return f(22)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-arm-errors.test:9:13: cannot use a closure that captures as an arm of a conditional expression: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
 <!-- test: first-class-function.capturing-closure-in-ternary-to-global-errors -->
-The same laundering, into a GLOBAL. Through the ternary this was an internal `StdPtr`/`StdI64`
-cast crash at lowering rather than a diagnostic.
+`handler` is initialized with `0` and holds an `int`, so the merged closure meets the type rule (see `capturing-closure-in-global-errors`).
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2267,13 +2195,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-to-global-errors.test:14:14: cannot use a closure that captures as an arm of a conditional expression: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+error E3005: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-to-global-errors.test:14:2: cannot assign a value of type 'function' to global 'handler', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
-<!-- test: first-class-function.capturing-closure-in-ternary-used-in-frame-errors -->
-Refused even when the result NEVER LEAVES THE FRAME. This is what makes the merge different
-from an escape route: the environment is dropped by the merge itself, so `h(22)` here called a
-closure with `env=0` and nil-dereffed without escaping anything.
+<!-- test: first-class-function.capturing-closure-in-ternary-used-in-frame -->
+A capturing closure merged through a ternary and called in the same frame.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2289,20 +2215,15 @@ function main() returns ExitCode
 	return h(22)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-used-in-frame-errors.test:12:12: cannot use a closure that captures as an arm of a conditional expression: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
-<!-- test: first-class-function.capturing-closure-in-match-arm-errors -->
-The REACHABLE twin of the ternary-arm refusal above: `a if c else b` is not parsed yet, but a match
-EXPRESSION is, and it merges its `gives` arms through the same single result phi. A capturing closure as
-an arm carries only its code pointer through that phi (the env rides a side column a phi cannot merge),
-so the merged closure would be called with no environment. Without this check it compiled clean and
-nil-dereferenced inside `_$closure_0`, exactly as the ternary case describes.
+<!-- test: first-class-function.capturing-closure-in-match-arm -->
+A capturing closure as a `gives` arm of a match expression merges with the other arm and is called.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = function(Integer) returns Integer
 
 function dbl(n Integer) returns Integer
 	return n * 2
@@ -2319,16 +2240,12 @@ function main() returns ExitCode
 	return h(22)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-match-arm-errors.test:15:11: cannot use a closure that captures as a `gives` arm of a match expression: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
-<!-- test: first-class-function.capturing-closure-in-otherwise-errors -->
-The other reachable merge: `try call() otherwise <value>` joins the success value and the fallback
-through one result phi. A capturing closure as the `otherwise` fallback would be called with no
-environment on the error edge, so it is refused — regardless of whether the call actually throws, since
-the parser cannot know which edge runs. The try's SUCCESS value cannot itself be a capturing closure (a
-function may not return one), so only the fallback needs guarding.
+<!-- test: first-class-function.capturing-closure-in-otherwise -->
+A capturing closure as an `otherwise` fallback: the call throws, so the merge takes the closure.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2356,15 +2273,12 @@ function main() returns ExitCode
 	return h(22) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-otherwise-errors.test:24:33: cannot use a closure that captures as the value of an `otherwise` fallback: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
-<!-- test: first-class-function.capturing-closure-returned-from-other-block-errors -->
-The escape rule keys on the VALUE, and a cross-block read mints a new one. Returning the closure
-from a block other than the one that bound it must still be refused — this compiled clean and
-nil-dereffed, because the read that crossed the block boundary dropped the "has an environment"
-mark and the check had nothing left to fire on.
+<!-- test: first-class-function.capturing-closure-returned-from-other-block -->
+Returning a capturing closure from a block other than the one that bound it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2387,14 +2301,13 @@ function main() returns ExitCode
 	return add(22)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-returned-from-other-block-errors.test:13:3: cannot return a closure that captures: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
 <!-- test: first-class-function.non-capturing-closure-through-ternary -->
-The accept side of the ternary rule. A closure that captures NOTHING has no environment to
-lose, so it merges through a ternary like any other function value — and the merged result is
-callable, which requires the signature to have survived the merge.
+A closure that captures NOTHING merges through a ternary like any other function value — and the
+merged result is callable, which requires the signature to have survived the merge.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2414,10 +2327,8 @@ end 'main'
 ### A function value only fits a function-typed place
 
 A function value is assignable to a place declared with a function `typealias`, and to nothing
-else. This is a TYPE rule, and it is deliberately NOT the escape rule above: it fires for a
-plain top-level function that captures nothing and escapes nowhere, and it would fire just the
-same if closures did not exist. "May this value be represented here?" and "may this value
-OUTLIVE here?" are separate questions, and a place can fail either, both, or neither.
+else. This is a TYPE rule: it fires for a plain top-level function that captures nothing, and it
+would fire just the same if closures did not exist.
 
 <!-- test: first-class-function.function-value-into-int-global-errors -->
 Unchecked, this store reached the LOWERING, where a function pointer and an integer slot have
@@ -2444,8 +2355,8 @@ error E3005: specs/fragments/first-class-functions/first-class-function.function
 ```
 
 <!-- test: first-class-function.function-value-into-int-local-errors -->
-The same rule for a LOCAL. This one was worse than an internal error: with the value never
-read, the whole program compiled CLEAN and the mismatch was never reported at all.
+The same rule for a LOCAL. The value is never read, so nothing downstream would report the mismatch:
+without this rule the whole program would compile CLEAN.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2465,8 +2376,7 @@ error E3005: specs/fragments/first-class-functions/first-class-function.function
 ```
 
 <!-- test: first-class-function.capturing-closure-into-int-local-errors -->
-A CLOSURE into the same int local. It is the type rule that answers, not the escape rule: the
-value never leaves the frame, so there is no escape to report — it simply does not fit.
+A CLOSURE into the same int local. The type rule answers: a function value does not fit an `int`.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2483,10 +2393,10 @@ error E3005: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.function-value-returned-as-int-errors -->
-The RETURN position reaches the same mismatch by a different road: the return check consulted
-the numeric widening table directly, and that table answers only for numeric kinds, so a
-function kind fell off the end of it as an E9001 "Unhandled cast combination: Function ->
-Integer". The correctly worded type error was already written one line below it.
+The RETURN position reaches the same mismatch by a different road: the numeric widening table
+answers only for numeric kinds, so the return check asks the type rule first, and a function kind
+gets the worded type error rather than falling off the table as an E9001 "Unhandled cast
+combination: Function -> Integer".
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2510,7 +2420,7 @@ error E3005: specs/fragments/first-class-functions/first-class-function.function
 <!-- test: first-class-function.function-value-as-arg-errors -->
 The CALL-ARGUMENT position reaches the same type rule through `SemanticCheck.checkArgTypes`. Without a
 test here a sabotage of the `functionIntoNonFunction` routing at that site stays green — the condition
-is single-homed (`checkDeclaredType`) but this ROUTE was pinned by nothing (OPEN.md #69).
+is single-homed (`checkDeclaredType`), and this case is what pins the ROUTE.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2532,9 +2442,8 @@ error E3005: specs/fragments/first-class-functions/first-class-function.function
 ```
 
 <!-- test: first-class-function.function-value-into-field-errors -->
-The FIELD-STORE position (`b.slot = dbl`, a struct field holding a non-function). The other unpinned
-route of OPEN.md #69 — a sabotage of the field-store `functionIntoNonFunction` arm stayed green without
-this.
+The FIELD-STORE position (`b.slot = dbl`, a struct field holding a non-function). This case is what pins
+the field-store `functionIntoNonFunction` arm; nothing else in the suite reaches it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2566,13 +2475,12 @@ A **`throws` function cannot be taken as a value.** A function type has no throw
 grammar is `function(T) returns U` — so the binding would drop it, and there is no channel to carry
 it back: `StdIndirectCallOp` has no error flag, unlike `StdTryCallOp`.
 
-Before this check the indirect call was not merely unchecked, it was **wrong**. `risky(99)` took its
-error return (ordinal in RDX, `xor rax, rax` in RAX); the caller read RAX, ignored RDX, and received
-**0 — the dummy — as a normal result**. `try` was bypassed entirely by round-tripping the function
+Without this check the indirect call would be not merely unchecked but **wrong**. `risky(99)` takes its
+error return (ordinal in RDX, `xor rax, rax` in RAX); an indirect caller reads RAX, ignores RDX, and would
+receive **0 — the dummy — as a normal result**, bypassing `try` entirely by round-tripping the function
 through a value.
 
-It is refused rather than supported on evidence: no spec and no stdlib file ever wanted a throwing
-function value.
+It is refused rather than supported because no spec and no stdlib file wants a throwing function value.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -2621,18 +2529,18 @@ end 'main'
 42
 ```
 
-### Float function values carry the callee's float result and param types (P1.5 #78)
+### Float function values carry the callee's float result and param types
 
 A function VALUE returns and takes floats exactly as a direct call does. The indirect-call
 lowering carries the function value's own signature, so a float RESULT is captured from the
 float return register (xmm0/d0, or a wasm f64 result) instead of the integer one, and a float
 ARGUMENT travels in a float argument register (its own separate counter) instead of a GPR. An
-integer function value is untouched — the tests above are the no-regression anchor.
+integer function value is untouched — the tests above are its control.
 
 <!-- test: first-class-function.float-return-called-indirectly -->
-A function value that RETURNS a float, called indirectly. Before #78 the indirect call assumed
-an integer result and captured xmm0's value from the integer return register, which colored a
-move across register files (x64: `r8` → `xmm0` panic; wasm: an `i64` → `f64` coerce panic).
+A function value that RETURNS a float, called indirectly. The indirect call reads the result from
+the float return register; reading it from the integer one would color a move across register files
+(x64: `r8` → `xmm0`; wasm: an `i64` → `f64` coerce).
 ```maxon
 
 typealias Ratio = float(0.0 to 1000.0)
@@ -2763,25 +2671,13 @@ end 'main'
 21
 ```
 
-### The escape rule is DERIVED, not a list of places to remember
+### A merge carries the closure
 
-The refusals above each name the construct the user wrote — the field, the union case, the `gives`
-arm — and they can, because the parser still holds those words. But a hand-written check at each
-syntactic sink can only cover the sinks somebody remembered, and the rule it enforces is not about
-syntax at all: it is that a capturing closure's ENVIRONMENT must be able to follow the value. So the
-rule is also stated once, structurally, over the finished IR: a capturing closure may appear only
-where the environment travels with it — as the callee of an in-frame indirect call, or as an argument
-to a direct call whose callee is known not to persist it. Every other slot is refused.
+A `var` holding a capturing closure and reassigned inside an `if` or a `while` merges through a block-argument
+phi, which carries the record; the closure the assignment replaces is dropped.
 
-Stating it that way covers routes the enumeration missed, and these are not hypothetical. A `var`
-holding a capturing closure and REASSIGNED inside an `if` or a `while` merges through a block-arg phi
-exactly as a ternary does — one slot, carrying the code pointer and nothing else — and neither shape
-is a ternary, a match `gives` or an `otherwise`. Both compiled clean and segfaulted.
-
-<!-- test: first-class-function.capturing-closure-across-if-merge-errors -->
-A capturing closure reassigned inside an `if` merges through the continuation's phi. Refused at the
-closure literal — the phi edge that loses the environment has no source position of its own, and the
-literal is the token that has to change either way.
+<!-- test: first-class-function.capturing-closure-across-if-merge -->
+A `var` holding a capturing closure reassigned inside an `if`: the merge carries the closure, and the replaced one is dropped.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2795,14 +2691,33 @@ function main() returns ExitCode
 	return f(2)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-across-if-merge-errors.test:7:10: cannot carry a closure that captures across a branch merge: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```exitcode
+40
 ```
 
-<!-- test: first-class-function.capturing-closure-across-loop-merge-errors -->
-The same merge through a LOOP-HEADER phi. `capturing-closure-rebound-in-loop` (accepted, above) binds
-a fresh `let` inside the body and carries nothing across the back edge; this carries a `var` across it,
-which is a merge and loses the environment.
+<!-- test: first-class-function.capturing-closure-handed-to-async -->
+A capturing closure handed to an `async` call is moved into the coroutine, which owns it until it ends.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Step = function(Integer) returns Integer
+
+function later(step Step) returns Integer
+	Scheduler.yield()
+	return step(2)
+end 'later'
+
+function main() returns ExitCode
+	let bump = 20
+	let p = async later(function(n Integer) gives n + bump)
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+22
+```
+
+<!-- test: first-class-function.capturing-closure-across-loop-merge -->
+A `var` holding a capturing closure carried across a loop's back edge; each replaced closure is dropped.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2818,16 +2733,12 @@ function main() returns ExitCode
 	return f(2)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-across-loop-merge-errors.test:7:10: cannot carry a closure that captures across a branch merge: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```exitcode
+40
 ```
 
-<!-- test: first-class-function.capturing-closure-through-witness-dispatch-errors -->
-A capturing closure handed to an interface method dispatched through a WITNESS. The interprocedural
-check that decides "does the callee persist this parameter?" is keyed on a callee NAME, and a witness
-dispatch has none — the concrete method is chosen at run time from the witness table, so no summary can
-be consulted and the environment cannot be threaded to it either. Before the rule was derived this
-reached lowering and panicked; the identical shape through a plain call was already E3099.
+<!-- test: first-class-function.capturing-closure-through-witness-dispatch -->
+A capturing closure handed to an interface method dispatched through a witness, which stores it and calls it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
@@ -2845,7 +2756,7 @@ type Slot implements Stasher
 
 	function stash(fn UnaryOp) returns Integer
 		self.op = fn
-		return 7
+		return self.op(2)
 	end 'stash'
 end 'Slot'
 
@@ -2873,17 +2784,12 @@ function main() returns ExitCode
 	return w.put(5)
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-through-witness-dispatch-errors.test:30:27: cannot pass a closure that captures to an interface method dispatched through a witness: the concrete method is chosen at run time, so the compiler cannot tell whether it stores the closure, and its environment cannot be threaded to it. captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+7
 ```
 
-<!-- test: first-class-function.capturing-closure-into-container-errors -->
-A capturing closure pushed into a heap container. The array literal route is refused by this same
-escape rule (see `capturing-closure-in-container-errors`), but `.push()` is a call to a compiler
-runtime entry — and a runtime entry is in no
-signature registry, so the escape summary the call-site check consults cannot be built for it. Rather
-than delegate the decision to a check that structurally cannot run, the derived rule refuses it: the
-Array outlives the frame and takes the code pointer alone.
+<!-- test: first-class-function.capturing-closure-into-container -->
+A capturing closure pushed into an Array is owned by the Array.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -2894,11 +2800,17 @@ function main() returns ExitCode
 	let bump = 20
 	var a = OpArray.create()
 	a.push(function(n Integer) gives n + bump)
-	return a.count() as ExitCode
+	var total = 0
+
+	for op in a 'each'
+		total = total + op(22)
+	end 'each'
+
+	return total as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-into-container-errors.test:10:9: cannot pass a closure that captures to a compiler runtime entry: it puts the value in heap memory that outlives this frame, and a runtime entry has no signature for the escape summary to be built from. captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```exitcode
+42
 ```
 
 <!-- test: first-class-function.int-literal-widens-at-indirect-call -->
@@ -3043,8 +2955,8 @@ end 'main'
 ```
 
 <!-- test: first-class-function.error.cast-return-type-mismatch -->
-A cast whose target function type returns something else. Accepted silently before this rule, after
-which the integer the function really returns is read back out of the float return register.
+A cast whose target function type returns something else. Accepted, the integer the function really
+returns would be read back out of the float return register.
 ```maxon
 
 typealias Real = float(f64.min to f64.max)
@@ -3110,7 +3022,7 @@ error E3009: <fragment>:11:14: function type mismatch in cast: expected 'fn(int,
 
 <!-- test: first-class-function.error.wrong-signature-into-function-param -->
 The rule is NOT cast-only. The same disagreement reached through a function-typed PARAMETER — no cast
-anywhere — was accepted just as silently, because the argument check compared only the `function` TAG.
+anywhere — is refused the same way; an argument check that compared only the `function` TAG would accept it.
 ```maxon
 
 typealias Real = float(f64.min to f64.max)
@@ -3197,11 +3109,11 @@ error E3005: <fragment>:23:19: function type mismatch storing into union payload
 ```
 
 <!-- test: first-class-function.error.different-enum-param-into-function-param -->
-⭐⭐ **THE SAME DOOR, DECIDED FROM AN ERASED PARAMETER — and the shape check could not see it.**
+⭐⭐ **THE SAME DOOR, DECIDED FROM AN ERASED PARAMETER.**
 `TypeResolution.resolveType` collapses a boxed enum/union parameter to bare `integer`, so
-`function(Shade)` and `function(Color)` were the SAME `paramTypes` and every enum agreed with every other
-enum. The call then hands the callee a `Color` ordinal its own `match` has no arm for: MEASURED as a clean
-compile that died SIGSEGV (139) on x64-linux and `ACCESS_VIOLATION` on x64-windows. The identity a
+`function(Shade)` and `function(Color)` are the SAME `paramTypes`, and by those alone every enum agrees with
+every other enum. The call would then hand the callee a `Color` ordinal its own `match` has no arm for —
+a clean compile that dies SIGSEGV (139) on x64-linux and `ACCESS_VIOLATION` on x64-windows. The identity a
 parameter loses at resolution rides in `FunctionShape.paramAggregateNames`, and this is the door that
 reads it.
 ```maxon
@@ -3245,10 +3157,9 @@ error E3005: <fragment>:28:10: argument type mismatch for 'f': expected 'fn(Colo
 ```
 
 <!-- test: first-class-function.error.different-enum-param-into-union-payload -->
-The PAYLOAD door, which this batch added, was wired to that same checker — so it caught a wrong ARITY and
-missed a wrong ENUM. One predicate serves six doors, which is the point: naming the defect once is what
-closes all six, and pinning it at more than one door is what proves the fix is in the predicate rather
-than in a door.
+The PAYLOAD door is wired to that same checker, so it catches a wrong ENUM exactly as it catches a wrong
+ARITY. One predicate serves six doors, which is the point: pinning it at more than one door is what
+proves the rule is in the predicate rather than in a door.
 ```maxon
 
 enum Color
@@ -3298,9 +3209,9 @@ error E3005: <fragment>:36:22: function type mismatch storing into union payload
 ```
 
 <!-- test: first-class-function.error.different-enum-return-into-function-param -->
-The RETURN slot has the identical erasure and needed the identical carrier: a `function() returns Color`
-arriving where `function() returns Shade` is declared handed back a three-case ordinal to a two-arm
-`match`, and MEASURED as a clean compile that died `STATUS_STACK_OVERFLOW` falling off the end of it.
+The RETURN slot has the identical erasure and needs the identical carrier: a `function() returns Color`
+arriving where `function() returns Shade` is declared would hand back a three-case ordinal to a two-arm
+`match` — a clean compile that dies `STATUS_STACK_OVERFLOW` falling off the end of it.
 A shape's return column carries ONE name rather than a per-position array, because a function type
 returns exactly one thing.
 ```maxon
@@ -3434,12 +3345,11 @@ red
 ```
 
 <!-- test: first-class-function.per-instance-alias-param-agrees -->
-⚠ **THE FALSE-REFUSAL CONTROL, and it is why the two fill sites had to be UNIFIED rather than the
-comparison loosened.** The two branches that build a `FunctionShape` classified a parameter differently:
-the DECLARED branch asked `Parser.aggregateNameOf` (a struct OR an enum OR a per-instance alias) while the
-ALIAS branch asked `containsEnum` alone — so `IntPool.Idx` carried an identity on one side and none on the
-other, and a comparison that merely tolerated the disagreement would have refused this legal program.
-Both sides now fill through ONE parser-tier extraction.
+⚠ **THE FALSE-REFUSAL CONTROL, and it is why the two fill sites are ONE rather than the comparison
+loosened.** Both branches that build a `FunctionShape` — the DECLARED one and the ALIAS one — classify a
+parameter through ONE parser-tier extraction (`Parser.aggregateNameOf`: a struct OR an enum OR a
+per-instance alias). Were the alias branch to ask `containsEnum` alone, `IntPool.Idx` would carry an
+identity on one side and none on the other, and this legal program would be refused.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -3474,10 +3384,9 @@ end 'main'
 ```
 
 <!-- test: first-class-function.union-payload-param-called-through-function-type -->
-⚠ **THE OTHER FALSE REFUSAL THE SAME CARRIER CURES.** An INDIRECT call passed
-`preErasedAggregate: EmptySourceText` under a comment reading *"a function TYPE carries no pre-erasure
-union/enum identity"* — true when it was written, stale the moment the column existed. The consequence was
-not a missed refusal but a WRONG one: calling a `function(Payload)` with a `Payload` was rejected as
+⚠ **THE OTHER FALSE REFUSAL THE SAME CARRIER PREVENTS.** An INDIRECT call reads the pre-erasure
+union/enum identity from the function type's column. Without it the consequence would be not a missed
+refusal but a WRONG one: calling a `function(Payload)` with a `Payload` would be rejected as
 *"expected 'int', got 'Payload'"*, a sentence naming the erasure rather than the program.
 ```maxon
 
@@ -3558,18 +3467,6 @@ stops at an alias NAME: `Outer = function(f InnerA)` accepts a function declared
 function declared over a different alias of the same shape is refused there
 (`nominal-function-alias.md`'s `error.nested-alias-position-is-nominal`).
 
-⚠ NOT a wasm case, and the reason is a BACKEND defect rather than anything about this rule: passing a
-function value into a parameter whose function type has a function-typed parameter emits a wasm module
-that fails validation (`expected i64 but nothing on stack`). It reproduces with the SAME alias on both
-sides and with no indirect call anywhere, so it is neither this rule's nor newly reachable — it is filed
-for its own rung.
-
-⚠ **The marker also excludes both arm64 targets, and NOTHING above explains that** — the wasm reason
-does not reach arm64, which shares the register backend x64 uses. Flagged by the 2026-07-28 targets
-audit, which could not settle it: the audit ran x64-windows, x64-linux and wasm32-wasi locally, and the
-arm64 lanes are synced by hand from a Mac. **Widen it to `arm64-macos, arm64-linux` and keep it if it
-passes** — an unexplained exclusion is the shape a "it was red once" gate hides in.
-<!-- unsupported-targets: arm64-macos, arm64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -3629,8 +3526,8 @@ error E3005: <fragment>:18:9: argument type mismatch for '_': expected 'fn(Inner
 
 <!-- test: first-class-function.error.indirect-call-too-few-args -->
 An indirect call that supplies fewer arguments than the function type declares. The missing argument
-was read out of whatever the register held — `f(3)` against `a + b` returned 3 — and the arity a
-function value promises is exactly the fact the declared type now carries.
+would be read out of whatever the register held — `f(3)` against `a + b` would return 3 — and the arity
+a function value promises is exactly the fact the declared type carries.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -3653,8 +3550,8 @@ error E3036: <fragment>:11:10: 'Bin' expects 2 argument(s) but 1 were provided
 ```
 
 <!-- test: first-class-function.error.indirect-call-arg-type-mismatch -->
-And an indirect call whose argument is the wrong KIND. A `String` at an int parameter reached the
-backend untouched and the callee did integer arithmetic on a heap pointer.
+And an indirect call whose argument is the wrong KIND. Unchecked, a `String` at an int parameter would
+reach the backend untouched and the callee would do integer arithmetic on a heap pointer.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -3677,8 +3574,8 @@ error E3005: <fragment>:11:10: argument type mismatch for 1: expected 'int', got
 ```
 
 <!-- test: first-class-function.indirect-call-arity-13 -->
-The BOUNDARY below the arity that used to panic, so a regression that moves the cliff is caught
-from both directions. A plain function reached as a VALUE is called through its `__fnref_` env
+The BOUNDARY below the x64 argument pool, so a change that moves the cliff is caught from both
+directions. A plain function reached as a VALUE is called through its `__fnref_` env
 thunk, whose signature is `(userargs, __env)` — so a 13-argument function value makes a
 14-parameter thunk, exactly the x64 pool, and it fits. Result is `sum(1..13) = 91`.
 ```maxon
@@ -3702,13 +3599,13 @@ end 'main'
 ```
 
 <!-- test: first-class-function.indirect-call-arity-14 -->
-⭐ THE ARITY THAT PANICKED THE REGISTER ALLOCATOR — and the call site was never the reason. The
+⭐ THE ARITY AT THE EDGE OF THE x64 POOL — and the call site is not what makes it hard. The
 thunk's trailing `__env` is materialized and then read by nothing, so it is a DEAD DEF: live at no
 program point, invisible to every popcount over a live set, and still occupying a real register
 (the load that produces it clobbers one whatever becomes of the value). Fourteen live forwarded
-arguments plus that one dead load is fifteen against a pool of fourteen — the splitter saw no
-overflow at all and `chooseRegister` died with every register blocked. A DIRECT call of the same
-arity was always fine, which is what made the boundary look like an indirect-call fact rather than
+arguments plus that one dead load is fifteen against a pool of fourteen, an overflow no live-set
+count shows, so the allocator has to count the dead def's demand itself. A DIRECT call of the same
+arity has no such def, which is what makes the boundary look like an indirect-call fact rather than
 the dead-def fact it is (see `specs/register-pressure.md`, where the same demand appears with
 no function value anywhere). Result is `sum(1..14) = 105`.
 ```maxon
@@ -3732,7 +3629,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.indirect-call-arity-20 -->
-Comfortably PAST the boundary, so a fix that merely shifted the cliff by one does not pass. Twenty
+Comfortably PAST the boundary, so a cliff shifted by one does not pass. Twenty
 forwarded arguments plus the dead `__env` is twenty-one against fourteen, relieved by cold splits
 in the thunk and in the caller alike. Result is `sum(1..20) = 210`.
 ```maxon
@@ -3809,18 +3706,17 @@ end 'main'
 ```
 
 <!-- test: first-class-function.exitcode-return-through-alias -->
-⭐ **THE WIDTH A FUNCTION TYPEALIAS USED TO DROP (W1).** `ExitCode` is the ONE builtin type name
+⭐ **THE WIDTH A FUNCTION TYPEALIAS MUST CARRY.** `ExitCode` is the ONE builtin type name
 whose tag carries a sub-64 width (`MaxonType.exitCode` → u32), and a function typealias stores its
 declared return interner-free as a `(tag, NAME)` pair — so a `returns ExitCode` arrives at every
 reader as the tag `named` plus the bytes `ExitCode`, and rebuilding it through `maxonTypeOfTag`
-alone gave back a `named`, an i64. The call site then declared `(i64) -> i64` against a
-`__fnref_nine` thunk whose own return width came from the resolved declaration and was i32.
+alone would give back a `named`, an i64. The call site would then declare `(i64) -> i64` against a
+`__fnref_nine` thunk whose own return width comes from the resolved declaration and is i32.
 
 Invisible on every register target — an i64 and a u32 occupy the same GPR — and a hard
 **`wasm trap: indirect call type mismatch`** on wasm, whose `call_indirect` checks the declared
-functype against the funcref's own EXACTLY. So this case is worth nothing on the lane that
-computed the right answer anyway and is the whole assertion on the lane that trapped; it runs on
-all of them for that reason. No closure is involved: a bare function reference through a typealias
+functype against the funcref's own EXACTLY. So this case is the whole assertion on wasm and
+runs on every lane for that reason. No closure is involved: a bare function reference through a typealias
 is enough.
 ```maxon
 typealias Thunk = function() returns ExitCode
@@ -3842,13 +3738,12 @@ end 'main'
 ```
 
 <!-- test: first-class-function.ranged-alias-return-through-alias -->
-⭐ **THE CONTROL FOR THE CASE ABOVE, AND THE CONTROL IS THE POINT (W1).** `Code` is declared over
+⭐ **THE CONTROL FOR THE CASE ABOVE, AND THE CONTROL IS THE POINT.** `Code` is declared over
 `ExitCode`'s EXACT range, so the two cases differ in the NAME and in nothing else — which is what
-shows the divergence was a WIDTH recovered from a name and not a name treated specially. A user
-ranged alias erases to width-free `integer` on both sides of the call (an i64 either way), so it
-agreed before the fix and agrees after it; a regression that re-broke `ExitCode` by teaching the
-rebuild to answer for one name would leave this case green and the one above red, which is
-precisely the pair that says which.
+shows the difference is a WIDTH recovered from a name and not a name treated specially. A user
+ranged alias erases to width-free `integer` on both sides of the call (an i64 either way), so the
+two ends agree whatever the rebuild does; losing `ExitCode`'s width would leave this case green and
+the one above red, which is precisely the pair that says which.
 ```maxon
 typealias Code = int(0 to u32.max)
 typealias CodeThunk = function() returns Code
@@ -3898,17 +3793,14 @@ end 'main'
 <!-- test: first-class-function.exitcode-param-through-alias -->
 The PARAMETER half of the same registry, isolated from the return half — the alias takes an
 `ExitCode` and returns a user ranged alias, so the only sub-64 name in the signature is on the
-argument side. It already agreed, and the asymmetry is the point: an indirect call's argument
-widths come from the RESOLVED `functionAliasShapes`, where the RETURN width was taken from
-the parser's own rebuild instead. So this case is the evidence for that asymmetry rather than a
-second repro of it, and it is what would catch a fix that single-sourced the two columns by moving
-the return's answer onto the param's footing instead of the other way round. `8 + 1`.
-⚠ It passed for a WEAKER reason than it does now, and the two are worth telling apart. The uniform
-function-value ABI used to pass every non-float argument as one machine word whatever it was
-declared: the call site said i64 and the `__fnref_` thunk said i64, so the two agreed by both
-being wrong together, and the narrow width was simply lost. `argNarrowMask` carries it now, so
-both ends say i32 — and the case that catches the difference is `bool-param-through-closure`
-below, where there is no thunk to lose the width symmetrically.
+argument side. An indirect call's argument widths come from the RESOLVED `functionAliasShapes`,
+so this case is what would catch the two columns being single-sourced the wrong way round — the
+parameter's answer moved onto a parser rebuild. `8 + 1`.
+⚠ It cannot tell a width carried from a width lost on both ends: a function-value ABI that passed
+every non-float argument as one machine word would have the call site say i64 and the `__fnref_`
+thunk say i64, agreeing by both being wrong together. `argNarrowMask` carries the width, so both
+ends say i32 — and the case that catches the difference is `bool-param-through-closure` below,
+where there is no thunk to lose the width symmetrically.
 ```maxon
 typealias Outcome = int(0 to u32.max)
 typealias Bump = function(ExitCode) returns Outcome
@@ -3931,17 +3823,15 @@ end 'main'
 
 <!-- test: first-class-function.bool-param-through-closure -->
 ⭐⭐ **THE PARAMETER WIDTH WHERE NOTHING CAN LOSE IT SYMMETRICALLY — a LIFTED CLOSURE taking a
-`bool`.** The `ExitCode`-parameter case above passed while the width was being dropped, because a
-plain function reached as a value goes through the `__fnref_` thunk and the thunk was widening every
-non-float parameter to a machine word, so the call site's i64 met the thunk's i64. A closure has NO
-thunk — it is already `(userargs, __env)`-shaped, so it is called at its OWN declared widths — and
-that is the shape the two ends could not agree on. **MEASURED before `argNarrowMask` existed: this
-program compiled clean, answered `11` on x64-windows, and died `wasm trap: indirect call type
+`bool`.** A plain function reached as a value goes through the `__fnref_` thunk, so a width lost at
+both ends is invisible there. A closure has NO thunk — it is already `(userargs, __env)`-shaped, so it
+is called at its OWN declared widths — and that is the shape where the two ends must agree. **Without
+`argNarrowMask` this program answers `11` on x64-windows and dies `wasm trap: indirect call type
 mismatch` under wasmtime**, because `call_indirect` checks the declared functype against the target's
-own EXACTLY and a `bool` is a wasm `i32` on one side and an `i64` on the other. It is the same missing
-fact `interface-conformance/interface-impl-ignore-param-name` hit through a witness table, reached by
-the one route the wasm backend's now-deleted `.rdata`-slot guard structurally could not see: a
-function value's address is a `.text` `funcAddr`, in no `.rdata` slot at all.
+own EXACTLY and a `bool` would be a wasm `i32` on one side and an `i64` on the other. It is the same
+fact `interface-conformance/interface-impl-ignore-param-name` needs through a witness table, reached by
+a route no `.rdata`-slot guard could see: a
+capturing closure's code address is stored into its heap record at run time, in no `.rdata` slot at all.
 The captured `bump` is what keeps it a genuine closure rather than a closure the compiler could lower
 as a plain function, and the `if loud` is what makes the answer depend on the argument actually
 arriving: pass the wrong word and `7 + 4` does not come back.
@@ -3963,14 +3853,13 @@ end 'main'
 ```
 
 <!-- test: first-class-function.bool-param-through-fnref-thunk -->
-The `__fnref_` half of the case above, and the reason the fix had to move BOTH ends at once. A plain
-named function used as a value is reached through the synthesized `__fnref_<name>` thunk, whose
-parameter types are its own declaration — so the moment the call site began declaring a `bool`
-argument at its real i32 width, a thunk still widening that parameter to an i64 would have started
-trapping exactly where the closure had stopped. The thunk asks the one `maxonTypeToStdType` collapse
-the call site's masks ask, which is what makes the two callable shapes of a function value one shape.
-This case is the guard on that agreement: it passed before the width existed (both ends wrong
-together) and passes after (both ends right), and it fails the moment they diverge again. Returns `7`.
+The `__fnref_` half of the case above, and the reason BOTH ends carry the width. A plain named
+function used as a value is reached through the synthesized `__fnref_<name>` thunk, whose parameter
+types are its own declaration — so with the call site declaring a `bool` argument at its real i32
+width, a thunk widening that parameter to an i64 would trap. The thunk asks the one
+`maxonTypeToStdType` collapse the call site's masks ask, which is what makes the two callable shapes of
+a function value one shape. This case is the guard on that agreement: it fails the moment they
+diverge. Returns `7`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias BoolFn = function(bool) returns Integer
@@ -3993,25 +3882,24 @@ end 'main'
 
 <!-- test: first-class-function.exitcode-return-through-alias-high -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⚠ **A WINDOWS-LANE READING SINCE BATCH27, WHICH IS A REAL LOSS ON THE ONE LANE THIS CASE WAS ABOUT.**
+⚠ **A WINDOWS-LANE READING, WHICH IS A REAL LOSS ON WASM.**
 `return 4000000000` is E3005 on every other target — `ExitCode` is `int(0 to 255)` there — so those lanes
 cannot express this program, which is what the `unsupported-targets:` restriction says. It cannot be re-pinned on
 wasm through any other type, and the reason it cannot (plus the array-element route that looks like a
 substitute and measurably is not) is stated once, in `exit-code-range.md`'s *"What the narrowing costs
 the other lanes"*.
 
-⭐⭐ **THE WIDTH RECOVERED ABOVE 2^31 — THE CASE THE VALUE `9` CANNOT SEE (W1 review).** The case above
+⭐⭐ **THE WIDTH RECOVERED ABOVE 2^31 — THE CASE THE VALUE `9` CANNOT SEE.** The case above
 proves an `ExitCode` returned through a function typealias is the right WIDTH; it cannot prove the
 right VALUE, because 9 is the same number under every extension rule. `ExitCode` is a **u32**
 (`valueTagToStdType`), so on wasm it lives in an `i32` and has to be widened back to the `i64` world
-every Maxon value inhabits — and widening it as SIGNED reads its top bit as a sign. MEASURED, before
-the fix: the host printed `4000000000` and wasm printed **-294967296**, through the alias and through
-a DIRECT call alike. A silent wrong answer, on the one lane that had just been taught to compute the
-width at all.
+every Maxon value inhabits — and widening it as SIGNED would read its top bit as a sign: wasm would
+print **-294967296** where the host prints `4000000000`, through the alias and through a DIRECT call
+alike, a silent wrong answer.
 
-Both readings are asserted, and the pair is the assertion: a fix that corrected only the indirect
-path would leave `direct=` red, and one that corrected only the declared functype would leave both
-red while `exitcode-return-through-alias` above stayed green. `4000000000` is chosen because it
+Both readings are asserted, and the pair is the assertion: an unsigned widening on only the indirect
+path would leave `direct=` red, and one only in the declared functype would leave both red while
+`exitcode-return-through-alias` above stayed green. `4000000000` is chosen because it
 exceeds `i32.max` and fits `u32.max`, which is exactly the band where the two extensions disagree.
 ```maxon
 typealias Thunk = function() returns ExitCode
@@ -4041,33 +3929,31 @@ alias=4000000000
 
 <!-- test: first-class-function.exitcode-through-alias-computes-at-machine-width -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⚠ **A WINDOWS-LANE READING SINCE BATCH27, WHICH IS A REAL LOSS ON THE ONE LANE THIS CASE WAS ABOUT.**
+⚠ **A WINDOWS-LANE READING, WHICH IS A REAL LOSS ON WASM.**
 `return 4000000000` is E3005 on every other target — `ExitCode` is `int(0 to 255)` there — so those lanes
 cannot express this program, which is what the `unsupported-targets:` restriction says. It cannot be re-pinned on
 wasm through any other type, and the reason it cannot (plus the array-element route that looks like a
 substitute and measurably is not) is stated once, in `exit-code-range.md`'s *"What the narrowing costs
 the other lanes"*.
 
-⭐⭐ **AN OPERAND'S DECLARED TYPE IS NOT THE WIDTH THE OPERATION IS PERFORMED AT (X5 review).** The case
+⭐⭐ **AN OPERAND'S DECLARED TYPE IS NOT THE WIDTH THE OPERATION IS PERFORMED AT.** The case
 above proves an `ExitCode` READ back through a function typealias is the right value. This one asks what
-happens when that value is then USED, and the answer had been: on `wasm32-wasi`, at 32 bits. `ExitCode`
-is a **u32** (`valueTagToStdType`), the Std `binOp`/`cmp` carry their left operand's type as
-`operandType`, and a backend whose locals are typed read that as the arithmetic's width — while the
-native backends compute every integer op in a 64-bit register whatever the Std type says. MEASURED
-against x64, all four on the same value: `v * 2` answered **3705032704** for 8000000000, `not v`
-answered **294967295** for -4000000001, `v shl 1` answered **3705032704** for 8000000000, and
-`v > 100` answered **le** for **gt**.
+happens when that value is then USED. `ExitCode` is a **u32** (`valueTagToStdType`), the Std `binOp`/`cmp`
+carry their left operand's type as `operandType`, and a backend whose locals are typed could read that as
+the arithmetic's width — while the native backends compute every integer op in a 64-bit register
+whatever the Std type says. Performed at 32 bits on `wasm32-wasi`, `v * 2` would answer **3705032704**
+for 8000000000, `not v` **294967295** for -4000000001, `v shl 1` **3705032704** for 8000000000, and
+`v > 100` **le** for **gt**.
 
 ⚠ **THE ALIAS IS LOAD-BEARING, WHICH IS WHY THIS CASE LIVES HERE AND NOT IN `division.md`.** A DIRECT
-call to the same function does not reproduce any of it: only the entrances W1 opened — a function
+call to the same function does not reproduce any of it: only the function-typealias entrances — a function
 typealias, and an interface method — mint a genuinely `exitCode`-TAGGED SSA value, and the tag is what
-puts `u32` on the op. A case written against `big()` directly passes with the defect present, which is
-how X5's own `comparison-operators/compare-against-a-literal-keeps-the-operand-width` stayed green over
-this half.
+puts `u32` on the op. A case written against `big()` directly would pass with the width wrong, which is
+why `comparison-operators/compare-against-a-literal-keeps-the-operand-width` cannot stand in for this half.
 
 Each reading is paired with its non-folded twin (`* 2` beside `* d`, `> 100` beside `> d`) because the
-immediate and register forms are different emitters: a fix to one leaves the other red, and a single
-reading cannot see that.
+immediate and register forms are different emitters: one can be right while the other is wrong, and a
+single reading cannot see that.
 ```maxon
 typealias Thunk = function() returns ExitCode
 
@@ -4109,7 +3995,7 @@ valueCmp=1
 
 <!-- test: first-class-function.character-return-through-alias -->
 `Character` is DELIBERATELY absent from `TypeResolution.builtinTypeNameTag`, and this is the case that
-turns the reason into a measurement rather than an argument (W1 review). `parseTypeReference` settles
+turns the reason into an assertion rather than an argument. `parseTypeReference` settles
 `Character` SYNTACTICALLY, so a function typealias stores it by TAG with an EMPTY name and the
 name→tag table is never consulted for it — which is only true while the storage convention holds. If a
 later change ever routed `Character` through the NAME column, this case goes red at the door, instead
@@ -4139,7 +4025,7 @@ x
 ```
 
 <!-- test: first-class-function.string-return-through-alias -->
-`Character`'s twin, and the one that matters for OWNERSHIP rather than width (W1 review). A `String` is
+`Character`'s twin, and the one that matters for OWNERSHIP rather than width. A `String` is
 MANAGED, so a function typealias that returned it under the wrong tag would not merely mis-size the
 value — it would put it on the wrong side of the drop walk. It rides the TAG column for
 `Character`'s reason (`parseTypeReference` settles `String` syntactically, storing an empty name), so
@@ -4170,10 +4056,10 @@ abc
 
 <!-- test: first-class-function.bool-return-through-alias -->
 The other keyword-settled tag, and the other sub-64 one: `bool` is an `i1` — a wasm `i32` — so a
-function typealias returning it has the same width to lose that `ExitCode` did. It cannot lose it by
+function typealias returning it has the same width to lose that `ExitCode` has. It cannot lose it by
 the same route (`bool` is a KEYWORD, so it can never arrive as a `named` name), and that asymmetry is
 what this case pins beside `exitcode-return-through-alias`: the two sub-64 returns reach their width
-through DIFFERENT columns, and only one of them was ever at risk.
+through DIFFERENT columns, and only the `named` column can lose it.
 ```maxon
 typealias Num = int(0 to 100)
 typealias Pred = function(Num) returns bool
@@ -4195,11 +4081,11 @@ end 'main'
 ```
 
 <!-- test: first-class-function.exitcode-through-alias-struct-field -->
-A THIRD door into the function-alias registry, and one no case reached before (W1 review): the alias
+A THIRD door into the function-alias registry: the alias
 names a struct FIELD's type, so the recovered return width has to survive being stored in a box and
 loaded back out before the indirect call is made. A width recovered only where a PARAMETER is typed
-would leave this one declaring `() -> i64` against a `() -> i32` thunk, which is the original trap
-arriving through a different door.
+would leave this one declaring `() -> i64` against a `() -> i32` thunk — the same trap arriving
+through a different door.
 ```maxon
 typealias Thunk = function() returns ExitCode
 
@@ -4224,7 +4110,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.exitcode-through-alias-array-element -->
-The FOURTH door — the alias as an `Array` ELEMENT type (W1 review). It is the struct-field case's twin
+The FOURTH door — the alias as an `Array` ELEMENT type. It is the struct-field case's twin
 with one difference that is worth its own case: the element type reaches the alias registry through
 the GENERIC instance machinery rather than a field declaration, so the two are separate readers of the
 same stored `(tag, name)` pair, and either could have been left behind.
@@ -4249,19 +4135,19 @@ end 'main'
 
 <!-- test: first-class-function.generic-instance-returned-through-alias-is-identified-by-type-not-by-intern-order -->
 ⭐⭐ **THE MIRROR OF THE FOUR DOORS ABOVE: a generic INSTANCE as the alias's OWN return type, and it is
-the one spelling whose identity the stored `(tag, name)` pair could not carry.** A `genericInstance`'s
-identity is a `GenericInstanceId`, not an interned name, so `functionAliasTypeName` had nothing to put in
-the name slot and the rebuild substituted `UnnamedTypeId` — which is **0**, a perfectly valid instance
-id. The declared side of every comparison therefore read as *"generic instance #0"*: whichever
-instantiation the declaration sweep happened to intern FIRST.
+the one spelling whose identity a `(tag, name)` pair cannot carry.** A `genericInstance`'s identity is a
+`GenericInstanceId`, not an interned name, so the alias carries it in its own column
+(`FunctionAliasParam.identity`). With only a name slot the rebuild would substitute
+`UnnamedTypeId` — which is **0**, a perfectly valid instance id — and the declared side of every
+comparison would read as *"generic instance #0"*: whichever instantiation the declaration sweep happened
+to intern FIRST.
 
-⚠ **`SmallArray` IS THE TEST, AND IT IS DECLARED FIRST ON PURPOSE.** With `FieldArray` alone this program
-passes on the broken compiler, because `Array with Field` is then instance 0 and the wrong answer
-coincides with the right one. Declaring an unrelated instantiation ahead of it moves `Array with Field`
-to id 1 and the legal program is refused `E3005 … expected 'fn(int) returns struct', got 'fn(int)
-returns struct'` — a diagnostic saying a type does not match itself, because the renderer had no
-`genericInstance` arm either. Nothing about this is cross-file: the ORDINAL is the defect, and a
-declaration two lines up is enough to move it.
+⚠ **`SmallArray` IS THE TEST, AND IT IS DECLARED FIRST ON PURPOSE.** With `FieldArray` alone an ordinal
+reading would pass, because `Array with Field` is then instance 0 and the wrong answer coincides with the
+right one. Declaring an unrelated instantiation ahead of it moves `Array with Field` to id 1, where an
+ordinal reading refuses the legal program — and, without a `genericInstance` arm in the renderer, says
+`expected 'fn(int) returns struct', got 'fn(int) returns struct'`, a type not matching itself. Nothing
+about this is cross-file: the ORDINAL is the hazard, and a declaration two lines up is enough to move it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -4304,10 +4190,9 @@ end 'main'
 <!-- test: first-class-function.generic-instance-parameter-through-alias-is-identified-by-type-not-by-intern-order -->
 The PARAMETER half of the same loss. `FunctionAliasParam` stores its type the same interner-free way the
 return does — one extractor fills both — so a generic instance is dropped at either door and the halves
-must be pinned separately: a fix that carries the return's identity and forgets the parameter's leaves
-this program refused. On the broken compiler it fails TWICE, and the first failure is the mechanism in
-plain sight: `expected 'SmallArray', got 'FieldArray'` at the indirect call, naming a type this program
-never writes in that position, because the alias's parameter type had genuinely BECOME instance 0's.
+must be pinned separately: carrying the return's identity and not the parameter's would leave this
+program refused, with `expected 'SmallArray', got 'FieldArray'` at the indirect call — naming a type this
+program never writes in that position, because the alias's parameter type would have BECOME instance 0's.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -4349,15 +4234,14 @@ end 'main'
 ⛔⛔ **THE WRONG ANSWER, AND IT IS A SEGFAULT.** The two cases above are false REFUSALS — a legal program
 turned away. This is the other polarity, and it is what makes the lost identity a memory-safety defect
 rather than an inconvenience: `buildSmalls` returns `Array with Small`, a **ranged-integer** array, where
-`FieldsBuilder` promises `Array with Field`, an array of **structs**. Because the declared side had
-decayed to *"instance #0"* and `Array with Small` — declared first — genuinely IS instance 0, the
-comparison was `0 == 0` and the call was **accepted**. `first.v` then reads the integer `3` as a `Field`
-pointer and dereferences it. MEASURED on the broken compiler: compiles clean, exit 0 from the compiler,
-**SIGSEGV** from the program.
+`FieldsBuilder` promises `Array with Field`, an array of **structs**. Were the declared side to decay
+to *"instance #0"* — and `Array with Small`, declared first, genuinely IS instance 0 — the comparison
+would be `0 == 0` and the call **accepted**; `first.v` would then read the integer `3` as a `Field`
+pointer and dereference it: a clean compile, and a **SIGSEGV** from the program.
 
-⚠ **The refusal must name the two instances.** `maxonTypeName` spelled only `named`/`structRef`/
-`function`/`interfaceRef` through the interner and dropped a `genericInstance` to `typeTagName`'s bare
-word `struct`, so even the correctly-refused twin below said a type did not match itself.
+⚠ **The refusal must name the two instances.** `maxonTypeName` spells a `genericInstance` through the
+interner; spelled as `typeTagName`'s bare word `struct`, even the correctly-refused twin below would say
+a type did not match itself.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -4398,14 +4282,14 @@ error E3005: <fragment>:31:9: argument type mismatch for 'f': expected 'fn(int) 
 <!-- test: first-class-function.error.generic-instance-returned-through-alias-refuses-a-different-instance-either-order -->
 ⭐ **THE ORDER TWIN, AND IT IS THE ONE THAT ISOLATES THE RENDERER.** The identical program with the two
 generic aliases declared the other way round, so `Array with Field` is instance 0 and the decayed
-declared side coincides with the truth. The broken compiler therefore reaches the **right verdict here**
-— it refuses — while accepting the twin above; that asymmetry is the whole defect, and a pair is what
-makes *"the answer does not depend on which instance was interned first"* a claim a test can fail.
+declared side coincides with the truth. An ordinal reading would therefore reach the **right verdict here**
+— it refuses — while accepting the twin above; a pair is what makes *"the answer does not depend on which
+instance was interned first"* a claim a test can fail.
 
-⚠ **It was still RED, on the MESSAGE alone**, which is why this half is not decoration: the refusal read
-`expected 'fn(int) returns struct', got 'fn(int) returns struct'`. A diagnostic that renders both sides
-of a mismatch identically names nothing, and a reader who trusts it concludes the compiler is broken in
-some way it is not — here it was right about the program and wrong only about how to say so.
+⚠ **The MESSAGE is pinned too**, which is why this half is not decoration: a refusal reading
+`expected 'fn(int) returns struct', got 'fn(int) returns struct'` renders both sides of a mismatch
+identically and names nothing, and a reader who trusts it concludes the compiler is broken in some way it
+is not.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -4453,7 +4337,7 @@ alias declared inside an `extension` body is the one that reaches the index alre
 carrying a real, dense `GenericInstanceId`.
 
 ⚠ **THIS CASE *REACHES* THE CACHE-KEY ARM; IT DOES NOT DISCRIMINATE IT, AND THE DIFFERENCE IS THE WHOLE
-REASON THE CLAUSE IS WORDED THIS WAY.** MEASURED with a temporary panic on this program: `Builder` arrives
+REASON THE CLAUSE IS WORDED THIS WAY.** `Builder` arrives
 at `ProgramSignatures.recordFunctionTypeAlias` tagged `genericInstance` with **gid 1** — 1 and not 0
 precisely because `SmallArray` is declared first, which is the same theft the file-scope cases pin — and
 none of the four cases above reaches that arm at all. But a spec case observes stdout, stderr and an exit
@@ -4462,7 +4346,7 @@ that raw gid and this case and its twin below both still PASS. What this case pi
 it does discriminate — the alias's stored identity, checked by `functionShapesAgree`.
 
 ⇒ **The hash half's evidence is not in the suite and cannot be put there.** It is an isolated-contribution
-probe recorded in the landing commit: the same alias's hash contribution measured across four programs, one
+probe outside the suite: the same alias's hash contribution compared across four programs, one
 per polarity — an unrelated declaration removed so the gid moves 1 → 0 with the type unchanged (contribution
 must not move), the return retyped (must move), a parameter retyped (must move), and the file reformatted
 (must not move). A warm rebuild across a source edit — the situation the key exists for — is not
@@ -4513,7 +4397,7 @@ end 'main'
 <!-- test: first-class-function.error.generic-instance-through-an-extension-body-alias-refuses-a-different-instance -->
 ⛔ **THE NEGATIVE TWIN OF THE CASE ABOVE, so the extension-body population is pinned in BOTH polarities
 exactly as the file-scope one is.** `buildSmalls` returns `Array with Small` where `Builder` promises
-`Array with Field`; the identity carried in `FunctionAliasParam.genericInstanceId` is what makes that a
+`Array with Field`; the identity carried in `FunctionAliasParam.identity` is what makes that a
 refusal rather than a `0 == 0` acceptance, and the instance display name is what makes the sentence name two
 types rather than saying `struct` twice.
 ```maxon
@@ -4555,4 +4439,468 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:35:11: argument type mismatch for 'f': expected 'fn(int) returns FieldArray', got 'fn(int) returns SmallArray'
+```
+
+<!-- test: first-class-function.an-inner-function-alias-naming-self-offers-the-instance-to-an-untyped-closure -->
+A closure literal with an UNTYPED parameter, written at a method parameter declared with an inner function
+alias whose parameter is `Self`, is offered the receiver's own instance.
+```maxon
+type Cell uses T
+	export var v as T
+
+	typealias Pick = function(Self) returns T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function through(p Pick) returns T
+		return p(self)
+	end 'through'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function main() returns ExitCode
+	let c = StrCell.make("inferred")
+	print("{c.through(function(x) gives x.v)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+inferred
+```
+
+<!-- test: first-class-function.a-function-field-read-through-an-instance-takes-its-arguments -->
+```maxon
+type Cell uses T
+	export var v as T
+	export var pick as Pick
+
+	typealias Pick = function(T) returns T
+
+	static function make(v T, pick Pick) returns Self
+		return Self{v: v, pick: pick}
+	end 'make'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function shout(s String) returns String
+	return "{s}!"
+end 'shout'
+
+function main() returns ExitCode
+	let c = StrCell.make("stored", pick: shout)
+	let p = c.pick
+	print("{p(c.v)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+stored!
+```
+
+
+<!-- test: first-class-function.a-function-field-naming-self-is-called-with-the-instance -->
+```maxon
+type Cell uses T
+	export var v as T
+	export var pick as Pick
+
+	typealias Pick = function(Self) returns T
+
+	static function make(v T, pick Pick) returns Self
+		return Self{v: v, pick: pick}
+	end 'make'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function first(c StrCell) returns String
+	return "first {c.v}"
+end 'first'
+
+function main() returns ExitCode
+	let c = StrCell.make("stored", pick: first)
+	print("{c.pick(c)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first stored
+```
+
+
+<!-- test: first-class-function.a-function-field-stored-through-an-instance-is-called-with-its-arguments -->
+```maxon
+type Cell uses T
+	export var v as T
+	export var pick as Pick
+
+	typealias Pick = function(T) returns T
+
+	static function make(v T, pick Pick) returns Self
+		return Self{v: v, pick: pick}
+	end 'make'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function shout(s String) returns String
+	return "{s}!"
+end 'shout'
+
+function whisper(s String) returns String
+	return "{s}..."
+end 'whisper'
+
+function main() returns ExitCode
+	var c = StrCell.make("stored", pick: shout)
+	c.pick = whisper
+	print("{c.pick(c.v)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+stored...
+```
+
+
+<!-- test: first-class-function.a-function-value-returned-through-an-instance-takes-its-arguments -->
+```maxon
+type Cell uses T
+	export var v as T
+	export var pick as Pick
+
+	typealias Pick = function(T) returns T
+
+	static function make(v T, pick Pick) returns Self
+		return Self{v: v, pick: pick}
+	end 'make'
+
+	function getter() returns Pick
+		return pick
+	end 'getter'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function shout(s String) returns String
+	return "{s}!"
+end 'shout'
+
+function main() returns ExitCode
+	let c = StrCell.make("got", pick: shout)
+	let g = c.getter()
+	print("{g(c.v)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+got!
+```
+
+
+<!-- test: first-class-function.a-function-field-read-through-an-instance-fits-a-concrete-function-type -->
+```maxon
+typealias Transform = function(String) returns String
+
+type Cell uses T
+	export var v as T
+	export var pick as Pick
+
+	typealias Pick = function(T) returns T
+
+	static function make(v T, pick Pick) returns Self
+		return Self{v: v, pick: pick}
+	end 'make'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function shout(s String) returns String
+	return "{s}!"
+end 'shout'
+
+function apply(f Transform, s String) returns String
+	return f(s)
+end 'apply'
+
+function main() returns ExitCode
+	let c = StrCell.make("passed", pick: shout)
+	print("{apply(c.pick, s: c.v)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+passed!
+```
+
+
+<!-- test: error.first-class-function.a-function-field-read-through-an-instance-refuses-a-wrong-argument -->
+```maxon
+type Cell uses T
+	export var v as T
+	export var pick as Pick
+
+	typealias Pick = function(T) returns T
+
+	static function make(v T, pick Pick) returns Self
+		return Self{v: v, pick: pick}
+	end 'make'
+end 'Cell'
+
+typealias StrCell = Cell with String
+
+function shout(s String) returns String
+	return "{s}!"
+end 'shout'
+
+function main() returns ExitCode
+	let c = StrCell.make("stored", pick: shout)
+	let p = c.pick
+	_ = p(42)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:22:7: argument type mismatch for 1: expected 'String', got 'int'
+```
+
+<!-- test: first-class-function.capturing-closure-passed-to-a-function-value -->
+The callee is a plain function reached as a value; its `__fnref_` thunk forwards the closure argument to `run`.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Op = function(Integer) returns Integer
+typealias Runner = function(Op, Integer) returns Integer
+
+function run(f Op, x Integer) returns Integer
+	return f(x)
+end 'run'
+
+function pick() returns Runner
+	return run
+end 'pick'
+
+function main() returns ExitCode
+	let offset = 5
+	let runner = pick()
+	let result = runner(function(n Integer) gives n + offset, 10)
+	print("{result}\n")
+	return 0
+end 'main'
+```
+```stdout
+15
+```
+
+<!-- test: first-class-function.capturing-closure-passed-to-a-closure-parameter -->
+The callee is a closure literal handed down as a parameter; two capturing arguments, one call each.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Op = function(Integer) returns Integer
+typealias Runner = function(Op, Integer) returns Integer
+
+function twice(runner Runner, x Integer) returns Integer
+	let scale = 3
+	return runner(function(n Integer) gives n * scale, x) + runner(function(n Integer) gives n + scale, x)
+end 'twice'
+
+function main() returns ExitCode
+	let bump = 1
+	let result = twice(function(f Op, x Integer) gives f(x) + bump, x: 4)
+	print("{result}\n")
+	return 0
+end 'main'
+```
+```stdout
+21
+```
+
+<!-- test: first-class-function.capturing-closure-forwarded-through-an-indirect-call -->
+A function-typed PARAMETER forwarded into an indirect call is the closure it arrived as, captures included.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Op = function(Integer) returns Integer
+typealias Runner = function(Op, Integer) returns Integer
+
+function run(f Op, x Integer) returns Integer
+	return f(x)
+end 'run'
+
+function relay(f Op, runner Runner) returns Integer
+	return runner(f, 7)
+end 'relay'
+
+function main() returns ExitCode
+	let offset = 30
+	let result = relay(function(n Integer) gives n + offset, runner: run)
+	print("{result}\n")
+	return 0
+end 'main'
+```
+```stdout
+37
+```
+
+<!-- test: first-class-function.capturing-closures-at-two-function-parameters-beside-a-float -->
+Two function-typed parameters around a float one: each closure is one word in its own argument position.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+typealias Op = function(Integer) returns Integer
+typealias Scale = function(Real) returns Real
+typealias Mixer = function(Op, Real, Scale, Integer) returns Real
+
+function mix(f Op, r Real, g Scale, n Integer) returns Real
+	return g(r) + (f(n) as Real)
+end 'mix'
+
+function chosen(m Mixer) returns Mixer
+	return m
+end 'chosen'
+
+function main() returns ExitCode
+	let add = 2
+	let factor = 1.5
+	let mixer = chosen(function(f Op, r Real, g Scale, n Integer) gives mix(f, r: r, g: g, n: n) * 2.0)
+	let result = mixer(function(n Integer) gives n + add, 2.0, function(x Real) gives x * factor, 10)
+	print("{result}\n")
+	return 0
+end 'main'
+```
+```stdout
+30.0
+```
+
+<!-- test: first-class-function.capturing-closure-to-a-function-value-that-keeps-it -->
+A capturing closure handed through a function value to a body that stores it.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Op = function(Integer) returns Integer
+
+type Keeper
+	export var kept as Op
+
+	static function create(f Op) returns Keeper
+		return Keeper{kept: f}
+	end 'create'
+end 'Keeper'
+
+function keep(f Op, x Integer) returns Integer
+	let k = Keeper.create(f)
+	return k.kept(x)
+end 'keep'
+
+function main() returns ExitCode
+	let offset = 5
+	let runner = keep
+	let result = runner(function(n Integer) gives n + offset, 10)
+	print("{result}\n")
+	return 0
+end 'main'
+```
+```stdout
+15
+```
+
+<!-- test: a-closure-literal-result-takes-the-exit-code-its-function-type-returns -->
+A closure passed where a function type returning `ExitCode` is declared returns `ExitCode`, as a `return`
+of the same literal would in a function declared that way.
+```maxon
+type Box
+	let v as ExitCode
+
+	static function make() returns Box
+		return Box{v: 9}
+	end 'make'
+end 'Box'
+
+typealias Op = function(Box) returns ExitCode
+
+function probe(o Op) returns ExitCode
+	return o(Box.make())
+end 'probe'
+
+function main() returns ExitCode
+	return probe(function(_) gives 4)
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: a-closure-literal-result-is-range-checked-against-its-function-types-ranged-return -->
+A closure passed where `function(Small) returns Small` is declared returns `Small`, under the rules a
+`return` from a function declared `returns Small` is held to. `v * 3` cannot be proved in range, so it is
+checked when the closure returns: 5 passes, and 12 stops the program.
+```maxon
+typealias Small = int(0 to 9)
+typealias Op = function(Small) returns Small
+
+function apply(o Op, v Small) returns Small
+	return o(v)
+end 'apply'
+
+function main() returns ExitCode
+	print("{apply(function(_) gives 5, v: 1)}")
+	return apply(function(v) gives v * 3, v: 4) as ExitCode
+end 'main'
+```
+```stdout
+5
+```
+```exitcode
+1
+```
+```stderr
+panic at a-closure-literal-result-is-range-checked-against-its-function-types-ranged-return.test:11: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in main$closure_1
+  in apply
+  in main
+  in mrt_start
+```
+
+<!-- test: error.a-closure-literal-result-outside-its-function-types-ranged-return-is-refused -->
+A literal is proved against the declared return type where it is written, as `return 50` from a function
+declared `returns Small` is.
+```maxon
+typealias Small = int(0 to 9)
+typealias Op = function(Small) returns Small
+
+function apply(o Op, v Small) returns Small
+	return o(v)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(function(_) gives 50, v: 1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:27: Value 50 is outside the range of 'Small' (int(0 to 9))
 ```

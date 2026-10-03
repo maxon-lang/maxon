@@ -1,8 +1,7 @@
-// Runtime/MmRuntime.maxon — the emitted memory-management runtime (Workstream R, slice R1).
+// Runtime/MmRuntime.maxon — the emitted memory-management runtime.
 //
-// ⭐ THIS IS A BUILDER-BUILT `StdModule`, NOT HAND-ASSEMBLED BYTES, and that was a decision taken
-// on purpose rather than by inertia (PLAN.md's R1 box exists to force exactly this). The panic
-// runtime (P1.0d.3) IS hand-assembled, and that was right for it: the OS calls a VEH thunk with a
+// ⭐ THIS IS A BUILDER-BUILT `StdModule`, NOT HAND-ASSEMBLED BYTES. The panic
+// runtime IS hand-assembled, and that is right for it: the OS calls a VEH thunk with a
 // raw ABI, so there is no Maxon-level spelling of "read CONTEXT.Rip". The allocator is not such a
 // case — it needs only ordinary calls, arithmetic, loads and stores. Building it as `StdOp`s means
 // it gets register allocation, the frame layout, and target-independence for FREE, and every later
@@ -55,9 +54,7 @@
 // tracing.
 let HeaderDestructorOffset = 0 as ByteOffset
 
-// ⭐⭐ **THE SIZE FIELD HOLDS THE SIZE THE CALLER ASKED FOR, AND SINCE S4 THAT IS ITS ONLY MEANING.**
-// Between S2 and S4 it held the ROUNDED size instead, because `__mm_free` recovered the free-list bucket
-// by SHIFTING it and a caller's 40 would have returned a 40-byte box to the 48-byte bucket. The span now
+// ⭐⭐ **THE SIZE FIELD HOLDS THE SIZE THE CALLER ASKED FOR, AND THAT IS ITS ONLY MEANING.** The span
 // knows the class, so nothing asks this field a question about the ALLOCATOR — the one reader left is
 // `__mm_free`'s poison range, which wants exactly the bytes the caller could write, and `[ptr + size,
 // slot end)` is slack the caller never saw. One fact, one place: what the program asked for.
@@ -73,7 +70,7 @@ let HeaderRefcountOffset = 16 as ByteOffset
 let HeaderBytes = 24
 
 // ⭐⭐ **THE `--debugstream` PREFIX WORD — `(alloc_id << 16 | tag_index)`, AND IT SITS *BELOW* THE HEADER
-// ON PURPOSE (Workstream O3).** `mm_incref`/`mm_decref`/`mm_free` know only a POINTER, so the id and the
+// ON PURPOSE.** `mm_incref`/`mm_decref`/`mm_free` know only a POINTER, so the id and the
 // type tag an mm-trace event needs must live in the box; `__mm_alloc` is the one place that knows both.
 //
 // ⚠ **PUTTING IT BELOW THE THREE EXISTING FIELDS RATHER THAN AMONG THEM IS THE WHOLE OF WHY THIS IS A
@@ -115,9 +112,10 @@ end 'boxPrefixBytes'
 // arithmetic on a live refcount arrives at it and no pointer-shaped guard mistakes it for an address.
 let MmImmortalRefcount = 4611686018427387904 as ParsedInt  // 0x4000_0000_0000_0000 = 2^62
 
-// ⭐⭐ **THE MARK A LENT RECORD'S COUNT CARRIES — the word is `mark + owners - 1` from the lend on.** A lend adds
-// it once, on the sender's own green thread at the walk's first meeting of the record (`emitBoxWalkStep`), and from
-// then on every step of that count is ATOMIC, because a second green thread may hold the record.
+// ⭐⭐ **THE MARK A SHARED RECORD'S COUNT CARRIES — the word is `mark + owners - 1` from the share
+// on.** A share walk adds it once, on the sharing green thread at the walk's first meeting of the
+// record (`emitBoxWalkStep`), and from then on every step of that count is ATOMIC, because a second
+// green thread may hold the record.
 //
 // ⚠ **THE VALUE'S PROPERTIES ARE WHAT MATTER.** A counted word stays below it — its transient `-1` after the
 // last owner leaves is below it too, the compare being signed — and a shared count stays below
@@ -129,9 +127,7 @@ let MmSharedRefcountMark = 2305843009213693952 as ParsedInt  // 0x2000_0000_0000
 // DebugStream prefix word below them is the same width.
 let HeaderSlotBytes = 8 as BytePos
 
-// `destructor@0` for a record that has none, and the packed id of a box that was never allocated — both
-// zero, and named apart because they answer different questions in the two slots they fill.
-export let NoDestructor = 0 as ParsedInt
+// The packed id of a box that was never allocated.
 let NoAllocationId = 0 as ParsedInt
 
 // ⭐⭐ **THE SYNTHETIC ALLOCATION HEADER AN IMAGE RECORD IS REGISTERED BEHIND** — the bytes that sit in
@@ -167,7 +163,7 @@ export function immortalBoxHeaderBytes(debugStream bool, recordBytes ParsedInt) 
 	end 'tracedBuild'
 
 	let base = header.count() as ByteOffset
-	appendHeaderSlot(header, base: base, expectedOffset: HeaderDestructorOffset, value: NoDestructor)
+	appendHeaderSlot(header, base: base, expectedOffset: HeaderDestructorOffset, value: TrivialDestructor)
 	appendHeaderSlot(header, base: base, expectedOffset: HeaderSizeOffset, value: recordBytes)
 	appendHeaderSlot(header, base: base, expectedOffset: HeaderRefcountOffset, value: MmImmortalRefcount)
 
@@ -200,7 +196,7 @@ end 'appendHeaderSlot'
 //   • COUNTED — below `MmSharedRefcountMark`. One green thread owns the box, so its count steps PLAIN.
 //   • IMMORTAL — exactly `MmImmortalRefcount`. Image data in `.rdata`: nothing may write the header, and there
 //     is nothing to count, because the record outlives every owner.
-//   • SHARED — a lend marked it. Its count steps ATOMICALLY, and its graph is frozen.
+//   • SHARED — a share walk marked it. Its count steps ATOMICALLY, and its graph is frozen.
 //
 // Every door that touches a header routes through here: the owner-count step (`emitStepOwnerCount`, which
 // every acquire and every release takes) and the walk step (`emitBoxWalkStep`, which every soleness and share
@@ -225,17 +221,6 @@ function emitRouteOnRefcountWord(module StdModule, func IrFunction, block IrBloc
 	let isImmortal = emitCmp(module, block: uncounted, a: word, b: sentinel, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(uncounted, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: shared.id))
 end 'emitRouteOnRefcountWord'
-
-// ⛔⛔ **THE SIZE-CLASSED FREE LISTS STOOD HERE AND WENT WITH THE CUTOVER (S4).** They were a
-// 16-byte-granular bucket table (`__mm_free_lists`, its 128 KB array committed lazily by
-// `__mm_free_lists_base`, threaded LIFO through each dead box's own payload) and they existed for one
-// stated reason: the allocator BENEATH them reclaimed nothing, so a program's peak RSS was its TOTAL
-// allocation rather than its LIVE one — which is what the slab now has to hold on its own.
-//
-// They are gone rather than kept beside the slab because a second size-class ladder over a real one is not
-// a cache, it is a FORK: two granularities, two reuse policies, and a dead box whose bytes could be live in
-// either. What replaced each piece is one layer down — the rounding is `emitSlabClassIndex`'s reverse-table
-// read, the bucket is the owning span's own free list, and the lazily-committed table is `__slab_state`.
 
 // ⭐⭐ **THE BOX LAYER KEEPS NO `.data` WORD.** Its counters — the leak gate's live count and the two
 // traffic columns `__Builtins.mm*()` read — are the TRACKED trio of the slab's per-row traffic columns
@@ -340,8 +325,8 @@ export let MmIsNullName = b"__mm_is_null"
 // ownership encoding it republishes. See `buildMmCowDetach` for why it is an `__mm_` operation at all.
 export let MmCowDetachName = b"__mm_cow_detach"
 
-// ⭐ **THE NAME OF A MANAGED-PAYLOAD UNION'S SYNTHESIZED DESTRUCTOR — `__destruct_<UnionName>`** (P1.3
-// slice 2). It is `__`-prefixed, so `isCompilerInternalCallee` routes its call past the user-function
+// ⭐ **THE NAME OF A MANAGED-PAYLOAD UNION'S SYNTHESIZED DESTRUCTOR — `__destruct_<UnionName>`**.
+// It is `__`-prefixed, so `isCompilerInternalCallee` routes its call past the user-function
 // checks — no file declares it. ONE speller, so the DROP site (`Parser.decrefCalleeFor`), the USAGE scan
 // (`recordCallUsage`) and the SYNTHESIS (`installUnionDestructors`) name it identically and cannot drift.
 export let DestructorPrefix = b"__destruct_"
@@ -351,7 +336,7 @@ export function destructorSymbol(unionName ByteArray) returns ByteArray
 end 'destructorSymbol'
 
 // ⭐⭐⭐ **THE NAME OF A DECLARATION VIEW'S *DICTIONARY* DESTRUCTOR — `__destruct_dict_<mangled>(descriptor,
-// box)` (BATCH41).** The `__destruct_<mangled>` a CONCRETE instance gets is a one-argument cascade whose every
+// box)`.** The `__destruct_<mangled>` a CONCRETE instance gets is a one-argument cascade whose every
 // field drop is a symbol; a DECLARATION VIEW (`BagIter with Element` inside `type Bag uses Element`) has a
 // field whose release is not a symbol at all but the enclosing instantiation's `destroyFunc@40`, so its
 // cascade takes the layout descriptor as a SECOND parameter and releases that field through
@@ -403,7 +388,7 @@ let WholeDescriptorBlockOffset = 0 as ByteOffset
 let PlainDestructorParamCount = 1 as ParamCount
 let PlainDestructorBoxParam = 0 as ValueId
 
-// ⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED DEEP-CLONER — `__clone_<TypeName>`** (P1.7 slice 3b-vi-b), the
+// ⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED DEEP-CLONER — `__clone_<TypeName>`**, the
 // `(box) -> newBox` DUAL of `__destruct_<TypeName>`. `__`-prefixed, so `isCompilerInternalCallee` routes its
 // call/`funcAddr` past the user-function checks and no file declares it. ONE speller, so the STAMP site
 // (`Parser.arrayElementCloneValue` / the struct/union field cascade), the USAGE scan (`recordCallUsage`) and
@@ -502,8 +487,8 @@ end 'isRuntimeCallee'
 // EMITS (`__mm_alloc`, `__print_string`, `__str_eq`, …) starts with it. The reservation is enforced
 // at parse time (E2051), so no user name can collide.
 //
-// ⭐ **THE RESERVATION IS ENFORCED AT BOTH ENDS, AND IT TAKES BOTH** (OPEN.md #35, CLOSED; completed by
-// P1.0b step 2). Two separate rules bound what a `__` callee can be:
+// ⭐ **THE RESERVATION IS ENFORCED AT BOTH ENDS, AND IT TAKES BOTH.**
+// Two separate rules bound what a `__` callee can be:
 //
 //   1. **No `__` name may be DECLARED, outside the ONE module that declares the reserved space** —
 //      E2051, `Parser.requireUnreservedName`, at all eight binding sites, pinned by
@@ -511,7 +496,7 @@ end 'isRuntimeCallee'
 //      function, and this predicate would route that call past `validateCall`'s arity/label checks — a
 //      silent miscompile.
 //   2. **No `__` name may be CALLED from source unless it names a recognized intrinsic — or the module
-//      that declares the reserved space is calling a name it declares (D6/A1r)** — E3004,
+//      that declares the reserved space is calling a name it declares** — E3004,
 //      `Parser.requireCalleeIsNotReservedName`, at the two source call doors (`emitCall`,
 //      `emitAsyncCall`), pinned by `builtins-clock.md` and `reserved-double-underscore.md`.
 //
@@ -523,14 +508,14 @@ end 'isRuntimeCallee'
 // `valueTagToStdType: an 'unresolved' tag reached lowering`). Rule 2 is what bounds the family.
 //
 // ⚠⚠ **WHAT THE TWO RULES DO *NOT* GIVE IS "A `__` CALLEE IS COMPILER-OWNED" — rule 1's own exemption is
-// why**, and reading them as if they did is what `isSignaturelessCompilerCallee` exists to stop. Since D6
-// there is a `__` name with a DECLARATION behind it, and since A1r there is a call to one; such a call is
-// an ordinary user function call that happens to wear the prefix. "Compiler-owned" is therefore the
+// why**, and reading them as if they did is what `isSignaturelessCompilerCallee` exists to stop. A `__`
+// name can have a DECLARATION behind it, and a call to one is an ordinary user function call that
+// happens to wear the prefix. "Compiler-owned" is therefore the
 // REGISTRY's answer, not the name's — see below.
 let CompilerInternalPrefix = b"__"
 
 // ⭐ **DOES THIS CALLEE WEAR THE COMPILER'S PREFIX?** The GENERAL predicate — a superset of
-// `isRuntimeCallee`. It answers about the NAME's SHAPE and nothing else, which since D6/A1r is strictly less
+// `isRuntimeCallee`. It answers about the NAME's SHAPE and nothing else, which is strictly less
 // than "is this callee the compiler's own": for that, ask `isSignaturelessCompilerCallee` below.
 //
 // ⚠ **ITS THREE REMAINING DIRECT READERS ALL WANT THE SHAPE, and two of them because "declared" is already
@@ -559,7 +544,7 @@ let CompilerInternalPrefix = b"__"
 // prevent for `__mm_alloc`.
 //
 // ⚠ The second clause covers exactly the qualifiers a direct dispatch can be emitted under — `int.`,
-// `float.`, `bool.` and, since BATCH2 slice 2, `String.` — and that bound is load-bearing rather than
+// `float.`, `bool.` and `String.` — and that bound is load-bearing rather than
 // conservative. See `isBuiltinConformanceImplName` for the two DIFFERENT things that make it sound: the
 // three primitives are keywords, while `String.` rests on the name being reserved from user declarations
 // (`TypeResolution.isCompilerOwnedTypeName`).
@@ -586,13 +571,10 @@ end 'isCompilerInternalCallee'
 // that cannot be true, which is the shape a reader mistakes for coverage.
 export let ForceSegfaultName = b"maxon_force_segfault"
 
-// ⭐⭐ **WHY A CALLEE IS THE COMPILER'S OWN — the two clauses above, told apart rather than summed (W55).**
-// The predicate answers *whether*; a REFUSAL has to say *why*, and deriving the two separately is how the
-// gate and its sentence came to disagree: `Parser.requireCalleeIsNotReservedName` refused on the OR and then
-// explained every refusal with the FIRST clause's reason, so a synthesized impl named directly reported
-// **`E3004 call to undefined function 'String.compare': the '__' prefix names a compiler intrinsic`** about
-// a name carrying no `__` at all. One classifier, asked once, removes the second derivation rather than
-// keeping it in step.
+// ⭐⭐ **WHY A CALLEE IS THE COMPILER'S OWN — the two clauses above, told apart rather than summed.**
+// The predicate answers *whether*; a REFUSAL has to say *why*. Deriving the reason separately from
+// the OR lets a refusal explain itself with the wrong clause — a synthesized impl named directly
+// would be told its name carries the `__` prefix — so one classifier, asked once, answers both.
 //
 // ⚠ **THE TWO CLAUSES ARE DISJOINT AND THE ORDER IS THEREFORE NOT A PRECEDENCE.** A synthesized impl is
 // `<conformer>.<method>` over `int`/`float`/`bool`/`String`, none of which can wear the reserved prefix
@@ -643,30 +625,26 @@ end 'reservedCalleeReasonOf'
 //
 // **The readers, and which reading each takes:**
 //
-//   • *"nothing to check against"* — `SemanticCheck.validateCall` and `validatePlainCall` (no E3004, no
-//     arity/label/type checks), `SemanticCheck.directCallArgEscapes` (the closure-escape slot `validateCall`
-//     returns before), `LowerMaxonToStd.lowerCall` / `lowerTryCall` (no signature slotting — the compiler
-//     wrote its arguments positionally).
-//   • *"the compiler emitted it"* — `LowerMaxonToStd.lowerFunctionRef` and `FnRefThunk.noteFnRefTarget` (a
-//     bare `.text` address for a drop-walk `callIndirect(ptr)`, versus the uniform-ABI `__fnref_` thunk a
-//     USER function value needs), and `StringRuntime.recordFunctionRefUsage` (does this reference install a
-//     runtime floor?). ⚠ **THESE THREE WERE LEFT ON THE PREFIX BY A1r AND ONE OF THEM WAS REACHABLY WRONG** —
-//     see `lowerFunctionRef` for the `wasm trap: indirect call type mismatch` it measured.
+//   • *"nothing to check against"* — `SemanticCheck.validateCall`, `validatePlainCall` and
+//     `calleeIsUnresolved` (no E3004, no arity/label/type checks), `LowerMaxonToStd.lowerCall` /
+//     `lowerTryCall` / `noteTableCandidateOfCall` (no signature slotting — the compiler wrote its
+//     arguments positionally).
+//   • *"the compiler emitted it"* — `FnRefThunk.functionValueNeedsFnRefThunk` (a bare `.text` address
+//     for a drop-walk `callIndirect(ptr)`, versus the uniform-ABI `__fnref_` thunk a USER function
+//     value needs), and `RuntimeUsage.recordFunctionRefUsage` (does this reference install a
+//     runtime floor?).
 //
-// ⚠ **THEY USED TO ASK IT BY PREFIX, AND D6/A1r BROKE THAT PROXY.** "`__`-prefixed" stood in for "no file
-// declares it" only while NO file could declare such a name. D6 exempted `stdlib/Builtins.maxon` at the
-// declaration door (`Parser.requireUnreservedName`) and A1r exempted it at the two CALL doors, so a
-// `__int_fromString` written in that module is now a call to a REGISTERED function — with parameter names,
-// declared types and a `throws` clause every ordinary call is checked against.
+// ⚠ **THE PREFIX IS NOT THE ANSWER.** `stdlib/Builtins.maxon` may declare a `__` name
+// (`Parser.requireUnreservedName`) and call it (the two CALL doors), so a `__int_fromString`
+// written in that module is a call to a REGISTERED function — with parameter names, declared types
+// and a `throws` clause every ordinary call is checked against.
 //
-// ⚠⚠ Left keyed on the prefix it waves that call past all of them, and **BOTH HALVES ARE MEASURED, on the
-// flag-only door, against `stdlib/Builtins.maxon` itself**: `__int_fromString()` with its one argument
-// OMITTED drew NO DIAGNOSTIC AT ALL (the whole file passed every check, and the only complaint left was
-// `E3001: No 'main' function found`), and neither did a BARE `__int_fromString(input)` — a throwing call
-// with no `try`, whose error flag nothing would then have read. Both now report (E3036, E3057). That
-// silent-acceptance is the same shape the reservation was introduced to close
-// (`CompilerInternalPrefix`'s rule 1, `__add(7)`, exit 65543), which is why the fact this predicate states
-// is the REGISTRY's answer and not the name's.
+// ⚠⚠ Keyed on the prefix, such a call is waved past all of them: `__int_fromString()` with its one
+// argument OMITTED, or a BARE `__int_fromString(input)` — a throwing call with no `try` — draws no
+// diagnostic, where the registry's answer reports E3036 and E3057. That silent-acceptance is the
+// same shape the reservation was introduced to close (`CompilerInternalPrefix`'s rule 1,
+// `__add(7)`, exit 65543), which is why the fact this predicate states is the REGISTRY's answer and
+// not the name's.
 //
 // A BUILDER-BUILT callee is still in no registry (`__mm_alloc`, `__print_string`, `int.compare` are built at
 // the Std tier, long after the merge that fills `funcSignatures`), so its answer is unchanged. The registry
@@ -822,7 +800,7 @@ export function twoI64Params() returns StdTypeArray
 	return types
 end 'twoI64Params'
 
-// One f64 parameter — the synthesized `float.hash(self)` (P1.7a's last slice). The f64 sibling of
+// One f64 parameter — the synthesized `float.hash(self)`. The f64 sibling of
 // `oneI64Param`, and it exists for `twoF64Params`' reason: the DECLARED f64 is what makes the ABI
 // agree at both ends, `calleeParamClass` routing the argument into an XMM register and `lowerParam`
 // capturing it from one.
@@ -832,8 +810,8 @@ export function oneF64Param() returns StdTypeArray
 	return types
 end 'oneF64Param'
 
-// Two f64 parameters — the synthesized `float.equals(self, other)` / `float.compare(self, other)`
-// (P1.7a slice 2b-iii). It joins the i64 family here rather than beside its caller for that family's
+// Two f64 parameters — the synthesized `float.equals(self, other)` / `float.compare(self, other)`.
+// It joins the i64 family here rather than beside its caller for that family's
 // reason, and the DECLARED f64 is what makes the ABI agree at both ends: `calleeParamClass` reads these
 // types to route each ARGUMENT into an XMM register, and `lowerParam` reads them to capture it from one.
 export function twoF64Params() returns StdTypeArray
@@ -896,20 +874,18 @@ end 'fourteenI64Params'
 export let SubprocessSpawnParamCount = 14 as ParamCount
 let SpawnContractExtraParams = 8 as ParamCount
 
-// ⚠ **`i64Params(count)` STOOD HERE AND WENT AT W129's REVIEW, WITH ITS ONLY CALLER.** The named ladder
-// above is right for an entry whose arity IS a source fact — `__mm_alloc` takes two because it takes two.
-// It was wrong for one whose arity was a SUM the threading computed (`__cs_contains`: two explicit
-// arguments, a layout descriptor, and one witness table per key constraint), because there the count and
-// the list are two statements of one number paired by hand, and the hand pairing is what silently survives
-// a change to either summand. **NO ENTRY POINT HAS A DERIVED ARITY TODAY** — the last one that did went
-// with the `__cs_*` runtime (W129) — so the ladder is complete, and a future derived-arity entry brings the
-// deriving helper back rather than writing a count beside a list.
+// ⚠ **THE LADDER IS NAMED, NOT A DERIVED `i64Params(count)`, BECAUSE EVERY ARITY ON IT IS A SOURCE
+// FACT** — `__mm_alloc` takes two because it takes two. An entry whose arity is a SUM the threading
+// computes (explicit arguments, a layout descriptor, one witness table per constraint) would make
+// the count and the list two statements of one number paired by hand, and the hand pairing silently
+// survives a change to either summand. No entry point has a derived arity; one that does brings a
+// deriving helper rather than writing a count beside a list.
 
 // Emit the `param` ops an entry block owes. A Std function's parameters are materialized once, at
 // entry, by the op whose `role` is `param` — the backend turns each into the move that captures the
 // incoming ABI register into its virtual register. Parameter `k` is ValueId `k`. All-i64: every
 // hand-assembled runtime chunk uses the GPR-only internal ABI. A chunk with a NON-i64 parameter (a
-// `__fnref_` thunk forwarding a float — P1.5 #78) uses `emitTypedParams` instead.
+// `__fnref_` thunk forwarding a float) uses `emitTypedParams` instead.
 export function emitParams(module StdModule, block IrBlock, count ParamCount)
 	for k in 0 upto count 'each'
 		module.appendOp(block, op: StdOp.param(k as ValueId, index: k, paramType: StdType.i64))
@@ -917,7 +893,7 @@ export function emitParams(module StdModule, block IrBlock, count ParamCount)
 end 'emitParams'
 
 // Emit the `param` ops for a synthesized function whose parameters are NOT all i64 — the `__fnref_` thunk,
-// whose float user parameters must be captured from a float argument register (P1.5 #78). Parameter `k` is
+// whose float user parameters must be captured from a float argument register. Parameter `k` is
 // ValueId `k`, typed `paramTypes[k]`, so the value-class column classes it in the file its type names and
 // the entry capture reads it from the matching ABI register. The all-i64 twin of `emitParams`, for the one
 // runtime builder whose parameter files vary.
@@ -949,7 +925,7 @@ export function emitStoreField(module StdModule, block IrBlock, record ValueId, 
 	module.appendOp(block, op: StdOp.storeIndirect(record, offset: offset, valueId: value, valueType: StdType.i64))
 end 'emitStoreField'
 
-// ⭐⭐ **THE ADDRESS OF `record`'s FIELD AT `offset` — what an ATOMIC has to be handed (G2).**
+// ⭐⭐ **THE ADDRESS OF `record`'s FIELD AT `offset` — what an ATOMIC has to be handed.**
 // `loadIndirect`/`storeIndirect` carry a field displacement and so never need this; `StdOp.atomicCas` and
 // `StdOp.atomicRmw` deliberately carry none — an atomic names ONE word and nothing else, which is stated at
 // those ops — so every atomic on a struct field has to compute the address first: a SHARED box's refcount
@@ -961,19 +937,16 @@ export function emitFieldAddr(module StdModule, block IrBlock, record ValueId, o
 end 'emitFieldAddr'
 
 // ⭐⭐ **A VALUE RAISED TO THE NEXT MULTIPLE OF A POWER-OF-TWO WIDTH — `(value + width - 1) and -width`.**
-// Two layers of the allocator round to two DIFFERENT widths and neither of them owns the idiom: the
-// OS-direct tier rounds a BYTE COUNT up to a whole `SlabPageBytes` chunk, and `__slab_arena_new` rounds the
-// BASE `osReservePages` answered up to a whole commit granule. Written once, with the width as an argument,
-// because the second copy's failure mode is not a wrong shape — it is the right shape carrying the wrong
-// width, which reads correct at both sites and is a silent misalignment at one of them.
+// Its callers round to DIFFERENT widths and none of them owns the idiom: the OS-direct tier rounds a BYTE
+// COUNT up to a whole `SlabPageBytes` chunk, and the debug stream rounds a LOG_TEXT tail up to `DsEntryAlign`.
+// Written once, with the width as an argument, because a second copy's failure mode is not a wrong shape — it
+// is the right shape carrying the wrong width, which reads correct at both sites and is a silent misalignment
+// at one of them.
 //
 // ⚠ **`width` MUST BE A POWER OF TWO, AND THAT IS ASKED HERE RATHER THAN LEFT TO THE CALLER'S OWN CHECK.**
 // `-width` is the "clear the low bits" mask only then, and a width that is not one raises to a boundary that
-// does not exist — silently, in emitted code, on whichever lane happens to exercise it. Today's two widths
-// are each proven a power of two by their own geometry check, against the shift that divides by them
-// (`checkSlabClassTable` for `SlabPageBytes`, `checkSlabArenaGeometry` for the commit granule); this is what
-// makes a THIRD caller arriving with some other width a compile failure instead of a misaligned pointer,
-// since nothing about those two checks reaches this signature.
+// does not exist — silently, in emitted code, on whichever lane happens to exercise it. The check here is what
+// makes a caller arriving with some other width a compile failure instead of a misaligned pointer.
 //
 // ⚠ **THE COMPILER HAS ITS OWN `alignUp` (`Targets/Shared/BinaryHelpers.maxon`) AND THE TWO CANNOT BE ONE.**
 // That one answers a NUMBER at compile time for the binary writers; this one APPENDS OPS that answer at run
@@ -992,26 +965,18 @@ export function emitAlignUp(module StdModule, block IrBlock, value ValueId, widt
 	return emitBin(module, block: block, a: raised, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitAlignUp'
 
-// ⭐ **ONE MACHINE-WORD SLOT — the stride every WORD-INDEXED buffer in the runtime uses.** A hash table's
-// `keys`/`states`/`hashes`/`values` columns, and the element buffer of any `Array` whose element is a managed
-// POINTER or a machine-word int, all address slot `i` at `base + i·8`.
+// ⭐ **ONE MACHINE-WORD SLOT — the stride every WORD-INDEXED buffer in the runtime uses.** The element
+// buffer of any `Array` whose element is a managed POINTER or a machine-word int addresses slot `i`
+// at `base + i·8`.
 let WordSlotBytes = 8 as ParsedInt
 
 // The byte address of word slot `index` in a parallel buffer — `base + index · WordSlotBytes`.
 //
-// ⚠ **IT LIVES HERE, WITH THE OTHER SINGLE-OP EMIT HELPERS, BECAUSE THE HASH TABLE WAS NEVER ITS ONLY
-// CALLER.** It was the deleted `HashTableRuntime`'s `emitHtSlotAddr` — but a `from`-construction already reads an ARRAY's element
-// buffer through it, which is what identifies it as a word-slot fact rather than a hash-table one, and
-// `__list_from` reads the same buffer the same way. A second copy under a list-shaped name would have been
-// "the address of word slot i" written down twice, over the same buffers.
-// ⚠ **IT IS `export`ED AGAIN AS OF S2, AND THE REASON IS A THIRD COPY THAT HAD ALREADY APPEARED.** The
-// slab's page layer wrote its own `emitWordSlotAddress` for the bitmap and the reverse map's six index
-// computations, with a comment saying outright that this one *"IS THE SAME ARITHMETIC AND IS NOT REACHABLE
-// FROM HERE — it is private"*; the object layer above it then wanted the same three ops for the mcentral
-// heads, the mcache rows and the packed class-geometry table. Two copies of "the address of word slot i"
-// is what the header above says this function exists to prevent, so the answer is to make it reachable
-// rather than to write it a third time. (`SlabArena`'s copy can fold into this one; it is that file's
-// change to make.)
+// ⚠ **IT LIVES HERE, WITH THE OTHER SINGLE-OP EMIT HELPERS, AND IS `export`ED, BECAUSE IT IS A
+// WORD-SLOT FACT AND NOT ONE CALLER'S.** A `from`-construction reads an ARRAY's element buffer
+// through it, `__list_from` reads the same buffer the same way, and the slab wants the same three
+// ops for the mcentral heads, the mcache rows and the packed class-geometry table. A second copy
+// would be "the address of word slot i" written down twice.
 export function emitWordSlotAddr(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
 	let slotBytes = emitConst(module, block: block, value: WordSlotBytes, ids: ids)
 	let offset = emitBin(module, block: block, a: index, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
@@ -1280,12 +1245,6 @@ end 'emitCmp'
 // dual-register `errorReturn(value, flag)` ABI — `flag == NoErrorFlag` on the success edge, `ordinal +
 // ErrorFlagOrdinalBias` on the failure edge — and every family needs both spellings.
 //
-// ⚠ **THEY WERE COPIED, AND THE COPY IS EXACTLY THE PAIR THIS PROJECT KEEPS FINDING DRIFTED.**
-// `ManagedMemoryRuntime` had `emitErrorReturn`/`emitOkReturn` and `ManagedFileRuntime` had
-// `emitManagedFileThrow`/`emitManagedFileOk` — the same two three-line bodies under two names, and R4.3
-// would have made it three. They join the single-op emit helpers above for their reason: `MmRuntime` is the
-// runtime's base layer and every family already draws on it, so homing them here needs no new dependency.
-//
 // ⚠ A VOID throwing function passes a 0 through `value` that the ABI never moves (a void
 // `emitReturnValueMove` emits nothing); only the flag register is read.
 export function emitErrorReturn(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
@@ -1372,7 +1331,7 @@ end 'emitLoadByteIndexed'
 // name disjoint allocations and no overlap rule applies — see `emitForwardCopy` for the rule that does apply
 // when they can be the same buffer.
 export function buildStrCopy(module StdModule)
-	var func = IrFunction.createFromStd(StrCopyName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(StrCopyName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1468,12 +1427,6 @@ end 'openCountedLoop'
 // op `foldConstOperands` produces, minted by the one party that already knows the operand is a compile-time
 // constant — so the fold has nothing to find here, and the emitted trip carries one `add` rather than a
 // `movRegImm32` AND an add, in the hottest loops the language has.
-//
-// ⛔ **THIS PARAGRAPH SAID THE RUNTIME "IS NEVER SHOWN `foldConstOperands`", AND EC3-H FALSIFIED THAT IN
-// THE SAME RUNG THAT WROTE IT** — a second fold runs over exactly the appended band now
-// (`Compiler.compileToCodeResult`'s install block owns that fact). The CHOICE survives its dead reason: an
-// op the builder can mint directly is one the fold does not have to find, classify, rewrite and then DCE
-// the `const` of. Do not read the correction as licence to spell a runtime constant as `const` + `binOp`.
 export function closeCountedLoop(module StdModule, loop CountedLoop, tail IrBlock, step Imm32, ids ValueMinter)
 	let next = ids.mint()
 	module.appendOp(tail, op: StdOp.binOpImm(next, lhs: loop.index, imm: step, opcode: StdBinOpcode.add, operandType: StdType.i64))
@@ -1503,8 +1456,8 @@ export let SingleStep = 1 as Imm32
 // has to touch the highest bytes before anything overwrites them. One partition, two orders — so the
 // partition is what is shared.
 //
-// ⚠ **THE CONTIGUOUS FILL IS NOT A CALLER, AND FOR ONE RUNG (EC3-F) IT WAS THIS FAMILY'S THIRD.** A fill has
-// been `StdOp.memFill` since the allocator rung — one op, lowered by each target as a size ladder of its own
+// ⚠ **THE CONTIGUOUS FILL IS NOT A CALLER.** A fill is
+// `StdOp.memFill` — one op, lowered by each target as a size ladder of its own
 // (`encodeX64MemFill`, `arm64MemFill`, wasm's `memory.fill`) — so `buildMmFree`'s poison, the slab's
 // recycled-slot zeroer and `buildManagedZeroElems`'s byte arm build no loop here. The partition stays for
 // the copies, which have a SOURCE as well as a destination and no op in the dialect.
@@ -1574,7 +1527,7 @@ end 'closeWordTailSplit'
 // scalars needs to run at death, so there is no function to point at. (Synthesizing an empty one
 // just to have a non-null pointer would be a function with no reason to exist.)
 //
-// ⭐⭐ **THE WHOLE BOX IS ONE SLAB REQUEST, AND THE BOX LAYER COMPUTES NO SIZE CLASS OF ITS OWN (S4).**
+// ⭐⭐ **THE WHOLE BOX IS ONE SLAB REQUEST, AND THE BOX LAYER COMPUTES NO SIZE CLASS OF ITS OWN.**
 // `header + payload` goes to `__slab_alloc`, which picks the class, hands back a slot of at least that many
 // bytes and REMEMBERS which span it came from; `__mm_free` gives that same pointer back and the span
 // answers which class the slot belongs to, so nothing shifts a rounded size out of the header. The
@@ -1590,7 +1543,7 @@ function buildMmAlloc(module StdModule, model MachineModel)
 	let debugStream = module.debugStream
 	let paramCount = 3 if debugStream else 2
 	let paramTypes = threeI64Params() if debugStream else twoI64Params()
-	var func = IrFunction.createFromStd(MmAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var func = IrFunction.createFromStd(MmAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes)
 	var ids = ValueMinter.create(paramCount)
 
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1618,8 +1571,7 @@ function buildMmAlloc(module StdModule, model MachineModel)
 	// MICRO-OPTIMISATION — IT IS THE BYTE-IDENTICAL RULE.** With no prefix word the two distances are the
 	// same number, and minting a SECOND `const HeaderBytes` for the payload offset is one more op in
 	// `__mm_alloc`: the register allocator then makes different choices and every heap program's `.text`
-	// moves, against thousands of committed fragment goldens. (Measured on O3's first byte-identical check:
-	// identical printed IR, 1084 differing bytes in the linked image.) Under the flag the two genuinely
+	// moves, against thousands of committed fragment goldens. Under the flag the two genuinely
 	// differ — the total includes the prefix word, the payload offset does not — so the second constant is
 	// minted there and only there.
 	var payloadOffset = headerConst
@@ -1716,8 +1668,7 @@ end 'emitLoadPackedId'
 // arguments these pass cost OPS to compute (a refcount load, a packed-id load, a plus-one), and those ops
 // would be emitted before a gate inside `emitMmEvent` could decline them — which is not a cosmetic
 // difference: a `globalAddr __ds_base` emitted into an untraced build names a `.data` slot that build
-// never laid out, and the backend PANICS at the relocation. (Measured, on the first byte-identical check
-// of this rung: `buildMmAlloc` called `emitMmEvent` directly and every heap program failed to link.) So
+// never laid out, and the backend PANICS at the relocation. So
 // the compile-time gate lives at each of the four, where the arguments are built.
 //
 // ⭐ **AND THE `owners - 1` CONVENTION IS TRANSLATED HERE.**
@@ -1733,12 +1684,11 @@ end 'emitLoadPackedId'
 // the last-owner case because the stored value is 0 there. That identity is why the event is emitted ONCE,
 // in the block before the branch, instead of once per arm.
 //
-// ⭐ **SINCE G2 THAT PRIOR COUNT IS HANDED IN RATHER THAN RE-READ, AND IT IS STILL THE ONLY WAY TO GET IT.**
+// ⭐ **THAT PRIOR COUNT IS HANDED IN RATHER THAN RE-READ, AND IT IS THE ONLY WAY TO GET IT.**
 // The decrement happens before the branch and answers the value it displaced
-// (`emitRefcountCheckToLastOwner`), so the trace reports the count THIS decref displaced. G2's reason was
-// that another M could move the word in between; EC10 removed that M and the conclusion is unchanged for a
-// nearer one — the decrement has already STORED the new count, so a re-read answers the count after this
-// event rather than before it.
+// (`emitRefcountCheckToLastOwner`), so the trace reports the count THIS decref displaced. The
+// decrement has already STORED the new count, so a re-read answers the count after this event
+// rather than before it.
 //
 // The alloc event, with the requested USER size as its value — never the total, so the number in the
 // trace is the one the caller asked for and stays comparable across a header that grows. It is the one
@@ -1794,8 +1744,9 @@ end 'emitMmFreeEvent'
 // ⭐ **ITS FIRST CONSUMER IS `__managed_slice`'s ZERO-COPY VIEW.** A view is a second owner of the parent's
 // ELEMENT BUFFER — a separate `__mm_alloc` allocation from either record — so taking a slice increfs that
 // buffer and dropping (or detaching) a view decrefs it. What is counted is the buffer, not the record: a
-// buffer's non-zero count means "someone else may be reading these bytes" — a view, or a lend that shared
-// them — which is precisely what `__managed_cow_detach` must ask before an in-place write.
+// buffer's non-zero count means "someone else may be reading these bytes" — a view, or a share walk
+// that marked them — which is precisely what `__managed_cow_detach` must ask before an in-place
+// write.
 //
 // ⭐ **AN IMAGE RECORD LEAVES AT THE TOP, UNCOUNTED.** Its header is in `.rdata`, so a read-modify-write would
 // be a write into a read-only page; and there is nothing to count — the record outlives every owner. The
@@ -1804,7 +1755,7 @@ end 'emitMmFreeEvent'
 //
 // There is no overflow check: a program cannot hold 2^61 owners of one box.
 function buildMmIncref(module StdModule)
-	var func = IrFunction.createFromStd(MmIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1830,7 +1781,7 @@ end 'buildMmIncref'
 //
 // ⭐ **AN IMAGE RECORD IS HANDED STRAIGHT BACK, UNCOUNTED**, for `buildMmIncref`'s reasons.
 function buildMmRetain(module StdModule)
-	var func = IrFunction.createFromStd(MmRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1867,7 +1818,7 @@ end 'buildMmRetain'
 // what is left here owns no slot a second owner could be wrong about; `destructor@0` is trivial for the same
 // reason.
 function buildMmOwn(module StdModule)
-	var func = IrFunction.createFromStd(MmOwnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmOwnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1913,7 +1864,7 @@ end 'buildMmOwn'
 // ⚠ **AND THE FORK IS AT RUN TIME BECAUSE PROVENANCE IS NOT A COMPILE-TIME FACT** — a merge phi may join an
 // imaged box with a heap one, exactly as `buildMmOwn`'s header records for the scalar-struct half.
 function buildMmOwnDeep(module StdModule)
-	var func = IrFunction.createFromStd(MmOwnDeepName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmOwnDeepName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1965,7 +1916,7 @@ let ElementWalkParamCount = 3 as ParamCount
 // WORD it stands in for: it is reached through a `callIndirect` on a witness word, so a parameter list that
 // merely fits the abort disagrees with the call — a disagreement wasm refuses as an invalid module.
 function buildAbortingRuntimeEntry(module StdModule, symbolName ByteArray, paramCount ParamCount, paramTypes StdTypeArray, abort RuntimeAbort)
-	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2125,7 +2076,7 @@ export function beginWalkBody(module StdModule, name ByteArray, scope WalkScope,
 		paramTypes.push(StdType.i64)
 	end 'eachParam'
 
-	var func = IrFunction.createFromStd(name, returnType: walkReturnType(scope), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, needsGreenThreadStackGuard: recursesPerLevel)
+	var func = IrFunction.createFromStd(name, returnType: walkReturnType(scope), paramCount: paramCount, paramTypes: paramTypes, needsGreenThreadStackGuard: recursesPerLevel)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2165,8 +2116,8 @@ end 'finishWalkBody'
 //
 //   • IMMORTAL — image data, and everything it reaches is image data too.
 //   • SHARED — marking is CLOSED: the whole cone below a mark is marked and frozen, so a moved unit may
-//     reference it and a second lend finds nothing left to mark. A share walk over a graph also counts the
-//     meeting, since the mark may be its own (`__mm_walk_revisit`).
+//     reference it and a second share walk finds nothing left to mark. A share walk over a graph
+//     also counts the meeting, since the mark may be its own (`__mm_walk_revisit`).
 //   • COUNTED and sole — descends; the share walk first adds `MmSharedRefcountMark` with a PLAIN store, which is
 //     sound because a counted record belongs to this green thread alone. One owner is met once, so no table is
 //     touched.
@@ -2201,9 +2152,9 @@ export function emitBoxWalkStep(module StdModule, func IrFunction, cursor Cascad
 	return descend
 end 'emitBoxWalkStep'
 
-// Mark a record a lend reaches first, then go on below it.
+// Mark a record a share walk reaches first, then go on below it.
 function emitMarkedDescent(module StdModule, from CascadeCursor, count RefcountWord, action CascadeAction, descend CascadeCursor, ids ValueMinter)
-	emitMarkWhenLending(module, block: from.block, count: count, action: action, ids: ids)
+	emitShareWalkMark(module, block: from.block, count: count, action: action, ids: ids)
 	emitCascadeBranch(module, from: from, to: descend)
 end 'emitMarkedDescent'
 
@@ -2233,8 +2184,8 @@ function emitSoleWalkMeetings(module StdModule, shared CascadeCursor, several Ca
 	pushCascadeEdge(several.block, to: stop, values: several.carried)
 end 'emitSoleWalkMeetings'
 
-// A lend marks at the first meeting, so a counted record is always met for the first time, and a later meeting
-// arrives as a shared record — counted if this walk marked it, left alone if an earlier lend did.
+// A share walk marks at the first meeting, so a counted record is always met for the first time, and a later
+// meeting arrives as a shared record — counted if this walk marked it, left alone if an earlier walk did.
 function emitShareWalkMeetings(module StdModule, shared CascadeCursor, several CascadeCursor, box ValueId, meeting WalkMeeting, firstMeeting IrBlock, stop CascadeCursor, ids ValueMinter)
 	_ = emitWalkRevisit(module, block: shared.block, visits: shared.visits(), record: box, meeting: meeting, ids: ids)
 	emitCascadeBranch(module, from: shared, to: stop)
@@ -2243,7 +2194,7 @@ end 'emitShareWalkMeetings'
 
 // A counted record of several owners and a shared record, over one record. A shared record is closed; the other
 // owners of a counted one are outside the graph, which an owner meeting may not leave behind. A view meeting marks
-// what a lend lends and leaves a move's detach to release its reference.
+// what a share walk shares and leaves a move's detach to release its reference.
 function emitLoneMeetings(module StdModule, func IrFunction, shared CascadeCursor, several CascadeCursor, count RefcountWord, action CascadeAction, meeting WalkMeeting, descend CascadeCursor, stop CascadeCursor, ids ValueMinter)
 	emitCascadeBranch(module, from: shared, to: stop)
 
@@ -2253,24 +2204,25 @@ function emitLoneMeetings(module StdModule, func IrFunction, shared CascadeCurso
 	end 'meeting'
 end 'emitLoneMeetings'
 
-function emitMarkWhenLending(module StdModule, block IrBlock, count RefcountWord, action CascadeAction, ids ValueMinter)
+function emitShareWalkMark(module StdModule, block IrBlock, count RefcountWord, action CascadeAction, ids ValueMinter)
 	match action 'action'
-		clone then panic("emitMarkWhenLending: a clone marks nothing")
+		clone then panic("emitShareWalkMark: a clone marks nothing")
 		soleWalk then break 'action'
 		shareWalk then emitAddSharedMark(module, block: block, count: count, ids: ids)
 	end 'action'
-end 'emitMarkWhenLending'
+end 'emitShareWalkMark'
 
-// ⭐ **`__mm_share_buffer(buffer)` — MARK THE ALLOCATION A LENT RECORD'S BYTES LIVE IN SHARED, WHATEVER ITS
-// COUNT.** An owner's separate buffer, or a view's parent when the view is the whole lent graph: views step that
-// count from any green thread once the record is lent. Other holders are not refused: each is a view, which
-// copies before it writes, or an owner, which writes only after it copies the bytes out — so the bytes are
-// read-only for all of them. An allocation already marked is left alone. A view's parent inside a larger graph
-// is a meeting instead (`WalkMeeting.view`), because the parent may be a record the graph also owns.
+// ⭐ **`__mm_share_buffer(buffer)` — MARK THE ALLOCATION A SHARED RECORD'S BYTES LIVE IN SHARED, WHATEVER ITS
+// COUNT.** An owner's separate buffer, or a view's parent when the view is the whole shared graph: views step
+// that count from any green thread once the record is shared. Other holders are not refused: each
+// is a view, which copies before it writes, or an owner, which writes only after it copies the
+// bytes out — so the bytes are read-only for all of them. An allocation already marked is left
+// alone. A view's parent inside a larger graph is a meeting instead (`WalkMeeting.view`), because
+// the parent may be a record the graph also owns.
 export let MmShareBufferName = b"__mm_share_buffer"
 
 function buildMmShareBuffer(module StdModule)
-	var func = IrFunction.createFromStd(MmShareBufferName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmShareBufferName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2379,10 +2331,10 @@ end 'emitStepOwnerCount'
 // thread that called it, a member of its owner's strand. The two OS threads that are not an owner's M — the
 // syscall monitor and an idle worker — never dereference a box.
 //
-// ⇒ **A SHARED box was lent**: a message took a reference to it while the sender kept its own, so two green
-// threads — possibly on two Ms — step one count, and only an atomic step keeps it exact. A lost increment
-// frees a record under a live holder (139) and a lost decrement leaks it (101);
-// `specs/services.md`'s count torture is sixteen processors stepping one lent graph.
+// ⇒ **A SHARED box is one a share walk marked** — a published registry value, or a `let` a service
+// can read — so two green threads, possibly on two Ms, step one count, and only an atomic step
+// keeps it exact. A lost increment frees a record under a live holder (139) and a lost decrement
+// leaks it (101).
 //
 // ⚠ `scripts/multicore-stress/refcount-torture.maxon` (driven by `multicore-stress/refcount-race.sh`) is the
 // committed control for the plain arm: N increfs and N decrefs of one word per round, which crashes the day a
@@ -2518,7 +2470,7 @@ end 'emitRefcountCheckToLastOwner'
 // other `__mm_*` entry would fault on. That is the whole of what it is for — a producer that can answer "no
 // record" hands its caller something no drop may touch, and this is how the caller finds out.
 function buildMmIsNull(module StdModule)
-	var func = IrFunction.createFromStd(MmIsNullName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmIsNullName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2531,25 +2483,37 @@ function buildMmIsNull(module StdModule)
 	module.functions.push(func)
 end 'buildMmIsNull'
 
-// `__mm_decref(ptr)` — one fewer owner; free at the last. The refcount read-modify-write is the
-// shared `emitRefcountCheckToLastOwner`; this function supplies only the LAST-OWNER path — reclaim
-// the box.
+// `__mm_decref(ptr)` — one fewer owner; at the last, run the header's `destructor@0` and free the
+// box. The refcount read-modify-write is the shared `emitRefcountCheckToLastOwner`.
+//
+// A header destructor releases what the record holds and never frees the record: `__mm_free`
+// follows it here, so a destructor that freed would be a double free.
 function buildMmDecref(module StdModule)
-	var func = IrFunction.createFromStd(MmDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	var destroy = module.addBlock(func, label: b"destroy", heat: BlockHeat.cold)
+	var free = module.addBlock(func, label: b"free", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: ptr, lastOwner: release, ids: ids)
 
-	let freed = ids.mint()
-	module.appendOp(release, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(ptr)))
-	module.setTerminator(release, op: StdOp.retVoid)
+	let header = emitHeaderBase(module, block: release, ptr: ptr, ids: ids)
+	let destructor = emitLoadField(module, block: release, record: header, offset: HeaderDestructorOffset, ids: ids)
+	let trivial = emitConst(module, block: release, value: TrivialDestructor, ids: ids)
+	let holdsReferences = emitCmp(module, block: release, a: destructor, b: trivial, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(release, op: StdOp.condBranch(holdsReferences, thenBlockId: destroy.id, elseBlockId: free.id))
+
+	module.appendOp(destroy, op: StdOp.callIndirect(ids.mint(), calleeReg: destructor, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(ptr)))
+	module.setTerminator(destroy, op: StdOp.branch(free.id))
+
+	module.appendOp(free, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(ptr)))
+	module.setTerminator(free, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildMmDecref'
@@ -2583,7 +2547,7 @@ end 'emitBoxAllocationBase'
 // count drops (the one number the leak gate reads), the payload is POISONED, and the box goes back to the
 // slab — which is where its bytes become somebody else's.
 //
-// ⭐ **POISON-ON-FREE, ALWAYS ON (Workstream R / #108).** A use-after-free that reads bytes nothing has
+// ⭐ **POISON-ON-FREE, ALWAYS ON.** A use-after-free that reads bytes nothing has
 // overwritten returns exactly the value it wrote before the free, and is INVISIBLE to every test.
 // Overwriting the payload with `PoisonByte` the instant it dies turns that whole class loud: a
 // read-after-free returns 63 or faults on a poisoned pointer instead of stale-but-correct bytes. This is
@@ -2603,7 +2567,7 @@ end 'emitBoxAllocationBase'
 // sees is zero.**
 //
 // ⚠⚠ **A RECYCLE THEREFORE COSTS TWO PASSES OVER THE SAME BYTES — poison here, zero on the way out —
-// and that is a STATED OPEN COST rather than something this rung argued away.** It is not paid on a VIRGIN
+// and that is a STATED OPEN COST.** It is not paid on a VIRGIN
 // slot, which is exactly the point of the slab's bump region: those bytes are OS-fresh, so the alloc side
 // skips the fill and nothing ever poisoned them. It is paid in full on every reuse. The two halves cannot
 // be collapsed into one pass without giving up either the poison (which is a debugging guarantee) or the
@@ -2622,13 +2586,11 @@ end 'emitBoxAllocationBase'
 // is what has to be right; the test therefore sits at the top of the release door
 // (`emitRefcountCheckToLastOwner`), where a record is still deciding whether to die.
 //
-// ⭐ THE DESTRUCTOR CASCADE ALSO LANDS HERE AT P1.2 (still deferred): the header carries the destructor
-// (`__mm_alloc` stored it at `HeaderDestructorOffset`); loading it and calling it through `callIndirect`
-// before the poison is the local change. It is NOT written now — every struct at this rung is trivially
-// owned, so the pointer is always 0 and the call would be emitted-but-never-taken, the `mintPhi` failure
-// exactly.
+// ⚠ The header's `destructor@0` is not run here: `__mm_decref` runs it before calling this, and a
+// cascade that frees its own box has already released its fields, so running it here would release
+// them twice.
 function buildMmFree(module StdModule, model MachineModel)
-	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var start = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2728,7 +2690,7 @@ end 'buildMmCounterAccessors'
 // because it arrives from user code, and they are two compares rather than one because `StdCmpPred` has no
 // unsigned predicate to fold the negative side into the high one.
 function buildAllocTallyReader(module StdModule, name ByteArray, column ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: AllocTallyReaderArity, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: AllocTallyReaderArity, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(AllocTallyReaderArity)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2791,7 +2753,7 @@ end 'emitAllocTallyStep'
 
 // `name() -> i64` — one figure walked over every row.
 function buildFigureReader(module StdModule, name ByteArray, figure SlabTrafficFigure)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2835,7 +2797,7 @@ end 'threadColumnOffset'
 // walk reads the scheduler word out of the region, so it cannot run without one — and a program that has
 // never allocated has no scheduler either, which is the arm that answers 0 for every column.
 function buildThreadCounterReader(module StdModule, name ByteArray, model MachineModel, count CombinedCount)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2904,7 +2866,7 @@ function emitCurrentThreadOrZero(module StdModule, func IrFunction, cur IrBlock,
 	return merge
 end 'emitCurrentThreadOrZero'
 
-// ⭐⭐ **THE PER-UNION DESTRUCTOR CASCADE (P1.3 slice 2).** Synthesize `__destruct_<U>(box)` for every
+// ⭐⭐ **THE PER-UNION DESTRUCTOR CASCADE.** Synthesize `__destruct_<U>(box)` for every
 // managed-payload union whose destructor is REFERENCED (`needed`, collected from the module's
 // `__destruct_*` calls — install only what is used, exactly like the rest of the runtime). It is
 // APPENDED already-lowered after the pipeline (like `installMmRuntime`); what runs over that appended band
@@ -2943,17 +2905,6 @@ end 'installUnionDestructors'
 // Called after `scanRuntimeUsage`, before `.data` layout reads `usesHeap` and `installStringRuntime` reads
 // `usesStrDecref` — so the closed set and the bits are settled before anything they gate is built.
 //
-// ⛔⛔ **IT USED TO OPEN BY ROOTING EVERY MANAGED OPAQUE-`T` `Array` ELEMENT DESTRUCTOR THE DESCRIPTOR
-// RELOCS *MIGHT* BAKE, AND THAT PREDICTION IS GONE (W17-c).** It walked the whole instance registry and rooted
-// on `genericInstanceHasManagedOpaqueArrayField` alone — unconditional over the instances, by its own header
-// — which is a prediction of what LOWERING will emit, made before lowering. Listing the `String`/`Character`
-// cone put four instances of `stdlib/helpers/itertools/withIterator.maxon` in every program's registry
-// (`WithIterIterator_ByteIterator_Byte` and its three siblings, from the views' `Iterable with (…)`
-// conformances), so `return 0` rooted `__destruct_ByteIterator`, `__destruct_CodepointIterator`,
-// `__destruct_UTF16Iterator` and `__destruct_StringIterator`, and the struct loop below turned the heap on for
-// a program that allocates nothing — the five `static-variables/data-section-*` pins, reading their `var` 24
-// bytes past its true offset.
-//
 // ⭐ **THE ROOTED SET IS THE MEASURED ONE AND NOTHING PREDICTS IT**: `noteRelocatedFunctionUsage` roots
 // every `.rdata` slot's callee off `pendingRdataRelocs` AFTER lowering — *"the rooted set is the RELOCATED
 // set, literally"* — and `ensureLayoutDescriptor`'s `destroyFunc@40` stamp is one of those slots
@@ -2969,30 +2920,13 @@ end 'noteDestructorUsage'
 // can put a `__destruct_<T>` in the set that no pre-pipeline walk saw, and a destructor whose `usesStrDecref`
 // was never declared links against a `__str_decref` nothing installed.
 //
-// ⭐⭐ **EVERY BIT IS DERIVED FROM THE DROP CALLEE THE CASCADE WILL ACTUALLY EMIT, AND IT USED TO BE A
-// HAND-WRITTEN LIST OF FIELD KINDS — WHICH IS THE SAME FACT WRITTEN TWICE, AND IT WAS WRONG IN ALL THREE ARMS
-// AT ONCE.** The three arms asked `structHasStringField` / `structHasArrayField` /
-// `unionHasManagedField(wantStringOnly: true)` / `genericInstanceHasStringField`: a fixed roster of the field
-// kinds someone remembered, against a synthesis (`managedFieldDropCallee`) that routes SIX. A managed type
-// whose drop has its own install bit — rather than one its own construction already turns on — therefore
-// linked against nothing.
-//
-// ⚠ **`CharacterSet` WAS EXACTLY THAT TYPE, AND IT IS WHY THE DEFECT WAS OBSERVABLE (its runtime went at
-// W129; the DEFECT class this states did not).** Its family had THREE
-// bits (`usesCharSetMake`/`usesCharSetDecref`/`usesCharSetContains`), so `CharacterSet.whitespaces()` declared
-// the MAKE and nothing else, and a set reached only through a cascade wanted a `__cs_decref` no install had
-// been asked for. MEASURED on this tree at a struct field, at a union payload AND at a generic instance's
-// substituted field — all three — `panic at X64Backend.maxon:2013: resolveCallFixups: call to unknown function
-// '__cs_decref'`, with no diagnostic and no line. (`Set`/`Map`/`List`/`__ManagedFile`/`__ManagedDirectory`
-// escaped only because each has ONE bit that constructing a value already sets; that is a property of their
-// bit granularity, not of this walk, and it is not a property worth relying on.)
-//
-// ⇒ Each arm now walks its own managed fields, asks the SAME router the synthesis will ask, and hands the
-// answer to `recordCallUsage` — the one callee-to-bit map, which also closes each family over what its own
-// body calls. A drop callee this compiler can emit and this walk cannot account for is now unrepresentable
-// rather than a list to remember to extend. It is also CHEAPER than what it replaces: the struct arm ran three
-// full field walks (`structHasStringField`, `structHasArrayField`, `structHasExistentialField`) and now runs
-// one.
+// ⭐⭐ **EVERY BIT IS DERIVED FROM THE DROP CALLEE THE CASCADE WILL ACTUALLY EMIT.** Each arm walks
+// its own managed fields, asks the SAME router the synthesis will ask (`managedFieldDropCallee`),
+// and hands the answer to `recordCallUsage` — the one callee-to-bit map, which also closes each
+// family over what its own body calls. A hand-written roster of field kinds would be the same fact
+// written twice, and a managed type whose drop has its own install bit — rather than one its own
+// construction already turns on — would then link against nothing: a backend panic with no
+// diagnostic.
 //
 // ⚠ **IT IS SAFE TO CALL `recordCallUsage` HERE, AND ONLY HERE, BECAUSE `closeDestructorNeeds` HAS ALREADY
 // RUN.** That map INSERTS a `__destruct_<T>` callee into `neededDestructors` without queueing the cascade node
@@ -3011,7 +2945,7 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 		end 'referenced'
 	end 'eachUnion'
 
-	// A REFERENCED managed generic instance's `__destruct_<mangled>` (P1.6-B2) frees its box (`__mm_free` —
+	// A REFERENCED managed generic instance's `__destruct_<mangled>` frees its box (`__mm_free` —
 	// heap) and calls each substituted field's own drop, both inside the synthesized body the Maxon scan cannot
 	// see. A managed value inside a nested struct/instance field is dropped by that nested destructor, so only
 	// a DIRECT substituted field is accounted for here.
@@ -3028,12 +2962,12 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 			declareInstanceFieldDropNeeds(usage, id: id, signatures: signatures)
 		end 'referenced'
 
-		// The DICTIONARY cascade's own bits (BATCH41). It frees its box like every other cascade, and it is
+		// The DICTIONARY cascade's own bits. It frees its box like every other cascade, and it is
 		// the ONE cascade that calls `__drop_type_param` — a runtime entry with its own install bit, which no
 		// other walk here can turn on because no other cascade names it.
 		if usage.neededDestructors.contains(dictionaryDestructorSymbol(mangled)) 'dictionaryReferenced'
 			usage.usesHeap = true
-			declareInstanceDictionaryDropNeeds(usage, id: id, signatures: signatures)
+			declareDictionaryDropNeeds(usage, source: CascadeFieldSource.genericInstance(id), signatures: signatures)
 		end 'dictionaryReferenced'
 	end 'eachInstance'
 end 'declareDestructorCascadeNeeds'
@@ -3046,7 +2980,7 @@ function declareStructLayoutDropNeeds(usage RuntimeUsage, entry StructRosterEntr
 
 	if usage.neededDestructors.contains(dictionaryDestructorSymbol(entry.layout.name)) 'dictionaryReferenced'
 		usage.usesHeap = true
-		declareStructDictionaryDropNeeds(usage, layout: entry.layout, typeNames: entry.typeNames, signatures: signatures)
+		declareDictionaryDropNeeds(usage, source: CascadeFieldSource.declaredRecord(entry), signatures: signatures)
 	end 'dictionaryReferenced'
 end 'declareStructLayoutDropNeeds'
 
@@ -3061,7 +2995,7 @@ function declareStructFieldDropNeeds(usage RuntimeUsage, layout StructLayout, ty
 		end 'scalar'
 
 		// ⭐ **AN EXISTENTIAL FIELD NAMES NO CALLEE, so it is the one kind that cannot be derived and is
-		// declared directly** (P1.7a-existentials slice 2). Its drop is `__drop_existential(witness, value)`,
+		// declared directly**. Its drop is `__drop_existential(witness, value)`,
 		// read out of the witness table at run time, which `managedFieldDropCallee` refuses to answer for at
 		// all — the same arm `addNestedStructDestructors` skips for the same reason, one question over.
 		if signatures.structFieldIsExistential(layout.name, index: i) 'existential'
@@ -3072,18 +3006,6 @@ function declareStructFieldDropNeeds(usage RuntimeUsage, layout StructLayout, ty
 		recordCallUsage(managedStructFieldDropCallee(layout, index: i, typeNames: typeNames, signatures: signatures), usage: usage)
 	end 'eachField'
 end 'declareStructFieldDropNeeds'
-
-// The dictionary twin of the walk above (W183) — `addNestedStructDictionaryDestructors`' bit-declaring dual,
-// over the SAME `dictionaryStructFieldDropKind` classifier, so a field accounted for here is dropped through
-// the callee it was accounted for under.
-function declareStructDictionaryDropNeeds(usage RuntimeUsage, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures)
-	for i in 0 upto layout.fieldCount() 'eachField'
-		match dictionaryStructFieldDropKind(layout, index: i, typeNames: typeNames, signatures: signatures) 'released'
-			none then continue
-			released(kind) then declareDropKindNeeds(usage, kind: kind)
-		end 'released'
-	end 'eachField'
-end 'declareStructDictionaryDropNeeds'
 
 // The union twin — `addNestedUnionDestructors`' bit-declaring dual, over the same payload classifier.
 function declareUnionPayloadDropNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures)
@@ -3125,21 +3047,13 @@ function declareInstanceFieldDropNeeds(usage RuntimeUsage, id GenericInstanceId,
 	end 'eachField'
 end 'declareInstanceFieldDropNeeds'
 
-// The dictionary twin of the walk above — `addNestedInstanceDictionaryDestructors`' bit-declaring dual, over
-// the SAME `dictionaryInstanceFieldDropKind` classifier, so a field accounted for here is dropped through the
-// callee it was accounted for under.
-function declareInstanceDictionaryDropNeeds(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures)
-	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCascade'
-		return
-	end 'noSynthesizedCascade'
-
-	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
-		match dictionaryInstanceFieldDropKind(signatures, id: id, index: i) 'released'
-			none then continue
-			released(kind) then declareDropKindNeeds(usage, kind: kind)
-		end 'released'
-	end 'eachField'
-end 'declareInstanceDictionaryDropNeeds'
+// The dictionary cascades' bit-declaring walk — `addNestedDictionaryDestructors`' dual, over the SAME
+// `dictionaryFieldDrops`, so a field accounted for here is dropped through the callee it was accounted for under.
+function declareDictionaryDropNeeds(usage RuntimeUsage, source CascadeFieldSource, signatures ProgramSignatures)
+	for drop in dictionaryFieldDrops(signatures, source: source) 'eachDrop'
+		declareDropKindNeeds(usage, kind: drop.kind)
+	end 'eachDrop'
+end 'declareDictionaryDropNeeds'
 
 // The runtime bits ONE released field's drop needs. `recordCallUsage` closes each family over what its own
 // body calls, and it is what turns on `usesDropTypeParam` for the bare-parameter slot.
@@ -3151,8 +3065,8 @@ module function declareDropKindNeeds(usage RuntimeUsage, kind FieldDropKind)
 	end 'kind'
 end 'declareDropKindNeeds'
 
-// ⭐⭐ **ROOT EVERY FUNCTION AN `.rdata` SLOT NAMES, AFTER LOWERING HAS FILLED THEM (P1.7a-existentials
-// slice 2).** A witness table's `destroyFunc@8` and its method slots, and a layout descriptor's
+// ⭐⭐ **ROOT EVERY FUNCTION AN `.rdata` SLOT NAMES, AFTER LOWERING HAS FILLED THEM.**
+// A witness table's `destroyFunc@8` and its method slots, and a layout descriptor's
 // `destroyFunc@40`/`copyFunc@32`, are reached through DATA rather than through code: `__drop_existential`
 // loads the word out of `.rdata` at run time and `callIndirect`s it, so nothing the module's call graph can
 // see names it. The writer will bake a `.text` VA for every one of them, so every one must be INSTALLED.
@@ -3160,11 +3074,10 @@ end 'declareDropKindNeeds'
 // ⭐ **THE ROOTED SET IS THE RELOCATED SET, LITERALLY — read off the relocations rather than re-derived from
 // the declarations that produced them.** It is had by CONSTRUCTION here, which matters because WHICH
 // `(conformer, interface)` pairs get a table — and which instances get a layout descriptor — is decided
-// during LOWERING, and no pre-pipeline walk can know it. That is why the two pre-pipeline PREDICTIONS of the
-// descriptor's own `destroyFunc@40`/`copyFunc@32` targets are deleted (W17-c) rather than kept beside this:
-// they asked the same question of the declarations and answered it for instances no program reaches. The first attempt rooted every DECLARED conformance instead, and every program has the stdlib's
-// (`FilePath` and `URL` conform, reachable or not) — so `var flag = true` grew the three `__slab_*` `.data`
-// globals and five `static-variables/data-section-*` cases read their bool 24 bytes off its true offset.
+// during LOWERING, and no pre-pipeline walk can know it. That is why nothing predicts these targets
+// before the pipeline: a prediction from the declarations answers for conformances no program
+// reaches (every program carries the stdlib's), and rooting one turns the heap on for a program
+// that allocates nothing, moving the offset of every `.data` global after the heap's.
 //
 // ⚠ **IT MUST RUN AFTER THE PIPELINE AND BEFORE THE INSTALLS, AND THE ONE THING IT CANNOT REACH IS THE
 // `.data` LAYOUT** (`globalData.layOut`, which reads `usesHeap` before lowering). That is sound rather than
@@ -3300,10 +3213,10 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 
 		match node 'node'
 			structLayout(entry) then addNestedStructDestructors(usage, layout: entry.layout, typeNames: entry.typeNames, signatures: signatures, work: work)
-			structLayoutDictionary(entry) then addNestedStructDictionaryDestructors(usage, layout: entry.layout, typeNames: entry.typeNames, signatures: signatures, work: work)
+			structLayoutDictionary(entry) then addNestedDictionaryDestructors(usage, source: CascadeFieldSource.declaredRecord(entry), signatures: signatures, work: work)
 			declaredUnion(layout) then addNestedUnionDestructors(usage, layout: layout, project: project, signatures: signatures, work: work)
 			genericInstance(id) then addNestedInstanceDestructors(usage, id: id, signatures: signatures, work: work)
-			genericInstanceDictionary(id) then addNestedInstanceDictionaryDestructors(usage, id: id, signatures: signatures, work: work)
+			genericInstanceDictionary(id) then addNestedDictionaryDestructors(usage, source: CascadeFieldSource.genericInstance(id), signatures: signatures, work: work)
 		end 'node'
 	end 'drain'
 end 'closeDestructorNeeds'
@@ -3330,8 +3243,8 @@ function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, typ
 			continue
 		end 'scalar'
 
-		// ⭐ **AN EXISTENTIAL FIELD CONTRIBUTES NO *NESTED* SYMBOL, BECAUSE IT NAMES NONE (P1.7a-existentials
-		// slice 2).** Its drop is `__drop_existential`, which reads the destructor out of the witness table at
+		// ⭐ **AN EXISTENTIAL FIELD CONTRIBUTES NO *NESTED* SYMBOL, BECAUSE IT NAMES NONE.**
+		// Its drop is `__drop_existential`, which reads the destructor out of the witness table at
 		// run time — so there is no callee here to close the set over. The destructors those tables can name
 		// are rooted from the RELOCATIONS instead (`noteRelocatedFunctionUsage`), which re-enters this closure
 		// afterwards, so a conformer that owns a managed field still gets its own cascade expanded.
@@ -3342,20 +3255,6 @@ function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, typ
 		insertIfDestructorSymbol(usage, callee: managedStructFieldDropCallee(layout, index: i, typeNames: typeNames, signatures: signatures), work: work)
 	end 'eachField'
 end 'addNestedStructDestructors'
-
-// The DICTIONARY twin of the walk above (W183) — add the nested cascade each released field of a record over
-// the enclosing parameters names. It reads `dictionaryStructFieldDropKind` rather than restating it, exactly
-// as its instance twin `addNestedInstanceDictionaryDestructors` reads that family's classifier: a
-// bare-parameter slot names no symbol at all (its release is `__drop_type_param` against a WORD), and every
-// other managed field names whatever its concrete drop callee names.
-function addNestedStructDictionaryDestructors(usage RuntimeUsage, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, work CascadeWorklist)
-	for i in 0 upto layout.fieldCount() 'eachField'
-		match dictionaryStructFieldDropKind(layout, index: i, typeNames: typeNames, signatures: signatures) 'released'
-			none then continue
-			released(kind) then noteNestedCascadeOf(usage, kind: kind, work: work)
-		end 'released'
-	end 'eachField'
-end 'addNestedStructDictionaryDestructors'
 
 // The union twin of `addNestedStructDestructors` — add each managed payload field's nested destructor.
 function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
@@ -3375,7 +3274,7 @@ function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, projec
 	end 'eachCase'
 end 'addNestedUnionDestructors'
 
-// The instance twin of `addNestedStructDestructors` (P1.6-B2) — add the nested `__destruct_<T>` of each
+// The instance twin of `addNestedStructDestructors` — add the nested `__destruct_<T>` of each
 // managed SUBSTITUTED field of instance `id` (a nested struct/union/instance) to the needed set. A String
 // field's `__str_decref` and a trivial box's `__mm_decref` are leaf drops and add nothing. No `project`:
 // every fact is answered inside `signatures`, over its own interner.
@@ -3383,10 +3282,7 @@ function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, 
 	// ⚠ One of the three sites needing the no-layout early-out — `genericInstanceHasManagedField` and this
 	// walk's own bit-declaring dual `declareInstanceFieldDropNeeds` are the others: a node is expanded as soon
 	// as its SYMBOL is needed, and the field walk below reads a base struct a layout-less instance does not
-	// have. Measured before the guard existed: `panic ProgramSignatures.baseLayoutOf`, no diagnostic. (The
-	// route that reached it — a declared `type Array_Foo` expanding the base-less `Array with Foo` node
-	// registered under the identical string — is closed by P1.7's `reservedIfDeclared`; the guard is the
-	// walk's precondition either way.)
+	// have. Without the guard the walk panics in `ProgramSignatures.baseLayoutOf`, with no diagnostic.
 	//
 	// Nothing is lost by returning: an `Array`/`Set` instance synthesizes no cascade for its nesting to
 	// close over — its elements are dropped by `__managed_decref`, whose own element destructor is
@@ -3410,26 +3306,15 @@ function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, 
 	end 'eachField'
 end 'addNestedInstanceDestructors'
 
-// The DICTIONARY twin of the walk above (BATCH41) — add the nested cascade each released field of a
-// DECLARATION VIEW names. It differs from its twin in exactly what `dictionaryInstanceFieldDropKind` differs
-// in, and it reads that classifier rather than restating it: a bare-parameter slot names no symbol at all
-// (its release is `__drop_type_param` against a WORD), a nested declaration view names its own DICTIONARY
-// destructor, and every other managed field names whatever its concrete drop callee names.
-function addNestedInstanceDictionaryDestructors(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist)
-	// `addNestedInstanceDestructors`' precondition, for its reason: a layout-less instance has no field list
-	// to walk. It cannot be reached today — `instanceRestsARetainedSlot` opens with the same guard — and it is
-	// the walk's precondition rather than a patch on the route that reaches it.
-	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCascade'
-		return
-	end 'noSynthesizedCascade'
-
-	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
-		match dictionaryInstanceFieldDropKind(signatures, id: id, index: i) 'released'
-			none then continue
-			released(kind) then noteNestedCascadeOf(usage, kind: kind, work: work)
-		end 'released'
-	end 'eachField'
-end 'addNestedInstanceDictionaryDestructors'
+// The DICTIONARY twin of the walks above — add the nested cascade each released field of a dictionary cascade
+// names: a bare-parameter slot names no symbol at all (its release is `__drop_type_param` against a WORD), a
+// nested declaration view names its own DICTIONARY destructor, and every other managed field names whatever
+// its concrete drop callee names.
+function addNestedDictionaryDestructors(usage RuntimeUsage, source CascadeFieldSource, signatures ProgramSignatures, work CascadeWorklist)
+	for drop in dictionaryFieldDrops(signatures, source: source) 'eachDrop'
+		noteNestedCascadeOf(usage, kind: drop.kind, work: work)
+	end 'eachDrop'
+end 'addNestedDictionaryDestructors'
 
 // The nested cascade ONE released field names, whichever shape its release came in. An existential names
 // none — `addNestedStructDestructors`' arm, for its reason.
@@ -3472,7 +3357,7 @@ end 'insertIfDestructorSymbol'
 // A void `(i64) -> void` signature — the X64 backend discards nothing, and there is no `call_indirect`
 // type tag to satisfy (static dispatch), so it needs no `i64` return.
 function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
-	var func = IrFunction.createFromStd(destructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(destructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3516,7 +3401,7 @@ function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project 
 	module.functions.push(func)
 end 'synthesizeUnionDestructor'
 
-// ⭐⭐ **THE PER-STRUCT DESTRUCTOR CASCADE (P1.4a wave 2).** The struct twin of `installUnionDestructors`:
+// ⭐⭐ **THE PER-STRUCT DESTRUCTOR CASCADE.** The struct twin of `installUnionDestructors`:
 // synthesize `__destruct_<Struct>(box)` for every struct that owns a managed field and whose destructor is
 // REFERENCED. Appended already-lowered after the pipeline, like the union one; what runs over that appended
 // band is stated once, in `Compiler.compileToCodeResult`'s install block.
@@ -3525,9 +3410,7 @@ end 'synthesizeUnionDestructor'
 //
 // ⚠ **GATED ON ANY DESTRUCTOR BEING NEEDED AT ALL**, so a program that drops nothing does not walk the
 // type registry to discover it needs nothing — `closeDestructorNeeds`' early-out, on the same set and for
-// the same reason. ⚠ It stood BELOW the project walk until this rung's review, where it said this and gated
-// only the SECOND of the two registries; the clone twin already gated both, which is the disagreement that
-// made the two walks worth deriving once.
+// the same reason.
 export function installStructDestructors(module StdModule, project Project, signatures ProgramSignatures, needed DestructorSet)
 	if needed.count() == 0 'nothingDrops'
 		return
@@ -3536,7 +3419,7 @@ export function installStructDestructors(module StdModule, project Project, sign
 	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed as ReferencedEntrySymbols, kind: StructRuntimeEntryKind.destructor)
 end 'installStructDestructors'
 
-// ⭐⭐ **THE PER-RECORD *DICTIONARY* DESTRUCTOR CASCADE (W183)** — the declared-record twin of
+// ⭐⭐ **THE PER-RECORD *DICTIONARY* DESTRUCTOR CASCADE** — the declared-record twin of
 // `installGenericInstanceDictionaryDestructors`, over the same roster the plain struct cascade walks. It
 // exists for one record shape the instance family cannot reach: a TUPLE whose elements stand at the
 // enclosing generic's own parameters (`typealias Pair = (K, V)`, `stdlib/Map.maxon`'s `Entry`), which is a
@@ -3565,7 +3448,7 @@ union StructRuntimeEntryKind
 	// `__destruct_<Struct>` — admitted only for a layout that owns a managed field.
 	destructor
 
-	// ⭐ `__destruct_dict_<Struct>(descriptor, box)` (W183) — admitted only for a layout resting a slot at a
+	// ⭐ `__destruct_dict_<Struct>(descriptor, box)` — admitted only for a layout resting a slot at a
 	// bare type parameter, which is the one slot `structHasManagedField` cannot see. Its instance twin is
 	// `installGenericInstanceDictionaryDestructors`.
 	dictionaryDestructor
@@ -3599,7 +3482,7 @@ function installOneStructRuntimeEntry(module StdModule, entry StructRosterEntry,
 
 	match kind 'entry'
 		destructor then installOneStructDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed as DestructorSet)
-		dictionaryDestructor then installOneStructDictionaryDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed as DestructorSet)
+		dictionaryDestructor then installOneStructDictionaryDestructor(module, entry: entry, signatures: signatures, needed: needed as DestructorSet)
 		cloner then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.clone)
 		soleWalk then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.soleWalk)
 		shareWalk then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.shareWalk)
@@ -3607,31 +3490,26 @@ function installOneStructRuntimeEntry(module StdModule, entry StructRosterEntry,
 end 'installOneStructRuntimeEntry'
 
 // ⭐⭐ **THE ONE ROSTER OF LAYOUTS A PER-STRUCT RUNTIME ENTRY MAY BE SYNTHESIZED FOR — TWO REGISTRIES, ONE
-// DERIVATION (review of W180).** Every per-struct walk — the installers and the cascade-need walks alike —
+// DERIVATION.** Every per-struct walk — the installers and the cascade-need walks alike —
 // must agree about WHICH LAYOUTS EXIST, and the way they came to disagree is that each spelled the walk
 // itself; a missing body is `bakeFuncAbs64Relocs: … it was never installed`, a BACKEND PANIC rather than a
 // diagnostic. What stays per-entry is the ADMISSION TEST, which is genuinely different
 // (`installOneStructDestructor` gates on a managed field, `installOneStructCascade` deliberately does not).
 //
-// ⭐⭐ **THE TUPLES, FROM THE INDEX — BECAUSE THE PROJECT REGISTRY NEVER RECEIVES A SUBSTITUTED ONE
-// (W41).** `project.structTypes` is fed by `ParseStaging.commitStructTypes`, which copies each FILE
+// ⭐⭐ **THE TUPLES, FROM THE INDEX — BECAUSE THE PROJECT REGISTRY NEVER RECEIVES A SUBSTITUTED
+// ONE.** `project.structTypes` is fed by `ParseStaging.commitStructTypes`, which copies each FILE
 // ARTIFACT's own layouts, so it holds every tuple the source SPELLS and no tuple minted by SUBSTITUTION —
 // `ProgramSignatures.substituteTupleThroughInstance` creates those at a CALL SITE, straight into the
-// whole-program index. The parser emits the drop call either way, so the missing body is a BACKEND panic
-// rather than a leak: **MEASURED, with the corpus `Map` live, `for (_, value) in m` over `["a": 10]` walks
-// `MapIterator.current()`, whose declared `Entry = (Key, Value)` substitutes to `__Tuple2.String.int`, and
-// the compile stops at `resolveCallFixups: call to unknown function '__destruct___Tuple2.String.int'`.** A
-// plain `function pair() returns (String, Num)` in the same tree compiles and runs, which is what
-// localizes it to the substituted mint rather than to tuples. The clone side's own measurement of the same
-// hole is on `installStructCascades`.
+// whole-program index. The parser emits the drop call either way, so a substituted tuple missing
+// here is a BACKEND panic (`resolveCallFixups: call to unknown function '__destruct___Tuple2…'`)
+// rather than a leak.
 //
-// ⛔⛔ **A NAME THE PROJECT REGISTRY ALREADY HOLDS IS SKIPPED, AND LETTING THIS WALK OWN ALL TUPLES
-// INSTEAD WAS A MEASURED REGRESSION (22 failures against 14).** The two registries are NOT two views of
-// one table for a tuple: a sweep key is `(spelling, file)` and only a CANONICAL name is a whole-program
-// identity, so the index can hold a layout whose elements were resolved in a different file's scope from
-// the one `commitStructTypes` committed — see `ProgramSignatures`' A3v header, which records the wrong
-// answer that shape already produced once. The project's entry is the authoritative resolved one wherever
-// it exists; this walk supplies only what nothing committed.
+// ⛔⛔ **A NAME THE PROJECT REGISTRY ALREADY HOLDS IS SKIPPED; THIS WALK MUST NOT OWN ALL TUPLES.**
+// The two registries are NOT two views of one table for a tuple: a sweep key is `(spelling, file)`
+// and only a CANONICAL name is a whole-program identity, so the index can hold a layout whose
+// elements were resolved in a different file's scope from the one `commitStructTypes` committed.
+// The project's entry is the authoritative resolved one wherever it exists; this walk supplies only
+// what nothing committed.
 //
 // ⚠⚠ **THE TWO REGISTRIES HAND OVER LAYOUTS FROM TWO NAME SPACES, AND THE INTERNER TRAVELS WITH THE
 // LAYOUT (`StructRosterEntry`).** A `project.structTypes` layout's field-type ids index `project.typeNames`;
@@ -3648,7 +3526,7 @@ function structRuntimeRoster(project Project, signatures ProgramSignatures) retu
 	let indexTypeNames = signatures.indexTypeNames()
 
 	for layout in signatures.tupleLayouts() 'eachInternedTuple'
-		if not projectHasStructLayout(project, name: layout.name) 'notCommitted'
+		if not project.structTypes.contains(layout.name) 'notCommitted'
 			roster.push(StructRosterEntry.create(layout, typeNames: indexTypeNames))
 		end 'notCommitted'
 	end 'eachInternedTuple'
@@ -3656,20 +3534,7 @@ function structRuntimeRoster(project Project, signatures ProgramSignatures) retu
 	return roster
 end 'structRuntimeRoster'
 
-// Has `ParseStaging.commitStructTypes` already committed a layout under this name? The membership half of
-// the skip above, spelled as its own question because "the project registry is authoritative where it has an
-// entry" is the rule, and a `try … otherwise false` inline would read as a lookup that happened to fail.
-function projectHasStructLayout(project Project, name ByteArray) returns bool
-	if let committed = try project.structTypes.get(name) 'found'
-		return not committed.name.isEmpty()
-	end 'found'
-
-	return false
-end 'projectHasStructLayout'
-
-// One layout's cascade, or nothing when it is unreferenced or owns nothing droppable. Split out when the
-// substituted-tuple walk landed (W41) so the two walks share one admission test rather than each spelling
-// it — the shape where one of them comes to admit a layout the other would have declined.
+// One layout's cascade, or nothing when it is unreferenced or owns nothing droppable.
 function installOneStructDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, needed DestructorSet)
 	if not signatures.structHasFieldOwingDrop(layout.name) 'noManaged'
 		return
@@ -3689,7 +3554,7 @@ end 'installOneStructDestructor'
 //          null), each through `managedFieldDropCallee`.
 //
 // A struct has NO tag — every field is always present — so the cascade drops unconditionally rather than
-// under a tag switch. It shares its skeleton with the generic-instance cascade (P1.6-B2), which is the same
+// under a tag switch. It shares its skeleton with the generic-instance cascade, which is the same
 // tagless box shape over a substituted field list.
 function synthesizeStructDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures)
 	var drops = ManagedFieldDropArray.create()
@@ -3705,74 +3570,22 @@ function synthesizeStructDestructor(module StdModule, layout StructLayout, typeN
 	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(layout.name), drops: drops)
 end 'synthesizeStructDestructor'
 
-// The dictionary twin's admission (W183) — `installOneStructDestructor`'s shape with the one question that
+// The dictionary twin's admission — `installOneStructDestructor`'s shape with the one question that
 // differs: not "does it own a managed field" (a bare parameter is not one) but "does it rest a slot at a
 // parameter at all". `recordOpaqueSlotDeclaration` carries WHICH declaration's parameters; only the drop site
 // has to check that, so here the presence is the whole test.
-function installOneStructDictionaryDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures, needed DestructorSet)
-	match signatures.recordOpaqueSlotDeclaration(layout.name) 'restsASlot'
+function installOneStructDictionaryDestructor(module StdModule, entry StructRosterEntry, signatures ProgramSignatures, needed DestructorSet)
+	match signatures.recordOpaqueSlotDeclaration(entry.layout.name) 'restsASlot'
 		none then return
 		declaredBy then break 'restsASlot'
 	end 'restsASlot'
 
-	if not needed.contains(dictionaryDestructorSymbol(layout.name)) 'notReferenced'
+	if not needed.contains(dictionaryDestructorSymbol(entry.layout.name)) 'notReferenced'
 		return
 	end 'notReferenced'
 
-	synthesizeStructDictionaryDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures)
+	synthesizeDictionaryDestructor(module, source: CascadeFieldSource.declaredRecord(entry), signatures: signatures)
 end 'installOneStructDictionaryDestructor'
-
-// Emit `__destruct_dict_<Struct>(descriptor, box)` (W183) — `synthesizeStructDestructor` with the one field
-// classifier that differs, exactly as `synthesizeGenericInstanceDictionaryDestructor` differs from
-// `synthesizeGenericInstanceDestructor`. The skeleton (the refcount check to last owner, the null-guarded
-// drops, the free) is the shared `emitFieldCascadeDestructor`, so this cascade releases at REFCOUNT ZERO like
-// every other — which is what makes it safe for a record a shared frame is not the last owner of.
-function synthesizeStructDictionaryDestructor(module StdModule, layout StructLayout, typeNames TypeNameInterner, signatures ProgramSignatures)
-	var drops = ManagedFieldDropArray.create()
-
-	for i in 0 upto layout.fieldCount() 'eachField'
-		match dictionaryStructFieldDropKind(layout, index: i, typeNames: typeNames, signatures: signatures) 'released'
-			none then continue
-			released(kind) then drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), kind: kind))
-		end 'released'
-	end 'eachField'
-
-	emitFieldCascadeDestructor(module, symbolName: dictionaryDestructorSymbol(layout.name), drops: drops, takesDescriptor: true)
-end 'synthesizeStructDictionaryDestructor'
-
-// HOW declared field `index` of a record over the enclosing parameters is released, or `none` for a field
-// that owns nothing — `structFieldDropKind`'s dictionary twin, and the ONE classifier the synthesis above,
-// the needs closure (`addNestedStructDictionaryDestructors`) and the runtime-bit declaration
-// (`declareStructDictionaryDropNeeds`) all read. Its instance twin is `dictionaryInstanceFieldDropKind`, and
-// the arm order is that one's for that one's reason: the slot at a bare parameter first, because
-// `structFieldIsManaged` answers `false` for it and a managed test would skip it.
-//
-// A field resting a slot through a NESTED declaration view is released through that view's own dictionary
-// destructor, handed this record's whole descriptor (`nestedViewDropKind`). The retain side agrees on the
-// parameter: `retainedFeed` follows a declaration view out to the parameter it stands at
-// (`kindFollowsADeclarationView`), which is the parameter this release is made against.
-//
-// ⚠⚠ **THE TWO TWINS ARE A PARALLEL COPY AND NOTHING MAKES THEM AGREE.** Same arms, same order, same
-// two decisions, differing only in the accessor set and in the plain-kind fallback — and they are reached
-// through DIFFERENT admission predicates (`instanceRestsARetainedSlot` against the mere presence of an opaque
-// slot). Collapsing them onto one classifier over a `CascadeFieldSource{declaredStruct(layout), instance(id)}`
-// is the right shape and would let the six near-identical walks share their loop; it is filed rather than
-// done here because it lands in a cascade this rung had just repaired.
-function dictionaryStructFieldDropKind(layout StructLayout, index FieldIndex, typeNames TypeNameInterner, signatures ProgramSignatures) returns FieldDropKindOption
-	if signatures.structFieldIsOpaque(layout.name, index: index) 'aBareParameterSlot'
-		return FieldDropKindOption.released(FieldDropKind.throughDescriptor(DropTypeParamName, descriptor: DictionaryDestructorDescriptorParam, blockOffset: signatures.structFieldOpaqueBlockOffset(layout.name, index: index)))
-	end 'aBareParameterSlot'
-
-	if let view = try signatures.structFieldRestingNestedView(layout.name, index: index) 'aNestedDeclarationView'
-		return FieldDropKindOption.released(nestedViewDropKind(signatures, view: view))
-	end 'aNestedDeclarationView'
-
-	if not signatures.structFieldOwesDrop(layout.name, index: index) 'scalarField'
-		return FieldDropKindOption.none
-	end 'scalarField'
-
-	return FieldDropKindOption.released(structFieldDropKind(layout, index: index, typeNames: typeNames, signatures: signatures))
-end 'dictionaryStructFieldDropKind'
 
 // HOW a payload that owes a drop is released — `structFieldDropKind`'s union twin. An interface-typed payload
 // is a SERVICE REQUEST's message argument, whose witness half the request union carries in the next slot
@@ -3785,8 +3598,8 @@ function payloadDropKind(signatures ProgramSignatures, typeNames TypeNameInterne
 	return FieldDropKind.direct(managedFieldDropCallee(signatures, typeNames: typeNames, fieldType: field.declaredType))
 end 'payloadDropKind'
 
-// HOW struct field `index` is released — the `existential` kind for an interface-typed field
-// (P1.7a-existentials slice 2), the statically resolved callee for every other. It is asked HERE, off the
+// HOW struct field `index` is released — the `existential` kind for an interface-typed field,
+// the statically resolved callee for every other. It is asked HERE, off the
 // declared type, because the alternative is `managedFieldDropCallee` inventing a 1-argument callee for a
 // slot whose destructor is a run-time fact; that function's own `interfaceRef` guard says so from the other
 // side.
@@ -3798,7 +3611,7 @@ function structFieldDropKind(layout StructLayout, index FieldIndex, typeNames Ty
 	return FieldDropKind.direct(managedStructFieldDropCallee(layout, index: index, typeNames: typeNames, signatures: signatures))
 end 'structFieldDropKind'
 
-// ⭐⭐ **THE PER-INSTANCE DESTRUCTOR CASCADE (P1.6-B2).** A generic instance is a monomorphized base struct
+// ⭐⭐ **THE PER-INSTANCE DESTRUCTOR CASCADE.** A generic instance is a monomorphized base struct
 // that OWNS its managed type arguments (moved in at the concrete call site), so `__destruct_<mangled>` drops
 // each SUBSTITUTED managed field then frees the box — `Box with String` drops the String, `Box with Holder`
 // drops the Holder (through its own `__destruct_Holder`), `Box with (Box with String)` drops the inner box
@@ -3835,7 +3648,7 @@ function instanceFieldDropKind(signatures ProgramSignatures, id GenericInstanceI
 	return FieldDropKind.direct(signatures.genericInstanceFieldDropCallee(id, index: index))
 end 'instanceFieldDropKind'
 
-// ⭐ **THE PER-INSTANCE DESTRUCTOR INSTALLER (P1.6-B2)** — the generic-instance twin of
+// ⭐ **THE PER-INSTANCE DESTRUCTOR INSTALLER** — the generic-instance twin of
 // `installStructDestructors`: synthesize `__destruct_<mangled>` for every managed instance whose destructor
 // is REFERENCED (directly by a `decrefCalleeFor` scope-exit drop, or through a nested cascade
 // `closeDestructorNeeds` grew the set over). Appended already-lowered after the pipeline.
@@ -3853,7 +3666,7 @@ export function installGenericInstanceDestructors(module StdModule, signatures P
 	end 'each'
 end 'installGenericInstanceDestructors'
 
-// ⭐⭐⭐ **THE DICTIONARY DESTRUCTOR CASCADE (BATCH41) — `__destruct_dict_<mangled>(descriptor, box)`, the drop
+// ⭐⭐⭐ **THE DICTIONARY DESTRUCTOR CASCADE — `__destruct_dict_<mangled>(descriptor, box)`, the drop
 // a DECLARATION VIEW owes and no symbol could name.** `synthesizeGenericInstanceDestructor` above builds the
 // cascade for a MONOMORPHIZED instance, whose every managed field has a statically resolved callee. This one
 // builds it for the view a shared generic body actually holds — `BagIter with Element` inside
@@ -3874,45 +3687,121 @@ end 'installGenericInstanceDestructors'
 // exactly the callee `instanceFieldDropKind` gives it, so a record dropped through this cascade and the same
 // record dropped through `__destruct_<Base>_<Arg>` release the identical set — which is what makes the two
 // safe to coexist for one record shape: at refcount zero exactly one of them runs.
-function synthesizeGenericInstanceDictionaryDestructor(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
+//
+// The same body serves a declared record whose fields stand at the enclosing parameters
+// (`installStructDictionaryDestructors`). The skeleton is the shared `emitFieldCascadeDestructor`, so this
+// cascade releases at REFCOUNT ZERO like every other — which is what makes it safe for a record a shared frame
+// is not the last owner of.
+function synthesizeDictionaryDestructor(module StdModule, source CascadeFieldSource, signatures ProgramSignatures)
+	let symbolName = match source 'source'
+		declaredRecord(entry) gives dictionaryDestructorSymbol(entry.layout.name)
+		genericInstance(id) gives instanceDictionaryDestructorSymbol(signatures, id: id)
+	end 'source'
+
+	emitFieldCascadeDestructor(module, symbolName: symbolName, drops: dictionaryFieldDrops(signatures, source: source), takesDescriptor: true)
+end 'synthesizeDictionaryDestructor'
+
+// The record a dictionary cascade releases the fields of: a declared record over the enclosing parameters (a
+// TUPLE of them is a `structRef` and reaches none of the instance family), or a generic instance's
+// DECLARATION VIEW.
+union CascadeFieldSource
+	declaredRecord(entry StructRosterEntry)
+	genericInstance(id GenericInstanceId)
+end 'CascadeFieldSource'
+
+// Every released field of `source`, in declaration order — the ONE walk the dictionary cascade's synthesis,
+// its needs closure (`addNestedDictionaryDestructors`) and its runtime-bit declaration
+// (`declareDictionaryDropNeeds`) all read, so a field is dropped through exactly the callee it is accounted
+// for under.
+function dictionaryFieldDrops(signatures ProgramSignatures, source CascadeFieldSource) returns ManagedFieldDropArray
 	var drops = ManagedFieldDropArray.create()
 
-	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
-		match dictionaryInstanceFieldDropKind(signatures, id: id, index: i) 'released'
+	for i in 0 upto cascadeFieldCount(signatures, source: source) 'eachField'
+		match dictionaryFieldDropKind(signatures, source: source, index: i) 'released'
 			none then continue
-			released(kind) then drops.push(ManagedFieldDrop.create(signatures.genericInstanceFieldOffset(id, index: i), kind: kind))
+			released(kind) then drops.push(ManagedFieldDrop.create(cascadeFieldOffset(signatures, source: source, index: i), kind: kind))
 		end 'released'
 	end 'eachField'
 
-	emitFieldCascadeDestructor(module, symbolName: instanceDictionaryDestructorSymbol(signatures, id: id), drops: drops, takesDescriptor: true)
-end 'synthesizeGenericInstanceDictionaryDestructor'
+	return drops
+end 'dictionaryFieldDrops'
 
-// HOW substituted field `index` of a declaration view is released, or `none` for a field that owns nothing —
-// `instanceFieldDropKind`'s dictionary twin, and the ONE classifier the synthesis above, the needs closure
-// (`addNestedInstanceDictionaryDestructors`) and the runtime-bit declaration
-// (`declareInstanceDictionaryDropNeeds`) all read. Three of them asking the same question their own way is
-// how a field would come to be dropped through one callee and accounted for under another.
+// A layout-less instance (`Array`/`Set` and every undeclared base) has no field list to walk — see
+// `addNestedInstanceDestructors`.
+function cascadeFieldCount(signatures ProgramSignatures, source CascadeFieldSource) returns FieldIndex
+	return match source 'source'
+		declaredRecord(entry) gives entry.layout.fieldCount()
+		genericInstance(id) gives signatures.genericInstanceFieldCount(id) if signatures.genericInstanceHasBaseLayout(id) else 0
+	end 'source'
+end 'cascadeFieldCount'
+
+function cascadeFieldOffset(signatures ProgramSignatures, source CascadeFieldSource, index FieldIndex) returns ByteOffset
+	return match source 'source'
+		declaredRecord(entry) gives entry.layout.offsetOfField(index)
+		genericInstance(id) gives signatures.genericInstanceFieldOffset(id, index: index)
+	end 'source'
+end 'cascadeFieldOffset'
+
+// HOW field `index` of `source` is released, or `none` for a field that owns nothing.
 //
 // The order of the arms is the order of the questions: a slot still at a bare parameter first (it is the one
 // `typeIsManaged` answers `false` for, so a managed test would skip it), then a NESTED declaration view
-// resting a retained slot (released through its own dictionary destructor, `nestedViewDropKind` — see
-// `dictionaryStructFieldDropKind` for why the retain agrees on the parameter), then the ordinary managed
-// field, then nothing.
-function dictionaryInstanceFieldDropKind(signatures ProgramSignatures, id GenericInstanceId, index FieldIndex) returns FieldDropKindOption
-	if signatures.genericInstanceFieldIsOpaque(id, index: index) 'aBareParameterSlot'
-		return FieldDropKindOption.released(FieldDropKind.throughDescriptor(DropTypeParamName, descriptor: DictionaryDestructorDescriptorParam, blockOffset: signatures.genericInstanceFieldOpaqueBlockOffset(id, index: index)))
+// resting a retained slot, then the ordinary managed field, then nothing. A nested view is released through
+// its own dictionary destructor, handed this record's whole descriptor (`nestedViewDropKind`); the retain side
+// agrees on the parameter, because `retainedFeed` follows a declaration view out to the parameter it stands at
+// (`kindFollowsADeclarationView`).
+function dictionaryFieldDropKind(signatures ProgramSignatures, source CascadeFieldSource, index FieldIndex) returns FieldDropKindOption
+	if fieldStandsAtABareParameter(signatures, source: source, index: index) 'aBareParameterSlot'
+		return FieldDropKindOption.released(FieldDropKind.throughDescriptor(DropTypeParamName, descriptor: DictionaryDestructorDescriptorParam, blockOffset: bareParameterBlockOffset(signatures, source: source, index: index)))
 	end 'aBareParameterSlot'
 
-	if let view = try signatures.viewRestingARetainedSlot(signatures.substituteInstanceFieldType(id, index: index)) 'aNestedDeclarationView'
+	if let view = try nestedViewRestingAt(signatures, source: source, index: index) 'aNestedDeclarationView'
 		return FieldDropKindOption.released(nestedViewDropKind(signatures, view: view))
 	end 'aNestedDeclarationView'
 
-	if not signatures.genericInstanceFieldIsManaged(id, index: index) 'scalarField'
+	if not fieldOwesDrop(signatures, source: source, index: index) 'scalarField'
 		return FieldDropKindOption.none
 	end 'scalarField'
 
-	return FieldDropKindOption.released(instanceFieldDropKind(signatures, id: id, index: index))
-end 'dictionaryInstanceFieldDropKind'
+	return FieldDropKindOption.released(concreteFieldDropKind(signatures, source: source, index: index))
+end 'dictionaryFieldDropKind'
+
+function fieldStandsAtABareParameter(signatures ProgramSignatures, source CascadeFieldSource, index FieldIndex) returns bool
+	return match source 'source'
+		declaredRecord(entry) gives signatures.structFieldIsOpaque(entry.layout.name, index: index)
+		genericInstance(id) gives signatures.genericInstanceFieldIsOpaque(id, index: index)
+	end 'source'
+end 'fieldStandsAtABareParameter'
+
+function bareParameterBlockOffset(signatures ProgramSignatures, source CascadeFieldSource, index FieldIndex) returns ByteOffset
+	return match source 'source'
+		declaredRecord(entry) gives signatures.structFieldOpaqueBlockOffset(entry.layout.name, index: index)
+		genericInstance(id) gives signatures.genericInstanceFieldOpaqueBlockOffset(id, index: index)
+	end 'source'
+end 'bareParameterBlockOffset'
+
+function nestedViewRestingAt(signatures ProgramSignatures, source CascadeFieldSource, index FieldIndex) returns MaxonType throws MapError
+	return match source 'source'
+		declaredRecord(entry) gives try signatures.structFieldRestingNestedView(entry.layout.name, index: index)
+		genericInstance(id) gives try signatures.viewRestingARetainedSlot(signatures.substituteInstanceFieldType(id, index: index))
+	end 'source'
+end 'nestedViewRestingAt'
+
+function fieldOwesDrop(signatures ProgramSignatures, source CascadeFieldSource, index FieldIndex) returns bool
+	return match source 'source'
+		declaredRecord(entry) gives signatures.structFieldOwesDrop(entry.layout.name, index: index)
+		genericInstance(id) gives signatures.genericInstanceFieldIsManaged(id, index: index)
+	end 'source'
+end 'fieldOwesDrop'
+
+// The plain cascade's release of a field that owes a drop — the field shapes the dictionary cascade shares
+// with it.
+function concreteFieldDropKind(signatures ProgramSignatures, source CascadeFieldSource, index FieldIndex) returns FieldDropKind
+	return match source 'source'
+		declaredRecord(entry) gives structFieldDropKind(entry.layout, index: index, typeNames: entry.typeNames, signatures: signatures)
+		genericInstance(id) gives instanceFieldDropKind(signatures, id: id, index: index)
+	end 'source'
+end 'concreteFieldDropKind'
 
 // ⭐ **THE INSTALLER FOR THE FAMILY ABOVE** — `installGenericInstanceDestructors`' dictionary twin, gated on
 // the same two questions: does this instance rest such a slot at all, and did anything REFERENCE its
@@ -3927,7 +3816,7 @@ export function installGenericInstanceDictionaryDestructors(module StdModule, si
 			continue
 		end 'notReferenced'
 
-		synthesizeGenericInstanceDictionaryDestructor(module, id: id, signatures: signatures)
+		synthesizeDictionaryDestructor(module, source: CascadeFieldSource.genericInstance(id), signatures: signatures)
 	end 'each'
 end 'installGenericInstanceDictionaryDestructors'
 
@@ -3947,7 +3836,7 @@ export union FieldDropKind
 	// a reply cell's are not (`GtRuntime.GtOffReplyWitness`).
 	existential(witnessDisplacement ByteOffset)
 
-	// ⭐⭐ **A field of a DECLARATION VIEW released through the DICTIONARY the cascade was handed (BATCH41)** —
+	// ⭐⭐ **A field of a DECLARATION VIEW released through the DICTIONARY the cascade was handed** —
 	// `callee(descriptor + blockOffset, value)`. Two field shapes take it and they are one act, which is why
 	// they are one arm rather than two: a slot still standing at a bare type parameter goes to
 	// `__drop_type_param` at THAT parameter's block, and a slot at a nested declaration view goes to that
@@ -3959,9 +3848,9 @@ export union FieldDropKind
 	throughDescriptor(callee ByteArray, descriptor ValueId, blockOffset ByteOffset)
 end 'FieldDropKind'
 
-// ⭐ **A FIELD'S RELEASE, OR THAT IT HAS NONE** — the answer `dictionaryInstanceFieldDropKind` gives, where
-// its concrete twin `instanceFieldDropKind` can assume its caller already filtered the scalars. The
-// dictionary classifier cannot: the field it exists for is exactly the one `genericInstanceFieldIsManaged`
+// ⭐ **A FIELD'S RELEASE, OR THAT IT HAS NONE** — the answer `dictionaryFieldDropKind` gives, where
+// its concrete twin `concreteFieldDropKind` can assume its caller already filtered the scalars. The
+// dictionary classifier cannot: the field it exists for is exactly the one `fieldOwesDrop`
 // answers `false` for, so the "is it released at all?" question and the "how?" question have to be settled
 // together or the filter would have to know the answer before asking for it.
 union FieldDropKindOption
@@ -3970,7 +3859,7 @@ union FieldDropKindOption
 end 'FieldDropKindOption'
 
 // One managed field a TAGLESS box destructor must drop: its byte offset in the box, and HOW it is released.
-// The struct (P1.4a) and generic-instance (P1.6-B2) cascades each build a list of these and hand it to
+// The struct and generic-instance cascades each build a list of these and hand it to
 // `emitFieldCascadeDestructor`, so the entry/lower/drop/free skeleton lives in ONE place.
 type ManagedFieldDrop
 	export let offset as ByteOffset
@@ -3997,7 +3886,7 @@ typealias ManagedFieldDropArray = Array with ManagedFieldDrop
 // skeleton the union cascade uses too, minus the tag switch — hence the shared `emitNullGuardedDrop`.
 function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drops ManagedFieldDropArray, takesDescriptor bool = false)
 	let paramCount = DictionaryDestructorParamCount if takesDescriptor else PlainDestructorParamCount
-	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: twoI64Params() if takesDescriptor else oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: twoI64Params() if takesDescriptor else oneI64Param(), needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4088,7 +3977,7 @@ export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, 
 end 'emitNullGuardedDrop'
 
 // Load the WITNESS half beside an already-live value half and release the pair through
-// `__drop_existential(witness, value)` (P1.7a-existentials slice 2). Its own function because a `match` arm
+// `__drop_existential(witness, value)`. Its own function because a `match` arm
 // carries one statement and this shape is two; `dropped` is the caller's result slot, so the two kinds mint
 // exactly one apiece.
 function emitExistentialFieldDrop(module StdModule, block IrBlock, box ValueId, witnessOffset ByteOffset, value ValueId, dropped ValueId, ids ValueMinter)
@@ -4219,7 +4108,7 @@ export function installCascades(module StdModule, project Project, signatures Pr
 	installGenericInstanceCascades(module, project: project, signatures: signatures, needed: needed, action: action)
 end 'installCascades'
 
-// ⭐ The GENERIC-INSTANCE twin of `noteStructCascadeNeeds` (W162) — over each SUBSTITUTED managed field, and
+// ⭐ The GENERIC-INSTANCE twin of `noteStructCascadeNeeds` — over each SUBSTITUTED managed field, and
 // the exact clone dual of `addNestedInstanceDestructors`. It needs no `project`: every fact about an instance
 // is answered inside `signatures`, over `signatures`' own interner.
 //
@@ -4230,7 +4119,7 @@ end 'installCascades'
 // element-bearing records are layout-less and DO have a cloner, so they are taken before that early-out
 // rather than exempted from it.
 function noteInstanceCascadeNeeds(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist, action CascadeAction)
-	// ⭐ **A MANAGED-ELEMENT RECORD'S `__clone_<mangled>` IS THE ONE-ARGUMENT THUNK (G18), NOT A FIELD CASCADE.**
+	// ⭐ **A MANAGED-ELEMENT RECORD'S `__clone_<mangled>` IS THE ONE-ARGUMENT THUNK, NOT A FIELD CASCADE.**
 	// It has no field list to walk — it has no base layout at all — and its whole body is the container's own
 	// 2-argument per-element copy, so its needs are exactly that FIELD-position strategy's: the container entry
 	// (`__managed_clone_managed` / `__list_clone_managed`) and the ELEMENT's own cloner, which may itself be
@@ -4300,7 +4189,7 @@ end 'noteFieldCascadeNeeds'
 // A managed-element CONTAINER field clones through `containerClone(field, funcAddr(elementClone))` — route BOTH
 // callees the synthesized cloner body will emit through the ONE usage map, so their bits are exactly a direct
 // scan of those calls (no second spelling of "__managed_clone_managed → usesManagedElementCopy", and none of
-// "__list_clone_managed → usesList" either — W173).
+// "__list_clone_managed → usesList" either).
 function noteManagedElementsFieldNeeds(usage RuntimeUsage, containerEntry ByteArray, elementEntry ByteArray, work CascadeWorklist, action CascadeAction)
 	recordCallUsage(containerEntry, usage: usage)
 	noteCascadeCalleeNeeds(usage, callee: elementEntry, work: work, action: action)
@@ -4332,17 +4221,10 @@ function installStructCascades(module StdModule, project Project, signatures Pro
 		return
 	end 'noneReferenced'
 
-	// ⭐⭐ **THE TUPLES ARE IN THE ROSTER, AND THEY WERE MISSING (W180).** `project.structTypes` carries every
-	// tuple the source SPELLS and no tuple minted by SUBSTITUTION, because
-	// `ProgramSignatures.substituteTupleThroughInstance` creates those at a CALL SITE straight into the
-	// whole-program index. The drop side gained the index walk at W41 off a MEASURED backend panic; the clone
-	// side kept a one-registry walk, so the two installers' key spaces differed and a `copyFunc@32` stamp could
-	// name a cloner in neither. **MEASURED**: with the corpus `Map` live, `for e in ["a": "x"]` binds the
-	// substituted `__Tuple2.String.String`, `let arr = [e]` infers an `Array` of it and `arr.clone()` stamped
-	// `__clone___Tuple2.String.String` — `bakeFuncAbs64Relocs: … it was never installed`, on a program holding
-	// no `typealias` at all. A drop and a clone that disagree about which layouts exist is the same defect
-	// twice — so the roster is `installStructRuntimeEntries`, derived once, and neither side can grow a
-	// registry the other does not see.
+	// ⭐⭐ **THE ROSTER IS THE DROP SIDE'S, SUBSTITUTED TUPLES INCLUDED (`structRuntimeRoster`).** A
+	// clone installer over a narrower roster lets a `copyFunc@32` stamp name a cloner nothing built
+	// (`bakeFuncAbs64Relocs: … it was never installed`), so neither side can grow a registry the other
+	// does not see.
 	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed as ReferencedEntrySymbols, kind: structEntryKindOf(action))
 end 'installStructCascades'
 
@@ -4385,7 +4267,7 @@ function installUnionCascades(module StdModule, project Project, signatures Prog
 	end 'each'
 end 'installUnionCascades'
 
-// ⭐ **THE PER-INSTANCE CASCADE INSTALLER (W162)** — the twin of `installGenericInstanceDestructors`, and
+// ⭐ **THE PER-INSTANCE CASCADE INSTALLER** — the twin of `installGenericInstanceDestructors`, and
 // `installStructCascades`' instance twin. Synthesize `__clone_<mangled>` / `__sole_<mangled>` for every
 // instance whose entry is REFERENCED (directly by an element stamp in a layout descriptor's `copyFunc@32` or
 // by a transfer door's call, or through a nested cascade `noteCascadeUsage` grew the set over). Like the
@@ -4398,7 +4280,7 @@ function installGenericInstanceCascades(module StdModule, project Project, signa
 	end 'noneReferenced'
 
 	for id in 0 upto signatures.genericInstanceCount() 'each'
-		// ⭐ **A MANAGED-ELEMENT RECORD HAS NO BASE LAYOUT AND STILL HAS AN ENTRY (G18)** — the one-argument
+		// ⭐ **A MANAGED-ELEMENT RECORD HAS NO BASE LAYOUT AND STILL HAS AN ENTRY** — the one-argument
 		// thunk, which is why the layout gate is a disjunct here rather than the loop's first word. Asked once
 		// and reused below, so the roster and the routing read one answer.
 		let isElementRecordThunk = signatures.isManagedElementRecordInstance(id)
@@ -4420,7 +4302,7 @@ function installGenericInstanceCascades(module StdModule, project Project, signa
 	end 'each'
 end 'installGenericInstanceCascades'
 
-// ⭐⭐ **THE ONE-ARGUMENT ELEMENT-CLONER THUNK FOR A MANAGED-ELEMENT RECORD (G18)** — what makes
+// ⭐⭐ **THE ONE-ARGUMENT ELEMENT-CLONER THUNK FOR A MANAGED-ELEMENT RECORD** — what makes
 // `Array with (Array with String)` copyable at all. The record's copy is a 2-argument
 // `<containerClone>(box, funcAddr(elementClone))`, and an ARRAY ELEMENT is invoked through
 // `callIndirect(fn, elem)`, which passes exactly one. So the element's stamped `copyFunc@32` is this
@@ -4441,7 +4323,7 @@ end 'installGenericInstanceCascades'
 // through the SAME `emitCloneCall` a struct field takes, so the two entry points of one operation cannot come
 // to copy differently.
 function synthesizeElementRecordCloner(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
-	var func = IrFunction.createFromStd(clonerSymbol(signatures.mangleGenericInstance(id)), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(clonerSymbol(signatures.mangleGenericInstance(id)), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4454,8 +4336,8 @@ function synthesizeElementRecordCloner(module StdModule, id GenericInstanceId, s
 end 'synthesizeElementRecordCloner'
 
 // One managed field a TAGLESS box cloner must deep-copy: its byte offset in the box, and HOW it is copied.
-// `ManagedFieldDrop`'s clone dual, and it exists for that one's reason — the struct (P1.7 slice 3b-vi-b) and
-// generic-instance (W162) cloners each build a list of these and hand it to `emitFieldCascadeCloner`, so the
+// `ManagedFieldDrop`'s clone dual, and it exists for that one's reason — the struct and
+// generic-instance cloners each build a list of these and hand it to `emitFieldCascadeCloner`, so the
 // alloc/blit/clone/ret skeleton lives in ONE place rather than once per shape of field list.
 type ManagedFieldCascade
 	export let offset as ByteOffset
@@ -4476,7 +4358,7 @@ typealias ManagedFieldCascadeArray = Array with ManagedFieldCascade
 // cascade's null-guard does. `emitFieldCascadeDestructor`'s dual, minus the refcount check: a clone never
 // frees, it always allocates.
 function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize ByteOffset, tagName ByteArray, clones ManagedFieldCascadeArray, project Project)
-	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4484,7 +4366,7 @@ function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize 
 	let src = 0 as ValueId
 
 	let size = emitConst(module, block: entry, value: boxSize as ParsedInt, ids: ids)
-	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
+	let zeroDtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
 	let newBox = ids.mint()
 	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: tagName, debugStream: module.debugStream), ids: ids)
 	var copied = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
@@ -4545,7 +4427,7 @@ function synthesizeStructCascade(module StdModule, layout StructLayout, typeName
 	end 'action'
 end 'synthesizeStructCascade'
 
-// ⭐⭐ **THE PER-INSTANCE DEEP-CLONER CASCADE (W162)** — the exact clone dual of
+// ⭐⭐ **THE PER-INSTANCE DEEP-CLONER CASCADE** — the exact clone dual of
 // `synthesizeGenericInstanceDestructor`, and the same relationship to `synthesizeStructCascade` that one has to
 // `synthesizeStructDestructor`. A generic instance is a monomorphized base struct that OWNS its managed type
 // arguments, so `__clone_<mangled>` allocates a fresh box of the BASE's size and deep-clones each SUBSTITUTED
@@ -4561,16 +4443,16 @@ end 'synthesizeStructCascade'
 // `genericInstanceBoxDropCallee` answers the trivial `__mm_decref`.
 //
 // ⚠ **WHAT MAKES THAT SAFE IS THAT BOTH SIDES ARE NO-OPS ON `v` — NOT THAT SOMETHING ELSE OWNS IT. READ THE
-// EMITTED CODE BEFORE BUILDING ON THIS NOTE.** It first credited the balance to the enclosing instance's
-// layout-descriptor protocol (`retainFunc@64` / `destroyFunc@40`), and that is NOT what this shape emits.
-// MEASURED at W162's review with `--emit-ir-runtime` on `Bag with String`: `Bag.create` builds the element
+// EMITTED CODE BEFORE BUILDING ON THIS NOTE.** The balance is not the enclosing instance's
+// layout-descriptor protocol (`retainFunc@64` / `destroyFunc@40`), which this shape does not emit.
+// Under `--emit-ir-runtime` on `Bag with String`: `Bag.create` builds the element
 // array as `__managed_create(8, __mm_decref)`, `Box.create` allocates each element box with a ZERO
 // destructor, and `__clone_Box_T<hash>` is `__mm_alloc` + blit with no incref — so `v` is neither retained on
 // the way in nor released on the way out, on EITHER side. The clone therefore takes no reference and frees
 // none, which is why it can neither leak nor double-free. It is admissible for exactly that reason and for no
 // stronger one.
 //
-// ⛔ The other half of that measurement is a PRE-EXISTING hole this rung neither opened nor widens: the
+// ⛔ The other half of that reading is a hole outside this cascade: the
 // enclosing body BORROWS the element it stores. A `Bag with String` whose caller's `String` dies before the
 // read SEGFAULTS (139) — and it segfaults identically on a program with no
 // cloner in it at all — so it belongs to the opaque type-parameter ownership protocol, not to this cascade.
@@ -4600,7 +4482,7 @@ end 'synthesizeGenericInstanceCascade'
 // (no case owns a managed payload) is a pure blit, which is exactly the fresh independent box its element copy
 // needs.
 function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
-	var func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4609,7 +4491,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	let src = 0 as ValueId
 
 	let size = emitConst(module, block: entry, value: layout.boxSizeBytes() as ParsedInt, ids: ids)
-	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
+	let zeroDtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
 	let newBox = ids.mint()
 	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: layout.name, debugStream: module.debugStream), ids: ids)
 	var copied = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
@@ -4778,8 +4660,8 @@ end 'emitManagedElementsFieldClone'
 // ⭐⭐ **EACH IS THE CLONE CASCADE'S SHAPE WITHOUT THE ALLOCATION.** `__sole_<T>(box, visits)` counts `box`'s
 // owners in the moved graph and `__share_<T>(box, visits)` marks it shared, then each walks the SAME managed
 // field list the cloner copies and the destructor releases — one classifier (`managedFieldCascadeStrategy`)
-// routes all four, so a field a clone deep-copies is a field a move proves, a lend marks and a drop releases,
-// and none of them can come to disagree about what a type holds.
+// routes all four, so a field a clone deep-copies is a field a move proves, a share marks and a
+// drop releases, and none of them can come to disagree about what a type holds.
 //
 // ⚠ **A WALK NEITHER RETAINS NOR RELEASES ANYTHING IN THE GRAPH.** It reads counts, marks them (share), may
 // DETACH a shared copy-on-write buffer (sole, `__managed_sole`), and otherwise leaves the graph as it found it —
@@ -4787,8 +4669,8 @@ end 'emitManagedElementsFieldClone'
 // memory it touches is its own visit table, which `__mm_walk_settle` frees.
 //
 // ⭐ **BOTH WALKS STOP WHERE `emitBoxWalkStep` SAYS NOTHING BELOW CAN NEED THEM** — at image data, at a
-// shared box and at a record an earlier meeting already descended — which is what makes a second lend of one
-// graph cost one box step, and a record reached twice cost one descent.
+// shared box and at a record an earlier meeting already descended — which is what makes a second
+// share of one graph cost one box step, and a record reached twice cost one descent.
 
 // One declared union's cascade for `action`. The bodies differ in what they leave behind — a fresh box or
 // nothing — and share the tag-guard chain and the payload list through `emitUnionManagedCaseChain`.
@@ -4905,7 +4787,7 @@ end 'emitManagedElementsFieldWalk'
 // load is gated on `usage.usesGt` because `__gt_live_count` only exists when the GT runtime is installed —
 // and since `usesGt ⟹ usesHeap`, this gate is always present for a GT program, so no GT leak slips past it.
 function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
-	var func = IrFunction.createFromStd(MmLeakCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MmLeakCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var start = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

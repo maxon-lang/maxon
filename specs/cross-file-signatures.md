@@ -23,11 +23,11 @@ file is parsed. A callee's return type is therefore exact whether it is declared
 below it, or in another file. Declaration order — and file boundaries — do not decide what a
 program means.
 
-### What this replaces, and why it was a wrong answer
+### Why deferring an unseen callee is a wrong answer
 
-A callee the parser could not see used to be typed `unresolved`, which agrees with **everything**.
-That is the right move for a type you genuinely cannot know, and a catastrophic one for a type you
-simply did not look for:
+Typing a callee the parser could not see as `unresolved`, which agrees with **everything**, is the
+right move for a type you genuinely cannot know, and a catastrophic one for a type you simply did not
+look for:
 
 ```text
 // --- file: a.maxon
@@ -42,25 +42,24 @@ function main() returns ExitCode
 end 'main'
 ```
 
-The same program in **one** file was already rejected. The bug was not the deferral; it was that
-nothing had looked.
+The same program in **one** file is rejected. The fault is not the deferral; it is not looking.
 
 Its twin is worse, because deferral does not merely fail to reject — it **mints a false tag**. A
 word operator whose operands *agree only because one of them deferred* takes the bool reading, so
-`flag and crossFileInt()` produced a merge phi tagged `bool` that carried the integer `7`, and
-`if m` then branched on `7`.
+`flag and crossFileInt()` would produce a merge phi tagged `bool` that carries the integer `7`, and
+`if m` would branch on `7`.
 
 ### A callee no file declares
 
-`unresolved` is still reachable, for exactly one thing: a call to a function that does not exist.
+`unresolved` is reachable, for exactly one thing: a call to a function that does not exist.
 That program is rejected — `E3004: call to undefined function` — so the deferral has nothing left
 to lie to.
 
 ## Tests
 
 <!-- test: cross-file-bool-plus-int -->
-A `bool` returned from another file cannot be added to an `int`. This is the headline case: it
-compiled, and returned 42.
+A `bool` returned from another file cannot be added to an `int`. This is the headline case: typed by
+deferral, it would compile and return 42.
 ```maxon
 // --- file: a.maxon
 
@@ -79,8 +78,8 @@ error E2004: <fragment>:11:11: Cannot operate on bool and int
 ```
 
 <!-- test: cross-file-word-operator-mixed-operands -->
-The false-tag twin. `flag and crossFileInt()` used to mint a merge phi tagged `bool` carrying the
-int `7`; `if m` branched on `7` and the program returned 1.
+The false-tag twin. Typed by deferral, `flag and crossFileInt()` would mint a merge phi tagged `bool`
+carrying the int `7`; `if m` would branch on `7` and the program would return 1.
 ```maxon
 // --- file: a.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -126,8 +125,8 @@ error E3005: <fragment>:9:15: type mismatch: 'cannot compare bool with int'
 
 <!-- test: cross-file-int-call-still-compiles -->
 ⚠ THE OVER-REJECTION GUARD. Refusing an operand whose type the parser could not pin would reject
-this — a correct program — and over-rejection is the worse failure. The fix was to LOOK, not to
-refuse.
+this — a correct program — and over-rejection is the worse failure. The parser LOOKS rather than
+refusing.
 ```maxon
 // --- file: a.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -153,7 +152,7 @@ refuses an unknown operand — so this correct program would stop compiling. It 
 is false. A clean exit IS the proof.
 
 ⚠ The zero divisor comes from an OPAQUE call rather than from `var zero = 0`. A folded zero is a
-compile-time E3103 (A1), which would refuse the program outright and take the short-circuit — the
+compile-time E3103, which would refuse the program outright and take the short-circuit — the
 actual subject — with it. The `otherwise panic` is what keeps "never reached" a checked claim: if
 the `and` ever stopped short-circuiting, this would name itself instead of trapping.
 ```maxon
@@ -219,14 +218,12 @@ error E3004: <fragment>:3:9: call to undefined function 'bogus'
 ```
 
 <!-- test: cross-file-generic-alias-is-a-swept-value-type -->
-⭐ **A GENERIC-INSTANCE TYPEALIAS IS A SWEPT VALUE TYPE, NOT ONLY A CALL BASE (A3e).** `parseTypeReference`'s
-generic-alias arm carried a comment claiming the declaration sweep never reached it and that such an alias
-is "used only as a call BASE … never as a swept value type". Both halves were false: the sweep reads
-declared TYPES through that same routine, and this program spells `IntArray` at a struct FIELD, a METHOD
-return and a FREE-FUNCTION return — three positions the sweep records and the whole-program index stores.
-This half DECLARES the alias file first and the twin below declares it last — and since A3m the declared
-order is the compiled order, so the two halves cover the two orders between them instead of both getting
-whichever one the host's directory walk happened to serve.
+⭐ **A GENERIC-INSTANCE TYPEALIAS IS A SWEPT VALUE TYPE, NOT ONLY A CALL BASE.** The declaration sweep
+reads declared TYPES through `parseTypeReference`'s generic-alias arm, and this program spells `IntArray`
+at a struct FIELD, a METHOD return and a FREE-FUNCTION return — three positions the sweep records and the
+whole-program index stores. This half DECLARES the alias file first and the twin below declares it last —
+and the declared order is the compiled order, so the two halves cover the two orders between them instead
+of both getting whichever one the host's directory walk happened to serve.
 ```maxon
 // --- file: alias.maxon
 public typealias Int = int(i64.min to i64.max)
@@ -270,10 +267,11 @@ end 'main'
 <!-- test: cross-file-generic-alias-is-a-swept-value-type-either-order -->
 ⭐ **THE SAME PROGRAM WITH THE TWO FILES DECLARED THE OTHER WAY ROUND, so the alias file is compiled LAST.**
 Whether the arm fires during the sweep is decided by the order the files are registered in — which the
-CALLER states and the loader never sorts (A3m; `StdlibLoader`'s header for the no-sort ruling). The arm is now gated on `ProgramSignatures.allFilesFolded`, so it fires in neither order and the
+CALLER states and the loader never sorts (`StdlibLoader`'s header states the no-sort rule). The arm is
+gated on `ProgramSignatures.allFilesFolded`, so it fires in neither order and the
 sweep records `named("IntArray")` for both — repaired identically at every read door. The alias file
 declares nothing but aliases, so the two cases' emitted IR is the SAME text: a golden that drifts apart is
-the order dependence coming back.
+an order dependence.
 ```maxon
 // --- file: main.maxon
 type Holder
@@ -315,11 +313,10 @@ export typealias IntArray = Array with Int
 ```
 
 <!-- test: cross-file-function-alias-is-a-swept-value-type -->
-⭐ **THE FUNCTION-ALIAS ARM IS THE SAME SHAPE (A3e).** `functionTypeAliases` is folded per FILE, so a
+⭐ **THE FUNCTION-ALIAS ARM IS THE SAME SHAPE.** `functionTypeAliases` is folded per FILE, so a
 function alias declared in a sibling file walked earlier is registered while a later file is still being
-swept — the arm's own comment claimed the registry "returns `undeclared`" throughout the sweep, which is
-true only within one file. This half declares the alias file FIRST and its twin below declares it
-last; since A3m that is what the compiler compiles, so the pair covers both orders (see
+swept. This half declares the alias file FIRST and its twin below declares it
+last; that is the order the compiler compiles, so the pair covers both orders (see
 `cross-file-generic-alias-is-a-swept-value-type-either-order` above).
 ```maxon
 // --- file: alias.maxon
@@ -389,19 +386,17 @@ export typealias UnaryOp = function(Int) returns Int
 ```
 
 <!-- test: cross-file-generic-instance-through-a-function-alias -->
-⭐⭐ **THE SWEPT FUNCTION ALIAS AGAIN, BUT OVER A GENERIC INSTANCE — AND HERE THE ORDER DECIDED THE ANSWER
+⭐⭐ **THE SWEPT FUNCTION ALIAS AGAIN, BUT OVER A GENERIC INSTANCE — WHERE THE ORDER CAN DECIDE THE ANSWER
 RATHER THAN THE SPELLING.** The pair above pins a function alias whose types are RANGED, which round-trip
 through the stored `(tag, name)` pair because they have a name. A `genericInstance` does not: its identity
-is a `GenericInstanceId`, the name slot took the empty string, and the rebuild substituted `UnnamedTypeId`
-— **0**, the id of whichever instantiation the sweep interned first. `thief.maxon` is walked first here
-purely so that `Array with Small` takes id 0, which moves `Array with Field` to 1 and refuses this legal
-program `E3005 … expected 'fn(int) returns struct', got 'fn(int) returns struct'`.
+is a `GenericInstanceId`, and a rebuild from an empty name slot would substitute `UnnamedTypeId` — **0**,
+the id of whichever instantiation the sweep interned first. `thief.maxon` is walked first here purely so
+that `Array with Small` takes id 0, which moves `Array with Field` to 1; a rebuild that read id 0 would
+refuse this legal program `E3005 … expected 'fn(int) returns struct', got 'fn(int) returns struct'`.
 
-⚠ **THE FILE SPLIT IS THE REPORTED SHAPE, NOT AN EMBELLISHMENT.** This is `maxon-dev-mcp/mcp` reduced: the
-generic alias lives in one file (`Schema.maxon`'s `SchemaFieldArray`), the function alias and its call site
-in another (`Server.maxon`'s `SchemaFieldsBuilder`), and a dozen files that mention neither decide the
-verdict by deciding who interns first. Renaming `Schema.maxon` so it sorted ahead of them made nine E3005s
-disappear, which is what a bug reported as *"identity depends on file order"* looks like from outside.
+⚠ **THE FILE SPLIT IS THE SHAPE UNDER TEST, NOT AN EMBELLISHMENT.** The generic alias lives in one file,
+the function alias and its call site in another, and a file that mentions neither decides the verdict by
+deciding who interns first.
 ```maxon
 // --- file: thief.maxon
 export typealias Small = int(0 to 10)
@@ -457,11 +452,11 @@ end 'main'
 
 <!-- test: cross-file-generic-instance-through-a-function-alias-either-order -->
 ⭐ **THE SAME FOUR FILES WITH THE THIEF MOVED AFTER THE DECLARATION IT WAS STEALING FROM**, so
-`Array with Field` interns first and holds id 0. **MEASURED: this half PASSES on the broken compiler and
-its twin above does not** — same program, same files, different declared order, opposite verdicts. Since
-A3m the compiler compiles the order the case declares, so the pair is a two-order test rather than one
-program written twice, and neither half is decoration: the failing half proves the defect and this one
-proves the fix did not simply refuse everything.
+`Array with Field` interns first and holds id 0. **A rebuild that read id 0 would pass this half and fail
+its twin above** — same program, same files, different declared order, opposite verdicts. The compiler
+compiles the order the case declares, so the pair is a two-order test rather than one program written
+twice, and neither half is decoration: the twin catches the order dependence and this one proves the
+compiler does not simply refuse everything.
 ```maxon
 // --- file: types.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -517,10 +512,9 @@ end 'main'
 
 ### A generic-instance receiver is a CONSUMER, and a consumer never swallows the undefined call
 
-A union that is not `export`ed is still nameable as a TYPE from another file, but its case
-constructor is not callable there — so `Hidden.broke(...)` across the boundary is a callee no file
-declares, which `A callee no file declares` above answers with E3004. The result is typed
-`unresolved` and deferred, and every consumer position that receives it names the CALL rather than
+`brokeHidden(...)` below is a callee no file declares, which `A callee no file declares` above answers
+with E3004. Its result is typed `unresolved` and deferred, and every consumer position that receives
+it — here as a value of the exported union `Hidden` — names the CALL rather than
 the symptom one line below it: arithmetic, interpolation, a field read, a method call on the result,
 a closure capture and a closure body all do so in `specs/functions.md`.
 
@@ -538,7 +532,7 @@ it, so the only boundary this program crosses is the union's, and nothing here t
 alias may be declared.
 ```maxon
 // --- file: probe.maxon
-union Hidden
+export union Hidden
 	broke(detail String)
 end 'Hidden'
 
@@ -546,25 +540,25 @@ end 'Hidden'
 typealias HiddenArray = Array with Hidden
 
 function main() returns ExitCode
-	var b = Hidden.broke("x")
+	var b = brokeHidden("x")
 	var xs = HiddenArray.create()
 	xs.push(b)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:11:17: call to undefined function 'Hidden.broke'
+error E3004: <fragment>:11:10: call to undefined function 'brokeHidden'
 error E3005: <fragment>:13:5: argument type mismatch for 'value': expected 'Hidden', got 'unknown'
 ```
 
 <!-- test: error.generic-instance-consumer-control-free-function-names-the-undefined-call -->
 ⭐ The control that makes the receiver the variable under test. Same union, same undefined
-constructor, same value — only the consumer changes, from a method on a generic instance to a free
+callee, same value — only the consumer changes, from a method on a generic instance to a free
 function. Nothing here depends on a generic receiver, so this is the answer the case above owes, and
-it is what proves a fix reached E3004 rather than silencing E3005 or suppressing the argument door.
+it is what proves the receiver case reaches E3004 rather than silencing E3005 or suppressing the argument door.
 ```maxon
 // --- file: probe.maxon
-union Hidden
+export union Hidden
 	broke(detail String)
 end 'Hidden'
 
@@ -574,13 +568,13 @@ function takesIt(v Hidden)
 end 'takesIt'
 
 function main() returns ExitCode
-	var b = Hidden.broke("x")
+	var b = brokeHidden("x")
 	takesIt(b)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:13:17: call to undefined function 'Hidden.broke'
+error E3004: <fragment>:13:10: call to undefined function 'brokeHidden'
 error E3005: <fragment>:14:2: argument type mismatch for 'v': expected 'Hidden', got 'unknown'
 ```
 
@@ -591,7 +585,7 @@ Its rule opens by asking whether the argument is an array instance, which an `un
 without the deferral the refusal it throws ends the file's parse and E3004 is never reported at all.
 ```maxon
 // --- file: probe.maxon
-union Hidden
+export union Hidden
 	broke(detail String)
 end 'Hidden'
 
@@ -600,11 +594,11 @@ typealias HiddenArray = Array with Hidden
 
 function main() returns ExitCode
 	var xs = HiddenArray.create()
-	xs.append(Hidden.broke("x"))
+	xs.append(brokeHidden("x"))
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:12:19: call to undefined function 'Hidden.broke'
+error E3004: <fragment>:12:12: call to undefined function 'brokeHidden'
 error E3005: <fragment>:12:5: argument type mismatch for 'other': expected 'HiddenArray', got 'unknown'
 ```

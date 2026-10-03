@@ -1,8 +1,5 @@
-typealias FoldedOwnerSlot = int(0 to u64.max)
-typealias FoldedOwnerColumn = Array with FoldedOwnerSlot
-
-let NoFoldedOwner = 0 as FoldedOwnerSlot
-let FoldedOwnerBias = 1
+typealias FoldedOwnerSlot = int(0 to u64.max) implements ElementIndex
+typealias FoldedOwnerColumn = OptionalIndexColumn with FoldedOwnerSlot
 
 let MaxPhiResolutionSteps = 8
 
@@ -45,15 +42,14 @@ function noteFoldedRecordsInFunc(module StdModule, func IrFunction, liveOps OpIn
 	let carried = carriedBlockArgValues(module, func: func, argBound: argBound)
 	let valueBound = namedOrDefinedValueBound(module, func: func)
 
-	var ownerOfValue = FoldedOwnerColumn.create()
-	ownerOfValue.refill(valueBound, value: NoFoldedOwner)
+	var ownerOfValue = FoldedOwnerColumn.absent(valueBound)
 	var namedOfValue = ValueIdArray.create()
 	namedOfValue.refill(valueBound, value: 0 as ValueId)
 
 	for (iter, local) in func.debugLocals.withIterator() 'eachBinding'
 		for named in local.valueIds 'eachValue'
 			let carrier = resolveThroughPhis(carried, value: named, argBound: argBound)
-			try ownerOfValue.set(carrier, value: (iter.index() + FoldedOwnerBias) as FoldedOwnerSlot) otherwise panic("noteFoldedRecords: ownerOfValue.set OOB at value {carrier} of the {ownerOfValue.count()} this function defines")
+			ownerOfValue.set(carrier, value: iter.index() as FoldedOwnerSlot)
 			try namedOfValue.set(carrier, value: named) otherwise panic("noteFoldedRecords: namedOfValue.set OOB at value {carrier} of the {namedOfValue.count()} this function defines")
 		end 'eachValue'
 	end 'eachBinding'
@@ -74,9 +70,13 @@ function noteFoldedRecordsInFunc(module StdModule, func IrFunction, liveOps OpIn
 	for opIdx in liveOps 'eachOp'
 		classifyStoreOperands(opAt(module, opIdx: opIdx), store: store)
 
-		if store.isStore() 'aFieldWrite'
-			noteFieldWrite(writes, refused: refused, owner: ownerAt(ownerOfValue, value: store.addrId), recordValue: namedAt(namedOfValue, value: store.addrId), offset: store.offset, valueId: store.valueId, valueType: store.valueType, constMap: constMap)
-		end 'aFieldWrite'
+		if not store.isStore() 'notAFieldWrite'
+			continue
+		end 'notAFieldWrite'
+
+		if let owner = try ownerAt(ownerOfValue, value: store.addrId) 'aNamedRecord'
+			noteFieldWrite(writes, refused: refused, owner: owner, recordValue: namedAt(namedOfValue, value: store.addrId), offset: store.offset, valueId: store.valueId, valueType: store.valueType, constMap: constMap)
+		end 'aNamedRecord'
 	end 'eachOp'
 
 	writes.sort(function(left FoldedFieldWrite, right FoldedFieldWrite) gives compareFoldedFieldWrites(left, right: right))
@@ -139,7 +139,7 @@ function anyStoreIntoANamedValue(module StdModule, liveOps OpIndexArray, ownerOf
 	for opIdx in liveOps 'eachOp'
 		classifyStoreOperands(opAt(module, opIdx: opIdx), store: store)
 
-		if store.isStore() and ownerAt(ownerOfValue, value: store.addrId) != NoFoldedOwner 'fillsANamedRecord'
+		if store.isStore() and hasOwner(ownerOfValue, value: store.addrId) 'fillsANamedRecord'
 			return true
 		end 'fillsANamedRecord'
 	end 'eachOp'
@@ -152,10 +152,6 @@ function opAt(module StdModule, opIdx ElementIndex) returns StdOp
 end 'opAt'
 
 function noteFieldWrite(writes FoldedFieldWriteArray, refused BoolArray, owner FoldedOwnerSlot, recordValue ValueId, offset ByteOffset, valueId ValueId, valueType StdType, constMap ConstValueMap)
-	if owner == NoFoldedOwner 'notANamedRecord'
-		return
-	end 'notANamedRecord'
-
 	if valueType.rawValue.isFloat or not constMap.contains(valueId) 'notAFoldedField'
 		refuse(refused, owner: owner)
 		return
@@ -172,11 +168,19 @@ function noteFieldWrite(writes FoldedFieldWriteArray, refused BoolArray, owner F
 end 'noteFieldWrite'
 
 function refuse(refused BoolArray, owner FoldedOwnerSlot)
-	try refused.set((owner - FoldedOwnerBias) as ElementIndex, value: true) otherwise panic("noteFoldedRecords: refused.set OOB at binding {owner - FoldedOwnerBias} of {refused.count()}")
+	try refused.set(owner, value: true) otherwise panic("noteFoldedRecords: refused.set OOB at binding {owner} of {refused.count()}")
 end 'refuse'
 
-function ownerAt(ownerOfValue FoldedOwnerColumn, value ValueId) returns FoldedOwnerSlot
-	return try ownerOfValue.get(value) otherwise NoFoldedOwner
+function hasOwner(ownerOfValue FoldedOwnerColumn, value ValueId) returns bool
+	return value < ownerOfValue.count() and ownerOfValue.holds(value)
+end 'hasOwner'
+
+function ownerAt(ownerOfValue FoldedOwnerColumn, value ValueId) returns FoldedOwnerSlot throws AbsentError
+	if not hasOwner(ownerOfValue, value: value) 'unowned'
+		throw AbsentError.absent
+	end 'unowned'
+
+	return try ownerOfValue.get(value)
 end 'ownerAt'
 
 function namedAt(namedOfValue ValueIdArray, value ValueId) returns ValueId
@@ -208,8 +212,7 @@ function publishFoldedRecords(func IrFunction, writes FoldedFieldWriteArray, ref
 end 'publishFoldedRecords'
 
 function publishOneFoldedRecord(func IrFunction, writes FoldedFieldWriteArray, refused BoolArray, owner FoldedOwnerSlot, first ElementIndex, past ElementIndex)
-	let binding = (owner - FoldedOwnerBias) as ElementIndex
-	let wasRefused = try refused.get(binding) otherwise true
+	let wasRefused = try refused.get(owner) otherwise true
 
 	if wasRefused 'aFieldTheCompilerCannotState'
 		return
@@ -230,6 +233,6 @@ function publishOneFoldedRecord(func IrFunction, writes FoldedFieldWriteArray, r
 		at = at + 1
 	end 'eachField'
 
-	var local = try func.debugLocals.get(binding) otherwise panic("noteFoldedRecords: debugLocals.get OOB at {binding} of {func.debugLocals.count()}")
+	var local = try func.debugLocals.get(owner) otherwise panic("noteFoldedRecords: debugLocals.get OOB at {owner} of {func.debugLocals.count()}")
 	local.noteFoldedRecord((try writes.get(first) otherwise panic("noteFoldedRecords: writes.get OOB at {first}, which its own run named")).recordValue, words: words)
 end 'publishOneFoldedRecord'

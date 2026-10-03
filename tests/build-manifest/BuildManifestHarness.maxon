@@ -14,7 +14,7 @@
 // and a manifest's output path is relative to the directory it runs in.
 
 let FixturesDirName = "tests/build-manifest/fixtures"
-let StagingRootDirName = "temp/build-manifest"
+let StagingRootDirName = "temp/build_manifest"
 
 // `tests/README.md` rule 1: `<name>.fixture -> <name>`.
 let StoredFixtureSuffix = ".fixture"
@@ -44,22 +44,126 @@ export let NothingRanExitCode = 2
 // A stable fragment of the tree lock's busy refusal (`TreeLock.reportBusy`).
 export let TreeLockBusyWording = "holds its tree lock"
 
-// The refusal must name the host's own way of asking whether the holder is still alive, spelled exactly: a
-// reader left to their half-remembered process tool reads the wrong column and believes a live holder is
-// gone. The probe is spelled around `HeldLockRecord`'s pid, so the two must agree.
-#if os(Windows)
-	export let TreeLockLivenessProbeWording = "tasklist /FI \"PID eq 0\""
-#else
-	export let TreeLockLivenessProbeWording = "ps -p 0"
+export let TreeLockUnprobedHolderWording = "the record names no process this host can probe"
+
+export let TreeLockEndedHolderWording = "has ended without releasing it"
+
+export let TreeLockStaleClaimWording = "removed a stale tree lock claim file"
+
+export let TreeLockClaimBusyWording = "is claiming its tree lock"
+
+export let TreeLockNotItsOwnWording = "is no longer its own"
+
+export let TreeLockReleasingWording = "while releasing"
+
+export let TreeLockRefreshingWording = "while refreshing"
+
+export let TreeLockAbandonedWording = "taking over an ABANDONED tree lock"
+
+export let TreeLockHolderRunningWording = "is running"
+
+export let TreeLockLeftoverSweptWording = "removed a leftover tree lock file"
+
+#if not os(Windows)
+	export let TreeLockFailureWording = "the tree lock could not be taken"
+	export let TreeLockFailureHintWording = "build from a directory you own"
 #endif
 
-// `TreeLock.LockFileName`, and the directory whose presence makes a directory a checkout
-// (`stdlibDirAbove`). A second copy of each.
+let VersionCommandName = "version"
+let SpecTestCommandName = "spec-test"
+
+// `TreeLock.LockFileName` and `ClaimFileSuffix`, and the directory whose presence makes a directory a
+// checkout (`stdlibDirAbove`). A second copy of each.
 let TreeLockFileName = ".maxon-tree.lock"
+let TreeLockClaimSuffix = ".claim"
 let CheckoutMarkerDirName = "stdlib"
 
-// A record's content is echoed, never parsed for liveness: a lock is held while its MTIME is recent.
-let HeldLockRecord = "pid=0\ntoken=build-manifest-test\n"
+let NoProcessId = 0 as Pid
+let HeldLockToken = "build-manifest-test"
+let ForeignLockToken = "build-manifest-foreign"
+let LiveClaimToken = "build-manifest-live-claim"
+let SetAsideClaimPrefix = ".maxon-tree.lock.claim.removing-"
+let SetAsideStampSeparator = "-"
+let LeftoverToken = "build-manifest"
+let ClockFileName = "build-manifest-clock"
+let StaleClockProbeName = ".maxon-tree.lock.claim.probe-build-manifest"
+let StaleStagedRecordName = ".maxon-tree.lock.staged-build-manifest"
+
+let HostIdentitySeparator = "/"
+let AnotherLockHost = "another-os/another-host"
+let ThisProcessToken = "build-manifest-live-holder"
+
+let ForeignRecordSpecFileName = "foreign-record.md"
+let ForeignRecordSpecHead = "---\nfeature: build-manifest-foreign-record\n---\n# A program that replaces the tree lock's record\n\n## Tests\n\n<!-- test: foreign-record.replace-the-record -->\n\n```maxon\nfunction main() returns ExitCode\n"
+let ForeignRecordSpecTail = "\treturn 0\nend 'main'\n```\n\n```exitcode\n0\n```\n"
+
+export let PastOneHeartbeatMs = 6500
+export let NoWaitMs = 0
+
+let PastTheClaimWindowSeconds = 120
+export let PastTheAbandonmentWindowSeconds = 120
+let SecondsPerMinute = 60
+
+#if os(Windows)
+	let HostNameVariable = "COMPUTERNAME"
+	let HostOsName = "windows"
+	let ShellName = "powershell"
+	let ShellCommandFlag = "-Command"
+	let ShellNoProfileFlag = "-NoProfile"
+#else
+	let PosixShellName = "sh"
+	let PosixShellCommandFlag = "-c"
+	let ExecWithOwnPidScript = "printf 'pid=%s\\ntoken=%s\\nhost=%s\\n' \"$$\" \"$1\" \"$2\" > \"$3\" && exec \"$4\" build"
+	let ChangeModeCommandName = "chmod"
+	let ReadOnlyDirectoryMode = "a-w"
+	let WritableDirectoryMode = "u+w"
+	let ReadOnlyCheckoutsRootStem = "/tmp/maxon-build-manifest"
+	let ReadOnlyCheckoutsRootSeparator = "-"
+	let UserIdCommandName = "id"
+	let UserIdFlag = "-u"
+	let RootUserId = "0"
+#endif
+
+#if os(Linux)
+	let KernelHostNamePath = "/proc/sys/kernel/hostname"
+	let MachineIdPath = "/etc/machine-id"
+	let DbusMachineIdPath = "/var/lib/dbus/machine-id"
+	let HostOsName = "linux"
+#endif
+
+#if os(Macos)
+	let HostOsName = "macos"
+#endif
+
+#if os(Linux) or os(Macos)
+	let TouchCommandName = "touch"
+#endif
+
+#if os(Linux)
+	let TouchReferenceFlag = "-r"
+	let TouchDateFlag = "-d"
+#endif
+
+#if os(Macos)
+	let TouchAdjustFlag = "-A"
+#endif
+
+export enum HostIdentityPart
+	machine
+	pidSpace
+end 'HostIdentityPart'
+
+type NamedPart
+	export let text as String
+	export let names as HostIdentityParts
+
+	static function create(text String, names HostIdentityParts) returns NamedPart
+		return Self{text: text, names: names}
+	end 'create'
+end 'NamedPart'
+
+typealias NamedPartArray = Array with NamedPart
+typealias HostIdentityParts = Array with HostIdentityPart
 
 export let NoSidecarFixtureName = "no-sidecar"
 export let DefaultFixtureName = "default"
@@ -99,6 +203,8 @@ export let ProjectProductsDirName = ".maxon"
 // The two halves of a case's staging directory: the project, and the run cache its builds are confined to.
 // Siblings, so the project's own source walk never reaches the cache.
 let StagedProjectDirName = "project"
+let CaseLabelWordSeparator = "-"
+let CaseDirectoryWordSeparator = "_"
 let StagedCacheDirName = "cache"
 
 // The variable that points the driver's run cache somewhere else, and the prefix the cache names a build
@@ -110,19 +216,31 @@ let PathSeparator = "/"
 let CarriageReturn = "\r"
 
 typealias PathArray = Array with FilePath
+export typealias SleepMs = int(0 to 60000)
+export typealias AgeSeconds = int(1 to 3599)
 
 // A runnable copy of one fixture under a directory named for the CASE, beside the run cache that case's
 // builds are confined to. The previous run's files go first, both halves: a stale executable or sidecar
 // would let a build that wrote none be read as though it had.
 export function stagedProject(caseLabel String, fixture String) returns FilePath
-	let caseRoot = "{StagingRootDirName}{PathSeparator}{caseLabel}"
-	clearStagedFiles(stagingDir(caseRoot))
-	let staged = stagingDir("{caseRoot}{PathSeparator}{StagedProjectDirName}")
-
+	let staged = emptyCaseProject(caseLabel)
 	stageStoredTree(fixtureDir("{FixturesDirName}{PathSeparator}{fixture}"), into: staged)
-
 	return staged
 end 'stagedProject'
+
+// ⛔ **A CASE'S TREE LOCK IS ITS OWN, NEVER THE REAL CHECKOUT'S**: the `stdlib/` marker at the case
+// root is the nearest one above the project, so a build or a planted lock blocks no other command
+// in this tree.
+function emptyCaseProject(caseLabel String) returns FilePath
+	let caseRoot = "{StagingRootDirName}{PathSeparator}{caseLabel.replace(CaseLabelWordSeparator, with: CaseDirectoryWordSeparator)}"
+	clearStaged(stagingDir(caseRoot))
+	_ = stagingDir("{caseRoot}{PathSeparator}{CheckoutMarkerDirName}")
+	return stagingDir("{caseRoot}{PathSeparator}{StagedProjectDirName}")
+end 'emptyCaseProject'
+
+function caseRootOf(staged FilePath) returns FilePath
+	return try staged.parent() otherwise panic("build-manifest tests: the gate could not run — {staged.toString()} has no parent, which is the checkout its tree lock lives in.")
+end 'caseRootOf'
 
 function stageStoredTree(stored FilePath, into FilePath)
 	for entry in listing(stored) 'eachEntry'
@@ -153,8 +271,11 @@ export function spawnManifestBuild(staged FilePath, options StringArray, environ
 		arguments.push(option)
 	end 'eachOption'
 
-	let binary = testedCompilerPath()
-	var config = Configuration.create(Executable.path(binary))
+	return spawnInStaged(staged, executable: Executable.path(testedCompilerPath()), arguments: arguments, environment: environment)
+end 'spawnManifestBuild'
+
+function spawnInStaged(staged FilePath, executable Executable, arguments StringArray, environment EnvMap) returns CollectedOutput
+	var config = Configuration.create(executable)
 	config.arguments = arguments
 	config.workingDirectory = staged
 
@@ -168,15 +289,14 @@ export function spawnManifestBuild(staged FilePath, options StringArray, environ
 	config.environment = Environment.inheritUpdating(overrides)
 
 	return try config.run() otherwise (e) 'spawnFailed'
-		panic("build-manifest tests: the gate could not run — could not spawn `{BuildCommandName}` in {staged.toString()} ({e.displayReason()}).")
+		panic("build-manifest tests: the gate could not run — could not spawn a child in {staged.toString()} ({e.displayReason()}).")
 	end 'spawnFailed'
-end 'spawnManifestBuild'
+end 'spawnInStaged'
 
 // The run cache a case's builds are confined to: the project's sibling under the case's staging directory,
 // so a case neither writes into the developer's own cache nor reads a previous run out of it.
 function privateCacheRoot(staged FilePath) returns FilePath
-	let caseRoot = try staged.parent() otherwise panic("build-manifest tests: the gate could not run — {staged.toString()} has no parent to keep its run cache beside.")
-	return caseRoot.join(StagedCacheDirName)
+	return caseRootOf(staged).join(StagedCacheDirName)
 end 'privateCacheRoot'
 
 export function builtExecutable(staged FilePath) returns FilePath
@@ -200,8 +320,8 @@ export function sidecarsIn(staged FilePath) returns String
 	return found.trim()
 end 'sidecarsIn'
 
-// Every file under the staged project's products directory, named for a report. Directories a previous
-// run left are not files, so only what THIS run wrote is found — staging clears the files.
+// Every file under the staged project's products directory, named for a report. Staging clears what
+// a previous run left, so only what THIS run wrote is found.
 export function filesInProjectProducts(staged FilePath) returns String
 	return listed(filesUnder(staged.join(ProjectProductsDirName)))
 end 'filesInProjectProducts'
@@ -255,18 +375,331 @@ function listed(paths PathArray) returns String
 	return text.trim()
 end 'listed'
 
-// Makes the staged project a checkout of its own and plants a lock on it that a live holder just wrote.
-// ⛔ **THE LOCK IS THE STAGED PROJECT'S, NEVER THE REAL CHECKOUT'S**: a marker directory under the staged
-// project is the nearest one above it, so the lock this plants blocks no other command in this tree.
+// A lock a live holder just wrote: fresh, and naming no process this host can probe.
 export function plantHeldTreeLock(staged FilePath)
-	let marker = staged.join(CheckoutMarkerDirName)
-
-	if not Directory.create(marker) 'couldNotCreate'
-		panic("build-manifest tests: the gate could not run — could not create {marker.toString()}, which makes the staged project a checkout of its own.")
-	end 'couldNotCreate'
-
-	try File.writeText(staged.join(TreeLockFileName), content: HeldLockRecord) otherwise panic("build-manifest tests: the gate could not run — could not plant a tree lock in {staged.toString()}.")
+	plantTreeLock(staged, record: hostlessRecord(HeldLockToken))
 end 'plantHeldTreeLock'
+
+export function plantTreeLockOfEndedHolder(staged FilePath)
+	plantTreeLock(staged, record: endedHoldersRecord(thisLockHost(), token: "build-manifest-ended-holder"))
+end 'plantTreeLockOfEndedHolder'
+
+export function plantTreeLockOfAnotherHostsHolder(staged FilePath)
+	plantTreeLock(staged, record: endedHoldersRecord(AnotherLockHost, token: "build-manifest-another-host"))
+end 'plantTreeLockOfAnotherHostsHolder'
+
+export function plantTreeLockOfThisRunningProcess(staged FilePath)
+	plantTreeLock(staged, record: lockRecord(__Builtins.currentProcessId(), token: ThisProcessToken, host: thisLockHost()))
+end 'plantTreeLockOfThisRunningProcess'
+
+export function ageTreeLock(staged FilePath, seconds AgeSeconds)
+	ageFile(treeLockOf(staged), seconds: seconds)
+end 'ageTreeLock'
+
+export function plantTreeLockOfThisHostWithout(staged FilePath, dropped HostIdentityPart)
+	var kept = StringArray.create()
+
+	for named in thisHostParts() 'eachPart'
+		keepUnlessNaming(kept, named: named, dropped: dropped)
+	end 'eachPart'
+
+	plantTreeLock(staged, record: endedHoldersRecord(lockHostOf(kept), token: "build-manifest-without-{dropped.name}"))
+end 'plantTreeLockOfThisHostWithout'
+
+function thisLockHost() returns String
+	var whole = StringArray.create()
+
+	for named in thisHostParts() 'eachPart'
+		whole.push(named.text)
+	end 'eachPart'
+
+	return lockHostOf(whole)
+end 'thisLockHost'
+
+function keepUnlessNaming(kept StringArray, named NamedPart, dropped HostIdentityPart)
+	for name in named.names 'eachName'
+		if name == dropped 'theDroppedPart'
+			return
+		end 'theDroppedPart'
+	end 'eachName'
+
+	kept.push(named.text)
+end 'keepUnlessNaming'
+
+export function plantLiveTreeLockClaim(staged FilePath)
+	try File.writeText(treeLockClaimOf(staged), content: LiveClaimToken) otherwise panic("build-manifest tests: the gate could not run — could not plant a tree lock claim beside {staged.toString()}.")
+end 'plantLiveTreeLockClaim'
+
+export function plantStaleTreeLockClaim(staged FilePath)
+	plantLiveTreeLockClaim(staged)
+	ageFile(treeLockClaimOf(staged), seconds: PastTheClaimWindowSeconds)
+end 'plantStaleTreeLockClaim'
+
+export function plantStaleTreeLockLeftovers(staged FilePath)
+	for name in [StaleClockProbeName, StaleStagedRecordName] 'eachLeftover'
+		ageFile(plantedLeftover(staged, name: name), seconds: PastTheClaimWindowSeconds)
+	end 'eachLeftover'
+
+	_ = plantedLeftover(staged, name: setAsideClaimName(filesystemNowIn(caseRootOf(staged)) - PastTheClaimWindowSeconds))
+end 'plantStaleTreeLockLeftovers'
+
+export function plantYoungSetAsideClaimOfAnOldFile(staged FilePath) returns FilePath
+	let aside = plantedLeftover(staged, name: setAsideClaimName(filesystemNowIn(caseRootOf(staged))))
+	ageFile(aside, seconds: PastTheClaimWindowSeconds)
+	return aside
+end 'plantYoungSetAsideClaimOfAnOldFile'
+
+function setAsideClaimName(stamp Timestamp) returns String
+	return "{SetAsideClaimPrefix}{stamp}{SetAsideStampSeparator}{LeftoverToken}"
+end 'setAsideClaimName'
+
+function plantedLeftover(staged FilePath, name String) returns FilePath
+	let leftover = caseRootOf(staged).join(name)
+	try File.writeText(leftover, content: LiveClaimToken) otherwise panic("build-manifest tests: the gate could not run — could not plant {leftover.toString()}.")
+	return leftover
+end 'plantedLeftover'
+
+function filesystemNowIn(dir FilePath) returns Timestamp
+	let clock = dir.join(ClockFileName)
+	try File.writeText(clock, content: LeftoverToken) otherwise panic("build-manifest tests: the gate could not run — could not write {clock.toString()} to read the filesystem's clock.")
+	let info = try File.info(clock) otherwise panic("build-manifest tests: the gate could not run — could not read the timestamp of {clock.toString()}.")
+	try File.delete(clock) otherwise panic("build-manifest tests: the gate could not run — could not delete {clock.toString()}.")
+	return info.modifiedTime
+end 'filesystemNowIn'
+
+export function treeLockClaimOf(staged FilePath) returns FilePath
+	return caseRootOf(staged).join("{TreeLockFileName}{TreeLockClaimSuffix}")
+end 'treeLockClaimOf'
+
+export function treeLockOf(staged FilePath) returns FilePath
+	return caseRootOf(staged).join(TreeLockFileName)
+end 'treeLockOf'
+
+function ageFile(path FilePath, seconds AgeSeconds)
+	#if os(Windows)
+		var config = Configuration.create(Executable.name(ShellName))
+		config.arguments = [ShellNoProfileFlag, ShellCommandFlag, "$file = Get-Item -LiteralPath '{path.toString()}'; $file.LastWriteTime = $file.LastWriteTime.AddSeconds(-{seconds})"]
+	#endif
+
+	#if os(Linux)
+		var config = Configuration.create(Executable.name(TouchCommandName))
+		config.arguments = [TouchReferenceFlag, path.toString(), TouchDateFlag, "-{seconds} seconds", path.toString()]
+	#endif
+
+	#if os(Macos)
+		var config = Configuration.create(Executable.name(TouchCommandName))
+		config.arguments = [TouchAdjustFlag, "-{seconds / SecondsPerMinute:02}{seconds mod SecondsPerMinute:02}", path.toString()]
+	#endif
+
+	let ran = try config.run() otherwise (e) 'spawnFailed'
+		panic("build-manifest tests: the gate could not run — could not spawn the tool that back-dates {path.toString()} ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	if not ran.succeeded() 'notAged'
+		panic("build-manifest tests: the gate could not run — the tool that back-dates {path.toString()} exited {ran.exitCode()}: {ran.stderr}")
+	end 'notAged'
+end 'ageFile'
+
+export function stagedForeignRecordCheckout(caseLabel String, sleepMs SleepMs) returns FilePath
+	let staged = emptyCaseProject(caseLabel)
+
+	let lock = treeLockOf(staged).toString().replace("\\", with: "/")
+	let program = "\ttry File.writeText(FilePath from \"{lock}\", content: \"{foreignLockRecord().replace("\n", with: "\\n")}\") otherwise return 1\n\tsleep({sleepMs})\n"
+	try File.writeText(staged.join(ForeignRecordSpecFileName), content: "{ForeignRecordSpecHead}{program}{ForeignRecordSpecTail}") otherwise panic("build-manifest tests: the gate could not run — could not write the spec into {staged.toString()}.")
+
+	return staged
+end 'stagedForeignRecordCheckout'
+
+export function spawnSpecTest(staged FilePath) returns CollectedOutput
+	return spawnInStaged(staged, executable: Executable.path(testedCompilerPath()), arguments: [SpecTestCommandName, staged.toString()], environment: EnvMap.create())
+end 'spawnSpecTest'
+
+function leftoverTreeLockFiles(staged FilePath) returns StringArray
+	var leftovers = StringArray.create()
+	let entries = listing(caseRootOf(staged))
+
+	for entry in entries 'eachEntry'
+		let name = entry.filename()
+
+		if name.startsWith(TreeLockFileName) 'aLockFile'
+			leftovers.push(name)
+		end 'aLockFile'
+	end 'eachEntry'
+
+	return leftovers
+end 'leftoverTreeLockFiles'
+
+function endedHoldersRecord(host String, token String) returns String
+	return lockRecord(endedProcessId(), token: token, host: host)
+end 'endedHoldersRecord'
+
+function lockRecord(pid Pid, token String, host String) returns String
+	return "{recordOf(pid, token: token)}host={host}\n"
+end 'lockRecord'
+
+function hostlessRecord(token String) returns String
+	return recordOf(NoProcessId, token: token)
+end 'hostlessRecord'
+
+export function foreignLockRecord() returns String
+	return hostlessRecord(ForeignLockToken)
+end 'foreignLockRecord'
+
+function recordOf(pid Pid, token String) returns String
+	return "pid={pid}\ntoken={token}\n"
+end 'recordOf'
+
+#if not os(Windows)
+	export let TreeLockOwnProcessWording = "which is this command's own process"
+	let OwnProcessToken = "build-manifest-reused-id"
+
+	export function spawnManifestBuildUnderARecordOfItsOwnPid(staged FilePath) returns CollectedOutput
+		return spawnInStaged(staged, executable: Executable.name(PosixShellName), arguments: [PosixShellCommandFlag, ExecWithOwnPidScript, PosixShellName, OwnProcessToken, thisLockHost(), treeLockOf(staged).toString(), testedCompilerPath().toString()], environment: EnvMap.create())
+	end 'spawnManifestBuildUnderARecordOfItsOwnPid'
+
+	export function spawnManifestBuildInAReadOnlyCheckout(caseLabel String) returns CollectedOutput
+		let root = createdDirectory(posixPath(readOnlyCheckoutsRoot()))
+		let caseRoot = createdDirectory(root.join(caseLabel.replace(CaseLabelWordSeparator, with: CaseDirectoryWordSeparator)))
+		changeMode(caseRoot, mode: WritableDirectoryMode)
+		clearStaged(caseRoot)
+		_ = createdDirectory(caseRoot.join(CheckoutMarkerDirName))
+		_ = createdDirectory(caseRoot.join(StagedCacheDirName))
+		let staged = createdDirectory(caseRoot.join(StagedProjectDirName))
+		stageStoredTree(fixtureDir("{FixturesDirName}{PathSeparator}{DefaultFixtureName}"), into: staged)
+
+		changeMode(caseRoot, mode: ReadOnlyDirectoryMode)
+		let build = spawnManifestBuild(staged, options: StringArray.create())
+		changeMode(caseRoot, mode: WritableDirectoryMode)
+		return build
+	end 'spawnManifestBuildInAReadOnlyCheckout'
+
+	// Keyed by user and checkout: a fixed path is shared by every user and checkout on the host, and
+	// one's read-only leftovers would refuse another's staging.
+	function readOnlyCheckoutsRoot() returns String
+		let userId = thisUserId()
+
+		if userId == RootUserId 'asRoot'
+			panic("build-manifest tests: the gate could not run — it is running as root, and root writes a directory whatever its mode, so the read-only checkout a case builds in would refuse nothing. Run this corpus as an ordinary user.")
+		end 'asRoot'
+
+		return "{ReadOnlyCheckoutsRootStem}{ReadOnlyCheckoutsRootSeparator}{userId}{ReadOnlyCheckoutsRootSeparator}{Directory.currentPath().toString().hash()}"
+	end 'readOnlyCheckoutsRoot'
+
+	function thisUserId() returns String
+		var config = Configuration.create(Executable.name(UserIdCommandName))
+		config.arguments = [UserIdFlag]
+
+		let ran = try config.run() otherwise (e) 'spawnFailed'
+			panic("build-manifest tests: the gate could not run — could not spawn `{UserIdCommandName} {UserIdFlag}` to learn which user it runs as ({e.displayReason()}).")
+		end 'spawnFailed'
+
+		if not ran.succeeded() 'noUserId'
+			panic("build-manifest tests: the gate could not run — `{UserIdCommandName} {UserIdFlag}` exited {ran.exitCode()}: {ran.stderr}")
+		end 'noUserId'
+
+		return ran.stdout.trim()
+	end 'thisUserId'
+
+	function posixPath(spelled String) returns FilePath
+		return try FilePath.from(spelled) otherwise panic("build-manifest tests: the gate could not run — '{spelled}' is not a spellable path")
+	end 'posixPath'
+
+	function createdDirectory(path FilePath) returns FilePath
+		if not Directory.create(path) 'couldNotCreate'
+			panic("build-manifest tests: the gate could not run — could not create {path.toString()}.")
+		end 'couldNotCreate'
+
+		return path
+	end 'createdDirectory'
+
+	function changeMode(path FilePath, mode String)
+		var config = Configuration.create(Executable.name(ChangeModeCommandName))
+		config.arguments = [mode, path.toString()]
+
+		let ran = try config.run() otherwise (e) 'spawnFailed'
+			panic("build-manifest tests: the gate could not run — could not spawn `{ChangeModeCommandName} {mode}` over {path.toString()} ({e.displayReason()}).")
+		end 'spawnFailed'
+
+		if not ran.succeeded() 'notChanged'
+			panic("build-manifest tests: the gate could not run — `{ChangeModeCommandName} {mode}` over {path.toString()} exited {ran.exitCode()}: {ran.stderr}")
+		end 'notChanged'
+	end 'changeMode'
+#endif
+
+// Must spell the identity `TreeLock.thisLockHost` computes. The `…-is-not-probed` cases pass for
+// any identity that differs from it, so only the cases that expect this host's holder probed catch
+// a drift.
+function thisHostParts() returns NamedPartArray
+	#if os(Windows)
+		let hostName = try Process.environmentVariable(HostNameVariable) otherwise panic("build-manifest tests: the gate could not run — {HostNameVariable} is not set, so this host names itself nowhere the driver reads")
+		return [NamedPart.create(hostName, names: HostIdentityParts.create()), NamedPart.create(String.init(__Builtins.processNamespace()), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
+	#endif
+
+	#if os(Linux)
+		return [NamedPart.create(firstNamedIn([KernelHostNamePath]), names: HostIdentityParts.create()), NamedPart.create(firstNamedIn([MachineIdPath, DbusMachineIdPath]), names: [HostIdentityPart.machine]), NamedPart.create(String.init(__Builtins.processNamespace()), names: [HostIdentityPart.pidSpace])]
+	#endif
+
+	#if os(Macos)
+		return [NamedPart.create(String.init(__Builtins.processNamespace()), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
+	#endif
+end 'thisHostParts'
+
+#if os(Linux)
+	function firstNamedIn(locations StringArray) returns String
+		for location in locations 'eachLocation'
+			let path = try FilePath.from(location) otherwise panic("build-manifest tests: '{location}' is not a valid path")
+
+			let text = try File.readText(path) otherwise (e) 'unread'
+				if e == FileReadError.notFound 'notHere'
+					continue
+				end 'notHere'
+
+				panic("build-manifest tests: the gate could not run — {location} could not be read ({e.name}), and the driver refuses to name its host from a place it cannot read")
+			end 'unread'
+
+			if not text.trim().isEmpty() 'named'
+				return text
+			end 'named'
+		end 'eachLocation'
+
+		panic("build-manifest tests: the gate could not run — this host names itself in none of {locations.count()} places the driver reads, so no lock record can claim it")
+	end 'firstNamedIn'
+#endif
+
+function lockHostOf(parts StringArray) returns String
+	var identity = HostOsName
+
+	for part in parts 'eachPart'
+		identity.append("{HostIdentitySeparator}{namedPart(part)}")
+	end 'eachPart'
+
+	return identity
+end 'lockHostOf'
+
+function namedPart(part String) returns String
+	let trimmed = part.trim()
+
+	if trimmed.isEmpty() 'namesNothing'
+		panic("build-manifest tests: the gate could not run — this host names itself nowhere the driver reads, so no lock record can claim it")
+	end 'namesNothing'
+
+	return trimmed
+end 'namedPart'
+
+function plantTreeLock(staged FilePath, record String)
+	try File.writeText(treeLockOf(staged), content: record) otherwise panic("build-manifest tests: the gate could not run — could not plant a tree lock beside {staged.toString()}.")
+end 'plantTreeLock'
+
+function endedProcessId() returns Pid
+	var config = Configuration.create(Executable.path(testedCompilerPath()))
+	config.arguments = [VersionCommandName]
+
+	let ran = try config.run() otherwise (e) 'spawnFailed'
+		panic("build-manifest tests: the gate could not run — could not spawn `{VersionCommandName}` to obtain the id of a process that has ended ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	return ran.pid
+end 'endedProcessId'
 
 // ⛔ **THE ABSENCE OF AN EXECUTABLE IS ASSERTED BESIDE THE REFUSAL.** A refused build that still wrote one
 // did the work the refusal exists to prevent.
@@ -285,6 +718,19 @@ export function requireRefused(staged FilePath, options StringArray, exitCode Ex
 
 	try Expect.isEmpty(builtProductsIn(staged), message: "`{what}` over the staged manifest was refused and still wrote a product.")
 end 'requireRefused'
+
+export function requireBuiltPastTheLock(staged FilePath, build CollectedOutput, wordings StringArray, what String) throws TestFailure
+	let stderr = withoutCarriageReturns(build.stderr)
+
+	try Expect.equal(build.exitCode(), expected: 0, message: "`maxon build` in a checkout whose tree lock {what} exited {build.exitCode()}. It wrote to stderr: {stderr}")
+
+	for wording in wordings 'eachWording'
+		try Expect.contains(stderr, needle: wording, message: "`maxon build` in a checkout whose tree lock {what} did not say what it did with the lock. It wrote to stderr: {stderr}")
+	end 'eachWording'
+
+	try Expect.isTrue(File.exists(builtExecutable(staged)), message: "`maxon build` exited 0 and wrote no executable to {builtExecutable(staged).toString()}.")
+	try Expect.equal(leftoverTreeLockFiles(staged).count(), expected: 0, message: "`maxon build` left a tree lock file behind in {staged.toString()} after it ended.")
+end 'requireBuiltPastTheLock'
 
 export function requireRepeatedWithOutput(caseLabel String, option String) throws TestFailure
 	let staged = stagedProject(caseLabel, fixture: RebuildWithOutputFixtureName)
@@ -376,16 +822,22 @@ function stagingDir(spelled String) returns FilePath
 end 'stagingDir'
 
 // Recursive, so a file a previous run wrote under the project's `.maxon/` cannot be read as this run's.
-function clearStagedFiles(dir FilePath)
-	for file in filesUnder(dir) 'eachFile'
-		try File.delete(file) otherwise panic("build-manifest tests: the gate could not run — could not clear {file.toString()} from a previous run's staging.")
-	end 'eachFile'
-end 'clearStagedFiles'
+function clearStaged(dir FilePath)
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			clearStaged(entry)
+			try Directory.delete(entry) otherwise panic("build-manifest tests: the gate could not run — could not clear {entry.toString()} from a previous run's staging.")
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("build-manifest tests: the gate could not run — could not clear {entry.toString()} from a previous run's staging.")
+	end 'eachEntry'
+end 'clearStaged'
 
 function listing(dir FilePath) returns PathArray
 	return try Directory.list(dir) otherwise panic("build-manifest tests: the gate could not run — could not list {dir.toString()}")
 end 'listing'
 
-function withoutCarriageReturns(text String) returns String
+export function withoutCarriageReturns(text String) returns String
 	return text.replace(CarriageReturn, with: "")
 end 'withoutCarriageReturns'

@@ -63,7 +63,7 @@ struct/instance whose fields are all trivial — is passed opaque and **borrowed
 it and the caller keeps and drops it (`PointBox.create(p)` leaves `p` usable). A **managed** type
 argument — a `String`, a struct with a managed field, a boxed union, or a nested instance that owns
 managed heap — is **owned**: the concrete constructor call MOVES it into the box, and the box drops
-it exactly once through its synthesized `__destruct_<instance>` cascade (P1.6-B2). So a returned or
+it exactly once through its synthesized `__destruct_<instance>` cascade. So a returned or
 escaping managed instance carries VALID content, and there is no leak or double-free. A non-generic
 base, or the wrong number of arguments, is rejected.
 
@@ -485,7 +485,7 @@ end 'main'
 <!-- test: opaque-field-reassign-trivial-instantiation-inert -->
 Reassigning a bare opaque `T` field inside a shared generic method body is INERT when every instantiation
 is trivial (`Box with SmallInt`): the opaque word owns no heap, so the write is a sound scalar plain store
-with no drop — unchanged from before P1.7 slice 3b-vii, and exercised on all targets.
+with no drop, exercised on all targets.
 ```maxon
 type Box uses Element
 	export var saved as Element
@@ -511,9 +511,8 @@ end 'main'
 <!-- test: reassign-managed-opaque-field-in-generic-method -->
 Reassigning a bare opaque `T` field INSIDE a shared generic method body (`self.saved = next`) WORKS when an
 instantiation makes it MANAGED (`Box with String`): the field's old opaque value is dropped through the
-descriptor-gated single-value drop (`__drop_type_param`), whose install is now decoupled from the array floor,
+descriptor-gated single-value drop (`__drop_type_param`), whose install is independent of the array floor,
 and the new value transfers in. Old `"alpha"` is freed exactly once — leak-free under `__mm_free` poisoning.
-This was a reachable `0xC0000005` fault before P1.7 Finding A.
 ```maxon
 type Box uses Element
 	export var saved as Element
@@ -538,7 +537,7 @@ end 'main'
 <!-- test: reassign-managed-opaque-field-concrete-instance -->
 The same reassignment on a CONCRETE instance (`b.saved = "beta"` where `b` is `Box with String`) WORKS too:
 the field retypes to the instance's substituted `String`, so the old String drops through `__str_decref`
-(Finding B's concrete-field fix) and the new one moves in — no descriptor needed, the field is concrete here.
+and the new one moves in — no descriptor needed, the field is concrete here.
 Leak-free under `__mm_free` poisoning.
 ```maxon
 type Box uses Element
@@ -688,15 +687,15 @@ error E3005: <fragment>:26:9: argument type mismatch for '_': expected 'LeafBox'
 
 ### ⚠ `Box_Leaf` BELOW IS THE FALLBACK, NOT AN UNCONVERTED DOOR — and the `typealias` line is the tell
 
-A diagnostic names a type by the `typealias` the author wrote (user ruling, 2026-08-04), and every case in
+A diagnostic names a type by the `typealias` the author wrote, and every case in
 this file that HAS such a line reads it back: `expected 'LeafBox'` above, `Cannot return 'OtherBox' …` below.
-The three cases that still print a mint are the three whose type has **no declaration to quote** —
+The three cases that print a mint are the three whose type has **no declaration to quote** —
 `typealias LeafBoxBox = Box with (Box with Leaf)` declares `LeafBoxBox`, and the `Box with Leaf` inside its
 argument list is interned without any name of its own. There is nothing else the message could say, so the
 canonical mint is the answer rather than the absence of one (`ProgramSignatures.instanceDisplayName`).
 
 The discriminator is mechanical: add `typealias LeafBox = Box with Leaf` to one of these programs and the
-`expected` side becomes `LeafBox`, measured. **A mint here beside a declaration that names the same type
+`expected` side becomes `LeafBox`. **A mint here beside a declaration that names the same type
 would be a bug; a mint here with no such declaration is the rule working.**
 
 <!-- test: error.type-parameter-arg-wrong-instance -->
@@ -1277,15 +1276,14 @@ xy
 
 <!-- test: alias-named-type-argument-owning-heap-is-not-co-owned-trivial -->
 ⭐⭐ **A `Box with N0` whose `N0` owns a String is an OWNING argument, and the CONSUME boundary has to
-say so as loudly as the DROP boundary already did (A3k).** `typeArgIsOwned` looked the alias name up in
-`structTypes` and `enumTypes`, which a generic-instance typealias is in neither of, and answered "not
-owned" — while its twin `typeIsManaged` has always ended in `isGenericAlias(name)` and answered
-"managed". The pair is read as `typeArgIsCoOwnedTrivial = typeIsManaged and not typeArgIsOwned`, so the
-box classified as CO-OWNED TRIVIAL: every construction paid an `__mm_incref` plus a destructor call
-where a move was owed, and this program — a shared-body reassign of `Box.value`, which is refused
-whenever ANY instantiation of `Box` is co-owned trivial — was refused **E2015** "a trivial-struct
-instantiation co-owns the field", said of a box that owns a String. Order-INDEPENDENTLY, unlike the
-tuple-alias half A3e's review closed.
+say so as loudly as the DROP boundary does.** A generic-instance typealias is in neither `structTypes`
+nor `enumTypes`, so `typeArgIsOwned` must resolve it to its instance rather than look the alias name up
+there — its twin `typeIsManaged` ends in `isGenericAlias(name)` and answers "managed". The pair is read
+as `typeArgIsCoOwnedTrivial = typeIsManaged and not typeArgIsOwned`, so a "not owned" here would classify
+the box CO-OWNED TRIVIAL: every construction would pay an `__mm_incref` plus a destructor call where a
+move is owed, and this program — a shared-body reassign of `Box.value`, which is refused whenever ANY
+instantiation of `Box` is co-owned trivial — would be refused **E2015** "a trivial-struct instantiation
+co-owns the field", said of a box that owns a String, whatever the walk order.
 ```maxon
 type S0
 	export var s as String
@@ -1317,7 +1315,7 @@ end 'main'
 
 <!-- test: alias-named-type-argument-reassigned-in-a-loop-is-leak-free -->
 The same reassignment 200 times over, so the balance is a COUNT and not a coincidence: each round moves
-a fresh `N0` into the box and drops the one it replaces. A retain that no longer has a matching decref
+a fresh `N0` into the box and drops the one it replaces. A retain without a matching decref
 — or a decref for a reference the move never took — is a leak or a double free rather than an exit 0.
 ```maxon
 type S0
@@ -1351,11 +1349,10 @@ end 'main'
 
 <!-- test: alias-named-type-argument-is-consumed-and-co-owned -->
 ⭐ **The narrowing that comes with it, and the half that proves the CONSUME is real.** An owning argument
-is CONSUMED into the box, which since the durable-sink ruling (⚖ 2026-08-12) means the box takes its OWN
+is CONSUMED into the box, which under the durable-sink rule means the box takes its OWN
 reference rather than stealing the caller's — so `v0` stays readable and releases its reference at scope
-exit. What the rung fixed is still pinned here: the alias spelling and the inline spelling must agree
-about the argument being OWNING at all, and they now do. (Both spellings were E3102 at `v0.value` while a
-consume was a MOVE; the classification they pin is unchanged, only its refcount consequence is.)
+exit. What this pins is that the alias spelling and the inline spelling agree about the argument being
+OWNING at all.
 ```maxon
 type S0
 	export var s as String
@@ -1391,8 +1388,7 @@ xx
 <!-- test: inline-nested-type-argument-is-consumed-and-co-owned -->
 The inline spelling of the case above, accepted identically. It is the CONTROL that makes the pair a
 statement about agreement rather than about one spelling: its argument arrives tagged
-`genericInstance`, which `typeArgIsOwned` has always classified through the instance, so this half was
-already correct and did not move.
+`genericInstance`, which `typeArgIsOwned` classifies through the instance directly.
 ```maxon
 type S0
 	export var s as String
@@ -1426,15 +1422,11 @@ xx
 ```
 
 <!-- test: a-bare-generic-factory-binds-t-from-its-argument -->
-⭐⭐ **A REFUSAL STOOD HERE, AND ITS STATED BASIS WAS THAT `T` IS NEVER BOUND.** `Box.create(…)` on the BASE
-rather than on an instance alias was refused because an unbound `T` yields no concrete instance, hence no
-layout descriptor, hence no synthesized `__destruct_<instance>` — and the record it built was never dropped.
-The measured symptom was **exit 101**, and the refusal was standing in for that leak; its own note recorded
-that the diagnostic it landed on was the ordinary argument-identity mismatch and *"deliberately NOT a code of
-its own"*.
-
-⇒ **`T` IS BOUND NOW, FROM THE FACTORY'S OWN ARGUMENT**, which closes the leak at its cause instead of
-forbidding the program. The instance is `Box with S0`, so the descriptor exists and the destructor is
+⭐⭐ **`Box.create(…)` ON THE BASE BINDS `T` FROM THE FACTORY'S OWN ARGUMENT.** Called on the BASE rather
+than on an instance alias, an unbound `T` would yield no concrete instance, hence no layout descriptor,
+hence no synthesized `__destruct_<instance>` — and the record it built would never be dropped (**exit
+101**). Binding `T` from the argument closes that leak at its cause rather than forbidding the program.
+The instance is `Box with S0`, so the descriptor exists and the destructor is
 synthesized. **The exit code is the whole assertion twice over**: `3` says `T` really bound to `S0` — the
 body reads `b.value.s`, which is a `String` field reachable only through the binding — and NOT `101` says the
 record is dropped.
@@ -1464,8 +1456,8 @@ end 'main'
 ```
 
 <!-- test: a-bare-generic-factory-binds-t-through-a-binding -->
-The same construct reached through a BINDING rather than inline. It leaked identically and was refused
-identically, so neither the leak nor its cure depended on the argument being a temporary.
+The same construct reached through a BINDING rather than inline: binding `T` from the argument does not
+depend on the argument being a temporary.
 ```maxon
 type S0
 	export var s as String
@@ -1494,15 +1486,15 @@ end 'main'
 
 <!-- test: per-instance-alias-decays-at-a-type-parameter-argument -->
 ⭐ **A PER-INSTANCE alias argument DECAYS at a bare `T` parameter, exactly as it does everywhere else.**
-`WA.Idx` is a nominal identity only against another per-instance alias (P1.6-C); met by a target that is
+`WA.Idx` is a nominal identity only against another per-instance alias; met by a target that is
 not one — here `T` bound to the ranged alias `Integer`, whose type-argument identity is deliberately
 empty — it carries no claim and decays to its underlying scalar.
 
 The type-parameter check must therefore ask the SAME door the parser's coercion sites ask
-(`aggregatesConflict`, which owns that decay) and not the bare rule beneath it. Asked the bare way it read
-the decaying argument as "an aggregate meeting a scalar" and REJECTED this program, while
-`takesPlain(t)` — the same value into the same `Integer` — was accepted one site over. Both forms are
-pinned here so the two can never again answer differently.
+(`aggregatesConflict`, which owns that decay) and not the bare rule beneath it. Asked the bare way it would
+read the decaying argument as "an aggregate meeting a scalar" and REJECT this program, while
+`takesPlain(t)` — the same value into the same `Integer` — is accepted one site over. Both forms are
+pinned here so the two cannot answer differently.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1623,32 +1615,20 @@ error E2012: <fragment>:14:24: Circular typealias dependency: A
 ```
 
 <!-- test: error.field-access-on-builtin-array-base -->
-⭐⭐ **THIS CASE'S SUBJECT SURVIVED THE LISTING; ITS REASON DID NOT, AND THE NEW ANSWER IS
-STRICTLY BETTER.** It used to read: *"`Array` and `Set` are BUILTIN generic bases: The compiler
-synthesizes their runtime records rather than compiling `stdlib/Array.maxon`, so no
-`type` declaration carries a field table and no field of an instance is reachable. The
-field is missing from the COMPILER, not from the language — so this reports a
-not-implemented-yet construct, never an unknown field."* Every clause of that is now
-false for `Array`: `stdlib/Array.maxon` is LISTED, it IS compiled, and its `type Array`
-declaration carries a field table with exactly one entry in it — `managed`.
+⭐⭐ **A MISSING FIELD ON AN `Array` INSTANCE IS AN UNKNOWN FIELD, NOT AN UNIMPLEMENTED CONSTRUCT.**
+`stdlib/Array.maxon` is LISTED, it IS compiled, and its `type Array` declaration carries a field table
+with exactly one entry in it — `managed`.
 
-⇒ The answer is no longer `E2015 Unsupported` but `E3018 type 'Array' has no field named
-'value'`, which is what the program's mistake actually is. Three things improve at once:
-the diagnostic stops apologising for the compiler, it points at the FIELD token (`:8:13`)
+⇒ The answer is `E3018 type 'Array' has no field named 'value'`, which is what the program's mistake
+actually is: the diagnostic does not apologise for the compiler, it points at the FIELD token (`:8:13`)
 rather than at the receiver (`:8:9`), and it is the same sentence any user `type` gets for
-the same mistake instead of a container-specific copy of one. The oracle's own answer to
-this program is `E4006 Type 'IntArray' has no field named 'value'` — the same fact under
-that compiler's numbering.
+the same mistake instead of a container-specific copy of one.
 
-⚠ **`Set` IS STILL SYNTHESIZED AND STILL TAKES THE OLD DOOR**, so the sentence above is
-about `Array` alone; the E2015 arm is live and is not dead code. Its own coverage moves the
-day `stdlib/Set.maxon` is listed.
-
-⚠ The field named here is still deliberately NOT `managed`: that spelling is served —
+⚠ The field named here is deliberately NOT `managed`: that spelling is served —
 in both the chained (`arr.managed.setLength(2)`) and the value (`f(arr.managed)`) forms —
 because it is routed to the array dispatcher ahead of the field machinery
-(`arrayManagedFieldAt`, BATCH2 slice 6). It is now ALSO the one field the corpus
-declaration genuinely has, so the two doors agree on the roster for the first time; `value`
+(`arrayManagedFieldAt`). It is ALSO the one field the corpus
+declaration genuinely has, so the two doors agree on the roster; `value`
 is refused by both.
 ```maxon
 typealias Int = int(i64.min to i64.max)
@@ -1690,14 +1670,12 @@ error E2015: <fragment>:6:9: Unsupported: a field access on 't': its type instan
 An instance is interned for whatever base a `with` names, declared or not, so the
 whole-program instance walks (`noteDestructorUsage`'s managed-opaque-element rooting
 among them) meet an undeclared base with no fields to read. They must answer "no
-fields" and let the E2055 already recorded at the `with` be the verdict — this
-program used to die inside `ProgramSignatures.baseLayoutOf` before any diagnostic
-was printed. ⚠ This case and its `sizeof` sibling below used to spell the undeclared
-base `Map`, on the stated ground that it was "a real stdlib generic that the compiler has not
-built" — **a premise the compiler falsified** when `Map` became a builtin generic. A
-base that is undeclared only until someone builds it dates the test to the day it was
-written; `Nonexistent` is undeclared by construction, and is the same spelling the
-field-access case above already uses.
+fields" and let the E2055 already recorded at the `with` be the verdict, rather than
+die inside `ProgramSignatures.baseLayoutOf` before any diagnostic is printed. ⚠ This case
+and its `sizeof` sibling below spell the undeclared base `Nonexistent`, not the name of a
+real generic: a base that is undeclared only until someone builds it dates the test to the
+day it was written, and `Nonexistent` is undeclared by construction — the same spelling the
+field-access case above uses.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntMap = Nonexistent with (Int, Int)
@@ -1717,10 +1695,10 @@ registers a field table, but every door that decides what the VALUE is — `crea
 method router, the box size, the drop callee — is routed to the synthesized runtime record
 by `isArrayInstance`, so the declaration's field offsets address that record. The field
 access must ask the same walk gate the destructor walks do, not `structOf`, which answers
-the different question "is a type of this NAME declared". Before it did, this program
-compiled with no diagnostic at all: the write landed on the array record's element buffer
-POINTER and the teardown took an access violation (0xC0000005). Reading was as bad and
-quieter — `a.value` handed the raw heap address back as an Integer.
+the different question "is a type of this NAME declared". Asked through `structOf`, this
+program would compile with no diagnostic at all: the write would land on the array record's
+element buffer POINTER and the teardown would take an access violation (0xC0000005). Reading
+is as bad and quieter — `a.value` would hand the raw heap address back as an Integer.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
@@ -1742,28 +1720,20 @@ error E2015: <fragment>:13:2: Unsupported: a field access on 'a': `Array` is a B
 ```
 
 <!-- test: error.field-read-on-the-second-builtin-base-a-declaration-also-claims -->
-The SECOND-NAME twin, and the READ direction — the two builtins are one rule, so a fix that
-reached only the one it was measured on would leave the other silently handing out its
-record. This one used to hand the record's own words back as if they were the declared
-field.
+The SECOND-NAME twin, and the READ direction — the two builtins are one rule, so a check
+that reached only one of them would leave the other silently handing out its record's own
+words as if they were the declared field.
 
-⚠ **THE SUBJECT HAS BEEN FALSIFIED TWICE BY THE RETIREMENT CHAIN, WHICH IS WHY THE CASE NAME
-NO LONGER CARRIES A CONTAINER.** It was `Set` until `W90` listed `stdlib/Set.maxon`, and
-`List` until `W153` listed `stdlib/List.maxon`: a listed module makes a user `type Set` /
-`type List` CONTEST a declared type rather than a synthesized record, so it takes A1s
-wave 2's "a declaration wins" road instead of this gate. **Measured at `W153` on the same
-binary, the two answer identically** — `a member access 'add'/'append' on a 'unknown' value`
-— which is that other road, not this one.
+⚠ **THE CASE NAME CARRIES NO CONTAINER, because the subject is whichever base a declaration can
+claim while the compiler still owns its record.** `Set` and `List` are not such bases: their
+modules are listed, so a user `type Set` / `type List` CONTESTS a declared type rather than a
+synthesized record and takes the "a declaration wins" road instead of this gate — `a member access
+'add'/'append' on a 'unknown' value`.
 
-⇒ **`Vector` is the subject, and `W189`/`W190` did NOT take it away — which is worth stating,
-because the paragraph that stood here predicted they would.** It read *"`stdlib/Vector.maxon`
-exists and is NOT whitelisted … when `Vector` is listed in its turn, this case moves to whatever
-base is still single-regime or it goes"*. The module IS loaded now and every member of a `Vector`
-is its declaration's, and this case is UNMOVED — because what it turns on is not who serves the
-members but who owns the RECORD, and that is still the compiler (`isBuiltinGenericBaseName`, which decides
-what `Vector with 3 Int` MEANS; taking the name off it is `W114`'s rung). The refusal's own sentence
-is re-derived to say exactly that and no longer claims this compiler reads no stdlib, which had
-stopped being true for both bases. The `Array` write-direction twin directly above does not cover
+⇒ **`Vector` is the subject.** `stdlib/Vector.maxon` is loaded and every member of a `Vector` is its
+declaration's, but what this case turns on is not who serves the members but who owns the RECORD, and
+that is the compiler (`isBuiltinGenericBaseName`, which decides what `Vector with 3 Int` MEANS). The
+refusal's own sentence says exactly that. The `Array` write-direction twin directly above does not cover
 this direction, and `Array` would not carry the second-name half of the question at all — the
 roster's other members (`__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`) cannot
 serve, because `E2051` refuses a declaration whose name starts with `__` before this gate is ever
@@ -1791,10 +1761,10 @@ The other query that assumes an instance's base exists, and it is NOT the field 
 gate: `genericInstanceBoxSize` answers for a BUILTIN (the fixed 48-byte record) as happily
 as for a declared base, and has nothing to say only when the base is neither. `sizeof`
 folds at PARSE time, while the E2055 `checkGenericInstance` recorded against this `with` is
-drained whole-program afterwards — so this used to die inside `ProgramSignatures.baseLayoutOf`'s
-sibling with a stack trace and the real diagnostic never printed. `sizeof(Array with Int)`
-still folds to 48; only an unknown base is refused. (`Nonexistent` rather than `Map` for
-the reason the case above records.)
+drained whole-program afterwards — so `sizeof` must refuse the unknown base itself, or it dies
+inside `ProgramSignatures.baseLayoutOf`'s sibling with a stack trace and the real diagnostic never
+printed. `sizeof(Array with Int)` folds to 48; only an unknown base is refused. (`Nonexistent`
+for the reason the case above records.)
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntMap = Nonexistent with (Int, Int)
@@ -1810,11 +1780,9 @@ error E2015: <fragment>:6:9: Unsupported: sizeof of a type that instantiates 'No
 <!-- test: error.bare-int-type-arg -->
 ⭐ **A BARE `int` IS NOT A TYPE ARGUMENT (E2061).** Everywhere else in the language a numeric
 domain has to be DECLARED — that is the whole of the ranged-typealias rule — and a `with` clause
-was the one type position that let the keyword through. It was silently ACCEPTED: `parseTypeReference`
-mints a bare keyword as a CONCRETE tag, so it never entered the name cascade that validates every
-other spelling, and the check that guards that cascade returned before seeing it. The oracle refuses
-it (`RejectBarePrimitiveTypeArgs`), and the fix the message names is the declaration the rule wanted
-all along.
+is no exception. `parseTypeReference` mints a bare keyword as a CONCRETE tag, so it never enters the
+name cascade that validates every other spelling; the type-argument check must refuse it itself. The fix the message names is the declaration the rule
+wants.
 ```maxon
 type Box uses T
 	export var value as T
@@ -1832,15 +1800,15 @@ error E2061: <fragment>:8:29: Cannot use bare type 'int' as a type argument; use
 ```
 
 <!-- test: error.float-type-arg -->
-⭐ **A FLOAT TYPE ARGUMENT IS REFUSED HOWEVER IT IS SPELLED (E2062), AND THAT IS A DELIBERATE
-DIVERGENCE FROM BOTH REFERENCE COMPILERS.** They accept it because they MONOMORPHIZE — the
-instantiation gets a genuine f64 slot and the question never arises. The compiler DICTIONARY-PASSES: a type
+⭐ **A FLOAT TYPE ARGUMENT IS REFUSED HOWEVER IT IS SPELLED (E2062).** A monomorphizing compiler would
+give the instantiation a genuine f64 slot and the question would never arise. The compiler
+DICTIONARY-PASSES: a type
 parameter is one opaque 8-byte GENERAL-PURPOSE slot, so a float value, which is born in a
-floating-point register, has no way to travel through it. Reaching the backend it PANICKED —
+floating-point register, has no way to travel through it. Reaching the backend it would PANIC —
 *"a register-to-register move from xmm0 to rcx crosses register files"* — with no `where` constraint,
 no comparison and no method call needed; the instantiation and one call are the whole reproducer.
-This is a compiler limitation, not a language rule, so the message names no workaround: at this
-milestone there is none.
+This is a compiler limitation, not a language rule, so the message names no workaround: there
+is none.
 ```maxon
 type Box uses T
 	export var value as T
@@ -1861,7 +1829,7 @@ error E2062: <fragment>:8:31: Cannot use 'float' as a type argument: a float typ
 <!-- test: error.float-alias-type-arg -->
 ⭐ **THE CASE THAT CLOSES THE SECOND SPELLING, AND THE REASON E2062 IS ASKED BEFORE E2061.**
 A ranged FLOAT typealias reaches the identical backend assertion — the alias is not the problem, the
-float is — so refusing only the bare keyword would have left the crash reachable through the very
+float is — so refusing only the bare keyword would leave the crash reachable through the very
 declaration E2061 recommends. Which is also why a bare `float`, which satisfies BOTH rules, is
 claimed by this one: "use a ranged typealias instead" is true for `int` and a trap for `float`, and a
 compiler must not route a reader into a panic with its own diagnostic. The message names the ALIAS
@@ -1869,25 +1837,23 @@ the source wrote, not `float`, so a reader of the line `Box with Real` is told a
 
 ⚠ **IT CLOSES THE TYPE-ARGUMENT DOOR, NOT THE VALUE DOOR — and the difference is two lines of
 source.** Every spelling of a float TYPE ARGUMENT is refused above, but a float VALUE handed to a
-`T`-typed formal reached `X64Backend.emitRegRegMove` with no float in the type arguments at all, and
-PANICKED the compiler: `typealias SBox = Box with String` then `SBox.create(1.5)`, and the same call
-on a `Box with Integer`. That door is the OPPOSITE side of one thesis E2062's own message states — a
-float cannot travel through a type parameter's general-purpose slot — but it is a different
-mechanism (`tagIsIntegral` answers `false` for `typeParameter` precisely so that a float into a `T`
-does NOT read as a lossy conversion, which is right INSIDE a generic body), so this rule strictly
-shrank its reach rather than closing it.
+`T`-typed formal has no float in the type arguments at all: `typealias SBox = Box with String` then
+`SBox.create(1.5)`, and the same call on a `Box with Integer`. Unchecked, it reaches
+`X64Backend.emitRegRegMove` and PANICS the compiler. That door is the OPPOSITE side of one thesis
+E2062's own message states — a float cannot travel through a type parameter's general-purpose slot —
+but it is a different mechanism (`tagIsIntegral` answers `false` for `typeParameter` precisely so that
+a float into a `T` does NOT read as a lossy conversion, which is right INSIDE a generic body), so this
+rule does not reach it.
 
-⭐ **IT IS CLOSED NOW, AND THE RULING IS THAT A GENERIC CALL SITE SUBSTITUTES ITS INSTANCE'S TYPE
-ARGUMENTS BEFORE THE ACTUAL-VS-FORMAL CHECK.** `IntBox.create(1.5)` is therefore the ordinary E3009
-the non-generic `takeInt(1.5)` already reports, and `StrBox.create(1.5)` the ordinary E3005 —
+⭐ **WHAT CLOSES IT IS THAT A GENERIC CALL SITE SUBSTITUTES ITS INSTANCE'S TYPE ARGUMENTS BEFORE THE
+ACTUAL-VS-FORMAL CHECK.** `IntBox.create(1.5)` is therefore the ordinary E3009
+the non-generic `takeInt(1.5)` reports, and `StrBox.create(1.5)` the ordinary E3005 —
 `error.float-actual-at-opaque-formal` and `error.float-actual-at-opaque-formal-string` below pin
 both, byte-for-byte against the non-generic wording, and `int-actual-at-opaque-formal-still-works`
-pins that an ordinary generic call is untouched. ONE RULE, BOTH PATHS. The rejected alternative was
-refusing a float actual at an opaque formal outright: it decides from the FORMAL's shape rather than
-from the instance's real type, and answers wrongly the moment a float type argument becomes legal —
-which E2062's own message says is temporary. The defect is described here rather than deleted
-because the sentence that used to stand in this place said the panic was unreachable, and a reader
-who believed it would never look for the value door at all.
+pins that an ordinary generic call is untouched. ONE RULE, BOTH PATHS. Refusing a float actual at an
+opaque formal outright is the wrong rule: it decides from the FORMAL's shape rather than from the
+instance's real type, and answers wrongly the moment a float type argument becomes legal — which
+E2062's own message says is temporary.
 ```maxon
 typealias Real = float(f64.min to f64.max)
 type Box uses T
@@ -1912,11 +1878,11 @@ reaches it through the same `parseGenericArgNode` a declared generic does. Only 
 argument in a file is shown here because each alias is its own declaration — two declarations, two
 diagnostics.
 
-`Set` and `List` are the bases still under the rule, and `Array` and `Vector` are the two that are not
-(A4d / the `vector` port): a buffer STRIDE is written and read at the element's own type, where a
+`Set` and `List` are the bases under the rule, and `Array` and `Vector` are the two that are not:
+a buffer STRIDE is written and read at the element's own type, where a
 dictionary-passed type parameter is one opaque general-purpose slot. `Set` hashes its key and `List`
 boxes its payload, and each refuses a float in its own terms at its own door — so the refusal that
-belongs at the DECLARATION is still theirs.
+belongs at the DECLARATION is theirs.
 ```maxon
 typealias Real = float(f64.min to f64.max)
 typealias RealSet = Set with Real
@@ -1957,8 +1923,7 @@ end 'main'
 The rules overlap on the bare keyword, and the order between them decides which sentence a reader
 gets. Off a buffer base E2062 claims it, because *"declare a ranged typealias"* would send the reader
 into the very refusal they are already in. ON one the exemption lifts E2062, E2061 takes the keyword
-back, and its advice is now a working program — `error.float-type-arg-builtin-generic`'s `Array` half
-became this case.
+back, and its advice is a working program.
 ```maxon
 typealias FloatArray = Array with float
 function main() returns ExitCode
@@ -2011,8 +1976,7 @@ error E2061: <fragment>:8:40: Cannot use bare type 'int' as a type argument; use
 ⭐ **`bool` IS DELIBERATELY NOT A BARE PRIMITIVE**, and this is the case that keeps the rule narrow.
 There is no range to declare for it — it is already a constrained type, its domain is its two
 values — so demanding a `typealias` over it would demand a declaration the grammar cannot even
-spell. The oracle excludes it for exactly this reason (`MlirType.IsBarePrimitive` names only the
-numerics). It must stay admitted through BOTH kinds of base: a declared generic `type`, and the
+spell, so the bare-primitive rule names only the numerics. It must stay admitted through BOTH kinds of base: a declared generic `type`, and the
 builtin `Array`.
 ```maxon
 type Sizer uses T
@@ -2040,8 +2004,8 @@ end 'main'
 <!-- test: string-and-user-type-args-admitted -->
 The other admitted shapes, and the reason the rule tests the TAG rather than the token: a `String`,
 a user `type` and a NESTED instance each reach `checkGenericArgType` with a concrete tag that is not
-`integer` or `float`, so the bare-primitive arm passes them straight to the name cascade that was
-always there. These are the 900-odd `with String` / `with <UserType>` arguments the rest of the
+`integer` or `float`, so the bare-primitive arm passes them straight to the name cascade every other
+spelling takes. These are the 900-odd `with String` / `with <UserType>` arguments the rest of the
 suite is built on; the rule may not touch one of them.
 ```maxon
 type Leaf
@@ -2109,10 +2073,10 @@ end 'main'
 <!-- test: error.float-actual-at-opaque-formal -->
 A `float` actual meeting a `T`-typed formal is refused by the type the INSTANCE substitutes for `T`,
 not by the formal's own spelling. `IntBox`'s `T` is `Integer`, so this is the identical E3009 the
-non-generic `takeInt(1.5)` gives -- one rule, both paths. Before the substitution existed the front
-end had nothing to check against and the float reached the x64 emitter, which died on a
-register-to-register move across register files (`X64Backend.maxon:745`) -- a compiler panic on a
-program whose only defect was an ordinary lossy conversion.
+non-generic `takeInt(1.5)` gives -- one rule, both paths. Without the substitution the front
+end has nothing to check against and the float reaches the x64 emitter, which dies on a
+register-to-register move across register files -- a compiler panic on a
+program whose only defect is an ordinary lossy conversion.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
@@ -2134,7 +2098,7 @@ error E3009: <fragment>:11:17: argument 'v': cannot implicitly convert 'float' t
 <!-- test: error.float-actual-at-opaque-formal-string -->
 The same rule where the substituted type is not numeric at all: `StrBox`'s `T` is `String`, so a
 float actual is a plain type mismatch (E3005), matching the non-generic `takeStr(1.5)`. This case
-exists because the panic was NOT specific to `Integer` -- it reproduced identically here, so a fix
+exists because the panic is NOT specific to `Integer`, so a check
 that only taught the numeric arm would leave half the defect live.
 ```maxon
 type Box uses T
@@ -2178,18 +2142,17 @@ end 'main'
 <!-- test: error.per-instance-alias-actual-at-opaque-formal -->
 The OTHER value door out of the same check, and the one the two float tests above do not reach: a
 per-instance alias actual (`IntWrapper.Idx` — a nominal wrapper over a plain `int`) meeting a
-`T`-typed formal whose instance substitutes a STRUCT. Both halves of the argument rule used to
-decline to judge it. The nominal half abstained because `aggregatesConflict` decayed any
-per-instance `got` against any target that was not itself per-instance, `Leaf` included; the scalar
-half never ran, because it runs only where the type argument carries no nominal identity and `Leaf`
-carries one. So an `int` was stored into the box's `T` field and freed by `__destruct_Box_Leaf` as a
-`Leaf`: a wild free, exit `0xC0000005`, from a program that compiled clean — the same failure mode
-the type-parameter argument check was opened on.
+`T`-typed formal whose instance substitutes a STRUCT. The scalar half of the argument rule does not
+judge it — it runs only where the type argument carries no nominal identity, and `Leaf` carries one —
+so the nominal half must. Were `aggregatesConflict` to decay any per-instance `got` against any target
+that is not itself per-instance, `Leaf` included, an `int` would be stored into the box's `T` field and
+freed by `__destruct_Box_Leaf` as a `Leaf`: a wild free, exit `0xC0000005`, from a program that
+compiled clean — the same failure mode the type-parameter argument check exists for.
 
-The fix is in the decay rule itself, not in a new arm here: a per-instance alias decays only where
+The rule is in the decay itself, not in a new arm here: a per-instance alias decays only where
 the target carries NO nominal identity of its own, because there is nothing for it to decay into
-otherwise. The decay's old safety argument leaned on "a tag check runs before every one of these
-sites", which is a second fact held at six call sites — and false at this one, where the tag check
+otherwise. A safety argument that leaned on "a tag check runs before every one of these
+sites" would be a second fact held at six call sites — and false at this one, where the tag check
 compares `substitutedInstanceArg`'s AS-INTERNED `named` leaf against a `named` value and agrees.
 `per-instance-alias-decays-at-a-type-parameter-argument` above pins the decay that must survive.
 ```maxon
@@ -2228,12 +2191,12 @@ error E3005: <fragment>:27:18: argument type mismatch for 'v': expected 'Leaf', 
 
 <!-- test: opaque-field-read-of-a-struct-argument-is-that-struct -->
 ⭐ **A `T`-TYPED FIELD READ FROM OUTSIDE THE GENERIC BODY IS THE INSTANCE'S ARGUMENT, AND FOR A
-STRUCT ARGUMENT IT WAS AN INTEGER (A4i).** The retype-of-`T` at a concrete field read has been here
-since P1.6-B2, but it handed the value the instance's argument exactly as the registry stored it —
-and a struct argument is stored as a bare `named`, which reads as an INTEGER everywhere. So
-`pb.value` on a `Box with Point` bound a value the front end typed `int` and the machine typed a
-pointer. `generic-trivial-struct-arg` above builds the same box and never reads its field, which is
-why the suite could be green over it.
+STRUCT ARGUMENT IT IS THAT STRUCT.** A concrete field read retypes `T` to the instance's argument,
+and a struct argument is stored in the registry as a bare `named`, which reads as an INTEGER
+everywhere — so the retype must resolve the argument rather than hand it over as stored. Handed over
+as stored, `pb.value` on a `Box with Point` would bind a value the front end types `int` and the
+machine types a pointer. `generic-trivial-struct-arg` above builds the same box and never reads its
+field, so it cannot see this.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Point
@@ -2264,9 +2227,9 @@ end 'main'
 ```
 
 <!-- test: error.opaque-field-read-of-a-struct-argument-is-not-an-integer -->
-⚠ **THE SAME READ, AND THE WORST OF ITS FACES: ARITHMETIC WAS ACCEPTED AGAINST A POINTER.** Typed
-`int`, `q + 0` compiled and PRINTED THE RAW HEAP ADDRESS — a silent wrong answer where the two
-refusing faces at least stopped. The correct verdict is the one a plain struct already gets from
+⚠ **THE SAME READ, AND THE WORST OF ITS FACES: ARITHMETIC AGAINST A POINTER.** Typed
+`int`, `q + 0` would compile and PRINT THE RAW HEAP ADDRESS — a silent wrong answer where a
+refusing face at least stops. The correct verdict is the one a plain struct gets from
 this compiler, at the same code with the same words: a struct is not
 an operand of `+`.
 ```maxon
@@ -2297,8 +2260,8 @@ error E2004: <fragment>:19:12: Cannot operate on struct and int
 
 <!-- test: opaque-field-read-of-a-generic-alias-argument-is-that-instance -->
 The third face, and the one that proves the cause is the ARGUMENT's storage and not struct-hood: a
-GENERIC-ALIAS argument (`Holder with IntBox`) is stored as a bare `named` too, so the read used to
-report `E3011 Unknown type 'IntBox'` — a name the program declares one line above. Resolved through
+GENERIC-ALIAS argument (`Holder with IntBox`) is stored as a bare `named` too, so an unresolved read
+would report `E3011 Unknown type 'IntBox'` — a name the program declares one line above. Resolved through
 the same door, it is the instance, and `q.value` reaches `Box`'s field.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2366,14 +2329,12 @@ end 'main'
 ```
 
 <!-- test: opaque-field-write-on-a-concrete-instance-drops-a-generic-alias-argument -->
-⭐⭐ **THE WRITE TWIN OF THE READ ABOVE, AND IT WAS A READ-AFTER-FREE (A4i review).** `emitFieldWrite`
-re-spelled the read's `adoptType(substitutedInstanceArg(…))` instead of calling it, so fixing the READ
-door left its declared twin handing a bare `named` to `classifyUnionPayload` — which resolves a `named`
-through its OWN cascade, and that cascade has a struct arm but NO generic-alias arm. So this write fell
-through to `undeclaredName`, took the SCALAR store, and neither dropped the old box nor moved the new one
-in: the temporary was freed at the statement and the field kept pointing at it, so the read printed
-`4557430888798830399` — `0x3F3F3F3F3F3F3F3F`, the free poison. Reading the field back was `E3011` before
-A4i, so A4i is what turned a clean refusal into this.
+⭐⭐ **THE WRITE TWIN OF THE READ ABOVE, AND A SECOND SPELLING OF IT IS A READ-AFTER-FREE.**
+`emitFieldWrite` resolves the stored type through the same derivation the read does. Resolved any other
+way — a bare `named` handed to a cascade with a struct arm but NO generic-alias arm — this write would fall
+through to `undeclaredName`, take the SCALAR store, and neither drop the old box nor move the new one
+in: the temporary would be freed at the statement and the field would keep pointing at it, so the read
+would print `4557430888798830399` — `0x3F3F3F3F3F3F3F3F`, the free poison.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
@@ -2406,10 +2367,9 @@ end 'main'
 ```
 
 <!-- test: opaque-field-write-on-a-concrete-instance-drops-a-managed-struct-argument -->
-The OTHER arm of that same door, and the reason the split above stayed hidden: a STRUCT argument was
-already answered correctly — not by the shared door, but by `classifyUnionPayload`'s own struct arm
-resolving the bare `named` a second time. Both arms come out of one call now, so this case and the one
-above cannot part again. The old `Label` owns a `String`, so a write that failed to drop it would leak
+The OTHER arm of that same door: a STRUCT argument, which a cascade with only a struct arm would answer
+correctly — so this case alone cannot tell one derivation from two. Both arms come out of one call, so
+this case and the one above cannot part. The old `Label` owns a `String`, so a write that failed to drop it would leak
 and a write that dropped it twice would fault — the runner treats either as a failure.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2443,12 +2403,12 @@ end 'main'
 ```
 
 <!-- test: error.opaque-field-write-on-a-concrete-instance-refuses-another-struct -->
-⭐⭐ **THE REFUSAL THE TWO CASES ABOVE WERE MISSING, AND WITHOUT IT THE WRITE THEY PIN WAS A WILD ONE
-(BATCH32 review).** `b.value = <a Label>` is legal on a `Box with Label` because the instance binds `T`;
-`b.value = <an Other>` is the same door with the identity that binds it VIOLATED, and nothing was asking.
-The store already resolved `T` → `Label` (`emitFieldWrite`), while the type CHECK one line earlier was
-handed the unsubstituted `T` — which admits everything — so an `Other` box was written into a `Label` slot
-and reading it back exited **0xC0000005**. The bootstrap refuses the same program. Both readers now take
+⭐⭐ **THE REFUSAL THE TWO CASES ABOVE NEED, AND WITHOUT IT THE WRITE THEY PIN IS A WILD ONE.**
+`b.value = <a Label>` is legal on a `Box with Label` because the instance binds `T`;
+`b.value = <an Other>` is the same door with the identity that binds it VIOLATED.
+The store resolves `T` → `Label` (`emitFieldWrite`); a type CHECK handed the unsubstituted `T` — which
+admits everything — would let an `Other` box be written into a `Label` slot, and reading it back would
+exit **0xC0000005**. Both readers take
 the field type from one derivation (`storedFieldType`), so the verdict and the store cannot disagree
 about what the slot holds.
 ```maxon
@@ -2489,11 +2449,9 @@ body is compiled ONCE for every instantiation, so `self.value = Label.create(77)
 `Box with X` holds a `Label` — true of at most one instantiation and unjustifiable for the rest. Here the
 slot legitimately stays opaque (a `structRef` receiver binds nothing), so the cure is not substitution but
 the ordinary identity comparison: an empty aggregate name meeting `Label` is a conflict, exactly as
-`namedAggregatesConflict` has always said. It was reachable only because a blanket "an opaque slot has no
-identity, so return" stood in front of that comparison. **MEASURED:** unguarded, this program compiled and
-exited **101 — a leak** — after printing the `Label` box's ADDRESS as the integer the field is declared to
-hold. The bootstrap does not adjudicate it: it internal-errors (`E9001 Unknown value kind: TypeParameter`),
-which is its own defect and not a verdict.
+`namedAggregatesConflict` says. No blanket "an opaque slot has no identity, so return" may stand in front
+of that comparison: unguarded, this program compiles and exits **101 — a leak** — after printing the
+`Label` box's ADDRESS as the integer the field is declared to hold.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Label
@@ -2523,13 +2481,13 @@ error E3005: <fragment>:15:8: cannot assign a value of type 'Label' to field 'va
 ```
 
 <!-- test: generic-alias-union-payload-round-trips -->
-⭐⭐ **A UNION PAYLOAD IS A SLOT TOO, AND ITS CASCADE ANSWERED THE SLOT QUESTION DIFFERENTLY (A4k).**
+⭐⭐ **A UNION PAYLOAD IS A SLOT TOO, AND IT ANSWERS THE SLOT QUESTION THROUGH THE SAME DOOR.**
 `ProgramSignatures.declaredSlotType` re-tags a bare `named` that names a generic alias to the instance
-it denotes; `classifyUnionPayload` resolved a `named` through its OWN cascade, which had a struct arm
-and NO generic-alias arm — so a payload declared `b PB` fell through to `undeclaredName`, the binding
-kept the bare `named`, and reading it was `E3011 Unknown type 'PB'` on a program the oracle compiles
-and runs. Both now come out of one door (`denotedSlotType`), so a name cannot denote one thing to a
-struct field and another to a payload.
+it denotes, and `classifyUnionPayload` resolves a payload's `named` through the same door
+(`denotedSlotType`). A cascade of its own, with a struct arm and NO generic-alias arm, would send a
+payload declared `b PB` to `undeclaredName`: the binding would keep the bare `named`, and reading it
+would be `E3011 Unknown type 'PB'` on a legal program. One door means a name
+cannot denote one thing to a struct field and another to a payload.
 ```maxon
 typealias Num = int(0 to 1000)
 type Box uses T
@@ -2560,9 +2518,9 @@ v=7
 ```
 
 <!-- test: array-alias-union-payload-round-trips -->
-The same gap under the alias form the corpus actually writes: an `Array` typealias is a generic alias,
-so `list(xs Nums)` was `E3011 Unknown type 'Nums'` at the binding — and with it every container-typed
-payload. The payload is the instance now, so `xs.count()` dispatches.
+The same door under the alias form the corpus actually writes: an `Array` typealias is a generic alias,
+so without it `list(xs Nums)` would be `E3011 Unknown type 'Nums'` at the binding — and with it every
+container-typed payload. The payload is the instance, so `xs.count()` dispatches.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Nums = Array with Integer
@@ -2590,10 +2548,10 @@ n=2 first=4
 ```
 
 <!-- test: managed-instance-union-payload-moves-out-and-drops-once -->
-⚠ **THE OWNERSHIP DIRECTION, AND IT IS WHY THE REFUSAL WAS NOT MERELY AN INCONVENIENCE.** Classified
-`undeclaredName`, the payload was NOT managed: `moveInPayload` stored the pointer without consuming the
-temporary, so the box was freed at the end of the construct statement while the union kept pointing at
-it — the same dangling store `emitFieldWrite` was measured printing the free poison from. Classified as
+⚠ **THE OWNERSHIP DIRECTION, AND IT IS WHY A MISCLASSIFIED PAYLOAD IS NOT MERELY A REFUSAL.** Classified
+`undeclaredName`, the payload would NOT be managed: `moveInPayload` would store the pointer without
+consuming the temporary, so the box would be freed at the end of the construct statement while the union
+kept pointing at it — the same dangling store a misresolved `emitFieldWrite` prints the free poison from. Classified as
 the instance it is, the construct MOVES it in and the match binding moves it out and drops it once. The
 instance owns a `String`, so a missed drop leaks (exit 101) and a double drop faults — the runner treats
 either as a failure.
@@ -2638,10 +2596,10 @@ t=9
 <!-- test: generic-alias-union-payload-drops-through-the-cascade -->
 The drop half, with NOTHING bound: an unmatched managed payload is freed by the union's own
 `__destruct_<U>` cascade, which is synthesized only when `caseHasManagedField` says the case carries
-one — a whole-program walk that reads the payload column with no reader file and so asked the same
-broken cascade. It compiled before this rung too, and that is the point: the payload was silently
-freed at the construct statement instead, so the box outlived its own content. Now the box owns it and
-the cascade frees it exactly once.
+one — a whole-program walk that reads the payload column with no reader file and so asks the same
+door. Misclassified, this program would still compile, and that is the point: the payload would be
+silently freed at the construct statement instead, so the box would outlive its own content. The box
+owns it and the cascade frees it exactly once.
 ```maxon
 type Label
 	export var text as String
@@ -2677,11 +2635,10 @@ boxed
 ```
 
 <!-- test: function-alias-union-payload-calls-through -->
-The THIRD arm the payload cascade was missing, found by deriving the difference rather than by probing
-for it: a FUNCTION typealias is re-tagged by the shared door exactly as a generic one is, and was
-equally absent here. Bound out of the payload it was a bare `named` — an int — so interpolating it was
-`E2015 … a value of type 'unknown'` and calling it had no signature to check. It is a code pointer, a
-scalar payload, and it calls.
+The THIRD arm the shared door gives a payload: a FUNCTION typealias is re-tagged exactly as a generic
+one is. Bound out of the payload as a bare `named` — an int — interpolating it would be
+`E2015 … a value of type 'unknown'` and calling it would have no signature to check. It is a code
+pointer, a scalar payload, and it calls.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
@@ -2709,13 +2666,12 @@ f=6
 ```
 
 <!-- test: a-field-chain-through-a-generic-instance-field -->
-⭐⭐ **A FIELD CHAIN THROUGH A GENERIC-INSTANCE-TYPED FIELD (A4j).** `structLayoutOfType` — the door a
-chain's BASE resolves through — has known `genericInstance` since P1.6-B1; `structLayoutOfField`, the door
-each later HOP resolves through, did not. So `o.b.value` on a plain `type Outer` with `export var b as
-IntBox` was refused by a message that contradicted itself, because `typeTagName(genericInstance)` prints
+⭐⭐ **A FIELD CHAIN THROUGH A GENERIC-INSTANCE-TYPED FIELD.** `structLayoutOfType` — the door a
+chain's BASE resolves through — knows `genericInstance`, and so must `structLayoutOfField`, the door
+each later HOP resolves through. Without it `o.b.value` on a plain `type Outer` with `export var b as
+IntBox` would be refused by a message that contradicts itself, because `typeTagName(genericInstance)` prints
 `"struct"`: *"a field access through 'Outer.b', which is declared 'struct' and not a struct"*. No type
-parameter appears anywhere in this program's chain — the receiver `o` is an ordinary struct. MEASURED on the
-runnable oracle, which prints 7.
+parameter appears anywhere in this program's chain — the receiver `o` is an ordinary struct.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
@@ -2746,13 +2702,12 @@ end 'main'
 
 <!-- test: a-field-chain-through-a-type-parameter-field -->
 ⭐ **THE SECOND SPELLING, AND IT IS THE SAME DOOR.** `pb.value.x` hops through a field the shared generic
-body typed `T`, so `structLayoutOfField` saw a `typeParameter` where the first case gave it a
-`genericInstance` — one function, two tags, one refusal. Continuing the walk therefore needs the hop's type
-SUBSTITUTED through the instance in hand, which is the same substitution `emitFieldLoad` already applies to
+body typed `T`, so `structLayoutOfField` sees a `typeParameter` where the first case gives it a
+`genericInstance` — one function, two tags. Continuing the walk therefore needs the hop's type
+SUBSTITUTED through the instance in hand, which is the same substitution `emitFieldLoad` applies to
 the loaded VALUE (`instanceSubstitutedType`); left unsubstituted a `typeParameter` reads as an INTEGER
 (`tagIsIntegral`). `opaque-field-read-of-a-struct-argument-is-that-struct` above is this program with the
-read SPLIT INTO TWO STATEMENTS, which is precisely the hop that never reached the walk. MEASURED on the
-oracle: 7.
+read SPLIT INTO TWO STATEMENTS, which is precisely the hop that does not go through the walk.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Point
@@ -2784,7 +2739,7 @@ end 'main'
 <!-- test: a-three-hop-chain-through-an-instance-survives-both-substitutions -->
 Both hops in one chain: `o.b` is a generic-instance field, `.value` is that instance's `T`-typed field, and
 `.n` is a plain field of the struct `T` turned out to be. The substitution has to survive more than one hop
-or the third one reads an integer. MEASURED on the oracle: 9.
+or the third one reads an integer.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Leaf
@@ -2822,30 +2777,24 @@ end 'main'
 <!-- test: error.a-field-chain-through-a-builtin-instance-field-is-still-refused -->
 ⛔⛔ **THE MEMORY-SAFETY GATE, CARRIED ACROSS TO THE HOP DOOR.** `structLayoutOfType` does not ask `structOf`
 for an instance — it asks `genericInstanceHasBaseLayout` first, and its header records what happens without
-that, MEASURED, with no diagnostic anywhere and a compile that exits 0: `a.value` on an `Array with Integer`
-printed **7077984**, the element buffer POINTER read as an Integer, and `a.value = 4242` overwrote that
-pointer and took an access violation (0xC0000005) in the teardown. `structOf` answering "a type of this name
+that, with no diagnostic anywhere and a compile that exits 0: `a.value` on an `Array with Integer`
+prints the element buffer POINTER read as an Integer, and `a.value = 4242` overwrites that
+pointer and takes an access violation (0xC0000005) in the teardown. `structOf` answering "a type of this name
 is declared" is NOT the same fact as "this instance's fields live at that layout": for a BUILTIN base the
 runtime record is a synthesized struct unrelated to any user `type` of the same name.
 
-So teaching the HOP door about `genericInstance` and forgetting the gate would reintroduce that miscompile
-one door over. This case is what says it did not.
+So a HOP door that knows `genericInstance` without the gate would carry that miscompile one door over.
+This case is what says it does not.
 
-⭐⭐ **THE GATE IS UNCHANGED BY THE `stdlib/Array.maxon` LISTING, AND THAT IS THE POINT WORTH PINNING —
-BECAUSE THE LISTING IS EXACTLY THE CHANGE THAT COULD HAVE DISSOLVED IT.** The old closing sentence read
-*"the compiler's answer is the one it can honestly give — it reads no stdlib, so the field is missing from this
-compiler rather than from the language"*, and that premise is gone: there IS a `type Array` declaration now,
-it DOES carry a `StructLayout`, and so `structOf` finally answers YES for this name. That is precisely the
-condition `genericInstanceHasBaseLayout` exists to distinguish from — *"a type of this name is declared"* is
-still NOT the fact *"this instance's fields live at that layout"*, because the buffer an `Array with Integer`
-carries is the synthesized runtime record and not the corpus struct. The measurement in the paragraph above
-(`a.value` reading the element buffer POINTER as **7077984**, `a.value = 4242` overwriting it and taking a
-0xC0000005) is what the gate prevents, and it is now prevented against a REAL declaration rather than
-against a missing one.
+⭐⭐ **THE GATE HOLDS AGAINST A REAL DECLARATION, AND THAT IS THE POINT WORTH PINNING.** There IS a
+`type Array` declaration — `stdlib/Array.maxon` is listed — and it DOES carry a `StructLayout`, so
+`structOf` answers YES for this name. That is precisely the condition `genericInstanceHasBaseLayout`
+exists to distinguish from — *"a type of this name is declared"* is NOT the fact *"this instance's fields
+live at that layout"*, because the buffer an `Array with Integer` carries is the synthesized runtime
+record and not the corpus struct. The miscompile in the paragraph above (`a.value` reading the element
+buffer POINTER, `a.value = 4242` overwriting it and taking a 0xC0000005) is what the gate prevents.
 
-⇒ The refusal survives with the same force and a better sentence: `E3018 type 'Array' has no field named
-'value'`, which is also what the oracle says (`E4006 Type 'IntArray' has no field named 'value'`) — the two
-compilers now give one answer to this program where they used to give two.
+⇒ The refusal is `E3018 type 'Array' has no field named 'value'`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -2867,15 +2816,16 @@ error E3018: <fragment>:12:14: type 'Array' has no field named 'value'
 
 <!-- test: generic-managed-return-round-trips -->
 ⭐⭐ **A `T`-RETURNING METHOD ON A MANAGED CONCRETE INSTANCE HANDS BACK THE CONCRETE TYPE, AND THE ROUND TRIP
-IS WHAT PROVES IT (A5o).** `bx.echo(Alpha.create())` was accepted — its argument is the opaque `T`, which
-agrees with everything — and then FEEDING THE RESULT BACK was refused: `E3005 … expected 'Alpha', got 'type
-parameter'` at the second call, and `back.a` was `E2015 … declared 'type parameter' and not a struct type`.
-One instantiation, one method, and the two directions disagreed.
+IS WHAT PROVES IT.** `bx.echo(Alpha.create())` is accepted — its argument is the opaque `T`, which
+agrees with everything — and FEEDING THE RESULT BACK is accepted too. Left opaque, the result would be
+refused at the second call (`E3005 … expected 'Alpha', got 'type parameter'`) and at `back.a`
+(`E2015 … declared 'type parameter' and not a struct type`): one instantiation, one method, and the two
+directions disagreeing.
 
-The cause was an ORDER, not a rule: the drop enrolment (`valueIsManagedHeap` → `trackOwnedTemp`) ran inside
-the MINT, while the tag was still the opaque `T`, so it always answered "owns nothing"; the retype then
-DECLINED to fire for a managed argument precisely because that decision had already been made. Enrolling
-AFTER the retype makes both halves true at once. MEASURED on the oracle: `a=1`.
+What makes both halves true is an ORDER, not a rule: the drop enrolment (`valueIsManagedHeap` →
+`trackOwnedTemp`) runs AFTER the retype. Enrolled inside the MINT, while the tag is still the opaque `T`,
+it would always answer "owns nothing", and the retype would have to decline to fire for a managed argument
+because that decision had already been made.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Alpha
@@ -2910,11 +2860,9 @@ a=1
 ```
 
 <!-- test: generic-managed-return-drops-once -->
-⛔⛔ **THE CASE THE DELETED `managedConcrete` GUARD EXISTED FOR — a managed `T` return bound to a `let` and
-left to fall out of scope.** Before A5o the enrolment could never fire for such a result (the tag was still
-opaque when it was asked), so the guard's job was to stop the retype from making the value LOOK managed
-after the drop decision had been taken. With the enrolment moved after the retype the two agree, and this
-is the case that says so: a hundred boxes allocated, each dropped exactly once. A missed enrolment is a
+⛔⛔ **A managed `T` return bound to a `let` and left to fall out of scope.** The enrolment is asked after
+the retype, so the value the retype makes managed is the value the drop decision enrolls — the two agree,
+and this is the case that says so: a hundred boxes allocated, each dropped exactly once. A missed enrolment is a
 leak (the runner reports exit 101); a doubled one faults on the poisoned box.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2952,8 +2900,8 @@ end 'main'
 
 <!-- test: generic-managed-string-return-drops-once -->
 The OTHER half of `valueIsManagedHeap` — a BYTE RECORD rather than an aggregate. `Box with String` reaches
-the enrolment through `tagIsByteRecord`, not `valueIsNonTextAggregate`, so a fix that moved only the
-aggregate half would pass the case above and leak here. A hundred fused String records, each returned out
+the enrolment through `tagIsByteRecord`, not `valueIsNonTextAggregate`, so an enrolment that covered only
+the aggregate half would pass the case above and leak here. A hundred fused String records, each returned out
 of the shared body and dropped once; the byte lengths of `0`…`99` sum to 190.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2988,9 +2936,7 @@ end 'main'
 DISAGREE.** The `T` result is enrolled as an owned temporary and then MOVED into `Wrap`'s field by
 `applyCallerConsume`, which poisons the source and takes it back off the pending list. Enrol without the
 transfer and the box is freed at the statement while the field still points at it; transfer without the
-enrolment and nobody ever owed the drop. The oracle cannot compile this program — it types a `T`-returning
-method's result as `int` at a concretely-typed parameter (`E3005 … expected 'Alpha', got 'int'`, a bootstrap
-defect) — so the answer is pinned by the non-generic control it DOES run, `Wrap.create(Alpha.create(5))`,
+enrolment and nobody ever owed the drop. The answer is the non-generic `Wrap.create(Alpha.create(5))`'s,
 which reads back 5.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3032,14 +2978,14 @@ end 'main'
 
 <!-- test: generic-managed-return-relayed-inside-the-generic-body -->
 ⭐⭐ **THE CO-OWN MUST NOT COMPOUND, AND THIS IS THE SHAPE THAT WOULD MAKE IT.** `relay()` returns what
-`self.get()` returned — a `T` produced by a call made INSIDE the shared body. If the caller-side co-own
-fired at both call sites the box would take two references and be dropped once: a LEAK, not a double free,
-and therefore invisible to a crash and visible only to the leak gate. It does not fire twice, and the
-reason is structural rather than lucky: `retypeOpaqueMethodResult` substitutes only when the receiver's tag
-is `genericInstance`, and inside the shared body `self` is the generic BASE, so no retype happens there and
-no co-own is spent. The instantiation's single co-own at `bx.relay()` is the only one, which is exactly the
-claim that a `T` return is a BORROW every callee refuses to retain. Pinned because a second co-own here
-would pass every other case in this file.
+`self.get()` returned — a `T` produced by a call made INSIDE the shared body. If both returns took a
+reference the box would take two and be dropped once: a LEAK, not a double free, and therefore invisible
+to a crash and visible only to the leak gate. The `+1` is the CALLEE's, taken at its `return`
+(`emitOwnedValueReturn` → `coOwnBorrowedOpaque` → `__retain_type_param`) and only for a value its frame
+does not already own (`borrowedValueOwesAHandoffReference`). `get` returns the borrowed `self.value` and
+takes it; inside `relay` that call's result is an owned temporary (`enrolOwnedCallTemp`), so `relay`
+hands it on with no second reference. Pinned because a second reference here would pass every other case
+in this file.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Alpha
@@ -3076,12 +3022,11 @@ r=3
 ```
 
 <!-- test: generic-managed-return-overload-selection -->
-⭐ **THE REFUSAL THAT GOES AWAY.** While the result kept the opaque tag, an overloaded callee handed one had
-nothing to choose by, and the compiler said so rather than guessing (`resolving an overload of 'over' against an
-argument of opaque generic type`). Retyped, the argument is an `Alpha` and there is nothing left to
-disambiguate. The oracle cannot run the generic spelling (same bootstrap defect as the case above: it types
-`b.get()` as `int` and reports `E3005 … expected 'Alpha', got 'int'`); the value 7 is the oracle's own answer
-to the non-generic control `over(Alpha.create(3))`, which this program must agree with.
+⭐ **THE RETYPE IS WHAT LETS OVERLOAD RESOLUTION CHOOSE.** An overloaded callee handed an opaque-tagged
+value has nothing to choose by, and the compiler says so rather than guessing (`resolving an overload of
+'over' against an argument of opaque generic type`). Retyped, the argument is an `Alpha` and there is
+nothing left to disambiguate. The value 7 is the non-generic `over(Alpha.create(3))`'s answer, which this
+program must agree with.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Alpha
@@ -3120,15 +3065,11 @@ end 'main'
 ```
 
 <!-- test: generic-managed-union-return-overload-selection -->
-⛔⛔ **THE EXACT PROGRAM THE DELETED GUARD'S HEADER CITED AS ITS EVIDENCE — `Box with Shape` for a BOXED
-UNION.** That header recorded a MEASURED wrong answer of exit 25 where 7 was correct: the retype fired, the
-substituted type stayed a bare `named` (which reads as an INTEGER), and `over(b.get())` chose
-`over(x Integer)` and did arithmetic on the payload word. A4i/A4k routed the substitution through
-`declaredSlotType` in the meantime, so the union name is now re-interned as itself and picks its own
-overload — but nothing in either corpus said so, which is how a fix could have silently un-fixed it. The
-oracle runs the non-generic control (`over(Shape.circle(3))` with the `Shape` overload alone) and answers 7;
-with both overloads present it reports its own `E3007 Ambiguous overload … (x Shape), (x i64)`, so the
-generic spelling is beyond it.
+⛔⛔ **`Box with Shape` for a BOXED UNION: THE SUBSTITUTED TYPE IS THE UNION ITSELF.** Were the substituted
+type left a bare `named` (which reads as an INTEGER), `over(b.get())` would choose `over(x Integer)` and do
+arithmetic on the payload word — exit 25 where 7 is correct. The substitution goes through
+`declaredSlotType`, so the union name is re-interned as itself and picks its own overload, and this case
+is what says so. The non-generic `over(Shape.circle(3))` answers 7, and so must this program.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 union Shape
@@ -3179,12 +3120,10 @@ is the CALLEE's, taken in `emitOwnedValueReturn` through the enclosing instance'
 instantiation), and `main` emits nothing at all after the call. The concrete callee takes no
 COPY either — `retainBorrowedByteRecord` → `__str_retain`, which clones an immortal record and increfs a heap
 one off that same `capacity@16`. And `-2` is `RdataBufferCapacity`, a byte-string literal whose record is an
-ordinary `__mm_alloc` box; W157 gives a String literal's wholly-immortal record its own
+ordinary `__mm_alloc` box; a String literal's wholly-immortal record has its own
 `ImmortalRecordCapacity`. Both roads end in ONE clone, which is why the answer is the same either way.
 
-The oracle cannot compile this program either — it types the generic result as `int`
-(`E4006 Variable 's' is not a struct or enum type` at `s.byteLength()`) — so the answer is pinned by the
-non-generic control `let s = "hi"`, whose `byteLength()` is 2.
+The answer agrees with the non-generic `let s = "hi"`, whose `byteLength()` is 2.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
@@ -3212,12 +3151,13 @@ hi
 ```
 
 <!-- test: generic-managed-return-routed-through-a-try-block -->
-⚠ **THE SUBSTITUTED RESULT MEETS THE BLOCK-FORM `try`'s ROUTING, WHICH IS THE ONE ORDERING A5o COULD NOT
+⚠ **THE SUBSTITUTED RESULT MEETS THE BLOCK-FORM `try`'s ROUTING, WHICH IS AN ORDERING THE RETYPE CANNOT
 MOVE.** `routeToTryBlock` rewrites the call to a `tryCall` and builds the throw edge, and
 it depends on the result's drop obligation being settled before the op is appended — on the error edge the
-result register was never written, so releasing it there faults. A SUBSTITUTED result owes nothing on that
-edge (the callee took no reference for it) and is co-owned only on the OK continuation, after the routing
-has forked. Both paths run here: `run(0)` returns through the body, `run(1)` throws out of the same call.
+result register is never written, so releasing it there faults. The callee takes the SUBSTITUTED result's
+reference at its own `return` (`emitOwnedValueReturn`), so the caller emits nothing after the call and
+adopts the result as an owned temporary (`enrolOwnedCallTemp`), which `routeToTryBlock` takes back off the
+pending drops while it builds the error edge. Both paths run here: `run(0)` returns through the body, `run(1)` throws out of the same call.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3270,26 +3210,16 @@ caught
 
 <!-- test: expression-form-try-over-a-substituted-return -->
 ⭐⭐ **THE EXPRESSION FORM OF THE CASE THE BLOCK FORM ABOVE HANDLES.** What it pins is the ANSWER — `v=9`
-off the ok edge of an expression-form `try` over a substituted managed return — and that has never moved. The
-MECHANISM behind it has, and the paragraph that stood here narrated the retired one as if it were still live.
+off the ok edge of an expression-form `try` over a substituted managed return.
 
-⚠ **READ THE NEXT SENTENCE IN THE PAST TENSE.** A shared generic body could not classify its `T` return, so
-it handed one back as a BORROW and the CALLER took its own reference (`coOwnSubstitutedCallResult`) —
-necessarily after the call, which is where the value exists. An expression `try` splits on the error flag at
-exactly that point, and on the error edge the result register was never written, so the promotion could not
-sit in the block both edges flow from: BATCH25 lifted its ops off the fork's entry block and re-attached them
-as the FIRST ops of `tryok`, the shape `generic-managed-return-routed-through-a-try-block` already emitted.
+⚠ An expression `try` splits on the error flag right after the call, and on the error edge the result
+register is never written — so nothing that takes a reference to the result may sit in the block both
+edges flow from.
 
-**THERE IS NOTHING AT THE CALL TO LIFT.** The `+1` for a substituted `T` return is the CALLEE's
+**THERE IS NOTHING AT THE CALL TO PLACE.** The `+1` for a substituted `T` return is the CALLEE's
 (`emitOwnedValueReturn` → `coOwnBorrowedOpaque` → `__retain_type_param`), so the caller emits no promotion
 for a substituted `T` at all — this case's own committed golden shows `Box.fetch` making that call and
-`tryok:` holding a single `jmp trycont`. The ordering rule the lift exists to obey still serves the
-promotions that DO trail a call; it simply is not this program's.
-
-⚠ **THE ORACLE MISCOMPILES THIS PROGRAM, so it is NOT the arbiter for the capability.** MEASURED on the
-bootstrap: it compiles, prints `v=9`, and then dies with `mm_decref: refcount underflow (already zero)`
-in `__destruct_AlphaBox`, exit 1 — it takes no reference and then over-releases. the compiler's answer is derived
-from the rule and from the block form's golden shape, never from what the reference emits.
+`tryok:` holding a single `jmp trycont`.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3329,18 +3259,11 @@ v=9
 ```
 
 <!-- test: expression-form-try-over-a-substituted-string-return -->
-The other managed spelling, which used to reach the refusal by a different wrong road — and every
-clause of that road is now HISTORY, so read the next two sentences in the past tense. A `String`
-substitution promoted by COPYING (`promoteToOwnedString`), so the op the try-rewrite found trailing the
-target was a string-interpolation rather than the aggregate's `__mm_retain` call, and the program was
-told *"the expression after `try` is not a call"* about a program whose `try` is applied to exactly one.
-Both spellings are ONE construct, so the cure keyed the move onto the ok edge on the promotion's op RANGE
-and not on which op the promotion happened to end with — a cure that only understood the aggregate arm's
-single `call` would have left the interpolation's whole op chain on the fork's entry block. TODAY neither
-half is emitted at this call: the `+1` for a substituted `T` return is taken by the CALLEE
-(`emitOwnedValueReturn`, P1.7 slice 3b-vi-a), so nothing trails the call to lift, and a borrowed `String`
+The other managed spelling: a `String` substitution. Both spellings are ONE construct, and nothing is
+emitted at this call for either: the `+1` for a substituted `T` return is taken by the CALLEE
+(`emitOwnedValueReturn`), so nothing trails the call, and a borrowed `String`
 handed off is RETAINED rather than copied (`retainBorrowedByteRecord` → `__str_retain`).
-What the case pins is unchanged and is the ANSWER: `v=hi` off the ok edge of an expression-form `try`
+What the case pins is the ANSWER: `v=hi` off the ok edge of an expression-form `try`
 over a substituted managed return.
 ```maxon
 enum Boom implements Error
@@ -3374,17 +3297,11 @@ v=hi
 ```
 
 <!-- test: expression-form-try-over-a-trivial-substituted-return -->
-⭐ **THE NEGATIVE CONTROL, AND THE DISCRIMINATOR THAT PROVED THE DIAGNOSIS — WHICH IS NOW HISTORY, AND THE
-CASE IS NOT.** A TRIVIAL instantiation owns no heap, so `coOwnSubstitutedCallResult` returned early and
-emitted nothing at all: the call op was still the last op the target emitted, the rewrite claimed it, and the
-program compiled and ran. That asymmetry between `Box with Integer` and `Box with Alpha` is what identified
-the co-own's promotion — rather than anything about `try` or about generics — as what the rewrite was
-grabbing.
-
-⚠ **THERE IS NO ASYMMETRY, BECAUSE THERE IS NO CALLER-SIDE PROMOTION.** The `+1` belongs to the CALLEE, so `Box
-with Alpha` emits nothing after its call either (see `expression-form-try-over-a-substituted-return`). What this
-case holds is the ANSWER for the trivial instantiation — it compiles, runs and returns 9 — and its golden, which
-must not budge for a rung that does not mean to move emission.
+⭐ **THE NEGATIVE CONTROL: A TRIVIAL INSTANTIATION.** It owns no heap, and there is no caller-side promotion
+for either instantiation: the `+1` belongs to the CALLEE, so `Box with Alpha` emits nothing after its call
+either (see `expression-form-try-over-a-substituted-return`), and `Box with Integer` and `Box with Alpha`
+are symmetric at the call. What this case holds is the ANSWER for the trivial instantiation — it compiles,
+runs and returns 9 — and its golden, which must not budge for a change that does not mean to move emission.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3418,12 +3335,11 @@ v=9
 ```
 
 <!-- test: condition-form-try-over-a-substituted-return -->
-⚠ **THE SIBLING DOOR, WHICH HAD THE SAME WRONG NOUN AND TAKES THE SAME CURE.** `if let x = try …` does not
+⚠ **THE SIBLING DOOR.** `if let x = try …` does not
 go through `parseTry` at all — `parseCatchingCondition` runs the same three steps and lets the `if` own the
-fork — but it takes the target's VALUE through the identical `parseTryCallTarget`, so it was broken
-identically and told the author about `__mm_retain` identically. The promotion is lifted off the condition's
-entry block at that ONE funnel, and each door re-attaches it at the head of its own ok edge: `tryok` for the
-expression form, the `if`'s THEN block here (the condition tests `flag == 0`, so then IS the ok edge).
+fork — but it takes the target's VALUE through the identical `parseTryCallTarget`. Its ok edge is the
+`if`'s THEN block, where the expression form's is `tryok` (the condition tests `flag == 0`, so then IS the
+ok edge).
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3466,15 +3382,11 @@ v=9
 ```
 
 <!-- test: try-over-a-call-whose-argument-is-a-substituted-return -->
-⭐ **THE SECOND NEGATIVE CONTROL, AND THE ONE THAT PINS THE OTHER HALF OF THE MOVE'S CONDITION.** A
-substituted `T` result is co-owned here too — `bx.get()` returns `Alpha` — but it is an ARGUMENT of the
-try target, so its promotion is emitted BEFORE `consume`'s call and `consume`'s call is still the last op
-the target left behind. The rewrite claims the right op and the program is legal WITHOUT anything moving:
-the promotion belongs on the unconditional path here, because the value it takes a reference to is one
-`consume` is handed and not one the fork's ok edge produces. That is why the move tests the co-own's own
-VALUE against the target rather than merely asking whether a co-own happened inside the target's extent:
-the looser question is true here, and a deferral keyed on it would carry this retain past `consume`'s own
-fork — a `+1` on the wrong side of a split, and an argument handed the borrow it was taken to replace.
+⭐ **THE SECOND NEGATIVE CONTROL: A SUBSTITUTED RESULT AS AN ARGUMENT OF THE TRY TARGET.** `bx.get()`
+returns `Alpha`, and `get` takes that reference at its own `return` (`emitOwnedValueReturn`), so the caller
+adopts the result as an owned temporary (`enrolOwnedCallTemp`) BEFORE `consume`'s call, on the
+unconditional path. The value is one `consume` is handed, not one the fork's ok edge produces, so the fork
+owes it nothing beyond releasing it once on whichever edge runs.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3517,16 +3429,16 @@ n=9
 ```
 
 <!-- test: try-over-a-substituted-return-whose-receiver-is-a-fork-temporary -->
-⭐⭐ **THE CO-OWN LANDS *FIRST* ON THE OK EDGE, AHEAD OF THE FORK'S OWN DROPS — AND THIS IS THE PROGRAM
-THAT CAN TELL.** `try make(f).fetch()` builds its receiver as a TEMPORARY, and `desugarTry` releases the
-fork's temporaries at the top of BOTH edges (they are live on each and each must drop them once). The
-box's release runs `__destruct_Box_Alpha`, which decrefs the very `Alpha` the promotion is about to take a
-reference to — so a co-own placed after those drops retains a freed record and `got.a` reads the `0x3F3F…`
-poison. Placed first, it holds the field alive across the box's own death and the answer is **11**.
+⭐⭐ **THE RESULT'S REFERENCE IS TAKEN BEFORE THE FORK'S OWN DROPS — AND THIS IS THE PROGRAM THAT CAN
+TELL.** `try make(f).fetch()` builds its receiver as a TEMPORARY, and `desugarTry` releases the fork's
+temporaries at the top of BOTH edges (they are live on each and each must drop them once). The box's
+release runs `__destruct_Box_Alpha`, which decrefs the very `Alpha` the result names — so a reference taken
+after those drops would retain a freed record and `got.a` would read the `0x3F3F…` poison. `fetch` takes it
+at its own `return` (`emitOwnedValueReturn` → `coOwnBorrowedOpaque`), before the call returns, so it holds
+the field alive across the box's death and the answer is **11**.
 
 Every other case in this family binds its receiver, so the box outlives the statement and the ordering is
-unobservable. This one is why `attachSubstitutedCoOwnToOkEdge` is called on a block nothing has emitted
-into yet, rather than merely "somewhere on the ok edge".
+unobservable.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3572,18 +3484,14 @@ ok=11 err=1
 ```
 
 <!-- test: condition-form-try-over-a-substituted-return-whose-receiver-is-a-fork-temporary -->
-⛔⛔ **THE SIBLING DOOR'S FORK TEMPORARY, WHICH THE REVIEW FOUND MISCOMPILING AND WHICH THE ORDERING
-ARGUMENT ABOVE DOES NOT REACH ON ITS OWN.** `desugarTry` releases the fork's temporaries at the top of
-each EDGE, so the co-own it puts at the head of `tryok` is ahead of them for free. A catching `if` used to
-release its condition's temporaries in the ENTRY block instead — one release dominating both edges, which
-is right for every condition whose temporaries nothing past the fork still reads, and wrong for exactly
-this one: `__destruct_Box_Alpha` ran before the branch, so the retain on the then edge took a reference to
-a freed record and `got.a` read the poison. MEASURED, before the fix: `ok=4557430888798830399`.
+⛔⛔ **THE SIBLING DOOR'S FORK TEMPORARY.** A catching `if` releases its condition's temporaries PER EDGE
+(`takeCatchingForkTemps`), at the head of its then block and of its else block. One release in the ENTRY
+block, dominating both edges, is right for every plain condition and wrong for exactly this one:
+`__destruct_Box_Alpha` would run before the branch, so a read on the then edge would reach a freed record
+and `got.a` would read the poison (`ok=4557430888798830399`).
 
-⭐ **THE CURE IS THAT THE TWO `try` FORKS NOW SAY IT ONCE** — a catching `if` takes `desugarTry`'s per-edge
-rule (`takeCatchingForkTemps`), so the head of its then block is the co-own and then the drops, and the
-head of its else block is the drops, in the order the expression form has always had. The pair of cases —
-this one and its `otherwise` twin above — is what keeps the two doors from drifting apart again.
+⭐ The pair of cases — this one and its `otherwise` twin above — is what keeps the two `try` doors from
+drifting apart.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error
@@ -3633,44 +3541,35 @@ ok=11 err=1
 
 <!-- test: error.a-type-parameter-belongs-to-the-type-that-declares-it -->
 ⭐⭐ **`Array with U` IN ONE GENERIC TYPE AND `Array with V` IN ANOTHER ARE TWO TYPES, AND A DIAGNOSTIC
-MUST SAY WHICH (W14).** A `typeParameter`'s identity used to be its POSITION in its declaring type's
-`uses` list and nothing else, so `HoldA`'s first parameter and `HoldB`'s first parameter were ONE
-value — and `GenericInstanceRegistry.instanceKey`, which mixes each argument's `(tag, id)` pair,
-therefore gave `Array with U` and `Array with V` ONE key. Not two names for two types: one interned
-type. `deriveInstanceDisplayNames` then settled the two spellings by FIRST DECLARATION, which is the
+MUST SAY WHICH.** A `typeParameter` is identified by a digest of `(declaring type, parameter name)`
+(`ProgramSignatures.typeParamTokenFor`), not by its POSITION in its declaring type's `uses` list. Keyed
+by position, `HoldA`'s first parameter and `HoldB`'s first parameter would be ONE value — and
+`GenericInstanceRegistry.instanceKey`, which mixes each argument's `(tag, id)` pair, would give
+`Array with U` and `Array with V` ONE key: not two names for two types, but one interned type.
+`deriveInstanceDisplayNames` would then settle the two spellings by FIRST DECLARATION, which is the
 right rule for two names that really are true of one type and the wrong one for a type the key had
-merged by accident.
-
-⛔ **MEASURED on this program and its twin below — byte-identical apart from which type is declared
-first.** Against the compiler as it stood, this order reported `got 'HoldA.Items'` for a value whose
-type is `HoldB`'s, and the swapped order reported `got 'HoldB.Items'`: one program, two answers,
-decided by declaration order. That is the build-order artifact the 2026-07-24 user ruling recorded at
-`StdlibLoader.maxon:29-63` bars from a diagnostic, and it is the same defect `W14b` closed for a
-nested tuple's name one rung earlier.
+merged by accident — so this program, and its twin below that differs only in which type is declared
+first, would name the value's type `HoldA.Items` in one order and `HoldB.Items` in the other: one
+program, two answers, decided by declaration order. That is the build-order artifact
+`StdlibLoader.maxon` bars from a diagnostic.
 
 ⭐ **THE PAIR IS THE GATE, AND NO ORDER-DEPENDENT CITATION CAN PASS IT**: the two cases pin ONE
 byte-identical sentence, so a compiler that lets declaration order pick the name must fail exactly one
-of them WHATEVER text is pinned. The cure is in the KEY — a type parameter is now identified by a
-digest of `(declaring type, parameter name)` (`ProgramSignatures.typeParamTokenFor`) — and NOT in the
-display rule, which needed no change once the two types stopped sharing an instance.
+of them WHATEVER text is pinned. The rule is in the KEY, and NOT in the display rule.
 
 The refusal itself is correct in both orders: an `Array` of `Num` and an `Array` of `String` are
-different types. Only the NAME was wrong.
+different types. Only the NAME is at stake.
 
-⚠ **THE `got` SIDE MOVED AT W25, FROM THE DECLARATION VIEW TO THE INSTANCE VIEW, AND THE PAIR STILL
-MEASURES WHAT IT WAS BUILT TO MEASURE.** `b.items` on a `HoldB with String` no longer keeps the shared
+⚠ **THE `got` SIDE IS THE INSTANCE VIEW.** `b.items` on a `HoldB with String` does not keep the shared
 body's `Array with V` — it is substituted to the type the receiver actually fixes, `Array with String` — so
-the sentence names that type by the `typealias` the program declares for it (`Strs`) instead of by the
-inner alias of the declaration it was read through (`HoldB.Items`). The property the pair exists for is
-untouched: the two orders must still print ONE byte-identical sentence, and a compiler that lets
-declaration order pick the name fails exactly one of them.
+the sentence names that type by the `typealias` the program declares for it (`Strs`) rather than by the
+inner alias of the declaration it was read through (`HoldB.Items`). The two orders must still print ONE
+byte-identical sentence, and a compiler that lets declaration order pick the name fails exactly one of them.
 
 ⚠ `Strs` is declared here ON PURPOSE, in both cases identically. Without it the program names
-`Array with String` nowhere, and `instanceDisplayName`'s first-declaration fallback then reaches into
-STDLIB and quotes `BuildConfig.StringArray` — a non-exported inner alias of a type this program has never
-heard of. That fallback is not W25's: it reproduces on the merge base for a bare `total(["a", "b"])`, and
-it is reported as its own finding rather than pinned here, because pinning it would couple this case to a
-stdlib private name.
+`Array with String` nowhere, and `instanceDisplayName` falls back to a name no line of this program
+wrote — an alias the standard library declares for that instance, or the instance's own rendering. That
+fallback is not pinned here, because pinning it would couple this case to the library's names.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias Nums = Array with Num
@@ -3769,21 +3668,20 @@ error E3005: <fragment>:40:11: argument type mismatch for 'other': expected 'Num
 ```
 
 <!-- test: an-inner-alias-field-crosses-into-a-parameter-of-its-own-instance -->
-⭐⭐ **THE LEGAL COUNTERPART OF THE PAIR ABOVE — AND IT WAS REFUSED (W25).** The two cases above pin that
+⭐⭐ **THE LEGAL COUNTERPART OF THE PAIR ABOVE.** The two cases above pin that
 `HoldA`'s `Items` and `HoldB`'s `Items` are DIFFERENT types and a diagnostic must say which. This one pins
 the other half of that sentence: **`HoldA`'s `Items` and `HoldA`'s `Items` are the SAME type**, so a value
-read out of one `HoldA with Num` may be handed to a parameter of another one. It was
+read out of one `HoldA with Num` may be handed to a parameter of another one. Refusing it would read
 **`E3005: argument type mismatch for 'other': expected 'HoldANum.Items', got 'HoldA.Items'`** — a program
-handing a value to a parameter of its own type, refused, with a sentence naming one type twice. The oracle
-builds it, runs it and prints `ok`.
+handing a value to a parameter of its own type, refused, with a sentence naming one type twice. It builds,
+runs and prints `ok`.
 
 ⚠ **THE MECHANISM IS THE SAME DECLARATION-VIEW/INSTANCE-VIEW SPLIT the extension crash is made of**, one
-surface over: substitution stopped at a bare `typeParameter`, so a field whose declared type is a generic
-INSTANCE (`Array with T`, reached through the inner `typealias Items`) was never substituted at all and
-`b.items` kept the shared body's opaque `Array with T` where the receiver had already fixed it to
-`Array with Num`. The NON-generic control is the case below: the identical store on a plain `type` compiled
-and ran throughout, which is what says the store is ownership-legal and this was purely a substitution
-failure.
+surface over: substitution must not stop at a bare `typeParameter`. A field whose declared type is a generic
+INSTANCE (`Array with T`, reached through the inner `typealias Items`) is substituted too, so `b.items` is
+the `Array with Num` the receiver fixes rather than the shared body's opaque `Array with T`. The NON-generic
+control is the case below: the identical store on a plain `type`, which is what says the store is
+ownership-legal and the question is purely one of substitution.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -3825,9 +3723,9 @@ ok
 
 <!-- test: the-same-field-store-on-a-non-generic-type -->
 The one-variable CONTROL of the case above: the identical program with the type parameter removed and the
-array alias hoisted to file scope, so nothing is substituted and nothing can fail to be. It compiled and
-ran on the merge base, which is what attributes the refusal above to the substitution and not to the store,
-to the array's ownership, or to `adopt`'s signature.
+array alias hoisted to file scope, so nothing is substituted and nothing can fail to be. It is what ties a
+refusal of the case above to the substitution and not to the store, to the array's ownership, or to
+`adopt`'s signature.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 typealias NumArray = Array with Num
@@ -3865,22 +3763,21 @@ end 'main'
 ok
 ```
 
-### ⭐⭐ An OPAQUE type parameter may not stand where a CONCRETE AGGREGATE is declared — W179
+### ⭐⭐ An OPAQUE type parameter may not stand where a CONCRETE AGGREGATE is declared
 
 A generic body compiles ONCE, for the declaration view, and a `T` there is one opaque machine word whose
 representation no instantiation has fixed. A CONCRETE AGGREGATE place — a `String`, a struct, a generic
 instance, a function value, a `Character` — is a promise that the word is a POINTER to a particular record
 with a particular destructor, and the shared body cannot keep that promise: it is dereferenced, stored and
-DROPPED under the declared type. Passing a `T` there was accepted with no diagnostic at all and the program
-faulted (`0xC0000005`), because the deferral that admits a type parameter lives in the TAG domain and a
-primitive formal has no other domain to be judged in.
+DROPPED under the declared type. Admitted, a `T` passed there compiles with no diagnostic at all and the
+program faults (`0xC0000005`), because the deferral that admits a type parameter lives in the TAG domain and
+a primitive formal has no other domain to be judged in.
 
 **The refusal does NOT depend on what the instantiations bind.** It is refused at `Outer with String` — where
 `T` really is `String` — exactly as it is refused at `Outer with Integer`, and
 `error.opaque-type-parameter-at-a-concrete-aggregate-argument-is-refused-at-a-matching-instantiation` below
 pins that.
-One thing in the tree already answers it that way and this is now the second: the MANAGED FIELD door has always
-compared the tags EXACTLY (`Parser.requireManagedValueMatches`), so `self.s = t` is refused at every
+The MANAGED FIELD door answers it the same way: it compares the tags EXACTLY (`Parser.requireManagedValueMatches`), so `self.s = t` is refused at every
 instantiation.
 Deciding it from the instantiation set instead would need an ALL-fold over every `with` in the program, and
 would make a body's validity change when an unrelated file adds a second instantiation.
@@ -3890,7 +3787,7 @@ that it is sound.** A `T` meeting a declared `int`/`bool` place is a word moving
 dereferences nothing and drops nothing, so the worst it can produce is a wrong NUMBER, never the fault above —
 and `array-declared-record`'s `the-self-spelling-of-a-corpus-served-member-reaches-the-same-body` is a
 committed program that returns an opaque element as its ranged-int alias and depends on being allowed to.
-Refusing that quadrant as well was MEASURED against the whole suite and costs three committed cases, two of
+Refusing that quadrant as well costs three committed cases, two of
 them `error.` cases whose own subject it masks; separating the sound instances from the unsound ones needs the
 instantiation fold this rule deliberately does without.
 
@@ -3939,7 +3836,7 @@ error E3005: <fragment>:22:13: argument type mismatch for 's': expected 'String'
 
 <!-- test: error.opaque-type-parameter-at-a-concrete-aggregate-argument-of-a-plain-function -->
 The same rule with no generic in the CALLEE at all — a plain `takeText(s String)` reached from inside a
-generic body. It is the wider shape and the one that shows the hole was never about the callee's own
+generic body. It is the wider shape and the one that shows the rule is not about the callee's own
 instance: the argument door alone decides it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -4008,8 +3905,8 @@ error E3005: <fragment>:10:3: cannot assign a value of type 'type parameter' to 
 
 <!-- test: error.opaque-type-parameter-at-a-concrete-aggregate-argument-is-refused-at-a-matching-instantiation -->
 ⭐ **THE CONTROL, AND IT IS A REFUSAL.** The first case's program with its ONE instantiation changed to
-`Outer with String`, so `T` is bound to exactly the type the formal declares. It COMPILED and printed `3`
-before this rule existed. It is refused now, for the reason the section above gives: the body is checked once,
+`Outer with String`, so `T` is bound to exactly the type the formal declares — without this rule it would
+compile and print `3`. It is refused, for the reason the section above gives: the body is checked once,
 against a declaration view no `with` has reached, and the answer cannot be allowed to depend on which
 instantiations the rest of the program happens to contain.
 ```maxon
@@ -4055,10 +3952,10 @@ error E3005: <fragment>:22:13: argument type mismatch for 's': expected 'String'
 ```
 
 <!-- test: error.opaque-type-parameter-returned-at-a-concrete-aggregate-return -->
-⚠ **THE RETURN QUADRANT WAS NEVER A HOLE, AND THIS CASE RECORDS WHICH REFUSAL SPEAKS — measured both ways.**
-On the merge base this program is refused too, by the DESCRIPTOR door (`E2015`, "takes a reference to a
+⚠ **THE RETURN QUADRANT HAS TWO REFUSALS, AND THIS CASE RECORDS WHICH ONE SPEAKS.**
+The DESCRIPTOR door refuses this program as well (`E2015`, "takes a reference to a
 borrowed type-parameter value"): returning a `T` means taking a reference to it, and a `static function` has
-no `self` to read the instantiation's descriptor from. The coercion rule now answers first, because the type
+no `self` to read the instantiation's descriptor from. The coercion rule answers first, because the type
 fault is the more fundamental one — following E2015's advice and moving the body to an instance method lands
 on this same refusal — and because its cure ("declare the place at the type parameter too", i.e. `returns T`)
 is the one that makes the program compile. It is pinned so that the ordering is a decision on the record
@@ -4092,7 +3989,7 @@ error E3005: <fragment>:8:3: Cannot return 'type parameter' from function declar
 
 <!-- test: error.opaque-type-parameter-at-a-boxed-union-argument-explains-itself -->
 A boxed UNION formal carries a NOMINAL identity, so this pairing is refused by the argument door's identity
-arm and never reaches the tag rule at all — it was never part of the hole. It is pinned because the READER is
+arm and never reaches the tag rule at all. It is pinned because the READER is
 the same reader: one fault gets one explanation, so the identity arm quotes the same tail the tag arm does
 whenever the ARGUMENT is the opaque one.
 ```maxon
@@ -4139,9 +4036,9 @@ The mirror of `error.opaque-field-write-in-the-shared-body-refuses-a-concrete-va
 concrete `Label` handed to a parameter the shared body declares as `T`. Both are the same rule about
 the same thing — a `T` place is opaque inside the shared body — and both are decided by the one
 identity comparison (`ProgramSignatures.aggregatesConflict`) over an EMPTY expected name meeting
-`Label`. **MEASURED:** unguarded, this program compiled with no diagnostic at all and passed the
-`Label` box's ADDRESS into a slot the instantiation had fixed as an integer, so `b.clobber() as
-ExitCode` range-checked a pointer and died `panic: Range check failed: value outside typealias
+`Label`. Unguarded, this program compiles with no diagnostic at all and passes the
+`Label` box's ADDRESS into a slot the instantiation has fixed as an integer, so `b.clobber() as
+ExitCode` range-checks a pointer and dies `panic: Range check failed: value outside typealias
 'ExitCode'` — a wrong answer that reaches runtime, which is why this case exists.
 
 The door decides only the case where the binding question answers itself: the receiver is a value of

@@ -59,8 +59,8 @@ hold one (`a-candidate-inside-an-orphaned-region`).
 committed fragment of the first case (the fast arm reaches `tryok` with no `cmp` on the flag) and the
 controls below, each of which exercises a path the rewrite touches: the value taken from the slow
 arm, the handler reached from the duplicated test, the phi of the loaded value in the continuation.
-Measured under sabotage — the "tested argument read elsewhere" refusal deleted — every case in this
-file fails at COMPILE time: the pass admits a rethrowing bare `try` inside a stdlib body every program
+With the "tested argument read elsewhere" refusal deleted, every case in this file fails at COMPILE
+time: the pass admits a rethrowing bare `try` inside a stdlib body every program
 links, the flag is then undefined on the new path into `tryerr`, and the register allocator refuses
 the function ("value … is live-in to block … but was never colored — a use dominates its def").
 
@@ -458,8 +458,8 @@ end 'main'
 <!-- test: a-candidate-inside-an-orphaned-region -->
 The orphaned region can itself hold a second admitted candidate — the `g` join inside the `nz` arm,
 with one runtime arm. Both are rewritten in one batch, so the second candidate's slot must be dropped
-while its block is still in the function, and only then may the region go. This program used to
-panic the compiler ("tested arg 13 is outside the block-arg id space").
+while its block is still in the function, and only then may the region go. In the other order this
+program panics the compiler ("tested arg 13 is outside the block-arg id space").
 ```maxon
 typealias Word = int(i64.min to i64.max)
 

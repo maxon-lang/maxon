@@ -17,8 +17,8 @@ the caller is itself a shared generic body, and each has its own obligation:
   through that instance — `c.get()` on a `Cell with Num` gives a `Num`. When the instance's argument at
   that position is the CALLER'S OWN type parameter, the substitution fixes nothing and the result must
   stay the type parameter it was. An instance over its own parameters is the identity substitution, and
-  a substitution that loses that identity leaves a value the body can no longer prove is a `T` — so a
-  `where Element is Equatable` comparison against a genuine `Element` is refused on a program in which
+  a substitution that loses that identity leaves a value the body cannot prove is a `T` — so a
+  `where Element is Equatable` comparison against a genuine `Element` would be refused on a program in which
   both operands are `Element`.
 
 - **what the result OWES.** The adopted `+1` is released at scope exit through the descriptor-gated

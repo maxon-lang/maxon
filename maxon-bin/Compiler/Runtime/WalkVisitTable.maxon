@@ -91,7 +91,7 @@ end 'emitWalkRevisit'
 // `__mm_walk_slot(table, record) -> entryAddress` — the entry holding `record`, or the vacant one a probe for it
 // ends at.
 function buildWalkSlot(module StdModule)
-	var func = IrFunction.createFromStd(WalkSlotName, returnType: StdReturnType.value(StdType.i64), paramCount: SlotParamCount, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(WalkSlotName, returnType: StdReturnType.value(StdType.i64), paramCount: SlotParamCount, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(SlotParamCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -134,7 +134,7 @@ end 'buildWalkSlot'
 // `__mm_walk_revisit(table, record, kept) -> met` — has the walk met `record` before? If so, one more of its owners
 // is met, and the unmet word keeps only the bits `kept` holds.
 function buildWalkRevisit(module StdModule)
-	var func = IrFunction.createFromStd(WalkRevisitName, returnType: StdReturnType.value(StdType.i64), paramCount: RevisitParamCount, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(WalkRevisitName, returnType: StdReturnType.value(StdType.i64), paramCount: RevisitParamCount, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(RevisitParamCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -168,7 +168,7 @@ end 'buildWalkRevisit'
 // met, creating the table or growing it first when it must. The caller has established the walk has not met
 // `record` before.
 function buildWalkNote(module StdModule)
-	var func = IrFunction.createFromStd(WalkNoteName, returnType: StdReturnType.value(StdType.i64), paramCount: NoteParamCount, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(WalkNoteName, returnType: StdReturnType.value(StdType.i64), paramCount: NoteParamCount, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(NoteParamCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -227,7 +227,7 @@ end 'buildWalkNote'
 // `__mm_walk_settle(table)` — once the root's walk has returned: free the table, then abort if any record an owner
 // has met has an owner the walk never met. The table is freed first so the abort path returns it too.
 function buildWalkSettle(module StdModule)
-	var func = IrFunction.createFromStd(WalkSettleName, returnType: StdReturnType.void, paramCount: SettleParamCount, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(WalkSettleName, returnType: StdReturnType.void, paramCount: SettleParamCount, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(SettleParamCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -301,7 +301,7 @@ function emitVisitTableAlloc(module StdModule, block IrBlock, entries ValueId, i
 	let entryBytes = emitBin(module, block: block, a: entries, b: stride, opcode: StdBinOpcode.mul, ids: ids)
 	let headBytes = emitConst(module, block: block, value: VisitTableEntriesOffset as ParsedInt, ids: ids)
 	let bytes = emitBin(module, block: block, a: entryBytes, b: headBytes, opcode: StdBinOpcode.add, ids: ids)
-	let noDestructor = emitConst(module, block: block, value: NoDestructor, ids: ids)
+	let noDestructor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let table = ids.mint()
 	emitMmAllocCall(module, block: block, result: table, size: bytes, destructor: noDestructor, tag: mmTagIndex(MmTag.WalkVisitTable), ids: ids)
 

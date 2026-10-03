@@ -34,7 +34,7 @@ let CoverageWriteFileName = b"__cov_write_file"
 let CoveragePathRdataPrefix = "__cov_path_"
 
 // ⚠ **THE OUT-PARAM SCRATCH IS A FRAME SLOT, NOT A `.data` WORD.** `osWriteFile` requires a pointer to
-// write its byte count into, and a shared global there is `ClockRuntime`'s W212 defect: two Ms are inside
+// write its byte count into, and a shared global there is a race: two Ms are inside
 // one function without needing a yield point between them, so one thread's count lands in the other's
 // word. A per-CALL need gets per-CALL storage.
 let CoverageScratchBytes = 8 as StackSize
@@ -133,7 +133,7 @@ end 'installCoverageRuntime'
 // The status is a PARAMETER rather than a constant because the two callers disagree about it and must: the
 // entry stub reports a run that reached its own exit, and a fault path reports one that did not.
 function buildCoverageDump(module StdModule, pathLabel ByteArray, pointCount MxcovPointIndex)
-	var func = IrFunction.createFromStd(CoverageDumpName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(CoverageDumpName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -160,7 +160,7 @@ end 'buildCoverageDump'
 // nothing to say; a write that failed is closed by the same arm that closes a write that worked. See this
 // file's header for why a diagnostic here would be the defect rather than the courtesy.
 function buildCoverageWriteFile(module StdModule)
-	var func = IrFunction.createFromStd(CoverageWriteFileName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(CoverageWriteFileName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

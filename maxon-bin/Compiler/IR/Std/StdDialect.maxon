@@ -159,7 +159,7 @@ end 'unsignedStdTypeOf'
 //
 // ⚠ **IT WAS `DivideSignedness` AND THE DIVIDE IS NO LONGER ITS ONLY READER** — three families read it
 // now, and each is a place where one bit pattern has two honest answers: the DIVIDE (`idiv` vs `div`),
-// the DECIMAL RENDERER (`-1` vs `18446744073709551615`, X11), and the four ORDERING COMPARISONS (`jl`
+// the DECIMAL RENDERER (`-1` vs `18446744073709551615`), and the four ORDERING COMPARISONS (`jl`
 // vs `jb`). The renaming is not cosmetic: a reader of `MaxonOp.compare`'s field who found a type named
 // for division would reasonably conclude the field was in the wrong place.
 //
@@ -176,8 +176,8 @@ end 'unsignedStdTypeOf'
 // and the splitter each go on seeing one op — a second variant would have had to be added to every
 // one of them, and a miss there is a miscoloured register rather than a compile error.
 export enum IntegerSignedness
-	// x64 `idiv`, arm64 `sdiv`, wasm `i64.div_s`/`i64.rem_s`. The reading every division in the
-	// language had before X10, and still the reading for every operand pair that admits a negative.
+	// x64 `idiv`, arm64 `sdiv`, wasm `i64.div_s`/`i64.rem_s`. The reading for every operand pair that
+	// admits a negative.
 	signed
 
 	// x64 `div` (with RDX ZEROED rather than sign-extended), arm64 `udiv`, wasm `i64.div_u`/`i64.rem_u`.
@@ -1377,7 +1377,7 @@ export union StdOp
 	// call-barrier metadata: it IS a diverging call once lowered.
 	osExit(codeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.diverging, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// --- non-capturing function values ---
+	// --- function values ---
 	//
 	// The `category` metadata places each variant logically (a `memory`-band `funcAddr`, a
 	// `call`-band `callIndirect`) independently of this tail position.
@@ -1404,7 +1404,7 @@ export union StdOp
 	// float-taking function value colored a move across register files. The FRONT END already
 	// types the result value and every arg value, so `lowerIndirectCall` reads both straight off `stdTypeOf`
 	// — no parser or Maxon-op change. A backend routes arg `k` to a float or GPR register by bit `k` of the
-	// mask (`args`'s trailing entry, the uniform-ABI env pointer, is never float) and captures the result by
+	// mask (`args`'s trailing entry, the function record, is never float) and captures the result by
 	// `resultType`, exactly as a direct call reads the callee's declared types.
 	//
 	// ⭐ `resultType` IS A `StdReturnType`, NOT A BARE `StdType` — the union `void | value(StdType)` — because
@@ -1720,7 +1720,7 @@ export union StdOp
 	// --- the STREAMING subprocess stdin pipe + synchronous write ---
 	//
 	// Both carry `category: system` (metadata placing them logically in the system band, independent of
-	// this tail position) — the same shape and rationale as the slice-1a IOCP ops. ⭐ x64-WINDOWS ONLY, like
+	// this tail position) — the same shape and rationale as the IOCP ops. ⭐ x64-WINDOWS ONLY, like
 	// the whole green-thread substrate; every other backend REJECTS them (emitted only inside the
 	// x64-windows-gated streaming runtime). Full call-barrier metadata: each IS one or more indirect calls
 	// once lowered.
@@ -1786,7 +1786,7 @@ export union StdOp
 	//
 	// Its `category: system` places it logically in the system band, independent of this tail position.
 	//
-	// `osFileOpenRead(result, pathPtr)` = `CreateFileA(pathPtr, GENERIC_READ, FILE_SHARE_READ, NULL,
+	// `osFileOpenRead(result, pathPtr)` = `CreateFileA(pathPtr, GENERIC_READ, <every share bit>, NULL,
 	// OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)`, the raw HANDLE (or `INVALID_HANDLE_VALUE`) in `result`.
 	// One value operand and one def — the direct-return shape `osEventCreate` uses, NOT the
 	// out-param shape `osReadClock` needs, because `CreateFileA` returns its answer in RAX.
@@ -1836,16 +1836,17 @@ export union StdOp
 	// the BOOL result; the byte count lands in memory at `bytesOutPtr`.
 	osReadFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osFileOpenWrite(result, pathPtr)` = `CreateFileA(pathPtr, GENERIC_WRITE, FILE_SHARE_READ |
-	// FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)`, the raw HANDLE (or
-	// `INVALID_HANDLE_VALUE`) in `result` — `osFileOpenRead`'s shape with three constants changed.
+	// `osFileOpenWrite(result, pathPtr)` = `CreateFileA(pathPtr, GENERIC_WRITE, <every share bit>,
+	// NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)`, the raw HANDLE (or `INVALID_HANDLE_VALUE`)
+	// in `result` — `osFileOpenRead`'s shape with two constants changed.
 	//
-	// ⚠ **THE SHARE MODE IS `FILE_SHARE_READ | FILE_SHARE_WRITE`, NOT 0, AND THAT IS DELIBERATE.** With 0 an
-	// editor or an antivirus scanner holding a read handle on the path makes the open fail with
-	// `ERROR_SHARING_VIOLATION` — an intermittent failure that depends on what else is running.
+	// ⚠ **THE SHARE MODE IS EVERY SHARE BIT, NOT 0, AND THAT IS DELIBERATE**
+	// (`StdToX64Conversion.FileShareAll` owns the reason). With 0 an editor or an antivirus scanner
+	// holding a read handle on the path makes the open fail with `ERROR_SHARING_VIOLATION` — an
+	// intermittent failure that depends on what else is running.
 	//
-	// `openWriteExecutable` has an op of its own — see `osFileOpenWriteExecutable` at the tail of
-	// this union.
+	// `openWriteExecutable` and the exclusive create have ops of their own — see
+	// `osFileOpenWriteExecutable` and `osFileOpenCreateNew` at the tail of this union.
 	osFileOpenWrite(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osFileSize(result, handle, sizeOutPtr)` = `GetFileSizeEx(handle, sizeOutPtr)` — the 64-bit size is
@@ -2022,6 +2023,14 @@ export union StdOp
 	// backend translates its own convention into this op's, and the doubling walk above stays one graph.
 	osExecutablePath(resultId ValueId, bufLenId ValueId, bufPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
+	// `osExecutablePath`'s field order and count convention, which every lane owes for the same
+	// reason: both ops feed the one retry loop (`ManagedDirectoryRuntime.PathFill`).
+	osProcessNamespace(resultId ValueId, bufLenId ValueId, bufPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `result` is 0 when the buffer was filled and nonzero when it was not, on every lane, whatever
+	// the primitive itself answers: `RandomRuntime` tests it against 0.
+	osRandomFill(resultId ValueId, bufPtrId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	// --- the OTHER standard stream ---
 	//
 	// `category: system` places it logically beside `osWriteStdout`, independent of this tail
@@ -2069,7 +2078,7 @@ export union StdOp
 	// guess.
 	stackRecordAddr(resultId ValueId, slot SpillSlot) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: true, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 
-	// --- The DebugStream PRODUCER's three host primitives (Workstream O3) ---
+	// --- The DebugStream PRODUCER's three host primitives ---
 	//
 	// ⭐ Their `category: system` places them logically in the OS band, independent of this tail
 	// position.
@@ -2177,7 +2186,7 @@ export union StdOp
 	// live child and a pipe nobody drains.
 	osProcessTerminate(resultId ValueId, handleId ValueId, exitCodeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// --- The socket slice: the eight `ws2_32` primitives behind `__ManagedSocket` ---
+	// --- The eight `ws2_32` primitives behind `__ManagedSocket` ---
 	//
 	//
 	// ⭐ ALL EIGHT NEED `HostFacility.managedSocket`, exactly as the file-IO family needs its own: a lane
@@ -2210,7 +2219,7 @@ export union StdOp
 	osSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osSocketFreeAddrInfo(addrInfoPtr)` = `freeaddrinfo(addrInfoPtr)`. No result — the call returns void, and
-	// it exists in the same slice as the resolve for `osFileClose`'s reason: a `getaddrinfo` with no matching
+	// it exists beside the resolve for `osFileClose`'s reason: a `getaddrinfo` with no matching
 	// free leaks OS memory for the process lifetime, and that leak is invisible to the exit-101 gate.
 	osSocketFreeAddrInfo(addrInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
@@ -2229,7 +2238,7 @@ export union StdOp
 
 	// `osSocketConnect(result, sock, addrPtr)` = `connect(sock, addrPtr, sizeof(sockaddr_in))`, the returned int
 	// in `result` (0 = success, else a negative failure in the lane's vocabulary — see `osSocketCreate`). The
-	// length is fixed because the caller always hands an IPv4 `sockaddr_in`; an IPv6 slice takes a length
+	// length is fixed because the caller always hands an IPv4 `sockaddr_in`; IPv6 would take a length
 	// operand rather than widening this one silently.
 	//
 	// ⚠ **ON A POSIX LANE `-EINPROGRESS` IS NOT A FAILURE**: the descriptor is non-blocking, so the handshake
@@ -2347,7 +2356,7 @@ export union StdOp
 	// a lane that cannot ask for it. Full call-barrier metadata: it IS an indirect call once lowered.
 	osThreadCpuTicks(handleId ValueId, outPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// --- F1a: the DECOMMIT an OS-direct allocation and a scavenger need ---
+	// --- The DECOMMIT an OS-direct allocation and a scavenger need ---
 	//
 	// It carries `category: system`, placing it logically in the system band independent of this
 	// tail position.
@@ -2355,10 +2364,10 @@ export union StdOp
 	// ⭐⭐ **DECOMMIT IS NOT FREE, AND THAT IS WHY THERE IS A THIRD PAGE OP AT ALL.** `osFreePages` gives
 	// the ADDRESS RANGE back: the reservation is gone and the base may be handed to the next mapping.
 	// `osDecommitPages` gives back only the PHYSICAL BACKING and KEEPS the reservation, so the base stays valid and
-	// `osCommitPages` (F1c, at the end of this union) can re-back it IN PLACE. A scavenger returning a quiet
-	// arena's pages to the OS needs exactly that distinction: the arena's free lists still point into the range,
-	// so losing the ADDRESS — which is what `osFreePages` does — would turn every one of those links into a
-	// dangling pointer.
+	// `osCommitPages` (at the end of this union) can re-back it IN PLACE. A scavenger returning a
+	// quiet arena's pages to the OS needs exactly that distinction: the arena's free lists still point
+	// into the range, so losing the ADDRESS — which is what `osFreePages` does — would turn every one
+	// of those links into a dangling pointer.
 	//
 	// `osDecommitPages(addr, size)` drops the backing of the `size` bytes at `addr`, keeping the reservation. TWO
 	// VALUE operands and no result — `osFreePages`'s shape and, for its reasons, its full call-barrier metadata.
@@ -2375,7 +2384,7 @@ export union StdOp
 	//     VERBATIM.
 	// ⇒ the strongest contract a reback can honestly offer is "readable and writable", NEVER "zeroed". The
 	// slab's zeroing contract (docs/internals/memory-allocator.md) is kept by the arena zeroing a chunk run as
-	// it is released (INV-4), never by this round trip.
+	// it is released, never by this round trip.
 	//
 	// ⛔ **THAT OBLIGATION IS RECORDED HERE, AT THE OP, AND NOT LEFT TO THE EVENTUAL CALLER.** The natural later
 	// shortcut is a per-OS `pagesAreZeroAfterReback` flag the scavenger consults — and whoever writes it will set it
@@ -2390,10 +2399,9 @@ export union StdOp
 	// deliberate rather than an omission — a decommitted range is simply not a range a caller may touch.
 	osDecommitPages(addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// --- F1b: the BYTE FILL the zeroing contract and the free poison both run on ---
+	// --- The BYTE FILL the zeroing contract and the free poison both run on ---
 	//
-	// `category: memory` places it logically in the memory band, independent of this tail position. (F1c has
-	// since appended two more `system` variants past it, which is the same invariant working again.)
+	// `category: memory` places it logically in the memory band, independent of this tail position.
 	//
 	// `memFill(dest, byteCount, value)` overwrites `byteCount` bytes at `dest` with the low byte of `value`.
 	// A `byteCount` of 0 writes nothing.
@@ -2431,7 +2439,7 @@ export union StdOp
 	// it writes memory, so it must order against every load and store around it.
 	memFill(destId ValueId, byteCountId ValueId, value ParsedInt) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
 
-	// --- F1c: RESERVE address space, and COMMIT a range inside a reservation ---
+	// --- RESERVE address space, and COMMIT a range inside a reservation ---
 	//
 	// Both carry `category: system`, placing them logically in the system band independent of this tail
 	// position. They are ADJACENT so the sites that treat "an OS page call that defines a value" alike read
@@ -2491,7 +2499,7 @@ export union StdOp
 	osCommitPages(resultId ValueId, addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	osReservePages(resultId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// --- F2: the ATOMICS and the PER-THREAD IDENTITY the multi-M scheduler is built on ---
+	// --- The ATOMICS and the PER-THREAD IDENTITY the multi-M scheduler is built on ---
 	//
 	// All three carry `category: system`, placing them logically in the system band independent of
 	// this tail position.
@@ -2525,9 +2533,9 @@ export union StdOp
 	// ⛔ **THE REFCOUNT STEP IS NOT ONE OF THESE.** `MmRuntime.emitAdjustRefcount` steps a COUNTED box's word
 	// PLAIN, because it has no second party to serialise against — an `async` frame is a COROUTINE of the
 	// green thread that called it, so a counted box has one owning green thread running on one M — and a
-	// SHARED box's word with an `atomicRmw`, because a lend gave a second green thread a reference to it. Which
-	// arm runs is read off the word itself, never off `MAXON_MAX_PROCS`. `SchedRuntime.maxon`'s header states
-	// the invariant; `MmRuntime.emitAdjustRefcount` names the committed control.
+	// SHARED box's word with an `atomicRmw`, because a second green thread may hold a reference to it.
+	// Which arm runs is read off the word itself, never off `MAXON_MAX_PROCS`. `SchedRuntime.maxon`'s
+	// header states the invariant; `MmRuntime.emitAdjustRefcount` names the committed control.
 	//
 	// ⚠ **A `.data` COUNTER IS THE OTHER STORY AND KEEPS ITS ATOMIC** where a second OS thread can exist
 	// (`MmRuntime.emitGlobalAccumulate`'s `multiM` arm — item 2 on `SchedRuntime.maxon`'s audit list). A word
@@ -2713,9 +2721,10 @@ export union StdOp
 	// ⚠ **THE TWO OPS DELIBERATELY DO NOT COLLAPSE INTO ONE WITH A MODE OPERAND.** A mode is a POSIX fact
 	// with no Win32 counterpart, so a `mode` operand would be a value every Windows call site had to
 	// materialise and every Windows lowering had to discard — the target-neutral tier carrying a
-	// target-specific number. Two ops, each naming an INTENT, leaves each backend to spell that intent in
-	// its own vocabulary.
+	// target-specific number. One op per INTENT leaves each backend to spell that intent in its own
+	// vocabulary.
 	osFileOpenWriteExecutable(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osFileOpenCreateNew(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- The WHOLE environment, which `osEnvRead` cannot reach ---
 	//
@@ -3144,6 +3153,8 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 			osSocketFreeAddrInfo or
 			osCommandLine or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osEnvRead or
 			osEnvBlock or
 			osEnvBlockFree or
@@ -3183,6 +3194,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 			osFileOpenRead or
 			osFileOpenWrite or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osFileSize or
 			osFileDelete or
 			osFileRename or
@@ -3231,18 +3243,26 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 	end 'k'
 end 'stdOpSyscallClassOf'
 
-// ⭐ **DOES THIS `StdOp` NAME A `.data` LABEL?** ONE variant does — `globalAddr` — for a read and a write
-// alike, since both open with it. Read by dead-function elimination to collect the labels the surviving
-// functions reference, which is what `GlobalDataTable.layOut` keeps a walked runtime word for.
+export enum StdOpLabelKind
+	none
+	dataSlot
+	rdata
+end 'StdOpLabelKind'
+
+// ⭐ **WHICH LABEL, IF ANY, THIS `StdOp` NAMES.** `globalAddr` names a `.data` slot — for a read and
+// a write alike, since both open with it — and `rdataAddr` an `.rdata` label. Read by dead-function
+// elimination to collect the slots the surviving functions reference, which is what
+// `GlobalDataTable.layOut` keeps a walked runtime word for, and to reach the function records they
+// read.
 //
-// A scalar predicate plus a name getter rather than a payload union, for `maxonOpNamesAGlobalLabel`'s
-// measured reason: a union with a payload variant boxes on every ask, and this is asked once per live op of
-// every reached function.
+// A payload-free kind plus a label getter rather than a payload union, for
+// `maxonOpNamesAGlobalLabel`'s measured reason: a union with a payload variant boxes on every ask,
+// and this is asked once per live op of every reached function.
 //
 // The arms NAME every variant, so a variant added later FAILS TO COMPILE here rather than being classified
 // by omission. `covPoint` addresses the coverage run by a label of its own and lowers to it directly, so it
 // names nothing a walked slot could depend on.
-export function stdOpNamesAGlobalLabel(op StdOp) returns bool
+export function stdOpLabelKindOf(op StdOp) returns StdOpLabelKind
 	match op 'op'
 		const or
 			binOp or
@@ -3262,7 +3282,6 @@ export function stdOpNamesAGlobalLabel(op StdOp) returns bool
 			storeIndirect or
 			osAllocPages or
 			osWriteStdout or
-			rdataAddr or
 			tryCall or
 			errorReturn or
 			osExit or
@@ -3311,6 +3330,8 @@ export function stdOpNamesAGlobalLabel(op StdOp) returns bool
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -3347,6 +3368,7 @@ export function stdOpNamesAGlobalLabel(op StdOp) returns bool
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or
@@ -3360,20 +3382,23 @@ export function stdOpNamesAGlobalLabel(op StdOp) returns bool
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostProcess or
-			osNetpoll then return false
-		globalAddr then return true
+			osNetpoll then return StdOpLabelKind.none
+		globalAddr then return StdOpLabelKind.dataSlot
+		rdataAddr then return StdOpLabelKind.rdata
 	end 'op'
-end 'stdOpNamesAGlobalLabel'
+end 'stdOpLabelKindOf'
 
-// The `.data` label an op names — asked only of an op `stdOpNamesAGlobalLabel` answered TRUE for, so every
-// other variant panics rather than returning an empty name: an empty `ByteArray` would be a sentinel, and a
-// caller that forgot the gate would silently keep "the slot named by the empty string".
-export function stdOpGlobalLabel(op StdOp) returns ByteArray
+// The label an op names — asked only of an op `stdOpLabelKindOf` answered other than `none` for, so
+// every other variant panics rather than returning an empty name: an empty `ByteArray` would be a
+// sentinel, and a caller that forgot the gate would silently keep "the slot named by the empty
+// string".
+export function stdOpLabel(op StdOp) returns ByteArray
 	return match op 'op'
 		globalAddr(_, label) gives label
-		default panic("stdOpGlobalLabel: asked of an op that names no `.data` label — `stdOpNamesAGlobalLabel` answers false for it, and every caller gates on that")
+		rdataAddr(_, label) gives label
+		default panic("stdOpLabel: asked of an op that names no label — `stdOpLabelKindOf` answers `none` for it, and every caller gates on that")
 	end 'op'
-end 'stdOpGlobalLabel'
+end 'stdOpLabel'
 
 // ⭐⭐ **WHICH ARITHMETIC SHAPE AN OP CARRIES — ONE ROSTER, READ BY ALL THREE ARITHMETIC PASSES.**
 // `foldConstOperands` (move a const OPERAND into an immediate), `foldConstants` (EVALUATE
@@ -3744,6 +3769,8 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -3777,6 +3804,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or
@@ -3991,6 +4019,8 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -4022,6 +4052,7 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			osHandleFileType or
@@ -4307,6 +4338,8 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -4340,6 +4373,7 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or
@@ -4776,6 +4810,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osFileFindNext(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osDirCurrentPath(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osExecutablePath(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osProcessNamespace(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osRandomFill(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osMapNamedSegment(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osPipePeek(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osProcessTerminate(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
@@ -4792,6 +4828,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osFileOpenRead(_, operand) then referenced.insert(operand)
 		osFileOpenWrite(_, operand) then referenced.insert(operand)
 		osFileOpenWriteExecutable(_, operand) then referenced.insert(operand)
+		osFileOpenCreateNew(_, operand) then referenced.insert(operand)
 		osFileDelete(_, operand) then referenced.insert(operand)
 		osDirCreate(_, operand) then referenced.insert(operand)
 		osDirRemove(_, operand) then referenced.insert(operand)
@@ -5008,6 +5045,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osReadFile(resultId, _, _, _, _) then def.recordOne(resultId)
 		osFileOpenWrite(resultId, _) then def.recordOne(resultId)
 		osFileOpenWriteExecutable(resultId, _) then def.recordOne(resultId)
+		osFileOpenCreateNew(resultId, _) then def.recordOne(resultId)
 		osEnvBlock(resultId) then def.recordOne(resultId)
 		osHandleFileType(resultId, _) then def.recordOne(resultId)
 		osProcessProbe(resultId, _) then def.recordOne(resultId)
@@ -5031,6 +5069,8 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osCommandLine(resultId) then def.recordOne(resultId)
 		osStdHandle(resultId, _) then def.recordOne(resultId)
 		osExecutablePath(resultId, _, _) then def.recordOne(resultId)
+		osProcessNamespace(resultId, _, _) then def.recordOne(resultId)
+		osRandomFill(resultId, _, _) then def.recordOne(resultId)
 		osWriteStderr(resultId, _, _) then def.recordOne(resultId)
 		stackRecordAddr(resultId, _) then def.recordOne(resultId)
 		osOpenNamedSegment(resultId, _, _, _) then def.recordOne(resultId)
@@ -5278,6 +5318,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osReadFile(resultId, handle, buf, len, bytesOutPtr) gives StdOp.osReadFile(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), lenId: remappedValue(len, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst))
 		osFileOpenWrite(resultId, pathPtr) gives StdOp.osFileOpenWrite(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileOpenWriteExecutable(resultId, pathPtr) gives StdOp.osFileOpenWriteExecutable(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
+		osFileOpenCreateNew(resultId, pathPtr) gives StdOp.osFileOpenCreateNew(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osEnvBlockFree(blockPtr) gives StdOp.osEnvBlockFree(remappedValue(blockPtr, subst: subst))
 		osHandleFileType(resultId, handle) gives StdOp.osHandleFileType(resultId, handleId: remappedValue(handle, subst: subst))
 		osProcessProbe(resultId, pid) gives StdOp.osProcessProbe(resultId, pidId: remappedValue(pid, subst: subst))
@@ -5305,6 +5346,8 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 
 		osStdHandle(resultId, which) gives StdOp.osStdHandle(resultId, whichId: remappedValue(which, subst: subst))
 		osExecutablePath(resultId, bufLen, bufPtr) gives StdOp.osExecutablePath(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
+		osProcessNamespace(resultId, bufLen, bufPtr) gives StdOp.osProcessNamespace(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
+		osRandomFill(resultId, bufPtr, len) gives StdOp.osRandomFill(resultId, bufPtrId: remappedValue(bufPtr, subst: subst), lenId: remappedValue(len, subst: subst))
 
 		// `osWriteStdout`'s arm one stream over.
 		osWriteStderr(resultId, bufId, lenId) gives StdOp.osWriteStderr(resultId, bufId: remappedValue(bufId, subst: subst), lenId: remappedValue(lenId, subst: subst))
@@ -5329,21 +5372,22 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// one rewrite. It defines nothing.
 		osThreadCpuTicks(handle, outPtr) gives StdOp.osThreadCpuTicks(remappedValue(handle, subst: subst), outPtrId: remappedValue(outPtr, subst: subst))
 
-		// F1a: the exact mirror of `collectStdOpUses`'s arm — base and length are the reads, so both are the
+		// The exact mirror of `collectStdOpUses`'s arm — base and length are the reads, so both are the
 		// rewrites; the op defines nothing to carry through.
 		osDecommitPages(addr, size) gives StdOp.osDecommitPages(remappedValue(addr, subst: subst), sizeId: remappedValue(size, subst: subst))
 
-		// F1b: the exact mirror of `collectStdOpUses`'s arm — the destination and the length are the reads, so
+		// The exact mirror of `collectStdOpUses`'s arm — the destination and the length are the reads, so
 		// both are the rewrites, and the constant fill byte rides through untouched.
 		memFill(dest, byteCount, value) gives StdOp.memFill(remappedValue(dest, subst: subst), byteCountId: remappedValue(byteCount, subst: subst), value: value)
 
-		// F1c: the exact mirror of `collectStdOpUses`'s two arms — the reads are the rewrites, and each result id
-		// is a DEF carried through unchanged, exactly as `osAllocPages`'s is.
+		// The exact mirror of `collectStdOpUses`'s two arms — the reads are the rewrites, and each result
+		// id is a DEF carried through unchanged, exactly as `osAllocPages`'s is.
 		osCommitPages(resultId, addr, size) gives StdOp.osCommitPages(resultId, addrId: remappedValue(addr, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osReservePages(resultId, sizeId) gives StdOp.osReservePages(resultId, sizeId: remappedValue(sizeId, subst: subst))
 
-		// F2: the exact mirror of `collectStdOpUses`'s three arms — every read is a rewrite, each result id is
-		// a DEF carried through unchanged, and the RMW's opcode rides along untouched (it names no value).
+		// The exact mirror of `collectStdOpUses`'s three arms — every read is a rewrite, each result id
+		// is a DEF carried through unchanged, and the RMW's opcode rides along untouched (it names no
+		// value).
 		atomicCas(resultId, addr, expected, replacement) gives StdOp.atomicCas(resultId, addrId: remappedValue(addr, subst: subst), expectedId: remappedValue(expected, subst: subst), replacementId: remappedValue(replacement, subst: subst))
 		atomicRmw(resultId, addr, operand, opcode) gives StdOp.atomicRmw(resultId, addrId: remappedValue(addr, subst: subst), operandId: remappedValue(operand, subst: subst), opcode: opcode)
 
@@ -5581,6 +5625,8 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -5610,6 +5656,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			osHandleFileType or
@@ -6132,6 +6179,8 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -6165,6 +6214,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or
@@ -6332,6 +6382,8 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -6365,6 +6417,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or

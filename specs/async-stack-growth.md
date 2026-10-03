@@ -5,7 +5,7 @@ keywords: [async, green-threads, morestack, stack-growth, relocation, recursion,
 category: concurrency
 ---
 
-# Async stack growth — the relocating morestack (P1.5-B1a′)
+# Async stack growth — the relocating morestack
 
 ## Documentation
 

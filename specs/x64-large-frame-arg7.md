@@ -20,11 +20,11 @@ argument. RAX is an argument register under either order:
     eight-register: rcx, rdx, r8, r9, rsi, rdi, rax, rbx   -> RAX is parameter 7
     this backend:   rcx, rdx, rax, r9, rsi, rdi, rbx       -> RAX is parameter 3
 
-So a prologue that used RAX destroyed **parameter 7** of every function that had one and a frame over 4 KiB,
-before that parameter was ever read. A silent wrong-answer miscompile, not a crash, and invisible to
-any function with six parameters or a small frame. The size now travels in R11: caller-saved, not an
-argument register, and dead at function entry — the discipline `__gt_morestack` and the arm64 probe
-(X16/X17) already followed.
+So a prologue that used RAX would destroy **parameter 7** of every function that had one and a frame
+over 4 KiB, before that parameter was ever read. A silent wrong-answer miscompile, not a crash, and
+invisible to any function with six parameters or a small frame. The size travels in R11: caller-saved,
+not an argument register, and dead at function entry — the discipline `__gt_morestack` and the arm64
+probe (X16/X17) follow.
 
 The self-hosted backend emits no `__chkstk`: it walks the pages INLINE
 (`X64Backend.encodeStackProbe`), borrowing R11 and never RAX, so it cannot have this bug. The test still
@@ -35,28 +35,24 @@ The frame is forced past 4 KiB by 800 values the allocator does not rematerializ
 stack slot. (Written as `let v = g + N`, the allocator simply re-emits the constant and the frame
 stays tiny — the test would then pass under any large-frame bug.)
 
-⚠ **THE REASON USED TO BE "each is the result of a CALL", AND THAT STOPPED BEING TRUE.** `opaque` is a
-tiny leaf, so `inlineLeaves` (EC5) splices it away and `foldConstants` (EC12) evaluates what is left:
-the golden now holds **9** `callDirect`s where it held 810, and 800 `movRegImm32`s where it held call
-results. **The frame survived anyway** — 6408 → 6344 bytes, with 788 `storeSlotReg`/`loadRegSlot`
-pairs — because the compiler's allocator does not rematerialize a `const` across a spill. So the case still
-tests what it says it tests, and the golden's `x64.prologue 6344` is what says so; what changed is
-WHY the values are in slots. If a future rematerialization rung shrinks this frame below 4 KiB, this
-case needs a different source of pressure, not a smaller expectation.
+⚠ **THE VALUES ARE NOT CALL RESULTS.** `opaque` is a tiny leaf, so `inlineLeaves` splices it away and
+`foldConstants` evaluates what is left: the golden holds **9** `callDirect`s and 800 `movRegImm32`s. **The
+frame is large anyway** — 6344 bytes, with 788 `storeSlotReg`/`loadRegSlot` pairs — because the compiler's
+allocator does not rematerialize a `const` across a spill. So the case tests what it says it tests, and
+the golden's `x64.prologue 6344` is what says so. If rematerialization shrinks this frame below 4 KiB,
+this case needs a different source of pressure, not a smaller expectation.
 
-The result depends on parameter 7, so a clobbered RAX changes the answer: the pre-fix compiler returned 5568 — *the frame size itself*, read straight out
-of the register the prologue overwrote.
+The result depends on parameter 7, so a clobbered RAX changes the answer: a RAX-clobbering prologue
+returns 5568 — *the frame size itself*, read straight out of the register the prologue overwrote.
 
 **Targets: an x64-windows case ON ITS MERITS.** `__chkstk` is the Windows stack probe — Linux x64 grows
 the stack without one, and neither arm64 nor wasm has the concept — so no other native target can exhibit
 this bug and a pass on one would be a green light about nothing. arm64 is therefore gated out on the
 merits, not merely for the missing golden.
 
-The `x64-linux` and `wasm32-wasi` lanes are kept because they already pass and cost nothing, but **both
-check the SUM, not the prologue** — a green light about nothing, run because it is free, not because it
-proves anything. ⚠ `x64-linux` was absent until 2026-07-28 while `wasm32-wasi` was listed on exactly that
-"costs nothing" reasoning, which the two lanes could not both be right about; measured green there and
-added, so the stated policy and the marker now agree.
+The `x64-linux` and `wasm32-wasi` lanes are kept because they pass and cost nothing, but **both check
+the SUM, not the prologue** — a green light about nothing, run because it is free, not because it proves
+anything.
 
 ## Tests
 

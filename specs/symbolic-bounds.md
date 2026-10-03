@@ -321,10 +321,9 @@ end 'main'
 <!-- test: an-index-one-past-the-length-fires -->
 Control for the offset's strictness. `j = i + 1` inside `for i in 0 upto a.count()` is bounded by
 `length + 0` and non-negative, which proves `j <= length` and NOT `j < length`: the check stays, and
-the last iteration's read of slot `count` takes the fallback. Measured under sabotage — a strict
-compare accepting offset 0 — the check is deleted and the read returns the zeroed slot past the end:
-90 where 1090 is right; and a compiler built by that sabotaged compiler had the same check deleted
-in its own code and panicked inside its own CSE, spec-green.
+the last iteration's read of slot `count` takes the fallback. Under a strict compare that accepts
+offset 0, the check is deleted and the read returns the zeroed slot past the end: 90 where 1090 is
+right.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word

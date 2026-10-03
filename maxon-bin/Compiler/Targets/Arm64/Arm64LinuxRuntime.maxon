@@ -220,6 +220,7 @@ let Arm64LinuxSyscallPipe2 = 59
 let Arm64LinuxSyscallPpoll = 73
 let Arm64LinuxSyscallExit = 93
 let Arm64LinuxSyscallKill = 129
+let Arm64LinuxSyscallGetRandom = 278
 let Arm64LinuxSyscallSetsid = 157
 
 // Every child leads a process group of its own, and the tree kill rests on it: a deadline signals the GROUP
@@ -593,17 +594,19 @@ export function arm64LinuxThreadCpuStackBytes() returns StackSize
 end 'arm64LinuxThreadCpuStackBytes'
 
 // ==========================================================================
-// mrt_host_exe_path(x0 = bufPtr, x1 = bufLen) -> x0 = bytes written
+// mrt_host_exe_path / mrt_host_proc_ns(x0 = bufPtr, x1 = bufLen) -> x0 = bytes written
 // ==========================================================================
 
-// ⭐⭐ **THE RUNNING IMAGE'S PATH, WHICH ON THIS LANE IS NOT A CALL BUT A SYMLINK.** `_NSGetExecutablePath`
-// has no Linux counterpart at all; the kernel publishes `/proc/self/exe`, a symbolic link whose TARGET is
-// the path, so this chunk is one `readlinkat(AT_FDCWD, "/proc/self/exe", buf, bufLen)`.
+// ⭐⭐ **ON THIS LANE THE ANSWER IS NOT A CALL BUT A SYMLINK.** The kernel publishes
+// `/proc/self/exe`, whose TARGET is the running image's path (`_NSGetExecutablePath` has no Linux
+// counterpart), and `/proc/self/ns/pid`, whose target names the pid namespace — so each chunk is
+// one `readlinkat(AT_FDCWD, link, buf, bufLen)`.
 //
 // ⛔⛔ **`readlinkat` DOES NOT NUL-TERMINATE AND DOES NOT REPORT TRUNCATION**, and those are the two facts
 // this chunk exists for. It answers the byte count it wrote, writes no terminator, and — when the link does
 // not fit — SILENTLY TRUNCATES and answers exactly `bufLen`. Both are handled here in the vocabulary
-// `osExecutablePath` already speaks (`ManagedDirectoryRuntime.emitFilledBufferVerdict`):
+// `osExecutablePath` and `osProcessNamespace` speak
+// (`ManagedDirectoryRuntime.emitFilledBufferVerdict`):
 //
 //   • `n < 0` ⇒ answer **0**, which the Std verdict reads as "refused" and `__proc_exe_path` turns into
 //     `pathUnavailable`. ⚠ No errno is stashed, deliberately: nothing consumes an `osLastError` after this
@@ -618,7 +621,7 @@ end 'arm64LinuxThreadCpuStackBytes'
 // ⚠ **THE ARGUMENTS SHUFFLE AND THE ORDER IS LOAD-BEARING** for `buildArm64LinuxFileOpenChunk`'s reason: the
 // path constant materialises in x0 (the shared `.rdata` blob channel hands it there), so it moves to x1
 // BEFORE `AT_FDCWD` takes the x0 it vacated.
-function buildArm64LinuxExePathChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+function buildArm64LinuxReadLinkChunk(globalData GlobalDataTable, link ByteArray, name ByteArray) returns FunctionCodeChunk
 	let SlotBufPtr = 0 as StackSize
 	let SlotBufLen = 1 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(2)
@@ -629,7 +632,7 @@ function buildArm64LinuxExePathChunk(globalData GlobalDataTable) returns Functio
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufLen)
 
-	arm64EmitCStringArg(asm, globalData: globalData, bytes: LinuxProcSelfExe)
+	arm64EmitCStringArg(asm, globalData: globalData, bytes: link)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotBufPtr)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotBufLen)
@@ -653,8 +656,8 @@ function buildArm64LinuxExePathChunk(globalData GlobalDataTable) returns Functio
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 
 	asm.placeLabel(finish)
-	return asm.finishFunction(HostExePathName)
-end 'buildArm64LinuxExePathChunk'
+	return asm.finishFunction(name)
+end 'buildArm64LinuxReadLinkChunk'
 
 // ==========================================================================
 // mrt_host_cpu_count() -> x0 = usable processors | -1
@@ -2984,6 +2987,46 @@ function buildArm64LinuxProcessSignalChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostProcessSignalName)
 end 'buildArm64LinuxProcessSignalChunk'
 
+function buildArm64LinuxRandomFillChunk() returns FunctionCodeChunk
+	let SlotCursor = 0 as StackSize
+	let SlotRemaining = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	let issue = asm.newLabel()
+	let progressed = asm.newLabel()
+	let finish = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotCursor)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotRemaining)
+
+	asm.placeLabel(issue)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotCursor)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotRemaining)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxGetRandomFlags as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGetRandom)
+	arm64PosixEmitSyscallBranchIfEintr(asm, whenInterrupted: issue)
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.gt, label: progressed)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: finish)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxRandomFillNoProgress as MachineWord)
+	arm64EmitBranchTo(asm, label: finish)
+
+	asm.placeLabel(progressed)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotCursor)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCursor)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotRemaining)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x2, rhs: Arm64Register.x0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotRemaining)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.gt, label: issue)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(finish)
+	return asm.finishFunction(HostRandomFillName)
+end 'buildArm64LinuxRandomFillChunk'
+
 export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
 	assertLinuxSearchGeometry()
 
@@ -3007,8 +3050,16 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	end 'threadCpu'
 
 	if usage.usesExecutablePath 'executablePath'
-		chunks.push(buildArm64LinuxExePathChunk(globalData))
+		chunks.push(buildArm64LinuxReadLinkChunk(globalData, link: LinuxProcSelfExe, name: HostExePathName))
 	end 'executablePath'
+
+	if usage.usesProcessNamespace 'processNamespace'
+		chunks.push(buildArm64LinuxReadLinkChunk(globalData, link: LinuxProcSelfPidNamespace, name: HostProcessNamespaceName))
+	end 'processNamespace'
+
+	if usage.usesEntropy 'entropy'
+		chunks.push(buildArm64LinuxRandomFillChunk())
+	end 'entropy'
 
 	// ⭐⭐ **THE PROCESSOR COUNT RIDES A UNION, AND A NARROWER GATE IS A LINK FAILURE RATHER THAN A
 	// DIAGNOSTIC** (`arm64ResolveCallFixups: bl to unknown function 'mrt_host_cpu_count'`). The

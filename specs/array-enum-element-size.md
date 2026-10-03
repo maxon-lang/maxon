@@ -239,8 +239,8 @@ overload carries no conformance constraint at all — and `stdlib/helpers/sort/*
 Each body is compiled ONCE against an opaque `Element` and cannot know what the instance fixed, so the
 extension has to happen at the CALLEE's entry — the one place every such arrival passes through.
 
-⚠ **MEASURED before the parameter door existed**: the comparator was handed `-1` as **255**, so it saw a
-value no case of its own type has, and the resulting ORDER was wrong — `Signal.minus` sorted LAST. The exit
+⚠ **WITHOUT THE PARAMETER DOOR** the comparator is handed `-1` as **255**, so it sees a value no case of
+its own type has, and the resulting ORDER is wrong — `Signal.minus` sorts LAST. The exit
 code below carries all three facts at once, so either half failing changes it: the sorted first element
 (`103` → `2xx`), the sorted last element, and whether `map`'s transform ever saw a negative (`1` → `0`).
 ```maxon

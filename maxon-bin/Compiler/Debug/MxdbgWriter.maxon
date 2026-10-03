@@ -275,8 +275,18 @@ export type MxdbgWriter
 	// One coverage point. ⛔ **THEY MUST ARRIVE IN COUNTER ORDER**: the record's position IS the counter
 	// index the emitted increment steps, and a table in any other order joins every count to another
 	// point's source line — a report of REAL COUNTS ON THE WRONG LINES, which is worse than no report.
-	export function addCoveragePoint(codeOffset MxdbgCodeOffset, fileId MxdbgIndex, line MxdbgIndex, column MxdbgIndex, branchLine MxdbgIndex, branchColumn MxdbgIndex, funcName String, flags MxdbgIndex)
-		self.covPoints.push(MxdbgCovRecord.create(codeOffset, fileId: fileId, line: line, column: column, branchLine: branchLine, branchColumn: branchColumn, funcName: self.intern(funcName), flags: flags))
+	export function addCoveragePoint(code MxdbgCoverageCode, fileId MxdbgIndex, line MxdbgIndex, column MxdbgIndex, branchLine MxdbgIndex, branchColumn MxdbgIndex, funcName String, flags MxdbgIndex)
+		let codeOffset = match code 'offsetWord'
+			eliminated gives MxdbgEliminatedCoverageCodeOffset
+			at(offset) gives offset
+		end 'offsetWord'
+
+		let recordFlags = match code 'flagWord'
+			eliminated gives flags or MxdbgCovFlagEliminated
+			at gives flags
+		end 'flagWord'
+
+		self.covPoints.push(MxdbgCovRecord.create(codeOffset, fileId: fileId, line: line, column: column, branchLine: branchLine, branchColumn: branchColumn, funcName: self.intern(funcName), flags: recordFlags))
 	end 'addCoveragePoint'
 
 	// One spliced body; its index is its position, which is what a range, a nested site and a local

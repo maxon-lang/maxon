@@ -128,7 +128,6 @@ so the arity-1 intrinsics answer with the same E2067 the arity-2 `min` does rath
 than with E2052, whose wording ("only the second and later arguments take 'name:'
 labels") would invite the nonsense repair `abs(1.0, x: ...)` on a one-argument callee.
 
-⚠ compiler-authored and ADDITIVE — not in `/specs/abs.md`, and no expectation is retracted.
 Reading the label as a variable reference instead would answer
 `E2004: Undefined variable 'x'` — a consequence of the defect rather than the defect itself.
 ```maxon

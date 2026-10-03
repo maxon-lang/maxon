@@ -17,11 +17,11 @@
 // `opIsAServiceSend` — and `services.a-fire-and-forget-send-is-not-a-blocking-edge` goes red, which is the
 // sabotage this file's rule is proved by.
 //
-// ⛔ **AND IT IS THAT CASE AND NOT `services.fire-and-forget-cycle-is-legal`, WHICH CANNOT SEE THIS RULE AT
-// ALL.** That one has no `await` anywhere, so `checkServiceCallCycles` returns on an empty `serviceAwaitSites`
-// before the graph is built: it pins the SV1 property (a type-graph ring compiles and runs) and is silent
-// about this one. MEASURED TWICE — by the implementer, and independently at review, where the sabotage above
-// left it **PASS** while the two cases that can see the rule went red.
+// ⛔ **AND IT IS THAT CASE AND NOT `services.fire-and-forget-cycle-is-legal`, WHICH CANNOT SEE THIS
+// RULE AT ALL.** That one has no `await` anywhere, so `checkServiceCallCycles` returns on an empty
+// `serviceAwaitSites` before the graph is built: it pins that a type-graph ring compiles and runs,
+// and is silent about this one. MEASURED TWICE — by the implementer, and independently at review,
+// where the sabotage above left it **PASS** while the two cases that can see the rule went red.
 //
 // ⭐⭐ **IT OWNS NO GRAPH ALGORITHM OF ITS OWN**, on `TypeCycleCheck.maxon`'s discipline and stated in its
 // words: *"this file contributes the GRAPH and the WORDS, and nothing else. A second cycle finder here
@@ -86,17 +86,17 @@ type ServiceBlockingGraph
 		return try self.serviceNames.get(node) otherwise panic("ServiceBlockingGraph.serviceNameOf: serviceNames.get OOB at {node} below count {self.nodeCount()}")
 	end 'serviceNameOf'
 
-	// The node a service name occupies, or `NoServiceNode` when the program spawns no such service. A NAME
+	// The node a service name occupies; it throws when the program spawns no such service. A NAME
 	// with no node is an ordinary property of the program — a message may name a handle type whose service
 	// some later refusal removed from the roster — so the absence is a real answer rather than a panic.
-	function nodeOfService(typeName ByteArray) returns CsrIndex
+	function nodeOfService(typeName ByteArray) returns CsrIndex throws ServiceNodeLookup
 		for node in 0 upto self.nodeCount() 'eachService'
 			if self.serviceNameOf(node).equals(typeName) 'found'
 				return node
 			end 'found'
 		end 'eachService'
 
-		return NoServiceNode
+		throw ServiceNodeLookup.spawnsNoSuchService
 	end 'nodeOfService'
 
 	function addEdge(owner CsrIndex, awaited CsrIndex, message ByteArray, site ServiceAwaitSite)
@@ -137,11 +137,9 @@ type ServiceBlockingGraph
 	end 'edgeSiteAt'
 end 'ServiceBlockingGraph'
 
-// ⭐ **"NO NODE" AS A VALUE, NOT AS A SENTINEL INSIDE THE KEY SPACE** — `TypeCycleCheck.NoTypeCycleNode`'s
-// rule: `CsrIndex` is 0-based and 0 is a real node, so the absence sits above every key a program can mint.
-// Its bound, `i64.max`, is that rule's too — `CsrIndex` is a checked quantity and `u64.max` rides as a
-// signed-negative.
-let NoServiceNode = i64.max as CsrIndex
+enum ServiceNodeLookup implements Error
+	spawnsNoSuchService
+end 'ServiceNodeLookup'
 
 // ⭐ **THE E3139 CHECK.** Build the blocking graph, ask `nodesOnACycle` once for the whole of it, and report
 // the EARLIEST-SPAWNED service that lies on a cycle.
@@ -152,7 +150,7 @@ let NoServiceNode = i64.max as CsrIndex
 // of iteration order; the roster IS first-spawn order, so the lowest node is the one the author wrote first.
 //
 // ⚠ **THE GATE IS `serviceAwaitSites`, WHICH IS EMPTY FOR EVERY PROGRAM THAT AWAITS NO REPLY** — that is
-// every program with no service in it and every SV1-shaped program that only sends fire-and-forget — and it
+// every program with no service in it and every program that only sends fire-and-forget — and it
 // is asked by `checkServiceRules`, which owns the survey this check and E3143 share. Neither rule builds a
 // call graph of its own any more; see `ServiceProgramSurvey`.
 module function checkServiceCallCycles(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
@@ -187,18 +185,15 @@ function buildServiceBlockingGraph(signatures ProgramSignatures, funcNames Funct
 	return graph
 end 'buildServiceBlockingGraph'
 
-// The service a function is a message of, or EMPTY. The empty name is safe as the absence here — unlike a
-// node index, which has a real 0 — because no declaration is named by the empty string and the only reader
-// tests it with `isEmpty`.
 // ⚠ `module`, because `ServiceGlobalAccessCheck` seeds its forward closure from the very same question — *"is
 // this function a message, and of which service?"* — and a second spelling of it there would be free to
 // disagree about what a message is.
-module function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArray) returns ByteArray
+module function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArray) returns ByteArray throws AbsentError
 	if let message = try signatures.serviceMessageOf(callee) 'aMessage'
 		return message.typeName
 	end 'aMessage'
 
-	return EmptySourceText
+	throw AbsentError.absent
 end 'messageOwnerNameOf'
 
 // One awaited service's closure and the edges it produces. Split from the walk above so each half is one
@@ -220,11 +215,7 @@ function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, funcNa
 			continue
 		end 'blocksOnNothing'
 
-		let ownerName = survey.serviceOf(funcIndex)
-
-		if ownerName.isEmpty() 'notAMessage'
-			continue
-		end 'notAMessage'
+		let ownerName = try survey.serviceOf(funcIndex) otherwise continue
 
 		let func = try funcNames.functions.get(funcIndex) otherwise panic("addBlockingEdgesTo: functions.get OOB at {funcIndex}")
 		noteBlockingEdge(graph, owner: ownerName, awaited: awaited, message: func.name, site: blockingSiteFor(funcIndex, awaitedName: awaitedName, awaits: survey.awaits))
@@ -234,12 +225,7 @@ end 'addBlockingEdgesTo'
 // The edge, once its owner has been resolved to a node. A service whose roster entry is gone contributes
 // nothing — see `ServiceBlockingGraph.nodeOfService` for why that is a real answer.
 function noteBlockingEdge(graph ServiceBlockingGraph, owner ByteArray, awaited CsrIndex, message ByteArray, site ServiceAwaitSite)
-	let ownerNode = graph.nodeOfService(owner)
-
-	if ownerNode == NoServiceNode 'spawnsNoSuchService'
-		return
-	end 'spawnsNoSuchService'
-
+	let ownerNode = try graph.nodeOfService(owner) otherwise return
 	graph.addEdge(ownerNode, awaited: awaited, message: message, site: site)
 end 'noteBlockingEdge'
 
@@ -249,9 +235,7 @@ end 'noteBlockingEdge'
 // await of that service is what the fallback names, because the closure proves one is reachable from here
 // without saying which.
 function blockingSiteFor(funcIndex ElementIndex, awaitedName ByteArray, awaits ServiceAwaitRoster) returns ServiceAwaitSite
-	let own = awaits.rowWhere(funcIndex, awaitedName: awaitedName)
-
-	if own != NoAwaitRow 'awaitsItHere'
+	if let own = try awaits.rowWhere(funcIndex, awaitedName: awaitedName) 'awaitsItHere'
 		return awaits.siteAt(own)
 	end 'awaitsItHere'
 

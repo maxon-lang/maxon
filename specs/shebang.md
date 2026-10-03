@@ -21,8 +21,7 @@ end 'main'
 ```
 
 **Only at byte 0.** `#` opens a compiler directive everywhere else (`#if`, `#else`, `#endif`), and a
-`#!` anywhere but the very start of the file is the unknown directive `#` — **E1009** — exactly as it
-was before this rule existed. The rule is keyed on the file's first byte rather than on "a line
+`#!` anywhere but the very start of the file is the unknown directive `#` — **E1009**. The rule is keyed on the file's first byte rather than on "a line
 starting with `#!`" because that is the only position a kernel reads one from, and widening it would
 silently swallow a mistyped directive in the middle of a file.
 

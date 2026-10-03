@@ -61,7 +61,8 @@ end 'main'
 
 - A method carries its own visibility — `export`, `module` or `public` — and is file-private without one,
   whatever the enum's own visibility. Calling a private method from another file is **E3008**.
-- An enum declares no fields, so `self.something` inside a method is **E2015**; use `match self`.
+- An enum declares no fields, so `self.something` inside a method is **E2015** — `self.name`,
+  `self.ordinal` and `self.rawValue` included; use `match self`.
 - `static function` is not supported on an enum (**E2015**).
 
 ### Enum Properties

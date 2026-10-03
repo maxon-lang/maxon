@@ -1430,7 +1430,7 @@ end 'main'
 ```
 
 <!-- test: rc-struct-literal-as-function-arg -->
-Passing a struct literal directly as a function argument must still free the struct after use. Currently leaks (exit 101).
+Passing a struct literal directly as a function argument must still free the struct after use; a missed free is exit 101.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1456,7 +1456,7 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-return-destructure-no-crash -->
-Returning a tuple from a function and destructuring it must not crash. Currently the cleanup code attempts to decref the already-freed tuple, causing a segfault.
+Returning a tuple from a function and destructuring it must not crash: a cleanup that decref'd the already-freed tuple would segfault.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1474,7 +1474,7 @@ end 'main'
 ```
 
 <!-- test: rc-enum-char-rawvalue-from-function -->
-Returning an enum's char rawValue through a function must not underflow the refcount. Currently the returned value is treated as a managed allocation when it's actually a raw constant, causing refcount underflow.
+Returning an enum's char rawValue through a function must not underflow the refcount: the returned value is a raw constant, not a managed allocation, so releasing it as one would underflow.
 ```maxon
 enum Grade
 	excellent = 'A'
@@ -1500,7 +1500,7 @@ end 'main'
 ```
 
 <!-- test: rc-enum-name-from-function -->
-Returning an enum's .name (String) through a function must not underflow the refcount. Currently the returned raw constant string is decremented as if it were a managed allocation.
+Returning an enum's .name (String) through a function must not underflow the refcount: the returned string is a raw constant, so decrementing it as a managed allocation would underflow.
 ```maxon
 enum Direction
 	north
@@ -1553,7 +1553,7 @@ end 'main'
 ```
 
 <!-- test: rc-discarded-self-return -->
-When a self-returning method's result is discarded, the refcount must remain balanced. Currently the cleanup code double-decrefs the struct, causing a segfault.
+When a self-returning method's result is discarded, the refcount must remain balanced: a cleanup that double-decref'd the struct would segfault.
 ```maxon
 typealias Count = int(i64.min to i64.max)
 
@@ -1581,7 +1581,7 @@ end 'main'
 ```
 
 <!-- test: rc-borrow-field-from-param -->
-Extracting and returning a struct field from a borrowed parameter must not crash. Currently the cleanup code decrefs the returned borrowed field incorrectly, causing a segfault after printing the correct output.
+Extracting and returning a struct field from a borrowed parameter must not crash: a cleanup that decref'd the returned borrowed field would segfault after printing the correct output.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1617,7 +1617,7 @@ end 'main'
 ```
 
 <!-- test: rc-char-to-string-interpolation -->
-Interpolating a character into a string must not leak. Currently the intermediate ManagedMemory allocation from the Character is not freed.
+Interpolating a character into a string must not leak: the intermediate allocation from the Character must be freed.
 ```maxon
 function main() returns ExitCode
 	let c = 'A'
@@ -1634,7 +1634,7 @@ A
 ```
 
 <!-- test: rc-match-char-range-cleanup -->
-Using character range patterns in a match statement must clean up all allocated Characters. Currently the range bound Characters leak.
+Using character range patterns in a match statement must clean up all allocated Characters, the range bounds' included.
 ```maxon
 function main() returns ExitCode
 	let c = 'G'
@@ -1651,7 +1651,7 @@ end 'main'
 ```
 
 <!-- test: rc-string-backed-enum-compare -->
-Comparing two string-backed enum values must not leak. Currently the Character/String allocations for enum case values are not freed.
+Comparing two string-backed enum values must not leak: the allocations for the enum case values must be freed.
 ```maxon
 enum ContentType
 	json = "application/json"
@@ -1672,7 +1672,7 @@ end 'main'
 ```
 
 <!-- test: rc-char-backed-enum-compare -->
-Comparing two char-backed enum values must not leak. Currently the Character allocations for enum case values are not freed.
+Comparing two char-backed enum values must not leak: the Character allocations for the enum case values must be freed.
 ```maxon
 enum Escape
 	newline = '\n'
@@ -1692,7 +1692,7 @@ end 'main'
 ```
 
 <!-- test: rc-nested-struct-clone-no-leak -->
-Cloning a struct with a nested struct field must not leak the inner clone. Currently the cloned Inner's refcount is 1 when freed via Outer cascade, leaving 1 leaked allocation.
+Cloning a struct with a nested struct field must not leak the inner clone: the cloned Inner must reach refcount 0 when the Outer cascade frees it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1725,7 +1725,7 @@ end 'main'
 ```
 
 <!-- test: rc-string-clone-no-leak -->
-Cloning a string must not leak internal Slice/ManagedMemory allocations. Currently String.clone leaks 2 allocations (the Slice and its buffer).
+Cloning a string must not leak its internal allocations.
 ```maxon
 function main() returns ExitCode
 	let a = "hello"
@@ -1742,7 +1742,7 @@ hello
 ```
 
 <!-- test: rc-string-replace-no-leak -->
-String.replace must not leak internal working allocations. Currently leaks 2 allocations (ManagedMemory buffers from the replace implementation).
+String.replace must not leak its internal working allocations.
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -2239,8 +2239,7 @@ on another (`pickOr`: `return fallback` vs `return Tag.named(...)`) is a *mixed*
 whose call result owns a `+1`. When the caller passes a fresh box as that argument and the
 return-the-param path fires, the result ALIASES the argument. The caller releases BOTH the
 box argument and the result, so it must first ACQUIRE-AND-KEEP its own reference — else the
-box is decref'd twice (the self-hosted `enumLiteralTypeOr(fallback)` over-release, where a
-`MaxonType.float` box is `mm_drop`'d as the argument AND `decref`'d as the aliasing result).
+box is decref'd twice — `mm_drop`'d as the argument AND `decref`'d as the aliasing result.
 Summing across both the alias path and the fresh-box path must complete cleanly.
 ```maxon
 typealias N = int(0 to u64.max)
@@ -2292,9 +2291,9 @@ fresh list, then iterating the SNAPSHOT (`let old = buf.ops; buf.ops = IntList.c
 for x in old ...`). Overwriting `buf.ops` decrefs the old list. The snapshot `old` is an
 interior borrow of the old list, so its liveness must span the whole loop — otherwise the
 overwrite frees the old list while `for x in old` still walks it (use-after-free), and scope
-cleanup then decrefs it a second time (double-free). This is the self-hosted `IrModule.compactOps`
-double-free: `let oldOps = block.opRefs; block.opRefs = WordList.create(); for x in oldOps`.
-The fix has two halves — InsertRefcounts recognizes the field-overwrite as case (c) and acquires
+cleanup then decrefs it a second time (double-free). The compiler's own `IrModule.compactOps` has
+this shape: `let oldOps = block.opRefs; block.opRefs = WordList.create(); for x in oldOps`.
+Two halves hold it — InsertRefcounts recognizes the field-overwrite as case (c) and acquires
 the live borrow even though `lowerFieldStore` already emits the decref-old, and StdLiveness roots
 the managed field-load snapshot at itself so the acquired borrow outlives the loop. The sum must
 be computed from the original three elements.
@@ -2339,11 +2338,9 @@ total=6
 
 <!-- test: borrowed-aggregate-forwarded-to-a-consuming-callee -->
 ⭐⭐ **TRANSITIVE CONSUME: A BORROWED AGGREGATE AT A CONSUMING ARGUMENT POSITION TAKES ITS OWN REFERENCE**
-(the user ruling, 2026-08-04). `Box.create` stores its parameter into a field, so the analysis marks that
+(user ruling). `Box.create` stores its parameter into a field, so the analysis marks that
 position CONSUMED; `twice`'s own `item` is only ever FORWARDED, so nothing marks it consumed and it stays
-borrowed. Before this rung that pair was refused outright — *"passing a borrowed struct/union value at a
-CONSUMING argument position … the transitive-consume case handled by the call-graph fixpoint"* — and the
-answer is a refcount rather than a fixpoint: each box becomes a second owner, `item` is NOT poisoned (so
+borrowed. The answer is a refcount rather than a call-graph fixpoint: each box becomes a second owner, `item` is NOT poisoned (so
 the second `Box.create` and the later `item.n` are both legal), and each box's destructor releases exactly
 the reference its own construction took. Runs under the suite's leak gate, so an over-release or a leak
 fails it.
@@ -2389,8 +2386,7 @@ end 'main'
 The DIRECT half of the same rule, one call boundary in: `Self{item: other.item}` moves a value into durable
 storage in THIS frame rather than handing it to a callee that will. `other.item` is a borrowed field read —
 a struct has no `clone`, so the fresh box cannot take sole ownership of it — and the same co-ownership
-answers it, through the same door (`Parser.coOwnBorrowedForConsume`). The two doors were refused by two
-separately-worded `E2015`s and are now one rule, which is what keeps `f(x)` and `Self{f: x}` from
+answers it, through the same door (`Parser.coOwnBorrowedForConsume`). The two doors are one rule, which is what keeps `f(x)` and `Self{f: x}` from
 disagreeing about the same value. The shared `Item` is released once by each holder and freed exactly once.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2431,16 +2427,13 @@ Appending a string to ITSELF: the source of the blit IS the buffer the grow has 
 copy that reads the pre-grow pointer reads freed memory and the string silently ends in the freed
 block's contents rather than its own. Every round must double the string.
 
-⭐⭐ **THREE ROUNDS, AND THE THIRD IS THE ONLY ONE THAT REACHES THE HAZARD (BATCH32 review).** Canonical's
-version stops at two and this case was ported with two, under the reason that *"the second grow frees the
-block it copies from"*. **That reason is FALSE, and it was measured false** by moving
-`emitReleaseOwedBase` ahead of the blit in `buildStrAppend` and rebuilding: rounds 1 and 2 stayed clean
-and round 3 came back `abcabcabcabc????????????` — `0x3F`, the free poison. The arithmetic says why.
+⭐⭐ **THREE ROUNDS, AND THE THIRD IS THE ONLY ONE THAT REACHES THE HAZARD.** The second grow does NOT
+free the block it copies from. The arithmetic says why.
 Growth is `2 * requiredLen` and the grow test is `capacity < requiredLen`, so round 1 detaches an `.rdata`
 literal onto an owned buffer and frees NOTHING (there was no owed allocation), leaving `len 6, cap 12`;
 round 2 needs exactly 12, `12 < 12` is false, so it appends IN PLACE and frees nothing either. Round 3 is
-the first whose owed base is the record's own buffer. ⇒ a two-round case — this one as ported, and
-`string-type-2.md`'s one-round `string-append-self` — cannot fail on the bug either of them describes.
+the first whose owed base is the record's own buffer. ⇒ a case of one or two rounds, such as
+`string-type-2.md`'s one-round `string-append-self`, cannot fail on this hazard.
 The third round is what makes this case pin its own claim.
 ```maxon
 function main() returns ExitCode

@@ -109,9 +109,9 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: crlf-iterates-once -->
 ### CR LF is ONE cluster when iterated, as well as when counted
 
-GB3 joins CR and LF. The reference compilers disagree with themselves here — `count()` answers 1 and
-`for c in s` answers 2, because their iterator takes an ASCII shortcut that never consults GB3 — so
-the compiler routes both through the real scan and this case pins that they agree.
+GB3 joins CR and LF. An iterator taking an ASCII shortcut that never consults GB3 would answer 2 for
+`for c in s` while `count()` answers 1, so both go through the real scan and this case pins that they
+agree.
 
 ```maxon
 function main() returns ExitCode
@@ -325,8 +325,8 @@ end 'main'
 ### A `returns Character` hands ownership to the caller, which drops it
 
 A Character crossing a return is a heap record the callee moves out, so the CALLER becomes its sole
-owner. Nothing in the corpus reached that path before this case: sabotaging the adoption test
-(`valueIsManagedHeap`) left the whole suite green, which is what identified the hole.
+owner. This case is the one that reaches the caller's adoption test (`valueIsManagedHeap`) for a
+Character.
 
 ```maxon
 function litOnly() returns Character
@@ -356,8 +356,8 @@ end 'main'
 ### Assigning the trip's cluster to an outer `var` MOVES it
 
 `found = c` must move the minted cluster into `found` — dropping whatever `found` held — not copy it.
-Before the element carried its owned-heap provenance, the reassignment saw a borrow, promoted a COPY
-(a second allocation per trip) and left the original with no owner: exit 101.
+The element carries its owned-heap provenance; a reassignment that saw a borrow would promote a COPY
+(a second allocation per trip) and leave the original with no owner: exit 101.
 
 ```maxon
 function reassignInLoop(s String) returns Integer
@@ -406,7 +406,7 @@ t=300
 
 A `var`'s managed initializer is promoted to an owned copy at its declaration, and the copy is built
 by the interpolation encoder — whose result is a String. Keeping the source's type is what makes the
-next line legal; before it did, `found` was typed `String` and the assignment was E3005.
+next line legal; typed `String`, `found` would make the assignment E3005.
 
 ```maxon
 function main() returns ExitCode
@@ -428,11 +428,9 @@ end 'main'
 <!-- test: character-literal-adopts-the-character-type -->
 ### A character literal in a Character-expecting position IS a Character
 
-Every character literal IS a `Character` (A5m-ab), so no position has to ask for one: `c == 'a'` inside
+Every character literal IS a `Character`, so no position has to ask for one: `c == 'a'` inside
 `for c in s`, `found = 'z'` into a `Character` var and `return 'a'` from `returns Character` are all the
-literal's own type meeting itself. The case predates that ruling — it was written when a one-byte literal
-was an `int` and each of these positions had to make the literal ADOPT the type — and it is kept exactly
-as it was, because what it measures is the behaviour and not the route to it.
+literal's own type meeting itself. What the case measures is the behaviour and not the route to it.
 
 ```maxon
 function firstAscii() returns Character
@@ -477,11 +475,9 @@ end 'main'
 <!-- test: an-int-position-keeps-its-integer-literal -->
 ### A character literal meeting an `int` is still an int
 
-Its title survives the flip and its behaviour is unchanged, but the direction of the rule is now the
-opposite one: the literal is a `Character` and the INTEGER position converts it to its codepoint
-(`Parser.integerizedOperand`), where before the position had to be a Character one for anything to happen
-at all. What must not move is the ANSWER, and `char-literal-to-int.md`'s codepoint arithmetic pins the
-rest of it.
+The literal is a `Character` and the INTEGER position converts it to its codepoint
+(`Parser.integerizedOperand`). What must not move is the ANSWER, and `char-literal-to-int.md`'s codepoint
+arithmetic pins the rest of it.
 
 ```maxon
 function main() returns ExitCode
@@ -535,9 +531,9 @@ end 'main'
 ### `for c in s` locks `s`, exactly as the array form locks its array
 
 The loop evaluates its source ONCE into the preheader and re-reads `length@8` / `buffer@0` off that
-record every trip. Rebinding the variable inside the body decrefs the record the loop is still
-walking — it compiled clean and faulted with **0xC0000005** before the String form took the same
-`lockIterationSource` the array form has always taken. The runnable oracle reports E2013 here too.
+record every trip. Rebinding the variable inside the body would decref the record the loop is still
+walking, and the next trip's read would fault (**0xC0000005**) — so the String form takes the same
+`lockIterationSource` the array form takes.
 
 ```maxon
 function main() returns ExitCode
@@ -560,8 +556,7 @@ error E2013: specs/fragments/character-ownership/iterating-a-string-locks-its-so
 <!-- test: mutating-a-string-being-iterated-is-refused -->
 ### A method that mutates the iterated String is refused too
 
-The other half of the same lock, and it is the half the missing lock was believed to buy. The oracle
-refuses this program with **E3019**, so keeping it legal was a divergence, not a feature.
+The other half of the same lock: a mutating method would change the record the loop re-reads every trip.
 
 ```maxon
 function main() returns ExitCode
@@ -585,9 +580,9 @@ error E3019: specs/fragments/character-ownership/mutating-a-string-being-iterate
 ### An `Array with Character` accepts a literal, exactly as an `Array with String` does
 
 A move into durable storage picks its protocol off the element's RECORD, not off its type: a borrowed
-byte record is COPIED into a fresh owned one. Asked as `tagIsText`, a Character element took the
-aggregate arm and `a.push('é')` was refused as *"a struct/union has no `clone`"* — on a value whose
-clone is `__str_clone`, and while the identical literal into a struct FIELD was accepted.
+byte record is COPIED into a fresh owned one. Asked as `tagIsText`, a Character element would take the
+aggregate arm and `a.push('é')` would be refused as *"a struct/union has no `clone`"* — on a value whose
+clone is `__str_clone`, and while the identical literal into a struct FIELD is accepted.
 
 ```maxon
 typealias CharArray = Array with Character
@@ -624,10 +619,9 @@ typealias Integer = int(i64.min to i64.max)
 ### A ONE-BYTE character literal adopts `Character` at an array element too
 
 `push` / `set` / `insert` take whatever the element slot declares, and a one-byte literal must not be a
-different KIND of thing from a wider one. It nearly was: under the width rule that made `'e'` an `int` and
-`'é'` a `Character`, `a.push('e')` was refused as *"cannot assign 'int' … of type 'Character'"* on a
-program the oracle runs, and the cure was an adoption door asked before the slot's type was compared. Since
-A5m-ab there is no width rule and no adoption to do — but the case is what would catch its return.
+different KIND of thing from a wider one. There is no width rule: `'e'` and `'é'` are both a `Character`,
+so `a.push('e')` needs no adoption before the slot's type is compared — and a width rule that made `'e'`
+an `int` would refuse it as *"cannot assign 'int' … of type 'Character'"*, which this case catches.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -657,8 +651,7 @@ end 'main'
 ### `panic` takes a string literal, and a Character is not one
 
 The near-twin of `print-takes-a-string-not-a-character`. ⚠ **The two doors ask DIFFERENT questions and
-this case no longer pins `tagIsText`** — `print` does (and that case still carries the whole
-thirteen-site sabotage argument), but `panic`'s argument must be a string **literal**, not merely a
+this case does not pin `tagIsText`** — `print` does, but `panic`'s argument must be a string **literal**, not merely a
 value of string type, because its message is baked into `.rdata` at parse time along with the file and
 line the runtime prints. A `'中'` is a character-literal token, so it is refused at the literal door
 before any type tag is consulted — which is why the message names the rule that actually rejected it.
@@ -676,7 +669,7 @@ error E3005: specs/fragments/character-ownership/panic-takes-a-string-not-a-char
 <!-- test: an-array-literal-element-is-not-a-character -->
 ### An array literal infers no element type from a Character
 
-The third type-side site sabotage left green, and the one whose wrong answer is SILENT: with
+A type-side site of `tagIsText`, and the one whose wrong answer is SILENT: with
 `tagIsText` answering for a Character, `['é']` infers `Array with String` and stores Characters in it.
 
 ```maxon
@@ -693,10 +686,9 @@ error E2015: specs/fragments/character-ownership/an-array-literal-element-is-not
 <!-- test: a-single-byte-literal-adopts-on-the-left-too -->
 ### The LEFT operand's literal is judged against the RIGHT one
 
-A one-word transposition — the left operand asking its own tag instead of the other side's — left the whole
-suite at **2113/0** when this was written, and the asymmetry it hides is still exactly as reachable after
-A5m-ab: `integerizedOperand` is asked of both operands, each against what the OTHER is, and a left operand
-compared with itself would answer about nothing.
+A one-word transposition — the left operand asking its own tag instead of the other side's — leaves every
+other case green: `integerizedOperand` is asked of both operands, each against what the OTHER is, and a
+left operand compared with itself would answer about nothing.
 
 ```maxon
 function main() returns ExitCode
@@ -727,10 +719,10 @@ end 'main'
 ### `try 'A'.asciiValue()` is a call, not a block-form `try`
 
 A block LABEL and a character literal are the same `TokenKind.charLiteral`; only grammatical position tells
-them apart, and `tryOpensBlockAt` used to claim the two forms were disjoint on the token alone because *"no
-call can begin with a charLiteral"*. A character literal with methods is exactly such a call, and the claim
-became false: measured, this program was **E3059**, *"a block-form `try 'label' … end` groups statements and
-yields no value"* — a diagnostic about a construct it does not contain. The disambiguator is the `.`: a block
+them apart. The two forms are NOT disjoint on the token alone: a character literal with methods is a call
+that begins with a charLiteral, and reading this program as a block-form `try` reports **E3059**, *"a
+block-form `try 'label' … end` groups statements and yields no value"* — a diagnostic about a construct it
+does not contain. `tryOpensBlockAt`'s disambiguator is the `.`: a block
 label is always followed by a statement, so the lexer emits a `newline` behind it and never a dot.
 
 ```maxon
@@ -750,9 +742,8 @@ end 'main'
 <!-- test: a-character-literal-fills-a-character-struct-field -->
 ### A character literal at a struct-literal field
 
-`Self{ch: 'e'}` was `E3005 … cannot assign 'int' to variable 'Cell.ch' of type 'Character'` while the oracle
-compiled and ran it (`PLAN.md`'s roster entry). It needs no roster entry now: the literal IS a `Character`,
-so the field and the value are the same type without anything being asked.
+`Self{ch: 'e'}` compiles and runs: the literal IS a `Character`, so the field and the value are the same
+type without anything being asked.
 
 ```maxon
 type Cell
@@ -800,9 +791,8 @@ error E3005: specs/fragments/character-ownership/a-character-binding-is-never-re
 ### A top-level `let` cannot hold a character
 
 A module-scope binding folds to a compile-time constant and a `Character` is a heap-shaped record, so there
-is nothing for the constant evaluator to fold — whatever the character's byte width. The one-byte case used
-to fold to its byte, which it could only do while the literal was an `int`. Both reference compilers refuse
-it under the same code and the same sentence.
+is nothing for the constant evaluator to fold — whatever the character's byte width, the one-byte case
+included.
 
 ```maxon
 let DASH = '-'
@@ -847,8 +837,8 @@ abcde 294
 ### The conversion is to the CODEPOINT, not to a byte
 
 `'é'` is two bytes and one codepoint, and an integer position wants the codepoint: 233, which is what the
-oracle compares against too. It is what makes the rule a statement about characters rather than about the
-one-byte case that happened to be an `int` before A5m-ab.
+program compares against. It is what makes the rule a statement about characters rather than about the
+one-byte case.
 
 ```maxon
 function main() returns ExitCode
@@ -895,9 +885,8 @@ error E3005: specs/fragments/character-ownership/a-cluster-has-no-integer-readin
 <!-- test: an-ascii-array-literal-is-a-character-array-too -->
 ### `['a', 'b']` infers the same element type `['é', 'ö']` does
 
-The width rule made these two literals different kinds of array; they are one kind now, and the compiler refuses a
-`Character` array in both. The case exists because the refusal moved: `['a', 'b']` used to be an
-`Array with integer` and compiled.
+The two literals are one kind of array, and the compiler refuses a `Character` array in both — a one-byte
+literal array is not an `Array with integer`.
 
 ```maxon
 function main() returns ExitCode

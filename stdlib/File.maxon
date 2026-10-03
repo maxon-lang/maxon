@@ -3,21 +3,73 @@
 /// Error for file read operations
 public enum FileReadError implements Error
 	notFound
+	accessDenied
+	busy
+	failed
+
+	public function failure() returns FileFailure
+		return match self 'cause'
+			notFound gives FileFailure.notFound
+			accessDenied gives FileFailure.accessDenied
+			busy gives FileFailure.busy
+			failed gives FileFailure.failed
+		end 'cause'
+	end 'failure'
 end 'FileReadError'
 
 /// Error for file write operations
 public enum FileWriteError implements Error
 	failed
+	notFound
+	accessDenied
+	alreadyExists
+	busy
+	partialFileLeft  // `createText` failed to write and could not delete the file it had created
+
+	public function failure() returns FileFailure
+		return match self 'cause'
+			failed gives FileFailure.failed
+			notFound gives FileFailure.notFound
+			accessDenied gives FileFailure.accessDenied
+			alreadyExists gives FileFailure.alreadyExists
+			busy gives FileFailure.busy
+			partialFileLeft gives FileFailure.failed
+		end 'cause'
+	end 'failure'
 end 'FileWriteError'
 
 /// Error for file delete operations
 public enum FileDeleteError implements Error
 	notFound
+	accessDenied
+	busy
+	failed
+
+	public function failure() returns FileFailure
+		return match self 'cause'
+			notFound gives FileFailure.notFound
+			accessDenied gives FileFailure.accessDenied
+			busy gives FileFailure.busy
+			failed gives FileFailure.failed
+		end 'cause'
+	end 'failure'
 end 'FileDeleteError'
 
 /// Error for file rename operations
 public enum FileRenameError implements Error
 	failed
+	notFound
+	accessDenied
+	busy
+
+	public function failure() returns FileFailure
+		return match self 'cause'
+			failed gives FileFailure.failed
+			notFound gives FileFailure.notFound
+			accessDenied gives FileFailure.accessDenied
+			busy gives FileFailure.busy
+		end 'cause'
+	end 'failure'
 end 'FileRenameError'
 
 /// A size in bytes, and a moment in whole Unix seconds. Both come out of `__ManagedFile.statField`,
@@ -30,6 +82,18 @@ public typealias Timestamp = int(0 to u64.max)
 /// Error for file info operations
 public enum FileInfoError implements Error
 	notFound
+	accessDenied
+	busy
+	failed
+
+	public function failure() returns FileFailure
+		return match self 'cause'
+			notFound gives FileFailure.notFound
+			accessDenied gives FileFailure.accessDenied
+			busy gives FileFailure.busy
+			failed gives FileFailure.failed
+		end 'cause'
+	end 'failure'
 end 'FileInfoError'
 
 /// Metadata about a file
@@ -54,37 +118,52 @@ public enum FilePermission
 	executable  // 0755 - executable permissions (Unix)
 end 'FilePermission'
 
+let ReadChunkBytes = 4096 as FileSize
+
 /// A file handle opened for reading.
 type FileReader
 	let file as __ManagedFile
 
 	/// Open file for reading, throwing if not found
 	static function open(path String) returns FileReader throws FileReadError
-		let result = try __ManagedFile.openRead(path.addressableBytes()) otherwise 'notFound'
-			throw FileReadError.notFound
-		end 'notFound'
+		let result = try __ManagedFile.openRead(path.addressableBytes()) otherwise (e) 'openFailed'
+			throw readFailureOf(e)
+		end 'openFailed'
 
 		return FileReader{file: result}
 	end 'open'
 
 	/// Read entire file into managed memory with extra bytes for null terminator etc.
+	/// It reads until a read returns nothing, past `size()`: a Linux `/proc` file reports a size of 0
+	/// and still holds text (`specs/file-io.md` pins this).
 	function readAll(extraBytes FileSize) returns __ManagedMemory throws FileReadError
-		let size = try file.size() otherwise 'sizeErr'
-			throw FileReadError.notFound
-		end 'sizeErr'
+		let size = try file.size() otherwise (e) 'sizeFailed'
+			throw readFailureOf(e)
+		end 'sizeFailed'
 
-		var managed = try __ManagedMemory.create(size + extraBytes, 1) otherwise 'createErr'
-			panic("File.readAll: create — size+extraBytes >= 0 guaranteed")
+		var managed = try __ManagedMemory.create(size + ReadChunkBytes, 1) otherwise 'createErr'
+			panic("File.readAll: create — size + ReadChunkBytes is positive")
 		end 'createErr'
 
-		let bytesRead = try file.read(managed, size) otherwise 'readErr'
-			throw FileReadError.notFound
-		end 'readErr'
+		while true 'eachChunk'
+			if managed.capacity() - managed.length() < ReadChunkBytes 'roomForAChunk'
+				try managed.grow(managed.length() + ReadChunkBytes) otherwise panic("File.readAll: grow — the new capacity is above the current one")
+			end 'roomForAChunk'
+
+			let got = try file.readAppending(managed, managed.capacity() - managed.length()) otherwise (e) 'readFailed'
+				throw readFailureOf(e)
+			end 'readFailed'
+
+			if got == 0 'endOfFile'
+				break
+			end 'endOfFile'
+		end 'eachChunk'
 
 		file.close()
-		try managed.setLength(bytesRead) otherwise 'lenErr'
-			panic("File.readAll: setLength — bytesRead from file.read, always <= size allocated")
-		end 'lenErr'
+
+		if managed.capacity() < managed.length() + extraBytes 'roomForTheExtra'
+			try managed.grow(managed.length() + extraBytes) otherwise panic("File.readAll: grow — the new capacity is above the current one")
+		end 'roomForTheExtra'
 
 		return managed
 	end 'readAll'
@@ -96,25 +175,39 @@ type FileWriter
 
 	/// Open a file for writing with the given permission mode, throwing on failure
 	static function open(path __ManagedMemory, mode FilePermission) returns FileWriter throws FileWriteError
-		let fileHandle = match mode 'perm'
-			executable gives try __ManagedFile.openWriteExecutable(path) otherwise throw FileWriteError.failed
-			normal gives try __ManagedFile.openWrite(path) otherwise throw FileWriteError.failed
-		end 'perm'
+		let fileHandle = try openForWriting(path, mode: mode) otherwise (e) 'openFailed'
+			throw writeFailureOf(e)
+		end 'openFailed'
 
 		return FileWriter{file: fileHandle}
 	end 'open'
 
+	static function openNew(path __ManagedMemory) returns FileWriter throws FileWriteError
+		let fileHandle = try __ManagedFile.openCreateNew(path) otherwise (e) 'createFailed'
+			throw writeFailureOf(e)
+		end 'createFailed'
+
+		return FileWriter{file: fileHandle}
+	end 'openNew'
+
 	/// Write managed memory content and close the file. Closes the file on both
-	/// success and error paths; callers propagate write failures as FileWriteError.failed.
+	/// success and error paths.
 	function writeAll(managed __ManagedMemory) throws FileWriteError
-		try file.write(managed) otherwise 'err'
+		try file.write(managed) otherwise (e) 'err'
 			file.close()
-			throw FileWriteError.failed
+			throw writeFailureOf(e)
 		end 'err'
 
 		file.close()
 	end 'writeAll'
 end 'FileWriter'
+
+function openForWriting(path __ManagedMemory, mode FilePermission) returns __ManagedFile throws __ManagedFileError
+	return match mode 'perm'
+		executable gives try __ManagedFile.openWriteExecutable(path)
+		normal gives try __ManagedFile.openWrite(path)
+	end 'perm'
+end 'openForWriting'
 
 /// Static file operations.
 public type File
@@ -154,6 +247,25 @@ public type File
 		try writer.writeAll(content.addressableBytes())
 	end 'writeText'
 
+	/// Create a new file holding `content`. Throws `alreadyExists` when the path is already there. A
+	/// failed write deletes the file it created and throws the write's error; `partialFileLeft` when
+	/// that delete fails too.
+	public static function createText(path FilePath, content String) throws FileWriteError
+		var writer = try FileWriter.openNew(path.path.addressableBytes())
+
+		try writer.writeAll(content.addressableBytes()) otherwise (e) 'unwritten'
+			try File.delete(path) otherwise (cleanup) 'kept'
+				if cleanup == FileDeleteError.notFound 'nothingLeft'
+					throw e
+				end 'nothingLeft'
+
+				throw FileWriteError.partialFileLeft
+			end 'kept'
+
+			throw e
+		end 'unwritten'
+	end 'createText'
+
 	/// Write binary content to a file
 	public static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
 		var writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
@@ -168,8 +280,8 @@ public type File
 
 	/// Delete a file at the given path
 	public static function delete(path FilePath) throws FileDeleteError
-		try __ManagedFile.delete(path.path.addressableBytes()) otherwise 'failed'
-			throw FileDeleteError.notFound
+		try __ManagedFile.delete(path.path.addressableBytes()) otherwise (e) 'failed'
+			throw deleteFailureOf(e)
 		end 'failed'
 	end 'delete'
 
@@ -178,16 +290,16 @@ public type File
 	/// destination never observes a partially written file. Used to publish
 	/// freshly written files (e.g. cache entries) without a torn-read window.
 	public static function rename(from FilePath, to FilePath) throws FileRenameError
-		try __ManagedFile.rename(from.path.addressableBytes(), to.path.addressableBytes()) otherwise 'failed'
-			throw FileRenameError.failed
+		try __ManagedFile.rename(from.path.addressableBytes(), to.path.addressableBytes()) otherwise (e) 'failed'
+			throw renameFailureOf(e)
 		end 'failed'
 	end 'rename'
 
 	/// Get file metadata
 	public static function info(path FilePath) returns FileInfo throws FileInfoError
-		let statResult = try __ManagedFile.stat(path.path.addressableBytes()) otherwise 'notFound'
-			throw FileInfoError.notFound
-		end 'notFound'
+		let statResult = try __ManagedFile.stat(path.path.addressableBytes()) otherwise (e) 'statFailed'
+			throw infoFailureOf(e)
+		end 'statFailed'
 
 		let fileSize = __ManagedFile.statField(statResult, 0) as FileSize
 		let mtime = __ManagedFile.statField(statResult, 1) as Timestamp
@@ -201,3 +313,81 @@ public type File
 		return FileInfo.create(fileSize, modifiedTime: mtime, createdTime: ctime, accessedTime: atime, isDirectory: isDir, isReadOnly: isRo)
 	end 'info'
 end 'File'
+
+/// Why a file operation failed, whichever operation it was: every `File` error answers it through
+/// `failure()`, so a caller can judge them all in one place.
+public enum FileFailure
+	notFound
+	accessDenied
+	alreadyExists
+	busy
+	failed
+end 'FileFailure'
+
+function fileFailureOf(cause __ManagedFileError) returns FileFailure
+	return match cause 'cause'
+		notFound gives FileFailure.notFound
+		accessDenied gives FileFailure.accessDenied
+		alreadyExists gives FileFailure.alreadyExists
+		busy gives FileFailure.busy
+		openFailed or
+			readFailed or
+			writeFailed or
+			sizeFailed or
+			deleteFailed or
+			statFailed or
+			invalidStatBuffer or
+			invalidStatIndex or
+			closed gives FileFailure.failed
+	end 'cause'
+end 'fileFailureOf'
+
+function readFailureOf(cause __ManagedFileError) returns FileReadError
+	return match fileFailureOf(cause) 'failure'
+		notFound gives FileReadError.notFound
+		accessDenied gives FileReadError.accessDenied
+		busy gives FileReadError.busy
+		alreadyExists or
+			failed gives FileReadError.failed
+	end 'failure'
+end 'readFailureOf'
+
+function writeFailureOf(cause __ManagedFileError) returns FileWriteError
+	return match fileFailureOf(cause) 'failure'
+		notFound gives FileWriteError.notFound
+		accessDenied gives FileWriteError.accessDenied
+		alreadyExists gives FileWriteError.alreadyExists
+		busy gives FileWriteError.busy
+		failed gives FileWriteError.failed
+	end 'failure'
+end 'writeFailureOf'
+
+function deleteFailureOf(cause __ManagedFileError) returns FileDeleteError
+	return match fileFailureOf(cause) 'failure'
+		notFound gives FileDeleteError.notFound
+		accessDenied gives FileDeleteError.accessDenied
+		busy gives FileDeleteError.busy
+		alreadyExists or
+			failed gives FileDeleteError.failed
+	end 'failure'
+end 'deleteFailureOf'
+
+function renameFailureOf(cause __ManagedFileError) returns FileRenameError
+	return match fileFailureOf(cause) 'failure'
+		notFound gives FileRenameError.notFound
+		accessDenied gives FileRenameError.accessDenied
+		busy gives FileRenameError.busy
+		alreadyExists or
+			failed gives FileRenameError.failed
+	end 'failure'
+end 'renameFailureOf'
+
+function infoFailureOf(cause __ManagedFileError) returns FileInfoError
+	return match fileFailureOf(cause) 'failure'
+		notFound gives FileInfoError.notFound
+		accessDenied gives FileInfoError.accessDenied
+		busy gives FileInfoError.busy
+		alreadyExists or
+			failed gives FileInfoError.failed
+	end 'failure'
+end 'infoFailureOf'

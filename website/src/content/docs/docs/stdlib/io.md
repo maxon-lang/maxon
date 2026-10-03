@@ -12,9 +12,10 @@ sidebar:
 
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `File.readText(path FilePath)` | `String` | `FileReadError` | The whole file as text. |
-| `File.readBinary(path FilePath)` | `ByteArray` | `FileReadError` | The whole file as bytes. |
+| `File.readText(path FilePath)` | `String` | `FileReadError` | The whole file as text, read to its end — bytes appended while it is read are included. |
+| `File.readBinary(path FilePath)` | `ByteArray` | `FileReadError` | The whole file as bytes, read the same way. |
 | `File.writeText(path FilePath, content String, mode FilePermission = .normal)` | — | `FileWriteError` | Create or truncate, then write. |
+| `File.createText(path FilePath, content String)` | — | `FileWriteError` | Create a file that must not exist yet, then write. An existing file is `alreadyExists` and is left as it was. A failed write deletes the new file and throws the write's error; when that delete fails too, it throws `partialFileLeft`. |
 | `File.writeBinary(path FilePath, content ByteArray, mode FilePermission = .normal)` | — | `FileWriteError` | Create or truncate, then write. |
 | `File.exists(path FilePath)` | `bool` | — | True when a file exists at `path`. |
 | `File.delete(path FilePath)` | — | `FileDeleteError` | Delete a file. |
@@ -27,7 +28,6 @@ sidebar:
 |------|------------|
 | `FileSize` | `int(0 to u64.max)` — bytes |
 | `Timestamp` | `int(0 to u64.max)` — whole seconds since the Unix epoch |
-| `Byte` | `int(0 to u8.max)` |
 | `ByteArray` | `Array with Byte` |
 
 `FileInfo` has read-only fields and a factory, `FileInfo.create(size, modifiedTime:, createdTime:,
@@ -44,13 +44,26 @@ accessedTime:, isDirectory:, isReadOnly:)`:
 
 `FilePermission` is `normal` (0666) or `executable` (0755 on Unix).
 
-| Error enum | Case | Thrown when |
-|------------|------|-------------|
-| `FileReadError` | `notFound` | The file cannot be opened or read |
-| `FileWriteError` | `failed` | The file cannot be created or written |
-| `FileDeleteError` | `notFound` | The file cannot be deleted |
-| `FileRenameError` | `failed` | The rename fails |
-| `FileInfoError` | `notFound` | The path does not exist |
+Each operation throws its own error enum. They share these cases:
+
+| Case | Thrown when |
+|------|-------------|
+| `notFound` | The file, or a directory on its path, does not exist |
+| `accessDenied` | The operating system refuses access to the path |
+| `busy` | Another process holds the file open in a way that excludes this operation |
+| `failed` | Any other failure |
+
+| Error enum | Cases |
+|------------|-------|
+| `FileReadError` | `notFound`, `accessDenied`, `busy`, `failed` |
+| `FileWriteError` | `failed`, `notFound`, `accessDenied`, `alreadyExists`, `busy`, `partialFileLeft` |
+| `FileDeleteError` | `notFound`, `accessDenied`, `busy`, `failed` |
+| `FileRenameError` | `failed`, `notFound`, `accessDenied`, `busy` |
+| `FileInfoError` | `notFound`, `accessDenied`, `busy`, `failed` |
+
+`alreadyExists` and `partialFileLeft` come only from `File.createText`. Every one of these enums has
+`failure()`, which returns the cause as a `FileFailure` — `notFound`, `accessDenied`, `alreadyExists`, `busy`
+or `failed` (`partialFileLeft` gives `failed`) — so one `match` handles the causes of any file operation.
 
 ```maxon
 function main() returns ExitCode
@@ -159,7 +172,7 @@ Output: `main.maxon main .maxon src`, `true true false true`, `main.txt`.
 
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `Directory.list(path FilePath)` | `Array with FilePath` | `DirectoryListError` | The entries of a directory, each joined onto `path`. |
+| `Directory.list(path FilePath)` | `FilePathArray` | `DirectoryListError` | The entries of a directory, each joined onto `path`. |
 | `Directory.exists(path FilePath)` | `bool` | — | True when `path` is an existing directory. |
 | `Directory.isDirectory(path FilePath)` | `bool` | — | The same as `exists`. |
 | `Directory.create(path FilePath)` | `bool` | — | Create the directory and any missing parents. True when the directory exists afterwards. |
@@ -682,6 +695,7 @@ union SubprocessError implements Error
 	ioFailed(reason String)
 	timeout(elapsedMs DurationMs, stdout String, stderr String)
 	inputTooLarge
+	endOfStream
 end 'SubprocessError'
 ```
 
@@ -694,8 +708,26 @@ fails with a not-found code; its reason carries the OS error number (`os error 5
 text is usually the only evidence of why it hung. Both fields are empty when the layer that threw was not
 collecting output, which is `StreamingSubprocess.waitWithTimeout`.
 
+`endOfStream` is what a `StreamingSubprocess` line reader throws when the stream it reads has ended.
+
 `displayReason()` renders any case as one line, such as
-`timed out after 5000ms, and the kill was sent to the child's whole process tree`.
+`timed out after 5000ms, and the kill was sent to the child's whole process tree`. `timedOut()` is true for
+`timeout` and `endedTheStream()` for `endOfStream`, so a caller can test for either without a `match`.
+
+`SpawnPreparation` — `none`, `standardStream`, `workingDirectory` — names the step of a spawn the runtime
+records a failure at; a not-found code at `none` is what makes a failure `executableNotFound`.
+
+### RunProcessError
+
+```maxon
+enum RunProcessError implements Error
+	spawnFailed
+end 'RunProcessError'
+```
+
+The error the runtime's `__Builtins.runProcess` intrinsic throws when its command names nothing the host
+can start. An `otherwise (e)` handler on that call can `match` on `spawnFailed`. `Subprocess` reports its own
+failures as `SubprocessError`.
 
 ### StreamingSubprocess
 
@@ -710,7 +742,7 @@ request after request. A read parks the calling green thread until data arrives.
 | `StreamingSubprocess.spawnTraceable(executable, arguments:, workingDirectory:, environment Environment, traced bool)` | `StreamingSubprocess` | `SubprocessError` | As `spawnWithEnvironment`; with `traced`, the child is created for a debugger: on Windows and Linux this process becomes its debugger, and on macOS the child is created suspended, for a debugger to attach to by its `processId()`. |
 | `processId()` | `Pid` | `SubprocessError` | The child's operating-system process id. Throws once the handle is released. |
 | `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline. Throws on a broken pipe. |
-| `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF). `""` means end of stream. Lines over 1 MiB arrive in pieces. |
+| `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF); `""` is a blank line. Throws `endOfStream` when the stream has ended. Lines over 1 MiB arrive in pieces. |
 | `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | With an explicit per-call cap. |
 | `readStdoutBytes(count)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; nothing is stripped. For length-framed protocols. Shares a buffer with the line readers. |
 | `readStderrLine()` | `String` | `SubprocessError` | As `readStdoutLine`, for stderr. |
@@ -755,7 +787,11 @@ function main() returns ExitCode
 		return 1
 	end 'spawn'
 
-	let line = try child.readStdoutLine() otherwise ""
+	let line = try child.readStdoutLine() otherwise (e) 'read'
+		print("{e.displayReason()}\n")
+		return 1
+	end 'read'
+
 	let code = try child.wait() otherwise -1
 
 	let state = match child.pollExit() 'poll'

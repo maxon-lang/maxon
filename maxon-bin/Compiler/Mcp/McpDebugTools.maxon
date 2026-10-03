@@ -27,6 +27,7 @@ let SelectAction = "select"
 let ClearSelectionAction = "clear"
 let ParkAction = "park"
 let ResumeAction = "resume"
+let BreakConditionArgument = "condition"
 let ThreadBacktraceAction = "backtrace"
 
 module let WordListSeparator = ", "
@@ -55,23 +56,22 @@ export function executeDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String,
 	end 'start'
 
 	return match debug.hold 'live'
-		empty gives toolErrorText(reqDoc, idNode: idNode, message: NoSessionMessage, repoRoot: "")
+		empty gives toolErrorText(reqDoc, idNode: idNode, message: NoSessionMessage, repoRoot: ActingTree.host)
 		held(session) gives runDebugTool(reqDoc, idNode: idNode, name: name, args: args, session: session, debug: debug)
 	end 'live'
 end 'executeDebugTool'
 
 function startDebugSession(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, debug DebugSessionSlot) returns String
 	match debugStartReadOf(reqDoc, args: args) 'asked'
-		refused(message) then return toolErrorText(reqDoc, idNode: idNode, message: message, repoRoot: "")
+		refused(message) then return toolErrorText(reqDoc, idNode: idNode, message: message, repoRoot: ActingTree.host)
 		read(program, argument, targetEnv, stopTimeoutMs) then return builtAndLaunched(reqDoc, idNode: idNode, args: args, program: program, argument: argument, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, exePath: exePath, debug: debug)
 	end 'asked'
 end 'startDebugSession'
 
 function debugStartReadOf(reqDoc JsonDoc, args OptionalNode) returns DebugStartRead
-	let executableArg = getOptionalStringArg(reqDoc, args: args, key: DebugProgramArgument.executable.name, defaultVal: "")
-	let sourceArg = getOptionalStringArg(reqDoc, args: args, key: DebugProgramArgument.source.name, defaultVal: "")
+	let hasSource = statedTextArg(reqDoc, args: args, key: DebugProgramArgument.source.name).isStated()
 
-	if executableArg.isEmpty() == sourceArg.isEmpty() 'neitherOrBoth'
+	if statedTextArg(reqDoc, args: args, key: DebugProgramArgument.executable.name).isStated() == hasSource 'neitherOrBoth'
 		return DebugStartRead.refused("`{DebugStartToolName}` takes either `{DebugProgramArgument.executable.name}` or `{DebugProgramArgument.source.name}`, and exactly one of them.")
 	end 'neitherOrBoth'
 
@@ -84,8 +84,8 @@ function debugStartReadOf(reqDoc JsonDoc, args OptionalNode) returns DebugStartR
 		end 'read'
 	end 'eachVariable'
 
-	let program = executableArg if sourceArg.isEmpty() else sourceArg
-	let argument = DebugProgramArgument.executable if sourceArg.isEmpty() else DebugProgramArgument.source
+	let argument = DebugProgramArgument.source if hasSource else DebugProgramArgument.executable
+	let program = try statedStringArg(reqDoc, args: args, key: argument.name) otherwise panic("debugStartReadOf: `{argument.name}` was just read as the one program argument stated")
 
 	if argument == DebugProgramArgument.executable 'nothingToBuild'
 		match numberAskOf(reqDoc, args: args, key: ChildTimeoutOption) 'buildBound'
@@ -104,7 +104,7 @@ function builtAndLaunched(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, 
 	let traced = getOptionalBoolArg(reqDoc, args: args, key: "trace", defaultVal: false)
 
 	return match debugProgramFor(program, compiler: exePath, traced: traced, argument: argument, timeoutMs: childTimeoutMsOf(reqDoc, args: args, unasked: CompilerChildTimeoutMs)) 'resolved'
-		failed(diagnostics) gives toolErrorText(reqDoc, idNode: idNode, message: "{DebugStartToolName}: {diagnostics}", repoRoot: "")
+		failed(diagnostics) gives toolErrorText(reqDoc, idNode: idNode, message: "{DebugStartToolName}: {diagnostics}", repoRoot: ActingTree.host)
 		ready(image) gives launchedInPlaceOfTheLive(reqDoc, idNode: idNode, args: args, image: image, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced, debug: debug)
 	end 'resolved'
 end 'builtAndLaunched'
@@ -120,7 +120,7 @@ end 'launchedInPlaceOfTheLive'
 
 function refusedStartReply(reqDoc JsonDoc, idNode JsonNodeId, message String, replaced CollectedLines) returns String
 	var doc = JsonDoc.create()
-	var payload = toolErrorPayload(doc, message: message, repoRoot: "")
+	var payload = toolErrorPayload(doc, message: message, repoRoot: ActingTree.host)
 	payload.addNode(OutputKey, node: outputArray(doc, output: replaced))
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
@@ -138,7 +138,7 @@ function runDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String, args Optio
 	end 'stop'
 
 	return match debugCommandFor(name, reqDoc: reqDoc, args: args) 'command'
-		refused(reason) gives toolErrorText(reqDoc, idNode: idNode, message: reason, repoRoot: "")
+		refused(reason) gives toolErrorText(reqDoc, idNode: idNode, message: reason, repoRoot: ActingTree.host)
 		command(command) gives ranDebugCommand(reqDoc, idNode: idNode, replies: session.conversation.perform(command), session: session)
 	end 'command'
 end 'runDebugTool'
@@ -155,11 +155,11 @@ end 'stopDebugSession'
 
 function debugCommandFor(name String, reqDoc JsonDoc, args OptionalNode) returns DebugToolCommand
 	if name.equals(DebugBreakToolName) 'arm'
-		return breakpointToolCommand(reqDoc, args: args, missing: "`{DebugBreakToolName}` needs a `target`: {DebugBreakTargetSpellings}.", condition: getOptionalStringArg(reqDoc, args: args, key: "condition", defaultVal: ""), arming: true)
+		return breakpointToolCommand(reqDoc, args: args, missing: "`{DebugBreakToolName}` needs a `target`: {DebugBreakTargetSpellings}.", action: BreakpointToolAction.arm(breakConditionArg(reqDoc, args: args)))
 	end 'arm'
 
 	if name.equals(DebugClearToolName) 'disarm'
-		return breakpointToolCommand(reqDoc, args: args, missing: "`{DebugClearToolName}` needs the `target` the breakpoint was armed on.", condition: "", arming: false)
+		return breakpointToolCommand(reqDoc, args: args, missing: "`{DebugClearToolName}` needs the `target` the breakpoint was armed on.", action: BreakpointToolAction.disarm)
 	end 'disarm'
 
 	if name.equals(DebugStepToolName) 'step'
@@ -167,11 +167,7 @@ function debugCommandFor(name String, reqDoc JsonDoc, args OptionalNode) returns
 	end 'step'
 
 	if name.equals(DebugEvalToolName) 'read'
-		let expression = getOptionalStringArg(reqDoc, args: args, key: "expression", defaultVal: "")
-
-		if expression.isEmpty() 'nothingToRead'
-			return DebugToolCommand.refused("`{DebugEvalToolName}` needs an `expression`: a local, or a dotted path through one.")
-		end 'nothingToRead'
+		let expression = try statedStringArg(reqDoc, args: args, key: "expression") otherwise return DebugToolCommand.refused("`{DebugEvalToolName}` needs an `expression`: a local, or a dotted path through one.")
 
 		return DebugToolCommand.command(DebugCommand.print(expression))
 	end 'read'
@@ -216,16 +212,29 @@ function argumentFreeCommandFor(name String) returns DebugCommand
 	panic("debugCommandFor: the roster advertises `{name}` and no arm spells its command")
 end 'argumentFreeCommandFor'
 
-function breakpointToolCommand(reqDoc JsonDoc, args OptionalNode, missing String, condition String, arming bool) returns DebugToolCommand
-	let spelling = getOptionalStringArg(reqDoc, args: args, key: BreakTargetArgument, defaultVal: "")
+union BreakpointToolAction
+	arm(condition DebugBreakCondition)
+	disarm
 
-	if spelling.isEmpty() 'noTarget'
-		return DebugToolCommand.refused(missing)
-	end 'noTarget'
+	function commandOn(target DebugBreakTarget) returns DebugCommand
+		return match self 'action'
+			arm(condition) gives DebugCommand.arm(target, condition: condition, owner: DebugBreakOwner.client)
+			disarm gives DebugCommand.disarm(target, owner: DebugBreakOwner.client)
+		end 'action'
+	end 'commandOn'
+end 'BreakpointToolAction'
+
+function breakConditionArg(reqDoc JsonDoc, args OptionalNode) returns DebugBreakCondition
+	return DebugBreakCondition.when(try statedStringArg(reqDoc, args: args, key: BreakConditionArgument) otherwise return DebugBreakCondition.unconditional)
+end 'breakConditionArg'
+
+function breakpointToolCommand(reqDoc JsonDoc, args OptionalNode, missing String, action BreakpointToolAction) returns DebugToolCommand
+	let spelling = try statedStringArg(reqDoc, args: args, key: BreakTargetArgument) otherwise return DebugToolCommand.refused(missing)
 
 	match debugBreakTargetOf(spelling) 'parsed'
 		notATarget(named) then return DebugToolCommand.refused("`target` is {DebugBreakTargetSpellings}, and `{named}` is none of them.")
-		target(target) then return DebugToolCommand.command(DebugCommand.arm(target, condition: condition, owner: DebugBreakOwner.client) if arming else DebugCommand.disarm(target, owner: DebugBreakOwner.client))
+		lineZero(named) then return DebugToolCommand.refused("`target`: {debugLineZeroReason(named)}.")
+		target(target) then return DebugToolCommand.command(action.commandOn(target))
 	end 'parsed'
 end 'breakpointToolCommand'
 
@@ -237,7 +246,7 @@ function stepToolCommand(kind String) returns DebugToolCommand
 end 'stepToolCommand'
 
 function greenThreadCommand(reqDoc JsonDoc, args OptionalNode) returns DebugToolCommand
-	let action = getOptionalStringArg(reqDoc, args: args, key: "action", defaultVal: "")
+	let action = requiredStringArg(reqDoc, args: args, key: "action")
 
 	if not debugGreenThreadActions().contains(action) 'notAnAction'
 		return DebugToolCommand.refused("`{DebugGreenThreadToolName}`'s `action` is one of {joinedWith(backQuoted(debugGreenThreadActions()), separator: WordListSeparator)}, and `{action}` is not.")
@@ -247,11 +256,7 @@ function greenThreadCommand(reqDoc JsonDoc, args OptionalNode) returns DebugTool
 		return DebugToolCommand.command(DebugCommand.greenClear)
 	end 'clearsTheSelection'
 
-	let thread = getOptionalStringArg(reqDoc, args: args, key: "thread", defaultVal: "")
-
-	if thread.isEmpty() 'noThread'
-		return DebugToolCommand.refused("`{DebugGreenThreadToolName}` with `action` `{action}` needs a `thread`: the id `{DebugThreadsToolName}` reported, or a selector.")
-	end 'noThread'
+	let thread = try statedStringArg(reqDoc, args: args, key: "thread") otherwise return DebugToolCommand.refused("`{DebugGreenThreadToolName}` with `action` `{action}` needs a `thread`: the id `{DebugThreadsToolName}` reported, or a selector.")
 
 	return DebugToolCommand.command(greenThreadCommandFor(action, thread: debugThreadSelectorOf(thread)))
 end 'greenThreadCommand'

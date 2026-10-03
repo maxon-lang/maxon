@@ -27,14 +27,14 @@ A field occupies `Project.fieldSlotCount` 8-byte slots — **one** for every dec
 but an **interface**-typed one, which takes two (the 16-byte fat pointer) — so those two
 ceilings fall at the **512th** and the **4096th** SLOT: the 512th/4096th ordinary field,
 or the 256th/2048th existential one. A struct that reaches them is not exotic — a
-generated schema binding or a flag table does — and until the instruction selector asked,
-the 4097th field's store PANICKED in the encoder:
+generated schema binding or a flag table does — and if the instruction selector did not ask,
+the 4097th field's store would PANIC in the encoder:
 
 ```
 panic: arm64 emitter: load/store offset 32768 (scaled 4096) exceeds the 12-bit unsigned field
 ```
 
-on a program x64 and wasm32 both compiled and ran. It is the same shape of defect
+on a program x64 and wasm32 both compile and run. It is the same shape of defect
 `wide-immediate-arithmetic` pins for `+` and `-`: a tier above the backend hands it a
 number sized for another target's field, and the backend has to decide per operand
 whether a form exists at all.

@@ -57,13 +57,9 @@ end 'main'
 ```
 
 <!-- test: atan2.positive-y-axis -->
-⚠ **EVERY `stdout` BLOCK IN THIS FILE IS RETRACTED TO SHORTEST ROUND-TRIP, for the reason
-`specs/sin.md` sets out at length — see that file rather than a copy here.** `/specs` rendered floats
-in a fixed-6-decimal format; The compiler prints the shortest round-trip representation by user
-ruling. It changes the rendering, not the numbers, and you can check that here without running
-anything: each old value is exactly the fixed-6-decimal rendering of the double replacing it —
-`1.570796` → `1.5707963267948966`, `3.141593` → `3.141592653589793`, `-1.570796` →
-`-1.5707963267948966`. Stated once here; the other two axis cases below carry the same retraction.
+⚠ **EVERY `stdout` BLOCK IN THIS FILE IS SHORTEST ROUND-TRIP, for the reason `specs/sin.md` sets out
+at length — see that file rather than a copy here.** The compiler prints the shortest round-trip
+representation of a double.
 ```maxon
 function main() returns ExitCode
 	// π/2 ≈ 1.5708
@@ -130,17 +126,15 @@ end 'main'
 ```
 
 <!-- test: atan2.first-quadrant -->
-⭐ **THE `stdout` BLOCK BELOW IS ADDED, AND IT IS WHY THIS TICK FOUND A REAL BUG.** `/specs` has this case
-and `atan2.third-quadrant` PRINT without asserting anything, so whatever they printed was accepted. They
-were the only two off-axis cases in the file — every other case either returns a stored `pi_half` literal
-or hands `Math.atan` a zero, which the series never sees. So the one code path with real arithmetic in it
-was the one path nothing checked, and **`Math.atan` was wrong by ~1e-2 near |z| = 1**: its 24-term Taylor
-series is the Leibniz series at z = 1, converging like 1/n. This case printed `0.7953941713587581` where
-π/4 is `0.7853981633974483`. Fixed in `stdlib/Math.maxon` by reducing the argument so nothing reaches the
-series above `tan(π/8)`; the truncation error is now far under the rounding floor and accumulated
-summation rounding leaves a few ULP.
+⭐ **THE `stdout` BLOCK BELOW IS WHAT CHECKS `Math.atan`'s ARITHMETIC.** This case and
+`atan2.third-quadrant` are the only two off-axis cases in the file — every other case either returns a
+stored `pi_half` literal or hands `Math.atan` a zero, which the series never sees. A 24-term Taylor series
+is the Leibniz series at z = 1, converging like 1/n, and is wrong by ~1e-2 near |z| = 1
+(`0.7953941713587581` where π/4 is `0.7853981633974483`). `stdlib/Math.maxon` reduces the argument so
+nothing reaches the series above `tan(π/8)`; the truncation error is far under the rounding floor and
+accumulated summation rounding leaves a few ULP.
 
-Asserting the output is the whole repair — a case that prints without a `stdout` block is not a test of
+Asserting the output is what makes this a test — a case that prints without a `stdout` block is not a test of
 what it prints.
 ```maxon
 function main() returns ExitCode
@@ -193,11 +187,10 @@ end 'main'
 ```
 
 <!-- test: atan2.signed-zero -->
-⭐ **ADDED HERE, not ported: `/specs` does not cover the sign of a zero, and four of the eight zero
-combinations were wrong until this tick.** IEEE 754 requires `atan2` to carry the sign of `y` through
-every zero case — `atan2(-0.0, x: -1.0)` is `-π`, not `+π` — and the case is easy to get wrong because
+⭐ **THE SIGN OF A ZERO, in all eight zero combinations.** IEEE 754 requires `atan2` to carry the sign of `y`
+through every zero case — `atan2(-0.0, x: -1.0)` is `-π`, not `+π` — and the case is easy to get wrong because
 **no comparison can see it**: `-0.0 == 0.0`, so `y < 0.0` and `y >= 0.0` both answer as though every
-zero were positive. `stdlib/Math.maxon` now reads the sign from the bits (`__Builtins.floatToBits`)
+zero were positive. `stdlib/Math.maxon` reads the sign from the bits (`__Builtins.floatToBits`)
 exactly once and branches on that.
 
 The rows returning a **zero** are pinned through `floatToBits` rather than printed: `+0.0` and `-0.0`

@@ -28,21 +28,20 @@ return cur                             // normal path: forward the borrow
 borrow **intrinsic** (so not reclassified via the wrapper path) — it stays
 `callReturnRc1`. On the normal path the enclosing function forwards the borrow
 and the caller acquires its own `+1` (`funcReturnsBorrow`), so nothing releases
-`cur`. On the **throw** path `cur` dies without being returned; the release side
-treated `callReturnRc1` as owning a `+1` and decref'd it there — **stripping the
+`cur`. On the **throw** path `cur` dies without being returned; a release side
+that treats `callReturnRc1` as owning a `+1` decrefs it there — **stripping the
 collection's own reference** to the element. The collection then holds a freed
 element, and its teardown element-walk double-frees it
 (`__mm_decref: over-release — refcount was already 0`).
 
-The fix makes the release side recognize a borrow-returning call result owns no
+The release side recognizes a borrow-returning call result owns no
 transferable `+1` (the release-side dual of the store-side no-`+1` recognition),
 so the throw-edge death emits no decref.
 
 This differs from a *fallible* accessor (`arr.get(i)`): its success edge already
 increfs the element, so its throw-edge decref is balanced — that shape does not
-reproduce the bug. The infallible `current()` paired with a separate fallible
-`advance()` is required. The C# oracle is immune (uniform borrow: every element
-read hands the reader its own `+1`).
+reproduce the hazard. The infallible `current()` paired with a separate fallible
+`advance()` is required.
 
 ## Tests
 

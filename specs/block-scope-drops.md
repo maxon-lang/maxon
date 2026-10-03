@@ -285,11 +285,11 @@ A local declared BEFORE a loop drops ONCE, in the block control actually leaves 
 per iteration, and not only on one arm of a branch.
 
 `scratch` outlives the `while` and is never read after it, so the function's implicit-void end owes
-its release. That drop used to be emitted into `self.currentBlock`, which after a nested `if`/`while`
-is that construct's BODY rather than the block the `retVoid` ends: the decref landed inside the loop
-and ran once per iteration — a double free that corrupts the heap — while the loop's exit path got
-none. `emitScopeDrops` now takes the destination block as a parameter, so every caller names the
-block it means and there is no implicit one left to go stale.
+its release. After a nested `if`/`while`, `self.currentBlock` is that construct's BODY rather than
+the block the `retVoid` ends: a drop emitted there lands inside the loop and runs once per iteration —
+a double free that corrupts the heap — while the loop's exit path gets none. `emitScopeDrops` takes
+the destination block as a parameter, so every caller names the block it means and there is no
+implicit one to go stale.
 
 The exit code is `sink.count()`, so a `sink` corrupted by the double free cannot answer 3.
 ```maxon

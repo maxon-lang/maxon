@@ -1,10 +1,10 @@
-// REFCOUNT-RACE control (EC10) — the program that justified the `lock`
+// REFCOUNT-RACE control — the program that justified the `lock`
 // prefix on every retain and release in the language, and now justifies its
 // REMOVAL. Same program, three builds; the exit codes are below.
 //
 // ⭐⭐ WHY IT LIVES HERE AND NOT IN `temp/`. `MmRuntime.emitAdjustRefcount`'s
 // header cited `temp/g2/rc-global.maxon` as the measurement that made the
-// refcount read-modify-write atomic at G2. `temp/` is gitignored and is swept,
+// refcount read-modify-write atomic. `temp/` is gitignored and is swept,
 // so that file is GONE and the measurement survived only as a path in a comment
 // — which is the defect, not an accident of housekeeping. This is the program
 // rebuilt, and it is COMMITTED beside the four torture programs so the next
@@ -28,7 +28,7 @@
 // `__mm_incref`'s co-own arm on a heap record, i.e. `emitAdjustRefcount`. The
 // bag's scope-end `__managed_decref` then runs `__str_decref` over every
 // element, so one round is `chunk` increfs and `chunk` decrefs of the SAME
-// refcount word — and every task is handed the SAME String.
+// refcount word — and every task feeds it the SAME module-level String.
 //
 // ⇒ THE THREE READINGS, ALL MEASURED, **24 runs per cell** at
 //   MAXON_MAX_PROCS in {1, 2, 4, 12}. Readings 1 and 3 are the SHIPPED builds;
@@ -54,7 +54,7 @@
 // the N=4 rows show the mechanism directly: `workers=4 steals=6`, with a
 // byte-identical `aggregate=576522` on the runs that reached the leak gate.
 //
-// ⇒ Reading 3 is what SLICE 2 cashed in: `emitAdjustRefcount` is a plain
+// ⇒ Reading 3 is the shipped shape: `emitAdjustRefcount` is a plain
 // load/add/store unconditionally, and reading 2 is why that is safe rather than
 // merely untested. The pin removes the second party rather than the race — with
 // `async` creating a coroutine of the calling green thread, no worker M is ever
@@ -70,7 +70,6 @@
 // aggregate-only assertion would call a segfaulting run correct.
 
 typealias Integer = int(i64.min to i64.max)
-typealias StringArray = Array with String
 typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
@@ -89,6 +88,17 @@ let rounds = 6000
 // and an oscillating count is what lets a lost incref reach the "last owner"
 // arm and free the box under a live holder (the segfault half).
 let chunk = 8
+
+let shared = makeSharedBox()
+
+// ⚠ A HEAP record is required: an immortal `.rdata` literal takes
+// `__str_retain`'s CLONE arm and never touches a refcount, and an inline
+// small string has no box. Interpolation forces the allocation.
+function makeSharedBox() returns String
+	var box = "the one box every task refcounts"
+	box = "{box} :: {taskCount}"
+	return box
+end 'makeSharedBox'
 
 // ⭐ ONE ROUND OF CHURN ON THE SHARED BOX. `bag.push(s)` is the escaping-borrow
 // feed: it retains `s` per push. `bag` dies at this function's scope end, and
@@ -110,9 +120,9 @@ function churnRound(s String, n Integer) returns Integer
 	return bag.count()
 end 'churnRound'
 
-// ⭐ THE RACING TASK. Every one of the `taskCount` tasks is handed the SAME
-// heap `String`, so every incref and every decref below lands on ONE word.
-function hammer(idx Integer, s String, roundCount Integer, perRound Integer) returns Integer
+// ⭐ THE RACING TASK. Every one of the `taskCount` tasks churns the SAME
+// heap `String`, `shared`, so every incref and every decref below lands on ONE word.
+function hammer(idx Integer, roundCount Integer, perRound Integer) returns Integer
 	// Marks this CPU-bound function a legitimate `async` target (the E3073
 	// yielding contract) without claiming fake I/O. No-op at runtime.
 	__Builtins.parallelBoundary()
@@ -121,32 +131,26 @@ function hammer(idx Integer, s String, roundCount Integer, perRound Integer) ret
 	var r = 0
 
 	while r < roundCount 'round'
-		acc = acc + churnRound(s, n: perRound)
+		acc = acc + churnRound(shared, n: perRound)
 		r = r + 1
 	end 'round'
 
 	// ⭐ READ THE BOX AFTER THE CHURN. The lost-incref half frees the record
 	// while this task still holds it; touching the bytes here turns that into a
 	// fault or a wrong answer rather than a quiet pass.
-	acc = acc + s.byteLength()
+	acc = acc + shared.byteLength()
 
 	// Index-derived so the aggregate changes if a task ran twice or not at all.
 	return acc + idx
 end 'hammer'
 
 function main() returns ExitCode
-	// ⚠ A HEAP record is required: an immortal `.rdata` literal takes
-	// `__str_retain`'s CLONE arm and never touches a refcount, and an inline
-	// small string has no box. Interpolation forces the allocation.
-	var shared = "the one box every task refcounts"
-	shared = "{shared} :: {taskCount}"
-
 	var promises = IntPromiseArray.create()
 
 	// Spawn every task before awaiting any, so the scheduler spins up worker Ms
 	// to service the backlog — that is what puts more than one M on the word.
 	for i in 0 upto taskCount 'spawn'
-		promises.push(async hammer(i, s: shared, roundCount: rounds, perRound: chunk))
+		promises.push(async hammer(i, roundCount: rounds, perRound: chunk))
 	end 'spawn'
 
 	var total = 0

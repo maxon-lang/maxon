@@ -120,32 +120,23 @@ The report goes to **stderr**, which is why a wrapper exists at all — a test m
 likes, and the runner has to find its own lines among it. The whole surface a program can see is
 those two functions; the compiler emits `threw` and nothing else, and no program writes either.
 
-⚠ **AND the compiler ENFORCES THAT LAST SENTENCE, WHICH IS WHY THIS FILE PORTS THREE OF THE REFERENCE'S ELEVEN
-CASES AND NOT ALL OF THEM** (it carries FOUR: the fourth, `bare-try-on-a-boxed-foreign-error-compiles`,
-is the compiler's own and has no counterpart there — see its note).
+⚠ **AND the compiler ENFORCES THAT LAST SENTENCE, SO NO CASE IN THIS FILE CAN INVOKE A TEST.**
 *"No program writes either call"* is a rule here, not a convention: `requireCalleeIsNotReservedName`
-refuses a `__` callee whose bytes an author typed, wherever it stands. The reference's remaining cases
-hand-roll a dispatcher and therefore write exactly those calls — see the PORT NOTE below. Nothing
-about the RULE depends on who calls the test; what depends on it is whether a spec can invoke one
-without the runner, and here it cannot.
+refuses a `__` callee whose bytes an author typed, wherever it stands, and scopes its exemptions to the
+head's PROVENANCE rather than to a spelling —
+`stdlib-user-shadows.error.the-mint-is-not-reachable-from-user-code` pins that. A program that
+hand-rolls a dispatcher, writing `__TestReport.useWireFormat(...)` and the mangled `__test_<name>()`
+in its own source, is therefore refused; the dispatcher `maxon test` generates is compiler-minted and
+passes. Nothing about the RULE depends on who calls the test; what depends on it is whether a spec can
+invoke one without the runner, and here it cannot.
 
 ## Tests
-
-⚠ **PORT NOTE — 8 OF THE REFERENCE'S 11 CASES ARE HELD BACK, UNEDITED, FOR THE RUNNER SLICE.**
-They hand-roll a dispatcher: with no `maxon test` to invoke a test, each writes
-`__TestReport.useWireFormat(...)` and calls the mangled `__test_<name>()` **from its own source**.
-The bootstrap allows that because it has no call-side reservation at all; The compiler has one on purpose,
-and scopes its exemptions to the head's PROVENANCE rather than to a spelling — a `__` callee whose
-bytes an author typed stays refused, which `stdlib-user-shadows.error.the-mint-is-not-reachable-from-user-code`
-pins shut in exactly those words. Rewording those 8 to suit this compiler would be inventing a claim
-nobody has satisfied, so they are NOT reworded here: they stay verbatim in
-`/specs/test-uncaught-throw.md` and land with the `maxon test` command, whose generated dispatcher
-is compiler-minted and therefore passes the rule as it stands.
 
 ⇒ What is pinned here is the relaxation's COMPILE-TIME half, which is all of it that a program can
 observe without a runner: it admits a bare `try` on a foreign error inside a `test`, and it admits
 one NOWHERE ELSE. The runtime half — the `__TestReport.threw` report itself — is pinned by the
-minted fragment goldens of the first TWO cases below, and by those 8 cases when they land.
+minted fragment goldens of the first TWO cases below, and end to end through `maxon test` by
+`tests/test-command`'s `uncaught-throw` and `implied-try` fixtures.
 
 <!-- test: bare-try-on-a-foreign-error-compiles -->
 The whole relaxation in one program, and the exact counterpart of `error.function-does-not-relax`

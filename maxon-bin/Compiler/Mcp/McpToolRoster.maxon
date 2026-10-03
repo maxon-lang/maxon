@@ -26,6 +26,9 @@ export union McpValueKind
 	text
 	flag
 	textList
+	// A `textList` whose elements may be empty strings: a program can be handed an empty argument,
+	// where an empty `text` or `textList` element names nothing and is refused.
+	programArguments
 	textOrTextList
 
 	// `alsoText` admits a string as well: an error code arrives as `3014` as readily as `"3014"`, and
@@ -56,7 +59,8 @@ export type McpProperty
 		return match self.kind 'declared'
 			text gives arrived == JsonKind.jsonString
 			flag gives arrived == JsonKind.jsonBool
-			textList gives arrived == JsonKind.jsonArray
+			textList or
+				programArguments gives arrived == JsonKind.jsonArray
 			textOrTextList gives arrived == JsonKind.jsonString or arrived == JsonKind.jsonArray
 			wholeNumber(_, _, alsoText) gives arrived == JsonKind.jsonNumber or (alsoText and arrived == JsonKind.jsonString)
 			seconds gives arrived == JsonKind.jsonNumber
@@ -71,7 +75,8 @@ export type McpProperty
 		return match self.kind 'declared'
 			text gives [JsonStringType]
 			flag gives [JsonBooleanType]
-			textList gives [JsonArrayType]
+			textList or
+				programArguments gives [JsonArrayType]
 			textOrTextList gives [JsonStringType, JsonArrayType]
 			wholeNumber(_, _, alsoText) gives [JsonStringType, JsonIntegerType] if alsoText else [JsonIntegerType]
 			seconds gives [JsonNumberType]
@@ -119,6 +124,10 @@ function list(name String, description String) returns McpProperty
 	return McpProperty.create(name, kind: McpValueKind.textList, description: description)
 end 'list'
 
+function programArguments(name String, description String) returns McpProperty
+	return McpProperty.create(name, kind: McpValueKind.programArguments, description: description)
+end 'programArguments'
+
 function textOrList(name String, description String, required bool = false, devOnly bool = false) returns McpProperty
 	return McpProperty.create(name, kind: McpValueKind.textOrTextList, description: description, required: required, devOnly: devOnly)
 end 'textOrList'
@@ -160,7 +169,7 @@ export function mcpToolRoster() returns McpToolSpecArray
 	var executeProps = McpPropertyArray.create()
 	executeProps.push(str("path", description: "Path to the .maxon file to run. Mutually exclusive with `source`."))
 	executeProps.push(str("source", description: "Inline Maxon source to compile and run instead of a path."))
-	executeProps.push(list("arguments", description: "Command-line arguments passed to the program"))
+	executeProps.push(programArguments("arguments", description: "Command-line arguments passed to the program"))
 	executeProps.push(childTimeoutProperty())
 	executeProps.push(repoRootProperty(RepoRootDefaultsToHostDirectory))
 	tools.push(McpToolSpec.create(ExecuteToolName, description: "Compile and run a Maxon program, or an inline snippet, using `maxon execute`.", properties: executeProps))
@@ -237,7 +246,7 @@ function pushDebugTools(tools McpToolSpecArray)
 	var startProps = McpPropertyArray.create()
 	startProps.push(str("executable", description: "Path to an already-built program to debug. Mutually exclusive with `source`."))
 	startProps.push(str("source", description: "Path to a .maxon file or project directory to BUILD with this compiler and then debug. Mutually exclusive with `executable`."))
-	startProps.push(list("args", description: "Command-line arguments passed to the program being debugged"))
+	startProps.push(programArguments("args", description: "Command-line arguments passed to the program being debugged"))
 	startProps.push(list("env", description: "Environment variables for the program being debugged, each spelled NAME=VALUE"))
 	startProps.push(seconds(DebugStopTimeoutOption, description: "Seconds a command waits for the program to stop before reporting a timeout (default {DefaultStopTimeoutSeconds:.0}, {targetSecondsRange()})."))
 	startProps.push(flag("trace", description: "Record the DebugStream ring, so `debug_trace` has events to report. A `source` is then built with --debugstream; an `executable` must already have been."))
@@ -304,6 +313,7 @@ export union ArgumentFault
 	notAWholeNumberWithin(key String, tool String, least JsonInt, most JsonInt)
 	notSecondsWithin(key String, tool String)
 	wrongElementType(key String, tool String)
+	empty(key String, tool String)
 end 'ArgumentFault'
 
 export function argumentFaultReason(fault ArgumentFault) returns String
@@ -315,20 +325,34 @@ export function argumentFaultReason(fault ArgumentFault) returns String
 		notAWholeNumberWithin(key, tool, least, most) gives "`{key}` on `{tool}` must be a whole number from {least} to {most}."
 		notSecondsWithin(key, tool) gives "{targetSecondsRefusal("`{key}` on `{tool}`")}."
 		wrongElementType(key, tool) gives "`{key}` on `{tool}` must be a list of strings."
+		empty(key, tool) gives "`{key}` on `{tool}` is an empty string, which names nothing. Leave the argument out instead."
 	end 'f'
 end 'argumentFaultReason'
 
-function requireOnlyStrings(doc JsonDoc, value JsonNode, key String, tool String) throws ArgumentFault
+function requireOnlyStrings(doc JsonDoc, value JsonNode, key String, tool String, elementsMayBeEmpty bool) throws ArgumentFault
 	if value.kind != JsonKind.jsonArray 'notAList'
+		try requireStatedText(value, key: key, tool: tool)
 		return
 	end 'notAList'
 
 	for childId in value.children 'eachElement'
-		if doc.get(childId).kind != JsonKind.jsonString 'notAString'
+		let element = doc.get(childId)
+
+		if element.kind != JsonKind.jsonString 'notAString'
 			throw ArgumentFault.wrongElementType(key, tool: tool)
 		end 'notAString'
+
+		if not elementsMayBeEmpty 'stated'
+			try requireStatedText(element, key: key, tool: tool)
+		end 'stated'
 	end 'eachElement'
 end 'requireOnlyStrings'
+
+function requireStatedText(value JsonNode, key String, tool String) throws ArgumentFault
+	if value.kind == JsonKind.jsonString and value.stringValue.isEmpty() 'statedEmpty'
+		throw ArgumentFault.empty(key, tool: tool)
+	end 'statedEmpty'
+end 'requireStatedText'
 
 function requireWholeWithin(value JsonNode, key String, tool String, least JsonInt, most JsonInt) throws ArgumentFault
 	if value.kind != JsonKind.jsonNumber 'anotherSpelling'
@@ -358,45 +382,51 @@ function findProperty(spec McpToolSpec, key String) returns McpProperty throws M
 end 'findProperty'
 
 export function validateToolArguments(doc JsonDoc, args OptionalNode, spec McpToolSpec, devMode bool) throws ArgumentFault
-	let present = argumentsGiven(args)
-	let argsId = argumentsNode(args)
-
-	if present 'checkArrivals'
-		let node = doc.get(argsId)
-
-		for (iter, key) in node.keys.withIterator() 'eachArrival'
-			let prop = try findProperty(spec, key: key) otherwise throw ArgumentFault.unknown(key, tool: spec.name)
-
-			if prop.devOnly and not devMode 'refusedInUserMode'
-				throw ArgumentFault.devOnly(key, tool: spec.name)
-			end 'refusedInUserMode'
-
-			let valueId = try node.children.get(iter.index()) otherwise panic("validateToolArguments: keys and children disagree in length")
-
-			let value = doc.get(valueId)
-
-			if not prop.accepts(value.kind) 'wrongShape'
-				throw ArgumentFault.wrongType(key, tool: spec.name, expected: prop.acceptedTypes())
-			end 'wrongShape'
-
-			match prop.kind 'bounds'
-				text or
-					flag then break 'bounds'
-				textList or
-					textOrTextList then try requireOnlyStrings(doc, value: value, key: key, tool: spec.name)
-				wholeNumber(least, most, _) then try requireWholeWithin(value, key: key, tool: spec.name, least: least, most: most)
-				seconds then try requireSecondsWithin(value, key: key, tool: spec.name)
-			end 'bounds'
-		end 'eachArrival'
-	end 'checkArrivals'
+	match args 'given'
+		some(argsId) then try requireArrivalsFitTheRoster(doc, argsId: argsId, spec: spec, devMode: devMode)
+		none then break 'given'
+	end 'given'
 
 	for prop in spec.properties 'eachRequired'
-		if not prop.required 'optional'
-			continue
-		end 'optional'
-
-		if not present or not objectHasKey(doc, parent: argsId, key: prop.name) 'absent'
+		if prop.required and not argumentArrived(doc, args: args, key: prop.name) 'absent'
 			throw ArgumentFault.missing(prop.name, tool: spec.name)
 		end 'absent'
 	end 'eachRequired'
 end 'validateToolArguments'
+
+function requireArrivalsFitTheRoster(doc JsonDoc, argsId JsonNodeId, spec McpToolSpec, devMode bool) throws ArgumentFault
+	let node = doc.get(argsId)
+
+	for (iter, key) in node.keys.withIterator() 'eachArrival'
+		let prop = try findProperty(spec, key: key) otherwise throw ArgumentFault.unknown(key, tool: spec.name)
+
+		if prop.devOnly and not devMode 'refusedInUserMode'
+			throw ArgumentFault.devOnly(key, tool: spec.name)
+		end 'refusedInUserMode'
+
+		let valueId = try node.children.get(iter.index()) otherwise panic("requireArrivalsFitTheRoster: keys and children disagree in length")
+
+		let value = doc.get(valueId)
+
+		if not prop.accepts(value.kind) 'wrongShape'
+			throw ArgumentFault.wrongType(key, tool: spec.name, expected: prop.acceptedTypes())
+		end 'wrongShape'
+
+		match prop.kind 'bounds'
+			flag then break 'bounds'
+			text then try requireStatedText(value, key: key, tool: spec.name)
+			textList or
+				textOrTextList then try requireOnlyStrings(doc, value: value, key: key, tool: spec.name, elementsMayBeEmpty: false)
+			programArguments then try requireOnlyStrings(doc, value: value, key: key, tool: spec.name, elementsMayBeEmpty: true)
+			wholeNumber(least, most, _) then try requireWholeWithin(value, key: key, tool: spec.name, least: least, most: most)
+			seconds then try requireSecondsWithin(value, key: key, tool: spec.name)
+		end 'bounds'
+	end 'eachArrival'
+end 'requireArrivalsFitTheRoster'
+
+function argumentArrived(doc JsonDoc, args OptionalNode, key String) returns bool
+	return match args 'given'
+		some(argsId) gives objectHasKey(doc, parent: argsId, key: key)
+		none gives false
+	end 'given'
+end 'argumentArrived'

@@ -101,6 +101,12 @@ module union DigitParse
 	invalid
 end 'DigitParse'
 
+let DebugOperandIndex = 1 as ElementIndex
+
+typealias CommandWordCount = int(0 to u64.max) implements ElementIndex
+
+let SymbolizeLeastWords = 3 as CommandWordCount
+
 // The outcome of finding, reading and VOUCHING FOR the sidecar that describes a given path.
 union SidecarLoad
 	loaded(reader MxdbgReader, code ByteArray)
@@ -108,7 +114,7 @@ union SidecarLoad
 end 'SidecarLoad'
 
 export function runDebugCommand(args MaxonArgs) returns ExitCode
-	let subcommand = try args.paths.get(0) otherwise ""
+	let subcommand = try args.paths.get(0) otherwise return runDebugger(args)
 
 	if subcommand == DumpInfoOption 'dumpInfo'
 		return runDumpInfo(args)
@@ -151,11 +157,9 @@ union DebuggerFaceRequest
 end 'DebuggerFaceRequest'
 
 type DebuggerRequest
-	export var exePath as String
-	export var exeGiven as bool
+	export var exe as StatedText
 	export var batch as bool
-	export var script as String
-	export var scriptGiven as bool
+	export var script as StatedText
 	export var face as DebuggerFaceRequest
 	export var stopTimeoutMs as StopTimeoutMs
 	export var targetEnv as EnvMap
@@ -163,7 +167,7 @@ type DebuggerRequest
 	export var traced as bool
 
 	static function create() returns DebuggerRequest
-		return Self{exePath: "", exeGiven: false, batch: false, script: "", scriptGiven: false, face: DebuggerFaceRequest.session, stopTimeoutMs: stopTimeoutMsOf(DefaultStopTimeoutSeconds), targetEnv: EnvMap.create(), programArguments: StringArray.create(), traced: false}
+		return Self{exe: StatedText.unstated, batch: false, script: StatedText.unstated, face: DebuggerFaceRequest.session, stopTimeoutMs: stopTimeoutMsOf(DefaultStopTimeoutSeconds), targetEnv: EnvMap.create(), programArguments: StringArray.create(), traced: false}
 	end 'create'
 end 'DebuggerRequest'
 
@@ -298,13 +302,12 @@ function parsedDebuggerRequest(args MaxonArgs) returns DebuggerRequestParse
 		end 'theSeparator'
 
 		if not argument.startsWith(LongOptionPrefix) 'theExecutable'
-			if request.exeGiven 'anotherWord'
+			if request.exe.isStated() 'anotherWord'
 				request.programArguments.push(argument)
 				continue
 			end 'anotherWord'
 
-			request.exePath = argument
-			request.exeGiven = true
+			request.exe = StatedText.stated(argument)
 			continue
 		end 'theExecutable'
 
@@ -314,7 +317,7 @@ function parsedDebuggerRequest(args MaxonArgs) returns DebuggerRequestParse
 		end 'option'
 	end 'eachArgument'
 
-	if not request.exeGiven 'nothingToDebug'
+	if not request.exe.isStated() 'nothingToDebug'
 		return DebuggerRequestParse.noExecutable
 	end 'nothingToDebug'
 
@@ -340,8 +343,7 @@ function recordedDebuggerOption(request DebuggerRequest, argument String) return
 	end 'theDebugStreamRing'
 
 	if argument.startsWith(CommandsOptionPrefix) 'aScript'
-		request.script = argument.replaceFirst(CommandsOptionPrefix, with: "")
-		request.scriptGiven = true
+		request.script = StatedText.stated(argument.replaceFirst(CommandsOptionPrefix, with: ""))
 
 		return DebuggerOptionParse.accepted
 	end 'aScript'
@@ -374,15 +376,16 @@ function recordedDebuggerOption(request DebuggerRequest, argument String) return
 end 'recordedDebuggerOption'
 
 function runDebuggerRequest(request DebuggerRequest) returns ExitCode
-	let named = try FilePath.from(request.exePath) otherwise return refuseDebugCommand("'{request.exePath}' is not a spellable path")
+	let exePath = try request.exe.text() otherwise panic("runDebuggerRequest: `parsedDebuggerRequest` answers `noExecutable` for a command line that names none")
+	let named = try FilePath.from(exePath) otherwise return refuseDebugCommand("'{exePath}' is not a spellable path")
 
 	if not File.exists(named) 'notThere'
-		return refuseDebugCommand("there is no program at {request.exePath}")
+		return refuseDebugCommand("there is no program at {exePath}")
 	end 'notThere'
 
 	let program = named.anchoredAt(Directory.currentPath())
 
-	match debugImageCheckFor(program, spelled: request.exePath) 'checked'
+	match debugImageCheckFor(program, spelled: exePath) 'checked'
 		refused(reason) then return refuseDebugCommand(reason)
 		usable(code, reader) then return runCheckedDebugger(request, program: program, code: code, reader: reader)
 	end 'checked'
@@ -438,7 +441,7 @@ function runCheckedDebugger(request DebuggerRequest, program FilePath, code Byte
 		session then break 'which'
 	end 'which'
 
-	if request.batch and not request.scriptGiven 'noScript'
+	if request.batch and not request.script.isStated() 'noScript'
 		return refuseDebugCommand("{BatchOption} needs {CommandsOptionPrefix}<cmd;cmd;...|@file>")
 	end 'noScript'
 
@@ -467,7 +470,7 @@ function drivenDebugSession(session DebugSession, request DebuggerRequest) retur
 		return runDebugRepl(session)
 	end 'aReaderAtAPrompt'
 
-	match debugBatchScript(request.script) 'script'
+	match debugBatchScript(try request.script.text() otherwise panic("drivenDebugSession: `runCheckedDebugger` refuses a batch run that names no script")) 'script'
 		unreadable(path) then return refusedBatchScript(session, path: path)
 		commands(lines) then return runDebugBatch(session, lines: lines)
 	end 'script'
@@ -480,9 +483,7 @@ function refusedBatchScript(session DebugSession, path String) returns ExitCode
 end 'refusedBatchScript'
 
 function runDumpInfo(args MaxonArgs) returns ExitCode
-	let spelled = try args.paths.get(1) otherwise ""
-
-	if spelled.isEmpty() 'noPath'
+	let spelled = try args.positionalAt(DebugOperandIndex) otherwise 'noPath'
 		printError("maxon debug {DumpInfoOption} needs a path to an executable or .mxdbg sidecar.\n")
 		return OwnFailureExit
 	end 'noPath'
@@ -578,12 +579,16 @@ function sectionIsPrinted(sections BoolArray, section String) returns bool
 	end 'named'
 end 'sectionIsPrinted'
 
-function runSymbolize(args MaxonArgs) returns ExitCode
-	let spelled = try args.paths.get(1) otherwise ""
+function refusedSymbolizeUsage() returns ExitCode
+	printError("maxon debug {SymbolizeOption} needs a path and at least one code offset.\n")
+	return OwnFailureExit
+end 'refusedSymbolizeUsage'
 
-	if spelled.isEmpty() or args.paths.count() < 3 'notEnough'
-		printError("maxon debug {SymbolizeOption} needs a path and at least one code offset.\n")
-		return OwnFailureExit
+function runSymbolize(args MaxonArgs) returns ExitCode
+	let spelled = try args.positionalAt(DebugOperandIndex) otherwise return refusedSymbolizeUsage()
+
+	if args.paths.count() < SymbolizeLeastWords 'notEnough'
+		return refusedSymbolizeUsage()
 	end 'notEnough'
 
 	match loadSidecarFor(spelled) 'sidecar'

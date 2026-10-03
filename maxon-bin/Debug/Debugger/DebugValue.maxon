@@ -54,6 +54,7 @@ let ManagedLengthOffset = 8 as DebugAddress
 let ManagedElementSizeOffset = 24 as DebugAddress
 
 let UnionTagOffset = 0 as DebugAddress
+let FunctionCodeOffset = FunctionRecordCodeOffset as DebugAddress
 let UnionTagBytes = 8 as DebugWidth
 
 let MinimumPlausibleHeapAddress = 0x10000 as DebuggeeWord
@@ -102,7 +103,7 @@ export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset
 	end 'eachMember'
 
 	let held = tree.nodeAt(current)
-	tree.roots.push(tree.add(DebugValueNode.create(path, typeName: held.typeName, kind: held.kind, display: held.display, unavailable: held.unavailable, children: held.children)))
+	tree.roots.push(tree.add(DebugValueNode.create(path, typeName: held.typeName, kind: held.kind, display: held.display, availability: held.availability.clone(), children: held.children)))
 
 	return DebugValueAnswer.rendered(tree)
 end 'renderValuePath'
@@ -211,6 +212,10 @@ function renderTyped(tree DebugValueTree, memory DebugMemory, symbols DebugSymbo
 		return renderOpaquePointer(tree, name: name, typeName: typeName, kind: kind, source: source)
 	end 'aPointer'
 
+	if record.kind == MxdbgTypeKindFunction 'aFunctionValue'
+		return renderFunctionValue(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, source: source)
+	end 'aFunctionValue'
+
 	return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
 end 'renderTyped'
 
@@ -318,15 +323,64 @@ function renderStruct(tree DebugValueTree, memory DebugMemory, symbols DebugSymb
 		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: NullPointerDisplay))
 	end 'noRecord'
 
+	return tree.add(DebugValueNode.withChildren(name, typeName: typeName, kind: kind, display: StructDisplay, children: fieldsAt(tree, memory: memory, symbols: symbols, record: record, base: base)))
+end 'renderStruct'
+
+function fieldsAt(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, record MxdbgTypeInfo, base DebugAddress) returns DebugValueIndexArray
 	var children = DebugValueIndexArray.create()
 
 	for k in record.fieldFirst upto record.fieldFirst + record.fieldCount 'eachField'
 		let field = symbols.fieldRecordOf(k as MxdbgIndex)
-		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: field.name, typeId: field.typeId, source: DebugValueSource.address(base + (field.offset as DebugAddress))))
+		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: field.name, typeId: field.typeId, source: fieldSource(memory, symbols: symbols, field: field, base: base)))
 	end 'eachField'
 
-	return tree.add(DebugValueNode.withChildren(name, typeName: typeName, kind: kind, display: StructDisplay, children: children))
-end 'renderStruct'
+	return children
+end 'fieldsAt'
+
+function fieldSource(memory DebugMemory, symbols DebugSymbols, field MxdbgFieldInfo, base DebugAddress) returns DebugValueSource
+	let slot = base + (field.offset as DebugAddress)
+
+	if not symbols.typeIsDescribed(field.typeId) or not mxdbgTypeKindIsIndirect(symbols.typeRecordOf(field.typeId).kind) 'theValueItself'
+		return DebugValueSource.address(slot)
+	end 'theValueItself'
+
+	return DebugValueSource.word(try readRaw(memory, source: DebugValueSource.address(slot), width: DebuggeeWordBytes) otherwise return DebugValueSource.nowhere)
+end 'fieldSource'
+
+function renderFunctionValue(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, source DebugValueSource) returns ElementIndex
+	let functionRecord = try baseOf(source) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	if functionRecord == 0 'noRecord'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: NullPointerDisplay))
+	end 'noRecord'
+
+	let code = try pointerAt(memory, address: functionRecord + FunctionCodeOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+	let textBase = memory.imageTextBase()
+
+	if code < textBase 'outsideTheImage'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: unresolvedCodeDisplay(code)))
+	end 'outsideTheImage'
+
+	match symbols.functionValueTargetAt(code - textBase) 'target'
+		unknown then return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: unresolvedCodeDisplay(code)))
+		named(target, display) then return tree.add(DebugValueNode.withChildren(name, typeName: typeName, kind: kind, display: display, children: capturesAt(tree, memory: memory, symbols: symbols, closure: target, functionRecord: functionRecord)))
+	end 'target'
+end 'renderFunctionValue'
+
+function capturesAt(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, closure String, functionRecord DebugAddress) returns DebugValueIndexArray
+	let envType = try symbols.typeIdNamed(closure) otherwise return DebugValueIndexArray.create()
+	let record = symbols.typeRecordOf(envType)
+
+	if record.kind != MxdbgTypeKindFunction 'notAnEnvironment'
+		return DebugValueIndexArray.create()
+	end 'notAnEnvironment'
+
+	return fieldsAt(tree, memory: memory, symbols: symbols, record: record, base: functionRecord)
+end 'capturesAt'
+
+function unresolvedCodeDisplay(code DebugAddress) returns String
+	return "<code 0x{code:x}>"
+end 'unresolvedCodeDisplay'
 
 function renderFoldedStruct(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, first MxdbgIndex) returns ElementIndex
 	let words = symbols.foldedWordsFor(first, count: mxdbgFoldedAggregateWordCount(record.kind, fieldCount: record.fieldCount))

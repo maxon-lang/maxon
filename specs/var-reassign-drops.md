@@ -292,10 +292,10 @@ E3067 rule ever became semantic.
 OWNERSHIP.** `let t = s` moves the ownership to `t`; `s = t` hands it straight back, so afterwards `s`
 is live again and `t` is moved-from (E3102 on a later `t`). A move does not mint a value — it re-homes
 one — so a hand-back reaches the identity guard while meaning the exact opposite of a no-op, and the
-guard is therefore gated on `not binding.movedFrom`. This is the same rule the door already applied to
-every OTHER bare-local source — measured: `var s = build(1); let t = build(2); s = t; print(t)` has
-always been E3102 — so the source surviving HERE was never a rule, only the elision showing through.
-`/specs/optimizer-refcount.md` pins the same shape one type over (`var b = a; a = b; a.x`) and reads
+guard is therefore gated on `not binding.movedFrom`. This is the same rule the door applies to
+every OTHER bare-local source — `var s = build(1); let t = build(2); s = t; print(t)` is E3102 — so a
+source surviving HERE would be no rule, only the elision showing through.
+`specs/optimizer-refcount.md` pins the same shape one type over (`var b = a; a = b; a.x`) and reads
 the target.
 
 <!-- test: self-assign -->

@@ -49,15 +49,6 @@ public typealias Pid = int(0 to u64.max)
 // `String`, so the backing `__ManagedMemory`'s signed machine-word length bounds it.
 public typealias ByteLimit = int(0 to u64.max)
 
-// File-private aliases mirroring the same names declared in `stdlib/String.maxon`
-// and `stdlib/Json.maxon`. The self-hosted stdlib whitelist doesn't yet include
-// `Json.maxon` (where `StringArray` is exported), and `String.maxon`'s
-// `StringArray`/`ByteArray` are file-private. Re-declaring them here keeps
-// Subprocess.maxon parse-clean under the self-hosted compiler's whitelist
-// without forcing the whole `Json.maxon` to be whitelisted.
-typealias StringArray = Array with String
-typealias ByteArray = Array with Byte
-
 // Stdin discriminator passed across the builtin boundary. Raw values match
 // the runtime contract (see X86/ARM64 emitters and the parent plan).
 //
@@ -328,8 +319,17 @@ end 'TerminationStatus'
 // Errors
 // =============================================================================
 
-/// Errors raised by `Subprocess.run` / `Configuration.run`. Each carries the
-/// actionable detail rather than just a kind tag.
+/// The error `__Builtins.runProcess` throws: `spawnFailed` when the command names nothing the host can
+/// start.
+public enum RunProcessError implements Error
+	spawnFailed
+end 'RunProcessError'
+
+/// Errors raised by `Subprocess.run` / `Configuration.run` and by a
+/// `StreamingSubprocess`. Each carries the actionable detail rather than just a
+/// kind tag.
+///
+/// `endOfStream` is what a line reader throws once the child's stream has ended.
 ///
 /// `timeout` carries the output the child had already produced when the
 /// deadline killed it, because that partial text is usually the only evidence
@@ -341,6 +341,7 @@ public union SubprocessError implements Error
 	ioFailed(reason String)
 	timeout(elapsedMs DurationMs, stdout String, stderr String)
 	inputTooLarge
+	endOfStream
 
 	/// Human-readable rendering for diagnostics. Centralises the wording so
 	/// every callsite produces the same single-line description of a spawn /
@@ -352,8 +353,33 @@ public union SubprocessError implements Error
 			ioFailed(reason) gives "I/O failed: {reason}"
 			timeout(elapsedMs, _, _) gives "timed out after {elapsedMs}ms, and the kill was sent to the child's whole process tree"
 			inputTooLarge gives "stdin payload too large"
+			endOfStream gives "end of stream"
 		end 'e'
 	end 'displayReason'
+
+	/// True for `timeout`.
+	public function timedOut() returns bool
+		return match self 'e'
+			timeout gives true
+			executableNotFound or
+				spawnFailed or
+				ioFailed or
+				inputTooLarge or
+				endOfStream gives false
+		end 'e'
+	end 'timedOut'
+
+	/// True for `endOfStream`: a line reader met the end of the child's stream.
+	public function endedTheStream() returns bool
+		return match self 'e'
+			endOfStream gives true
+			executableNotFound or
+				spawnFailed or
+				ioFailed or
+				timeout or
+				inputTooLarge gives false
+		end 'e'
+	end 'endedTheStream'
 end 'SubprocessError'
 
 // =============================================================================
@@ -854,10 +880,10 @@ let spawnErrorFileNotFound = 2
 let spawnErrorPathNotFound = 3
 
 // Which step of a spawn failed, as the runtime records it above the OS code in the word
-// `__Builtins.subprocessLastErrorCode` answers — the raw values of the compiler's `GtRuntime.SpawnPreparation`.
+// `__Builtins.subprocessLastErrorCode` answers; `GtRuntime` stores them from this enum.
 // A spawn opens its standard streams, and on POSIX its working directory, before it launches anything, and
 // each fails with the same not-found codes a missing executable does; only the runtime knows which step it was.
-enum SpawnPreparation
+public enum SpawnPreparation
 	none = 0
 	standardStream = 1
 	workingDirectory = 2
@@ -988,7 +1014,8 @@ public type StreamingSubprocess
 
 	/// Read one line from the child's stdout, WITHOUT the trailing newline (the runtime keeps the
 	/// terminating LF and this strips it, along with a stray CR so Windows CRLF never reaches a
-	/// caller). An empty string means end of stream and nothing else — a refusal throws.
+	/// caller). End of stream throws `SubprocessError.endOfStream`, and a refusal throws `ioFailed`;
+	/// an empty string is an empty line.
 	///
 	/// Blocks until a line is available or EOF is reached. Lines longer than
 	/// `maxBytes` are truncated and the remainder is delivered on the next
@@ -1024,7 +1051,8 @@ public type StreamingSubprocess
 	end 'readStdoutBytes'
 
 	/// Read one line from the child's stderr. Same contract as `readStdoutLine`: the terminator is
-	/// trimmed here, an empty string means end of stream, and a refusal throws.
+	/// trimmed here, end of stream throws `SubprocessError.endOfStream`, and a refusal throws
+	/// `ioFailed`.
 	public function readStderrLine() returns String throws SubprocessError
 		return try Self.readStderrLineCapped(self, maxBytes: defaultReadLineCap)
 	end 'readStderrLine'
@@ -1237,7 +1265,13 @@ let lineReaderShortestAnswer = 1 as ByteLimit
 /// holding the line bytes including the terminating LF, or a zero-length buffer at end of stream.
 /// The trailing CR goes with it so Windows CRLF doesn't leak into caller-visible strings.
 function readLineResultToString(handle StreamingHandle, raw __ManagedMemory, stream StdioStream) returns String throws SubprocessError
-	return stripTrailingCR(String.init(try finishRead(handle, raw: raw, wanted: lineReaderShortestAnswer, stream: stream)))
+	let line = try finishRead(handle, raw: raw, wanted: lineReaderShortestAnswer, stream: stream)
+
+	if line.length() < lineReaderShortestAnswer 'theStreamEnded'
+		throw SubprocessError.endOfStream
+	end 'theStreamEnded'
+
+	return stripTrailingCR(String.init(line))
 end 'readLineResultToString'
 
 /// The one place a reader's answer is judged, for all three of them.

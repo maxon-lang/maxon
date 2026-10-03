@@ -40,7 +40,7 @@ end 'clamp'
 ```
 
 `clamp(101)` is refused at compile time — the 101 is right there. A value the compiler cannot fold
-reaches a runtime check — since A1f, `clamp`'s ENTRY guard on the parameter, before its body runs:
+reaches a runtime check — `clamp`'s ENTRY guard on the parameter, before its body runs:
 
 ```text
 Range check failed: value outside typealias 'Percent'
@@ -50,11 +50,10 @@ Stack trace:
   in mrt_start
 ```
 
-### ⚠ Where the RUNTIME check is emitted — and WHERE a call argument's lands (A1f)
+### ⚠ Where the RUNTIME check is emitted — and WHERE a call argument's lands
 
-The runtime half is now enforced for **every** position: a `return`, a struct-literal field, a field
-store, a field's declared default, an explicit `as`, an **array element** (since `A1f-arrayelem`) and a
-**call argument** (since A1f).
+The runtime half is enforced for **every** position: a `return`, a struct-literal field, a field
+store, a field's declared default, an explicit `as`, an **array element** and a **call argument**.
 
 ⚠ **"Enforced for every position" is not "emitted at every position", and the CALL ARGUMENT is the one
 that keeps them apart.** Its guard is emitted at the callee's ENTRY, not where the argument is written,
@@ -66,7 +65,7 @@ Read this paragraph before concluding the enum has no live case.
 **A call argument's runtime check is not emitted where the argument is written**, and the obstacle is
 mechanical: a check is a BRANCH, so it splits the block it lands in, and an argument is evaluated
 part-way through building an argument list — a guard placed there lands PAST the call, with the callee
-already run on the value the range forbids. A1f did not defeat that obstacle; it moved the guard. The
+already run on the value the range forbids. The guard therefore stands somewhere else: the
 runtime half of the argument door belongs to the **callee's entry**: one guard per narrowed parameter
 per function, emitted once, standing in front of every caller.
 
@@ -79,7 +78,7 @@ Three consequences follow, and all three are pinned below:
 - **A guarded leaf function stops being a leaf**, because the panic block calls `mrt_panic`. That is a
   per-FUNCTION cost on the in-range path, not an instruction count on the failing one.
 
-**The compile-time half at a call argument is unchanged and still fires first**: `clamp(101)` is
+**The compile-time half at a call argument fires first**: `clamp(101)` is
 refused by E3005 and never builds, so no entry guard ever runs for it. A parameter that promises
 nothing gains nothing — no guard, no frame, byte-identical codegen — and there are exactly three such
 shapes: the signed-full `int(i64.min to i64.max)`, a raw `bits(64)` pattern, and a full-range float.
@@ -88,10 +87,10 @@ it is a quantity, whose only test is for a negative from a signed type, and that
 CALL, where the argument's type is known — an argument whose type is already unsigned passes with
 nothing to test.
 
-### An ARRAY ELEMENT goes the other way, and the difference is where the ALIAS is known (A1f-arrayelem)
+### An ARRAY ELEMENT goes the other way, and the difference is where the ALIAS is known
 
 An element travels as `__managed_push`/`__managed_set`/`__managed_insert`'s third argument into a shared `Array`
-body whose parameter is the OPAQUE element type, so A1f's callee-entry cure has no narrowed parameter to
+body whose parameter is the OPAQUE element type, so a callee-entry guard has no narrowed parameter to
 stand behind. But the argument obstacle above never applied to it either: an element's alias is right
 there in the instance's declared element type, at parse time, so it records an ordinary positioned site
 and its guard goes at the **store**, immediately in front of the `__managed_*` call.
@@ -100,10 +99,10 @@ and its guard goes at the **store**, immediately in front of the `__managed_*` c
 zero-initialized slots, so an `Array with NonZero` can acquire a `0` with no value crossing any door.
 `specs/safety.md`'s `divide-by-zero-fault-through-a-resized-array-slot` pins it.
 
-### ⭐ A `return` of a guarded parameter is ALREADY guarded — and the elision has to earn that (A1f-dupguard)
+### ⭐ A `return` of a guarded parameter is ALREADY guarded — and the elision has to earn that
 
-`function f(x T) returns T … return x` used to emit the entry cascade and an identical return cascade
-over the same value against the same alias. The second is now elided, and because this whole mechanism
+In `function f(x T) returns T … return x` the entry cascade and a return cascade would test the same
+value against the same alias. The second is elided, and because this whole mechanism
 exists *because* an elision rested on a premise nothing enforced, the premise is stated rather than
 assumed. **All four clauses are required, and each one is what a case below breaks:**
 
@@ -121,13 +120,13 @@ assumed. **All four clauses are required, and each one is what a case below brea
    on the answer that made the entry guard fire. A full-range alias, or a range whose bounds both elide,
    emits nothing at either site.
 
-Break any of 1, 2 or 4 and the return guard is emitted exactly as before. That is what
+Break any of 1, 2 or 4 and the return guard is emitted. That is what
 `return-of-a-reassigned-shadow-is-still-guarded`, `return-through-a-narrower-alias-is-still-guarded` and
 `return-of-a-computed-value-is-still-guarded` pin; `return-of-a-second-ranged-parameter-is-covered-by-its-entry-guard`
 and `entry-guard-covers-a-return-inside-a-branch` pin the elision itself, the first by keying on the
 VALUE (not on "is there a ranged parameter") and the second on clause 3.
 
-### ⭐⭐ A value the destination PROVABLY ADMITS gets no check (A4f)
+### ⭐⭐ A value the destination PROVABLY ADMITS gets no check
 
 A `Byte = int(0 to u8.max)` cast to `ExitCode` cannot be outside `ExitCode`'s range on **any** target —
 `int(0 to u32.max)` on Windows *strictly* contains `0 to 255`, and `int(0 to 255)` on Linux, macOS and
@@ -149,15 +148,14 @@ rule about `ExitCode`, about builtins, or about which alias is "wide":
   `int` local, a folded literal, a `trunc` result. So the **compile-time E3005 half is untouched** —
   `InsertRangeChecks` reports it only for a value it can fold, and a folded literal denotes no alias.
 - **Equal ranges are contained.** `returns ExitCode` returning an `ExitCode` call result emits nothing.
-- **Anything else still guards, and still panics** — that is `A1f`'s whole mechanism, and this elision
-  removes none of it.
+- **Anything else guards, and panics** — the mechanism above, none of which this elision removes.
 
 ⚠ **WHAT THE ELISION RESTS ON, stated rather than assumed** (the same discipline the four clauses above
 are written in): *a value denoting alias `A` is in `A`'s range*. Every door in this spec maintains it — a
 cast guards its result, a parameter is guarded at the callee's entry, a `return` before its `ret`, a field
 or element at its store. The one producer that does not is **`Array.resize`**, which *exposes*
 zero-initialized slots crossing no door at all (see the array-element section above, and `safety.md`'s
-`divide-by-zero-fault-through-a-resized-array-slot`). A wider door downstream used to catch such a slot
+`divide-by-zero-fault-through-a-resized-array-slot`). A wider door downstream catches such a slot only
 **by coincidence** — it fires only when the exposed `0` happens to fall outside the *second* range too —
 and a coincidence is not a guarantee an elision may be written against. **That hole is `resize`'s to
 close, and closing it is what makes this premise total.**
@@ -180,8 +178,8 @@ mistake are pinned below:
 - **The value is COMPUTED in the arm**: the cascade is emitted in a block that DOMINATES the definition it
   reads, which is a use above its def. Liveness carries the operand out of the entry block and the
   register allocator refuses the function — *"value N is live-in to block 0 but was never colored"*. This
-  is what stopped the compiler compiling ITSELF the day `stdlib/Array.maxon`'s `ElementIndex` narrowed and put a
-  guard on every computed array index.
+  is what the compiler's own source reaches, because `stdlib/Array.maxon`'s `ElementIndex` puts a guard on
+  every computed array index.
 
 **The cure is that the arm's SITES move with the arm's OPS** (`Parser.rehomeArmRangeSites`, called from
 `parseTernaryExpression` where `detachOpRefsAbove`'s ops are re-attached), which is the relocation's own
@@ -193,7 +191,7 @@ arm existed, and could not: the only frame that knows which ops moved is the one
 
 <!-- test: range-check-panic.upper-bound -->
 Above the maximum, and not foldable — so a runtime check is what fires, and the trace names `clamp`.
-⭐ Since A1f the guard is `clamp`'s ENTRY guard, at the parameter's own line (5), not the one on its
+⭐ The guard is `clamp`'s ENTRY guard, at the parameter's own line (5), not the one on its
 `return` (6): the value was already outside `Percent` when it crossed the boundary, and the parameter
 list is where that premise is declared.
 ```maxon
@@ -256,9 +254,9 @@ Stack trace:
 
 <!-- test: range-check-panic.in-range -->
 The half that must keep working: an in-range argument passes every guard and returns normally.
-⭐ Its fragment is also where the `A1f-dupguard` elision is visible — `check`'s entry guard is now the
-ONLY cascade in the function, where it used to be followed by an identical `return` cascade over the
-same `ValueId` against the same alias, with a second panic block and a second `.rdata` blob. See the
+⭐ Its fragment is also where the return-guard elision is visible — `check`'s entry guard is the ONLY
+cascade in the function, with no `return` cascade over the same `ValueId` against the same alias, and
+no second panic block or second `.rdata` blob. See the
 Documentation above for the four clauses that elision rests on.
 ```maxon
 typealias SmallInt = int(0 to 10)
@@ -307,8 +305,7 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.error.literal-argument -->
-The compile-time half at a call argument -- the position that used to let the value through in
-silence. `clamp(101)` never reaches a runtime check because it never builds.
+The compile-time half at a call argument. `clamp(101)` never reaches a runtime check because it never builds.
 ```maxon
 typealias Percent = int(0 to 100)
 
@@ -606,6 +603,79 @@ end 'main'
 panic at z.maxon:4: Range check failed: value outside typealias 'Level'
 Stack trace:
   in relay
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.an-alias-beside-a-same-named-type-is-named-as-its-file-spells-it -->
+A file's own alias that shares its name with another directory's type is named in the panic exactly as the file
+writes it.
+```maxon
+// --- file: a/t.maxon
+export type Score
+	export let v as ExitCode
+
+	export static function make() returns Score
+		return Score{v: 0}
+	end 'make'
+end 'Score'
+
+// --- file: app/main.maxon
+typealias Signed = int(i64.min to i64.max)
+typealias Score = int(0 to 10)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
+function narrow(v Signed) returns Score
+	return v as Score
+end 'narrow'
+
+function main() returns ExitCode
+	return narrow(launder(11)) as ExitCode + a.Score.make().v
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at main.maxon:9: Range check failed: value outside typealias 'Score'
+Stack trace:
+  in narrow
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-library-alias-beside-an-authors-type-is-named-through-stdlib -->
+The library's `ElementIndex` beside an author's enum of that name is named `stdlib.ElementIndex` in the panic,
+the spelling a compile-time diagnostic gives it in the same file.
+```maxon
+// --- file: a/e.maxon
+export enum ElementIndex
+	below = -5
+	above = 7
+end 'ElementIndex'
+
+// --- file: app/main.maxon
+typealias Signed = int(i64.min to i64.max)
+
+function launder(n Signed) returns Signed
+	return n
+end 'launder'
+
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	let val = try arr.get(launder(a.ElementIndex.above.rawValue - 8) as stdlib.ElementIndex) otherwise 99
+	return val
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at main.maxon:9: Range check failed: value outside typealias 'stdlib.ElementIndex'
+Stack trace:
   in main
   in mrt_start
 ```
@@ -965,11 +1035,10 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.error.literal-argument-into-a-divisor -->
-⭐ **THE COMPILE-TIME HALF STILL FIRES FIRST, AND IT IS STRICTLY BETTER THAN THE RUNTIME ONE.** `divide`
-now carries an entry guard, but a literal argument never reaches it: E3005 refuses the program at the
+⭐ **THE COMPILE-TIME HALF FIRES FIRST, AND IT IS STRICTLY BETTER THAN THE RUNTIME ONE.** `divide`
+carries an entry guard, but a literal argument never reaches it: E3005 refuses the program at the
 line that wrote the `0`, naming the value, the type and its bounds — a caller-anchored diagnostic the
-one shared entry guard structurally cannot give. The two halves coexist; adding the runtime one did not
-displace the compile-time one.
+one shared entry guard structurally cannot give. The two halves coexist.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonZero = int(1 to i64.max)
@@ -993,7 +1062,7 @@ what this case is about and E3012 refuses any other spelling of it — so the on
 establishes is *the premise itself* — and a guard whose
 sole consumer is a premise is exactly what a naive dead-value pass deletes. That is not a hypothetical:
 the whole point of this mechanism is that the divide prover TRUSTS a `NonZero` parameter, so a pass that
-elided the guard on the grounds that nothing reads the value would silently restore the bug A1f closed,
+elided the guard on the grounds that nothing reads the value would silently let a zero reach the unguarded divide,
 with every existing case still green. Pinned so `pruneDeadBlockArgs` / `elimTrivialBlockArgs` /
 `foldConstOperands` — and anything later that walks uses — has a test standing in front of it.
 ```maxon
@@ -1211,7 +1280,7 @@ Stack trace:
 
 
 <!-- test: range-check-panic.a-contained-return-emits-no-guard -->
-⭐ **THE A4f REPRODUCER.** `pick` returns a `Byte`, `main` returns an `ExitCode`, and `int(0 to 255)` is
+⭐ **THE CONTAINED RETURN.** `pick` returns a `Byte`, `main` returns an `ExitCode`, and `int(0 to 255)` is
 inside `ExitCode`'s range on every target — strictly, under Windows' `int(0 to u32.max)`; as an equal
 range, under the `int(0 to 255)` Linux, macOS and WASI carry — so the `as ExitCode` that `main`'s
 `return` owes gets nothing on any of them. Its FRAGMENT is the evidence: `pick` keeps its own cascade
@@ -1240,8 +1309,8 @@ end 'main'
 
 <!-- test: range-check-panic.an-identical-range-return-emits-no-guard -->
 The boundary of the rule: the two ranges are the SAME range, which is contained in itself. Every `main`
-in the corpus that returns an `ExitCode`-returning call is this program, and every one of them used to
-carry a full bounds cascade against a value that had just passed the identical cascade one frame down.
+in the corpus that returns an `ExitCode`-returning call is this program, and a guard there would run a
+full bounds cascade against a value that had just passed the identical cascade one frame down.
 The rule is containment, so it does not care *which* range `ExitCode` carries on the target — only that
 the two ends of the `return` name the same one.
 ```maxon
@@ -1260,7 +1329,7 @@ end 'main'
 
 <!-- test: range-check-panic.an-uncontained-return-is-still-guarded -->
 ⚠ **THE NEGATIVE CONTROL, and the one that matters most.** `Wide` is not inside `Narrow`, so nothing is
-proved and the guard stands exactly where A1f put it. Off by one at the top: `101` is a legal `Wide` and
+proved and the guard stands at the `return`. Off by one at the top: `101` is a legal `Wide` and
 not a legal `Narrow`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1414,7 +1483,7 @@ Stack trace:
 
 
 <!-- test: range-check-panic.an-uncontained-element-store-is-still-guarded -->
-⚠ The negative control for the array-element door, which A1f-arrayelem put at the STORE rather than at
+⚠ The negative control for the array-element door, whose guard stands at the STORE rather than at
 the callee's entry — so the elision has to leave that one standing too.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1449,7 +1518,7 @@ Stack trace:
 ```
 
 
-### A COUNTED LOOP'S COUNTER CARRIES A RANGE, AND A GUARD IT COVERS IS DEAD (EC7)
+### A COUNTED LOOP'S COUNTER CARRIES A RANGE, AND A GUARD IT COVERS IS DEAD
 
 `for r in 0 upto 64` steps its counter through `0 … 63` and nothing else. That is a fact about every
 value the body ever sees, so a range check the counter reaches — an `as` cast, a `return`, a field or
@@ -1608,8 +1677,8 @@ Stack trace:
 ⭐⭐ **A LIMIT THAT DOES NOT FOLD STILL BOUNDS THE COUNTER FROM BELOW.** `for i in 0 upto xs.count()`
 cannot fold its top, but its START is a literal, so every trip runs on `i >= 0` — which is the whole of
 what a non-negative element index needs. The interval is recorded ONE-SIDED as `[start, i64.max]`.
-MEASURED over this compiler's own self-compile: it retires **635** of its 6,863 range-check sites, all
-but four of every one an interval could reach, and 633 of them are `ElementIndex`.
+Over this compiler's own self-compile it retires nearly every range-check site an interval could
+reach, and almost all of them are `ElementIndex`.
 
 ⚠ **THE CEILING IS WHAT MUST BE PROVED, NOT THE FLOOR — and a limit above `i64.max` is where it fails.**
 The loop test runs at a signedness valid for both operands, so `i < xs` over an `int(0 to u64.max)` limit
@@ -1770,8 +1839,8 @@ total=3
 admitting negatives pins the test to the SIGNED reading, under which the counter stops at `limit - 1` and
 the floor would hold. It is refused because `limitStatesANonNegativeCeiling` asks for a limit provably
 inside `0 … i64.max` and answers on the DECLARED range alone — a narrower rule than soundness needs, and a
-much easier one to be sure of. MEASURED: the whole of what it costs is 4 sites of the 639 an interval could
-reach in this compiler's self-compile, against the 635 it takes.
+much easier one to be sure of, and in this compiler's self-compile it costs only a handful of the sites
+an interval could reach.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonNeg = int(0 to i64.max)
@@ -2022,12 +2091,12 @@ Stack trace:
 
 
 <!-- test: range-check-panic.an-inclusive-counted-loop-past-the-unsigned-top-still-panics -->
-⚠⚠ **THE DISCRIMINATING CASE FOR THE TOP BOUND, AND IT WAS A MEASURED WRONG ANSWER.** A `to` loop runs the
+⚠⚠ **THE DISCRIMINATING CASE FOR THE TOP BOUND.** A `to` loop runs the
 body AT its bound, steps past it and tests again — so at the top of the domain the test READS, the step wraps
 to that domain's bottom and the loop never leaves. There are two tops, because `emitCompare` picks a
 signedness valid for both operands: this counter is declared over `int(0 to u64.max)`, so the test compiles
 UNSIGNED, walks past `-1` into `0, 1, …`, and the interval `[-5, -1]` stops being true on the sixth trip.
-With only the SIGNED top refused this printed `n=7 last=1` and exited 0; the guard belongs here and fires.
+Refusing only the SIGNED top would print `n=7 last=1` and exit 0; the guard belongs here and fires.
 ⚠ `(0 - 5) as Big` is spelled as a SUBTRACTION on purpose: a written `-5` is refused at a declared lower
 bound of 0 before the program runs (E3005), and this case pins the RUNTIME guard — the counter has to
 arrive negative through arithmetic, not through a literal the parser marks.
@@ -2168,10 +2237,10 @@ t=10
 ⛔⛔ **A GUARD BELONGS TO ITS ARM, AND A CONDITIONAL EXPRESSION'S TRUE ARM IS *RELOCATED* AFTER IT IS
 PARSED.** A site records the block control was in and the ordinal that block stood at, because an
 int->int cast emits no op to anchor to — and `parseTernaryExpression` then lifts the true arm's ops off
-the unconditional path into `ternarytrue`, leaving the site describing a position that no longer holds
-its value. The cascade was emitted in the CONDITION's block and ran on both edges: this program panicked
-`value outside typealias 'Small'` where the answer is `7`. The arm's sites now travel with its
-ops (`Parser.rehomeArmRangeSites`).
+the unconditional path into `ternarytrue`. A site left where it was recorded would describe a position
+that holds a different value, its cascade would run in the CONDITION's block on both edges, and this
+program would panic `value outside typealias 'Small'` where the answer is `7`. The arm's sites travel with
+its ops (`Parser.rehomeArmRangeSites`).
 ```maxon
 typealias Wide = int(0 to u64.max)
 typealias Small = int(0 to 100)
@@ -2226,8 +2295,8 @@ Stack trace:
 ⛔ The same defect's louder half: when the guarded value is COMPUTED in the arm rather than merely read
 there, the misplaced cascade READS a value defined in a block it dominates, and the register allocator
 refuses the function outright — *"seedInUse: value N is live-in to block 0 but was never colored"*, so
-the program does not build at all. It is what stopped the compiler compiling ITSELF once `stdlib/Array.maxon`'s
-`ElementIndex` narrowed and put a guard on every computed array index: `Project.slotCallArgs` indexes
+the program does not build at all. The compiler's own source has this shape, because `stdlib/Array.maxon`'s
+`ElementIndex` puts a guard on every computed array index: `Project.slotCallArgs` indexes
 `argDefaultSlots` by a subtraction inside a conditional expression's true arm. The second call also
 carries an OUT-OF-RANGE value down the arm that is NOT selected, so a guard that merely survived in the
 wrong block would be caught here too and not only by the compile.

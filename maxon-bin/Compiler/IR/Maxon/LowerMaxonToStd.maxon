@@ -77,7 +77,7 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 			named or
 
 			// Every reference is one machine word: a struct or generic instance is its box's address, a
-			// String or Character its record's, a function value a `.text` code address, a `cstring` a
+			// String or Character its record's, a function value its function record's, a `cstring` a
 			// raw address. A type parameter is an opaque word, which is what lets a generic type's method
 			// bodies compile once. MaxonType stays width-free (see MaxonDialect), so this arm is the one
 			// place the machine word is named. An existential's tag types only its value half; the
@@ -401,26 +401,10 @@ end 'maxonUnaryOpOfStdOpcode'
 // carries, read off the CALLEE's declared types and never off the argument values. Both indirect shapes come
 // through here now: a function value hands it the declared `FunctionShape`'s parameters
 // (`appendCallIndirect`), a witness call the requirement's declared formals (`witnessFormalTypes`) —
-// DECLARED, never the actuals, for the wasm trap that function records. The
-// trailing uniform-ABI env pointer is an i64 no parameter describes, so the walk over the parameters alone
+// DECLARED, never the actuals, for the wasm trap that function records. The trailing uniform-ABI
+// function-record pointer is an i64 no parameter describes, so the walk over the parameters alone
 // leaves its bit clear, which is exactly right; a witness call's RECEIVER is covered the same way, by the
 // `integer` its formal list is seeded with.
-// ⭐ **THE CALLEE NAME AN INDIRECT CALL HAS NOT GOT** — what `crossFloatDomainArgs` is handed by a function
-// value's call and by a witness dispatch. Named rather than passed as a bare empty slice, because the reader
-// has to know it is a STATEMENT and not an omission: neither shape can reach a by-reference parameter, since
-// a function TYPE and an interface REQUIREMENT both describe their parameters without saying how they are
-// passed, and the sweep records by-reference columns per DECLARATION. `paramIsByRef` answers false for it,
-// which is the right answer rather than a fallback.
-//
-// ⚠ **IT IS A SECOND SPELLING OF `EmptySourceText`, AND THE REASON IS A LANGUAGE RESTRICTION RATHER THAN A
-// PREFERENCE — MEASURED, because the PBR-2 review tried the alias first.** `let NoNamedCallee =
-// EmptySourceText` is `error E2004: Undefined constant 'EmptySourceText'` at this line: a module-level `let`
-// initializer cannot name another module's constant, though a function BODY in this same file reads it
-// freely (`currentFuncName: EmptySourceText`, in `create`). So the duplicate literal is forced here, and the
-// two spellings are of the EMPTY SLICE — a value with no state to drift. Fold this into `EmptySourceText`
-// the day a top-level initializer can name one.
-let NoNamedCallee = b""
-
 function paramFloatMask(paramTypes MaxonTypeArray) returns ArgFloatMask
 	var mask = 0 as ArgFloatMask
 
@@ -434,20 +418,6 @@ function paramFloatMask(paramTypes MaxonTypeArray) returns ArgFloatMask
 
 	return mask
 end 'paramFloatMask'
-
-// Does any parameter of `sig` have `function` type — the ONLY thing that forces a companion environment
-// argument to be threaded at the call (see `MaxonToStdLowering.appendCalleeEnvArgs`). Bounded scan (the same
-// shape as `signatureHasFloatParam`), so the overwhelmingly common no-function call returns its slotted
-// arguments verbatim rather than building a fresh array.
-function signatureHasFunctionParam(sig FuncSignature) returns bool
-	for paramType in sig.paramTypes 'eachParam'
-		if maxonTypeTag(paramType) == ValueTypeTag.function 'function'
-			return true
-		end 'function'
-	end 'eachParam'
-
-	return false
-end 'signatureHasFunctionParam'
 
 // Public entry: lower a whole MaxonModule to a fresh StdModule. Takes the whole `Project`, because the
 // lowering needs three things off it: the `funcSignatures` registry (label→positional argument
@@ -493,6 +463,21 @@ export typealias ImmortalStringTableLabelSet = Set with String
 // label. Its own set for `ImmortalStringTableLabelSet`'s reason — a box of scalars owes no relocation at
 // all, and a container's box owes one per column slot.
 export typealias ImmortalStructBoxLabelSet = Set with String
+
+export typealias FunctionRecordLabelSet = Set with String
+
+typealias FunctionValueTargetMap = Map with (ValueId, ByteArray)
+
+union FunctionValueTargets
+	none
+	entries(byValue FunctionValueTargetMap)
+end 'FunctionValueTargets'
+
+function singleFunctionValueTarget(value ValueId, funcName ByteArray) returns FunctionValueTargetMap
+	var byValue = FunctionValueTargetMap.create()
+	byValue.upsert(value, value: funcName)
+	return byValue
+end 'singleFunctionValueTarget'
 
 // The set of witness-slot ABI adapters already REQUESTED — keyed on the adapter's symbol, which is
 // the `(conformer, interface, method)` triple by construction (`witnessSlotAdapterSymbol`). One conformer's
@@ -794,7 +779,7 @@ end 'lowerMaxonToStd'
 // existing walks at this point in the pipeline cannot carry it — `scanRuntimeUsage` is a pure analysis
 // whose whole contract is to compute a usage struct (threading a mutable `.rdata` sink through it would
 // make every `record*Usage` helper a potential mutator), and `collectFnRefThunkTargets` harvests function
-// names for the env-thunk ABI, which this shares nothing with but the loop shape. It sits inside
+// names for the `__fnref_` thunks, which this shares nothing with but the loop shape. It sits inside
 // `lowerMaxonToStd` rather than beside them so the ordering is established in the same file that would
 // otherwise interleave these registrations, and so it needs no pipeline wiring of its own. Per op it is one
 // union match, against a lowering that then does real work on every one of them.
@@ -923,6 +908,11 @@ union LayoutSource
 	forwardedFromTheCaller
 end 'LayoutSource'
 
+union ByReferenceParamSource
+	indirectCallee
+	directCallee(name ByteArray)
+end 'ByReferenceParamSource'
+
 typealias DescriptorTableMap = Map with (ByteArray, GenericInstanceIdArray)
 
 let noDescriptorTableEntries = GenericInstanceIdArray.create()
@@ -1034,6 +1024,11 @@ function divisionExpansionKind(expansion DivisionExpansion) returns CheckedDivis
 	end 'e'
 end 'divisionExpansionKind'
 
+union LoweredFunction
+	none
+	named(name ByteArray)
+end 'LoweredFunction'
+
 type MaxonToStdLowering
 	var maxonModule as MaxonModule
 	var stdModule as StdModule
@@ -1054,7 +1049,7 @@ type MaxonToStdLowering
 	// through `genericInstanceBoxSize` / `genericInstanceSoleArgLogicalSize` / `mangleGenericInstance`.
 	var signatures as ProgramSignatures
 
-	// PBR-2: the current function's by-reference parameter mask and parameter count — see `stdTypeOf`. Both
+	// The current function's by-reference parameter mask and parameter count — see `stdTypeOf`. Both
 	// are re-pointed per function beside `valueTags`, and both are 0 for a function with no by-reference
 	// parameter, which is every function in a program that reassigns none.
 	var currentByRefParams as ParamPositionMask
@@ -1104,6 +1099,9 @@ type MaxonToStdLowering
 	// The imaged struct boxes whose column slots are already relocated — see `ImmortalStructBoxLabelSet`.
 	var emittedImmortalStructBoxes as ImmortalStructBoxLabelSet
 
+	var emittedFunctionRecords as FunctionRecordLabelSet
+	var functionValueTargets as FunctionValueTargets
+
 	// The witness-slot ABI adapters already requested — see `WitnessAdapterNameSet`.
 	var emittedWitnessAdapters as WitnessAdapterNameSet
 
@@ -1144,11 +1142,6 @@ type MaxonToStdLowering
 	// It is a per-function BINDING rather than a parameter threaded through `lowerOp`, because
 	// every op in a function shares one column and the walk is already per-function.
 	var valueTags as ValueTypeTagArray
-
-	// The per-value closure-environment column of the function CURRENTLY being lowered —
-	// re-pointed per function like `valueTags`, from the SAME `IrFunction.valueClosureEnv` the parser
-	// published. `appendCalleeEnvArgs` reads it to thread a function-value ARGUMENT's environment to a callee.
-	var valueClosureEnv as ValueIdArray
 
 	// The per-value WITNESS-PAIRING column of the function CURRENTLY being lowered
 	// — re-pointed per function like `valueTags`, from the SAME
@@ -1222,7 +1215,7 @@ type MaxonToStdLowering
 
 	// The name of the function CURRENTLY being lowered — re-pointed per function, for the diagnostics the
 	// dictionary-passing invariant checks raise (`bindImplicitLayoutParam` / `forwardCallerLayout`).
-	var currentFuncName as ByteArray
+	var currentFunction as LoweredFunction
 	var currentSourceFilePath as FilePath
 
 	// Where each file's coverage points begin in `Project.covPoints`. EMPTY for every build `--coverage` is
@@ -1230,7 +1223,7 @@ type MaxonToStdLowering
 	var covPointBases as CovPointBaseMap
 
 	// The base of the CURRENT function's file — added to the FILE-LOCAL id a `MaxonOp.covPoint` carries to
-	// give the whole-program counter slot. Re-stamped per function beside `currentFuncName`.
+	// give the whole-program counter slot. Re-stamped per function beside `currentFunction`.
 	var currentCovPointBase as CovPointId
 
 	// The ValueId of the CURRENT function's hidden layout-descriptor parameter — or, in a closure, of the
@@ -1333,7 +1326,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1347,13 +1340,13 @@ type MaxonToStdLowering
 	// The Std type a VALUE computes in — the truth the arith band's `operandType` carries, and a
 	// single indexed read of the column `lower` pointed at this function.
 	//
-	// ⭐⭐ **EXCEPT FOR A BY-REFERENCE PARAMETER, WHICH IS AN ADDRESS AND SO IS ALWAYS THE MACHINE WORD
-	// (PBR-2).** Its DECLARED type is the type of what the cell holds, and every tier above this one wants
-	// that type — the argument check judges a forwarded `cur` against `Node`, the accessor gate sees a
-	// `named` value, the field base finds a layout. Only the machine representation differs, and this is the
-	// one place that answers for it: `valueTags` keeps the declared type and the REPRESENTATION is decided
-	// here, where the ABI already lives (`func.reassignedParamMask`, the same mask that types the callee's
-	// parameter slot in `transferFuncs`).
+	// ⭐⭐ **EXCEPT FOR A BY-REFERENCE PARAMETER, WHICH IS AN ADDRESS AND SO IS ALWAYS THE MACHINE
+	// WORD.** Its DECLARED type is the type of what the cell holds, and every tier above this one
+	// wants that type — the argument check judges a forwarded `cur` against `Node`, the accessor gate
+	// sees a `named` value, the field base finds a layout. Only the machine representation differs,
+	// and this is the one place that answers for it: `valueTags` keeps the declared type and the
+	// REPRESENTATION is decided here, where the ABI already lives (`func.reassignedParamMask`, the
+	// same mask that types the callee's parameter slot in `transferFuncs`).
 	//
 	// ⚠ **THE FLOAT CASE IS WHY THIS CANNOT BE LEFT TO THE TAG.** A by-reference `float(f64.min to f64.max)`
 	// parameter would compute in `f64`, so the register allocator colors the CELL'S ADDRESS into an XMM
@@ -1377,7 +1370,7 @@ type MaxonToStdLowering
 	// compiler emitted (an empty `sourceFilePath`), which interns to `NoSpanId` — so a runtime body can
 	// never be attributed to a statement of the program's first source file.
 	function spanFileIdOf(func IrFunction, project Project) returns DebugFileId
-		if not project.debugInfo or func.sourceFilePath.isEmpty() 'noFile'
+		if not project.debugInfo or func.isCompilerBuilt() 'noFile'
 			return NoDebugFileId
 		end 'noFile'
 
@@ -1431,8 +1424,6 @@ type MaxonToStdLowering
 			dstBlock.blockArgs = srcBlock.blockArgs
 			dstBlock.branchEdges = srcBlock.branchEdges
 			self.stdModule.blocks.push(dstBlock)
-			let srcInfo = try self.maxonModule.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
-			self.stdModule.blockSourceInfo.push(srcInfo)
 		end 'relocateBlocks'
 
 		// Transfer each function, collapsing its Maxon-phase types (return type +
@@ -1443,7 +1434,7 @@ type MaxonToStdLowering
 			var stdParams = StdTypeArray.create()
 
 			for k in 0 upto func.maxonParamTypes.count() 'eachParam'
-				// ⭐⭐ **A BY-REFERENCE PARAMETER CARRIES AN ADDRESS, WHATEVER ITS DECLARED TYPE SAYS (PBR-2).**
+				// ⭐⭐ **A BY-REFERENCE PARAMETER CARRIES AN ADDRESS, WHATEVER ITS DECLARED TYPE SAYS.**
 				// The declared type is the type of the VALUE the cell holds; the parameter itself is the cell's
 				// address, which is the machine word. Nothing in `maxonParamTypes` can say so — a
 				// `float(f64.min to f64.max)` parameter is spelled exactly the same whether it arrives by value
@@ -1457,13 +1448,13 @@ type MaxonToStdLowering
 				stdParams.push(StdType.i64 if maskHasParam(func.reassignedParamMask, param: k) else maxonTypeToStdType(paramType))
 			end 'eachParam'
 
-			// The uniform ABI's companion environment parameters sit PAST the user parameters:
-			// `paramCount` counts them, `maxonParamTypes` does not (each is an i64 pointer with no source type).
-			// Grow the Std parameter list to `paramCount` so `emitParams` materializes every incoming register and
-			// the wasm functype covers every slot.
-			for _ in func.maxonParamTypes.count() as ParamCount upto func.paramCount 'envParam'
+			// The hidden parameters sit PAST the user parameters: `paramCount` counts them,
+			// `maxonParamTypes` does not (each is an i64 word with no source type). Grow the Std parameter
+			// list to `paramCount` so `emitParams` materializes every incoming register and the wasm
+			// functype covers every slot.
+			for _ in func.maxonParamTypes.count() as ParamCount upto func.paramCount 'hiddenParam'
 				stdParams.push(StdType.i64)
-			end 'envParam'
+			end 'hiddenParam'
 
 			func.returnType = maxonReturnTypeToStdReturnType(func.maxonReturnType)
 			func.paramTypes = stdParams
@@ -1473,12 +1464,12 @@ type MaxonToStdLowering
 		// Walk each function's blocks and lower their body ops + terminator. Value
 		// ids need no per-function reset — the parser already numbered them densely
 		// per function, and this pass passes them through untouched.
-		// An INDEX loop, not `for … in`: the element is a BORROW of `stdModule`, and the call below is
-		// recorded as writing that same storage. ⚖ Canonical note at
-		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+		// An INDEX loop through `getFunc`, which ends the element's borrow at its return: the lowering
+		// below writes `stdModule` while the body reads `srcFunc` on every trip of its own loops. ⚖ Canonical
+		// note at `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 		for fnIndex in 0 upto self.stdModule.functions.count() 'eachFunc'
 			try requireStillWanted(project)
-			let srcFunc = try self.stdModule.functions.get(fnIndex) otherwise panic("lowerFunctionBodies: fnIndex {fnIndex} is below self.stdModule.functions.count()")
+			let srcFunc = self.stdModule.getFunc(fnIndex)
 
 			// ⭐⭐ **A LIBRARY FUNCTION THE BACK END NEVER RECEIVES HAS NO BODY LOWERED, AND THE REASON IS THE
 			// LOADER'S BYTE-NEUTRALITY INVARIANT** (`StdlibLoader`: "adding a module to `stdlib/` changes
@@ -1505,14 +1496,10 @@ type MaxonToStdLowering
 			// column is dense per function, so every `stdTypeOf` below reads the right one.
 			self.valueTags = srcFunc.valueTags
 
-			// PBR-2: which of THIS function's parameters are cell ADDRESSES rather than values. It travels with
+			// Which of THIS function's parameters are cell ADDRESSES rather than values. It travels with
 			// the type column because it is a correction TO that column — see `stdTypeOf`.
 			self.currentByRefParams = srcFunc.reassignedParamMask
 			self.currentParamCount = srcFunc.paramCount
-
-			// The closure-environment column travels with it: `appendCalleeEnvArgs` threads a
-			// function-value argument's env from here.
-			self.valueClosureEnv = srcFunc.valueClosureEnv
 
 			// The witness-pairing column travels with it too: an existential
 			// argument's witness half is FORWARDED from here rather than re-resolved.
@@ -1525,8 +1512,9 @@ type MaxonToStdLowering
 			// The name column travels with it too: `instanceIdOfValue` reads a `genericInstance`
 			// receiver's `GenericInstanceId` out of it.
 			self.valueNameIds = srcFunc.valueNameIds
-			self.currentFuncName = srcFunc.name
+			self.currentFunction = LoweredFunction.named(srcFunc.name)
 			self.currentSourceFilePath = srcFunc.sourceFilePath
+			self.functionValueTargets = FunctionValueTargets.none
 			self.bindCovPointBase(srcFunc)
 
 			// Bind this function's hidden implicit parameters (layout + witnesses).
@@ -1709,10 +1697,8 @@ type MaxonToStdLowering
 			tryCall(result, errorFlag, callee, args, argLabels, _, _, argDefaultSlots, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, dstBlock: dstBlock)
 			panicAbort(message) then self.lowerPanicAbort(message, dstBlock: dstBlock)
 
-			// A function VALUE — a `.text` code address. Lowers to the Std `funcAddr`, the
-			// `.text` twin of `globalAddr`; a PLAIN function routes through its `__fnref_` env-thunk so the
-			// materialized address has the uniform `(userargs, env) -> R` shape.
-			functionRef(result, funcName) then self.lowerFunctionRef(result, funcName: funcName, dstBlock: dstBlock)
+			// A function VALUE (the address of its record) or a bare code address — see `lowerFunctionRef`.
+			functionRef(result, funcName, form) then self.lowerFunctionRef(result, funcName: funcName, form: form, dstBlock: dstBlock)
 
 			// A call THROUGH a function value — lowers to the Std `callIndirect`, the callee value
 			// passing through as the register the call goes through. Positional args, no labels to slot.
@@ -1786,10 +1772,17 @@ type MaxonToStdLowering
 	// `sourceFilePath` and holds no coverage point, so it needs no base; every parsed function's file was
 	// merged, and `mergeArtifact` records a base for every file it merges, so a miss there is an invariant
 	// break rather than an uninstrumented file.
+	function currentFuncName() returns ByteArray
+		match self.currentFunction 'lowered'
+			none then panic("MaxonToStdLowering.currentFuncName: asked outside the lowering of any function")
+			named(name) then return name
+		end 'lowered'
+	end 'currentFuncName'
+
 	function bindCovPointBase(srcFunc IrFunction)
 		self.currentCovPointBase = 0
 
-		if self.covPointBases.count() == 0 or srcFunc.sourceFilePath.isEmpty() 'noPointsToRebase'
+		if self.covPointBases.count() == 0 or srcFunc.isCompilerBuilt() 'noPointsToRebase'
 			return
 		end 'noPointsToRebase'
 
@@ -1824,7 +1817,7 @@ type MaxonToStdLowering
 	// ⭐ **THE `element_destroy@40` RELOCATION IS ALSO WHAT ROOTS THE DESTRUCTOR.** Imaging the global deletes
 	// its `__module_init` construction, and with it the `functionRef` that was the callee's only compile-time
 	// mention; `MmRuntime.noteRelocatedFunctionUsage` installs every callee an `.rdata` relocation names.
-	function emitImmortalStringTable(result ValueId, texts ByteArrayArray, elementSize ElementStride, elementDestroy ByteArray, dstBlock IrBlock)
+	function emitImmortalStringTable(result ValueId, texts ByteArrayArray, elementSize ElementStride, elementDestroy OwnershipCallee, dstBlock IrBlock)
 		let table = registerImmortalStringTableRecord(self.globalData, texts: texts, elementSize: elementSize, debugStream: self.debugStream)
 
 		if not self.emittedImmortalStringTables.contains(table.recordLabel) 'firstUse'
@@ -1894,7 +1887,7 @@ type MaxonToStdLowering
 			slotLabels.push(self.immortalBoxSlotLabel(nodes, below: node, value: column.value))
 		end 'eachSlot'
 
-		let label = registerImmortalRecord(self.globalData, prefix: ImmortalStructRecordPrefix, record: self.seededBoxBytes(entry.bytes, columns: entry.columns, slotLabels: slotLabels), kind: RdataPayloadKind.structRecord, shape: ImmortalRecordShape.userStruct, debugStream: self.debugStream)
+		let label = registerImmortalRecord(self.globalData, prefix: ImmortalStructRecordPrefix, record: self.seededBoxBytes(entry.bytes, columns: entry.columns, slotLabels: slotLabels), kind: RdataPayloadKind.structRecord, debugStream: self.debugStream)
 
 		if self.emittedImmortalStructBoxes.contains(label) 'alreadyRelocated'
 			return label
@@ -2177,7 +2170,7 @@ type MaxonToStdLowering
 	// construction, and with it the `functionRef` that would otherwise be the callee's only compile-time mention —
 	// `MmRuntime.noteRelocatedFunctionUsage` installs every callee an `.rdata` relocation names, so recording
 	// one here is what keeps the symbol the writer resolves against in the program at all.
-	function ensureImmortalEmptyArrayRecord(elementSize ElementStride, elementDestroy ByteArray) returns String
+	function ensureImmortalEmptyArrayRecord(elementSize ElementStride, elementDestroy OwnershipCallee) returns String
 		let label = registerImmortalEmptyArrayRecord(self.globalData, elementSize: elementSize, elementDestroy: elementDestroy, debugStream: self.debugStream)
 
 		if self.emittedImmortalEmptyArrays.contains(label) 'alreadyStamped'
@@ -2235,20 +2228,20 @@ type MaxonToStdLowering
 		end 'eachFunc'
 	end 'buildLayoutNeedingFuncs'
 
-	// Does `func` carry a layout-descriptor parameter? The parser reserves it after the user + env +
+	// Does `func` carry a layout-descriptor parameter? The parser reserves it after the user +
 	// EXISTENTIAL-WITNESS companions and BEFORE the fixed-element count and any constraint-witness parameters
-	// (`[user][env][existentialWitness][layout][count][witness_0..k]`), so a `paramCount` above every
+	// (`[user][existentialWitness][layout][count][witness_0..k]`), so a `paramCount` above every
 	// OTHER hidden block means the layout slot is present. Each of the three
-	// counts is derived from a whole-program fact the parser reserved by — the declared parameter TYPES for
-	// the env and existential blocks, the enclosing type's `where` constraints for the witness block — so
-	// caller and callee agree without a per-function field.
+	// counts is derived from a whole-program fact the parser reserved by — the declared parameter
+	// TYPES and by-reference mask for the existential block, the enclosing type's `where` constraints
+	// for the witness block — so caller and callee agree without a per-function field.
 	//
-	// ⚠ **A COUNT MISSING FROM THIS SUM READS AS A LAYOUT SLOT THAT IS NOT THERE.** MEASURED with the
-	// existential block absent from it: `function callGreet(g Greeter)` makes `layoutNeedingFuncs` claim a
-	// free function needs a descriptor, and the caller then panics looking for a generic instance to source
-	// one from.
+	// ⚠ **A COUNT MISSING FROM THIS SUM READS AS A LAYOUT SLOT THAT IS NOT THERE.** With the
+	// existential block absent from it, `function callGreet(g Greeter)` makes `layoutNeedingFuncs`
+	// claim a free function needs a descriptor, and the caller then panics looking for a generic
+	// instance to source one from.
 	function functionHasDescriptorParam(func IrFunction) returns bool
-		return func.paramCount > func.maxonParamTypes.count() as ParamCount + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.function) + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.interfaceRef) + self.fixedElementCountParamCountFor(func.name) + self.witnessParamCountForFunc(func)
+		return func.paramCount > func.maxonParamTypes.count() as ParamCount + existentialWitnessParamCount(func.maxonParamTypes, byReference: func.reassignedParamMask) + self.fixedElementCountParamCountFor(func.name) + self.witnessParamCountForFunc(func)
 	end 'functionHasDescriptorParam'
 
 	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER?** — asked BY NAME, of the
@@ -2278,7 +2271,7 @@ type MaxonToStdLowering
 		self.currentWitnessCount = self.witnessParamCountForFunc(func)
 		self.witnessParamBase = valueIdAtParamPosition(func.paramCount - self.currentWitnessCount)
 
-		// ⭐ `[user][env][existentialWitness][layout][count][witness_0..k]` — read back from the END, so the
+		// ⭐ `[user][existentialWitness][layout][count][witness_0..k]` — read back from the END, so the
 		// count slot is found first and the descriptor sits one further in. BOTH offsets come from
 		// `MaxonDialect`'s two slot functions, which is where `Parser.parseFunction` RESERVED them: the order
 		// is one fact and a second spelling of it is a wrong register, never a compile error.
@@ -2323,37 +2316,38 @@ type MaxonToStdLowering
 		return self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints).count()
 	end 'witnessParamCountForCallee'
 
-	// `finalizeCallArgs` (float widening + companion env args) PLUS the hidden IMPLICIT arguments a
-	// dictionary-passing call carries: the layout descriptor, THEN the fixed element count,
-	// THEN one witness pointer per `where` constraint — in the
-	// `[user][env][existentialWitness][layout][count][witness_0..k]` order the parser reserved them at, so the
-	// caller's argument registers and the callee's `param` ops meet. That ORDER's arithmetic has one home,
-	// `MaxonDialect`'s two slot functions; this list is the same order expressed as push order.
+	// The float-widened arguments (`crossFloatDomainArgs`) PLUS the hidden IMPLICIT arguments a
+	// dictionary-passing call carries: the existential witnesses, the layout descriptor, THEN the
+	// fixed element count, THEN one witness pointer per `where` constraint — in the
+	// `[user][existentialWitness][layout][count][witness_0..k]` order the parser reserved them at, so
+	// the caller's argument registers and the callee's `param` ops meet. That ORDER's arithmetic has
+	// one home, `MaxonDialect`'s two slot functions; this list is the same order expressed as push
+	// order.
 	function finalizeCallArgsWithLayout(argIds ValueIdArray, sig FuncSignature, callee ByteArray, result ValueId, dstBlock IrBlock) returns ValueIdArray
-		let baseArgs = self.finalizeCallArgs(argIds, sig: sig, callee: callee, dstBlock: dstBlock)
+		let baseArgs = self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, byReference: ByReferenceParamSource.directCallee(callee), dstBlock: dstBlock)
 		let needsLayout = self.layoutNeedingFuncs.contains(callee)
 		let witnessCount = self.witnessParamCountForCallee(callee, sig: sig)
 
 		// The SUPPLY side of the reserve/supply pair — the SAME counter `Parser.parseFunction` reserves with.
-		let existentialCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef)
+		let byReference = self.existentialByReferenceOf(callee, sig: sig)
+		let existentialCount = existentialWitnessParamCount(sig.paramTypes, byReference: byReference)
 		let countSlots = self.fixedElementCountParamCountFor(callee)
 
 		if not needsLayout and witnessCount == 0 and existentialCount == 0 and countSlots == 0 'noImplicits'
 			return baseArgs
 		end 'noImplicits'
 
-		// A FRESH array — `baseArgs` may BE the slotted `argIds` verbatim (finalizeCallArgs's fast path
-		// returns them unchanged), so pushing into it would mutate a possibly-shared array. Only a
+		// A FRESH array — `baseArgs` may BE the slotted `argIds` verbatim (`crossFloatDomainArgs`'s fast
+		// path returns them unchanged), so pushing into it would mutate a possibly-shared array. Only a
 		// dictionary-passing call pays this copy; the common path already returned `baseArgs` above.
 		var out = ValueIdArray.create()
 		out.append(baseArgs)
 
 		// ⭐ **THE EXISTENTIAL WITNESSES COME FIRST — the ABI is
-		// `[user][env][existentialWitness][layout][count][witness]` and this list is built in that order** (the
-		// env companions are already inside `baseArgs`, appended by `finalizeCallArgs`). See
-		// `Parser.bindExistentialWitnessParams` for why the block sits where it does.
+		// `[user][existentialWitness][layout][count][witness]` and this list is built in that order.**
+		// See `Parser.bindExistentialWitnessParams` for why the block sits where it does.
 		if existentialCount > 0 'existentialWitnesses'
-			self.appendExistentialWitnessArgs(out, argIds: argIds, sig: sig, callee: callee, dstBlock: dstBlock)
+			self.appendExistentialWitnessArgs(out, argIds: argIds, sig: sig, callee: callee, byReference: byReference, dstBlock: dstBlock)
 		end 'existentialWitnesses'
 
 		if needsLayout 'layout'
@@ -2371,8 +2365,16 @@ type MaxonToStdLowering
 		return out
 	end 'finalizeCallArgsWithLayout'
 
-	// ⭐⭐ **APPEND THE WITNESS HALF OF EVERY EXISTENTIAL ARGUMENT** — one per
-	// interface-typed parameter of `callee`, in parameter order, which is the order
+	function existentialByReferenceOf(callee ByteArray, sig FuncSignature) returns ParamPositionMask
+		if countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef) == 0 'noExistentialParameter'
+			return NoParamPositions
+		end 'noExistentialParameter'
+
+		return self.funcNames.byReferenceParamsOf(callee)
+	end 'existentialByReferenceOf'
+
+	// ⭐⭐ **APPEND THE WITNESS HALF OF EVERY EXISTENTIAL ARGUMENT** — one per interface-typed parameter
+	// of `callee` not taken by reference, in parameter order, which is the order
 	// `Parser.bindExistentialWitnessParams` reserved the companions in.
 	//
 	// TWO ways a witness reaches the callee, and they are the two halves of the widening rule
@@ -2386,13 +2388,13 @@ type MaxonToStdLowering
 	//   • the argument is a CONCRETE conformer — materialize `__witness_<conformer>.<Iface>`, through the very
 	//     helper the `Set`/`Map` runtimes already thread their key witnesses with, so a program reaches one
 	//     table whichever door asked for it.
-	function appendExistentialWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, callee ByteArray, dstBlock IrBlock)
+	function appendExistentialWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, callee ByteArray, byReference ParamPositionMask, dstBlock IrBlock)
 		for i in 0 upto sig.paramTypes.count() 'eachParam'
 			let paramType = try sig.paramTypes.get(i) otherwise panic("appendExistentialWitnessArgs: paramTypes.get OOB at {i} for '{String.from(callee)}'")
 
-			if maxonTypeTag(paramType) != ValueTypeTag.interfaceRef 'notExistential'
+			if not paramCarriesAnExistentialWitness(paramType, param: i as ParamCount, byReference: byReference) 'noWitnessCompanion'
 				continue
-			end 'notExistential'
+			end 'noWitnessCompanion'
 
 			let arg = try argIds.get(i) otherwise panic("appendExistentialWitnessArgs: '{String.from(callee)}' declares an interface-typed parameter at position {i} but the call slotted only {argIds.count()} arguments — `slotCallArgs` fills every declared position")
 			out.push(self.witnessForExistentialValue(arg, interfaceName: interfaceNameOfType(paramType, typeNames: self.typeNames), site: callee, dstBlock: dstBlock))
@@ -2424,7 +2426,7 @@ type MaxonToStdLowering
 	// into a field and the same value widened into a parameter address one table.
 	function emitConformerWitness(result ValueId, conformer ValueId, interfaceName ByteArray, dstBlock IrBlock)
 		if self.valueTagOf(conformer) == ValueTypeTag.interfaceRef 'alreadyAnExistential'
-			panic("emitConformerWitness: v{conformer} is already held at an interface in '{String.from(self.currentFuncName)}' — its witness is forwarded (`pairedWitnessOf`), and the parser emits `existentialWitness` only for a concrete conformer")
+			panic("emitConformerWitness: v{conformer} is already held at an interface in '{String.from(self.currentFuncName())}' — its witness is forwarded (`pairedWitnessOf`), and the parser emits `existentialWitness` only for a concrete conformer")
 		end 'alreadyAnExistential'
 
 		self.emitWitnessTableAddr(result, conformerType: self.conformerNameOf(conformer), instance: self.witnessInstanceOfValue(conformer), interfaceName: interfaceName, dstBlock: dstBlock)
@@ -2537,7 +2539,7 @@ type MaxonToStdLowering
 			// a BARE opaque argument by forwarding a slot the caller was handed; this one is the argument that
 			// is a whole INSTANCE over the caller's parameters, for which no caller ever held a slot.
 			if self.constraintArgumentHasNoTable(concreteType, instance: argInstance, interfaceName: constraint.interfaceName) 'parametricArgument'
-				self.pendingNullWitnessArgs.push(NullWitnessArgRequest.create(self.currentFuncName, callee: callee, constraintIndex: constraintIndex, conformerType: concreteType, interfaceName: constraint.interfaceName))
+				self.pendingNullWitnessArgs.push(NullWitnessArgRequest.create(self.currentFuncName(), callee: callee, constraintIndex: constraintIndex, conformerType: concreteType, interfaceName: constraint.interfaceName))
 				let nullId = self.mintStdValueId()
 				self.stdModule.appendOp(dstBlock, op: StdOp.const(nullId, value: 0, valueType: StdType.i64))
 				return nullId
@@ -2592,29 +2594,26 @@ type MaxonToStdLowering
 	// means it did. Both panics name the two declarations, because the answer to "which one is wrong" is
 	// always which pair failed to line up.
 	function forwardOpaqueParamWitness(token TypeParamId, constraint WhereConstraint, callee ByteArray) returns ValueId
-		let owner = try self.signatures.typeParamOwnerOf(token) otherwise panic("forwardOpaqueParamWitness: lowering '{String.from(self.currentFuncName)}' reached an opaque type parameter (token {token}) that no declaration filed — every `typeParameter` the parser mints is recorded against the `uses` list it was resolved from")
+		let owner = try self.signatures.typeParamOwnerOf(token) otherwise panic("forwardOpaqueParamWitness: lowering '{String.from(self.currentFuncName())}' reached an opaque type parameter (token {token}) that no declaration filed — every `typeParameter` the parser mints is recorded against the `uses` list it was resolved from")
 
 		// The declaring TYPE of the function being lowered — the same `Type.member` split
 		// `witnessConstraintsOfMethod` reads a caller's own constraint list through, so the two agree on what
 		// "this function's type" means by construction.
-		let enclosingType = match splitQualifiedName(self.currentFuncName) 'q'
-			notQualified gives EmptySourceText
-			parts(typeName, _) gives typeName
-		end 'q'
+		let enclosingType = try declaringTypeOf(self.currentFuncName()) otherwise panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName())}' passes `{String.from(owner.paramName)}` of `type {String.from(owner.declaringTypeName)}` to '{String.from(callee)}', but this function is a method of no type — a witness slot index of one declaration is not a parameter number of another, and forwarding it would read a table out of an unrelated slot")
 
 		if not enclosingType.equals(owner.declaringTypeName) 'foreignParameter'
-			panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName)}' passes `{String.from(owner.paramName)}` of `type {String.from(owner.declaringTypeName)}` to '{String.from(callee)}', but this function is a method of `{String.from(enclosingType)}` — a witness slot index of one declaration is not a parameter number of another, and forwarding it would read a table out of an unrelated slot")
+			panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName())}' passes `{String.from(owner.paramName)}` of `type {String.from(owner.declaringTypeName)}` to '{String.from(callee)}', but this function is a method of `{String.from(enclosingType)}` — a witness slot index of one declaration is not a parameter number of another, and forwarding it would read a table out of an unrelated slot")
 		end 'foreignParameter'
 
 		match opaqueParamDischarge(self.signatures, interfaces: self.interfaces, token: token, interfaceName: constraint.interfaceName) 'discharge'
 			slot(index) then return self.forwardCallerWitness(index, callee: callee)
-			unsatisfied then panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName)}' passes `{String.from(owner.paramName)}` to '{String.from(callee)}', which requires `{String.from(constraint.interfaceName)}`, and `type {String.from(owner.declaringTypeName)}` promises nothing that reaches it — `checkWhereConstraints` asks this same question and refuses such a program with E3017, so the two have come apart")
+			unsatisfied then panic("forwardOpaqueParamWitness: '{String.from(self.currentFuncName())}' passes `{String.from(owner.paramName)}` to '{String.from(callee)}', which requires `{String.from(constraint.interfaceName)}`, and `type {String.from(owner.declaringTypeName)}` promises nothing that reaches it — `checkWhereConstraints` asks this same question and refuses such a program with E3017, so the two have come apart")
 		end 'discharge'
 	end 'forwardOpaqueParamWitness'
 
 	function forwardCallerWitness(constraintIndex WitnessSlotIndex, callee ByteArray) returns ValueId
 		if constraintIndex as ParamCount >= self.currentWitnessCount 'noSuchSlot'
-			panic("forwardCallerWitness: caller '{String.from(self.currentFuncName)}' carries {self.currentWitnessCount} witness parameter(s) and was asked to forward slot {constraintIndex} to '{String.from(callee)}' — a generic→generic dispatch is only reached from an instance method whose own constraint list is a PREFIX-COMPATIBLE superset of the callee's")
+			panic("forwardCallerWitness: caller '{String.from(self.currentFuncName())}' carries {self.currentWitnessCount} witness parameter(s) and was asked to forward slot {constraintIndex} to '{String.from(callee)}' — a generic→generic dispatch is only reached from an instance method whose own constraint list is a PREFIX-COMPATIBLE superset of the callee's")
 		end 'noSuchSlot'
 
 		return self.witnessParamBase + (constraintIndex as ValueId)
@@ -2641,10 +2640,10 @@ type MaxonToStdLowering
 
 		self.emittedWitnessTables.insert(label)
 
-		// ⭐ **THE SLOT LIST IS THE INTERFACE'S TRANSITIVE REQUIREMENT SET, not `iface.methods` (R10c)** — the
+		// ⭐ **THE SLOT LIST IS THE INTERFACE'S TRANSITIVE REQUIREMENT SET, not `iface.methods`** — the
 		// SAME list `Parser.findWitnessDispatchCandidates` numbers its `methodIndex` against, so the slot this
-		// pass stamps and the offset the caller compiles are one answer. Reading `iface.methods` here left an
-		// `extends`-inherited requirement with no slot at all.
+		// pass stamps and the offset the caller compiles are one answer. Reading `iface.methods` here
+		// would leave an `extends`-inherited requirement with no slot at all.
 		let iface = self.resolveWitnessInterface(interfaceName)
 		let slots = interfaceWitnessSlots(self.interfaces, iface: iface)
 		let methodCount = slots.count()
@@ -2733,21 +2732,21 @@ type MaxonToStdLowering
 	// at two different offsets and each is one line; what they must share is the PROTOCOL answer, and they do —
 	// see `ProgramSignatures.instanceDropCallee` / `existentialDestroyCallee`, each of which derives its
 	// retain twin from the same protocol call.
-	function witnessDestroyCallee(typeName ByteArray, instance WitnessTableInstance) returns ByteArray
+	function witnessDestroyCallee(typeName ByteArray, instance WitnessTableInstance) returns OwnershipCallee
 		return match instance 'table'
 			shared gives self.signatures.existentialDestroyCallee(typeName)
 			perInstance(gid) gives self.signatures.instanceDropCallee(gid)
 		end 'table'
 	end 'witnessDestroyCallee'
 
-	function witnessRetainCallee(typeName ByteArray, instance WitnessTableInstance) returns ByteArray
+	function witnessRetainCallee(typeName ByteArray, instance WitnessTableInstance) returns OwnershipCallee
 		return match instance 'table'
 			shared gives self.signatures.existentialRetainCallee(typeName)
 			perInstance(gid) gives self.signatures.instanceRetainCallee(gid)
 		end 'table'
 	end 'witnessRetainCallee'
 
-	function witnessCascadeCallee(typeName ByteArray, instance WitnessTableInstance, action CascadeAction) returns ByteArray
+	function witnessCascadeCallee(typeName ByteArray, instance WitnessTableInstance, action CascadeAction) returns OwnershipCallee
 		return match instance 'table'
 			shared gives self.signatures.existentialCascadeCallee(typeName, action: action)
 			perInstance(gid) gives self.signatures.instanceExistentialCascadeCallee(gid, action: action)
@@ -3025,7 +3024,7 @@ type MaxonToStdLowering
 			paramTypes.push(try impl.paramTypes.get(k) otherwise panic("synthesizeWitnessSlotAdapter: '{String.from(request.implName)}' declares {impl.paramTypes.count()} Std parameter types but its slot passes {request.slotArity} — a witness slot's arity can only be SHORTER than its impl's"))
 		end 'eachSlotParam'
 
-		var adapter = IrFunction.createFromStd(request.adapterName, returnType: impl.returnType, paramCount: request.slotArity, paramTypes: paramTypes, returnLine: 0, throwsTypeName: impl.throwsTypeName)
+		var adapter = IrFunction.createFromStd(request.adapterName, returnType: impl.returnType, paramCount: request.slotArity, paramTypes: paramTypes, throwsTypeName: impl.throwsTypeName)
 		adapter.maxonReturnType = impl.maxonReturnType
 		var entry = self.stdModule.addBlock(adapter, label: b"entry", heat: BlockHeat.normal)
 		emitTypedParams(self.stdModule, block: entry, paramTypes: paramTypes)
@@ -3073,17 +3072,16 @@ type MaxonToStdLowering
 	//     of it, and the proof is unnecessary because the values are real.
 	//
 	//
-	// ⛔ **THE OTHER TWO HIDDEN BLOCKS ARE NOT NULLABLE ON EITHER PATH, AND THE PANIC SAYS SO RATHER THAN
-	// GUESSING.** A `function`-typed parameter carries a companion ENVIRONMENT and an interface-typed one
-	// carries a WITNESS half; both are facts about the ARGUMENT, which only the caller has, and both are READ.
-	// A requirement declaring such a formal has no ABI a witness dispatch can satisfy — the call site passes
-	// one word where the impl reads two — so the panic is the only honest answer, adapter or not.
+	// ⛔ **THE EXISTENTIAL-WITNESS BLOCK IS NOT NULLABLE ON EITHER PATH, AND THE PANIC SAYS SO RATHER
+	// THAN GUESSING.** An interface-typed parameter not taken by reference carries a WITNESS half, a
+	// fact about the ARGUMENT, which only the caller has, and it is READ. A requirement declaring such
+	// a formal has no ABI a witness dispatch can satisfy — the call site passes one word where the
+	// impl reads two — so the panic is the only honest answer, adapter or not.
 	function appendWitnessAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, project Project)
 		let sig = try self.funcSignatures.get(request.implName) otherwise panic("appendWitnessAdapterDictionary: '{String.from(request.implName)}' has no signature — `witnessSlotCallee` returned the impl unchanged for exactly that case")
-		let companionCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.function) + countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef)
 
-		if companionCount > 0 'aPerArgumentCompanion'
-			panic("appendWitnessAdapterDictionary: witness slot impl '{String.from(request.implName)}' declares a `function`- or interface-typed parameter, whose hidden companion word is a fact about the ARGUMENT — a witness dispatch passes one word per formal and cannot supply it")
+		if existentialWitnessParamCount(sig.paramTypes, byReference: impl.reassignedParamMask) > 0 'aPerArgumentCompanion'
+			panic("appendWitnessAdapterDictionary: witness slot impl '{String.from(request.implName)}' declares an interface-typed parameter, whose hidden witness word is a fact about the ARGUMENT — a witness dispatch passes one word per formal and cannot supply it")
 		end 'aPerArgumentCompanion'
 
 		match request.instance 'table'
@@ -3132,12 +3130,9 @@ type MaxonToStdLowering
 			// A per-instance table is only minted for a CONCRETE instance, and a concrete instance states its
 			// own count — `Vector with 4 Element` says 4 — so unlike the value door there is no caller slot to
 			// fall back on and a silent instance is an internal break.
-			if not self.signatures.valueStatesItsOwnElementCount(ValueTypeTag.genericInstance, nameId: gid as TypeNameId) 'statesNoCount'
-				panic("appendInstanceAdapterDictionary: '{String.from(request.implName)}' reads a fixed element count and the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' states none — a table is keyed by an instance only when `instanceIsFullyConcrete` accepted it, and a concrete instance states its own count")
-			end 'statesNoCount'
-
+			let count = try self.signatures.genericInstanceFixedCount(gid) otherwise panic("appendInstanceAdapterDictionary: '{String.from(request.implName)}' reads a fixed element count and the per-instance table for '{String.from(self.signatures.mangleGenericInstance(gid))}' states none — a table is keyed by an instance only when `instanceIsFullyConcrete` accepted it, and a concrete instance states its own count")
 			let countId = args.count() as ValueId
-			self.stdModule.appendOp(entry, op: StdOp.const(countId, value: self.signatures.genericInstanceFixedSize(gid) as ParsedInt, valueType: StdType.i64))
+			self.stdModule.appendOp(entry, op: StdOp.const(countId, value: count as ParsedInt, valueType: StdType.i64))
 			args.push(countId)
 		end 'aFixedElementCount'
 
@@ -3184,17 +3179,17 @@ type MaxonToStdLowering
 	// parameter's uses are already Std ops — through `liveOpIndices`, never the flat array, which retains the
 	// orphans of every earlier pass.
 	//
-	// The hidden block is the tail `[slotArity, paramCount)`: the ABI is `[user][env][existential][layout]
-	// [count][witness]`, and `appendWitnessAdapterDictionary` has already refused the two middle blocks, so what
-	// remains past the slot's own arguments is exactly the descriptor, the fixed-element count and the
-	// witnesses.
+	// The hidden block is the tail `[slotArity, paramCount)`: the ABI is
+	// `[user][existential][layout][count][witness]`, and `appendWitnessAdapterDictionary` has already
+	// refused the existential block, so what remains past the slot's own arguments is exactly the
+	// descriptor, the fixed-element count and the witnesses.
 	//
-	// ⭐ **IT IS WIDTH-AGNOSTIC, WHICH IS WHY A NEW HIDDEN SLOT NEEDS NOTHING HERE — verified by
-	// MEASUREMENT, not by reading.** An `extension Vector implements Sizer` whose `capacity()` reads
-	// `countof(Self)` is refused with this diagnostic, and so is one that merely CALLS a sibling that does
-	// (the forward is a USE of the slot like any other). So a `countof`-reading body cannot be reached
-	// through a witness table at all, which is the right answer: one table serves every instantiation and
-	// there is no instantiation to take the count from.
+	// ⭐ **IT IS WIDTH-AGNOSTIC, WHICH IS WHY A NEW HIDDEN SLOT NEEDS NOTHING HERE.** An
+	// `extension Vector implements Sizer` whose `capacity()` reads `countof(Self)` is refused with
+	// this diagnostic, and so is one that merely CALLS a sibling that does (the forward is a USE of
+	// the slot like any other). So a `countof`-reading body cannot be reached through a witness table
+	// at all, which is the right answer: one table serves every instantiation and there is no
+	// instantiation to take the count from.
 	function requireWitnessSlotImplIgnoresDictionary(request WitnessAdapterRequest, impl IrFunction, project Project)
 		let referenced = self.loweredValueUses(impl)
 
@@ -3340,29 +3335,28 @@ type MaxonToStdLowering
 	end 'stampAssociatedWitnessSlots'
 
 	// Stamp ONE ownership word of a `.rdata` blob with the `funcAbs64InRdata` reloc the witness method slots
-	// take. An EMPTY callee leaves the zero-fill in place, which is the encoding every runtime entry that reads
-	// such a word treats as "nothing to do" — an `int`/`bool`/`float` conformer, whose value half is not a
-	// pointer at all, and equally a trivial generic type argument.
+	// take. An `inert` callee leaves the zero-fill in place, which is the encoding every runtime entry
+	// that reads such a word treats as "nothing to do" — an `int`/`bool`/`float` conformer, whose
+	// value half is not a pointer at all, and equally a trivial generic type argument.
 	//
 	// ⚠ **THE SYMBOL IS INSTALLED BECAUSE THIS RELOCATION EXISTS, NOT BECAUSE SOMETHING PREDICTED IT**:
 	// `MmRuntime.noteRelocatedFunctionUsage` roots every `.rdata` slot's callee after lowering, so the
 	// relocated set and the installed set are one list rather than two that agree. See there for what a
 	// pre-pipeline prediction costs. It is ONE function rather than a spelling per word
-	// because the empty test IS the encoding, and a second copy of it is where one word would come to be
-	// stamped on a rule another had already stopped using.
+	// because the `inert` test IS the encoding, and a second copy of it is where one word would come
+	// to be stamped on a rule another had already stopped using.
 	//
 	// ⚠ It serves the WITNESS TABLE's two ownership words, the LAYOUT DESCRIPTOR's two (`destroyFunc@40`,
 	// `retainFunc@64`) and an imaged empty container's `element_destroy@40` — which is why it names no blob.
 	// Each witness/descriptor pair is non-zero TOGETHER precisely because its two callees come off one
-	// protocol answer and meet the one EMPTY test here; the descriptor's `copyFunc@32` is a fact about an
-	// opaque `Array` COLUMN rather than about the type argument, so it keeps its own predicate and does not
-	// come through here.
-	function stampOwnershipWord(callee ByteArray, label String, offsetInLabel ByteOffset)
-		if callee.isEmpty() 'ownsNothing'
-			return
-		end 'ownsNothing'
-
-		self.globalData.recordFuncAbs64InRdata(callee, rdataLabel: label, offsetInLabel: offsetInLabel)
+	// protocol answer and meet the one `inert` test here; the descriptor's `copyFunc@32` is a fact
+	// about an opaque `Array` COLUMN rather than about the type argument, so it keeps its own
+	// predicate and does not come through here.
+	function stampOwnershipWord(callee OwnershipCallee, label String, offsetInLabel ByteOffset)
+		match callee 'callee'
+			inert then return
+			named(name) then self.globalData.recordFuncAbs64InRdata(name, rdataLabel: label, offsetInLabel: offsetInLabel)
+		end 'callee'
 	end 'stampOwnershipWord'
 
 	// ⭐⭐ **THE SYMBOL A WITNESS SLOT POINTS AT IS THE MEMBER `checkConformance` ACCEPTED — NOT A SECOND JOIN
@@ -3442,7 +3436,7 @@ type MaxonToStdLowering
 	// `planDescriptorTables` asks it too, so the table plan and the call lowering read one source.
 	function layoutSourceOf(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray) returns LayoutSource
 		if sig.takesReceiver() 'instanceMethod'
-			// Read from `argIds` (the ORIGINAL receiver), never from the widened/env-derived `baseArgs`.
+			// Read from `argIds` (the ORIGINAL receiver), never from the widened `baseArgs`.
 			let receiver = try argIds.get(0) otherwise panic("layoutSourceOf: layout-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
 			return self.receiverLayoutSource(receiver, callee: callee)
 		end 'instanceMethod'
@@ -3528,7 +3522,7 @@ type MaxonToStdLowering
 		end 'resolvedAtTheConcreteRoot'
 
 		if self.hasImplicitLayout and self.signatures.instanceDescriptorIsComposedFromTheCaller(gid) 'aComposedInstanceTheTableMissed'
-			panic("emitInstanceDescriptorAddr: '{String.from(self.currentFuncName)}' reaches a call on '{String.from(self.signatures.instanceDisplayName(gid))}', whose descriptor is read out of the caller's table, but `planDescriptorTables` filed no entry for it — the plan and the call lowering read the descriptor source through one `layoutSourceOf`, so they must agree")
+			panic("emitInstanceDescriptorAddr: '{String.from(self.currentFuncName())}' reaches a call on '{String.from(self.signatures.instanceDisplayName(gid))}', whose descriptor is read out of the caller's table, but `planDescriptorTables` filed no entry for it — the plan and the call lowering read the descriptor source through one `layoutSourceOf`, so they must agree")
 		end 'aComposedInstanceTheTableMissed'
 
 		if self.hasImplicitLayout and self.signatures.genericInstanceArgsAreACallerParameterRun(gid) 'forwardsTheCallersOwnRun'
@@ -3542,7 +3536,7 @@ type MaxonToStdLowering
 	end 'emitInstanceDescriptorAddr'
 
 	function instanceIdOfValue(value ValueId) returns GenericInstanceId
-		return (try self.valueNameIds.get(value) otherwise panic("instanceIdOfValue: generic-instance value v{value} in '{String.from(self.currentFuncName)}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")) as GenericInstanceId
+		return (try self.valueNameIds.get(value) otherwise panic("instanceIdOfValue: generic-instance value v{value} in '{String.from(self.currentFuncName())}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")) as GenericInstanceId
 	end 'instanceIdOfValue'
 
 	function emitDescriptorTableRead(gid GenericInstanceId, dstBlock IrBlock) returns ValueId
@@ -3585,7 +3579,7 @@ type MaxonToStdLowering
 
 	function appendComposedElementStampCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		if args.count() + 1 != stampedContainerCreateArity(callee) 'notShortTheStamp'
-			panic("appendComposedElementStampCreate: `{String.from(callee)}` in '{String.from(self.currentFuncName)}' arrived with {args.count()} arguments — the parser leaves the element stamp off a composed create in every body that carries a layout descriptor, and this lowering reads it off the same reservation")
+			panic("appendComposedElementStampCreate: `{String.from(callee)}` in '{String.from(self.currentFuncName())}' arrived with {args.count()} arguments — the parser leaves the element stamp off a composed create in every body that carries a layout descriptor, and this lowering reads it off the same reservation")
 		end 'notShortTheStamp'
 
 		let destroyId = self.mintStdValueId()
@@ -3611,15 +3605,15 @@ type MaxonToStdLowering
 	function loadClosureCapture(source ClosureCaptureSource, paramCount ParamCount, entryBlock IrBlock) returns ValueId throws MapError
 		match source 'source'
 			none then throw MapError.keyNotFound
-			envSlot(offset) then return self.loadEnvWord(offset, envParam: valueIdAtParamPosition(paramCount - 1), entryBlock: entryBlock)
+			envSlot(offset) then return self.loadRecordWord(offset, record: valueIdAtParamPosition(paramCount - 1), entryBlock: entryBlock)
 		end 'source'
 	end 'loadClosureCapture'
 
-	function loadEnvWord(offset ByteOffset, envParam ValueId, entryBlock IrBlock) returns ValueId
+	function loadRecordWord(offset ByteOffset, record ValueId, entryBlock IrBlock) returns ValueId
 		let wordId = self.mintStdValueId()
-		self.stdModule.appendOp(entryBlock, op: StdOp.loadIndirect(wordId, addrId: envParam, offset: offset, valueType: StdType.i64))
+		self.stdModule.appendOp(entryBlock, op: StdOp.loadIndirect(wordId, addrId: record, offset: offset, valueType: StdType.i64))
 		return wordId
-	end 'loadEnvWord'
+	end 'loadRecordWord'
 
 	function functionCarriesADescriptor(func IrFunction) returns bool
 		return match func.closureLayout 'source'
@@ -3642,7 +3636,7 @@ type MaxonToStdLowering
 
 			self.valueTags = func.valueTags
 			self.valueNameIds = func.valueNameIds
-			self.currentFuncName = func.name
+			self.currentFunction = LoweredFunction.named(func.name)
 			subjects.enterFunction(fnIndex, carriesADescriptor: self.functionCarriesADescriptor(func))
 			self.noteTableCandidatesOf(func.blockRefs, into: subjects)
 		end 'eachFunc'
@@ -3798,8 +3792,8 @@ type MaxonToStdLowering
 	// receiver → its descriptor blob's address, or the caller's own block forwarded when the instance is
 	// written over the caller's parameters (`emitInstanceDescriptorAddr` owns that split); a receiver that is
 	// the caller's OWN type parameter (a generic body calling another generic method on a `T` value) →
-	// FORWARD the caller's own layout slot. B1's acceptance calls come from a non-generic `main` on a
-	// concrete instance, so the forward arm is reached only by a generic-to-generic call.
+	// FORWARD the caller's own layout slot. The forward arm is reached only by a generic-to-generic
+	// call.
 	function receiverLayoutSource(receiver ValueId, callee ByteArray) returns LayoutSource
 		let tag = self.valueTagOf(receiver)
 
@@ -3835,7 +3829,7 @@ type MaxonToStdLowering
 	// descriptor at all, which matters because a frame holding such a field is not guaranteed to have one.
 	function materializeFixedElementCountArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
 		if sig.takesReceiver() 'instanceMethod'
-			// The ORIGINAL receiver, never the widened/env-derived `baseArgs` — `materializeLayoutArgFor`'s rule.
+			// The ORIGINAL receiver, never the widened `baseArgs` — `materializeLayoutArgFor`'s rule.
 			return self.emitFixedElementCountOf(try argIds.get(0) otherwise panic("materializeFixedElementCountArgFor: count-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`"), callee: callee, dstBlock: dstBlock)
 		end 'instanceMethod'
 
@@ -3859,7 +3853,7 @@ type MaxonToStdLowering
 	// on when the fixpoint's transitive reservation has failed to reach a caller.
 	function forwardCallerFixedElementCount(callee ByteArray) returns ValueId
 		if not self.hasImplicitFixedElementCount 'noSlot'
-			panic("forwardCallerFixedElementCount: caller '{String.from(self.currentFuncName)}' has no fixed-element-count parameter to forward to '{String.from(callee)}' — the fixpoint's transitive reservation should make this unreachable")
+			panic("forwardCallerFixedElementCount: caller '{String.from(self.currentFuncName())}' has no fixed-element-count parameter to forward to '{String.from(callee)}' — the fixpoint's transitive reservation should make this unreachable")
 		end 'noSlot'
 
 		return self.implicitCountValueId
@@ -3878,12 +3872,12 @@ type MaxonToStdLowering
 		if tag == ValueTypeTag.genericInstance 'anInstance'
 			let gid = try self.valueNameIds.get(instanceValue) otherwise panic("emitFixedElementCountOf: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
 
-			// ⚠ The BRANCH is `valueStatesItsOwnElementCount`'s, not a second reading of the same two clauses:
+			// ⚠ The BRANCH is `elementCountStatedBy`'s, not a second reading of the same two clauses:
 			// `Parser.requireFixedElementCountSourceForForwarding` refuses on that predicate, and a refusal that
 			// disagrees with this branch is either a rejected legal program or this routine's own abort.
-			if self.signatures.valueStatesItsOwnElementCount(tag, nameId: gid) 'statesItsOwnCount'
+			if let count = try self.signatures.elementCountStatedBy(tag, nameId: gid) 'statesItsOwnCount'
 				let countId = self.mintStdValueId()
-				self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: self.signatures.genericInstanceFixedSize(gid as GenericInstanceId) as ParsedInt, valueType: StdType.i64))
+				self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: count as ParsedInt, valueType: StdType.i64))
 				return countId
 			end 'statesItsOwnCount'
 		end 'anInstance'
@@ -3898,7 +3892,7 @@ type MaxonToStdLowering
 	// a missing slot here is a genuine internal invariant break rather than a user error.
 	function forwardCallerLayout(callee ByteArray) returns ValueId
 		if not self.hasImplicitLayout 'noSlot'
-			panic("forwardCallerLayout: caller '{String.from(self.currentFuncName)}' has no layout descriptor to forward to '{String.from(callee)}' — the parser's transitive reservation and residual-rejection should make this unreachable")
+			panic("forwardCallerLayout: caller '{String.from(self.currentFuncName())}' has no layout descriptor to forward to '{String.from(callee)}' — the parser's transitive reservation and residual-rejection should make this unreachable")
 		end 'noSlot'
 
 		return self.implicitLayoutValueId
@@ -4025,7 +4019,7 @@ type MaxonToStdLowering
 		end 'notTypeParam'
 
 		if not self.hasImplicitLayout 'noLayout'
-			panic("lowerSizeofType: sizeof(T) in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's slot reservation and this lowering's op-scan disagree")
+			panic("lowerSizeofType: sizeof(T) in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's slot reservation and this lowering's op-scan disagree")
 		end 'noLayout'
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: self.implicitLayoutValueId, offset: LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE, valueType: StdType.i64))
@@ -4085,6 +4079,14 @@ type MaxonToStdLowering
 		tagged.push(tagValue)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MmAllocName, args: tagged))
 	end 'appendMmAllocTag'
+
+	function appendParameterCellAlloc(result ValueId, dstBlock IrBlock)
+		let size = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(size, value: ParameterCellBytes, valueType: StdType.i64))
+		let destructor = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(destructor, value: TrivialDestructor, valueType: StdType.i64))
+		self.appendMmAllocTag(result, args: twoArgs(size, second: destructor), tag: mmTagIndex(MmTag.ParameterCell), dstBlock: dstBlock)
+	end 'appendParameterCellAlloc'
 
 	// ⭐⭐ **THE TRACE TAG A PARSER-ALLOCATED BOX CARRIES.** Two sources, asked in this order:
 	//
@@ -4332,7 +4334,7 @@ type MaxonToStdLowering
 		// each arrive with ONE argument (the opaque value) and take the descriptor in front of it. ONE arm
 		// because the prepend is one act: the block is chosen off the VALUE's own type parameter either way,
 		// and two arms is where the drop's block and the retain's would come to be read differently.
-		// ⭐ **AN `__mm_alloc` GETS ITS TRACE TAG HERE** (Workstream O3). The parser and `ModuleInit` both
+		// ⭐ **AN `__mm_alloc` GETS ITS TRACE TAG HERE.** The parser and `ModuleInit` both
 		// write a two-argument `__mm_alloc(size, destructor)` — a struct record, a boxed union, an
 		// interpolation scratch buffer — and none of them can name a USER type's tag, because the
 		// whole-program type-name interner does not exist at their tier. It does here, so the append
@@ -4345,6 +4347,11 @@ type MaxonToStdLowering
 			self.appendMmAllocTag(result, args: args, tag: self.allocTagIndexOf(result), dstBlock: dstBlock)
 			return
 		end 'allocTag'
+
+		if callee.equals(ParameterCellAllocName) 'parameterCell'
+			self.appendParameterCellAlloc(result, dstBlock: dstBlock)
+			return
+		end 'parameterCell'
 
 		// ⭐⭐ **THE ONE RUNTIME CALLEE THAT BECOMES A CONSTANT RATHER THAN A CALL** — the
 		// `__DebugStream.nameId("…")` marker. See `lowerDebugStreamNameId`.
@@ -4504,7 +4511,7 @@ type MaxonToStdLowering
 		end 'notOpaqueCopy'
 
 		if not self.hasImplicitLayout 'noLayout'
-			panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's copy-descriptor-need seed and this lowering disagree")
+			panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's copy-descriptor-need seed and this lowering disagree")
 		end 'noLayout'
 
 		// The COPIED array's own type parameter decides the block — its `copyFunc@32` is that column's
@@ -4526,7 +4533,7 @@ type MaxonToStdLowering
 	// stays dense either way.
 	function appendTypeParamDescriptor(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		if not self.hasImplicitLayout 'noLayout'
-			panic("appendTypeParamDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
+			panic("appendTypeParamDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
 
 		// The value's own type parameter decides the block: both entries read their word off whatever
@@ -4546,7 +4553,7 @@ type MaxonToStdLowering
 	// parser/lowering divergence — a loud bug, not a silent wrong load.
 	function appendWholeLayoutDescriptor(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		if not self.hasImplicitLayout 'noLayout'
-			panic("appendWholeLayoutDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
+			panic("appendWholeLayoutDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
 
 		var fullArgs = ValueIdArray.create()
@@ -4598,7 +4605,7 @@ type MaxonToStdLowering
 	// matching `lowerSizeofType`.
 	function appendOpaqueContainerCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		if not self.hasImplicitLayout 'noLayout'
-			panic("appendOpaqueContainerCreate: an opaque container `create()` (`{String.from(callee)}` — an `Array with <type parameter>`, a `Vector with <N> <type parameter>` since S2u, or a chain since W134; see `ProgramSignatures.opaqueInstanceCreateReadsTheDescriptor`) in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
+			panic("appendOpaqueContainerCreate: an opaque container `create()` (`{String.from(callee)}` — an `Array with <type parameter>`, a `Vector with <N> <type parameter>`, or a chain; see `ProgramSignatures.opaqueInstanceCreateReadsTheDescriptor`) in '{String.from(self.currentFuncName())}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
 
 		// ⭐ **WHICH type parameter's dictionary — the block for the ELEMENT's OWN parameter.** A
@@ -4670,24 +4677,29 @@ type MaxonToStdLowering
 		end 'ic'
 	end 'lowerIndirectCall'
 
-	// Build the Std `callIndirect`, recovering the function value's register-file signature from the
-	// already-typed result and arg VALUES: `resultType` is the result value's Std type (a float
-	// result is captured from the float return register), and `argFloatMask` has bit k set iff argument k is
-	// a float — a float argument travels in a float argument register, everything else (incl. the trailing
-	// uniform-ABI companion env pointer, `Parser.emitClosureEnvArg`, an i64) in a GPR. Both come from
-	// `stdTypeOf`, the per-value type the parser recorded.
+	// Build the Std `callIndirect` through the code word of the callee's function record, with the
+	// register-file signature taken from the function value's DECLARED type: `resultType` is the
+	// result value's Std type (a float result is captured from the float return register), and
+	// `argFloatMask` has bit k set iff declared parameter k is a float — everything else, the trailing
+	// function-record pointer included, travels in a GPR.
 	//
-	// ⚠⚠ **AND `stdTypeOf` ALONE IS NOT ENOUGH, WHICH IS WHY THE WIDENING RUNS FIRST.** An argument does
-	// NOT always share its callee parameter's type: an UNTYPED INT LITERAL does not. `f(2)` at a `float`
-	// parameter is a well-typed program the language widens implicitly, and reading the literal's own type
-	// makes the mask say GPR where the callee reads XMM. `v * 2.0` then multiplies whatever was in the
-	// register — a silent wrong answer, and one the mask makes CONSISTENTLY wrong end to end, so nothing
-	// downstream can catch it. The widening below makes the argument a float BEFORE the mask is taken,
-	// which is exactly the order the DIRECT call path uses.
+	// ⚠⚠ **THE ARGUMENTS ARE WIDENED TO THE DECLARED TYPES FIRST.** An argument does NOT always share
+	// its callee parameter's type: an UNTYPED INT LITERAL does not. `f(2)` at a `float` parameter is a
+	// well-typed program the language widens implicitly, and an integer left in a GPR where the callee
+	// reads XMM makes `v * 2.0` multiply whatever was in the register — a silent wrong answer.
 	// A helper because `lowerIndirectCall`'s arm must hand `args` to a function and touch it no other way.
 	function appendCallIndirect(dstBlock IrBlock, result ValueId, callee ValueId, args ValueIdArray)
 		let declaredParams = self.indirectCalleeParamTypes(callee)
-		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, callee: NoNamedCallee, dstBlock: dstBlock)))
+		let crossed = self.crossFloatDomainArgs(args, paramTypes: declaredParams, byReference: ByReferenceParamSource.indirectCallee, dstBlock: dstBlock)
+
+		if let target = try self.functionValueTargetOf(callee) 'aNamedFunctionsRecord'
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: target, args: self.argsTheTargetTakes(target, args: crossed)))
+			return
+		end 'aNamedFunctionsRecord'
+
+		let code = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(code, addrId: callee, offset: FunctionRecordCodeOffset, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: code, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: paramFloatMask(declaredParams), args: crossed))
 	end 'appendCallIndirect'
 
 	// ⭐ **THE DECLARED PARAMETER TYPES OF THE FUNCTION VALUE BEING CALLED — the one fact an indirect call's
@@ -4707,7 +4719,7 @@ type MaxonToStdLowering
 	// lowered — the twin of `SemanticCheck.functionValueGoverningName`, reading the same column and turning
 	// the id into a name through the one shared `TypeResolution.functionTypeNameOf`.
 	function functionValueName(value ValueId) returns ByteArray
-		let nameId = try self.valueNameIds.get(value) otherwise panic("functionValueName: value v{value} in '{String.from(self.currentFuncName)}' has no recorded type name — the two type columns are minted in lockstep and `lower` re-points both per function")
+		let nameId = try self.valueNameIds.get(value) otherwise panic("functionValueName: value v{value} in '{String.from(self.currentFuncName())}' has no recorded type name — the two type columns are minted in lockstep and `lower` re-points both per function")
 		return functionTypeNameOf(self.functionTypes, nameId: nameId)
 	end 'functionValueName'
 
@@ -4752,13 +4764,13 @@ type MaxonToStdLowering
 	// does not name reduced to the machine word by `renderedTypeNameAbiType`, which is right for `Self`, a user
 	// type, a type parameter and a ranged alias alike.
 	//
-	// ⚠ **THE ACTUAL IS NEVER CONSULTED, AND IT USED TO BE.** Falling back to the argument's own tag reads the
-	// unresolved `valueTags` column — this slice's own defect one level down — and it cannot see a binding the
-	// actual does not happen to match. Two conformers that bind one dispatched associated type DIFFERENTLY have
-	// no single answer at all: the shared body is compiled once, so it is compiled against one of them and
-	// hands the other's impl bits it reads as something else. MEASURED, x64 SEGFAULTED on one such pair and
-	// silently answered 1 for 51 on another. That is refused whole-program by E3119, on every target, because
-	// the register targets are the half that fails quietly.
+	// ⚠ **THE ACTUAL IS NEVER CONSULTED.** Falling back to the argument's own tag reads the unresolved
+	// `valueTags` column, and it cannot see a binding the actual does not happen to match. Two
+	// conformers that bind one dispatched associated type DIFFERENTLY have no single answer at all:
+	// the shared body is compiled once, so it is compiled against one of them and hands the other's
+	// impl bits it reads as something else — a crash on one pair and a silently wrong answer on
+	// another. That is refused whole-program by E3119, on every target, because the register targets
+	// are the half that fails quietly.
 	function witnessFormalTypes(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, receiver ValueId) returns MaxonTypeArray
 		let slot = self.witnessRequirementSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		let formals = slot.method.paramTypeNames
@@ -4808,10 +4820,9 @@ type MaxonToStdLowering
 	// ⭐ **AND AN ASSOCIATED TYPE RESOLVES TO ITS BINDING, NEVER TO THE ACTUAL.** The class is a fact about the
 	// CONFORMER (`implements Taker with float` is what makes the formal an f64), so it comes from
 	// `associatedAbiBindingOf` — the same whole-program fold the E3119 check refuses a disagreement from, so a
-	// program that passes the check and a call this emits cannot describe one argument two ways. Reading the
-	// ACTUAL's tag instead was this slice's own defect one level down: it is the unresolved `valueTags`
-	// column, it PANICKED `maxonTypeToStdType` outright on a `named` actual, and it cannot see a binding the
-	// actual does not happen to match.
+	// program that passes the check and a call this emits cannot describe one argument two ways. The
+	// ACTUAL's tag is the unresolved `valueTags` column, it would panic `maxonTypeToStdType` outright
+	// on a `named` actual, and it cannot see a binding the actual does not happen to match.
 	function witnessFormalType(formalName ByteArray, formalFilePath FilePath, interfaceDeclIndex ElementIndex, receiver ValueId) returns MaxonType
 		let dispatched = self.interfaceAtDeclIndex(interfaceDeclIndex)
 
@@ -4993,7 +5004,7 @@ type MaxonToStdLowering
 	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, callee: NoNamedCallee, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, byReference: ByReferenceParamSource.indirectCallee, dstBlock: dstBlock)))
 	end 'appendWitnessCall'
 
 	// The throwing twin of `appendWitnessCall`, sharing its result typing (`witnessCallResultType`) verbatim —
@@ -5003,7 +5014,7 @@ type MaxonToStdLowering
 	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, callee: NoNamedCallee, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, byReference: ByReferenceParamSource.indirectCallee, dstBlock: dstBlock)))
 	end 'appendWitnessTryCall'
 
 	// The Std return type a witness call CAPTURES its result in — the result value's own type, or `void` for
@@ -5048,8 +5059,8 @@ type MaxonToStdLowering
 	// arguments only, its own `(userargs) -> R` shape) becomes `__gt_spawn(funcPtr)`, whose result is the Promise
 	// handle (the GT struct pointer). No float widening is possible — a float parameter has no place in the
 	// trampoline's integer channel and `SemanticCheck.requireAsyncScalarParams` refuses it — so the slotted
-	// args pass through as i64 without `finalizeCallArgs`. A MANAGED argument is accepted and is one such
-	// i64: its box pointer.
+	// args pass through as i64 without the float widening. A MANAGED argument is accepted and is one
+	// such i64: its box pointer.
 	function lowerAsyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerAsyncCall: async callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 
@@ -5077,6 +5088,9 @@ type MaxonToStdLowering
 			panic("emitAsyncSpawn: async callee '{String.from(callee)}' has {argIds.count()} arguments but the inline arg region holds only MaxAsyncArgs ({MaxAsyncArgs}) slots — `Parser.emitAsyncCall` refuses a source-level spawn past that, so this spawn reached lowering without passing it")
 		end 'overflow'
 
+		let target = asyncSpawnTargetOf(callee, funcNames: self.funcNames)
+		let handed = self.asyncArgumentsHanded(argIds, callee: callee, byReference: target.byReference, dstBlock: dstBlock)
+
 		// funcPtr = &callee ; result = __gt_spawn(funcPtr) — the Promise handle (the GT struct pointer). The arg
 		// region is INLINE in the struct, so there is no separate slab buffer to allocate.
 		let funcPtr = self.mintStdValueId()
@@ -5093,12 +5107,12 @@ type MaxonToStdLowering
 		// each reading one integer argument summed to a DIFFERENT wrong total on every run. Publishing last
 		// removes the premise that a spawned GT is only enqueued, never run, until awaited — see
 		// `GtRuntime.GtReadyName`.
-		for k in 0 upto argIds.count() 'eachArg'
-			let argId = try argIds.get(k) otherwise panic("emitAsyncSpawn: argIds.get OOB at {k}")
+		for k in 0 upto handed.count() 'eachArg'
+			let argId = try handed.get(k) otherwise panic("emitAsyncSpawn: handed.get OOB at {k}")
 			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(result, offset: (GtOffArgInline + k * GtArgSlotBytes) as ByteOffset, valueId: argId, valueType: StdType.i64))
 		end 'eachArg'
 
-		self.emitAsyncReleaserStore(result, callee: callee, dstBlock: dstBlock)
+		self.emitAsyncReleaserStore(result, target: target, dstBlock: dstBlock)
 
 		// PUBLISH. Everything the trampoline and the releaser read is now written.
 		let readyResult = self.mintStdValueId()
@@ -5117,13 +5131,46 @@ type MaxonToStdLowering
 	// ⚠ Whether a releaser EXISTS is `asyncCalleeNeedsReleaser`'s answer and is not restated here — see there
 	// for why a disagreement between this site and the synthesis is a compile error at neither, and for which
 	// of the two directions leaks silently.
-	function emitAsyncReleaserStore(gt ValueId, callee ByteArray, dstBlock IrBlock)
-		if not asyncCalleeNeedsReleaser(callee, funcSignatures: self.funcSignatures, signatures: self.signatures, typeNames: self.typeNames) 'nothingToRelease'
+	// A position the callee takes by reference reads a cell ADDRESS, and a spawn's argument is moved
+	// into the green thread, so each such argument is handed a fresh parameter cell of its own.
+	function asyncArgumentsHanded(argIds ValueIdArray, callee ByteArray, byReference ParamPositionMask, dstBlock IrBlock) returns ValueIdArray
+		if byReference == NoParamPositions 'everyArgumentByValue'
+			return argIds
+		end 'everyArgumentByValue'
+
+		let sig = try self.funcSignatures.get(callee) otherwise panic("asyncArgumentsHanded: async callee '{String.from(callee)}' has no signature — `lowerAsyncCall` slotted its arguments against it")
+		var handed = ValueIdArray.create()
+
+		for (position, argId) in argIds.withIterator() 'eachArg'
+			let param = position.index() as ParamCount
+			let paramType = try sig.paramTypes.get(param) otherwise panic("asyncArgumentsHanded: paramTypes.get OOB at {param} for '{String.from(callee)}'")
+
+			if not parameterRidesACellIntoASpawn(byReference, param: param, paramType: paramType) 'byValue'
+				handed.push(argId)
+				continue
+			end 'byValue'
+
+			let cell = self.mintStdValueId()
+			self.appendParameterCellAlloc(cell, dstBlock: dstBlock)
+			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(cell, offset: ParameterCellValueOffset, valueId: argId, valueType: self.stdTypeOf(argId)))
+
+			if parameterCellHoldsAWitness(paramType) 'andItsWitness'
+				self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(cell, offset: ParameterCellWitnessOffset, valueId: self.witnessForExistentialValue(argId, interfaceName: interfaceNameOfType(paramType, typeNames: self.typeNames), site: callee, dstBlock: dstBlock), valueType: StdType.i64))
+			end 'andItsWitness'
+
+			handed.push(cell)
+		end 'eachArg'
+
+		return handed
+	end 'asyncArgumentsHanded'
+
+	function emitAsyncReleaserStore(gt ValueId, target AsyncSpawnTarget, dstBlock IrBlock)
+		if not asyncCalleeNeedsReleaser(target, funcSignatures: self.funcSignatures, signatures: self.signatures, typeNames: self.typeNames) 'nothingToRelease'
 			return
 		end 'nothingToRelease'
 
 		let releaserPtr = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(releaserPtr, funcName: asyncReleaserName(callee)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(releaserPtr, funcName: asyncReleaserName(target.callee)))
 		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(gt, offset: GtOffReleaser as ByteOffset, valueId: releaserPtr, valueType: StdType.i64))
 	end 'emitAsyncReleaserStore'
 
@@ -5152,7 +5199,7 @@ type MaxonToStdLowering
 	// classifier `ServiceLoop.spawnedInstancesByService` also reads, so the loop this takes the address of
 	// is the loop that was built.
 	function spawnedStateInstance(state ValueId) returns ServiceStateInstance
-		return serviceStateInstanceOfValueType(self.valueTagOf(state), nameId: try self.valueNameIds.get(state) otherwise panic("spawnedStateInstance: v{state} is not in '{String.from(self.currentFuncName)}'s dense value-name column"))
+		return serviceStateInstanceOfValueType(self.valueTagOf(state), nameId: try self.valueNameIds.get(state) otherwise panic("spawnedStateInstance: v{state} is not in '{String.from(self.currentFuncName())}'s dense value-name column"))
 	end 'spawnedStateInstance'
 
 	function emitServiceSpawn(result ValueId, typeName ByteArray, state ValueId, dstBlock IrBlock)
@@ -5229,21 +5276,58 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(self.pairedWitnessOf(result, site: GtReplyWitnessName), callee: GtReplyWitnessName, args: argsOf(promise)))
 	end 'lowerTryAwait'
 
-	// Materialize a function value's `.text` address. Under the uniform `(userargs, env) -> R`
-	// ABI every USER function value is called through the SAME indirect signature, so the address must name a
-	// function of that shape. A LIFTED CLOSURE already is one (its trailing `__env` parameter). A PLAIN named
-	// function is not, and its direct calls must stay unchurned — so its value use materializes the address of
-	// its `__fnref_` thunk instead, which `installFnRefThunks` synthesizes with the env-carrying signature.
-	// The thunk names cannot drift: `fnRefThunkName` is the ONE builder both this site and the synthesis read.
-	//
-	// Whether a bridge is needed at all is NOT decided here: it is `FnRefThunk.functionValueNeedsEnvThunk`, the
-	// one place that rule lives, because `collectFnRefThunkTargets` must reach the SAME verdict and a
-	// disagreement between the two is a compile error at neither — see that predicate's header, and the
-	// `wasm trap: indirect call type mismatch` measured when that rule is written out twice.
-	function lowerFunctionRef(result ValueId, funcName ByteArray, dstBlock IrBlock)
-		let target = fnRefThunkName(funcName) if functionValueNeedsEnvThunk(funcName, funcSignatures: self.funcSignatures) else funcName
-		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: target))
+	// Materialize a function reference: a `codeAddress` is the bare `.text` address; a function VALUE
+	// is the address of the function's immortal record, whose code word every indirect call jumps
+	// through under the uniform `(userargs, record) -> R` ABI. Which code word a record holds — the
+	// function itself or its `__fnref_` thunk — is `FnRefThunk.registerFunctionRecord`'s to decide,
+	// through `functionValueNeedsFnRefThunk`, the one place that rule lives.
+	function lowerFunctionRef(result ValueId, funcName ByteArray, form FunctionRefForm, dstBlock IrBlock)
+		match form 'form'
+			codeAddress then self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: funcName))
+			functionValue then self.lowerFunctionValueRef(result, funcName: funcName, dstBlock: dstBlock)
+		end 'form'
 	end 'lowerFunctionRef'
+
+	function lowerFunctionValueRef(result ValueId, funcName ByteArray, dstBlock IrBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(self.ensureFunctionRecord(funcName))))
+
+		match self.functionValueTargets 'targets'
+			none then self.functionValueTargets = FunctionValueTargets.entries(singleFunctionValueTarget(result, funcName: funcName))
+			entries(byValue) then byValue.upsert(result, value: funcName)
+		end 'targets'
+	end 'lowerFunctionValueRef'
+
+	function argsTheTargetTakes(target ByteArray, args ValueIdArray) returns ValueIdArray
+		if not functionValueNeedsFnRefThunk(target, funcSignatures: self.funcSignatures) 'takesItsRecord'
+			return args
+		end 'takesItsRecord'
+
+		var userArgs = ValueIdArray.create()
+
+		for i in 0 upto args.count() - FunctionRecordArgCount 'eachUserArg'
+			userArgs.push(try args.get(i) otherwise panic("argsTheTargetTakes: args.get OOB at {i} below the user argument count"))
+		end 'eachUserArg'
+
+		return userArgs
+	end 'argsTheTargetTakes'
+
+	function functionValueTargetOf(callee ValueId) returns ByteArray throws AbsentError
+		match self.functionValueTargets 'targets'
+			none then throw AbsentError.absent
+			entries(byValue) then return try byValue.get(callee) otherwise throw AbsentError.absent
+		end 'targets'
+	end 'functionValueTargetOf'
+
+	function ensureFunctionRecord(funcName ByteArray) returns String
+		let label = functionRecordLabel(funcName)
+
+		if self.emittedFunctionRecords.contains(label) 'alreadyRecorded'
+			return label
+		end 'alreadyRecorded'
+
+		self.emittedFunctionRecords.insert(label)
+		return registerFunctionRecord(self.globalData, funcName: funcName, funcSignatures: self.funcSignatures, debugStream: self.debugStream)
+	end 'ensureFunctionRecord'
 
 	// ⭐ **int→float ARGUMENT WIDENING** — the CALL-SITE dual of the `return`/assignment float
 	// coercions the parser already owns, and it lives HERE because this is the first tier that holds a
@@ -5271,25 +5355,25 @@ type MaxonToStdLowering
 	// is evaluated as the `args:` argument, ahead of the enclosing `appendOp`).
 	//
 	// ⚠ **AN ARGUMENT PAST THE LAST DECLARED PARAMETER PASSES THROUGH.** An INDIRECT call's `args` carries
-	// one more entry than its function type declares — the uniform-ABI companion env pointer
-	// (`IndirectCallEnvArgCount`), an i64 the compiler appended and no parameter describes. Indexing a
+	// one more entry than its function type declares — the uniform-ABI function-record pointer
+	// (`FunctionRecordArgCount`), an i64 the compiler appended and no parameter describes. Indexing a
 	// parameter for it would panic, and slicing it off first would allocate an array on every indirect call
 	// merely to hand the same values back. A DIRECT call never takes this path: `slotCallArgs` returns
 	// exactly one ordered argument per parameter, so the counts are equal and nothing is skipped. Too FEW
 	// arguments is a program error `SemanticCheck` has already refused (E3036) for both shapes.
-	// ⚠⚠ **A BY-REFERENCE POSITION CROSSES NO DOMAIN, AND WITHOUT THIS THE FLOAT CASE IS A BACKEND PANIC
-	// (PBR-2).** The argument at such a position is the ADDRESS of a cell, an integer; the callee's declared
-	// type is the type of what the cell HOLDS. Compared naively the two disagree in exactly the way an
-	// int-at-a-float-parameter does, so the widening fired on a pointer — MEASURED as
-	// `a register-to-register move from xmm0 to rcx crosses register files` out of the x64 emitter, on
-	// `pass-by-reference.mutate-float-ref`. `callee` is threaded in for this one question; an INDIRECT call
-	// cannot reach a by-reference parameter at all (a function TYPE carries no by-reference-ness), which is
-	// why `paramFloatMask`'s two indirect callers need no equivalent.
-	function crossFloatDomainArgs(argIds ValueIdArray, paramTypes MaxonTypeArray, callee ByteArray, dstBlock IrBlock) returns ValueIdArray
+	// ⚠⚠ **A BY-REFERENCE POSITION CROSSES NO DOMAIN, AND WITHOUT THIS THE FLOAT CASE IS A BACKEND
+	// PANIC.** The argument at such a position is the ADDRESS of a cell, an integer; the callee's
+	// declared type is the type of what the cell HOLDS. Compared naively the two disagree in exactly
+	// the way an int-at-a-float-parameter does, so the widening would fire on a pointer and the x64
+	// emitter would refuse a move that crosses register files (`pass-by-reference.mutate-float-ref`).
+	// `byReference` is threaded in for this one question; an INDIRECT call cannot reach a by-reference
+	// parameter at all (a function TYPE carries no by-reference-ness). A direct callee's positions are
+	// looked up only past the fast path, so a call that widens nothing pays no lookup.
+	function crossFloatDomainArgs(argIds ValueIdArray, paramTypes MaxonTypeArray, byReference ByReferenceParamSource, dstBlock IrBlock) returns ValueIdArray
 		// FAST PATH, and it is what keeps this allocation-neutral on the hot call-lowering path: a call
 		// whose arguments are already in the domain their parameters want returns them verbatim — no
 		// `ValueIdArray` built, no op emitted. Without it every lowered call allocates a fresh array it
-		// never changes (measured: a linear per-call allocation delta across the scale ladder).
+		// never changes.
 		//
 		// ⚠ **THE SCAN ASKS THE EXACT PER-ARGUMENT QUESTION, NOT A CHEAPER APPROXIMATION OF IT.** Asking only
 		// whether the SIGNATURE has a float parameter cannot express the opaque-word direction — a `T`
@@ -5299,6 +5383,11 @@ type MaxonToStdLowering
 		if not self.anyArgCrossesTheFloatDomain(argIds, paramTypes: paramTypes) 'everyArgAlreadyInItsDomain'
 			return argIds
 		end 'everyArgAlreadyInItsDomain'
+
+		let byRefParams = match byReference 'byRefSource'
+			indirectCallee gives NoParamPositions
+			directCallee(callee) gives self.funcNames.byReferenceParamsOf(callee)
+		end 'byRefSource'
 
 		var crossed = ValueIdArray.create()
 
@@ -5310,9 +5399,7 @@ type MaxonToStdLowering
 				continue
 			end 'pastDeclaredParams'
 
-			// The scalar gate first, for `Parser.bindParameters`' measured reason: `paramIsByRef` returns a
-			// union, and this loop runs per argument of every call that crosses the float domain.
-			if self.signatures.programTakesAParamByRef() and self.signatures.paramIsByRef(callee, index: i) 'anAddressRatherThanAValue'
+			if maskHasParam(byRefParams, param: i as ParamCount) 'anAddressRatherThanAValue'
 				crossed.push(argId)
 				continue
 			end 'anAddressRatherThanAValue'
@@ -5430,67 +5517,6 @@ type MaxonToStdLowering
 		let name = try self.typeNames.nameOf(nameId) otherwise panic("argIsFloatBackedEnum: type-name id {nameId} is not in the whole-program interner — every `named` tag is minted with an id folded into it")
 		return self.signatures.enumIsFloatBacked(name)
 	end 'argIsFloatBackedEnum'
-
-	// ⭐ **APPEND THE COMPANION ENVIRONMENT ARGUMENT FOR EACH FUNCTION-TYPED PARAMETER.** The
-	// uniform ABI splits a function value into (fn ptr, env): the slotted `argIds` carry the fn-ptr half at
-	// each function-typed parameter's position, and this appends the env half — the argument value's OWN
-	// environment (a capturing closure's block, else a null for a plain function reference or a non-capturing
-	// closure). The environments append in PARAMETER order, exactly the order the callee's
-	// `Parser.bindClosureEnvParams` assigned its companion parameters, so fn-ptr and env meet at the callee.
-	// This is the DIRECT-call dual of `Parser.emitClosureEnvArg` (the indirect-call threading); it lives at
-	// this tier because it needs the callee's ALIAS-RESOLVED parameter types (a `function` parameter may be
-	// declared in another file), which the parser does not have.
-	// The two call-argument transforms a slotted call needs, composed in one place so `lowerCall` and
-	// `lowerTryCall` cannot apply them in different orders: an int→float widening at a float parameter,
-	// then a companion environment appended per function parameter. They are independent (a
-	// parameter is float, function, or neither), and widening preserves the arg count, so the env append's
-	// per-position scan stays aligned with the signature.
-	function finalizeCallArgs(argIds ValueIdArray, sig FuncSignature, callee ByteArray, dstBlock IrBlock) returns ValueIdArray
-		return self.appendCalleeEnvArgs(self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, callee: callee, dstBlock: dstBlock), sig: sig, dstBlock: dstBlock)
-	end 'finalizeCallArgs'
-
-	function appendCalleeEnvArgs(argIds ValueIdArray, sig FuncSignature, dstBlock IrBlock) returns ValueIdArray
-		// FAST PATH: almost no callee takes a function parameter, so a signature with none returns its
-		// arguments verbatim — no array built, no op emitted (the shape `crossFloatDomainArgs` uses).
-		if not signatureHasFunctionParam(sig) 'noFunctionParam'
-			return argIds
-		end 'noFunctionParam'
-
-		var withEnvs = ValueIdArray.create()
-
-		for argId in argIds 'copyUser'
-			withEnvs.push(argId)
-		end 'copyUser'
-
-		for i in 0 upto argIds.count() 'eachParam'
-			let paramType = try sig.paramTypes.get(i) otherwise panic("appendCalleeEnvArgs: sig.paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} ordered args against a {sig.paramCount()}-parameter signature")
-
-			if maxonTypeTag(paramType) != ValueTypeTag.function 'notFunction'
-				continue
-			end 'notFunction'
-
-			let argId = try argIds.get(i) otherwise panic("appendCalleeEnvArgs: argIds.get OOB at {i}")
-			withEnvs.push(self.calleeEnvArg(argId, dstBlock: dstBlock))
-		end 'eachParam'
-
-		return withEnvs
-	end 'appendCalleeEnvArgs'
-
-	// The environment a function-value ARGUMENT carries: its own env when it has one (`valueClosureEnv != 0` —
-	// a capturing closure's block, published by the parser), else a freshly materialized null. A stored 0
-	// unambiguously means "no environment" (a real env id is always `>= 1`), so a null is minted for a plain
-	// function reference / non-capturing closure argument.
-	function calleeEnvArg(argId ValueId, dstBlock IrBlock) returns ValueId
-		let env = try self.valueClosureEnv.get(argId) otherwise panic("calleeEnvArg: v{argId} has no closure-env slot — the column is dense over every ValueId the parser minted")
-
-		if env != 0 'carriesEnv'
-			return env
-		end 'carriesEnv'
-
-		let nullEnv = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(nullEnv, value: 0, valueType: StdType.i64))
-		return nullEnv
-	end 'calleeEnvArg'
 
 	// The operand and result ValueIds pass through verbatim. The trapping division family becomes its
 	// own Std variant (`StdOp.div`/`mod`) rather than a `binOp` opcode, because `idiv` can fault and
@@ -5744,8 +5770,8 @@ type MaxonToStdLowering
 		end 'noErrorInFlight'
 
 		match self.currentMaxonReturnType 'declaredReturn'
-			void then panic("secondaryReturnValue: '{String.from(self.currentFuncName)}' uses the secondary return slot, is not throwing, and returns VOID — `functionUsesSecondaryReturnSlot` answers true for a void non-throwing function nowhere")
-			value(inner) then return self.witnessForExistentialValue(retVal, interfaceName: interfaceNameOfType(inner, typeNames: self.typeNames), site: self.currentFuncName, dstBlock: dstBlock)
+			void then panic("secondaryReturnValue: '{String.from(self.currentFuncName())}' uses the secondary return slot, is not throwing, and returns VOID — `functionUsesSecondaryReturnSlot` answers true for a void non-throwing function nowhere")
+			value(inner) then return self.witnessForExistentialValue(retVal, interfaceName: interfaceNameOfType(inner, typeNames: self.typeNames), site: self.currentFuncName(), dstBlock: dstBlock)
 		end 'declaredReturn'
 	end 'secondaryReturnValue'
 
@@ -6198,7 +6224,7 @@ function requireNoLeakedSpanCursor(project Project, module StdModule)
 	end 'notCapturing'
 
 	for func in module.functions 'eachFunction'
-		if not func.sourceFilePath.isEmpty() 'writtenByAnAuthor'
+		if not func.isCompilerBuilt() 'writtenByAnAuthor'
 			continue
 		end 'writtenByAnAuthor'
 

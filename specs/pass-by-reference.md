@@ -54,7 +54,7 @@ var result2 = double(a + b)   // expression result creates a temporary
 
 ### Closure Capture
 
-Closures capture variables by reference. Changes to the original variable are visible inside the closure, and assignments inside the closure are visible to the outer scope.
+A closure does not capture by reference. A captured scalar is copied when the closure is created, so a later change to the original variable is not visible inside the closure, and an assignment inside the closure does not reach the outer scope. A captured managed local moves into the closure; a captured parameter, `self` or field is retained (`closure-capture.md`). Because the closure holds its own copy, passing a captured name to a parameter the callee reassigns is E3019: the write could not reach the variable.
 
 ### Reassigning Reference-Typed Parameters
 
@@ -719,6 +719,239 @@ end 'main'
 error E3019: specs/fragments/pass-by-reference/pass-by-reference.let-to-mutating-param-error.test:11:2: cannot pass 'n' to function that mutates parameter 'x' (in main)
 ```
 
+<!-- test: pass-by-reference.captured-let-to-mutating-param-error -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function setIt(dest Integer) returns Integer
+	dest = 99
+	return dest
+end 'setIt'
+
+function main() returns ExitCode
+	let x = 1
+	let f = function() gives setIt(x)
+	print("{f()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.test:12:27: cannot pass 'x' to function that mutates parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach it
+```
+
+<!-- test: pass-by-reference.captured-var-to-mutating-param-error -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function setIt(dest Integer) returns Integer
+	dest = 99
+	return dest
+end 'setIt'
+
+function main() returns ExitCode
+	var x = 1
+	x = 2
+	let f = function() gives setIt(x)
+	print("{f()} {x}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:13:27: cannot pass 'x' to function that mutates parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach it
+```
+
+<!-- test: pass-by-reference.captured-parameter-to-mutating-param-error -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function setIt(dest Integer) returns Integer
+	dest = 99
+	return dest
+end 'setIt'
+
+function run(p Integer) returns Integer
+	let f = function() gives setIt(p)
+	return f()
+end 'run'
+
+function main() returns ExitCode
+	var n = 1
+	print("{run(n)} {n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:11:27: cannot pass 'p' to function that mutates parameter 'dest' (in run$closure_0): the closure holds its own copy of 'p', so a write through 'dest' cannot reach it
+```
+
+<!-- test: pass-by-reference.overloads-disagreeing-on-by-reference-bind-each-by-its-own-convention -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function settle(dest Integer, src Integer)
+	dest = src
+end 'settle'
+
+function settle(dest String, src String) returns String
+	return "{dest}{src}"
+end 'settle'
+
+function main() returns ExitCode
+	var n = 1
+	settle(n, src: 5)
+	var s = "a"
+	print("{settle(s, src: "b")} {n}\n")
+	s = "c"
+	return 0
+end 'main'
+```
+```stdout
+ab 5
+```
+
+<!-- test: pass-by-reference.a-let-to-the-reassigning-overload-is-refused-and-to-the-by-value-one-is-not -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function settle(dest Integer, src Integer)
+	dest = src
+end 'settle'
+
+function settle(dest String, src String) returns String
+	return "{dest}{src}"
+end 'settle'
+
+function main() returns ExitCode
+	let n = 1
+	settle(n, src: 5)
+	let s = "a"
+	print("{settle(s, src: "b")} {n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/pass-by-reference/pass-by-reference.a-let-to-the-reassigning-overload-is-refused-and-to-the-by-value-one-is-not.test:15:2: cannot pass 'n' to function that mutates parameter 'dest' (in main)
+```
+
+<!-- test: pass-by-reference.an-out-of-range-literal-at-the-reassigning-overload-is-a-compile-error -->
+```maxon
+
+typealias Count = int(0 to 1000)
+
+function settle(dest Count, src Count)
+	dest = src
+end 'settle'
+
+function settle(dest String, src String) returns String
+	return "{dest}{src}"
+end 'settle'
+
+function main() returns ExitCode
+	settle(2000, src: 5)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/pass-by-reference/pass-by-reference.an-out-of-range-literal-at-the-reassigning-overload-is-a-compile-error.test:14:2: Value 2000 is outside the range of 'Count' (int(0 to 1000))
+```
+
+<!-- test: pass-by-reference.an-async-call-to-overloads-disagreeing-on-by-reference-binds-its-member -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function settle(dest Integer, src Integer) returns String
+	dest = src
+	return "{dest}"
+end 'settle'
+
+function settle(dest String, src String) returns String
+	return "{dest}{src}"
+end 'settle'
+
+function main() returns ExitCode
+	var n = 1
+	let p = async settle(n, src: 5)
+	var s = "a"
+	let q = async settle(s, src: "b")
+	print("{await p} {await q} {n}\n")
+	s = "c"
+	return 0
+end 'main'
+```
+```stdout
+5 ab 1
+```
+
+<!-- test: pass-by-reference.an-async-call-to-overloads-with-different-results-binds-its-member -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function settle(dest Integer, src Integer) returns Integer
+	Scheduler.yield()
+	dest = src
+	return dest
+end 'settle'
+
+function settle(dest String, src String) returns String
+	Scheduler.yield()
+	return "{dest}{src}"
+end 'settle'
+
+function main() returns ExitCode
+	var n = 1
+	let p = async settle(n, src: 5)
+	var s = "a"
+	let q = async settle(s, src: "b")
+	print("{await p} {await q} {n}\n")
+	s = "c"
+	return 0
+end 'main'
+```
+```stdout
+5 ab 1
+```
+
+<!-- test: pass-by-reference.overloads-that-both-forward-a-parameter-write-through -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function setInt(x Integer)
+	x = 77
+end 'setInt'
+
+function setText(x String)
+	x = "set"
+end 'setText'
+
+function relay(a Integer)
+	setInt(a)
+end 'relay'
+
+function relay(a String)
+	setText(a)
+end 'relay'
+
+function main() returns ExitCode
+	var n = 1
+	var s = "unset"
+	relay(n)
+	relay(s)
+	print("{n} {s}\n")
+	return 0
+end 'main'
+```
+```stdout
+77 set
+```
+
 <!-- test: pass-by-reference.nested-calls -->
 ```maxon
 
@@ -1124,7 +1357,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-99
+10
 ```
 
 <!-- test: pass-by-reference.mutate-float-ref -->
@@ -1214,3 +1447,340 @@ end 'main'
 1
 ```
 
+<!-- test: pass-by-reference.an-async-call-resolving-to-a-by-reference-member-writes-the-coroutines-own-storage -->
+The chosen member assigns `dest`. An `async` argument is moved into the coroutine, so the member writes a cell the coroutine owns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function settle(dest String, src Integer) returns Integer
+	Scheduler.yield()
+	dest = "set-{src}"
+	return src
+end 'settle'
+
+function settle(dest String, src String) returns Integer
+	Scheduler.yield()
+	print("{dest}{src}\n")
+	return 0
+end 'settle'
+
+function main() returns ExitCode
+	var s = "a-{1}"
+	let p = async settle(s, src: 5)
+	let r = await p
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
+<!-- test: pass-by-reference.an-async-call-whose-promise-outlives-the-frame-of-a-by-reference-argument -->
+The promise is stored and awaited after the spawning frame returned; the callee's write lands in the coroutine's own cell.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function rename(dest String, n Integer) returns Integer
+	Scheduler.yield()
+	dest = "renamed-{n}"
+	print("callee wrote {dest}\n")
+	return n
+end 'rename'
+
+function kick(promises IntPromiseArray)
+	var s = "orig-{1}"
+	promises.push(async rename(s, n: 7))
+	print("kick spawned\n")
+end 'kick'
+
+function main() returns ExitCode
+	var promises = IntPromiseArray.create()
+	kick(promises)
+
+	for p in promises 'each'
+		print("awaited {await p}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kick spawned
+callee wrote renamed-7
+awaited 7
+```
+
+<!-- test: pass-by-reference.an-async-call-copies-a-scalar-into-the-coroutines-by-reference-cell -->
+A scalar argument is copied into the coroutine's cell, so the caller's variable keeps its value.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function bump(dest Integer, n Integer) returns Integer
+	Scheduler.yield()
+	dest = dest + n
+	return dest
+end 'bump'
+
+function kick(promises IntPromiseArray)
+	var c = 100
+	promises.push(async bump(c, n: 7))
+	print("kick sees {c}\n")
+end 'kick'
+
+function spray(k Integer) returns Integer
+	let a = k + 1
+	let b = k + 2
+	let d = k + 3
+	print("spray {a} {b} {d}\n")
+	return a + b + d
+end 'spray'
+
+function main() returns ExitCode
+	var promises = IntPromiseArray.create()
+	kick(promises)
+	_ = spray(1)
+	for p in promises 'each'
+		print("awaited {await p}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kick sees 100
+spray 2 3 4
+awaited 107
+```
+
+<!-- test: pass-by-reference.an-async-call-with-a-global-at-a-by-reference-position-leaves-the-global-unchanged -->
+A module-level `var` handed to an `async` callee that assigns its parameter is unchanged.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var shared = "orig"
+
+function rename(dest String, n Integer) returns Integer
+	Scheduler.yield()
+	dest = "renamed-{n}"
+	return n
+end 'rename'
+
+function main() returns ExitCode
+	let p = async rename(shared, n: 7)
+	let r = await p
+	print("{r} {shared}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 orig
+```
+
+<!-- test: pass-by-reference.an-async-string-argument-a-callee-reassigns-is-released-on-await-and-on-cancel -->
+The coroutine's cell releases its final value once on the await path and once on the cancel path.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function rename(dest String, n Integer) returns Integer
+	Scheduler.yield()
+	dest = "renamed {n} padded out long enough to heap allocate"
+	print("{dest}\n")
+	return n
+end 'rename'
+
+function main() returns ExitCode
+	var first = "first padded out long enough to heap allocate {1}"
+	let p = async rename(first, n: 7)
+	print("awaited {await p}\n")
+	var second = "second padded out long enough to heap allocate {2}"
+	let q = async rename(second, n: 8)
+	q.cancel()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+renamed 7 padded out long enough to heap allocate
+awaited 7
+```
+
+<!-- test: pass-by-reference.a-string-read-after-an-async-spawn-to-a-reassigning-callee-is-use-after-move -->
+The `var` is moved into the coroutine, not handed as storage, so reading it after the spawn is E3102.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function rename(dest String, n Integer) returns Integer
+	Scheduler.yield()
+	dest = "renamed-{n}"
+	return n
+end 'rename'
+
+function main() returns ExitCode
+	var s = "orig-{1}"
+	let p = async rename(s, n: 7)
+	let r = await p
+	print("{r} {s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:14:14: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: pass-by-reference.a-reassigned-interface-parameter-writes-the-callers-variable -->
+A parameter held at an interface type is reassigned; the caller's variable sees the new conformer, and an
+r-value argument gets a scratch cell of its own.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function squareShape(side Integer) returns Shape
+	return Square.create(side)
+end 'squareShape'
+
+function grow(s Shape)
+	if s.area() < 5 'small'
+		s = squareShape(4)
+	end 'small'
+end 'grow'
+
+function main() returns ExitCode
+	var shape = squareShape(1)
+	grow(shape)
+	grow(squareShape(3))
+	grow(Square.create(1))
+	print("{shape.area()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+16
+```
+
+<!-- test: pass-by-reference.an-interface-parameter-after-a-reassigned-one-keeps-its-witness -->
+`s` arrives as a cell holding both halves of the interface value, and `from` arrives by value; `from`'s
+dispatch still reaches its own conformer.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function squareShape(side Integer) returns Shape
+	return Square.create(side)
+end 'squareShape'
+
+function adopt(s Shape, from Shape) returns Integer
+	let wanted = from.area()
+
+	if s.area() < wanted 'smaller'
+		s = squareShape(2)
+	end 'smaller'
+
+	return wanted
+end 'adopt'
+
+function main() returns ExitCode
+	var shape = squareShape(1)
+	let wanted = adopt(shape, from: Square.create(3))
+	print("{wanted} {shape.area()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9 4
+```
+
+<!-- test: pass-by-reference.error.a-conformer-variable-cannot-take-an-interface-by-reference-parameter -->
+`grow` may store any `Shape` into its parameter, so a `Square` variable cannot be the storage it writes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function squareShape(side Integer) returns Shape
+	return Square.create(side)
+end 'squareShape'
+
+function grow(s Shape)
+	if s.area() < 5 'small'
+		s = squareShape(4)
+	end 'small'
+end 'grow'
+
+function main() returns ExitCode
+	var square = Square.create(1)
+	grow(square)
+	print("{square.area()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:32:7: argument type mismatch for 's': expected 'Shape', got 'Square'
+```

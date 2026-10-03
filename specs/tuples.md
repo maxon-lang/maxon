@@ -700,8 +700,7 @@ end 'main'
 fraction, which would lex `t.0.1` as `identifier(t)`, `dot`, `floatLiteral(0.1)` — two indices fused into one
 token. A number can follow a `.` for exactly
 one reason (there is no `.5` float form and every other dotted form has an identifier on its right), so
-the lexer refuses the fraction there and both hops survive. Neither reference compiler lexes this:
-v1's positional rewrite handles only an `intLiteral`, so `t.0.1` is a parse error there.
+the lexer refuses the fraction there and both hops survive.
 ```maxon
 function main() returns ExitCode
 	let t = ((1, 2), 39)
@@ -1125,8 +1124,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: duplicate-owned-element-co-owns -->
-One owned value CAN fill two slots of one record: each slot is a durable sink and takes its own reference
-(⚖ 2026-08-12), so the tuple's drop cascade releases exactly the two it took and `s` releases the one it
+One owned value CAN fill two slots of one record: each slot is a durable sink and takes its own reference,
+so the tuple's drop cascade releases exactly the two it took and `s` releases the one it
 holds.
 ```maxon
 function main() returns ExitCode
@@ -1148,8 +1147,7 @@ hellohellohello
 TRIVIAL tuple gets its own record — the caller's `a` keeps its `2` after the returned `b` is written — and
 that is what a tuple is for. A MANAGED-element tuple gets an `__mm_retain` instead, because a shallow copy
 would leave two records pointing at one `String` and free it twice, so writing through the returned `n` shows
-on `m`. The split is a soundness one, not a taste one, and **the value oracle answers exactly the same on
-both halves** (measured: `a.1=2 b.1=99 m.1=99 n.1=99`). Both halves are pinned because a share nobody pins can
+on `m`. The split is a soundness one, not a taste one. Both halves are pinned because a share nobody pins can
 become a wrong answer without a test noticing.
 
 ⚠ The exit code deliberately adds 7. `a.1 + m.1` alone is `2 + 99` = **101**, which is the runtime's
@@ -1192,8 +1190,7 @@ trivial a.1=2 b.1=99 managed m.1=99 n.1=99
 above pins `return t`; this one pins the two doors that reach the caller through a MERGE first — a ternary arm
 and a `try … otherwise` fallback — and a BINDING as the negative control. A borrowed trivial tuple is copied at
 a hand-off and INCREF'd at a binding, so `a.1` and `m.1` keep their `2` while `g.1` reads the `55` the callee
-wrote through its alias. **The value oracle answers all three identically** (measured: `merged a.1=2 fallback
-m.1=2 binding g.1=55`).
+wrote through its alias.
 
 ⚠ The merge is why this is pinned. A merged value reaches the same shared promotion as a returned one, and an
 incref'd tuple would answer the return copy's `not valueIsOwnedHeap` question wrongly by design, so the copy
@@ -1265,8 +1262,7 @@ bare `named("Pair")` and one walked AFTER records the tuple's `structRef`.
 
 ⚠ **THE PAIR BELOW DECLARES ITS TWO FILES IN THE TWO ORDERS, AND THAT IS WHAT IT GETS.** `build` takes an
 ORDERED list of paths and the runner names each case's files in the order the case declares them, so each
-half below compiles in its own order. The loader sorts nothing (`StdlibLoader`'s header, user ruling
-2026-07-24), because a sort would hide the dependence rather than surface it.
+half below compiles in its own order. The loader sorts nothing (`StdlibLoader`'s header), because a sort would hide the dependence rather than surface it.
 
 A `named` that the sweep left under an alias spelling is repaired at the READ door — a declared slot's type
 (`ProgramSignatures.declaredSlotType`), a call result (`Parser.resolveNamedAlias`), and the four classifiers
@@ -2147,8 +2143,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-tuple-of-two-records-whose-types-are-declared-in-the-other-order-survives-destructuring -->
-The first case with `type B` declared ABOVE `type A` and nothing else changed — the shape whose released
-element moved to `a`, which located the decision in interner order rather than in the tuple.
+The first case with `type B` declared ABOVE `type A` and nothing else changed — the shape that would move
+the released element to `a` if the decision followed interner order rather than the tuple.
 ```maxon
 type B
 	export var m as Integer
@@ -2289,4 +2285,196 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 42
+```
+
+<!-- test: a-tuple-literal-holding-a-closure-fills-a-function-typed-column -->
+A closure literal written as a tuple element takes the function type the receiving column declares, exactly as it
+does at a parameter or an array element.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+type Slot
+	export var pair as (Thunk, Integer)
+
+	static function create() returns Self
+		return Self{pair: (function() gives 40, 2)}
+	end 'create'
+
+	function rearm(base Integer)
+		self.pair = (function() gives base, 1)
+	end 'rearm'
+end 'Slot'
+
+function main() returns ExitCode
+	var s = Slot.create()
+	let first = s.pair.0() + s.pair.1
+	s.rearm(41)
+	let second = s.pair.0() + s.pair.1
+	var t = (idle, 0)
+	t = (function() gives 7, 1)
+	print("{first} {second} {t.0()}\n")
+	return 0
+end 'main'
+```
+```stdout
+42 42 7
+```
+
+<!-- test: a-tuple-literal-in-a-conditional-arm-fills-a-function-typed-column -->
+A tuple literal written as a `match` arm, or as a conditional's arm beside a value that is no literal, takes the
+column types the receiving slot declares.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+enum Mode
+	quiet
+	live
+end 'Mode'
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+type Slot
+	export var pair as (Thunk, Integer)
+
+	static function create() returns Self
+		return Self{pair: (idle, 0)}
+	end 'create'
+
+	function choose(mode Mode)
+		self.pair = match mode 'mode'
+			quiet gives (idle, 1)
+			live gives (seven, 2)
+		end 'mode'
+	end 'choose'
+
+end 'Slot'
+
+function keptOrArmed(kept (Thunk, Integer), keep bool) returns (Thunk, Integer)
+	return kept if keep else (seven, 3)
+end 'keptOrArmed'
+
+function main() returns ExitCode
+	var s = Slot.create()
+	s.choose(Mode.live)
+	let first = s.pair.0() + s.pair.1
+	s.pair = keptOrArmed(s.pair, keep: false)
+	let second = s.pair.0() + s.pair.1
+	print("{first} {second}\n")
+	return 0
+end 'main'
+```
+```stdout
+9 10
+```
+
+<!-- test: a-nested-tuple-and-an-array-of-tuples-fill-function-typed-columns -->
+A tuple nested in a tuple, and a tuple written as an element of an array literal, each take the function-typed
+column its position declares.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Entry = (Thunk, Integer)
+typealias Entries = Array with Entry
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function eight() returns Integer
+	return 8
+end 'eight'
+
+type Table
+	export var nested as ((Thunk, Integer), Integer)
+	export var entries as Entries
+
+	static function create() returns Self
+		return Self{nested: ((seven, 1), 2), entries: [(seven, 3), (eight, 4)]}
+	end 'create'
+end 'Table'
+
+function main() returns ExitCode
+	let t = Table.create()
+	let inner = t.nested.0
+	let last = try t.entries.get(1) otherwise inner
+	print("{inner.0()} {inner.1} {t.nested.1} {last.0()} {last.1}\n")
+	return 0
+end 'main'
+```
+```stdout
+7 1 2 8 4
+```
+
+<!-- test: a-tuple-literal-argument-to-an-inline-tuple-parameter-fills-a-function-typed-column -->
+A tuple literal handed to a parameter whose tuple type is written inline takes the column types that parameter
+declares, as it does through an alias.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+function run(armed (Thunk, Integer)) returns Integer
+	return armed.0() + armed.1
+end 'run'
+
+function main() returns ExitCode
+	print("{run((seven, 1))} {run((function() gives 40, 2))}\n")
+	return 0
+end 'main'
+```
+```stdout
+8 42
+```
+
+<!-- test: a-tuple-literal-argument-to-a-method-fills-a-function-typed-column -->
+A tuple literal handed to a method takes the column types its parameter declares.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+typealias Armed = (Thunk, Integer)
+
+function idle() returns Integer
+	return 0
+end 'idle'
+
+function seven() returns Integer
+	return 7
+end 'seven'
+
+type Slot
+	export var pair as (Thunk, Integer)
+
+	static function create() returns Self
+		return Self{pair: (idle, 0)}
+	end 'create'
+
+	function arm(armed Armed)
+		self.pair = armed
+	end 'arm'
+end 'Slot'
+
+function main() returns ExitCode
+	var s = Slot.create()
+	s.arm((seven, 2))
+	print("{s.pair.0() + s.pair.1}\n")
+	return 0
+end 'main'
+```
+```stdout
+9
 ```

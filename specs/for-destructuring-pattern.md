@@ -16,24 +16,22 @@ and is why the loop header needs no rules of its own.
 **What is NOT shared is the NOUNS the refusals are composed from**, and that is the whole subject
 of this file. A `let` binding has a *binding*, an *initializer* and a *right-hand side*. A `for`
 header has **none of the three**: it has a loop pattern and a source ELEMENT. Held to one
-hard-coded set of nouns, `for (a, b) in xs` over an int array reported
+hard-coded set of nouns, `for (a, b) in xs` over an int array would report
 
 > a destructuring **binding** of a 'int' **initializer** (only a TUPLE can be destructured —
 > `let (x, y) = …` needs a **right-hand side** that is a tuple)
 
 — a sentence describing a construct the author did not write, on the refusal a `for` header
-reaches FIRST. The nouns are now the caller's, exactly as `parseHashTableColumnArg` takes its
-subject, and the cases below pin one sentence per construct so the two cannot collapse back into
+reaches FIRST. The nouns are the caller's, exactly as `parseHashTableColumnArg` takes its
+subject, and the cases below pin one sentence per construct so the two cannot collapse into
 one.
 
-### Authored, not ported
+### The `let` spellings are the control
 
-`/specs/tuples.md` pins the `let` spellings of both sentences
-(`error.destructure-of-a-non-tuple`, `error.destructure-arity-mismatch`) and they stay
-byte-identical — that is what makes them the CONTROL for these. It has no case anywhere for the
-`for` spelling of either, because until `Map` landed there was no source whose element was a
-tuple, so the `for` arm of `requireDestructurableTuple` was unreachable and its wording was never
-read by anyone.
+`specs/tuples.md` pins the `let` spellings of both sentences
+(`error.destructure-of-a-non-tuple`, `error.destructure-arity-mismatch`) — that is what makes them the
+CONTROL for these. The `for` spelling of either, the
+`for` arm of `requireDestructurableTuple`, is pinned only here.
 
 ## Tests
 

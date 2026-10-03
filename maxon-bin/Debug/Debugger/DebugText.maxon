@@ -28,14 +28,14 @@ export function debugTextLinesFor(reply DebugReply) returns StringArray
 end 'debugTextLinesFor'
 
 function appendThreads(lines StringArray, roster DebugThreadRoster)
-	if not roster.unavailable.isEmpty() 'nothingToList'
-		lines.push("no green-thread roster: {roster.unavailable}")
+	if let reason = try roster.availability.reason() 'nothingToList'
+		lines.push("no green-thread roster: {reason}")
 
 		return
 	end 'nothingToList'
 
 	for row in roster.rows 'eachRow'
-		lines.push("{FrameIndent}#{row.id} {row.status}{debugNamePhrase(row.functionName, lead: " ")} at {row.file}:{row.line}")
+		lines.push("{FrameIndent}#{row.id} {row.status}{debugNamePhrase(row.functionName, lead: " ")} at {row.file.wireName()}:{row.line.wireNumber()}")
 	end 'eachRow'
 
 	if roster.truncated 'moreThanThePageHolds'
@@ -44,8 +44,8 @@ function appendThreads(lines StringArray, roster DebugThreadRoster)
 end 'appendThreads'
 
 function appendThreadWalk(lines StringArray, walk DebugThreadWalk)
-	if not walk.unavailable.isEmpty() 'nothingToWalk'
-		lines.push("no stack for {threadName(walk.thread)}: {walk.unavailable}")
+	if let reason = try walk.availability.reason() 'nothingToWalk'
+		lines.push("no stack for {threadName(walk.thread)}: {reason}")
 
 		return
 	end 'nothingToWalk'
@@ -55,11 +55,8 @@ function appendThreadWalk(lines StringArray, walk DebugThreadWalk)
 end 'appendThreadWalk'
 
 function threadOutcomeText(outcome DebugThreadOutcome) returns String
-	if outcome.reason.isEmpty() 'itWorked'
-		return "{outcome.event} {threadName(outcome.thread)}: {outcome.result}"
-	end 'itWorked'
-
-	return "{outcome.event} {threadName(outcome.thread)}: {outcome.result} ({outcome.reason})"
+	let reason = try outcome.reason.text() otherwise return "{outcome.event} {threadName(outcome.thread)}: {outcome.result}"
+	return "{outcome.event} {threadName(outcome.thread)}: {outcome.result} ({reason})"
 end 'threadOutcomeText'
 
 function threadName(thread DebugThreadRef) returns String
@@ -70,8 +67,8 @@ function threadName(thread DebugThreadRef) returns String
 end 'threadName'
 
 function appendTrace(lines StringArray, slice DebugTraceSlice)
-	if not slice.unavailable.isEmpty() 'nothingToShow'
-		lines.push("no trace: {slice.unavailable}")
+	if let reason = try slice.availability.reason() 'nothingToShow'
+		lines.push("no trace: {reason}")
 
 		return
 	end 'nothingToShow'
@@ -97,26 +94,35 @@ function breakpointText(answer DebugBreakpointAnswer) returns String
 	end 'nothingAnswersToIt'
 
 	if answer.action == BreakpointRefusedAction 'refused'
-		return "breakpoint at {answer.file}:{answer.line} refused ({answer.reason})"
+		let reason = try answer.reason.text() otherwise panic("breakpointText: a refused breakpoint answer carries no reason")
+		return "breakpoint at {answer.file.wireName()}:{answer.line.wireNumber()} refused ({reason})"
 	end 'refused'
 
 	if answer.action == BreakpointNoCodeAction 'noCodeThere'
-		return "no code at {answer.file}:{answer.line}"
+		return "no code at {answer.file.wireName()}:{answer.line.wireNumber()}"
 	end 'noCodeThere'
 
 	if answer.action == BreakpointConditionUnsupportedAction 'aConditionTheDebuggerCannotJudge'
-		return "breakpoint at {answer.file}:{answer.line} not set: the debugger cannot evaluate `{answer.condition}`, which must compare one integer or bool local held in a register or a frame slot with a literal"
+		let condition = refusedConditionText(answer)
+		return "breakpoint at {answer.file.wireName()}:{answer.line.wireNumber()} not set: the debugger cannot evaluate `{condition}`, which must compare one integer or bool local held in a register or a frame slot with a literal"
 	end 'aConditionTheDebuggerCannotJudge'
 
 	if answer.action == BreakpointConditionInvalidAction 'notACondition'
-		return "breakpoint at {answer.file}:{answer.line} not set: `{answer.condition}` is not `<local> <op> <literal>`"
+		return "breakpoint at {answer.file.wireName()}:{answer.line.wireNumber()} not set: `{refusedConditionText(answer)}` is not `<local> <op> <literal>`"
 	end 'notACondition'
 
-	return "breakpoint {answer.action} at {answer.file}:{answer.line}{debugNamePhrase(answer.functionName, lead: " in ")} ({answer.offsets.count()} site(s))"
+	return "breakpoint {answer.action} at {answer.file.wireName()}:{answer.line.wireNumber()}{debugNamePhrase(answer.functionName, lead: " in ")} ({answer.offsets.count()} site(s))"
 end 'breakpointText'
 
-function suggestionTail(suggestion String) returns String
-	return "" if suggestion.isEmpty() else " — did you mean '{suggestion}'?"
+function refusedConditionText(answer DebugBreakpointAnswer) returns String
+	return try answer.condition.text() otherwise panic("breakpointText: a breakpoint refused for its condition carries none")
+end 'refusedConditionText'
+
+function suggestionTail(suggestion StatedText) returns String
+	return match suggestion 'suggestion'
+		unstated gives ""
+		stated(name) gives " — did you mean '{name}'?"
+	end 'suggestion'
 end 'suggestionTail'
 
 function appendStop(lines StringArray, stop DebugStop)
@@ -129,14 +135,14 @@ end 'appendStop'
 
 function stopHeadline(stop DebugStop) returns String
 	if stop.reason == TrapStopReasonName 'anInt3NobodyPlanted'
-		return "trap at {stop.file}:{stop.line} ({hexWord(stop.offset)})"
+		return "trap at {stop.file.wireName()}:{stop.spot.wireLine()} ({hexWord(stop.offset)})"
 	end 'anInt3NobodyPlanted'
 
 	if stop.reason == FaultStopReasonName 'theProgramFaulted'
-		return "fault at {stop.file}:{stop.line}{debugNamePhrase(stop.functionName, lead: InFunctionLead)}: {stop.fault} ({hexWord(stop.offset)}); continuing ends the program"
+		return "fault at {stop.file.wireName()}:{stop.spot.wireLine()}{debugNamePhrase(stop.functionName, lead: InFunctionLead)}: {try stop.fault.text() otherwise panic("stopHeadline: a fault stop carries its fault's description")} ({hexWord(stop.offset)}); continuing ends the program"
 	end 'theProgramFaulted'
 
-	return "stopped ({stop.reason}) at {stop.file}:{stop.line}{debugNamePhrase(stop.functionName, lead: InFunctionLead)}"
+	return "stopped ({stop.reason}) at {stop.file.wireName()}:{stop.spot.wireLine()}{debugNamePhrase(stop.functionName, lead: InFunctionLead)}"
 end 'stopHeadline'
 
 function appendFrames(lines StringArray, frames DebugFrameArray)
@@ -146,7 +152,10 @@ function appendFrames(lines StringArray, frames DebugFrameArray)
 end 'appendFrames'
 
 function frameWhere(frame DebugFrame) returns String
-	return UnknownPositionText if frame.path.isEmpty() else "at {frame.file}:{frame.line}"
+	return match frame.path 'path'
+		unknown gives UnknownPositionText
+		file gives "at {frame.path.fileName().wireName()}:{frame.spot.wireLine()}"
+	end 'path'
 end 'frameWhere'
 
 let UnknownPositionText = "at an unknown position"
@@ -176,11 +185,14 @@ function appendValue(lines StringArray, tree DebugValueTree, index ElementIndex,
 end 'appendValue'
 
 function valueText(value DebugValueNode) returns String
-	return "<{value.unavailable}>" if not value.unavailable.isEmpty() else value.display
+	return match value.availability 'availability'
+		available gives value.display
+		unavailable(reason) gives "<{reason}>"
+	end 'availability'
 end 'valueText'
 
 let CandidateSeparator = ", "
 
-function errorText(message String, suggestion String) returns String
+function errorText(message String, suggestion StatedText) returns String
 	return "error: {message}{suggestionTail(suggestion)}"
 end 'errorText'

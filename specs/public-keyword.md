@@ -214,8 +214,7 @@ error E3092: api/<fragment>:5:17: exported function 'api.neverCalledFromOutside'
 
 ⚠ Each pair is tested in BOTH orders, and both orders must render the SAME sentence: the words are
 named in a fixed order rather than the order they were written, so one illegal program has exactly one
-diagnostic. Written the other way round, `module export` used to report `Expected function declaration,
-got 'module'` at column 1 — the combination was never even recognised as one.
+diagnostic.
 
 <!-- test: error.export-then-public-combined -->
 ```maxon
@@ -274,7 +273,7 @@ error E2001: <fragment>:2:8: 'module' and 'public' cannot be combined
 ```
 
 <!-- test: error.module-then-export-combined -->
-The pre-existing pair, in the order that used to be unrecognised.
+The `module`/`export` pair, written `module` first.
 ```maxon
 module export function bad() returns ExitCode
 	return 0
@@ -290,7 +289,7 @@ error E2001: <fragment>:2:8: 'export' and 'module' cannot be combined
 
 ## `public` is a keyword, and a keyword may still be a declared name
 
-D8's keyword-as-a-declared-name rule applies to `public` as it does to every other keyword: it may name
+The keyword-as-a-declared-name rule applies to `public` as it does to every other keyword: it may name
 a declaration, an enum case, or a member after `.`. What it may not be is a bare value in expression
 position — and nothing in the corpus wanted to be.
 

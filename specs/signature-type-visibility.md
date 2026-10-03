@@ -50,8 +50,9 @@ error E3167: api/lib.maxon:3:17: exported function 'api.f' names file-private ty
 ### The library is held to it too
 
 A typealias written in `stdlib/` with no modifier is file-private to the library file it lives in, the
-same as anyone's, so user code that names one is refused where it writes the name. Every alias a
-`public` library signature names is therefore written `public` itself.
+same as anyone's, and any library declaration without `public` is hidden from author code, so user code
+that names one — bare or as `stdlib.Name` — is refused where it writes the name. Every alias a `public`
+library signature names is therefore written `public` itself.
 
 ## Tests
 
@@ -104,7 +105,7 @@ error E3167: api/<fragment>:5:17: module function 'api.show' names file-private 
 
 <!-- test: error.an-export-function-throws-a-file-private-error -->
 The throws clause is a signature position: a caller that wants to MATCH on the error has to be able to
-name it. The `otherwise` here does not, which is why the program runs today.
+name it. The `otherwise` here does not, so nothing but this rule refuses the program.
 ```maxon
 // --- file: api/lib.maxon
 enum LibError implements Error
@@ -345,9 +346,8 @@ error E3167: api/<fragment>:6:11: public function 'api.Sized.size' names file-pr
 `stdlib/Math.maxon:8` writes `typealias SeriesTermLimit = int(2 to 64)` with no modifier; its one
 reader is `Math.lnBySeries`, a file-private static, and no other library file names it. It is an
 implementation detail of one function's term count, and nothing about `Math`'s public surface says it
-exists — yet the corpus promotion made it a global name every program could write. Once the library's
-unmarked aliases stay file-private, the name resolves to nothing at the `as` and the compiler gives
-the answer it already gives for any other file's non-exported typealias.
+exists. It is file-private, so the name resolves to nothing the author may name at the `as`, and the
+compiler gives the answer it gives for any other file's non-exported typealias.
 ```maxon
 // --- file: api/lib.maxon
 export function seriesLimit() returns ExitCode
@@ -362,7 +362,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2003: api/<fragment>:4:15: Expected type name after 'as'
+error E3008: api/<fragment>:4:15: typealias 'SeriesTermLimit' is not exported
 ```
 
 <!-- test: error.an-export-function-names-a-module-type-declared-in-another-file -->
@@ -398,7 +398,7 @@ error E3167: api/<fragment>:12:17: exported function 'api.make' names module typ
 error E3167: api/<fragment>:16:17: exported function 'api.sizeOf' names module type 'Config' in the type of parameter 'c'
 ```
 
-Now the guards. Each is legal today and stays legal: the rule is a floor under the function's own
+Now the guards. Each is legal: the rule is a floor under the function's own
 tier, and nothing below that floor is an error.
 
 <!-- test: a-file-private-function-may-name-a-public-type -->
@@ -526,7 +526,7 @@ end 'main'
 
 <!-- test: a-users-own-generic-alias-does-not-reach-the-librarys-readers -->
 ⭐ **THE SAME LAYER RULE AT THE GENERIC-INSTANCE DOOR.** `api/lib.maxon` declares an `export typealias
-ByteArray` of its own, over a two-byte element, and the library declares one in six files. `stdlib/Sha256.maxon`
+ByteArray` of its own, over a two-byte element, and `stdlib/File.maxon` declares the library's. `stdlib/Sha256.maxon`
 declares none of the name and its `public function sha256(data ByteArray) returns ByteArray` names it, so
 the library's own declaration has to answer there; the author's alias answers only where the author wrote
 it.
@@ -727,4 +727,32 @@ end 'main'
 ```
 ```maxoncstderr
 error E3167: api/<fragment>:20:18: exported function 'api.Worker.run' names file-private type 'Report' in its return type
+```
+
+<!-- test: error.a-contested-function-alias-is-named-as-written -->
+Two directories declare `Op` over two shapes, so each declaration is held under a name of its own inside the
+compiler. The refusal still names `Op`, which is what the author wrote.
+```maxon
+// --- file: aaa/a.maxon
+export typealias Small = int(0 to 1000)
+typealias Op = function(Small) returns Small
+
+export function twice(f Op) returns Small
+	return f(f(1))
+end 'twice'
+
+// --- file: zzz/z.maxon
+export typealias Op = function(ExitCode) returns ExitCode
+
+export function once(f Op) returns ExitCode
+	return f(1)
+end 'once'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (aaa.twice(function(x) gives x + 1) as ExitCode) + zzz.once(function(x) gives x)
+end 'main'
+```
+```maxoncstderr
+error E3167: aaa/<fragment>:6:17: exported function 'aaa.twice' names file-private typealias 'Op' in the type of parameter 'f'
 ```

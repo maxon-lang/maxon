@@ -31,10 +31,12 @@ All methods include safety checks to prevent crashes and memory corruption:
 
 **Process / Subprocess:**
 
-User code should use the `Subprocess` stdlib type rather than calling these builtins directly. The `subprocess*` builtins back `stdlib/Subprocess.maxon`; the table below documents what is present today.
+User code should use the `Subprocess` stdlib type rather than calling these builtins directly. The `subprocess*` builtins back `stdlib/Subprocess.maxon`; the table below documents what is present.
 
 - `__Builtins.executablePath()` returns __ManagedMemory - Absolute path to the current executable (empty buffer when unavailable; `Process.executablePath` surfaces this as `ProcessIntrospectionError.pathUnavailable`)
 - `__Builtins.currentProcessId()` returns int - Pid of the current process
+- `__Builtins.processNamespace()` returns __ManagedMemory - The pid space the current process belongs to: the `/proc/self/ns/pid` link target on Linux, the boot-session UUID on macOS, the machine's `MachineGuid` on Windows; empty buffer when unavailable. Refused (E3104) on wasm32-wasi
+- `__Builtins.fillRandom(managed)` returns int - Fills the buffer's live length with bytes from the operating system's random source; 0 when every byte was filled, non-zero when the source refused. Refused (E3104) on wasm32-wasi
 - `__Builtins.subprocessResolveOnPath(nameManaged)` returns __ManagedMemory - Resolve a bare executable name via PATH lookup; empty buffer on miss
 - `__Builtins.subprocessSpawn(argv, argc, cwd, envBlock, envInherit, stdinKind, stdinData, stdoutKind, stdoutData, stdoutLimit, stderrKind, stderrData, stderrLimit, flags)` returns int - Spawn a child process; returns a handle, -1 on failure
 - `__Builtins.subprocessDetach(... same args as spawn ...)` returns int - Like spawn but with the detach flag; returns pid, -1 on failure
@@ -216,11 +218,10 @@ not interchangeable. Passing the wrong one is always a mistake, and is rejected
 rather than reinterpreted.
 
 <!-- test: builtins-type.error.bits-to-float-float-arg -->
-⚠ **The compiler KEEPS ITS OWN SENTENCE (ruling, 2026-09-04).** The bootstrap words a `__Builtins.*` operand
-rejection per ARGUMENT, naming the ABI type and the argument index and anchoring on the argument; The compiler has
-one sentence for the whole surface, naming the callee and the two SOURCE types and anchoring on the callee.
-Every `__Builtins.*` operand refusal in this suite is worded that way — grep `but its argument is` — so the
-divergence is the consistency, not an oversight.
+⚠ **ONE SENTENCE FOR THE WHOLE SURFACE.** The compiler words a `__Builtins.*` operand rejection
+the same way for every intrinsic, naming the callee and the two SOURCE types and anchoring on the callee,
+rather than per ARGUMENT with the ABI type and the argument index. Every `__Builtins.*` operand refusal in
+this suite is worded that way — grep `but its argument is`.
 A `float` argument to `bitsToFloat` is almost always a `floatToBits` that was
 meant instead.
 ```maxon
@@ -237,7 +238,7 @@ error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires a int, but its a
 The wording divergence is `bits-to-float-float-arg`'s, one case up.
 A managed value is a heap pointer, and a heap pointer is not a float's bit
 pattern. This one matters most: the pointer shares the integer representation,
-so before the check existed this program compiled clean and bitcast the String's
+so without the check this program would compile clean and bitcast the String's
 handle into a garbage double.
 ```maxon
 function main() returns ExitCode

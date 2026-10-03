@@ -17,6 +17,9 @@
 // For synthetic ops that have no source span (e.g. compiler-inserted
 // conversions), use `SourceRange.none()` — every field is 0.
 
+let PositionlessLine = 0 as LineNumber
+let PositionlessColumn = 0 as ColumnNumber
+
 export type SourceRange
 	export let startByte as ByteOffset
 	export let endByte as ByteOffset
@@ -30,7 +33,7 @@ export type SourceRange
 	// Sentinel range for synthetic / positionless ops. Downstream consumers
 	// (diagnostics, LSP queries) treat all-zero fields as "no source origin".
 	export static function none() returns SourceRange
-		return Self{startByte: 0, endByte: 0, line: 0, column: 0}
+		return Self{startByte: 0, endByte: 0, line: PositionlessLine, column: PositionlessColumn}
 	end 'none'
 
 	// Range spanning a single token — convenience for the many single-token
@@ -51,6 +54,15 @@ export type SourceRange
 		return startByte == endByte
 	end 'isEmpty'
 end 'SourceRange'
+
+function namesASourcePosition(line LineNumber, column ColumnNumber) returns bool
+	return line != PositionlessLine and column != PositionlessColumn
+end 'namesASourcePosition'
+
+export union OpPlacement
+	unplaced
+	at(line LineNumber, column ColumnNumber)
+end 'OpPlacement'
 
 // Inline per-argument span lists on the call ops. These are genuine
 // per-ARGUMENT payload — they are not per-op, so they do not belong in the
@@ -121,16 +133,31 @@ export type SourceRangeTable
 	// together by `record`, so once the index is in range all four hold it — their
 	// `otherwise` arms are unreachable-by-construction, not error handling.
 	export function get(opIndex ElementIndex) returns SourceRange
-		if opIndex >= self.count() 'noSpan'
-			panic("SourceRangeTable.get: op {opIndex} has no recorded span (table holds {self.count()}) — an op was created without going through FileParseArtifact.emitOp")
-		end 'noSpan'
-
+		let (line, column) = self.positionOf(opIndex, reader: "get")
 		let startByte = try self.startBytes.get(opIndex) otherwise panic("SourceRangeTable.get: startBytes column out of step at op {opIndex}")
 		let endByte = try self.endBytes.get(opIndex) otherwise panic("SourceRangeTable.get: endBytes column out of step at op {opIndex}")
-		let line = try self.lines.get(opIndex) otherwise panic("SourceRangeTable.get: lines column out of step at op {opIndex}")
-		let column = try self.columns.get(opIndex) otherwise panic("SourceRangeTable.get: columns column out of step at op {opIndex}")
 		return SourceRange.create(startByte, endByte: endByte, line: line, column: column)
 	end 'get'
+
+	export function placementOf(opIndex ElementIndex) returns OpPlacement
+		let (line, column) = self.positionOf(opIndex, reader: "placementOf")
+
+		if not namesASourcePosition(line, column: column) 'positionless'
+			return OpPlacement.unplaced
+		end 'positionless'
+
+		return OpPlacement.at(line, column: column)
+	end 'placementOf'
+
+	function positionOf(opIndex ElementIndex, reader String) returns (LineNumber, ColumnNumber)
+		if opIndex >= self.count() 'noSpan'
+			panic("SourceRangeTable.{reader}: op {opIndex} has no recorded span (table holds {self.count()}) — an op was created without going through FileParseArtifact.emitOp")
+		end 'noSpan'
+
+		let line = try self.lines.get(opIndex) otherwise panic("SourceRangeTable.{reader}: lines column out of step at op {opIndex}")
+		let column = try self.columns.get(opIndex) otherwise panic("SourceRangeTable.{reader}: columns column out of step at op {opIndex}")
+		return (line, column)
+	end 'positionOf'
 
 	// Fold another table's spans onto the end of this one, preserving order.
 	// `mergeArtifact` calls this in lockstep with `IrModule.merge`, so the appended
@@ -228,10 +255,10 @@ export type DebugSpanTable
 
 	// The id of `(fileId, line, column)`, minting it on first sight.
 	//
-	// A line of 0 is `SourceRange.none()` — a synthetic op with no source origin — and answers
-	// `NoSpanId`, so a positionless op needs no separate spelling at any caller.
+	// A line or a column of 0 is `SourceRange.none()` — a synthetic op with no source origin — and
+	// answers `NoSpanId`, so a positionless op needs no separate spelling at any caller.
 	export function intern(fileId DebugFileId, line LineNumber, column ColumnNumber) returns SpanId
-		if line == 0 or fileId == NoDebugFileId 'positionless'
+		if not namesASourcePosition(line, column: column) or fileId == NoDebugFileId 'positionless'
 			return NoSpanId
 		end 'positionless'
 

@@ -13,7 +13,7 @@ When retrieving struct elements from an array via `get()`, the returned struct p
 
 A `try arr.get(i) otherwise <fresh owned value>` merges two edges with *different* ownership: the success edge yields a **borrow** the array owns, the error edge a **fresh owned** box. They flow into one binding, so the binding needs one uniform drop discipline. The compiler takes a second owner of the borrowed element on the success edge (`__mm_incref`) and drops the merged binding exactly once at its scope exit. The error-edge fallback is therefore **not** released on the error edge — doing so would free it before the binding is read, a use-after-free.
 
-⚠ **The `try-otherwise-error-fallback-outlives-read` test below is a regression guard for that use-after-free, and it PASSES WITH OR WITHOUT THE FIX under the shipped allocator** — a bump allocator that never reclaims a freed box leaves the freed bytes intact, so a premature free is invisible to a value check. It was caught only by a poisoning `__mm_free` that overwrites a freed payload; it is pinned here so the behaviour is not silently re-broken, not because it fails today on the shipped allocator.
+⚠ **The `try-otherwise-error-fallback-outlives-read` test below is a guard for that use-after-free, and it PASSES WHETHER OR NOT THE FALLBACK IS FREED EARLY under the shipped allocator** — a bump allocator that never reclaims a freed box leaves the freed bytes intact, so a premature free is invisible to a value check. Only a poisoning `__mm_free` that overwrites a freed payload shows it; the case pins the behaviour so it is not silently broken.
 
 ## Tests
 
@@ -146,7 +146,7 @@ end 'main'
 ```
 
 <!-- test: try-otherwise-error-fallback-outlives-read -->
-The `otherwise` fallback of a `try` over a managed-borrow accessor is a fresh owned box that must live until the merged binding is READ, not be freed on the error edge. Here index 1 is past the end (only slot 0 was pushed), so the error edge runs and the binding is the fallback `Slot.create(-7)`; `result.value` must read `-7`. If the fallback were freed on the error edge before the read, the field read would see a dead box. What matters is that `get` takes its ERROR edge, not which failure sent it there — the array was formerly widened with `resize(3)` to make slot 1 empty instead, which E3106 now refuses on a struct element. (See the ⚠ note above: this passes on the shipped allocator regardless — it is a poison-only regression guard.)
+The `otherwise` fallback of a `try` over a managed-borrow accessor is a fresh owned box that must live until the merged binding is READ, not be freed on the error edge. Here index 1 is past the end (only slot 0 was pushed), so the error edge runs and the binding is the fallback `Slot.create(-7)`; `result.value` must read `-7`. If the fallback were freed on the error edge before the read, the field read would see a dead box. What matters is that `get` takes its ERROR edge, not which failure sent it there. (See the ⚠ note above: this passes on the shipped allocator regardless — it is a poison-only guard.)
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -172,7 +172,7 @@ end 'main'
 ```
 
 <!-- test: otherwise-value-expression-allocates -->
-The `otherwise <value>` fallback is an expression, so it may build its OWN owned temporary that it does not hand back — `[1, 2].count()` builds an array and yields a scalar. That temporary runs on the error edge only and must die there, not at the shared statement tail (which the ok edge reaches too — releasing it there is a release of a value that edge never built, a register-allocator "use dominates its def" panic on a valid program). This pins the fallback expression as a fork region alongside a ternary/match arm. Unlike the borrow guard above, this DOES fail without the fix — it is a compiler crash, not a silent free — so it is a genuine red-before-green.
+The `otherwise <value>` fallback is an expression, so it may build its OWN owned temporary that it does not hand back — `[1, 2].count()` builds an array and yields a scalar. That temporary runs on the error edge only and must die there, not at the shared statement tail (which the ok edge reaches too — releasing it there is a release of a value that edge never built, a register-allocator "use dominates its def" panic on a valid program). This pins the fallback expression as a fork region alongside a ternary/match arm. Unlike the borrow guard above, getting this wrong is a compiler crash, not a silent free, so this case goes red on it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -191,7 +191,7 @@ end 'main'
 ```
 
 <!-- test: otherwise-live-binding-not-double-freed -->
-When the `otherwise` fallback is a live owned BINDING that is read again after the `try`, the error edge ALIASES it rather than moving it — so the merge binding `r` and the source binding `fallback` name the SAME box. If the phi is made owned by moving (the temporary rule), both `r` and `fallback` decref that one box at scope exit — a double-free the leak count catches as exit 101. The cure is the error-edge twin of the ok-edge borrow incref: incref the aliased binding so `r` owns its own reference and `fallback` keeps its own. Unlike the poison-only guards above, this is a genuine red-before-green — it exits **101** without the fix — and it needs no poison, because a double-free drives the leak count NEGATIVE. `fallback` must still read `99` after the try.
+When the `otherwise` fallback is a live owned BINDING that is read again after the `try`, the error edge ALIASES it rather than moving it — so the merge binding `r` and the source binding `fallback` name the SAME box. If the phi is made owned by moving (the temporary rule), both `r` and `fallback` decref that one box at scope exit — a double-free the leak count catches as exit 101. The cure is the error-edge twin of the ok-edge borrow incref: incref the aliased binding so `r` owns its own reference and `fallback` keeps its own. Unlike the poison-only guard above, getting this wrong exits **101**, and it needs no poison, because a double-free drives the leak count NEGATIVE. `fallback` must still read `99` after the try.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

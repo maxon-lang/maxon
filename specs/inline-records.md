@@ -40,15 +40,15 @@ Because the value is a word and not a box:
 - `==` keeps the ordinary record rule — it calls the type's own `equals`, and a type without one is E3005.
   `Hashable` and `Equatable` conformance is unchanged, so an inline record is a `Map` key like any other.
 
-**Enum fields do not qualify this stage.** A type with an enum field stays a heap record, as does every
-type that fails any part of the rule above — a `var` field, a signed or non-zero-based range, a type
-parameter, or fields summing past 64 bits. Nothing about those types changes.
+**Enum fields do not qualify.** A type with an enum field is a heap record, as is every type that fails
+any part of the rule above — a `var` field, a signed or non-zero-based range, a type parameter, or fields
+summing past 64 bits.
 
 ## Tests
 
 <!-- test: inline-records.two-u32-fields-are-one-word -->
-RED: two 32-bit fields sum to exactly 64 bits, so `Pair` is one word and `sizeof` is 8; today it is a
-two-slot heap record and the program exits 16.
+Two 32-bit fields sum to exactly 64 bits, so `Pair` is one word and `sizeof` is 8; as a two-slot heap
+record the program would exit 16.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -70,8 +70,8 @@ end 'main'
 ```
 
 <!-- test: inline-records.no-allocation-for-an-inline-record -->
-RED: a hundred inline records are a hundred words, so the live allocation count does not move; today each
-`create` boxes and the program exits 100. The holder is reserved before the first reading so no buffer
+A hundred inline records are a hundred words, so the live allocation count does not move; a `create`
+that boxed would make the program exit 100. The holder is reserved before the first reading so no buffer
 growth lands between the two.
 ```maxon
 typealias Half = int(0 to u32.max)
@@ -114,9 +114,8 @@ end 'main'
 ```
 
 <!-- test: inline-records.mixed-widths-round-trip -->
-RED: five fields of five different widths sum to 31 bits and pack into one word, so the exit code is 8;
-today the values read back correctly out of a five-slot heap record and the exit code is that record's
-size instead.
+Five fields of five different widths sum to 31 bits and pack into one word, so the exit code is 8; a
+five-slot heap record would read the values back correctly and exit with that record's size instead.
 ```maxon
 typealias Quad = int(0 to 3)
 typealias Nib = int(0 to 15)
@@ -154,8 +153,8 @@ false 0 0 0 0
 ```
 
 <!-- test: inline-records.bits-alias-field -->
-RED: four `bits(n)` fields sum to 56 bits, so `Packed` is one word and the exit code is 8; today it is a
-four-slot heap record whose size is what the program exits with instead. The two wide fields carry every bit set, so a field read
+Four `bits(n)` fields sum to 56 bits, so `Packed` is one word and the exit code is 8; a four-slot heap
+record would exit with its size instead. The two wide fields carry every bit set, so a field read
 that sign-extended or masked short would print the wrong number.
 ```maxon
 typealias Nib4 = bits(4)
@@ -189,8 +188,8 @@ end 'main'
 ```
 
 <!-- test: inline-records.array-of-inline-records-is-eight-byte-strided -->
-RED: an inline record is a trivial 8-byte element, so 500 pushes into a reserved array allocate nothing;
-today the stride is already 8 (a pointer) but every element is a box, so the program exits 3.
+An inline record is a trivial 8-byte element, so 500 pushes into a reserved array allocate nothing; a
+boxed element has the same 8-byte stride (a pointer), but boxing every element would exit 3.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -240,8 +239,8 @@ end 'main'
 ```
 
 <!-- test: inline-records.map-key-survives-rehash -->
-RED: an inline record on the primitive road is a `Map` key that is copied rather than retained, and
-building 500 of them allocates nothing — today each key is a box and the program exits 2. The keys are
+An inline record on the primitive road is a `Map` key that is copied rather than retained, and
+building 500 of them allocates nothing — boxing each key would exit 2. The keys are
 built into a reserved holder and measured there, apart from the inserts, because the map's own columns
 allocate whatever the key is.
 ```maxon
@@ -306,9 +305,9 @@ end 'main'
 
 <!-- test: inline-records.module-level-let-is-image-data -->
 CONTROL: a module-level `let` of an inline record is a constant word laid down with the program, so
-nothing is live when `main` starts. The case is green before the change as well as after it — a top-level
-`let` record is already image data, with nothing for `__module_init` to run — and it is here to hold that
-property while the value stops being a record at all.
+nothing is live when `main` starts. A top-level `let` record is image data whether or not it is a word,
+with nothing for `__module_init` to run, and the case holds that property for a value that is not a record
+at all.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -342,8 +341,8 @@ end 'main'
 ```
 
 <!-- test: inline-records.passed-and-returned-through-functions -->
-RED: an inline record crosses a call door as a word in a register, so neither call allocates; today each
-`create` in the callee boxes and the program exits 2.
+An inline record crosses a call door as a word in a register, so neither call allocates; a `create` in
+the callee that boxed would exit 2.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -389,8 +388,8 @@ end 'main'
 
 <!-- test: inline-records.captured-by-a-closure -->
 CONTROL: a captured inline record is a word in the environment, so calling the closure allocates nothing.
-The case is green before the change too — the captured record does not escape `main` and the promoter
-already puts it on the stack — and it is here to hold the reading once the promoter has nothing to do.
+A boxed record would read the same — it does not escape `main`, so the promoter would put it on the
+stack — and the case holds the reading where the promoter has nothing to do.
 The bracket is around the CALLS, not around the closure literal, because the environment itself is a box
 whatever it holds.
 ```maxon
@@ -434,8 +433,7 @@ end 'main'
 ```
 
 <!-- test: inline-records.clone-is-the-identity -->
-RED: cloning a word is copying it, so `clone()` allocates nothing; today it mints a second box and the
-program exits 2.
+Cloning a word is copying it, so `clone()` allocates nothing; minting a second box would exit 2.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -475,8 +473,8 @@ end 'main'
 ```
 
 <!-- test: inline-records.is-on-an-inline-record-is-refused -->
-RED: two inline records are two words and there is no record for the two names to share, so `is` is
-refused with the diagnostic every primitive already gets; today the program compiles and runs.
+Two inline records are two words and there is no record for the two names to share, so `is` is
+refused with the diagnostic every primitive already gets.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -503,8 +501,8 @@ error E3068: specs/fragments/inline-records/inline-records.is-on-an-inline-recor
 ```
 
 <!-- test: inline-records.try-otherwise-over-a-factory-returning-one -->
-RED: a throwing factory hands back a word on the success path and the `otherwise` arm supplies another, so
-neither arm allocates; today both branches box and the program exits 2.
+A throwing factory hands back a word on the success path and the `otherwise` arm supplies another, so
+neither arm allocates; boxing both branches would exit 2.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -563,7 +561,7 @@ end 'main'
 
 <!-- test: inline-records.a-var-field-stays-a-heap-record -->
 CONTROL: a mutable field disqualifies the type — a word has nowhere to be written through — so `Pair` is
-a two-slot heap record before the change and after it.
+a two-slot heap record.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -753,8 +751,8 @@ Stack trace:
 ```
 
 <!-- test: inline-records.as-a-field-of-a-heap-record -->
-CONTROL: a qualifying type held by a heap record is one 8-byte slot either way — a pointer today, the word
-itself afterwards — so the outer record's size does not move.
+CONTROL: a qualifying type held by a heap record is one 8-byte slot either way — the word itself, or a
+pointer to a box — so the outer record's size is the same.
 ```maxon
 typealias Half = int(0 to u32.max)
 typealias Integer = int(i64.min to i64.max)
@@ -974,7 +972,7 @@ end 'main'
 ```
 
 <!-- test: inline-records.a-module-level-var-is-reassigned -->
-RED: a module-level `var` of an inline record holds the WORD in its `.data` slot, so a whole new value
+A module-level `var` of an inline record holds the WORD in its `.data` slot, so a whole new value
 assigned to it is a scalar store and neither the read nor the write allocates.
 ```maxon
 typealias Half = int(0 to u32.max)
@@ -1021,20 +1019,20 @@ end 'main'
 ```
 
 <!-- test: inline-records.a-contested-alias-is-read-in-the-declaring-file -->
-RED: a field's storage width is read through the alias the DECLARING file means, not through a fold over
-every file's declaration. `wide.maxon` declares `Wide` as the whole signed span and never names `Packed`;
-`packed.maxon` declares its own `Wide` and the type built on it, so `Packed` is two 32-bit fields in one
+A field's storage width is read through the alias the DECLARING file means, not through a fold over
+every file's declaration. `wide/wide.maxon` exports `Wide` as the whole signed span and never names `Packed`;
+`packed/packed.maxon`, in another directory, declares its own `Wide` and the type built on it, so `Packed` is two 32-bit fields in one
 word. A width folded across both files would take the machine word for `Wide`, put the pair at 128 bits
 and leave `Packed` a heap record.
 ```maxon
-// --- file: wide.maxon
+// --- file: wide/wide.maxon
 export typealias Wide = int(i64.min to i64.max)
 
 export function widest(v Wide) returns Wide
 	return v - 1
 end 'widest'
 
-// --- file: packed.maxon
+// --- file: packed/packed.maxon
 export typealias Wide = int(0 to u32.max)
 
 export type Packed
@@ -1074,7 +1072,7 @@ end 'main'
 ```
 
 <!-- test: inline-records.a-module-level-var-whose-factory-is-not-folded -->
-RED: a factory the constant evaluator cannot fold — its body computes, and one argument rides a declared
+A factory the constant evaluator cannot fold — its body computes, and one argument rides a declared
 default — leaves the binding to `__module_init`, which RUNS the call before `main`. An inline record's
 slot is still one 8-byte word holding the VALUE, so the stored word reads back, a whole new value
 assigned over it is a scalar store, and nothing is allocated or released either side of `main`.

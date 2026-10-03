@@ -671,14 +671,14 @@ hi4
 ```
 
 <!-- test: error.static-let-array-mutate -->
-⭐⭐ **THE WRITE-THROUGH-AN-IMMUTABLE-STATIC GUARD, AND IT WAS MEASURED FAILING.** A receiver-writing method
+⭐⭐ **THE WRITE-THROUGH-AN-IMMUTABLE-STATIC GUARD.** A receiver-writing method
 on a `static let` array is E3019 — the SAME `requireMutableReceiver` rule
-`error.top-level-let-array-mutate` pins for a file-scope `let`, now naming the qualified binding.
+`error.top-level-let-array-mutate` pins for a file-scope `let`, naming the qualified binding.
 
-Before the static read was routed through the receiver door it fell out to `parsePostfix`, whose receiver
-is deliberately nameless (it serves literals and call results, which are bound to no name), so the blame
-name never reached the check: this exact program COMPILED CLEAN and returned **5** — a mutation of a
-binding declared `let`, with no diagnostic anywhere — while its file-scope twin was refused.
+The static read is routed through the receiver door so that the blame name reaches the check. Falling out
+to `parsePostfix` instead, whose receiver is deliberately nameless (it serves literals and call results,
+which are bound to no name), this exact program would compile clean and return **5** — a mutation of a
+binding declared `let`, with no diagnostic anywhere.
 ```maxon
 type Cache
 	static let xs = [1, 2, 3]
@@ -695,10 +695,10 @@ error E3019: <fragment>:7:23: cannot pass 'Cache.xs' to function that mutates pa
 
 <!-- test: static-struct-member-field-write -->
 A field STORE through a struct-valued static goes through the ordinary field-chain door, rooted at the
-qualified name. The read side worked from the moment the static arm existed (the value falls out and
-`parsePostfix` takes the hop); the WRITE reaches the chain resolver, where the base `Cache` is neither a
-value in scope nor a bare global and fell to the tail as `E2004: Undefined variable 'Cache'` — a name
-defined four lines up. Both spellings now root at `Cache.head`.
+qualified name. On the read side the value falls out and `parsePostfix` takes the hop; the WRITE reaches
+the chain resolver, where the base `Cache` is neither a value in scope nor a bare global, so the chain
+must be rooted at the qualified name rather than refused as `E2004: Undefined variable 'Cache'` — a name
+defined four lines up. Both spellings root at `Cache.head`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -989,10 +989,10 @@ Three array globals in one program: one grown past its initial capacity in a loo
 a fresh literal (the old record must be released, not leaked), one never touched at all, and an
 immutable one only read. `3 + 4 + 6 + 2`.
 
-⚠ **`untouched` NO LONGER REACHES THE BINARY** (P1.7 slice 3): nothing names it, so dead-global
-elimination drops its slot, the `__managed_create`/`__managed_push` run that built it and the `__managed_decref` that
-freed it — which is why the golden's `.data` holds `grow` and `fixed` alone. The answer is unmoved (the
-declaration never contributed to it), and what the case still pins is the pair that matters here: `grow`
+⚠ **`untouched` DOES NOT REACH THE BINARY**: nothing names it, so dead-global
+elimination drops its slot, the `__managed_create`/`__managed_push` run that would build it and the `__managed_decref` that
+would free it — which is why the golden's `.data` holds `grow` and `fixed` alone. The declaration contributes
+nothing to the answer, and what the case pins is the pair that matters here: `grow`
 and `fixed` are TWO LIVE array globals sharing one `__module_init`, so the prune is per-global rather
 than per-init.
 ```maxon
@@ -1086,7 +1086,7 @@ semantics, deliberately, because the alias is observable — so without this ref
 `b.push(9)` would grow `A` with E2013 and E3019 both intact and nothing to report it. Refused where the
 SOURCE is immutable, and only there: the same binding off a `var` global shares.
 
-⚠ **THE REFUSAL IS ON THE WRITE, NOT ON THE BINDING** (⚖ user, 2026-08-14, W117). `var b = A` is legal —
+⚠ **THE REFUSAL IS ON THE WRITE, NOT ON THE BINDING.** `var b = A` is legal —
 reading a `let` global and naming the result is what the language means by reading it — and `b.push(9)`
 is the error. The mark rides the VALUE and is CARRIED through the promotion rather than refused at it, so
 it reaches every use in this function — the direct binding, a reassignment, a ternary/`match` merge that
@@ -1096,20 +1096,19 @@ each pinned below — and, through a whole-program fact, every caller of a funct
 ⚠ **WHAT IS STILL OUTSIDE IT IS ONE BOUNDARY WITH SEVERAL SPELLINGS: A PARAMETER.** The mark is a fact
 about a VALUE in ONE function's SSA space; a callee's parameter is a fresh value in a fresh space, and
 whether it may alias an immutable global is a property of every CALL SITE rather than of the callee. So
-the taint neither enters a callee nor comes back out of one, and all of these are accepted today:
+the taint neither enters a callee nor comes back out of one, and all of these are accepted:
 
   • the callee ALIASES the parameter before writing — `g(A)` where `g(xs …)` does `var b = xs` then
-    `b.push(9)` (measured: `A` grows). The argument check reads the callee's summary of what IT writes,
+    `b.push(9)` (`A` grows). The argument check reads the callee's summary of what IT writes,
     and the callee writes a LOCAL that happens to carry the same record;
   • the callee RETURNS the parameter — `var c = idBox(a)` where `idBox(x Box)` is `return x`. The sweep
     sees the `return x`, recognises `x` as this body's own binder and correctly declines to seed on it,
-    so `c` comes back unmarked (measured: the caller's `c.n = 99` reaches the global);
+    so `c` comes back unmarked (the caller's `c.n = 99` reaches the global);
   • the callee STORES the parameter into a record it returns — `Holder.of(a)` then `h.inner.n = 99`.
 
-⚠ **NONE OF THE THREE IS NEW, and that is checkable rather than asserted: none of them needs an accessor
-or any other W117 machinery — `g(A)` and `idBox(G)` are written against a bare `let` global and behave
-identically on the merge base.** They are named together here so a later rung scopes the cure to the
-BOUNDARY rather than to whichever spelling it happened to be shown. Closing it needs the taint to flow
+⚠ **NONE OF THE THREE NEEDS AN ACCESSOR OR ANY OTHER PART OF THE TAINT MACHINERY** — `g(A)` and
+`idBox(G)` are written against a bare `let` global. They are named together here so a cure is scoped to
+the BOUNDARY rather than to whichever spelling shows it. Closing it needs the taint to flow
 into (and back out of) a callee's SSA space, which is a per-call-site fact, not a per-function one.
 ```maxon
 let A = [1, 2]
@@ -1145,8 +1144,8 @@ error E3019: <fragment>:7:4: cannot pass 'b' to function that mutates parameter 
 <!-- test: error.top-level-let-array-ternary-alias -->
 And through a value MERGE, which is the door that costs one extra keyword. The mark that refuses the two
 above rides the VALUE, and a merge mints a NEW value — so the phi has to inherit it, or `var pick = A if c
-else M` launders exactly what `var pick = A` is refused for. Measured before the phi inherited it: this
-program compiled and returned 3.
+else M` launders exactly what `var pick = A` is refused for. Without that inheritance this program would
+compile and return 3.
 ```maxon
 let A = [1, 2]
 var M = [5, 5]
@@ -1237,11 +1236,10 @@ end 'main'
 ```
 
 <!-- test: top-level-let-struct-accessor-read-only -->
-⭐ **READING AND RETURNING A `let` GLOBAL IS LEGAL; MUTATING THROUGH THE RESULT IS THE ERROR** (⚖ user,
-2026-08-14). This is the control the whole family was missing: an accessor that hands a `let`-declared
-global's record back to a caller that only READS it compiles and runs. Until W117 the compiler refused the
-RETURN itself, which made the shape unwritable — and it is the shape `stdlib/CharacterSet.maxon`'s
-eleven presets are declared in, so the refusal was the sole thing between the library and its callers.
+⭐ **READING AND RETURNING A `let` GLOBAL IS LEGAL; MUTATING THROUGH THE RESULT IS THE ERROR.** This is
+the family's control: an accessor that hands a `let`-declared global's record back to a caller that only
+READS it compiles and runs. It is the shape `stdlib/CharacterSet.maxon`'s eleven presets are declared in,
+so refusing the RETURN itself would stand between the library and its callers.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1269,10 +1267,9 @@ end 'main'
 ```
 
 <!-- test: top-level-var-struct-accessor-write-shares -->
-The same accessor off a `var` global, which is the measurement that says the rule keys on IMMUTABILITY
-and not on returning a global at all: the write goes through and is observable on the global. Both
-compilers do this, and the compiler did it before W117 too — it is the one keyword's difference that proves the
-refusal below is guarding the `let` claim rather than the aliasing.
+The same accessor off a `var` global, which is the case that says the rule keys on IMMUTABILITY
+and not on returning a global at all: the write goes through and is observable on the global. It is the
+one keyword's difference that proves the refusal below is guarding the `let` claim rather than the aliasing.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1371,8 +1368,8 @@ error E2015: <fragment>:24:2: Unsupported: writing through 'a', which aliases a 
 ```
 
 <!-- test: error.let-global-passed-to-field-writing-callee -->
-⛔ **A `let`-DECLARED GLOBAL HANDED STRAIGHT TO A CALLEE THAT WRITES A FIELD OF IT** — measured silently
-mutating the global (`g 99`, where the program declares `G` a `let`) before the record-write column existed.
+⛔ **A `let`-DECLARED GLOBAL HANDED STRAIGHT TO A CALLEE THAT WRITES A FIELD OF IT** — without the
+record-write column it silently mutates the global (`g 99`, where the program declares `G` a `let`).
 Neither of the other two masks can see it: the narrow one E3019 reads alone at a receiver slot records no
 field write, and E3070's is scoped to fields whose drop frees something. The third column is this program.
 ```maxon
@@ -1668,15 +1665,14 @@ error E3019: <fragment>:23:2: cannot pass 'G' to function that mutates parameter
 <!-- test: error.let-global-given-out-of-a-closure -->
 ⭐ **THE INDIRECT-CALL BOUNDARY, STATED RATHER THAN LEFT SILENT.** A closure has no static callee, so no
 whole-program fact can say what calling one returns — and without that, a tainted value handed out of a
-closure would escape into a call the analysis cannot follow. So a closure keeps the OLD refusal, at the
-`gives`, which is the conservative answer this rung deliberately does not widen. The remedy is the same
-one the message always named.
+closure would escape into a call the analysis cannot follow. So a closure keeps the refusal at the
+`gives`, which is the conservative answer, deliberately not widened. The remedy is the one the message
+names.
 
-⚠ **HONEST STATUS: this case is a REGRESSION GUARD, not a red W117 turned green.** The identical refusal
-fired here before the rung, because before it every such return was refused; what the case pins is that
-widening the RETURN did not widen this. It goes red the day a later rung publishes a fact for a closure
+⚠ **HONEST STATUS: this case is a REGRESSION GUARD.** What it pins is that the RETURN a named function
+may make does not widen to a closure. It goes red the day a fact is published for a closure
 without the analysis to back it. Its positive twin is `top-level-let-struct-accessor-read-only` above —
-the same shape, out of a NAMED function, which now compiles.
+the same shape, out of a NAMED function, which compiles.
 ```maxon
 let A = [1, 2]
 
@@ -1692,18 +1688,15 @@ error E2015: <fragment>:5:21: Unsupported: returning a read of a `let`-declared 
 ```
 
 <!-- test: error.let-global-alias-in-a-cell-keeps-its-mark -->
-⛔⛔ **A CELL IS A THIRD PLACE THE RECORD LIVES, AND IT USED TO DROP THE MARK — MEASURED SILENTLY MUTATING
-THE GLOBAL (W117 review, exit 8).** `var b` becomes CELL-RESIDENT the moment anything captures it, and a
-cell binding's `boundValue` is the CELL, not the value the promotion marked — so the write doors, which
-ask about `boundValue`, saw an unmarked binding and let `grow(b)` through **in the very frame that owns
-`b`**. The closure below does nothing but exist: delete it and the identical program is refused, which is
-what makes this a defect of the CELL and not of the capture.
+⛔⛔ **A CELL IS A THIRD PLACE THE RECORD LIVES, AND IT MUST NOT DROP THE MARK.** A parameter its function
+reassigns is CELL-RESIDENT, and a cell binding's `boundValue` is the CELL, not the value the promotion marked —
+so write doors asking only about `boundValue` would see an unmarked binding and let `grow(xs)` through **in the
+very frame that rebound `xs`**, silently mutating the global.
 
-⇒ The mark is now carried onto the cell at the store and back off it at the load, so where a binding's
+⇒ The mark is carried onto the cell at the store and back off it at the load, so where a binding's
 value lives cannot change what may be done through it.
 ```maxon
 typealias Names = Array with String
-typealias IntThunk = function() returns Integer
 
 let A = ["a", "b"]
 
@@ -1711,37 +1704,61 @@ function expose() returns Names
 	return A
 end 'expose'
 
-function size(xs Names) returns Integer
+function grow(xs Names) returns Integer
+	xs.push("zz")
 	return xs.count()
-end 'size'
+end 'grow'
+
+function regrow(xs Names) returns Integer
+	xs = expose()
+	return grow(xs)
+end 'regrow'
+
+function main() returns ExitCode
+	var b = ["c"]
+	let n = regrow(b)
+	return ((A.count() as Integer) + n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3019: <fragment>:17:9: cannot pass 'xs' to function that mutates parameter 'xs' (in regrow)
+```
+
+<!-- test: error.let-global-read-reassigned-into-a-cell-keeps-its-mark -->
+A cell-resident parameter reassigned a bare read of the `let` global takes its own reference to that record,
+and the cell carries the global's mark through that reference just as it does through a call's result.
+```maxon
+typealias Names = Array with String
+
+let A = ["a", "b"]
 
 function grow(xs Names) returns Integer
 	xs.push("zz")
 	return xs.count()
 end 'grow'
 
-function callThunk(f IntThunk) returns Integer
-	return f()
-end 'callThunk'
+function regrow(xs Names) returns Integer
+	xs = A
+	return grow(xs)
+end 'regrow'
 
 function main() returns ExitCode
-	var b = expose()
-	b = expose()
-	let k = callThunk(function() gives size(b))
-	let n = grow(b)
-	return ((A.count() as Integer) + k + n) as ExitCode
+	var b = ["c"]
+	let n = regrow(b)
+	return ((A.count() as Integer) + n) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3019: <fragment>:28:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)
+error E3019: <fragment>:13:9: cannot pass 'xs' to function that mutates parameter 'xs' (in regrow)
 ```
 
 <!-- test: error.let-global-alias-captured-by-a-closure -->
-⛔⛔ **AND THE CAPTURE ITSELF IS THE OTHER HALF: A CLOSURE MUST NOT LAUNDER THE TAINT** (W117 review;
-MEASURED mutating the global and exiting 3 before the fix). A closure body is its own SSA space, so the
+⛔⛔ **AND THE CAPTURE ITSELF IS THE OTHER HALF: A CLOSURE MUST NOT LAUNDER THE TAINT.** A closure body is its own SSA space, so the
 per-value marks are swapped out at its boundary — correctly, since an id means nothing there — but a
-CAPTURED binding names the very same record, and dropping the marks made the capture read arrive clean.
+CAPTURED binding names the very same record, and dropping the marks would make the capture read arrive
+clean — the global mutated, exit 3.
 The enclosing frame's marks therefore ride across the boundary and the capture re-mints one in the
 closure's own space.
 
@@ -1780,11 +1797,11 @@ error E3019: <fragment>:23:37: cannot pass 'a read of a `let`-declared global' t
 ```
 
 <!-- test: error.let-global-alias-across-an-if-merge -->
-⛔ **A MERGE THAT REBINDS A NAME MUST CARRY THE MARK, AND ONLY THE MERGES THAT PRODUCE A VALUE DID**
-(W117 review). The ternary and `match … gives` merges were covered from the start
+⛔ **A MERGE THAT REBINDS A NAME MUST CARRY THE MARK, NOT ONLY THE MERGES THAT PRODUCE A VALUE.**
+The ternary and `match … gives` merges carry it
 (`propagateImmutableGlobalReadToPhi`, and `error.top-level-let-array-owned-merge-alias` above pins one);
-an `if` that REBINDS a carried `var` mints its phi through a different door and inherited nothing, so
-`b` came out of the merge clean and `grow(b)` was accepted.
+an `if` that REBINDS a carried `var` mints its phi through a different door, and a phi that inherited
+nothing would bring `b` out of the merge clean and accept `grow(b)`.
 ```maxon
 typealias Names = Array with String
 
@@ -1814,10 +1831,10 @@ error E3019: <fragment>:20:10: cannot pass 'b' to function that mutates paramete
 ```
 
 <!-- test: error.let-global-alias-carried-by-a-loop -->
-⛔ **AND A LOOP IS THE SAME MERGE WITH THE EDGE PUSHED BEFORE THE PHI IS NAMED — MEASURED MUTATING THE
-GLOBAL (W117 review, exit 6).** On a back edge the binding's own value IS the pushed value, so the header
-phi — which is what every read of `b` after the loop resolves to — is a THIRD name for the record and got
-the mark from neither end. It is now carried onto the loop's phi explicitly, at the one place the loop
+⛔ **AND A LOOP IS THE SAME MERGE WITH THE EDGE PUSHED BEFORE THE PHI IS NAMED.** On a back edge the binding's own value IS the pushed value, so
+the header phi — which is what every read of `b` after the loop resolves to — is a THIRD name for the
+record and gets the mark from neither end (unmarked, the global is mutated and the program exits 6). It
+is carried onto the loop's phi explicitly, at the one place the loop
 names it.
 
 ⚠ The condition is runtime and the body may run zero times; the refusal is deliberately independent of
@@ -1852,9 +1869,8 @@ error E3019: <fragment>:20:10: cannot pass 'b' to function that mutates paramete
 
 <!-- test: error.top-level-array-empty -->
 An empty array literal has no element to infer a type from, so it is refused — and the advice is the
-same one a function body's `[]` gets, because a top-level `<Alias>.create()` now names the element type
-the brackets could not. (It did not when this case was written: the sentence used to end *"a `.create()`
-call is not a constant"*, which the container-factory initializer made false.)
+same one a function body's `[]` gets, because a top-level `<Alias>.create()` names the element type
+the brackets could not.
 ```maxon
 var items = []
 
@@ -2982,8 +2998,7 @@ author actually wrote, rather than reporting a name that is defined two lines up
 That distinction is the whole reason the assignment path probes for a constant at all: a name
 that is neither a local nor a top-level `var` would otherwise fall through to "undefined
 variable", sending the reader hunting for a typo instead of at the `let` they meant to make a
-`var`. The struct twin below pins the same arm but is blocked on P1.1 — a scalar `let` reaches
-it today, so the property is pinned now rather than on structs' schedule.
+`var`. The struct twin below pins the same arm for a struct `let`.
 
 ```maxon
 let origin = 5
@@ -3045,7 +3060,7 @@ error E2045: <fragment>:8:13: Function calls are not allowed in global variable 
 Declaring the same top-level `let` name twice is a duplicate definition (E3006), positioned at the
 LATER declaration — the top-level twin of the duplicate-function check. `recordDecl` is first-wins, so
 the first declaration keeps the name and the diagnostic names the redeclaration to remove. A duplicate
-FUNCTION is rejected the same way, and refusing the duplicate `let` is deliberate (OPEN.md #4b).
+FUNCTION is rejected the same way, and refusing the duplicate `let` is deliberate.
 
 ```maxon
 let A = 1
@@ -3076,11 +3091,11 @@ error E3006: <fragment>:3:5: duplicate definition of 'counter'
 ```
 
 <!-- test: error.top-level-let-array-owned-merge-alias -->
-The FOURTH door onto the same guard, and the one S5 opened. The three above all reach it as a `var`
+The FOURTH door onto the same guard. The three above all reach it as a `var`
 BINDING; this one reaches it as a MERGE that must be OWNED because its other arm gives a fresh record —
 so the borrowed arm is promoted, and for an aggregate a promotion is an INCREF of the same box. That is
 precisely the launder an unmarked incref would perform: the mark is therefore CARRIED across the
-promotion (W117) rather than the promotion being refused, so the phi that joins the two arms carries it
+promotion rather than the promotion being refused, so the phi that joins the two arms carries it
 too and `pick.push` is refused where it happens.
 ```maxon
 typealias Names = Array with String
@@ -3104,7 +3119,7 @@ end 'main'
 error E3019: <fragment>:15:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)
 ```
 
-### W117's returned-shape sweep — the INLINE CONDITIONAL
+### The returned-shape sweep — the INLINE CONDITIONAL
 
 ⭐⭐ **A `return` WHOSE VALUE IS AN INLINE CONDITIONAL HAS TWO ARMS, AND EITHER MAY BE A GLOBAL'S RECORD.**
 `noteReturnedGlobalOrForward` recognises a deliberately narrow set of `return` shapes, and its own tail
@@ -3154,21 +3169,20 @@ end 'main'
 short=0 long=1
 ```
 
-### W117's shadowing filter — a binder shadows only what comes AFTER it
+### The shadowing filter — a binder shadows only what comes AFTER it
 
-⛔⛔ **THE FILTER WAS POSITION-BLIND, AND ITS OWN HEADER CALLED THAT ACCEPTABLE.**
+⛔⛔ **THE FILTER IS POSITION-AWARE, BECAUSE ITS BINDER SET IS GENEROUS.**
 `returnedNamesNotBoundHere` drops a returned name that the body binds itself, using a deliberately
 GENEROUS binder set — a name is bound when it follows `let`, `var`, `for`, `(` or `,`, which also
-catches plain call ARGUMENTS. The header read *"that over-inclusion drops a seed, and a dropped seed
-falls back to the E2015 refusal at the return: the answer the compiler gave before this rung existed"*.
-That is true, and it stops being acceptable the moment a real program is the one refused.
+catches plain call ARGUMENTS. Over-inclusion drops a seed, and a dropped seed falls back to the E2015
+refusal at the return — which is not acceptable when a real program is the one refused.
 
-⭐ **IT WAS REACHED BY THE COMPILER'S OWN SOURCE.** `SignatureIndex.surfaceOfRootBits` returns
+⭐ **THE COMPILER'S OWN SOURCE REACHES IT.** `SignatureIndex.surfaceOfRootBits` returns
 `sharedEmptyDeclaredSurface` BARE on one path — a shape the sweep DOES recognise — and hands that same
-name to a call on the next line. The argument marked the candidate bound, the seed was dropped, and the
-bare return was refused on legal source.
+name to a call on the next line. A position-blind filter would read the argument as binding the
+candidate, drop the seed, and refuse the bare return on legal source.
 
-⭐⭐ **THE CURE IS POSITION, NOT SHAPE, AND THE SET IS UNCHANGED.** Narrowing the binder SET is what the
+⭐⭐ **THE FILTER KEYS ON POSITION, NOT SHAPE, AND THE SET STAYS GENEROUS.** Narrowing the binder SET is what the
 header warns against and it is right to: a `match` payload `case(a, b)` is character for character a
 call, and no token test separates them. Position needs no such test and is EXACT for the question being
 asked — **a name cannot resolve to a local at a `return` that precedes the local's own declaration,
@@ -3247,26 +3261,26 @@ end 'main'
 global=0 local=3
 ```
 
-### W117's returned-shape sweep — A PARAMETER DEFAULT IS THE LANGUAGE'S OTHER `return`
+### The returned-shape sweep — A PARAMETER DEFAULT IS THE LANGUAGE'S OTHER `return`
 
 ⭐⭐ **A DEFAULT VALUE IS A SYNTHESIZED NULLARY FUNCTION WHOSE ENTIRE BODY IS `return <the expression>`**
-(`Parser.parseDefaultHelperBody`), so `f(p T = A)` hands its caller exactly what `f(A)` hands it. Until
-this rung the sweep read `return` STATEMENTS only, and the two spellings therefore had different answers
-to the one question W117 exists to answer — *may this argument alias a `let`-declared global's record?* —
-which is the one thing a default may never differ from the written-out argument in. Both halves were
-measured on the tip, and they failed in OPPOSITE directions:
+(`Parser.parseDefaultHelperBody`), so `f(p T = A)` hands its caller exactly what `f(A)` hands it. The sweep
+therefore reads a default's helper as well as `return` STATEMENTS, so the two spellings give one answer
+to the question the sweep exists to answer — *may this argument alias a `let`-declared global's record?* —
+which is the one thing a default may never differ from the written-out argument in. A sweep that read
+`return` statements only would fail in OPPOSITE directions:
 
-⛔ **THE BARE NAME WAS REFUSED, ON THE COMPILER'S OWN SOURCE.** `ParseStaging.maxon:125` declares `opaqueParams
+⛔ **THE BARE NAME WOULD BE REFUSED, ON THE COMPILER'S OWN SOURCE.** `ParseStaging.maxon:125` declares `opaqueParams
 OpaqueParamInfo = sharedNoOpaqueParams` and `Project.maxon:648` declares `payloadStorage MaxonType =
-NoPayloadStorage`; both are E2015 at the helper's return, because the sweep published no bit for a
+NoPayloadStorage`; both would be E2015 at the helper's return, because the sweep would publish no bit for a
 function it never read.
 
-⛔⛔ **AND THE CALL EDGE WAS SILENTLY ACCEPTED, WHICH IS THE HALF A REFUSAL DOES NOT COVER.** A default
+⛔⛔ **AND THE CALL EDGE WOULD BE SILENTLY ACCEPTED, WHICH IS THE HALF A REFUSAL DOES NOT COVER.** A default
 that names the global THROUGH AN ACCESSOR (`= shared()`) reaches the helper's return as an already-OWNED
-call result, so it never touches the promotion and there was no refusal to fall back on — the mark simply
-stopped at the helper and the caller got an untainted value. MEASURED: a `grow(names Names = shared())`
-whose body pushes printed `a=1 b=2 g=2`, mutating a `let` global, while the written-out `grow(shared())`
-one line over is E3019. So this door had to be opened for SOUNDNESS and not only to lift a refusal.
+call result, so it never touches the promotion and there is no refusal to fall back on — the mark would
+stop at the helper and the caller would get an untainted value: a `grow(names Names = shared())`
+whose body pushes would print `a=1 b=2 g=2`, mutating a `let` global, while the written-out `grow(shared())`
+one line over is E3019. So this door is a matter of SOUNDNESS and not only of lifting a refusal.
 
 <!-- test: a-parameter-default-may-name-a-let-global -->
 The `sharedNoOpaqueParams` shape, and all three spellings of the same argument are exercised side by
@@ -3328,7 +3342,7 @@ omitted=0
 
 <!-- test: a-defaulted-global-may-not-reach-a-mutating-parameter -->
 ⭐ **THE CONTROL FOR THE NAME, AND IT IS THE HALF THAT MUST NOT BREAK.** Admitting the return is only
-half of W117; the other half is that the refusal MOVED to the write rather than being dropped. The
+half of the rule; the other half is that the refusal is at the write rather than dropped. The
 callee pushes, so the omitted argument is refused at the CALL — the same E3019, from the same one
 reporter, that the written-out `grow(sharedEmptyNames)` earns. **The blame is the shared noun and not a
 binding name**, because a filled default names nothing the author wrote.
@@ -3353,12 +3367,12 @@ error E3019: <fragment>:13:12: cannot pass 'a read of a `let`-declared global' t
 ```
 
 <!-- test: a-defaulted-accessor-call-may-not-reach-a-mutating-parameter -->
-⭐⭐ **THE CONTROL FOR THE EDGE — AND THIS ONE WAS A WRONG ANSWER, NOT A REFUSAL.** Identical to the case
-above but for the default naming the global through `shared()`, which is the spelling that compiled clean
-and mutated the global. It is refused now for the reason the written-out `grow(shared())` has always been.
+⭐⭐ **THE CONTROL FOR THE EDGE — AND ITS FAILURE WOULD BE A WRONG ANSWER, NOT A REFUSAL.** Identical to
+the case above but for the default naming the global through `shared()`, which is the spelling that would
+otherwise compile clean and mutate the global. It is refused for the reason the written-out `grow(shared())` is.
 
 ⚠ **CATCHING ONLY A `let` HANDED OVER BY NAME WOULD ACCEPT BOTH THIS PROGRAM AND THE WRITTEN-OUT
-`grow(shared())`.** Both are refused, which is W117's whole stance — the subject is the RECORD, not the
+`grow(shared())`.** Both are refused, which is the rule's whole stance — the subject is the RECORD, not the
 spelling that reached it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3392,11 +3406,11 @@ answers false and the E2015 stands.
 
 ⭐ **THE REASON IS WHERE THE RECORD LANDS.** A parameter default hands it to a call ARGUMENT, which is
 where the mark is read and where a mutating callee is refused. A field default hands it to a struct SLOT,
-and the mark does not survive a field store — MEASURED, `var h = Holder.make(sharedEmptyNames)` storing a
+and the mark does not survive a field store — `var h = Holder.make(sharedEmptyNames)` storing a
 global's record and then `h.names.push(1)` compiles clean and prints `g=1`.
 
-⚠ **THIS IS A HOLE IN W117 AS A WHOLE, AND NOT A DEFECT OF ONE ARM** — and that is precisely why the
-door stays shut rather than being widened. W117 is deliberately STRICT about a global's record reaching
+⚠ **THIS IS A HOLE IN THE `let`-GLOBAL RULE AS A WHOLE, AND NOT A DEFECT OF ONE ARM** — and that is
+precisely why the door stays shut rather than being widened. The rule is deliberately STRICT about a global's record reaching
 a mutating position (the case above is one), so publishing the field helper would open a route into the one part of the rule that
 cannot yet follow the record. A refusal is the direction this rule may err in; a silent acceptance is
 not. It is pinned here so the gap is visible rather than assumed, and it comes off the day a field store
@@ -3426,24 +3440,24 @@ error E2015: <fragment>:8:30: Unsupported: returning a read of a `let`-declared 
 
 ### `<Type> from "…"` AS A TOP-LEVEL INITIALIZER
 
-⛔⛔ **THE CONST EVALUATOR HAD NO READING OF THIS SHAPE, AND ANSWERED ABOUT A CONSTANT NOBODY WROTE.**
-the compiler's own `Compiler/Project.maxon:381` is `export let CompilerOwnedDeclFilePath = FilePath from ""`.
-Unrecognised, the scalar walk read the bare `FilePath` as a reference to another top-level `let` — its
-only other reading of an identifier — and answered **E2004 `Undefined constant 'FilePath'`**. That is the
-SAME misattribution the struct-literal and factory-call arms beside it were added for, a third time, and
-it cost four errors: the declaration plus the three files that read the name it declares.
+⛔⛔ **THE CONST EVALUATOR READS THIS SHAPE, OR IT ANSWERS ABOUT A CONSTANT NOBODY WROTE.**
+The compiler's own `Compiler/Project.maxon:381` is `export let CompilerOwnedDeclFilePath = FilePath from ""`.
+Unrecognised, the scalar walk would read the bare `FilePath` as a reference to another top-level `let` — its
+only other reading of an identifier — and answer **E2004 `Undefined constant 'FilePath'`**. That is the
+SAME misattribution the struct-literal and factory-call arms beside it exist to prevent, and it would
+cost four errors: the declaration plus the three files that read the name it declares.
 
 ⭐ **IT IS RECORDED AS THE CALL IT ALREADY IS.** The body form calls the type's own `init` static, so
 nothing new is evaluated: the walk states WHICH function to call and WHAT to pass it, and `__module_init`
 builds the record before `main` exactly as it does for `Database.create(…)`.
 
-⛔⛔ **AND THE CONFORMANCE HAD TO BE CHECKED HERE, WHICH THE FIRST CUT OF THIS ARM DID NOT DO.** The body
+⛔⛔ **AND THE CONFORMANCE IS CHECKED HERE.** The body
 spelling's conformance is decided by `checkLiteralInitConformance`, which walks `project.literalInitSites`
-— a store the REAL PARSE fills and the const evaluator cannot reach. So a top-level construction recorded
-nothing and was checked by nobody. **MEASURED with the check absent: a `type Tag` with an `init` static
-and NO `implements InitableFromStringLiteral` compiled and RAN**, where the required answer is
+— a store the REAL PARSE fills and the const evaluator cannot reach. So a top-level construction this arm
+did not check would be checked by nobody. **With the check absent, a `type Tag` with an `init` static
+and NO `implements InitableFromStringLiteral` compiles and RUNS**, where the required answer is
 `E3005 Type 'Tag' does not conform to InitableFromStringLiteral`. A silent acceptance is the costly
-direction. The arm now asks the SAME predicate through the SAME pair, reading the sweep's own
+direction. The arm asks the SAME predicate through the SAME pair, reading the sweep's own
 store — the substitution `sweptConformanceIndex`'s header exists for — and reports the same code with the
 same sentence.
 
@@ -3477,7 +3491,7 @@ empty=0 named=hello
 ```
 
 <!-- test: error.a-top-level-string-literal-init-still-needs-the-conformance -->
-⭐ **THE CONTROL, AND IT IS THE HALF A FIRST CUT OF THIS ARM GOT WRONG.** The only difference from the
+⭐ **THE CONTROL, AND IT IS THE HALF A SILENT ACCEPTANCE WOULD COST.** The only difference from the
 case above is the missing `implements` clause. Same code, same sentence, same anchor as the body
 spelling.
 ```maxon
@@ -3502,13 +3516,13 @@ error E3005: specs/fragments/static-variables/error.a-top-level-string-literal-i
 
 ### A PAYLOAD-FREE ENUM CASE IS A CONSTANT
 
-⭐⭐ **ITS VALUE IS ITS TAG — a number fixed at declaration — so it folds like any other.** The compiler refused
-it, and it cost six errors across its own backends: `let JumpTableBaseReg = X64Register.r10`
+⭐⭐ **ITS VALUE IS ITS TAG — a number fixed at declaration — so it folds like any other.** The compiler's
+own backends declare six such constants: `let JumpTableBaseReg = X64Register.r10`
 (`Targets/X64/X64Backend.maxon:1135`), `let GtSwitchFromReg = X64Register.rcx`, and the four register
 tables written as array literals.
 
 ⚠ **THE NUMBER ALONE IS A WRONG ANSWER ABOUT IT, WHICH IS THE WHOLE OF WHY THIS IS NOT A ONE-LINE FOLD.**
-MEASURED: a constant folded to a bare `integer` cannot be passed where the enum is declared —
+A constant folded to a bare `integer` cannot be passed where the enum is declared —
 `argument type mismatch for 'r': expected 'Reg', got 'int'`. So the fold is tagged `named` and carries the
 enum's SPELLING, which then rides the whole chain a constant travels: `ConstValue` → `TopLevelConstant`
 → `ConstEvalOutcome` → `TopLevelConstantLookup` → the use site. Each of those arms is WIDENED rather than
@@ -3546,14 +3560,7 @@ become the other. A case that DOES declare a payload is a construction and keeps
 each pair as one claim: the twin is not a duplicate, it is the only case on this page that still reaches
 `ModuleInit.builtUnionCaseBox` at all.
 
-⛔⛔ **THIS PARAGRAPH USED TO CLAIM THE OPPOSITE, AND IT WAS MEASURED FALSE.** It read *"A BOXED UNION'S CASE
-IS EXCLUDED, AND THAT IS THE RULE RATHER THAN A LIMIT OF THIS SLICE … A heap object is not something a
-constant folds to"*, and pinned that refusal as a passing case named
-`error.a-boxed-unions-case-is-still-not-a-constant`. The byte-identical program compiles and runs to
-exit 0, with `__module_init` heap-allocating the box instead of folding anything. The sentence was a SLICE BOUNDARY wearing a rule's words — this tree's
-recurring defect, a comment asserting a property nothing tests — and the case that pinned it was INVERTED
-rather than deleted, so the claim reads as measured false rather than quietly dropped. The refusal that
-survives is the honest one: a case the union does not declare.
+⛔ The one refusal here is a case the union does not declare.
 
 <!-- test: a-payload-free-enum-case-is-a-top-level-constant -->
 A plain enum, and a constant that REFERENCES another constant — which is the path through
@@ -3622,11 +3629,9 @@ raw=404 ord=1
 ```
 
 <!-- test: a-boxed-unions-payload-free-case-is-a-constant -->
-⭐⭐ **THE INVERTED CONTROL — the program this spec pinned as an ERROR until the claim was measured.**
+⭐⭐ **THE BOXED-UNION CONTROL.**
 `Boxed` has a payload-carrying case, so `plain` is a box rather than a bare tag; it is a
 constant all the same, and as a `let` its box is laid down in `.rdata` rather than folded to a number.
-Byte-identical to the old `error.` case but for the binding's name, which no longer describes what happens
-to it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3749,15 +3754,15 @@ count=4 sum=28 first=7
 <!-- test: a-boxed-union-var-shared-across-many-reads-frees-cleanly -->
 ⭐⭐ **THE `var` TWIN, AND THE EXIT CODE IS THE GATE.** The identical program with one keyword changed. A
 `var` is never imaged — `settleRecordValue` writes `hasStorage = decl.mutable or not recordShapeHasAnImage(…)`
-— so this binding keeps the whole built path the `let` above no longer has: `__module_init` allocates the
+— so this binding keeps the whole built path the `let` above does not have: `__module_init` allocates the
 box, stores the tag, zeroes the payload slots and writes the pointer into a `.data` slot, and
 `__maxon_global_cleanup` drops it after `main`.
 
 ⛔ **AND THE REFCOUNTS ARE REAL HERE, WHICH IS THE WHOLE REASON THIS CASE EXISTS.** The slot owns one
 reference; every `push` CO-OWNS the same box through a `__mm_incref` that actually steps a counter; the
 array's destructor releases four; the cleanup releases the slot's. Those have to balance, and an unbalanced
-pair is a leak (exit 101) or a double free — neither of which the stdout comparison can see. MEASURED with
-one extra `__mm_incref` in `ModuleInit.builtUnionCaseBox`: **this case exits 101 and the `let` case above
+pair is a leak (exit 101) or a double free — neither of which the stdout comparison can see. With
+one extra `__mm_incref` in `ModuleInit.builtUnionCaseBox`, **this case exits 101 and the `let` case above
 does not move**, which is exactly the asymmetry the pair is here to state.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3855,10 +3860,10 @@ error E3129: <fragment>:14:9: the payload binding 'n' cannot be honoured: case '
 ```
 
 <!-- test: error.a-case-the-union-does-not-declare-is-still-refused -->
-⛔ **THE BOUNDARY THAT SURVIVED.** Admitting a boxed union's cases does not admit any member name at all:
+⛔ **THE BOUNDARY THAT REMAINS.** Admitting a boxed union's cases does not admit any member name at all:
 `noSuchCase` is not a case of `Boxed`, so both arms decline it and the constant evaluator reports it where
-the author wrote it (E3034, *unknown enum case*). Unlike the case above, this refusal is a RULE and not a
-slice boundary, which is the whole reason it is the one kept as the control.
+the author wrote it (E3034, *unknown enum case*). This refusal is a RULE, which is the whole reason it is the one
+kept as the control.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3892,20 +3897,20 @@ says which FAMILY the array belongs to; the enum's spelling lives on the ELEMENT
 walk has it. `constArrayValueType` reads it off element 0 — the first element fixes the instance — and the
 homogeneity test compares the name as well as the kind.
 
-⛔ **THAT COMPARISON HAD TO CHANGE, and the old one would have accepted a program with no type.**
-`constArrayElementKindOf(elem) != element` was the whole test, and it is a KIND comparison:
-`[Reg.rcx, CharClass.tab]` is two enums and ONE kind, so it would have been accepted and then typed from
+⛔ **A KIND COMPARISON ALONE WOULD ACCEPT A PROGRAM WITH NO TYPE.**
+A test of `constArrayElementKindOf(elem) != element` alone is a KIND comparison:
+`[Reg.rcx, CharClass.tab]` is two enums and ONE kind, so it would be accepted and then typed from
 whichever element the walk saw first. `constArrayElementsAgree` compares the name for the enum kind and
 for no other, because no other element kind has one.
 
-⛔⛔ **AND THE CONTENT HASH NEEDED THE NAME TOO.** An array global's readers depend on its LABEL and its
+⛔⛔ **AND THE CONTENT HASH NEEDS THE NAME TOO.** An array global's readers depend on its LABEL and its
 element TYPE and deliberately NOT on its values — so the elements are not hashed, and without the name
 `[Reg.rcx]` and `[CharClass.other]` have the same kind and the same label, hash identically, and a file
 edited from one to the other is answered from the other's parse. Its two neighbours can hash a shape alone
 because their kind IS their element type; `enumCase` is a family.
 
 <!-- test: an-array-literal-of-enum-cases-is-a-top-level-constant -->
-Read three ways — iterated, counted, and indexed — because the instance is what the fix is about and each
+Read three ways — iterated, counted, and indexed — because the instance is what the element name decides and each
 reads it differently.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3941,8 +3946,8 @@ count=3 total=4 first=0
 ```
 
 <!-- test: error.an-array-literal-may-not-mix-two-enums -->
-⭐ **THE CASE THE OLD KIND-ONLY COMPARISON WOULD HAVE LET THROUGH.** Two enums, one kind. Accepted, this
-array would have been typed `Array with Reg` and hold a `CharClass` in its second slot.
+⭐ **THE CASE A KIND-ONLY COMPARISON WOULD LET THROUGH.** Two enums, one kind. Accepted, this array
+would be typed `Array with Reg` and hold a `CharClass` in its second slot.
 ```maxon
 enum Reg
 	rcx
@@ -3993,7 +3998,7 @@ base is a type the author declared and a declared type has a static roster to an
 wins: the honest sentence is about what `Box` does not have, and it is anchored on the member.
 
 ⚠ Answered as a bound, the refusal lands on the BASE token and reads `Expected 'a sized numeric type
-(u8/u16/u32/u64/i8/i16/i32/i64/f32/f64)' but got 'Box'` (measured 2026-09-02) — a demand the author
+(u8/u16/u32/u64/i8/i16/i32/i64/f32/f64)' but got 'Box'` — a demand the author
 never made of a name that resolved perfectly well. Nothing in either suite pins the alternative, which
 is why this case exists.
 
@@ -4404,7 +4409,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: :23:11: argument type mismatch for 'c': expected 'Colour', got 'Status'
+error E3005: <fragment>:23:11: argument type mismatch for 'c': expected 'Colour', got 'Status'
 ```
 
 The container half of the same rule. A `Map`'s box and an `Array`'s record are both `genericInstance`, and
@@ -4432,5 +4437,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: :14:9: argument type mismatch for 'xs': expected 'NumArray', got 'Counts'
+error E3005: <fragment>:14:9: argument type mismatch for 'xs': expected 'NumArray', got 'Counts'
 ```

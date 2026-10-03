@@ -13,17 +13,18 @@
 // > machine that holds the token runs every member of the strand (`GtRuntime.GtOffStrandHolder`); a strand
 // > moves between machines only through `__sched_lock`. Therefore every refcount read-modify-write on a
 // > COUNTED box happens on the machine running that box's strand, one machine at a time, and steps plain
-// > (`MmRuntime.emitAdjustRefcount`); the one exception is a box a lend marked SHARED, whose count steps
-// > atomically. The cross-thread writers that remain — machines publishing, popping and stealing tokens, and
-// > a machine draining the poller re-readying a parked GT — touch queues, status words, counters and claims,
-// > every one of which states its `MultiMSharing` class; none touches a refcount.**
+// > (`MmRuntime.emitAdjustRefcount`); the one exception is a box a share walk marked SHARED, whose
+// > count steps atomically. The cross-thread writers that remain — machines publishing, popping and
+// > stealing tokens, and a machine draining the poller re-readying a parked GT — touch queues,
+// > status words, counters and claims, every one of which states its `MultiMSharing` class; none
+// > touches a refcount.**
 //
 // ⭐ **THE LAST CLAUSE IS MEASURED, NOT ASSERTED, AND IT HAD TO BE — the plain refcount rests on it.** An
 // emitted program creates an OS thread at **two** `osThreadCreate` sites: `__sched_startm`'s worker M and
 // `emitSchedSysmonStart`'s system monitor. The monitor holds no processor and runs no green thread, so it
 // never dereferences a box. A worker M RUNS strands, so every refcount it touches belongs to the strand it is
-// running — which is the invariant, not an exception to it. ⚠ **A rung that gives either thread more to do
-// owes this measurement again** — the refcount door's argument is exactly this graph.
+// running — which is the invariant, not an exception to it. ⚠ **A change that gives either thread
+// more to do owes this measurement again** — the refcount door's argument is exactly this graph.
 //
 // ⚖ **USER:** *"async is not supposed to create a new green thread. it allows a function to yield the current
 // green thread while waiting for a blocking operation"*, and *"the language is supposed to guarantee that only
@@ -62,11 +63,11 @@
 //
 //   1. **A COUNTED BOX'S REFCOUNT READ-MODIFY-WRITE IS PLAIN**, because the invariant at the top of this file
 //      removes the second party rather than serialising against it; a SHARED box's is an `atomicRmw`, because
-//      a lend gave it one. What is load-bearing on both is the ORDER: `emitRefcountCheckToLastOwner`
-//      DECREMENTS FIRST and picks its arm from the value the decrement displaced. `MmRuntime.emitAdjustRefcount`
-//      carries the argument; `scripts/multicore-stress/refcount-torture.maxon` under
-//      `multicore-stress/refcount-race.sh` measures the plain arm and `specs/services.md`'s count torture the
-//      atomic one.
+//      sharing gave it one. What is load-bearing on both is the ORDER:
+//      `emitRefcountCheckToLastOwner` DECREMENTS FIRST and picks its arm from the value the
+//      decrement displaced. `MmRuntime.emitAdjustRefcount` carries the argument;
+//      `scripts/multicore-stress/refcount-torture.maxon` under `multicore-stress/refcount-race.sh`
+//      measures the plain arm.
 //   2. **EVERY `.data` COUNTER**, through the one `MmRuntime.emitGlobalAccumulate`, which every scheduler
 //      counter (`__gt_live_count`, `__gt_trace_counter`, `__gt_stack_bytes_sum`, `__gt_stack_bytes_count`,
 //      `__io_pipe_seq`, `__sched_nmspinning`, `__sched_active_workers`) calls instead of each spelling
@@ -222,9 +223,9 @@ export enum MultiMSharing
 
 	// ⛔ **THE ANSWER `pushRuntimeGlobal` REFUSES, and the reason it is a member rather than an omission is
 	// that "I do not know" is the answer a new slot arrives with.** A shared word with no discipline is the
-	// failure this whole rung exists to remove — a lost update nothing reproduces on demand — so a slot that
-	// wants this class is not a slot that may be added: fix it (one of the classes above), or take the surface
-	// it belongs to as its own rung and put the slot in a file that owns it.
+	// failure this classification exists to remove — a lost update nothing reproduces on demand — so a
+	// slot that wants this class is not a slot that may be added: fix it (one of the classes above),
+	// or put the slot in the file that owns the surface it belongs to.
 	unclassified
 end 'MultiMSharing'
 
@@ -545,7 +546,7 @@ let MOffIdleNext = MOffAllNext + (PointerSlotBytes as ByteOffset)
 // (`X64GtRuntime.emitGtBailUnlessOnItsOwnStack`). ⇒ **anything that ever makes the shim re-entrant owes this
 // encoding a second look.**
 //
-// ⚠ **THE ORDERING, STATED FOR W223's arm64 AUDIT (§7).** Every mutation of this word is a LOCKed
+// ⚠ **THE ORDERING ON EACH TARGET.** Every mutation of this word is a LOCKed
 // read-modify-write or a CAS, so on x64 each is already a full barrier and the protocol needs no fence of its
 // own. On arm64 the same three points need acquire/release on this one word, and the thief's first READ of it
 // is an acquire too: it reads `MOffCurrentP` after that read and before its CAS, and only the acquire orders
@@ -857,7 +858,7 @@ let POffReservedRemoteFreeHead = 0x78 as ByteOffset
 let POffSchedTick = 0x80 as ByteOffset
 
 // ⭐ **HOW MANY GREEN THREADS THIS P HAS STOLEN — the reading `__Builtins.schedStealCount()` sums.** It is a
-// per-P word and not a `.data` counter for the reason the whole rung is arranged around: a `.data` word is
+// per-P word and not a `.data` counter because a `.data` word is
 // visible in every golden's `data {` section, so one added here would move the emitted image of every
 // green-thread program in the corpus to carry a number nothing but a torture harness reads. Owner-written,
 // like `schedTick`, and summed across `__sched_procs` by `__sched_steal_count`.
@@ -2046,9 +2047,8 @@ function emitBailIfZero(module StdModule, block IrBlock, tested ValueId, bail Ir
 	end 'carriesArguments'
 end 'emitBailIfZero'
 
-// ⭐⭐ **THE P THIS OS THREAD'S M IS HOLDING.** One field off the M, and the field is the rung: it reads 0
-// for an M that holds no processor, which is a state a handoff will produce and which nothing could express
-// while TLS pointed at the P itself.
+// ⭐⭐ **THE P THIS OS THREAD'S M IS HOLDING.** One field off the M, so it reads 0
+// for an M that holds no processor — a state a handoff produces.
 //
 // ⛔ **ITS PRECONDITION IS THAT THIS OS THREAD HAS AN M**, which is exactly `emitLoadCurrentGt`'s
 // precondition below and is satisfied the same way: every caller here runs behind an entry point that opens
@@ -2892,7 +2892,7 @@ end 'emitSchedDequeueLocked'
 // The run-queue lock is allocated here because it guards the queue for every M, so a green-thread
 // program that never touches a pipe still needs it. See `SchedLockLabel`.
 function buildSchedInitProcs(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedInitProcsName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedInitProcsName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3515,7 +3515,7 @@ end 'emitSchedAnyRunnable'
 // push can overwrite them, because this function is the ring's only pusher and it has not pushed yet. A 1 KB
 // frame array avoided, and one fewer place for two copies of a batch to disagree.
 function buildSchedRunqPut(module StdModule)
-	var func = IrFunction.createFromStd(SchedRunqPutName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedRunqPutName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3674,7 +3674,7 @@ end 'buildSchedRunqPut'
 // CAS then fails to claim is harmless — the value is discarded — while reading it afterwards would be reading
 // a slot the winner may already have overwritten.
 function buildSchedRunqGet(module StdModule)
-	var func = IrFunction.createFromStd(SchedRunqGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedRunqGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3716,7 +3716,7 @@ end 'buildSchedRunqGet'
 // processor's machine ever stores a thread here and everybody else only ever clears it, so a CAS this machine
 // loses means a thief has taken the thread — and a second attempt could only read the 0 the thief left.
 function buildSchedRunqNext(module StdModule)
-	var func = IrFunction.createFromStd(SchedRunqNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedRunqNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3757,7 +3757,7 @@ end 'buildSchedRunqNext'
 // ⚠ **A FUNCTION AND NOT AN INLINE SEQUENCE**, because the retry is a loop and its four callers all sit inside
 // straight-line blocks — one of them (`__sched_any_work`) already inside a loop of its own.
 function buildSchedRunqEmpty(module StdModule)
-	var func = IrFunction.createFromStd(SchedRunqEmptyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedRunqEmptyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3795,7 +3795,7 @@ end 'buildSchedRunqEmpty'
 // thread already taken. Nothing refills either — `__sched_runq_put` only ever fills the processor its own
 // machine holds, and the caller is either `p`'s machine or `p` has none — so the loop terminates.
 function buildSchedDrainRunq(module StdModule)
-	var func = IrFunction.createFromStd(SchedDrainRunqName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedDrainRunqName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3855,7 +3855,7 @@ end 'buildSchedDrainRunq'
 // answered 0, and the ring's only pusher is the very thread running this — so the free space is the whole ring
 // and the grab is at most half of one.
 function buildSchedSteal(module StdModule)
-	var func = IrFunction.createFromStd(SchedStealName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedStealName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4380,6 +4380,8 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -4412,6 +4414,7 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			storeRelease or
@@ -4841,7 +4844,7 @@ end 'emitUnsignedMod'
 // is a second structure to build at init and to size. The random START is kept, because that is what stops
 // every idle P from hammering P[0].
 function buildSchedFindRunnable(module StdModule)
-	var func = IrFunction.createFromStd(SchedFindRunnableName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedFindRunnableName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5162,7 +5165,7 @@ end 'buildSchedFindRunnable'
 // the work already taken — one extra lap — or a publish too late for this read, which read the count after
 // the decrement and woke somebody itself.
 function buildSchedAnyWork(module StdModule)
-	var func = IrFunction.createFromStd(SchedAnyWorkName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedAnyWorkName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5262,7 +5265,7 @@ let SchedNoWorkFound = 0 as ParsedInt
 // is what puts one there.
 
 function buildSchedSweepDropped(module StdModule)
-	var func = IrFunction.createFromStd(SchedSweepDroppedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedSweepDroppedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var globalStart = module.addBlock(func, label: b"swglobalstart", heat: BlockHeat.normal)
@@ -5312,7 +5315,7 @@ end 'emitGtFreeLocalPop'
 
 // See `GtFreePutName`.
 function buildGtFreePut(module StdModule)
-	var func = IrFunction.createFromStd(GtFreePutName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtFreePutName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5373,7 +5376,7 @@ end 'buildGtFreePut'
 
 // See `GtFreeGetName`.
 function buildGtFreeGet(module StdModule)
-	var func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5473,7 +5476,7 @@ end 'buildGtFreeGet'
 // (`__slab_assert_os_alloc`'s argument), and 0 against 0 — the state before the first carve — fails the test
 // and maps the first chunk.
 function buildSchedArenaCarve(module StdModule)
-	var func = IrFunction.createFromStd(SchedArenaCarveName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedArenaCarveName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5537,7 +5540,7 @@ function buildSchedPerProcSum(module StdModule, name ByteArray, offset ByteOffse
 		panic("buildSchedPerProcSum: '{String.from(name)}' is built as a per-P sum but is not on `isSchedPerProcSumCallee`'s roster — add it there, which is how it reaches `isSchedSubstrateQueryCallee`, the ONE membership `RuntimeUsage.recordCallUsage` (install the scheduler) and `TargetFacilities.calleeHostFacility` (E3104 off its substrate) both read")
 	end 'offRoster'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5597,7 +5600,7 @@ end 'emitSchedProcCountOne'
 // unlocked reads. `__gt_run_main` brings the scheduler up before `main`, so
 // each word has been counted before any program code can read it.
 function buildSchedLockedCountQuery(module StdModule, name ByteArray, label ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5608,7 +5611,7 @@ end 'buildSchedLockedCountQuery'
 
 // `__sched_gt_stack_bytes() -> i64` — see `SchedGtStackBytesName`.
 function buildSchedGtStackBytes(module StdModule)
-	var func = IrFunction.createFromStd(SchedGtStackBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedGtStackBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5622,7 +5625,7 @@ end 'buildSchedGtStackBytes'
 // `SchedAllMLabel`'s reason, and each read is one aligned word some machine really stored, for
 // `buildSchedPerProcSum`'s.
 function buildSchedParkWakeCount(module StdModule)
-	var func = IrFunction.createFromStd(SchedParkWakeCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedParkWakeCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5685,7 +5688,7 @@ end 'emitSchedCountParkWake'
 // releases, and is not what the argument needs. What the argument needs is the
 // DISJOINTNESS, and that is true field by field.
 function buildSchedStartM(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedStartMName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedStartMName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6109,7 +6112,7 @@ function emitSchedMachinesRunning(module StdModule, block IrBlock, ids ValueMint
 end 'emitSchedMachinesRunning'
 
 function buildSchedCheckdead(module StdModule)
-	var func = IrFunction.createFromStd(SchedCheckdeadName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedCheckdeadName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6165,8 +6168,8 @@ end 'emitSchedRunStrand'
 function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// A worker answers the DWORD its `CreateThread` callback owes, which nobody reads.
 	var func = match role 'funcOf'
-		worker gives IrFunction.createFromStd(SchedWorkerLoopName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-		mainMachine gives IrFunction.createFromStd(SchedMainLoopName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+		worker gives IrFunction.createFromStd(SchedWorkerLoopName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+		mainMachine gives IrFunction.createFromStd(SchedMainLoopName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	end 'funcOf'
 
 	var ids = ValueMinter.create(1)
@@ -6975,7 +6978,7 @@ end 'emitSchedRaiseHighWater'
 // list is both cheaper than a linear scan and the only thing that can find a P-less machine. The gate above
 // runs lock-free, so a publish that wakes nobody costs one load.
 function buildSchedWakeOrSpawn(module StdModule)
-	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7051,7 +7054,7 @@ end 'emitSchedSpinningPlusIdle'
 // next poll one early return, and the machine that ended it looks again itself; a stale "nobody polls" wakes a
 // parked machine that finds the poller taken and parks again.
 function buildSchedWakeNetpoller(module StdModule)
-	var func = IrFunction.createFromStd(SchedWakeNetpollerName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedWakeNetpollerName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7102,7 +7105,7 @@ end 'emitSchedPollerLate'
 // after it reaches the idle tail with the deadline pending and nobody polling, and claims the poller itself
 // rather than joining the list.
 function buildSchedWakePoller(module StdModule)
-	var func = IrFunction.createFromStd(SchedWakePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedWakePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7154,7 +7157,7 @@ end 'buildSchedWakePoller'
 // the processor its own machine holds — so a thief may still drain it but nobody can fill it. Arm 1's
 // unlocked read is therefore not merely a hint: an empty answer stays empty all the way to the assertion.
 function buildSchedHandoffP(module StdModule)
-	var func = IrFunction.createFromStd(SchedHandoffPName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedHandoffPName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7269,7 +7272,7 @@ end 'buildSchedHandoffP'
 // runs inside it, so `MAXON_PREEMPT=off` withdraws both questions at one door rather than per processor.
 // The cost is the monitor's stated purpose: with it off, a CPU-bound strand starves `main` at one processor.
 function buildSchedRetake(module StdModule)
-	var func = IrFunction.createFromStd(SchedRetakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedRetakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7478,7 +7481,7 @@ end 'buildSchedRetake'
 // to another thread, which then yields once for nothing, or to its scheduler context, whose next switch-in
 // restores the word (`GtRuntime.emitGtExecute`). Records are never freed, so the store always lands in one.
 function buildSchedPreemptOne(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedPreemptOneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedPreemptOneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7549,7 +7552,7 @@ end 'buildSchedPreemptOne'
 // The address compares are signed, like every other in this runtime: a green thread's stack is
 // `osAllocPages`'d user memory and the PC is inside this image, both far below the sign bit.
 function buildGtPreemptSafe(module StdModule, target Target)
-	var func = IrFunction.createFromStd(PreemptSafeName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(PreemptSafeName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7728,7 +7731,7 @@ end 'emitLoadInstructionWord'
 // declines, because this thread's PC is inside `__gt_preempt` and, a moment later, its lock depth is not
 // zero.
 function buildGtAsyncPreemptPark(module StdModule)
-	var func = IrFunction.createFromStd(AsyncPreemptParkName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(AsyncPreemptParkName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7809,7 +7812,7 @@ end 'emitSchedSysmonStart'
 // ⚠ **A DEEP SLEEP KEEPS THE LADDER WHERE IT WAS**, which is Go's rule for a wake that did not come from a
 // syscall: a process that sleeps most of the time should not buy fifty fast laps at every wake.
 function buildSysmon(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedSysmonName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedSysmonName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8002,7 +8005,7 @@ let WordSignShift = 63 as ParsedInt
 // which may hold none, and such a call has no processor for a retake to take. `POffSyscallCount` carries why the
 // count must precede the announcement.
 function buildSchedEnterSyscall(module StdModule)
-	var func = IrFunction.createFromStd(SchedEnterSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedEnterSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8046,7 +8049,7 @@ end 'buildSchedEnterSyscall'
 // is on — a handoff moves the PROCESSOR, never the machine — so the exit's guarded walk answers the same M
 // the entry's did, and a bail on one side is a bail on the other.
 function buildSchedExitSyscall(module StdModule)
-	var func = IrFunction.createFromStd(SchedExitSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedExitSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8143,7 +8146,7 @@ end 'buildSchedExitSyscall'
 // ⚠ **IT DOES NOT JOIN `__sched_midle`**, so `__sched_checkdead` counts it as running, which it is: it holds a
 // green thread it will run once it has a processor.
 function buildSchedSyscallRegain(module StdModule)
-	var func = IrFunction.createFromStd(SchedSyscallRegainName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedSyscallRegainName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8335,7 +8338,7 @@ end 'emitSchedRegainUnlinkLocked'
 // ⚠ **M0's HANDLE IS ZERO AND IS SKIPPED BY THE SAME TEST ANY UNSTARTED MACHINE IS.** The main OS thread was
 // never created by this runtime, so there is no handle for it and joining it would be joining ourselves.
 function buildSchedStopWorkers(module StdModule)
-	var func = IrFunction.createFromStd(SchedStopWorkersName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SchedStopWorkersName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

@@ -127,8 +127,8 @@ export type DapAnswers
 end 'DapAnswers'
 
 function walkedThread(walk DebugThreadWalk) returns DapFrameListing
-	if not walk.unavailable.isEmpty() 'notWalkable'
-		return DapFrameListing.missing(walk.unavailable)
+	if let reason = try walk.availability.reason() 'notWalkable'
+		return DapFrameListing.missing(reason)
 	end 'notWalkable'
 
 	return DapFrameListing.walked(walk.frames)
@@ -201,13 +201,13 @@ export function dapThreadTargetOf(threadId DapNumber) returns DapThreadTarget
 	return DapThreadTarget.green(green as DebugThreadId)
 end 'dapThreadTargetOf'
 
-export function dapStoppedBody(doc JsonDoc, reason String, threadId DapNumber, fault String) returns JsonNodeId
+export function dapStoppedBody(doc JsonDoc, reason String, threadId DapNumber, fault StatedText) returns JsonNodeId
 	var body = JsonObjectBuilder.create()
 	body.addString(doc, key: ReasonKey, value: reason)
 
-	if not fault.isEmpty() 'aFault'
-		body.addString(doc, key: DescriptionKey, value: "{FaultDescriptionPrefix}{fault}")
-		body.addString(doc, key: TextKey, value: fault)
+	if let faultText = try fault.text() 'aFault'
+		body.addString(doc, key: DescriptionKey, value: "{FaultDescriptionPrefix}{faultText}")
+		body.addString(doc, key: TextKey, value: faultText)
 	end 'aFault'
 
 	body.addNumber(doc, key: ThreadIdKey, value: threadId as JsonFloat)
@@ -292,7 +292,7 @@ export function dapArmedBreakpointNode(doc JsonDoc, answer DebugBreakpointAnswer
 	node.addNumber(doc, key: LineKey, value: numbering.lineToClient(answer.line) as JsonFloat)
 
 	var source = JsonObjectBuilder.create()
-	source.addString(doc, key: NameKey, value: answer.file)
+	source.addString(doc, key: NameKey, value: answer.file.wireName())
 	node.addNode(SourceKey, node: source.build(doc))
 
 	return node.build(doc)
@@ -317,15 +317,15 @@ export function dapStackFrameNode(doc JsonDoc, id DapNumber, frame DebugFrame, n
 	node.addNumber(doc, key: IdKey, value: id as JsonFloat)
 	node.addString(doc, key: NameKey, value: frame.functionName)
 
-	if not frame.path.isEmpty() 'aSourceFile'
+	if let path = try frame.path.filePath() 'aSourceFile'
 		var source = JsonObjectBuilder.create()
-		source.addString(doc, key: NameKey, value: frame.file)
-		source.addString(doc, key: PathKey, value: frame.path)
+		source.addString(doc, key: NameKey, value: frame.path.fileName().wireName())
+		source.addString(doc, key: PathKey, value: path)
 		node.addNode(SourceKey, node: source.build(doc))
 	end 'aSourceFile'
 
-	node.addNumber(doc, key: LineKey, value: numbering.lineToClient(frame.line) as JsonFloat)
-	node.addNumber(doc, key: ColumnKey, value: numbering.columnToClient(frame.column) as JsonFloat)
+	node.addNumber(doc, key: LineKey, value: numbering.lineToClient(frame.spot.lineLookup()) as JsonFloat)
+	node.addNumber(doc, key: ColumnKey, value: numbering.columnToClient(frame.spot) as JsonFloat)
 
 	if frame.inlined 'aSplicedBody'
 		node.addString(doc, key: PresentationHintKey, value: SubtleFrameHint)
@@ -420,12 +420,18 @@ export type DapNumbering
 		return Self{linesStartAt1: try arguments.flagOr(LinesStartAt1Argument, fallback: true), columnsStartAt1: try arguments.flagOr(ColumnsStartAt1Argument, fallback: true)}
 	end 'askedBy'
 
-	export function lineToClient(line DebugLineNumber) returns DapNumber
-		return positionToClient(line as DapNumber, startsAtOne: self.linesStartAt1)
+	export function lineToClient(line DebugLineLookup) returns DapNumber
+		return match line 'line'
+			unknown gives UnknownPosition
+			line(number) gives positionToClient(number as DapNumber, startsAtOne: self.linesStartAt1)
+		end 'line'
 	end 'lineToClient'
 
-	export function columnToClient(column DebugColumnNumber) returns DapNumber
-		return positionToClient(column as DapNumber, startsAtOne: self.columnsStartAt1)
+	export function columnToClient(spot DebugSourceSpot) returns DapNumber
+		return match spot 'spot'
+			unknown gives UnknownPosition
+			at(_, column) gives positionToClient(column as DapNumber, startsAtOne: self.columnsStartAt1)
+		end 'spot'
 	end 'columnToClient'
 
 	export function lineFromClient(line DapNumber) returns DapNumber
@@ -439,7 +445,7 @@ let ZeroBasedShift = 1 as DapNumber
 let UnknownPosition = 0 as DapNumber
 
 function positionToClient(position DapNumber, startsAtOne bool) returns DapNumber
-	if startsAtOne or position == UnknownPosition 'asCounted'
+	if startsAtOne 'asCounted'
 		return position
 	end 'asCounted'
 
@@ -462,9 +468,6 @@ function threadName(row DebugThreadRow) returns String
 end 'threadName'
 
 export function dapValueText(value DebugValueNode) returns String
-	if value.unavailable.isEmpty() 'aValue'
-		return value.display
-	end 'aValue'
-
-	return "<{value.unavailable.replace(UnavailableWordSeparator, with: " ")}>"
+	let reason = try value.availability.reason() otherwise return value.display
+	return "<{reason.replace(UnavailableWordSeparator, with: " ")}>"
 end 'dapValueText'

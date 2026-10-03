@@ -100,12 +100,6 @@
 typealias FixpointRound = int(0 to u64.max)
 typealias TrailMarkColumn = Array with ElementIndex
 
-// The `symBasePlusOne` of a value with no symbolic bound — ValueId 0 is a real base.
-let NoSymbolicBase = 0 as ValueId
-
-// The `defPosition` of a value nothing this pass indexed defines.
-let NoDefPosition = 0 as ElementIndex
-
 // The rounds a function may take before every block arg is forced to the whole range. Widening moves
 // each side of a block arg at most once, so a chain of loops that hands a widened bound from one header
 // to the next through back edges is what a late round means; past this many, precision is given up
@@ -171,12 +165,13 @@ type Interval
 	export var lo as ParsedInt
 	export var hi as ParsedInt
 
-	// `v ≤ U(base) + symOffset` when `symBasePlusOne` names a base.
-	export var symBasePlusOne as ValueId
+	// `v ≤ U(symBaseId) + symOffset` when `symBounded`; `symBaseId` means nothing otherwise.
+	export var symBounded as bool
+	export var symBaseId as ValueId
 	export var symOffset as ParsedInt
 
 	static function create() returns Interval
-		return Self{lo: i64.min, hi: i64.max, symBasePlusOne: NoSymbolicBase, symOffset: 0}
+		return Self{lo: i64.min, hi: i64.max, symBounded: false, symBaseId: 0, symOffset: 0}
 	end 'create'
 
 	function setTop()
@@ -203,13 +198,22 @@ type Interval
 	function copyFrom(other Interval)
 		self.lo = other.lo
 		self.hi = other.hi
-		self.symBasePlusOne = other.symBasePlusOne
+		self.symBounded = other.symBounded
+		self.symBaseId = other.symBaseId
 		self.symOffset = other.symOffset
 	end 'copyFrom'
 
 	function sameAs(other Interval) returns bool
-		return self.lo == other.lo and self.hi == other.hi and self.symBasePlusOne == other.symBasePlusOne and self.symOffset == other.symOffset
+		return self.lo == other.lo and self.hi == other.hi and self.sameSymbolicBoundAs(other) and self.symOffset == other.symOffset
 	end 'sameAs'
+
+	function sameSymbolicBoundAs(other Interval) returns bool
+		if not self.symBounded 'noBase'
+			return not other.symBounded
+		end 'noBase'
+
+		return other.isBoundedBy(self.symBaseId)
+	end 'sameSymbolicBoundAs'
 
 	function isPoint() returns bool
 		return self.lo == self.hi
@@ -220,11 +224,11 @@ type Interval
 	end 'isNonNegative'
 
 	function hasSym() returns bool
-		return self.symBasePlusOne != NoSymbolicBase
+		return self.symBounded
 	end 'hasSym'
 
 	function isBoundedBy(base ValueId) returns bool
-		return self.symBasePlusOne == base + 1
+		return self.symBounded and self.symBaseId == base
 	end 'isBoundedBy'
 
 	function symBase() returns ValueId
@@ -232,16 +236,17 @@ type Interval
 			panic("refineValueRanges: symBase asked of an interval with no symbolic bound — ask `hasSym` first")
 		end 'unbounded'
 
-		return self.symBasePlusOne - 1
+		return self.symBaseId
 	end 'symBase'
 
 	function setSym(base ValueId, offset ParsedInt)
-		self.symBasePlusOne = base + 1
+		self.symBounded = true
+		self.symBaseId = base
 		self.symOffset = offset
 	end 'setSym'
 
 	function clearSym()
-		self.symBasePlusOne = NoSymbolicBase
+		self.symBounded = false
 		self.symOffset = 0
 	end 'clearSym'
 
@@ -329,6 +334,11 @@ type RangeFunction
 	end 'build'
 end 'RangeFunction'
 
+union AnalyzedFunction
+	none
+	named(name ByteArray)
+end 'AnalyzedFunction'
+
 // Everything a function's analysis writes into, created ONCE for the module: the interval columns, the
 // refinement trail, the walk and its per-block scopes, the decision list and the classification
 // records. `Array.clear` keeps capacity, so the second function's columns reuse the first's buffers.
@@ -340,17 +350,19 @@ module type RangeScratch
 	// whole range wherever it is read, joins included.
 	export var lo as ParsedIntArray
 	export var hi as ParsedIntArray
-	export var symBasePlusOne as ValueIdArray
+	export var symBounded as BoolArray
+	export var symBaseId as ValueIdArray
 	export var symOffset as ParsedIntArray
 	export var computed as BoolArray
 	export var modelled as BoolArray
-	export var defPosition as BlockPositionColumn
+	export var defPosition as OptionalElementIndexColumn
 
 	// The refinement trail: what a narrowing overwrote, restored in reverse on leaving the subtree.
 	export var trailValue as ValueIdArray
 	export var trailLo as ParsedIntArray
 	export var trailHi as ParsedIntArray
-	export var trailSymBasePlusOne as ValueIdArray
+	export var trailSymBounded as BoolArray
+	export var trailSymBaseId as ValueIdArray
 	export var trailSymOffset as ParsedIntArray
 	export var trailComputed as BoolArray
 
@@ -381,7 +393,7 @@ module type RangeScratch
 	export var tally as StdPassTally
 
 	// The function under analysis, for the column panics.
-	export var funcName as ByteArray
+	export var analyzed as AnalyzedFunction
 
 	// The round in progress: whether any interval or dead flag moved, whether block args are forced to
 	// the whole range, and the tallies of which only the last round's reading is kept.
@@ -394,22 +406,29 @@ module type RangeScratch
 	export var symbolicThisRound as TallyCount = 0
 
 	module static function create(tally StdPassTally) returns RangeScratch
-		return Self{lo: ParsedIntArray.create(), hi: ParsedIntArray.create(), symBasePlusOne: ValueIdArray.create(), symOffset: ParsedIntArray.create(), computed: BoolArray.create(), modelled: BoolArray.create(), defPosition: BlockPositionColumn.create(), trailValue: ValueIdArray.create(), trailLo: ParsedIntArray.create(), trailHi: ParsedIntArray.create(), trailSymBasePlusOne: ValueIdArray.create(), trailSymOffset: ParsedIntArray.create(), trailComputed: BoolArray.create(), walk: StdDominatorWalk.create(), walkTrailMark: TrailMarkColumn.create(), walkOpenedDead: BoolArray.create(), blockDead: BoolArray.create(), decisions: CompareDecisionArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), join: GuardedAccessJoinReader.create(), def: StdFoldableDef.create(), defined: StdDefinedValues.create(), left: Interval.create(), right: Interval.create(), result: Interval.create(), incoming: Interval.create(), tally: tally, funcName: ByteArray.create()}
+		return Self{lo: ParsedIntArray.create(), hi: ParsedIntArray.create(), symBounded: BoolArray.create(), symBaseId: ValueIdArray.create(), symOffset: ParsedIntArray.create(), computed: BoolArray.create(), modelled: BoolArray.create(), defPosition: OptionalElementIndexColumn.create(), trailValue: ValueIdArray.create(), trailLo: ParsedIntArray.create(), trailHi: ParsedIntArray.create(), trailSymBounded: BoolArray.create(), trailSymBaseId: ValueIdArray.create(), trailSymOffset: ParsedIntArray.create(), trailComputed: BoolArray.create(), walk: StdDominatorWalk.create(), walkTrailMark: TrailMarkColumn.create(), walkOpenedDead: BoolArray.create(), blockDead: BoolArray.create(), decisions: CompareDecisionArray.create(), arith: StdArithOperands.create(), branch: StdBranchOperands.create(), join: GuardedAccessJoinReader.create(), def: StdFoldableDef.create(), defined: StdDefinedValues.create(), left: Interval.create(), right: Interval.create(), result: Interval.create(), incoming: Interval.create(), tally: tally, analyzed: AnalyzedFunction.none}
 	end 'create'
 
 	// Drop the reference into the function a run held for its panics. This scratch outlives the function
 	// on a pool worker, and a unit crossing back to the driver must have one owner per record
 	// (`StdUnit`): the name it aliased would be that record's second.
+	function funcName() returns ByteArray
+		match self.analyzed 'analyzed'
+			none then panic("RangeScratch.funcName: a column was read between two functions' analyses")
+			named(name) then return name
+		end 'analyzed'
+	end 'funcName'
+
 	module function endFunction()
-		self.funcName = b""
+		self.analyzed = AnalyzedFunction.none
 	end 'endFunction'
 
 	function isComputed(valueId ValueId) returns bool
-		return try self.computed.get(valueId) otherwise panic("refineValueRanges: in '{String.from(self.funcName)}', value {valueId} is read but lies outside the {self.computed.count()} ids `nextFreeValueId` answered — nothing defines it")
+		return try self.computed.get(valueId) otherwise panic("refineValueRanges: in '{String.from(self.funcName())}', value {valueId} is read but lies outside the {self.computed.count()} ids `nextFreeValueId` answered — nothing defines it")
 	end 'isComputed'
 
 	function isModelled(valueId ValueId) returns bool
-		return try self.modelled.get(valueId) otherwise panic("refineValueRanges: in '{String.from(self.funcName)}', value {valueId} is read but lies outside the {self.modelled.count()} ids `nextFreeValueId` answered — nothing defines it")
+		return try self.modelled.get(valueId) otherwise panic("refineValueRanges: in '{String.from(self.funcName())}', value {valueId} is read but lies outside the {self.modelled.count()} ids `nextFreeValueId` answered — nothing defines it")
 	end 'isModelled'
 
 	function markModelled(valueId ValueId)
@@ -417,14 +436,16 @@ module type RangeScratch
 	end 'markModelled'
 
 	function recordDefPosition(valueId ValueId, position ElementIndex)
-		try self.defPosition.set(valueId, value: position + 1) otherwise panic("refineValueRanges: defPosition.set OOB at {valueId} against a column sized by nextFreeValueId")
+		self.defPosition.set(valueId, value: position)
 	end 'recordDefPosition'
 
-	// One past the position of the block defining `valueId`, or `NoDefPosition` for a value no block
-	// defines.
-	function defPositionPlusOne(valueId ValueId) returns ElementIndex
-		return try self.defPosition.get(valueId) otherwise panic("refineValueRanges: in '{String.from(self.funcName)}', value {valueId} is read but lies outside the {self.defPosition.count()} ids `nextFreeValueId` answered — nothing defines it")
-	end 'defPositionPlusOne'
+	function defPositionOf(valueId ValueId) returns ElementIndex throws AbsentError
+		if valueId >= self.defPosition.count() 'outsideTheIds'
+			panic("refineValueRanges: in '{String.from(self.funcName())}', value {valueId} is read but lies outside the {self.defPosition.count()} ids `nextFreeValueId` answered — nothing defines it")
+		end 'outsideTheIds'
+
+		return try self.defPosition.get(valueId)
+	end 'defPositionOf'
 
 	// The interval `valueId` currently holds — its definition's, narrowed by every refinement on the
 	// trail — or the whole range where nothing this pass models defines it, or where its definition is
@@ -445,14 +466,16 @@ module type RangeScratch
 	function readComputedInterval(valueId ValueId, into Interval)
 		into.lo = try self.lo.get(valueId) otherwise panic("refineValueRanges: lo.get OOB at {valueId}")
 		into.hi = try self.hi.get(valueId) otherwise panic("refineValueRanges: hi.get OOB at {valueId}")
-		into.symBasePlusOne = try self.symBasePlusOne.get(valueId) otherwise panic("refineValueRanges: symBasePlusOne.get OOB at {valueId}")
+		into.symBounded = try self.symBounded.get(valueId) otherwise panic("refineValueRanges: symBounded.get OOB at {valueId}")
+		into.symBaseId = try self.symBaseId.get(valueId) otherwise panic("refineValueRanges: symBaseId.get OOB at {valueId}")
 		into.symOffset = try self.symOffset.get(valueId) otherwise panic("refineValueRanges: symOffset.get OOB at {valueId}")
 	end 'readComputedInterval'
 
 	function storeInterval(valueId ValueId, interval Interval)
 		try self.lo.set(valueId, value: interval.lo) otherwise panic("refineValueRanges: lo.set OOB at {valueId}")
 		try self.hi.set(valueId, value: interval.hi) otherwise panic("refineValueRanges: hi.set OOB at {valueId}")
-		try self.symBasePlusOne.set(valueId, value: interval.symBasePlusOne) otherwise panic("refineValueRanges: symBasePlusOne.set OOB at {valueId}")
+		try self.symBounded.set(valueId, value: interval.symBounded) otherwise panic("refineValueRanges: symBounded.set OOB at {valueId}")
+		try self.symBaseId.set(valueId, value: interval.symBaseId) otherwise panic("refineValueRanges: symBaseId.set OOB at {valueId}")
 		try self.symOffset.set(valueId, value: interval.symOffset) otherwise panic("refineValueRanges: symOffset.set OOB at {valueId}")
 		try self.computed.set(valueId, value: true) otherwise panic("refineValueRanges: computed.set OOB at {valueId}")
 	end 'storeInterval'
@@ -492,7 +515,8 @@ module type RangeScratch
 		self.trailValue.push(valueId)
 		self.trailLo.push(self.incoming.lo)
 		self.trailHi.push(self.incoming.hi)
-		self.trailSymBasePlusOne.push(self.incoming.symBasePlusOne)
+		self.trailSymBounded.push(self.incoming.symBounded)
+		self.trailSymBaseId.push(self.incoming.symBaseId)
 		self.trailSymOffset.push(self.incoming.symOffset)
 		self.trailComputed.push(wasComputed)
 		self.storeInterval(valueId, interval: refined)
@@ -538,12 +562,14 @@ module type RangeScratch
 			let valueId = try self.trailValue.pop() otherwise panic("refineValueRanges: trailValue.pop on a non-empty trail failed")
 			let savedLo = try self.trailLo.pop() otherwise panic("refineValueRanges: trailLo.pop on a non-empty trail failed")
 			let savedHi = try self.trailHi.pop() otherwise panic("refineValueRanges: trailHi.pop on a non-empty trail failed")
-			let savedBase = try self.trailSymBasePlusOne.pop() otherwise panic("refineValueRanges: trailSymBasePlusOne.pop on a non-empty trail failed")
+			let savedBounded = try self.trailSymBounded.pop() otherwise panic("refineValueRanges: trailSymBounded.pop on a non-empty trail failed")
+			let savedBase = try self.trailSymBaseId.pop() otherwise panic("refineValueRanges: trailSymBaseId.pop on a non-empty trail failed")
 			let savedOffset = try self.trailSymOffset.pop() otherwise panic("refineValueRanges: trailSymOffset.pop on a non-empty trail failed")
 			let wasComputed = try self.trailComputed.pop() otherwise panic("refineValueRanges: trailComputed.pop on a non-empty trail failed")
 			try self.lo.set(valueId, value: savedLo) otherwise panic("refineValueRanges: lo.set OOB at {valueId}")
 			try self.hi.set(valueId, value: savedHi) otherwise panic("refineValueRanges: hi.set OOB at {valueId}")
-			try self.symBasePlusOne.set(valueId, value: savedBase) otherwise panic("refineValueRanges: symBasePlusOne.set OOB at {valueId}")
+			try self.symBounded.set(valueId, value: savedBounded) otherwise panic("refineValueRanges: symBounded.set OOB at {valueId}")
+			try self.symBaseId.set(valueId, value: savedBase) otherwise panic("refineValueRanges: symBaseId.set OOB at {valueId}")
 			try self.symOffset.set(valueId, value: savedOffset) otherwise panic("refineValueRanges: symOffset.set OOB at {valueId}")
 			try self.computed.set(valueId, value: wasComputed) otherwise panic("refineValueRanges: computed.set OOB at {valueId}")
 		end 'eachEntry'
@@ -651,21 +677,22 @@ end 'beginRound'
 // can read at all — the whole cost most functions pay.
 function prepareFunction(module StdModule, func IrFunction, scratch RangeScratch) returns bool
 	let bound = nextFreeValueId(module, func: func)
-	scratch.funcName = func.name
+	scratch.analyzed = AnalyzedFunction.named(func.name)
 	scratch.lo.clear()
 	scratch.lo.resize(bound)
 	scratch.hi.clear()
 	scratch.hi.resize(bound)
-	scratch.symBasePlusOne.clear()
-	scratch.symBasePlusOne.resize(bound)
+	scratch.symBounded.clear()
+	scratch.symBounded.resize(bound)
+	scratch.symBaseId.clear()
+	scratch.symBaseId.resize(bound)
 	scratch.symOffset.clear()
 	scratch.symOffset.resize(bound)
 	scratch.computed.clear()
 	scratch.computed.resize(bound)
 	scratch.modelled.clear()
 	scratch.modelled.resize(bound)
-	scratch.defPosition.clear()
-	scratch.defPosition.resize(bound)
+	scratch.defPosition.makeAbsent(bound)
 	scratch.blockDead.clear()
 	scratch.blockDead.resize(func.blockRefs.count())
 
@@ -1054,13 +1081,7 @@ end 'evaluateBlockArgs'
 // Whether the block defining `base` dominates the block at `position`, which is what makes `base` one
 // word for every value the block's args take.
 function baseDominates(base ValueId, position ElementIndex, analysis RangeFunction, scratch RangeScratch) returns bool
-	let definedAtPlusOne = scratch.defPositionPlusOne(base)
-
-	if definedAtPlusOne == NoDefPosition 'notADef'
-		return false
-	end 'notADef'
-
-	let definedAt = definedAtPlusOne - 1
+	let definedAt = try scratch.defPositionOf(base) otherwise return false
 	return analysis.tree.canReach(definedAt) and analysis.stamps.dominates(definedAt, b: position)
 end 'baseDominates'
 

@@ -9,48 +9,32 @@ category: system
 
 ## Documentation
 
-⚖ **A GREEN THREAD THAT ENTERS A BLOCKING SYSCALL TODAY TAKES ITS M WITH IT.** The M is the OS thread the
+⚖ **A GREEN THREAD THAT ENTERS A BLOCKING SYSCALL TAKES ITS M WITH IT.** The M is the OS thread the
 scheduler runs a P on, so for as long as the call is inside the kernel that P schedules nothing — and a
 program with more concurrent blocking calls than processors runs them **in batches of `MAXON_MAX_PROCS`,
-serially**, however many green threads are ready. The cure has two halves and this rung builds both:
+serially**, however many green threads are ready. The cure has two halves:
 **overlapped IO**, so the call parks the green thread on a completion rather than parking the OS thread on
 the kernel; and **Go-style P handoff plus a sysmon**, so a call that still blocks has its P taken away and
 given to another M rather than idled.
 
-⛔⛔ **THIS FILE USED TO CARRY A TABLE SHOWING THAT COST, AND THE TABLE WAS A COLD-CACHE ARTEFACT.** It read
-**566 ms** at one processor against 107 / 108 / 95 ms at two, four and sixteen, and concluded that the batch
-of eight *"falls off a cliff between one processor and two"*. **The 566 was a first-ever run of a
-freshly-written binary** — a cold file cache, a cold `cmd.exe` image and a cold loader — and the three
-numbers beside it were the same program measured once each, in ascending order, after it had warmed up.
-Re-measured WARM and INTERLEAVED, the cliff is not there:
+⛔⛔ **THE SUBPROCESS PROGRAM BELOW SHOWS NO SUCH COST, AND A TABLE THAT SHOWS A CLIFF IS A COLD-CACHE
+ARTEFACT.** `a-blocking-subprocess-wait-does-not-stall-a-sibling`, run as a standalone binary with
+`MAXON_MAX_PROCS` set per run, takes the same wall time at one, two, four and sixteen processors when it is
+measured WARM and INTERLEAVED. A first-ever run of a freshly-written binary pays a cold file cache, a cold
+`cmd.exe` image and a cold loader, and a program measured once per count in ascending order reads that cost
+as a curve.
 
-| `MAXON_MAX_PROCS` | 1 | 2 | 4 | 16 |
-|---|---|---|---|---|
-| **wall, median of 21** | **61 ms** | 61 ms | 61 ms | 62 ms |
+⭐ **THE METHOD IS THE MEASUREMENT.** One warm-up run per cell, DISCARDED; then rounds that each run every
+processor count once, so that drift in the machine's state lands on all four counts equally instead of on
+whichever was measured last; and a second binary interleaved in the same rounds as the CONTROL. **A number
+that does not reproduce under a warm interleaved control with a second binary is wrong, however carefully
+it was taken.**
 
-⭐ **THE METHOD IS THE MEASUREMENT, SO IT IS RECORDED HERE RATHER THAN LEFT TO BE GUESSED AT.** One warm-up
-run per cell, DISCARDED; then 21 rounds, each round running every processor count once, so that drift in the
-machine's state lands on all four counts equally instead of on whichever was measured last. **And the two
-compilers ran as EACH OTHER'S CONTROL** — the same program built by this tree and by its parent, interleaved
-in the same rounds, 21 runs per cell per binary, 168 runs in all. Every one answered `aggregate=8 last=1` and
-exited 0, and the two binaries agree cell for cell within 1 ms. The subject is
-`a-blocking-subprocess-wait-does-not-stall-a-sibling` below, run as a standalone binary with
-`MAXON_MAX_PROCS` set per run.
-
-⛔⛔ **IT TOOK TWO CORRECTIONS TO GET HERE, AND THAT IS THE MOST USEFUL THING THIS PARAGRAPH CAN TELL YOU.**
-The committed 566/107/108/95 was the first attempt. A SECOND reading — **143 / 128 / 128 / 127 ms**, taken
-warm and interleaved, 9 runs per count — was offered as the correction, and it does not survive either: it
-was still measured against no second binary and with a sample too small for a bimodal population, and the
-answer it produced is more than twice the one 21 controlled rounds give. **A number that does not reproduce
-under a warm interleaved control with a second binary is wrong, however carefully it was taken** — and this
-one had to be taken three times before it stopped moving.
-
-⚠⚠ **AND A MEDIAN IS THE WRONG STATISTIC TO QUOTE ALONE HERE, WHICH IS THE SECOND HALF OF WHY THE OLD TABLE
-MISLED.** The distribution is BIMODAL: a fast mode at 45–62 ms and a slow mode at ~280–500 ms, with roughly
+⚠⚠ **AND A MEDIAN IS THE WRONG STATISTIC TO QUOTE ALONE HERE.** The distribution is BIMODAL: a fast mode and a slow mode several times slower, with roughly
 **one run in four** landing in the slow mode **at every processor count**. It is `cmd.exe` spawn cost, not
 scheduling — the proportion does not move with the count, and it does not move between two different
 compilers either. A sample of one, or of a handful taken in count order, will therefore produce a "curve" of
-any shape you like; the 566/107/108/95 row is what that looks like.
+any shape you like.
 
 ⇒ **EIGHT CHILDREN AT ONE PROCESSOR DO *NOT* COST EIGHT TIMES ONE CHILD, AND THE MECHANISM IS NAMED RATHER
 THAN GUESSED AT — BECAUSE "NO EFFECT HERE" OTHERWISE READS AS "THE EFFECT IS NOT REAL".**
@@ -61,10 +45,10 @@ where a pass moved no bytes and the child is still running — sleeps **GREEN**,
 `__gt_sleep(SubpPollMs)`. That function's own header states it: *"it waits GREEN — a `__gt_sleep` on the
 completion-port lane … — so the whole scheduler runs meanwhile"*.
 
-⇒ **the wait PARKS the green thread and GIVES THE M BACK, so this program never occupied an M to begin
-with.** The flat 61–62 ms is therefore **the correct answer for a program that does not exhibit the effect**,
-not a failure to observe one — and eight of these at one processor were never serialised, which is exactly
-why there is no cliff to find.
+⇒ **the wait PARKS the green thread and GIVES THE M BACK, so this program does not occupy an M at
+all.** The flat wall time is therefore **the correct answer for a program that does not exhibit the effect**,
+not a failure to observe one — eight of these at one processor are not serialised, which is exactly why
+there is no cliff to find.
 
 ⭐⭐ **THE CALL THAT DOES HOLD ITS M IS `stdin`, AND THAT IS WHERE THIS FILE'S SUBJECT ACTUALLY LIVES.**
 `Console.stdin().readLine()` reaches `__con_read_stdin` (`ConsoleRuntime.maxon:38`), which is a plain
@@ -79,20 +63,18 @@ a second machine still has an M to carry the sentinel, and the order flips. **Th
 clock, is what a serialised M looks like when you can see it** — and the reader's `blocked=` witness, described
 at the first of the three cases, is what tells that ordering apart from a line that was already in the pipe.
 
-⚠ **NONE OF THIS RETIRES THE RUNG, AND THE `stdin` READING IS WHY THAT IS A STATEMENT RATHER THAN A HOPE.**
-The claim at the head of this file — a green thread inside a genuinely blocking kernel call takes its M with
-it — is untouched, and now has a live example pointing at it. What has been withdrawn is one program's claim
-to *demonstrate* it, and the reason that program never could is that its wait is green. Every call that
-really does block (the standard-input read above, a synchronous read of a slow device) still costs its
-processor for the duration, and `handoffp` is still what gives that processor to somebody else. **The
-correct reading of this file is that it has TWO passing cases and no committed timing evidence**, which is
-what the paragraph below already says the cases are for.
+⚠ **THE CLAIM AT THE HEAD OF THIS FILE STANDS, AND THE `stdin` READING IS WHY THAT IS A STATEMENT RATHER
+THAN A HOPE.** A green thread inside a genuinely blocking kernel call takes its M with it, and the `stdin`
+cases are a live example of it. The subprocess program does not *demonstrate* it, because its wait is green.
+Every call that really does block (the standard-input read above, a synchronous read of a slow device) costs
+its processor for the duration, and `handoffp` is what gives that processor to somebody else. **This file
+commits passing cases and no timing evidence**, which is what the paragraph below says the cases are for.
 
 ⛔⛔ **BUT IT IS NOT A DEADLOCK, AND THIS FILE MUST NOT CLAIM THAT IT IS.** A file read and a child's exit
 both complete on their own: the kernel returns, the M comes back, the P picks up the next green thread.
 So a program of *N* independent blocking calls at *P* processors takes ⌈N/P⌉ batches and **finishes** —
-it is slower than it should be and it is never wedged. **MEASURED before this file was written, on both
-programs below at `MAXON_MAX_PROCS ∈ {1, 2, 4, 16}`: every run answered, every run exited 0.** A shape
+it is slower than it should be and it is never wedged. **Both programs below answer and exit 0 at every
+`MAXON_MAX_PROCS ∈ {1, 2, 4, 16}`.** A shape
 that really does wedge needs a blocking call that only ANOTHER green thread can complete — a pipe whose
 writer is itself a green thread on an occupied M — and that is a different program from either of these.
 
@@ -358,11 +340,10 @@ the harness's or the runtime's defect, and the scheduler was never exercised. `b
 waited it out — the scheduler's defect, and the one this file gates. Without the witness those two reds
 are one red: a line already in the pipe reads exactly like a sentinel starved of its processor.
 
-⚠ **MEASURED ON THE PARENT OF THE CHANGE THAT GREENS THIS, 5 RUNS OF 5, `MAXON_MAX_PROCS=1`:**
-`R: read returned` then `S: sentinel ran`, exit 0 — the sentinel waited out the entire read. **A one-second
+⚠ **A SCHEDULER THAT LETS THE READ KEEP ITS PROCESSOR PRINTS, AT `MAXON_MAX_PROCS=1`,**
+`R: read returned` then `S: sentinel ran`, exit 0 — the sentinel waits out the entire read. **A one-second
 feed against a microsecond reply is a ~1000× margin**, which is why this is a stable wrong ANSWER and not a
-timing flake; it was deliberately built that way after a `stdin: hold` variant was rejected for being able
-to fail only by timing out.
+timing flake; a `stdin: hold` shape could fail only by timing out.
 
 ⭐⭐ **THE BLOCKED CALL HOLDS ITS OWN MACHINE AND ITS OWN STRAND, AND NOTHING ELSE.** No wait runs another
 green thread on the waiter's stack: an await, a mailbox wait or a timer parks its green thread onto its
@@ -450,15 +431,14 @@ done sibling=1 read=5 blocked=yes
 <!-- test: a-spare-processor-already-carries-the-sibling -->
 <!-- procs: 4 -->
 <!-- stdin: delayed -->
-⚠ **THIS CASE WAS ALREADY GREEN BEFORE THE CHANGE THAT GREENS THE ONE ABOVE, AND IT IS HERE TO SAY WHY
-THAT ONE IS RED.** Same program, same expected output, one marker different. **MEASURED on the same
-parent, `MAXON_MAX_PROCS=4`: `S` then `R: read returned`** — the required order already, because a second
-machine picks the sentinel up while the first is in the kernel.
+⚠ **THIS CASE IS GREEN WITH OR WITHOUT THE HANDOFF, AND IT IS HERE TO SAY WHY THE ONE ABOVE NEEDS
+IT.** Same program, same expected output, one marker different. **At `MAXON_MAX_PROCS=4` it prints `S` then
+`R: read returned`** whether or not a processor is ever retaken, because a second machine picks the sentinel
+up while the first is in the kernel.
 
 ⇒ The pair states the defect exactly: **one processor cannot do what four can, and the reason is that a
-processor is being spent on a thread that is asleep in the kernel.** As a gate this half is a regression
-guard — it is the path that must not break while the other is being fixed — and it is deliberately not
-counted as evidence for the cure.
+processor is being spent on a thread that is asleep in the kernel.** As a gate this half guards the
+path that already works, and it is deliberately not counted as evidence for the cure.
 
 ⚠ **FOUR PROCESSORS IS WHERE THE READER'S CAUSAL CHAIN EARNS ITS KEEP.** The ping leaves the reader only
 after `R: reading` has been written, so a spare machine can run the sentinel no earlier than that line;
@@ -543,7 +523,7 @@ done sibling=1 read=5 blocked=yes
 <!-- stdin: delayed -->
 ⭐ **THIS CASE PINS THE MECHANISM, BECAUSE THE CASE ABOVE CAN BE GREENED BY THE WRONG CURE.** Routing
 `__con_read_stdin` through the existing overlapped-read road would reorder those two lines without a
-processor ever being retaken — a real improvement, and a **different** rung's. `__Builtins.schedRetakeCount()`
+processor ever being retaken — a real improvement, and a **different** mechanism. `__Builtins.schedRetakeCount()`
 sums a per-P counter (the `schedStealCount` shape, so no `.data` word and no golden churn) and answers how
 many times a `sysmon` actually took a processor away from a machine stuck in the kernel.
 
@@ -667,7 +647,8 @@ function endedByItsDeadline(child StreamingSubprocess) returns bool
 			executableNotFound or
 				spawnFailed or
 				ioFailed or
-				inputTooLarge gives false
+				inputTooLarge or
+				endOfStream gives false
 		end 'why'
 	end 'ended'
 

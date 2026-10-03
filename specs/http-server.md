@@ -109,8 +109,7 @@ function serveOne(server HttpServer) returns Served
 	return 3
 end 'serveOne'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveOne(server)
 
 	let response = try HttpClient.get("http://127.0.0.1:{server.port()}/hello?q=1") otherwise return 2
@@ -121,6 +120,11 @@ function main() returns ExitCode
 	server.close()
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -166,8 +170,7 @@ function serveOne(server HttpServer) returns Served
 	return 3
 end 'serveOne'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveOne(server)
 
 	let sent = bigBody()
@@ -179,6 +182,11 @@ function main() returns ExitCode
 	server.close()
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -206,8 +214,7 @@ function serveOne(server HttpServer) returns Served
 	return 3
 end 'serveOne'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveOne(server)
 
 	var request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{server.port()}/tagged") otherwise return 2
@@ -220,6 +227,11 @@ function main() returns ExitCode
 	server.close()
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -267,8 +279,7 @@ function serveUntilClosed(server HttpServer, handler PickyHandler) returns Serve
 	return 3
 end 'serveUntilClosed'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let handler = PickyHandler.create("second")
 	let peer = async serveUntilClosed(server, handler: handler)
 	let port = server.port()
@@ -282,6 +293,11 @@ function main() returns ExitCode
 	print("first={first.statusCode().number()} second={second.statusCode().number()} body={second.body()} served={served}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -321,8 +337,7 @@ function serveUntilClosed(server HttpServer, handler LateThrowingHandler) return
 	return server.serve(handler)
 end 'serveUntilClosed'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let handler = LateThrowingHandler.create("answered")
 	let peer = async serveUntilClosed(server, handler: handler)
 	let port = server.port()
@@ -336,6 +351,11 @@ function main() returns ExitCode
 	print("first={first.statusCode().number()} body={first.body()} second={second.statusCode().number()} ended={ended.name}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -360,8 +380,7 @@ function answerTwice(server HttpServer) returns String
 	return "answered-twice"
 end 'answerTwice'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async answerTwice(server)
 
 	let response = try HttpClient.get("http://127.0.0.1:{server.port()}/") otherwise return 2
@@ -371,6 +390,11 @@ function main() returns ExitCode
 	print("status={response.statusCode().number()} body={response.body()} second={second}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -405,8 +429,7 @@ function serveUntilClosed(server HttpServer, handler EchoPathHandler) returns Ht
 	return server.serve(handler)
 end 'serveUntilClosed'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let handler = EchoPathHandler.create("echo")
 	try server.setAcceptDeadline(300) otherwise return 2
 
@@ -423,6 +446,11 @@ function main() returns ExitCode
 	print("idle={idle.name} prompt={tookMs < promptMs} body={response.body()} ended={ended.name}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -448,8 +476,7 @@ function acceptedHeader(server HttpServer) returns String
 	return accepted
 end 'acceptedHeader'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async acceptedHeader(server)
 
 	let client = try TcpClient.connect("127.0.0.1", port: server.port()) otherwise return 2
@@ -463,6 +490,11 @@ function main() returns ExitCode
 	print("accept={seen}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -839,8 +871,7 @@ function answerWithABadHeaderLine(listener TcpListener) returns Served
 	return 3
 end 'answerWithABadHeaderLine'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let serverPort = server.port()
 	let serverPeer = async serveOne(server)
 	let status = shout(serverPort, block: "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nBadHeaderLine\r\n\r\n")
@@ -848,22 +879,27 @@ function main() returns ExitCode
 	server.close()
 
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 2
+	let listenerPort = listener.port()
 	let clientPeer = async answerWithABadHeaderLine(listener)
 
 	var clientSaw = "accepted-a-bad-header-line"
 
-	if let response = try HttpClient.get("http://127.0.0.1:{listener.port()}/") 'answered'
+	if let response = try HttpClient.get("http://127.0.0.1:{listenerPort}/") 'answered'
 		clientSaw = "status {response.statusCode().number()}"
 	end 'answered' else (e) 'refused'
 		clientSaw = e.name
 	end 'refused'
 
 	let answered = await clientPeer
-	listener.close()
 
 	print("status={status} served={served} clientSaw={clientSaw} answered={answered}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -922,8 +958,7 @@ function serveOne(server HttpServer) returns Served
 	return 3
 end 'serveOne'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveOne(server)
 	let status = trickle(server.port())
 	let served = await peer
@@ -932,6 +967,11 @@ function main() returns ExitCode
 	print("status={status} served={served}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -992,23 +1032,26 @@ function paddedHead() returns String
 	return head
 end 'paddedHead'
 
-function main() returns ExitCode
-	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
-	var limits = HttpServerLimits.create()
-	limits.maxHeaderBytes = HeadCap
-	server.setLimits(limits)
-
-	let port = server.port()
+function exchangeOver(listening HttpServer) returns ExitCode
+	let port = listening.port()
 	let blocks = ["GET / HTTP/1.1\r\n\r\n", "GET @127.0.0.1/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\nhi", "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nHost: 127.0.0.1\r\n\r\n", paddedHead()]
 
 	for block in blocks 'eachBlock'
-		let peer = async acceptedAs(server)
+		let peer = async acceptedAs(listening)
 		let status = shout(port, block: block)
 		let accepted = await peer
 		print("status={status} accept={accepted}\n")
 	end 'eachBlock'
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var limits = HttpServerLimits.create()
+	limits.maxHeaderBytes = HeadCap
+	server.setLimits(limits)
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1051,8 +1094,7 @@ function serveUntilClosed(server HttpServer, handler PlainHandler) returns Serve
 	return 3
 end 'serveUntilClosed'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let handler = PlainHandler.create("serving")
 	let peer = async serveUntilClosed(server, handler: handler)
 
@@ -1063,6 +1105,11 @@ function main() returns ExitCode
 	print("status={response.statusCode().number()} body={response.body()} served={served}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1099,8 +1146,7 @@ function acceptAfterClose(server HttpServer) returns String
 	return "accepted-after-close"
 end 'acceptAfterClose'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveOne(server)
 
 	let response = try HttpClient.get("http://127.0.0.1:{server.port()}/live") otherwise return 2
@@ -1112,6 +1158,11 @@ function main() returns ExitCode
 	print("status={response.statusCode().number()} served={served} refusal={refusal}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1162,8 +1213,7 @@ function requestFor(host String, target String) returns String
 	return "GET {target} HTTP/1.1\r\nHost: {host}\r\n\r\n"
 end 'requestFor'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let port = server.port()
 	let blocks = [
 		requestFor("x/admin?", target: "/public"),
@@ -1198,6 +1248,11 @@ function main() returns ExitCode
 	server.close()
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1260,8 +1315,7 @@ function acceptedAs(server HttpServer) returns String
 	return "served x-tight={tight}"
 end 'acceptedAs'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let port = server.port()
 	let blocks = [
 		"POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding : chunked\r\n\r\n4\r\nabcd\r\n0\r\n\r\n",
@@ -1284,6 +1338,11 @@ function main() returns ExitCode
 	server.close()
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1335,8 +1394,7 @@ function acceptedAs(server HttpServer) returns String
 	return "served {seen}"
 end 'acceptedAs'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let port = server.port()
 	let blocks = [
 		"GET /a b HTTP/1.1\r\nHost: x\r\n\r\n",
@@ -1366,6 +1424,11 @@ function main() returns ExitCode
 	server.close()
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1420,8 +1483,7 @@ function everythingFrom(client TcpClient) returns String
 	return answer
 end 'everythingFrom'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveOne(server)
 
 	let client = try TcpClient.connect("127.0.0.1", port: server.port()) otherwise return 2
@@ -1446,6 +1508,11 @@ function main() returns ExitCode
 	print("served={served} {length} body=[{body}]\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1486,8 +1553,7 @@ function serveUntilClosed(server HttpServer, handler ForgetfulHandler) returns H
 	return server.serve(handler)
 end 'serveUntilClosed'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let handler = ForgetfulHandler.create("remembered")
 	let peer = async serveUntilClosed(server, handler: handler)
 	let port = server.port()
@@ -1501,6 +1567,11 @@ function main() returns ExitCode
 	print("first={first.statusCode().number()} second={second.statusCode().number()} body={second.body()} ended={ended.name}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1594,12 +1665,7 @@ function serveUntilClosed(server HttpServer, handler ResetHandler) returns HttpS
 	return server.serve(handler)
 end 'serveUntilClosed'
 
-function main() returns ExitCode
-	lowerFlag(RequestReadFlag)
-	lowerFlag(PeerResetFlag)
-	lowerFlag(FaultReportedFlag)
-
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveUntilClosed(server, handler: ResetHandler.create())
 	let reset = sendThenReset(server.port())
 	raiseFlag(PeerResetFlag)
@@ -1614,6 +1680,15 @@ function main() returns ExitCode
 	print("reset={reset} reported={reported} ended={ended.name}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	lowerFlag(RequestReadFlag)
+	lowerFlag(PeerResetFlag)
+	lowerFlag(FaultReportedFlag)
+
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1657,8 +1732,7 @@ function statusCodeOf(answer String) returns String
 	return try firstLine.split(" ").get(1) otherwise "no-status-code"
 end 'statusCodeOf'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveUntilClosed(server, handler: PlainHandler.create("after"))
 
 	let client = try TcpClient.connect("127.0.0.1", port: server.port()) otherwise return 2
@@ -1673,6 +1747,11 @@ function main() returns ExitCode
 	print("refused={refused} next={response.statusCode().number()} body={response.body()} ended={ended.name}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1739,22 +1818,25 @@ function trickle(port NetworkPort) returns String
 	return statusCodeOf(answer)
 end 'trickle'
 
+function exchangeOver(listening HttpServer) returns ExitCode
+	let peer = async acceptedAs(listening)
+	let start = Clock.nowMs()
+	let status = trickle(listening.port())
+	let tookMs = Clock.elapsedMs(start)
+	let accepted = await peer
+	listening.close()
+
+	print("status={status} accept={accepted} prompt={tookMs < PromptMs}\n")
+
+	return 0
+end 'exchangeOver'
+
 function main() returns ExitCode
 	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	var limits = HttpServerLimits.create()
 	limits.readDeadlineMs = ReadDeadlineMs
 	server.setLimits(limits)
-
-	let peer = async acceptedAs(server)
-	let start = Clock.nowMs()
-	let status = trickle(server.port())
-	let tookMs = Clock.elapsedMs(start)
-	let accepted = await peer
-	server.close()
-
-	print("status={status} accept={accepted} prompt={tookMs < PromptMs}\n")
-
-	return 0
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1817,8 +1899,7 @@ function upload(port NetworkPort) returns String
 	return statusCodeOf(answer)
 end 'upload'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async acceptedAs(server)
 	let status = upload(server.port())
 	let accepted = await peer
@@ -1827,6 +1908,11 @@ function main() returns ExitCode
 	print("status={status} accept={accepted}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1884,20 +1970,23 @@ function postWithBody() returns String
 	return block
 end 'postWithBody'
 
+function exchangeOver(listening HttpServer) returns ExitCode
+	let peer = async acceptedAs(listening)
+	let status = shout(listening.port(), block: postWithBody())
+	let accepted = await peer
+	listening.close()
+
+	print("status={status} accept={accepted}\n")
+
+	return 0
+end 'exchangeOver'
+
 function main() returns ExitCode
 	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	var limits = HttpServerLimits.create()
 	limits.maxHeaderBytes = HeaderCap
 	server.setLimits(limits)
-
-	let peer = async acceptedAs(server)
-	let status = shout(server.port(), block: postWithBody())
-	let accepted = await peer
-	server.close()
-
-	print("status={status} accept={accepted}\n")
-
-	return 0
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -1953,26 +2042,29 @@ function serveOne(server HttpServer, handler BigAnswerHandler) returns HttpServe
 	return server.serve(handler)
 end 'serveOne'
 
-function main() returns ExitCode
-	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
-	var limits = HttpServerLimits.create()
-	limits.writeDeadlineMs = WriteDeadlineMs
-	server.setLimits(limits)
-
+function exchangeOver(listening HttpServer) returns ExitCode
 	let handler = BigAnswerHandler.create(bigAnswer())
-	let peer = async serveOne(server, handler: handler)
+	let peer = async serveOne(listening, handler: handler)
 
-	let client = try TcpClient.connect("127.0.0.1", port: server.port()) otherwise return 2
+	let client = try TcpClient.connect("127.0.0.1", port: listening.port()) otherwise return 2
 	_ = try client.send("GET /big HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n") otherwise return 3
 	sleep(PeerSilenceMs)
 
-	server.close()
+	listening.close()
 	let ended = await peer
 	client.close()
 
 	print("ended={ended.name}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var limits = HttpServerLimits.create()
+	limits.writeDeadlineMs = WriteDeadlineMs
+	server.setLimits(limits)
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -2038,8 +2130,7 @@ function acceptedAs(server HttpServer) returns String
 	return "served {seen}"
 end 'acceptedAs'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let port = server.port()
 	let blocks = [
 		"GET http://origin.example:8080/p?q=1 HTTP/1.1\r\nHost: ignored.example\r\n\r\n",
@@ -2068,6 +2159,11 @@ function main() returns ExitCode
 	server.close()
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -2121,8 +2217,7 @@ function acceptedAs(server HttpServer) returns String
 	return "served {seen}"
 end 'acceptedAs'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let port = server.port()
 	let blocks = [
 		"GET /old HTTP/1.0\r\n\r\n",
@@ -2142,6 +2237,11 @@ function main() returns ExitCode
 	server.close()
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -2215,8 +2315,7 @@ function withHeader(code StatusCode, name String, value String, body String, rea
 	return HttpResponse.create(code, reasonPhrase: reason, responseHeaders: headers, responseBody: body)
 end 'withHeader'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let port = server.port()
 	let responses = [
 		withHeader(StatusCode.noContent, name: "x-kind", value: "empty", body: "", reason: "No Content"),
@@ -2238,6 +2337,11 @@ function main() returns ExitCode
 	server.close()
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout
@@ -2290,8 +2394,7 @@ function acceptedAs(server HttpServer) returns String
 	return "served {exchange.request().url().path()}"
 end 'acceptedAs'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async acceptedAs(server)
 
 	var overflow = StringBuilder.create()
@@ -2310,6 +2413,11 @@ function main() returns ExitCode
 	print("accept={accepted} answered={answer.endsWith("first answered")}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ```
 ```stdout

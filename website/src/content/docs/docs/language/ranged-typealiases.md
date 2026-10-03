@@ -277,8 +277,9 @@ Because every alias is its own type, a quantity crossing from one module's alias
 the crossing.
 
 A non-exported ranged alias is private to its file: two files may declare one name over different ranges,
-or one over `int` and the other over `float`, and each file's uses mean its own declaration. Two `export`ed
-or `public` declarations of one name in different files over different primitives are **E3105**.
+or one over `int` and the other over `float`, and each file's uses mean its own declaration. Exported
+declarations of one name live in different directories, whatever their ranges, and a file that sees more
+than one names the one it means by its directory (see [Bare Names and Ambiguity](/docs/language/namespaces/#bare-names-and-ambiguity)).
 
 ## Generic-Instance and Function-Type Aliases Are Brands
 

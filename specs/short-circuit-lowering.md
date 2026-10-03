@@ -25,19 +25,12 @@ over a merged value must pick the LOGICAL opcode, because the integer one turns 
 -1 which still reads as true. Every one of those is a wrong answer with a correct-looking
 program, and none of them is about elision at all.
 
-## Provenance — what this file replaced, and why the replacement is narrower
+## What these cases observe
 
-These nine cases were rescued from `short-circuit-elision.md` (**deleted at P1.0d.5b**), a
-workaround that existed because the compiler had no globals. That file proved elision the only way a
-compiler with no observable side effects can: it made the guarded operand **divide by zero**,
-so a clean exit was the proof. Its own header said to retire it when globals landed, and
-`OPEN.md` #4 said the same.
-
-Globals landed, `short-circuit-evaluation.md`'s counting cases went green, and the five
-divide-by-zero cases were deleted with the file — they tested elision, worse than the spec
-that now tests elision. **These nine never used that oracle.** They check ordinary values,
-they were never a workaround for anything, and deleting them along with the hack would have
-been a silent coverage regression dressed up as a cleanup.
+Elision itself is pinned by `short-circuit-evaluation.md`'s counting cases, which observe
+whether a guarded operand ran through a global. **These nine do not use that oracle.** They
+check ordinary values, and they cover what the elision spec does not: where the branches of
+the lowering land.
 
 ## Tests
 

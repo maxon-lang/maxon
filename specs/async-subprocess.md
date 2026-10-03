@@ -5,7 +5,7 @@ keywords: [subprocess, process, spawn, async, await, runProcess, green-threads, 
 category: concurrency
 ---
 
-# Subprocess — spawn a child and yield while it runs (P1.5)
+# Subprocess — spawn a child and yield while it runs
 
 ## Documentation
 
@@ -14,28 +14,25 @@ thread** while the child runs, and returns the child's integer exit code once it
 wait: the thread parks on the child, hands control back to the scheduler, and RESUMES with its exit code once the
 child has exited — so other green threads run while a child is pending.
 
-⭐ **IT IS SPELLED `__Builtins.runProcess`, AND THE BARE NAME `runProcess` IS AN ORDINARY NAME.** It used to be a
-bare-name builtin, recognized before any registry was consulted, so a program declaring its own `runProcess`
-found that declaration silently unreachable and its calls checked against the builtin's arity — which is
-exactly what `maxon-bin/Testing/SpecTestRunner.maxon`'s own four-parameter `runProcess` hit (`E3036`, G17
-defect 1). The entry moved into the reserved `__Builtins.` space, which `E2051` bars every declaration from,
-so no user name can contest it again. `the-bare-name-is-an-ordinary-declaration` below is the door that
-opened.
+⭐ **IT IS SPELLED `__Builtins.runProcess`, AND THE BARE NAME `runProcess` IS AN ORDINARY NAME.** The entry lives in the
+reserved `__Builtins.` space, which `E2051` bars every declaration from, so no user name can contest it, and a
+program declaring its own `runProcess` reaches that declaration with its own arity — as
+`maxon-bin/Testing/SpecTestRunner.maxon`'s own four-parameter `runProcess` does.
+`the-bare-name-is-an-ordinary-declaration` below pins it.
 
-⚠ **UNLIKE `sleep`, IT DID NOT MOVE INTO STDLIB SOURCE, AND THAT IS WHY ITS TARGET ANSWER DID NOT MOVE
-EITHER.** `sleep`'s retirement gave the entry to `stdlib/Sleep.maxon`, where the target gate is
-reachability-AWARE, so an unreached `sleep` began compiling for wasm (`async-sleep.unreached-compiles-on-wasm`).
-There is no stdlib declaration to give this one to: `stdlib/Subprocess.maxon`'s `Subprocess.run` is a different
-mechanism (a poll-and-`__gt_sleep` drain over `__Builtins.subprocess*`), and reconciling the two is the
-deferred full-Subprocess-API rung. `__Builtins.runProcess` therefore still emits `__gt_process_run` in USER
-code, where the gate is reachability-BLIND — pinned by `rejected-on-wasm-when-unreached` below.
+⚠ **UNLIKE `sleep`, IT IS NOT STDLIB SOURCE, AND THAT IS WHY ITS TARGET ANSWER DIFFERS.** `sleep`'s entry is
+`stdlib/Sleep.maxon`, where the target gate is reachability-AWARE, so an unreached `sleep` compiles for wasm
+(`async-sleep.unreached-compiles-on-wasm`). There is no stdlib declaration for this one:
+`stdlib/Subprocess.maxon`'s `Subprocess.run` is a different mechanism (a poll-and-`__gt_sleep` drain over
+`__Builtins.subprocess*`). `__Builtins.runProcess` therefore emits `__gt_process_run` in USER code, where the
+gate is reachability-BLIND — pinned by `rejected-on-wasm-when-unreached` below.
 
-`__Builtins.runProcess` is a **throwing** builtin (P1.5 #93): a spawn failure THROWS rather than aborting, so it
+`__Builtins.runProcess` is a **throwing** builtin: a spawn failure THROWS rather than aborting, so it
 must be called under `try`, exactly as a throwing array accessor is. It rides the same dual-register error ABI
 (`errorReturn`) an ordinary throwing call uses — the exit code in R8, the error flag in R10 — so
-`try __Builtins.runProcess(cmd) otherwise <handler>` catches the failure that used to abort the process, and a
-program can recover from it instead of dying. Recovery today is by VALUE — any error routes to the `otherwise`
-handler; binding `otherwise (e)` to a specific case is a deferred P1.7 feature, as for `ArrayError`.
+`try __Builtins.runProcess(cmd) otherwise <handler>` catches the spawn failure, and a program can recover from
+it instead of dying. The error is `RunProcessError` (`stdlib/Subprocess.maxon`), whose one case is
+`spawnFailed`, so an `otherwise (e)` handler can `match` on it.
 
 ```text
 function runChild() returns int
@@ -83,9 +80,9 @@ what "run this command line" means under POSIX and the same interpreter `system(
 `spawn-failure-caught` and `spawn-failure-recover-continue` turn on `CreateProcessA` REFUSING a
 command that names no runnable executable; under the shell shape the spawn of `/bin/sh` always
 succeeds and a missing command is the SHELL's exit **127**, so no command line on this lane can
-reach the spawn-failure throw those cases exist to catch (measured: a bad name answers 127, not the
-`otherwise` handler). That subject would need a different program asserting a different fact, which
-is a rung and not a marker.
+reach the spawn-failure throw those cases exist to catch (a bad name answers 127, not the
+`otherwise` handler). That subject would need a different program asserting a different fact, not a
+marker.
 
 ## Tests
 
@@ -208,12 +205,11 @@ that is gone cannot be opened: `pidfd_open` answers `ESRCH` for a reaped pid and
 registration answers it for a task that has exited. The exit STATUS is still there to read, so the wait is
 already over and the runtime takes the status — it does not abort.
 
-⛔⛔ **IT IS A RACE, WHICH IS WHY THE LOOP IS FIFTY AND WHY NOTHING PINNED IT BEFORE.** `exit 7` through
+⛔⛔ **IT IS A RACE, WHICH IS WHY THE LOOP IS FIFTY.** `exit 7` through
 `/bin/sh` is about as short-lived as a child gets, so each lap is a fresh chance to lose it; a machine that
-loses it once fails the whole case. MEASURED: as `RuntimeAbort.netpollFailed` (103) it killed ten spec
-workers on a 3-vCPU `macos-15` runner while every developer machine won the race every time and stayed
-green — a shape no existing case could see, because every other subprocess case spawns a child that outlives
-its own registration.
+loses it once fails the whole case. A loaded machine loses it far more often than an idle one, and a lost
+race that aborts answers `RuntimeAbort.netpollFailed` (103) — a shape no other case can see, because every
+other subprocess case spawns a child that outlives its own registration.
 
 ⚠ **THE COUNT IS THE ASSERTION, NOT THE EXIT CODE.** Each lap that answers 7 steps `done`, so `50` says
 every child was spawned, waited for and reaped with the right status; an abort answers 103 and a lap that
@@ -244,21 +240,20 @@ typealias Integer = int(i64.min to i64.max)
 <!-- unsupported-targets: x64-windows -->
 ⛔⛔ **`-ESRCH` IS AN ANSWER, NOT A DESCRIPTOR, AND IT MUST NEVER REACH THE RECORD TABLE.** Its neighbour
 above pins that an already-exited child is reaped rather than refused; this one pins the road the refusal
-travels. `__np_child_open` answers the negative errno, and the block that took it fell through into
-`__np_pd_adopt` — so **-3 was used as the table index**. The bound is a signed compare, so `-3 < capacity`
-reads as *inside the table*, and `table + 8*(-3)` is the word 24 bytes BEFORE it: either a wild value
-readied as a green thread, or a fresh record's address written over eight bytes belonging to something
-else. The open now RETURNS on that edge; callers see `-ESRCH` and take their own road exactly as before.
+travels. `__np_child_open` answers the negative errno, and the open RETURNS on that edge; callers see
+`-ESRCH` and take their own road. A block that fell through into `__np_pd_adopt` instead would use
+**-3 as the table index**. The bound is a signed compare, so `-3 < capacity` reads as *inside the table*,
+and `table + 8*(-3)` is the word 24 bytes BEFORE it: either a wild value readied as a green thread, or a
+fresh record's address written over eight bytes belonging to something else.
 
 ⚠ **ONE LAP, AND THE ONE IS THE WHOLE POINT.** `posix-a-child-that-has-already-exited` runs fifty and
-CANNOT catch this — MEASURED at 30,000 spawns with 0 failures against 16 in 20,000 here. From the second
+CANNOT catch this. From the second
 lap the record table exists, so `table - 24` lands in live heap and the damage is silent; on the FIRST
 `runProcess` of a process the table is unborn, the load is from a fixed wild address, and losing the race
 is a hard SIGSEGV naming `__np_pd_adopt`. So `main` spawns exactly once and does nothing before it.
 
-⚠ **IT IS PROBABILISTIC IN THE SAME WAY ITS NEIGHBOUR IS, AND LESS LIKELY TO FIRE.** 16 of 20,000 under
-192-way concurrency on a loaded 3-vCPU machine is the measured rate; on an idle developer box it is far
-rarer. What makes it worth keeping is that its failure is a crash naming the function, not a wrong number.
+⚠ **IT IS PROBABILISTIC IN THE SAME WAY ITS NEIGHBOUR IS, AND LESS LIKELY TO FIRE.** It fires rarely
+even under heavy concurrency on a loaded machine, and far more rarely on an idle one. What makes it worth keeping is that its failure is a crash naming the function, not a wrong number.
 ```maxon
 function once() returns Integer
 	return try __Builtins.runProcess("exit 7") otherwise 99
@@ -519,7 +514,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 Fifty children each exit 1, awaited in turn, summing to 50. The value is that `__gt_process_run`'s OS scratch —
 STARTUPINFOA, PROCESS_INFORMATION, the mutable cmdline copy and the exit-code slot — is REUSED across all fifty
-calls (P1.5-B1c #92): the three fixed buffers are one-time `__gt_init` allocations and the cmdline copy is a
+calls: the three fixed buffers are one-time `__gt_init` allocations and the cmdline copy is a
 grow-on-demand global that allocates once for a constant command length, so the loop stays bounded rather than
 bump-leaking ~150 bytes per call. Reuse is only correct because PROCESS_INFORMATION's `hProcess` is re-zeroed
 before each spawn (the failure sentinel) and the exit-code slot is re-zeroed before each `GetExitCodeProcess`
@@ -549,13 +544,30 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: async-subprocess.spawn-failure-caught -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 A command that names no runnable executable makes `CreateProcessA` fail outright, leaving a null child handle. The
-runtime now THROWS its spawn-failure error (P1.5 #93) rather than aborting the process — so the direct
-`try __Builtins.runProcess(bad) otherwise 42` in `main` catches it and returns the fallback 42. Before #93 this aborted with exit
-1; now the program runs to a normal return, proving the spawn failure is recoverable, not fatal.
+runtime THROWS its spawn-failure error rather than aborting the process — so the direct
+`try __Builtins.runProcess(bad) otherwise 42` in `main` catches it and returns the fallback 42. The program
+runs to a normal return, proving the spawn failure is recoverable, not fatal.
 ```maxon
 function main() returns ExitCode
 	let code = try __Builtins.runProcess("nonexistentprogram_xyz_12345") otherwise 42
 	return code as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: async-subprocess.spawn-failure-binds-its-case -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+The spawn failure is `RunProcessError.spawnFailed`, so an `otherwise (e)` handler can `match` on it.
+```maxon
+function main() returns ExitCode
+	try __Builtins.runProcess("nonexistentprogram_xyz_24680") otherwise (e) 'handler'
+		match e 'check'
+			spawnFailed then return 42
+		end 'check'
+	end 'handler'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -921,7 +933,7 @@ error E3005: <fragment>:3:13: '__Builtins.runProcess' requires a String, but its
 
 <!-- test: async-subprocess.error.bare-call-requires-try -->
 <!-- unsupported-targets: wasm32-wasi -->
-`__Builtins.runProcess` is a throwing builtin (P1.5 #93), so a bare call that drops its error flag is refused
+`__Builtins.runProcess` is a throwing builtin, so a bare call that drops its error flag is refused
 (E3057) — the exact mirror of the throwing-array-accessor rule. A bare call would read only the exit code (R8)
 and silently drop the spawn-failure flag (R10), so the compiler forces a `try`.
 
@@ -957,14 +969,13 @@ error E3104: <fragment>:3:28: this construct lowers to the runtime entry '__gt_p
 
 <!-- test: async-subprocess.rejected-on-wasm-when-unreached -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-**The retirement did NOT move this program, and that is the half worth pinning.** `spawner` is never called,
-yet its intrinsic is still refused: `__Builtins.runProcess` emits `__gt_process_run` in USER code, where
+**An unreached call is refused too, and that is the half worth pinning.** `spawner` is never called,
+yet its intrinsic is refused: `__Builtins.runProcess` emits `__gt_process_run` in USER code, where
 `SemanticCheck.requireTargetSupportsCallee` is reachability-BLIND — it visits every function, and
 dead-function elimination runs two tiers later. The twin `async-sleep.unreached-compiles-on-wasm` shows the
-opposite outcome for the retirement that DID hand its entry to stdlib source, where the gate is
-reachability-AWARE; this entry has no stdlib declaration to move to (see the *Documentation* section), so it
-keeps the property at the spelling that still has it, exactly as `builtins-sleep.rejected-on-wasm-when-unreached`
-does for `__Builtins.sleep`.
+opposite outcome for an entry written in stdlib source, where the gate is reachability-AWARE; this entry has
+no stdlib declaration (see the *Documentation* section), so it keeps the property, exactly as
+`builtins-sleep.rejected-on-wasm-when-unreached` does for `__Builtins.sleep`.
 ```maxon
 function spawner() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 1") otherwise 9
@@ -980,12 +991,12 @@ error E3104: <fragment>:3:24: this construct lowers to the runtime entry '__gt_p
 ```
 
 <!-- test: async-subprocess.the-bare-name-is-an-ordinary-declaration -->
-**THE DOOR THE RETIREMENT OPENED, and the defect it closed.** `runProcess` is no longer claimed by the parser,
-so a program may declare one and it is REACHED — with its own arity, its own `name:` labels and its own return
-type, none of which the one-argument builtin could express. Before the retirement this program was
-`E3036: 'runProcess' takes exactly 1 argument, but 3 were given`, reported against the call while the
-declaration sat there unreachable and undiagnosed — the shape `maxon-bin/Testing/SpecTestRunner.maxon`'s own
-four-parameter `runProcess` hit, and G17 defect 1. Target-neutral: nothing here reaches a runtime entry.
+**THE BARE NAME IS THE PROGRAM'S OWN.** `runProcess` is not claimed by the parser, so a program may declare
+one and it is REACHED — with its own arity, its own `name:` labels and its own return type, none of which the
+one-argument builtin could express. A parser that claimed the name would report
+`E3036: 'runProcess' takes exactly 1 argument, but 3 were given` against the call while the declaration sat
+there unreachable and undiagnosed — the shape `maxon-bin/Testing/SpecTestRunner.maxon`'s own
+four-parameter `runProcess` would hit. Target-neutral: nothing here reaches a runtime entry.
 The three arguments carry 1, 2 and 4 so their SUM names exactly which of them arrived: a dropped or
 transposed label changes the total to a different, distinguishable number rather than to another 7.
 ```maxon

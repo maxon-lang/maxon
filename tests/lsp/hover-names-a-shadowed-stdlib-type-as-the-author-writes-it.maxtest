@@ -1,0 +1,39 @@
+let ShadowedTypeDirName = "temp/lsp/hover-names-a-shadowed-stdlib-type-as-the-author-writes-it"
+let ShadowedTypeFileName = "main.maxon"
+let ShadowedTypeLocalLine = 10 as LspCoordinate
+let ShadowedTypeLocalCharacter = 5 as LspCoordinate
+let ShadowedTypeMemberLine = 11 as LspCoordinate
+let ShadowedTypeMemberCharacter = 26 as LspCoordinate
+
+test 'hover names a stdlib type the project shadows as the author writes it'
+	let local = shadowedTypeHover(ShadowedTypeLocalLine, character: ShadowedTypeLocalCharacter)
+
+	Expect.contains(local, needle: "of type `stdlib.FileInfo`", message: "`info` holds what `File.info` returns, which is the LIBRARY's `FileInfo`; this project declares a `FileInfo` of its own, so the bare name means the project's type here and only `stdlib.FileInfo` names the library's. It rendered: {local}")
+
+	let member = shadowedTypeHover(ShadowedTypeMemberLine, character: ShadowedTypeMemberCharacter)
+
+	Expect.contains(member, needle: "public let size as FileSize", message: "`info.size` is the library's field, and the hover rendered another declaration. The project's own `FileInfo` declares a `size` too, and a lookup by the bare name finds that one. It rendered: {member}")
+	Expect.contains(member, needle: "Field of `stdlib.FileInfo`", message: "the library field's owner must be named as the author can write it. It rendered: {member}")
+end 'hover names a stdlib type the project shadows as the author writes it'
+
+function shadowedTypeHover(line LspCoordinate, character LspCoordinate) returns String throws TestFailure
+	let directory = stagedCorpusDirectory(ShadowedTypeDirName)
+	writeCorpusFile(directory, fileName: ShadowedTypeFileName, content: shadowedTypeSource())
+	return try hoverRenderingAtUri(fileUriOf(directory.join(ShadowedTypeFileName)), source: shadowedTypeSource(), line: line, character: character)
+end 'shadowedTypeHover'
+
+function shadowedTypeSource() returns String
+	return String.from(b"type FileInfo
+	export var size = 0
+
+	static function make() returns Self
+		return Self{}
+	end 'make'
+end 'FileInfo'
+
+function main() returns ExitCode
+	let mine = FileInfo.make()
+	let info = try File.info(FilePath from \"x\") otherwise return 1
+	return (mine.size + info.size) as ExitCode
+end 'main'")
+end 'shadowedTypeSource'

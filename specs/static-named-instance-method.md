@@ -13,20 +13,20 @@ category: type-system
 when `method` is an INSTANCE method: the call is built with no receiver, so the author's first written
 argument lands in the slot the receiver would have occupied — parameter 0, `self`. That arrangement is
 accepted when the argument really is a receiver of the right type (`Adder.bump(a)` is `a.bump()`,
-MEASURED at exit 42), so the form is not refused.
+exit 42), so the form is not refused.
 
 **What must be refused is the argument whose type is wrong.** `Adder.bump(7)` passes an `int` where a
-record pointer is expected, and the callee dereferences it. Before this file existed the receiver
-argument was skipped by the argument type check outright, on the premise that a receiver is *compatible
-by construction* — true of `a.bump()`, where the callee was mangled FROM the receiver's own type, and
-false of every statically-named call, where the "receiver" is a value the author chose. All three cases
-below COMPILED CLEAN and faulted with an access violation at run time.
+record pointer is expected, and the callee dereferences it. The argument type check therefore does not
+skip the receiver argument: a receiver is *compatible by construction* only at `a.bump()`, where the
+callee is mangled FROM the receiver's own type, and not at a statically-named call, where the
+"receiver" is a value the author chose. Unchecked, all three cases below compile clean and fault with an
+access violation at run time.
 
-The premise the skip rested on is preserved rather than discarded: at an ordinary method call the
+An ordinary method call is checked the same way, so at an ordinary method call the
 receiver's type and its `self` parameter's still have to be judged compatible, and for a call through a
 concrete generic instance they are spelled differently — the receiver is tagged with the instance while
 the shared body's `self` is the base. `paramTypeThroughCallInstance` already resolves exactly that
-difference for every OTHER parameter, and the receiver is now simply one more parameter it resolves;
+difference for every OTHER parameter, and the receiver is simply one more parameter it resolves;
 the cases pinning an ordinary call are here so a check that red-flags one goes red.
 
 ## Tests

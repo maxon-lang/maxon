@@ -91,9 +91,10 @@ end 'echoOnce'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let port = listener.port()
 	let server = async echoOnce(listener)
 
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 2
 	try client.setReadDeadline(5000) otherwise return 3
 	_ = try client.send("ping") otherwise return 4
 	let reply = try client.recv(1024) otherwise return 5
@@ -203,9 +204,10 @@ end 'serveOnce'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let port = listener.port()
 	let server = async serveOnce(listener)
 
-	let response = try HttpClient.get("http://127.0.0.1:{listener.port()}/hello") otherwise (e) 'failed'
+	let response = try HttpClient.get("http://127.0.0.1:{port}/hello") otherwise (e) 'failed'
 		print("request failed: {e}\n")
 		return 1
 	end 'failed'

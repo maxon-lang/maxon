@@ -292,19 +292,19 @@ six machine words — rather than as an 8-byte pointer to one. That is what make
 `type String` lay out as the 56-byte record the runtime reads: `managed` occupies 0..48 (`buffer@0`,
 `length@8`, `capacity@16`, `element_size@24`, `parent@32`, `element_destroy@40`) and the flag lands at 48.
 
-⚠ **THE SIXTH SLOT IS THE POINT, AND IT IS WHY THIS NUMBER IS 56 RATHER THAN 48.** The embedding used to
-stop at `parent@32` and let the flag take `@40` — the slot a buffer record keeps `element_destroy` in — so
-a String record and a buffer record disagreed at exactly one offset and a String's bytes could only be
+⚠ **THE SIXTH SLOT IS THE POINT, AND IT IS WHY THIS NUMBER IS 56 RATHER THAN 48.** An embedding that
+stopped at `parent@32` would let the flag take `@40` — the slot a buffer record keeps `element_destroy` in — so
+a String record and a buffer record would disagree at exactly one offset and a String's bytes could only be
 handed to buffer code through a freshly minted view, one heap record per `addressableBytes()` call.
 Embedding the buffer record WHOLE (a String's `element_destroy` is always 0: its elements are `Byte`s and
-own nothing) makes a String record a valid buffer record, and the mint becomes an incref.
+own nothing) makes a String record a valid buffer record, and handing its bytes over is an incref.
 
 ⚠ **THE SUBJECT IS THE CORPUS'S OWN `String`, AND IT HAS TO BE.** A user conformer would be the more
-direct probe, and it is the one this case first used — but a marker conformer of any name the compiler
-does not own the byte record for is now refused at its `Self{…}`
-(`Parser.requireFusedWrapperTag`), because the value it produced carried a byte record's bytes under a
-struct's identity and its drop, its clone and its own field reads each disagreed with it. See
-`interface-conformance/error.literal-marker-conformer-*` for the three measured programs. So the marker
+direct probe, but a marker conformer of any name the compiler
+does not own the byte record for is refused at its `Self{…}`
+(`Parser.requireFusedWrapperTag`), because the value it would produce carries a byte record's bytes under a
+struct's identity and its drop, its clone and its own field reads each disagree with it. See
+`interface-conformance/error.literal-marker-conformer-*` for the three programs. So the marker
 conformers that remain are the two the corpus declares, and this reads one of them.
 
 ```maxon
@@ -342,12 +342,10 @@ end 'main'
 
 `merge(other Self)` binds `other` to the same instance the receiver is, so `other.slotSize()`
 reaches the same shared body `self.slotSize()` reaches and the caller forwards the descriptor
-it already carries. What had to change for this to compile is the descriptor-need fixpoint: it
-recorded a local bound to a `Self{…}` as a value of the enclosing type but not a parameter
-DECLARED `Self`, so nothing reserved `pairWith` a descriptor to forward and the call was
-refused — *"calling 'slotSize' … from a function that carries no layout descriptor of its own
-to forward"*. That refusal was a clean stand-in for an edge that had not been drawn, and its
-own header said so; the edge is drawn now.
+it already carries. The descriptor-need fixpoint records a parameter DECLARED `Self`, as it
+does a local bound to a `Self{…}`, as a value of the enclosing type, so `pairWith` is reserved a
+descriptor to forward; without that edge the call is refused — *"calling 'slotSize' … from a
+function that carries no layout descriptor of its own to forward"*.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntBag = Bag with Int
@@ -408,5 +406,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:28: Unsupported: sizeof of a type parameter with no instance receiver in scope — a `static function`, and a closure written inside one, are receiverless, and B1 threads the layout descriptor from the instance a method is called on; read the size through an instance method on `self`, or a concrete instance, instead
+error E2015: <fragment>:12:28: Unsupported: sizeof of a type parameter with no instance receiver in scope — a `static function`, and a closure written inside one, are receiverless, and the layout descriptor is threaded from the instance a method is called on; read the size through an instance method on `self`, or a concrete instance, instead
 ```

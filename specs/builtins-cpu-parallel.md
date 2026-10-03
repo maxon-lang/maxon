@@ -18,7 +18,7 @@ member, `__Builtins.parallelBoundary()`, is a marker rather than a query and has
 | `__Builtins.cpuCount()` | how many logical CPUs the OS reports for this MACHINE, as an `int`, never below 1 |
 | `__Builtins.schedMaxActiveWorkers()` | the high-water mark of concurrently-active green-thread worker Ms this PROCESS has had, as an `int`, never below 1 |
 
-Both take no arguments. Their one caller in this tree is `scripts/multicore-stress/alloc-torture.maxon`, the
+Both take no arguments. Their one caller in the repository is `scripts/multicore-stress/alloc-torture.maxon`, the
 multi-core validation harness, which prints both so its driver can sweep the core-count clamp
 (`cpucount=`) and see that more than one core actually ran the work (`workers=`).
 
@@ -33,7 +33,7 @@ documents them together:
 
 The compiler HAS a worker M — `SchedRuntime.buildSchedWorkerLoop` — and a high-water counter that loop
 raises on every entry, which is what this intrinsic reads. ⚖ **An `async` call creates a COROUTINE of the
-calling green thread** (user ruling, 2026-08-27), published only to its owner's queue, so a coroutine never
+calling green thread**, published only to its owner's queue, so a coroutine never
 gives a worker M anything to take. A second machine comes from the system monitor, or from the program's own
 green thread — `main`'s, in an `async`-only program — asking to be put behind everyone:
 
@@ -48,17 +48,12 @@ green thread — `main`'s, in an `async`-only program — asking to be put behin
 - **A `Scheduler.yield()` with no sibling coroutine to run** puts the green thread on the global queue the way a
   preemption does (`scheduler-yield.md`).
 
-Each global put pays a wake — Go's `wakep` — and a wake starts a worker M when a processor is idle. MEASURED
-on this tree: an `async` program whose one coroutine spins for 100 ms reads `workers=1` at
-`MAXON_MAX_PROCS=1` and `workers=2` at 2, at 12 and at the default, with six preemptions in each run.
+Each global put pays a wake — Go's `wakep` — and a wake starts a worker M when a processor is idle.
 ⇒ **An `async`-only program that never yields alone reads 1 exactly when the monitor's three counters read 0**,
 and that conditional — not a bare `workers == 1` a descheduled run can break — is what the case below
 asserts.
 
-⛔ **IT IS NOT 1 IN EVERY PROGRAM, AND THIS SECTION USED TO SAY IT WAS.** The old sentence — *"the
-high-water mark of a population that never exceeds one is 1, in every program"* — rested on there being no
-producer of a green thread "until a `spawn` primitive lands". `spawn` has landed. A program that spawns
-services publishes real green threads to a P ring, wakes worker Ms and reads this intrinsic above 1;
+⛔ **IT IS NOT 1 IN EVERY PROGRAM.** A program that spawns services publishes real green threads to a P ring, wakes worker Ms and reads this intrinsic above 1;
 `multicore-stress/pin-matrix.sh` asserts exactly that, per family. The cases below are `async` programs and their
 subject is the `async` half.
 
@@ -67,54 +62,45 @@ another P's ring, and no `async` frame ever enters a ring — only a green threa
 stolen, and only by a worker M, which a run that never reaches the scheduler does not start.
 `sched-runqueue.md` carries that half.
 
-⚠ **THAT IS A READING, NOT A PLACEHOLDER — AND IT USED TO BE A `ret 1`.** The body was a constant
-return for as long as the runtime had no worker loop to raise anything; it is now a `.data` load, and
-the slot is SEEDED TO 1 rather than written by an initializer, so a program that never installs the
-scheduler still reads the truth (one M: its own) with no code at all. ⚠ **The `workers=2, 7, 11-12`
-this used to report under `MAXON_MAX_PROCS ∈ {2, 7, 12}` was measured before EC10 pinned `async`, when
-a spawn published a green thread to the scheduler.** `multicore-stress/pin-matrix.sh` asserts `workers=1` for
-its coroutine family and `workers >= 2` for the spawn family; the coroutine half is asserted only for a row whose
+⚠ **THAT IS A READING, NOT A PLACEHOLDER.** The body is a `.data` load, and the slot is SEEDED TO 1
+rather than written by an initializer, so a program that never installs the scheduler reads the truth (one
+M: its own) with no code at all. `multicore-stress/pin-matrix.sh` asserts `workers=1` for its coroutine
+family and `workers >= 2` for the spawn family; the coroutine half is asserted only for a row whose
 `monitor=` reading — the three counters' sum — is 0.
 
-⚠ **THE SYSTEM MONITOR IS STILL NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS
+⚠ **THE SYSTEM MONITOR IS NOT A WORKER M, AND IT IS THE ONE THING THAT COULD MAKE THIS
 LOOK WRONG.** It reads per-machine state and hands a stuck processor on; it never RUNS a green thread and it
 never adopts a P.
 
 ### What the compiler answers for `alloc-torture.maxon`
 
-`scripts/multicore-stress/alloc-torture.maxon` is the one program in this tree that calls both intrinsics.
-MEASURED on a 12-logical-CPU Windows host: `aggregate=205500`, `workers=1`, `cpucount=12`, exit 42.
-The `aggregate=` row is the harness's own determinism signal.
+`scripts/multicore-stress/alloc-torture.maxon` is the one program in the repository that calls both
+intrinsics. It prints `aggregate=205500`, `workers=1` and the host's `cpucount=`, and exits 42. The
+`aggregate=` row is the harness's own determinism signal.
 
 ⛔ **`workers=1` IS NOT A CONSEQUENCE OF THE PROCESSOR COUNT.** The compiler defaults to the machine's count,
-so this program builds 12 Ps. **The `workers=` row is 1 anyway**, because this program's work is
-`async` and an `async` frame is a coroutine of its caller — the P count is not what decides whether a
+so this program builds one P per logical CPU. **The `workers=` row is 1 anyway**, because this program's work
+is `async` and an `async` frame is a coroutine of its caller — the P count is not what decides whether a
 worker M starts, the WORK is — and because its run is too short for the monitor to preempt its green thread.
-MEASURED on this tree: `workers=1` at `MAXON_MAX_PROCS ∈ {1, 2, 12}`, each run about 40 ms.
 
-⛔ **THE NOTE HERE WAS STALE TWICE OVER AND BOTH CORRECTIONS ARE MEASURED.** It said
-*"`MAXON_MAX_PROCS>1` really does give the compiler worker Ms"* and that this program *"dies with exit 86
-(`slabSpanExhaustedPastItsEnd`) at `MAXON_MAX_PROCS=2`"* because the allocator was one unsharded shard.
-**S5 sharded the allocator per P**, so the second half was already false; and **EC10 pinned `async`**,
-so the first half is false too — this program's tasks are coroutines and no worker M is created at any
-value. MEASURED with `multicore-stress/pin-matrix.sh` on this tree: `aggregate=205500`, `workers=1`, exit 42 at
-`MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and at the default. See `sched-processor.md`, which carries the same
-correction and the cost that comes with it (the cross-P allocator paths are correct and, for THIS program,
-still UNREACHED — `spawn`'s service programs are what reach them).
+⛔ **NO `MAXON_MAX_PROCS` VALUE GIVES THIS PROGRAM A WORKER M.** Its tasks are coroutines, so
+`multicore-stress/pin-matrix.sh` reads `aggregate=205500`, `workers=1`, exit 42 at every value it sweeps and
+at the default. The allocator is sharded per P (`sched-processor.md`); its cross-P paths are correct and,
+for THIS program, UNREACHED — `spawn`'s service programs are what reach them.
 
 ### The two land on OPPOSITE sides of the target line, and that is the pair's sharpest property
 
 `cpuCount` is an OS query with a different API on every platform — `GetActiveProcessorCount` on
 Windows, `sysconf(_SC_NPROCESSORS_ONLN)` under POSIX, and on WASI **nothing at all**: a component
-has no OS-thread concept and no primitive that reports one. The compiler lowers it wherever a backend has
-landed that read — x64-windows, arm64-macOS and arm64-linux — and every other target refuses at the
+has no OS-thread concept and no primitive that reports one. The compiler lowers it wherever a backend
+provides that read — x64-windows, arm64-macOS and arm64-linux — and every other target refuses at the
 call's own span with **E3104** (by the `__cpu_` PREFIX, so a second entry point in that band is gated
 by construction rather than by memory). A fabricated `1` on a lane that cannot ask the OS would be a
 silent wrong answer, which is strictly worse than a refusal.
 
-⚠ The POSIX half is not a re-spelling of the Windows one, which is why it is a rung and not a
-lowering: the two APIs fail differently (`0` against `-1`), and the `_SC_` parameter is itself
-numbered per OS. ⭐ **AND THE LINUX LANE INHERITED NOTHING FROM THE macOS ONE, EXACTLY AS THAT SAID:**
+⚠ The POSIX half is not a re-spelling of the Windows one: the two APIs fail differently (`0` against
+`-1`), and the `_SC_` parameter is itself numbered per OS. ⭐ **AND THE LINUX LANE SHARES NOTHING WITH THE
+macOS ONE:**
 `sysconf` is a libc FUNCTION rather than a syscall, so a static image with no libc cannot call it at
 all — the read there is `sched_getaffinity` plus a popcount of the returned mask, which answers the
 processors this PROCESS may use rather than the ones the machine has, and so agrees with `nproc`
@@ -146,13 +132,10 @@ the second reason, not the first.
 
 The clamp to at least 1 lives in builder-built Std rather than in the backend:
 `GetActiveProcessorCount` answers 0 on failure and `sysconf` answers -1, so one signed `< 1` test
-serves both and a future POSIX lane supplies only the read.
+serves both and each lane supplies only the read.
 
-⚠ **THE CLAMP IS REACHABLE AND WAS MEASURED THERE.** Pointed at an invalid processor group,
-`GetActiveProcessorCount` really does answer `0`, and the Std guard really does turn that into `1`:
-with the group number sabotaged, `cpu-count-is-at-least-one` and `cpu-count-is-in-range` stayed green
-(the clamp held) while `cpu-count-agrees-with-a-child-environment` went red; with the guard ALSO
-removed, the first two went red as well. The arm is not decoration.
+⚠ **THE CLAMP IS REACHABLE.** Pointed at an invalid processor group, `GetActiveProcessorCount` answers
+`0`, and the Std guard turns that into `1`. The arm is not decoration.
 
 ### The count is MACHINE-specific, so the cases assert PROPERTIES
 
@@ -175,12 +158,6 @@ as a DISCRIMINATION rather than an equality (*the child says "1" ⟺ we say 1*) 
 on a multi-group host, where the environment reports one group's count and the intrinsic reports the
 machine's. `process-id.md` reaches for a child process for the identical reason and accepts the
 identical dependency.
-
-✅ **SABOTAGE-VERIFIED, and it is the only case that catches this one.** With `__cpu_count`'s body
-replaced by a bare `return 1` that never calls the OS, `cpu-count-is-at-least-one`,
-`cpu-count-is-in-range` and `cpu-count-is-stable-across-calls` all stayed GREEN and this case went
-RED (exit 2 against the pinned 7) — measured, on the 12-CPU host. A suite without it would have
-reported a compiler that had stopped asking the machine anything as fully passing.
 
 ⚠ On a genuinely single-processor host with `NUMBER_OF_PROCESSORS` unset the child prints the
 literal `%NUMBER_OF_PROCESSORS%` and this case fails. Windows sets that variable for every process;
@@ -361,8 +338,7 @@ error E3036: <fragment>:3:20: '__Builtins.cpuCount' takes exactly 0 argument, bu
 WASI has no processor-count primitive at all, so this lane is a refusal of the permanent kind rather
 than of the not-yet kind. The call is refused at its source span with `E3104`, naming the runtime
 entry that has no lowering there — never a panic from inside the wasm backend, and never a
-fabricated count. (The diagnostic's own wording still opens "x64-windows only"; that is the pinned
-message text, not a claim this spec makes about which lanes lower the op.)
+fabricated count.
 ```maxon
 function main() returns ExitCode
 	let cpus = __Builtins.cpuCount()
@@ -394,14 +370,14 @@ error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__cpu_
 
 <!-- test: builtins-cpu-parallel.sched-max-active-workers-is-one -->
 A program that never spawns anything runs on one M — its own — whatever processor count the scheduler
-resolved, so the high-water mark of concurrently-active worker Ms is 1 (MEASURED: `workers=1`). The
-`>= 1` half is the contract's floor; the `== 1` half is this runtime's reading of it. ⚠ **THE CLAIM IS ABOUT THIS PROGRAM AND NOT ABOUT THE DEFAULT**, which used
-to be one processor and is now the machine's: a worker M is started by WORK reaching
-`__sched_wake_or_spawn`, and this program produces none — see the next case, which produces `async` work
-and reads the same 1.
+resolved, so the high-water mark of concurrently-active worker Ms is 1. The
+`>= 1` half is the contract's floor; the `== 1` half is this runtime's reading of it. ⚠ **THE CLAIM IS ABOUT
+THIS PROGRAM AND NOT ABOUT THE DEFAULT**, which is the machine's processor count: a worker M is started by
+WORK reaching `__sched_wake_or_spawn`, and this program produces none — see the next case, which produces
+`async` work and reads the same 1.
 
-⭐ **AND THIS PROGRAM INSTALLS NO SCHEDULER AT ALL, WHICH IS WHAT MAKES IT DISCRIMINATING NOW THAT
-THE ANSWER IS A `.data` LOAD.** Nothing here ever runs `__gt_init`, so nothing ever writes the
+⭐ **AND THIS PROGRAM INSTALLS NO SCHEDULER AT ALL, WHICH IS WHAT MAKES IT DISCRIMINATING, BECAUSE THE
+ANSWER IS A `.data` LOAD.** Nothing here ever runs `__gt_init`, so nothing ever writes the
 counter; a mark that were SEEDED BY AN INITIALIZER instead of by `.data` would read 0 here and this
 case would go red. That ordering hazard is the reason the slot carries its 1 from the image.
 ```maxon
@@ -429,17 +405,16 @@ to a second machine are the monitor's three and each has a counter. The case the
 OR one of them counted, and cannot go red because the OS descheduled the process long enough for a
 preemption. What turns it red is a second worker M with all three at 0 — a coroutine that reached the
 scheduler. The workers are read first: every counter is stepped before the machine it may start.
-⚠ It is a DEFAULT-`MAXON_MAX_PROCS` reading, and that is now a CHOICE rather than a limitation. ⛔ This
-sentence used to give the reason as *"a spec case cannot set that variable"*, which stopped being true when
-the per-case processor marker landed — `specs/sched-default-procs.md` owns it, and three other files
-already retracted this same claim. The case stays unpinned deliberately: its subject is that an `async`-only
-program reaches no worker M the monitor did not start **at whatever count the machine happens to have**, so pinning one would narrow
-it to a count nobody runs. The sweep over `{1, 2, 7, 12}` is still `multicore-stress/pin-matrix.sh`'s, because
-comparing counts is what that instrument is for and a spec case runs at exactly one.
+⚠ It is a DEFAULT-`MAXON_MAX_PROCS` reading, and that is a CHOICE rather than a limitation: the per-case
+processor marker `specs/sched-default-procs.md` owns could pin it. The case stays unpinned deliberately: its
+subject is that an `async`-only program reaches no worker M the monitor did not start **at whatever count the
+machine happens to have**, so pinning one would narrow it to a count nobody runs. The sweep over
+`{1, 2, 7, 12}` is `multicore-stress/pin-matrix.sh`'s, because comparing counts is what that instrument is
+for and a spec case runs at exactly one.
 
 ⛔ **THE MARKER IS NAMED HERE AND NOT SPELLED, AND THAT IS DELIBERATE.** Writing it out verbatim inside a
 case's marker region makes the parser read the prose AS a marker — `parseProcsValue` panics on the `N`,
-and the whole FILE stops parsing. (Measured: this paragraph did exactly that.) `sched-default-procs.md`
+and the whole FILE stops parsing. `sched-default-procs.md`
 can spell it because its copy sits in the Documentation section, above `## Tests`, which nothing scans for
 markers.
 ```maxon
@@ -536,15 +511,14 @@ end 'main'
 
 <!-- test: builtins-cpu-parallel.error.the-per-processor-counters-are-refused-off-their-substrate -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-⛔⛔ **THESE THREE PANICKED THE COMPILER INSTEAD OF REFUSING, AND THE SUITE COULD NOT SEE IT BECAUSE NO CASE
-CALLED ONE OF THEM OFF x64-windows.** MEASURED 2026-09-02, a four-line scalar program per builtin:
-`wasm32-wasi` died at `SchedRuntime.tlsSlotArrayBase` (*"wasi has no per-OS-thread slot this scheduler"*) and
-`x64-linux` at `StdToX64Conversion.lowerTlsSetValue`. **A panic is the worst answer a compiler can give**:
-no span, no code, and it names a runtime emitter rather than the call the user wrote.
+⛔⛔ **THE PER-PROCESSOR COUNTERS ARE REFUSED WITH `E3104`, NOT LEFT TO THE BACKEND.** Off its substrate a
+counter reaches `SchedRuntime.tlsSlotArrayBase`, which has no per-OS-thread slot on `wasm32-wasi`. **A panic
+is the worst answer a compiler can give**: no span, no code, and it names a runtime emitter rather than the
+call the user wrote.
 
-⇒ The three per-P counter sums now sit in `TargetFacilities.calleeHostFacility` under
-`HostFacility.greenThreads`, exactly as `__gt_await_any` and a service's two ops already do, so the refusal
-lands on the call's own span. ⚠ **They are named individually and NOT by prefix** — one of the three is a
+⇒ The per-P counter sums sit in `TargetFacilities.calleeHostFacility` under
+`HostFacility.greenThreads`, as `__gt_await_any` and a service's two ops do, so the refusal
+lands on the call's own span. ⚠ **They are named individually and NOT by prefix** — one of them is a
 `__slab_` entry, and `schedMaxActiveWorkers` sets no `usesGt` and **must keep working here**, which the
 sibling case `sched-max-active-workers-runs-on-wasm` in this file is what proves. `schedProcessorCount` is on
 the roster: its answer is the scheduler's resolution, so asking installs the scheduler.
@@ -554,21 +528,15 @@ the roster: its answer is the scheduler's resolution, so asking installs the sch
 is on it; a per-builtin case would pass while a sibling was quietly dropped from the list. A query added to
 the roster is added here too.
 
-⛔ **A SECOND DEFECT RODE WITH THE FIRST, AND IT REACHED x64-windows.** All three set `usage.usesGt` BY HAND
-instead of calling `recordGtUsage`, so `usesHeap` stayed off and the scheduler linked against a
-`__slab_alloc` that dead-function elimination had pruned — `resolveCallFixups: call to unknown function`, on
-**every** lane. It hid because the obvious probe prints its answer, and `print` turns `usesHeap` on by
-itself; only a program that discards the value shows it. That is why the program below **returns** the
-counter rather than printing it.
-⚠ **THE NATIVE TWIN THIS CASE ONCE HAD IS RETIRED, AND IT WAS PINNING SOMETHING THIS CASE DOES NOT.**
-`…refused-on-a-native-target` existed because both cases reach `E3104` through the same arm of
-`TargetFacilities.calleeHostFacility` but replaced panics in DIFFERENT backend code — wasm died in
-`SchedRuntime.tlsSlotArrayBase`, x64-Linux in `StdToX64Conversion.lowerTlsSetValue`, the same x64 backend
-that serves the lane where these builtins work. Now that x64-Linux provides the facility,
-`lowerTlsSetValue` has a real arm and no native lane refuses these counters, so the twin has nothing left
-to witness. ⚠ **What it covered is therefore NOT covered here**: this case proves the facility arm fires,
-not that the x64 backend stopped panicking — the suite's 7079 passing x64-linux cases are what prove that
-now. `async-sleep.md`'s surviving wasm case states the convention this follows.
+⛔ **THE PROGRAM BELOW RETURNS THE COUNTERS RATHER THAN PRINTING THEM.** Each counter records its
+scheduler use through `recordGtUsage`, which turns `usesHeap` on with `usesGt`; `usesGt` alone would link the
+scheduler against a `__slab_alloc` that dead-function elimination had pruned — `resolveCallFixups: call to
+unknown function`, on **every** lane. `print` turns `usesHeap` on by itself, so only a program that discards
+the value exposes that.
+⚠ **NO NATIVE LANE REFUSES THESE COUNTERS**, so this case runs on wasm alone. It proves the
+`TargetFacilities.calleeHostFacility` arm fires, not that the x64 backend lowers the counters —
+`StdToX64Conversion.lowerTlsSetValue` has a real arm, and the x64-linux lane's passing cases are what prove
+it. `async-sleep.md`'s wasm case states the convention this follows.
 
 ```maxon
 function main() returns ExitCode

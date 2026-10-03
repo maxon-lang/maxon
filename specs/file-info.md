@@ -50,8 +50,7 @@ print("size: {fi.size}, modified: {fi.modifiedTime}")
 <!-- unsupported-targets: wasm32-wasi -->
 **`file-io.md`'s "Targets — the one statement of the FILESYSTEM gate"**: `File.info` lowers to the
 runtime entry `__mf_stat` and the cases that create their fixture reach `__mf_open_write` too, and
-neither has an x64-linux or wasm32-wasi implementation at this rung (arm64-macOS gained one at MAC4,
-arm64-Linux at L2) — `E3104`, raised by
+neither has a wasm32-wasi implementation — `E3104`, raised by
 `SemanticCheck.requireTargetSupportsCallee`, not by the marker. The reason is written down there and
 not repeated here.
 

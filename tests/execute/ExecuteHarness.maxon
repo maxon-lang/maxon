@@ -368,20 +368,20 @@ export function spawnConcurrentRuns(staged StagedCase, program FilePath, howMany
 	return reported
 end 'spawnConcurrentRuns'
 
-// One child stream read to end-of-stream, terminators restored. The reader answers `""` at end of stream
-// and strips the terminator from every line, so a line has to have one put back for a case to compare
-// what it reads against what a program prints.
+// One child stream read to end-of-stream, terminators restored. The reader strips the terminator
+// from every line, so a line has to have one put back for a case to compare what it reads against
+// what a program prints.
 function drainStream(child StreamingSubprocess, stderr bool) returns String
 	var collected = ""
 
 	while true 'untilEndOfStream'
 		let line = try readOneLine(child, stderr: stderr) otherwise (e) 'readFailed'
-			panic("run tests: the gate could not run — could not read a concurrent driver's output ({e.displayReason()}).")
-		end 'readFailed'
+			if not e.endedTheStream() 'aReadFailure'
+				panic("run tests: the gate could not run — could not read a concurrent driver's output ({e.displayReason()}).")
+			end 'aReadFailure'
 
-		if line.isEmpty() 'endOfStream'
 			break
-		end 'endOfStream'
+		end 'readFailed'
 
 		collected.append("{line}{LineFeed}")
 	end 'untilEndOfStream'

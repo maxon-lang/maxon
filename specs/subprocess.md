@@ -29,6 +29,12 @@ and `StreamingSubprocess`. A spawn that works at the intrinsic and fails here
 is a stdlib-layer defect, which is a distinction the intrinsic cases cannot
 draw.
 
+### Reading a streaming child line by line
+
+`StreamingSubprocess.readStdoutLine()` / `readStderrLine()` and their `…Capped(maxBytes)` forms answer
+one line. A blank line is `""`; the end of the stream throws `SubprocessError.endOfStream`.
+`SubprocessError` answers `timedOut()` for `timeout` and `endedTheStream()` for `endOfStream`.
+
 ### Portability
 
 Every case branches on `#if os(Windows)` only to name the shell, so one
@@ -284,6 +290,56 @@ beta
 gamma
 ```
 
+<!-- test: subprocess-streaming-a-blank-line-is-not-the-end-of-the-stream -->
+<!-- unsupported-targets: wasm32-wasi -->
+A child's own BLANK line and the end of its stream are different answers, and `readStdoutLine` gives
+them differently: the blank line is a line whose text is `""`, and the end of the stream throws
+`SubprocessError.endOfStream`. The line-echo child of the case above is handed `alpha`, an empty line and
+`gamma`; the three come back as three lines, and the read past them is the end.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.path(try FilePath.from("C:/Windows/System32/cmd.exe") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("findstr")
+	argv.push("x*")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
+	var argv = StringArray.create()
+	#endif
+
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+
+	try child.writeStdinLine("alpha") otherwise return 4
+	try child.writeStdinLine("") otherwise return 4
+	try child.writeStdinLine("gamma") otherwise return 4
+	child.closeStdin()
+
+	let lineA = try child.readStdoutLine() otherwise return 5
+	let blank = try child.readStdoutLine() otherwise return 6
+	let lineC = try child.readStdoutLine() otherwise return 7
+	let past = try child.readStdoutLine() otherwise (e) 'ended'
+		child.release()
+		print("[{lineA}]\n[{blank}]\n[{lineC}]\nthen: {e.displayReason()}\n")
+		return 0
+	end 'ended'
+
+	child.release()
+	print("[{lineA}]\n[{blank}]\n[{lineC}]\nthen: a line of {past.byteLength()} bytes\n")
+	return 0
+end 'main'
+```
+```stdout
+[alpha]
+[]
+[gamma]
+then: end of stream
+```
+```exitcode
+0
+```
+
 <!-- test: subprocess-streaming-spawn-from-green-thread -->
 <!-- unsupported-targets: wasm32-wasi -->
 The case above spawns from `main`, i.e. from the OS thread's own stack. This
@@ -294,10 +350,10 @@ system stack, and the switch is emitted as a *conditional*: a green thread
 takes the switching arm, the main thread takes a straight-through arm. Any
 register the switching arm disturbs and the straight-through arm does not is
 therefore a defect that is INVISIBLE from `main` and fatal from a green
-thread — which is exactly the shape the bug this case pins had (the switch
-clobbered RAX, and the overlapped-pipe setup was holding its `CreateNamedPipeW`
-open-mode there). Nothing in the suite drove a streaming spawn off the main
-thread until this case existed.
+thread — which is exactly the shape of the defect this case pins: a switch
+that clobbers RAX while the overlapped-pipe setup holds its `CreateNamedPipeW`
+open-mode there. This case is the one that drives a streaming spawn off the
+main thread.
 ```maxon
 typealias StepCode = int(0 to 9)
 
@@ -376,6 +432,7 @@ function main() returns ExitCode
 			spawnFailed then sawTimeout = false
 			ioFailed then sawTimeout = false
 			inputTooLarge then sawTimeout = false
+			endOfStream then sawTimeout = false
 		end 'kind'
 	end 'handler'
 	if sawTimeout 'check'
@@ -392,8 +449,8 @@ end 'main'
 <!-- unsupported-targets: wasm32-wasi -->
 ⭐⭐ **A DEADLINE DOES NOT DESTROY WHAT THE CHILD ALREADY SAID.** The runtime hands back the bytes it
 collected before the kill exactly as it does on a clean exit, so `SubprocessError.timeout` carries them:
-`timeout(elapsedMs, stdout, stderr)`. Without that payload the collected buffers were decoded and then
-dropped on the floor when the throw fired, and every caller rendered a timeout as a bare
+`timeout(elapsedMs, stdout, stderr)`. Without that payload the collected buffers would be decoded and then
+dropped on the floor when the throw fired, and every caller would render a timeout as a bare
 "timed out after Nms" — which is the same text whether the child was wedged before it started or died
 one line short of finishing, and tells a reader nothing about which.
 
@@ -426,7 +483,8 @@ function main() returns ExitCode
 			executableNotFound or
 				spawnFailed or
 				ioFailed or
-				inputTooLarge gives ""
+				inputTooLarge or
+				endOfStream gives ""
 		end 'kind'
 	end 'handler'
 	if partial.contains("alpha") 'check'
@@ -442,11 +500,11 @@ end 'main'
 <!-- test: subprocess-run-bare-name-found-on-path -->
 <!-- unsupported-targets: wasm32-wasi -->
 ⭐⭐ **A BARE NAME IS FOUND THROUGH `PATH` ON EVERY LANE.** Every other case here spawns a POSIX tool by
-absolute path (`/bin/echo`), so a Windows-only resolver went unnoticed: on Linux it read the whole
-`:`-separated `PATH` as one directory, missed, and handed a bare name to `execve`, which never searches
-`PATH`. MEASURED before the fix: `Executable.name("git")` failed to spawn on x64-linux and arm64-linux
-while succeeding on Windows and macOS — and the release pipeline, which reads its version out of `git`,
-built compilers that called themselves `dev`.
+absolute path (`/bin/echo`), so this is the case that sees a Windows-only resolver: on Linux one would
+read the whole `:`-separated `PATH` as one directory, miss, and hand a bare name to `execve`, which never
+searches `PATH` — `Executable.name("git")` would fail to spawn on x64-linux and arm64-linux while
+succeeding on Windows and macOS, and the release pipeline, which reads its version out of `git`, would
+build compilers that call themselves `dev`.
 ```maxon
 function main() returns ExitCode
 	#if os(Windows)
@@ -471,11 +529,11 @@ end 'main'
 
 <!-- test: subprocess-bare-name-is-never-found-in-the-working-directory -->
 <!-- unsupported-targets: x64-windows, wasm32-wasi -->
-⛔ **A BARE NAME MUST NOT RESOLVE AGAINST THE WORKING DIRECTORY ON POSIX.** The resolver tried the name
-"exactly as given" first — correct on Windows, where the current directory is part of the search, and a
-hole on POSIX, where it lets a file in the working directory shadow the real tool. MEASURED with the
-v0.1.0 release on x64-linux: an executable `./maxon-cwd-shadow-probe` that exits 99 was RUN when spawned by
-its bare name, and this case answered 1. POSIX does not search the working directory for a name with no `/`,
+⛔ **A BARE NAME MUST NOT RESOLVE AGAINST THE WORKING DIRECTORY ON POSIX.** Trying the name
+"exactly as given" first is correct on Windows, where the current directory is part of the search, and a
+hole on POSIX, where it lets a file in the working directory shadow the real tool: an executable
+`./maxon-cwd-shadow-probe` that exits 99 would be RUN when spawned by its bare name, and this case would
+answer 1. POSIX does not search the working directory for a name with no `/`,
 so the name is not found.
 
 Windows is excluded because searching the working directory IS that platform's behaviour.
@@ -491,7 +549,8 @@ function main() returns ExitCode
 			spawnFailed or
 				timeout or
 				ioFailed or
-				inputTooLarge then refused = false
+				inputTooLarge or
+				endOfStream then refused = false
 		end 'kind'
 	end 'handler'
 	try File.delete(probe) otherwise return 4
@@ -834,7 +893,8 @@ function main() returns ExitCode
 			spawnFailed or
 				timeout or
 				ioFailed or
-				inputTooLarge then sawNotFound = false
+				inputTooLarge or
+				endOfStream then sawNotFound = false
 		end 'kind'
 	end 'handler'
 	if sawNotFound 'check'
@@ -867,7 +927,8 @@ function main() returns ExitCode
 			spawnFailed or
 				timeout or
 				ioFailed or
-				inputTooLarge then sawNotFound = false
+				inputTooLarge or
+				endOfStream then sawNotFound = false
 		end 'kind'
 	end 'handler'
 	if sawNotFound 'check'
@@ -897,7 +958,8 @@ function verdictOf(config Configuration) returns String
 			spawnFailed then verdict = "spawnFailed"
 			timeout or
 				ioFailed or
-				inputTooLarge then verdict = "other"
+				inputTooLarge or
+				endOfStream then verdict = "other"
 		end 'kind'
 	end 'handler'
 	return verdict
@@ -961,7 +1023,8 @@ function verdictOf(executable Executable, workingDirectory FilePath) returns Str
 			spawnFailed then verdict = "spawnFailed"
 			timeout or
 				ioFailed or
-				inputTooLarge then verdict = "other"
+				inputTooLarge or
+				endOfStream then verdict = "other"
 		end 'kind'
 	end 'handler'
 	return verdict
@@ -1049,7 +1112,8 @@ function main() returns ExitCode
 			spawnFailed then verdict = "spawnFailed"
 			timeout or
 				ioFailed or
-				inputTooLarge then verdict = "other"
+				inputTooLarge or
+				endOfStream then verdict = "other"
 		end 'kind'
 	end 'handler'
 
@@ -1370,7 +1434,7 @@ function main() returns ExitCode
 		argv.push("echo")
 		#endif
 		argv.push("child-{i}")
-		promises.push(async Subprocess.run(exe, arguments: argv))
+		promises.push(async Subprocess.run(exe.clone(), arguments: argv))
 		i = i + 1
 	end 'spawn'
 
@@ -1413,8 +1477,7 @@ RUN, AND THAT IS WHAT MAKES IT MEAN ANYTHING ON A BUSY MACHINE.** Four
 overlapped waits cost about what one costs; four sequential waits cost
 four. So the subject — *did these overlap* — is the quotient, and any
 absolute millisecond bound is a claim about the HOST rather than about
-the scheduler. MEASURED here, idle: parallel 1083/1075/1323ms against a
-single of 1273/1056/1055ms, i.e. a ratio of 0.85 to 1.25 where
+the scheduler. On an idle host the ratio reads about 1 where
 sequential dispatch would read 4.0. The `× 2` threshold sits between
 them with room on both sides, and a loaded machine inflates the two
 sides together instead of tripping the gate.
@@ -1455,7 +1518,7 @@ function main() returns ExitCode
 	let start = Clock.nowMs()
 	var i = 0
 	while i < count 'spawn'
-		promises.push(async Subprocess.run(exe, arguments: pingArgs()))
+		promises.push(async Subprocess.run(exe.clone(), arguments: pingArgs()))
 		i = i + 1
 	end 'spawn'
 	for p in promises 'drain'

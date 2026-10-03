@@ -28,23 +28,22 @@ The grammar has exactly two positions a call can appear in, and they differ by p
 - a call inside an **expression** — `let x = f()`, `f() + 1`, `if f()`, `g(f())`. The result *is*
   the expression. A void callee has nothing to give here, and the program is rejected.
 
-### Why this was a wrong answer, and what it has to do with cross-file calls
+### Why "no value" has its own tag, and what it has to do with cross-file calls
 
-It is the same defect as the cross-file one, wearing different clothes: **one sentinel, two
-meanings.** The parser reported *both* "I could not see this callee" *and* "this callee returns
-nothing" as `unresolved` — and `unresolved` is the tag that **agrees with everything**, because
-deferring is the right thing to do about a type you cannot know. So "there is no value" was
-classified as "I cannot judge this value", every type rule correctly deferred on it, and
+It is the same hazard as the cross-file one, wearing different clothes: **one sentinel, two
+meanings.** "I could not see this callee" is `unresolved`, and `unresolved` is the tag that
+**agrees with everything**, because deferring is the right thing to do about a type you cannot know.
+Reported for "this callee returns nothing" too, "there is no value" would be classified as "I cannot
+judge this value", every type rule would correctly defer on it, and
 
 ```text
 let x = noop()
 return x + 4
 ```
 
-compiled — returning whatever happened to be in the return register.
+would compile — returning whatever happened to be in the return register.
 
-The deferral was never the defect. Giving "no value" its own tag is the fix, and the two meanings
-can never be confused again.
+The deferral is not the defect. "No value" has its own tag, so the two meanings cannot be confused.
 
 ## Tests
 
@@ -195,12 +194,11 @@ end 'main'
 
 ⚠ **THIS ERROR ASSERTS TWO THINGS ABOUT THE CALLEE — that it EXISTS and that it is VOID — so raising
 it about a name the receiver has never heard of is false twice over.** The builtin containers dispatch
-a method by NAME, arm by arm, and a name matching no arm is the roster refusal (E2015). Between the
-value-yielding arms and the void ones sat a check reading only `resultUsed`, so an unknown name in
-VALUE position reached it first: `let x = arr.frobnicate()` reported *"Function 'frobnicate' does not
+a method by NAME, arm by arm, and a name matching no arm is the roster refusal (E2015). A check
+between the value-yielding arms and the void ones, reading only `resultUsed`, would reach an unknown
+name in VALUE position first: `let x = arr.frobnicate()` would report *"Function 'frobnicate' does not
 return a value"* — a claim that `frobnicate` is a real, void `Array` method — while the identical call
-in STATEMENT position correctly reported the roster. The refusal is now inside the arm the name
-matched, which is what `String` has always done (`parseStringAppend`).
+in STATEMENT position reports the roster. The refusal is inside the arm the name matched.
 
 ⚠⚠ **THE FOUR RED CASES AND THE THREE CONTROLS ARE ONE TEST.** Simply deleting the void check would
 turn every case below green in the first group and every one in the second into a confusing downstream
@@ -222,18 +220,17 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.unknown-set-method-in-value-position -->
-The same for a `Set` — the two containers shared the misplaced check, so they share the fix.
+The same for a `Set`.
 
-⭐ **THE SENTENCE MOVED WHEN `Set` STOPPED BEING SYNTHESIZED (W90), AND THE SUBJECT DID NOT.** With
-`stdlib/Set.maxon` listed there is no builtin roster left to quote: an unknown member of a declared type is
-the ordinary undefined-callee refusal, which is character-for-character what the already-retired `Map` answers
-for `m.frobnicate()` today (MEASURED: `error E3004: … call to undefined function 'Map.frobnicate'`). What this
-case is FOR is unchanged and still checked — the refusal is about the member being unknown, not about the call
-being in value position.
+⭐ **`Set` IS NOT SYNTHESIZED, SO THE SENTENCE IS THE ORDINARY ONE.** With `stdlib/Set.maxon` listed there
+is no builtin roster to quote: an unknown member of a declared type is the ordinary undefined-callee refusal,
+which is character-for-character what `Map` answers for `m.frobnicate()`
+(`error E3004: … call to undefined function 'Map.frobnicate'`). What this case is FOR is checked — the
+refusal is about the member being unknown, not about the call being in value position.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntSet = Set with Int
@@ -279,7 +276,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.array-void-mutator-in-value-position -->
@@ -304,10 +301,9 @@ error E2004: <fragment>:7:12: Function 'push' does not return a value
 <!-- test: error.set-void-mutator-in-value-position -->
 ⚠ THE CONTROL for `Set` — `insert` is its one void mutator.
 
-⭐ **IT NAMES `Set.insert` RATHER THAN A BARE `insert` SINCE W90, FOR THE REASON ITS `String` NEIGHBOUR TWO
-CASES DOWN ALREADY RECORDS**: an arm blames the member the author wrote, while a corpus call names the
-function it actually resolved to. `stdlib/Set.maxon` is listed, so this is that second shape. The code, the
-position and the answer are unchanged.
+⭐ **IT NAMES `Set.insert` RATHER THAN A BARE `insert`, FOR THE REASON ITS `String` NEIGHBOUR TWO CASES
+DOWN RECORDS**: an arm blames the member the author wrote, while a corpus call names the function it
+actually resolved to. `stdlib/Set.maxon` is listed, so this is that second shape.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntSet = Set with Int
@@ -323,13 +319,11 @@ error E2004: <fragment>:7:12: Function 'Set.insert' does not return a value
 ```
 
 <!-- test: error.string-void-mutator-in-value-position -->
-⚠ THE CONTROL for `String`, and the one of the three whose refusal NO LONGER COMES FROM AN ARM. Its void
-guard used to live inside the arm `append` matched — which is why it was correct first and why the other
-two were written to follow it — but `append` retired onto `stdlib/String.maxon` at W49 wave 8, so this is
-now the ORDINARY refusal every void call gets. ⭐ **That is why it names `String.append` where its two
-neighbours name a bare `insert`/`push`**: an arm blames the member the author wrote, while a corpus call
-names the function it actually resolved to, exactly as `stdlib-only-string-methods`' E3088 does. The
-code, the position and the answer are unchanged.
+⚠ THE CONTROL for `String`, and one whose refusal DOES NOT COME FROM AN ARM. `append` is
+`stdlib/String.maxon`'s, so this is the ORDINARY refusal every void call gets. ⭐ **That is why it names
+`String.append` where an arm would name a bare member**: an arm blames the member the author wrote, while
+a corpus call names the function it actually resolved to, exactly as `stdlib-only-string-methods`' E3088
+does.
 ```maxon
 function main() returns ExitCode
 	var s = "ab"
@@ -341,16 +335,16 @@ end 'main'
 error E2004: <fragment>:4:12: Function 'String.append' does not return a value
 ```
 
-### One control PER VOID ARM — because the guard is now written once per arm
+### One control PER VOID ARM — because the guard is written once per arm
 
 ⚠⚠ **THE REFUSAL IS NAME-SCOPED BY BEING WRITTEN IN EACH VOID ARM, so nothing but a test makes the
 twelve arms agree.** That is the cost of the scoping and it is deliberate — the alternative, one shared
 call ahead of them all, IS the defect above — and the failure mode of a MISSING one is never a compile
-error. It is one of TWO things, depending on the arm, and both were measured by neutering the guard and
-running this section (12 of 12 controls red, one per arm, and nothing else in the spec):
+error. It is one of TWO things, depending on the arm; with the guard neutered, 12 of 12 controls in this
+section go red, one per arm, and nothing else in the spec does:
 
 - the eight arms that hand the RECEIVER back (`push`/`reserve`/`resize`/`clear`/`insert`/`append`,
-  `Set.insert`, `String.append`) **silently accept**: `arr = arr.push(1)` compiled and linked.
+  `Set.insert`, `String.append`) **silently accept**: `arr = arr.push(1)` compiles and links.
 - the four THROWING buffer arms (`setLength`/`setByte`/`grow`/buffer `append`) tag their result `void`,
   so with the guard gone `let x = mm.setLength(1)` reaches `declareInitializedBinding` and **PANICS the
   compiler** — *"maxonTypeOfTag: a `void` tag names no value"*. For those four the guard is not a
@@ -501,25 +495,25 @@ TAG of the result the target minted (`parseTry`'s `voidInValue`). That is the de
 this rule, and it is why the buffer's three throwing void mutators need no more than an honest tag: a
 value-position `try mm.setLength(1)` is refused by it. `set` is throwing and valueless too — its runtime
 entry ok-returns a literal `0` and `dispatchArrayMethod`'s own comment calls it *"a discarded dummy"* —
-but the arm tagged that dummy `integer`, so the tag said "there IS a value here" and the one check able
-to look was answered wrongly.
+so an arm that tagged that dummy `integer` would say "there IS a value here" and answer the one check
+able to look wrongly.
 
-⇒ MEASURED on the tree this case was written against: `let x = try arr.set(0, value: 7) otherwise return
-1` **compiled, linked and ran, exit 0**, binding `x` to the dummy, where the program has to be refused
-with `E3059: type mismatch: ''stdlib.Array.set' does not return a value'`. It is the
-D11 defect's dual: not a false claim that a method exists, but a silent fabricated value for a method
-that has none.
+⇒ Under such a tag, `let x = try arr.set(0, value: 7) otherwise return 1` **compiles, links and runs,
+exit 0**, binding `x` to the dummy, where the program has to be refused with
+`E3059: type mismatch: ''stdlib.Array.set' does not return a value'`. It is the dual of the unknown-name
+defect above: not a false claim that a method exists, but a silent fabricated value for a method that
+has none.
 
 ⚠⚠ **A THROWING VOID METHOD NEEDS BOTH HALVES, BECAUSE THE TWO SPELLINGS OF ITS VALUE POSITION ARE SEEN
 BY DIFFERENT CHECKS.** Under a `try` the arm's `resultUsed` is false and only the TAG can refuse; written
 BARE the arm's `resultUsed` is true and only the GUARD can refuse — and there the tag is not merely
 insufficient, it is dangerous: an honest `void` with no guard reaches `declareInitializedBinding` and
 **PANICS the compiler** (*"maxonTypeOfTag: a `void` tag names no value"*), because the bare-throwing-call
-E3057 lives a whole pass later, in `SemanticCheck`. That is measured, and it is the same panic the four
-buffer mutators' guards have been quietly preventing. Both spellings are pinned below.
+E3057 lives a whole pass later, in `SemanticCheck`. It is the same panic the four buffer mutators'
+guards prevent. Both spellings are pinned below.
 
 ⚠ The STATEMENT position is what these methods are FOR and it is unaffected:
-`arrays.md:index-assignment` and `managed-memory-builtin.md:set-and-get` already run
+`arrays.md:index-assignment` and `managed-memory-builtin.md:set-and-get` run
 `try …set(…) otherwise …` and assert the value it stored, on both surfaces.
 
 <!-- test: error.array-set-in-value-position -->
@@ -577,32 +571,30 @@ end 'main'
 error E2004: <fragment>:8:14: Function 'set' does not return a value
 ```
 
-### THE NOUN A VALUELESS `try` QUOTES IS THE AUTHOR'S METHOD, NOT THE EMITTED SYMBOL (D11c)
+### THE NOUN A VALUELESS `try` QUOTES IS THE AUTHOR'S METHOD, NOT THE EMITTED SYMBOL
 
-⚠⚠ **E3059 USED TO NAME A SYMBOL NO AUTHOR CAN TYPE.** The two `set` cases above and the seven below all
-reach `parseTry`'s `voidInValue` refusal, and its noun came straight off the `tryCall`'s callee — so a
-program that says `mm.setLength(1)` was told about `'__managed_set_length'`, a name the `__` prefix forbids the
-author from writing at all (E2051). The right code, quoting a construct the program does not contain: the
-same defect D12 removed from E3057's sentence, arriving at the one door D12 did not pass through.
+⚠⚠ **E3059 MUST NOT NAME A SYMBOL NO AUTHOR CAN TYPE.** The two `set` cases above and the seven below all
+reach `parseTry`'s `voidInValue` refusal, and a noun taken straight off the `tryCall`'s callee would tell a
+program that says `mm.setLength(1)` about `'__managed_set_length'`, a name the `__` prefix forbids the
+author from writing at all (E2051) — the right code, quoting a construct the program does not contain, as
+E3057's sentence would without the same translation.
 
-⇒ The cure is D12's own map (`GtRuntime.runtimeCalleeSourceMethod`) asked from a SECOND consumer, not a
-second map. **These cases exist because a map with one caller is a map whose coverage nothing measures**:
+⇒ The noun comes from E3057's own map (`GtRuntime.runtimeCalleeSourceMethod`) asked from a SECOND
+consumer, not a second map. **These cases exist because a map with one caller is a map whose coverage nothing measures**:
 E3057's caller reaches the file, directory, string-search and buffer families, and NOT the array one; only
 E3059 can reach a callee that is both throwing and VALUELESS, which is a different subset again.
 
 ⭐⭐ **THAT SUBSET IS NINE, AND IT IS DERIVED — `isThrowingRuntimeCallee` INTERSECTED WITH THE EMISSION
 SITES THAT TAG THEIR RESULT `void`.** `__managed_set`, the buffer's five void mutators (`set`, `setLength`,
-`setByte`, `grow`, `append`), and — from two families this rung was not looking at — `__mf_delete`,
-`__mf_rename` and `__md_create`. All nine are pinned here.
+`setByte`, `grow`, `append`), and — from two other families — `__mf_delete`, `__mf_rename` and
+`__md_create`. All nine are pinned here.
 
-⚠⚠ **D11c FIRST CLAIMED SIX, BY PROBING THE TWO FAMILIES IT HAD IN HAND, AND THE THREE IT MISSED WERE
-EXACTLY THE THREE NOTHING ELSE PINNED EITHER.** The file and directory maps' `delete`/`rename`/`create`
-arms have no E3057 case of their own, so E3059 was their only reader and it was unpinned: with
-`managedFileSourceMethod`'s `delete` arm answering `stat` and `managedDirectorySourceMethodName`'s `create`
-arm answering `next`, the suite read **2897 passed, 0 failed** while the compiler told an author who wrote
-`delete` about `'stat'` — the rung's own defect, surviving the rung. **An enumeration is a claim about a
-SET: derive it from the predicates that define the set, because probing family-by-family can only find the
-families you already suspected.**
+⚠⚠ **THE FILE AND DIRECTORY THREE ARE PINNED NOWHERE ELSE.** The file and directory maps'
+`delete`/`rename`/`create` arms have no E3057 case of their own, so E3059 is their only reader: a
+`managedFileSourceMethod` whose `delete` arm answered `stat` would tell an author who wrote `delete` about
+`'stat'` with the rest of the suite green. **An enumeration is a claim about a SET: derive it from the
+predicates that define the set, because probing family-by-family can only find the families you already
+suspected.**
 
 ⚠ The BARE spellings of the buffer four are pinned far above as E2004 (`Function 'setLength' does not
 return a value`), by the arm's own `resultUsed` guard. **Two codes, two checks, one English sentence** —
@@ -646,16 +638,15 @@ error E3059: <fragment>:4:10: type mismatch: ''grow' does not return a value'
 
 <!-- test: error.buffer-try-append-in-value-position -->
 
-⚖ **`append` LEFT THIS ENUMERATION ON 2026-08-07 AND IS KEPT AS THE CASE THAT SAYS SO.** The four above it
-are void THROWING members, and a `try` on one is well-formed until the value position is asked about — which
-is the E3059 this block enumerates. The ruling that made the buffer's `append` NON-throwing
-(`ManagedMemoryRuntime.ManagedAppendName`, and `managed-memory-methods.error.try-on-the-buffers-append` for the door)
-takes it out of that class: this program is now wrong about the `try` BEFORE it is wrong about the value.
+⚖ **`append` IS NOT IN THIS ENUMERATION, AND THIS IS THE CASE THAT SAYS SO.** The four above it are void
+THROWING members, and a `try` on one is well-formed until the value position is asked about — which is the
+E3059 this block enumerates. The buffer's `append` is NON-throwing
+(`ManagedMemoryRuntime.ManagedAppendName`, and `managed-memory-methods.error.try-on-the-buffers-append` for the door),
+which takes it out of that class: this program is wrong about the `try` BEFORE it is wrong about the value.
 
-⚠ **AND THAT ORDER IS THE RIGHT ONE, WHICH IS THE ONLY REASON THIS IS AN EDIT AND NOT A REGRESSION.** Both
-complaints are true and `parseTry` raises both, E3055 first. `try` is what the author wrote OUTERMOST, and
+⚠ **AND THAT ORDER IS THE RIGHT ONE.** Both complaints are true and `parseTry` raises both, E3055 first. `try` is what the author wrote OUTERMOST, and
 *"there is nothing here to catch"* is the fact that survives deleting the `let x =` — where E3059 would not
-survive deleting the `try`. The three void throwing siblings below are unaffected and still pin E3059.
+survive deleting the `try`. The three void throwing siblings below pin E3059.
 ```maxon
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -718,7 +709,7 @@ error E3059: <fragment>:3:10: type mismatch: ''create' does not return a value'
 ⭐⭐ **THE CONTROL THAT SEPARATES THE MAP FROM THE MESSAGE.** An ordinary user function reaches the very
 same refusal, and its callee IS its source spelling — so it must be quoted UNCHANGED by the map lookup
 above it. `declaresCallee` is what routes it past the map, and it is the SAME door
-`requireThrowingNamedTryTarget` used to admit this `try` one line earlier, so the two cannot come to
+`requireThrowingNamedTryTarget` uses to admit this `try` one line earlier, so the two cannot come to
 disagree about whether the name has a declaration.
 
 ⚠ **The doubled quotes are CORRECT and are not a defect** — `''mayFail' does not return a value'` is
@@ -745,7 +736,7 @@ error E3059: <fragment>:11:10: type mismatch: ''mayFail' does not return a value
 <!-- test: error.user-method-void-try-in-value-position -->
 ⭐ **THE SECOND HALF OF THE `declaresCallee` CONTROL: a QUALIFIED callee.** A user METHOD is registered under
 `Gate.bump`, so the arm that returns the callee unchanged returns something the author did not literally
-type — they wrote `g.bump(1)`. That is NOT this rung's defect and must not be "fixed" into `bump`: the
+type — they wrote `g.bump(1)`. That is NOT the emitted-symbol defect and must not be "fixed" into `bump`: the
 qualified spelling `'Gate.bump'` IS the specified noun, and pinning that is the point of the case.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

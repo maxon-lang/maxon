@@ -317,7 +317,7 @@ a re-read string long enough to force a heap allocation
 
 ### A borrowed element in the loop takes a reference per slot
 
-The `set` spelling of the borrowed store, and the case that used to pin this door's refusal of one.
+The `set` spelling of the borrowed store.
 `other`'s element is a BORROW — `other` still owns it and still releases it — so each slot takes its
 own reference through `retainFunc@64` and the bag's element walk releases exactly as many. Both
 containers are destroyed at the end of `main`, so a missing retain is a double free and a missing
@@ -384,16 +384,16 @@ a second source string, also long enough to force a heap allocation
 The rule above is about the LOOP and about what the sink owes, not about which door emitted the
 store — so a call that CONSUMES its opaque argument owes the identical discharge. `fill`'s loop
 hands `v` to the consuming sibling `store`, which is the same three references the `set` spelling
-takes, arriving one call boundary out. Written only into the container-store arm, this program was
-refused outright (`moving a value declared outside this loop from inside the loop body`) while the
-`set` spelling beside it compiled — one rule with two answers.
+takes, arriving one call boundary out. Written only into the container-store arm, the rule would
+refuse this program outright (`moving a value declared outside this loop from inside the loop body`)
+while the `set` spelling beside it compiles — one rule with two answers.
 
-⭐ **AND IT IS ONE OF THE THINGS THAT KEPT `set` ON `Parser.arraySurfaceMemberNames` (ARRG).** Once
+⭐ **AND IT IS ONE OF THE THINGS THAT KEEP `set` ON `Parser.arraySurfaceMemberNames`.** Once
 the corpus serves the store, `Bag.fillTo`'s `items.set(n, value: value)` STOPS being the arm and
-BECOMES this door: an ordinary call with a consuming opaque parameter. MEASURED with `set`
-temporarily struck, before this case existed: five of this file's cases took that refusal. They are
-the reason the rule is read here rather than only inside `moveElementIntoContainer` — and this case
-pins it WITHOUT the strike, so nothing about it waits on the retirement.
+BECOMES this door: an ordinary call with a consuming opaque parameter, which five of this file's
+cases then reach. They are the reason the rule is read here rather than only inside
+`moveElementIntoContainer` — and this case pins it WITHOUT that change, so nothing about it waits on
+the retirement.
 
 `v` keeps its own reference and releases it at scope exit; the bag's element walk releases the three
 it took. A missing retain is a double free at teardown and a surplus one is exit 101.

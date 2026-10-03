@@ -37,6 +37,18 @@ export enum MxdbgOrderedTable
 	localScopes
 end 'MxdbgOrderedTable'
 
+export enum MxdbgPositionHolder
+	lineRow
+	inlineSiteCall
+end 'MxdbgPositionHolder'
+
+function positionHolderText(holder MxdbgPositionHolder, record MxdbgIndex) returns String
+	return match holder 'which'
+		lineRow gives "line row {record}"
+		inlineSiteCall gives "call position of inline site {record}"
+	end 'which'
+end 'positionHolderText'
+
 function orderedTableText(table MxdbgOrderedTable, record MxdbgIndex) returns String
 	return match table 'which'
 		functionLines gives "line rows of function {record} are not in ascending code order"
@@ -59,6 +71,7 @@ export union MxdbgReadError implements Error
 	outOfOrder(table MxdbgOrderedTable, record MxdbgIndex)
 	unknownLocKind(record MxdbgIndex, word MxdbgIndex)
 	unknownTarget(triple String)
+	unnumberedPosition(holder MxdbgPositionHolder, record MxdbgIndex)
 
 	export function displayReason() returns String
 		return match self 'k'
@@ -72,6 +85,7 @@ export union MxdbgReadError implements Error
 			outOfOrder(table, record) gives "the .mxdbg {orderedTableText(table, record: record)}"
 			unknownLocKind(record, word) gives "the .mxdbg local {record} names location kind {word}, which is none this build knows"
 			unknownTarget(triple) gives "the .mxdbg header names target '{triple}', which is none this build compiles for"
+			unnumberedPosition(holder, record) gives "the .mxdbg {positionHolderText(holder, record: record)} names line or column 0, and source positions are numbered from 1"
 		end 'k'
 	end 'displayReason'
 end 'MxdbgReadError'
@@ -540,6 +554,10 @@ export type MxdbgReader
 				throw MxdbgReadError.danglingReference(MxdbgReference.siteCallFile, record: site, names: callFile)
 			end 'noSuchCallFile'
 
+			if callFile != MxdbgNoSourceFile 'aCallPosition'
+				try self.requireNumberedPosition(self.inlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, index: site, lineAt: MxdbgInlineSiteCallLine, columnAt: MxdbgInlineSiteCallCol, holder: MxdbgPositionHolder.inlineSiteCall)
+			end 'aCallPosition'
+
 			try requireKnownOrigin(self.tableWord(self.inlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, index: site, at: MxdbgInlineSiteOrigin), holder: MxdbgOriginHolder.inlineSiteRecord, record: site)
 		end 'eachSite'
 
@@ -549,6 +567,7 @@ export type MxdbgReader
 
 		for row in 0 upto self.lineTally 'eachRow'
 			try self.requireBelow(self.tableWord(self.lineTableOff, stride: MxdbgLineEntrySize, index: row, at: MxdbgLineFileId), tally: self.fileTally, reference: MxdbgReference.lineFile, record: row)
+			try self.requireNumberedPosition(self.lineTableOff, stride: MxdbgLineEntrySize, index: row, lineAt: MxdbgLineLine, columnAt: MxdbgLineCol, holder: MxdbgPositionHolder.lineRow)
 		end 'eachRow'
 
 		for point in 0 upto self.covTally 'eachPoint'
@@ -681,6 +700,12 @@ export type MxdbgReader
 		let words = mxdbgFoldedAggregateWordCount(self.tableWord(self.typeTableOff, stride: MxdbgTypeEntrySize, index: typeId, at: MxdbgTypeKindWord), fieldCount: self.tableWord(self.typeTableOff, stride: MxdbgTypeEntrySize, index: typeId, at: MxdbgTypeFieldCount))
 		try self.requireWindowFits(first as MxdbgIndex, count: words, tally: self.constTally, window: MxdbgWindow.foldedWords, record: local)
 	end 'requireFoldedWordsFit'
+
+	function requireNumberedPosition(tableOff ByteOffset, stride ByteOffset, index MxdbgIndex, lineAt ByteOffset, columnAt ByteOffset, holder MxdbgPositionHolder) throws MxdbgReadError
+		if self.tableWord(tableOff, stride: stride, index: index, at: lineAt) == 0 or self.tableWord(tableOff, stride: stride, index: index, at: columnAt) == 0 'unnumbered'
+			throw MxdbgReadError.unnumberedPosition(holder, record: index)
+		end 'unnumbered'
+	end 'requireNumberedPosition'
 
 	function requireBelow(names MxdbgIndex, tally MxdbgIndex, reference MxdbgReference, record MxdbgIndex) throws MxdbgReadError
 		if names >= tally 'pastTheTable'

@@ -27,10 +27,9 @@ bystander first.
 the instant `main` started it, the moment its own loop ended, and `prompt` is *the bystander's reply reached
 `main` before that*. A budget cannot be written down instead: a handover costs the retake threshold, a monitor
 lap and a thread stop, and on a host whose own scheduler holds the process off a core those stretch without
-bound while nothing about preemption has changed. MEASURED on a 12-core box carrying sixteen other
-green-thread programs, the two forms of `a-call-free-loop-is-preempted-anyway` run one after the other:
-a 150 ms budget held in 1 run of 16 and the ORDER in 16 of 16, with the spinner still 150 ms from its end
-every time. Push the load far enough and the order does go false — and only ever alongside `preempted`,
+bound while nothing about preemption has changed. On a box carrying many other green-thread programs a
+150 ms budget fails where the ORDER holds, with the spinner still 150 ms from its end. Push the load far
+enough and the order does go false — and only ever alongside `preempted`,
 because what has stopped there is preemption itself.
 
 ## Tests
@@ -819,13 +818,13 @@ ping=0 held=true preempted=0 retaken=0
 
 <!-- test: sched-preempt.a-main-preempted-between-two-spawns-runs-the-earlier-one-first -->
 <!-- procs: 1 -->
-**A `main` PREEMPTED BETWEEN TWO `spawn`s SEES THE EARLIER SERVICE ANSWER FIRST.** This is the CI diff of
-`sched-runqueue.the-last-spawned-thread-runs-first-at-one-processor` made deterministic: that case pins
-`first=2` for this same program under `preempt: off`, and on a loaded runner the host held the process off a
-core for the monitor's 10 ms, so `main` was asked to yield between its second and third `spawn`. The case
+**A `main` PREEMPTED BETWEEN TWO `spawn`s SEES THE EARLIER SERVICE ANSWER FIRST.** This is
+`sched-runqueue.the-last-spawned-thread-runs-first-at-one-processor` with the preemption made deterministic:
+that case pins `first=2` for this same program under `preempt: off`, and on a loaded host holding the process
+off a core for the monitor's 10 ms, `main` is asked to yield between its second and third `spawn`. The case
 runs WITH preemption on, so it cannot choose where the monitor's request lands: a slow runner spends the
-10 ms on process start and the first `spawn`, and a request that lands before the window gives `first=0`
-(CI read exactly that, `first=0` at f63b0f8e on arm64-macos), while one that lands after the hold gives
+10 ms on process start and the first `spawn`, and a request that lands before the window gives `first=0`,
+while one that lands after the hold gives
 `first=2`. So one ATTEMPT reads `schedPreemptCount` around its window and is discarded — its handles
 dropped, its services shut down unasked — whenever the count moved before the hold or moved twice by the
 end; `main` retries up to `attemptCap` times and prints only from an attempt whose single preemption fell

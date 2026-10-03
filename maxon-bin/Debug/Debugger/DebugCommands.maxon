@@ -53,8 +53,6 @@ export let EntryStopReasonName = "entry"
 export let BreakpointStopReasonName = "breakpoint"
 export let StepStopReasonName = "step"
 
-let NoLine = 0 as DebugLineNumber
-let NoOffset = 0 as DebugAddress
 let DebugStackBoundsUnreadableReason = "stack-bounds-unreadable"
 let DebugSharedConditionReason = "condition-differs-at-a-shared-offset"
 
@@ -264,9 +262,9 @@ end 'DebugBreakIdentity'
 type DebugArmPurpose
 	export let hidden as DebugTally
 	export let identity as DebugBreakIdentity
-	export let condition as String
+	export let condition as DebugBreakCondition
 
-	static function create(hidden DebugTally, identity DebugBreakIdentity, condition String) returns DebugArmPurpose
+	static function create(hidden DebugTally, identity DebugBreakIdentity, condition DebugBreakCondition) returns DebugArmPurpose
 		return Self{hidden: hidden, identity: identity, condition: condition}
 	end 'create'
 
@@ -286,11 +284,11 @@ end 'PurposeDrop'
 
 union DebugHeldCondition
 	none
-	at(condition String)
+	at(condition DebugBreakCondition)
 end 'DebugHeldCondition'
 
 export union DebugCommand
-	arm(target DebugBreakTarget, condition String, owner DebugBreakOwner)
+	arm(target DebugBreakTarget, condition DebugBreakCondition, owner DebugBreakOwner)
 	disarm(target DebugBreakTarget, owner DebugBreakOwner)
 	resume
 	walk(mode DebugWalkMode)
@@ -470,14 +468,15 @@ end 'plainCommandFrom'
 
 function armCommandFrom(argument String) returns DebugCommandParse
 	match debugBreakRequestIn(argument, conditionWord: ConditionWord) 'asked'
-		plain(target) then return armCommandOf(target, condition: "")
-		conditional(target, condition) then return armCommandOf(target, condition: condition)
+		plain(target) then return armCommandOf(target, condition: DebugBreakCondition.unconditional)
+		conditional(target, condition) then return armCommandOf(target, condition: DebugBreakCondition.when(condition))
 	end 'asked'
 end 'armCommandFrom'
 
-function armCommandOf(spelling String, condition String) returns DebugCommandParse
+function armCommandOf(spelling String, condition DebugBreakCondition) returns DebugCommandParse
 	match debugBreakTargetOf(spelling) 'parsed'
 		notATarget(named) then return unreadTarget(named, word: BreakCommandWord)
+		lineZero(named) then return refusedLineZero(named)
 		target(target) then return DebugCommandParse.command(DebugCommand.arm(target, condition: condition, owner: DebugBreakOwner.console))
 	end 'parsed'
 end 'armCommandOf'
@@ -485,13 +484,18 @@ end 'armCommandOf'
 function disarmCommandFrom(argument String) returns DebugCommandParse
 	match debugBreakTargetOf(argument) 'parsed'
 		notATarget(named) then return unreadTarget(named, word: ClearCommandWord)
+		lineZero(named) then return refusedLineZero(named)
 		target(target) then return DebugCommandParse.command(DebugCommand.disarm(target, owner: DebugBreakOwner.console))
 	end 'parsed'
 end 'disarmCommandFrom'
 
 function unreadTarget(spelling String, word String) returns DebugCommandParse
-	return DebugCommandParse.refused(DebugReply.failed("'{word}' needs {DebugBreakTargetSpellings}, and '{spelling}' is none of them", suggestion: DebugNoSuggestion))
+	return DebugCommandParse.refused(DebugReply.failed("'{word}' needs {DebugBreakTargetSpellings}, and '{spelling}' is none of them", suggestion: StatedText.unstated))
 end 'unreadTarget'
+
+function refusedLineZero(spelling String) returns DebugCommandParse
+	return DebugCommandParse.refused(DebugReply.failed(debugLineZeroReason(spelling), suggestion: StatedText.unstated))
+end 'refusedLineZero'
 
 function traceLimitOf(spelling String) returns DebugTraceTally
 	return match parseDigits(spelling.trim(), skipping: 0, base: DecimalBase) 'asked'
@@ -551,13 +555,13 @@ type DebugPendingWalk
 	export let startPc as DebugAddress
 	export let startFrame as DebugAddress
 	export let startReturn as DebugReturnAddress
-	export let startLine as DebugLineNumber
+	export let startLine as DebugLineLookup
 	export let startDepth as DebugTally
 	export let startThread as DebugAddress
 	export let startStackTop as DebugAddress
 
 	static function from (mode DebugWalkMode, held DebugPosition, startFrame DebugAddress, startDepth DebugTally, startStackTop DebugAddress) returns DebugPendingWalk
-		return Self{mode: mode, startPc: held.record.pc, startFrame: startFrame, startReturn: returnAddressOf(held), startLine: held.stop.line, startDepth: startDepth, startThread: held.record.greenThread, startStackTop: startStackTop}
+		return Self{mode: mode, startPc: held.record.pc, startFrame: startFrame, startReturn: returnAddressOf(held), startLine: held.stop.spot.lineLookup(), startDepth: startDepth, startThread: held.record.greenThread, startStackTop: startStackTop}
 	end 'from'
 
 	function rebasedTo(top DebugAddress) returns DebugPendingWalk
@@ -594,7 +598,7 @@ end 'DebugStackTopRead'
 
 union DebugBreakTargetAnswer
 	answered(reply DebugReply)
-	atLine(file String, line DebugLineNumber, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, breakpoint String)
+	atLine(file DebugFileName, line DebugLineLookup, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, breakpoint String)
 end 'DebugBreakTargetAnswer'
 
 union DebugCallLookup
@@ -770,13 +774,13 @@ export type DebugConversation
 
 	function readyForALiveCommand(replies DebugReplyArray, resumes bool) returns bool
 		if not targetIsRunning(self.outcome) 'nothingLeftToAsk'
-			replies.push(DebugReply.failed(ProgramGoneMessage, suggestion: DebugNoSuggestion))
+			replies.push(DebugReply.failed(ProgramGoneMessage, suggestion: StatedText.unstated))
 
 			return false
 		end 'nothingLeftToAsk'
 
 		if resumes and self.isWalking() 'aStepStillWalks'
-			replies.push(DebugReply.failed(StillWalkingMessage, suggestion: DebugNoSuggestion))
+			replies.push(DebugReply.failed(StillWalkingMessage, suggestion: StatedText.unstated))
 
 			return false
 		end 'aStepStillWalks'
@@ -789,7 +793,7 @@ export type DebugConversation
 		end 'itMayHaveStoppedAlready'
 
 		if not targetIsRunning(self.outcome) 'itEndedWhileWeLooked'
-			replies.push(DebugReply.failed(ProgramGoneMessage, suggestion: DebugNoSuggestion))
+			replies.push(DebugReply.failed(ProgramGoneMessage, suggestion: StatedText.unstated))
 
 			return false
 		end 'itEndedWhileWeLooked'
@@ -968,13 +972,13 @@ export type DebugConversation
 		var replies = DebugReplyArray.create()
 
 		if not targetIsRunning(self.outcome) 'nothingLeftToAsk'
-			replies.push(DebugReply.failed(ProgramGoneMessage, suggestion: DebugNoSuggestion))
+			replies.push(DebugReply.failed(ProgramGoneMessage, suggestion: StatedText.unstated))
 
 			return replies
 		end 'nothingLeftToAsk'
 
 		match self.position 'stopped'
-			none then replies.push(DebugReply.failed(NoLocalsWhileRunningMessage, suggestion: DebugNoSuggestion))
+			none then replies.push(DebugReply.failed(NoLocalsWhileRunningMessage, suggestion: StatedText.unstated))
 			at(held) then replies.push(DebugReply.locals(DebugFunctionNameLookup.named(frame.functionName), values: renderLocals(self.engine, symbols: self.symbols, offset: frame.offset, site: frame.site, framePointer: frame.framePointer, registers: frameRegisters(frame, held: held, onTheStoppedThread: onTheStoppedThread))))
 		end 'stopped'
 
@@ -1004,7 +1008,7 @@ export type DebugConversation
 		end 'which'
 	end 'performLive'
 
-	function armResolved(target DebugBreakTarget, condition String, owner DebugBreakOwner) returns DebugReply
+	function armResolved(target DebugBreakTarget, condition DebugBreakCondition, owner DebugBreakOwner) returns DebugReply
 		let spelling = debugBreakTargetSpelling(target)
 
 		match self.breakTargetOf(target) 'resolved'
@@ -1025,7 +1029,7 @@ export type DebugConversation
 		end 'resolved'
 	end 'breakTargetOf'
 
-	function armBodies(spelling String, file String, line DebugLineNumber, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, identity DebugBreakIdentity, condition String) returns DebugReply
+	function armBodies(spelling String, file DebugFileName, line DebugLineLookup, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, identity DebugBreakIdentity, condition DebugBreakCondition) returns DebugReply
 		var attempt = DebugArmingAttempt.create(identity, condition: condition)
 
 		for candidates in bodies 'eachBody'
@@ -1035,29 +1039,24 @@ export type DebugConversation
 		end 'eachBody'
 
 		if attempt.armed.count() > 0 'somethingArmed'
-			return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointSetAction, target: spelling, functionName: functionName, file: file, line: line, offset: try attempt.armed.get(0) otherwise panic("armBodies: an attempt that armed something holds its first offset"), offsets: attempt.armed, candidates: StringArray.create(), suggestion: DebugNoSuggestion, reason: "", condition: condition))
+			return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointSetAction, target: spelling, functionName: functionName, file: file, line: line, offsets: attempt.armed, candidates: StringArray.create(), suggestion: StatedText.unstated, reason: StatedText.unstated, condition: condition))
 		end 'somethingArmed'
 
 		if not attempt.reachedArming 'noCandidateCouldCarryTheCondition'
 			return refusedCondition(BreakpointConditionInvalidAction if attempt.conditionRefusals.contains(BreakpointConditionInvalidAction) else BreakpointConditionUnsupportedAction, spelling: spelling, file: file, line: line, functionName: functionName, condition: condition)
 		end 'noCandidateCouldCarryTheCondition'
 
-		return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointRefusedAction, target: spelling, functionName: functionName, file: file, line: line, offset: NoOffset, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: DebugNoSuggestion, reason: try attempt.armRefusals.get(0) otherwise panic("armBodies: an attempt that reached arming and armed nothing recorded why")))
+		return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointRefusedAction, target: spelling, functionName: functionName, file: file, line: line, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: StatedText.unstated, reason: StatedText.stated(try attempt.armRefusals.get(0) otherwise panic("armBodies: an attempt that reached arming and armed nothing recorded why"))))
 	end 'armBodies'
 
 	function armFirstArmable(candidates DebugLineCandidateArray, attempt DebugArmingAttempt)
 		for candidate in candidates 'eachCandidate'
 			var settled = false
 
-			if attempt.condition.isEmpty() 'unconditional'
-				settled = self.armedHere(candidate, request: DebugConditionRequest.none, attempt: attempt)
-			end 'unconditional' else 'conditional'
-				match compileDebugCondition(self.symbols, offset: candidate.offset, site: self.symbols.presentedSiteAt(candidate.offset, hidden: candidate.hidden), text: attempt.condition) 'compiled'
-					unsupported then attempt.conditionRefusals.push(BreakpointConditionUnsupportedAction)
-					invalid then attempt.conditionRefusals.push(BreakpointConditionInvalidAction)
-					compiled(record) then settled = self.armedHere(candidate, request: DebugConditionRequest.carried(record), attempt: attempt)
-				end 'compiled'
-			end 'conditional'
+			match attempt.condition 'asked'
+				unconditional then settled = self.armedHere(candidate, request: DebugConditionRequest.none, attempt: attempt)
+				when(text) then settled = self.armedUnder(candidate, text: text, attempt: attempt)
+			end 'asked'
 
 			if settled 'thisBodyIsDone'
 				return
@@ -1083,11 +1082,21 @@ export type DebugConversation
 		end 'classified'
 	end 'armedHere'
 
+	function armedUnder(candidate DebugLineCandidate, text String, attempt DebugArmingAttempt) returns bool
+		match compileDebugCondition(self.symbols, offset: candidate.offset, site: self.symbols.presentedSiteAt(candidate.offset, hidden: candidate.hidden), text: text) 'compiled'
+			unsupported then attempt.conditionRefusals.push(BreakpointConditionUnsupportedAction)
+			invalid then attempt.conditionRefusals.push(BreakpointConditionInvalidAction)
+			compiled(record) then return self.armedHere(candidate, request: DebugConditionRequest.carried(record), attempt: attempt)
+		end 'compiled'
+
+		return false
+	end 'armedUnder'
+
 	function conditionDiffersAt(offset DebugAddress, attempt DebugArmingAttempt) returns bool
 		let purposes = try self.armPurposes.get(offset) otherwise return false
 
 		for purpose in purposes 'eachPurpose'
-			if not purpose.identity.equals(attempt.identity) and purpose.condition != attempt.condition 'anotherBreakpointsCondition'
+			if not purpose.identity.equals(attempt.identity) and not purpose.condition.sameAs(attempt.condition) 'anotherBreakpointsCondition'
 				return true
 			end 'anotherBreakpointsCondition'
 		end 'eachPurpose'
@@ -1102,8 +1111,8 @@ export type DebugConversation
 		return DebugHeldCondition.at(first.condition)
 	end 'conditionHeldAt'
 
-	function rearmedHeldByte(candidate DebugLineCandidate, request DebugConditionRequest, attempt DebugArmingAttempt, held String) returns bool
-		if held == attempt.condition 'theByteAlreadyCarriesIt'
+	function rearmedHeldByte(candidate DebugLineCandidate, request DebugConditionRequest, attempt DebugArmingAttempt, held DebugBreakCondition) returns bool
+		if held.sameAs(attempt.condition) 'theByteAlreadyCarriesIt'
 			return self.notedArmed(attempt, candidate: candidate)
 		end 'theByteAlreadyCarriesIt'
 
@@ -1250,7 +1259,7 @@ export type DebugConversation
 		end 'resolved'
 	end 'disarmTarget'
 
-	function disarmBodies(spelling String, file String, line DebugLineNumber, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, identity DebugBreakIdentity) returns DebugReply
+	function disarmBodies(spelling String, file DebugFileName, line DebugLineLookup, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, identity DebugBreakIdentity) returns DebugReply
 		var cleared = DebugAddressArray.create()
 		var refusals = StringArray.create()
 
@@ -1260,10 +1269,9 @@ export type DebugConversation
 			end 'eachCandidate'
 		end 'eachBody'
 
-		let reason = try refusals.get(0) otherwise ""
 		let action = BreakpointClearedAction if cleared.count() > 0 else BreakpointRefusedAction if refusals.count() > 0 else BreakpointNotSetAction
 
-		return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offset: try cleared.get(0) otherwise NoOffset, offsets: cleared, candidates: StringArray.create(), suggestion: DebugNoSuggestion, reason: reason))
+		return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offsets: cleared, candidates: StringArray.create(), suggestion: StatedText.unstated, reason: firstRefusalOf(refusals)))
 	end 'disarmBodies'
 
 	function disarmCandidate(candidate DebugLineCandidate, identity DebugBreakIdentity, cleared DebugAddressArray, refusals StringArray)
@@ -1469,7 +1477,7 @@ export type DebugConversation
 
 	function reportStoppedBacktrace(replies DebugReplyArray)
 		match self.position 'stopped'
-			none then replies.push(DebugReply.failed("the program is running: there is no stack to walk until it stops", suggestion: DebugNoSuggestion))
+			none then replies.push(DebugReply.failed("the program is running: there is no stack to walk until it stops", suggestion: StatedText.unstated))
 			at(held) then replies.push(DebugReply.walked(held.stop.frames))
 		end 'stopped'
 	end 'reportStoppedBacktrace'
@@ -1483,21 +1491,21 @@ export type DebugConversation
 
 	function reportStoppedLocals(replies DebugReplyArray)
 		match self.position 'stopped'
-			none then replies.push(DebugReply.failed(NoLocalsWhileRunningMessage, suggestion: DebugNoSuggestion))
+			none then replies.push(DebugReply.failed(NoLocalsWhileRunningMessage, suggestion: StatedText.unstated))
 			at(held) then replies.push(DebugReply.locals(held.stop.functionName, values: renderLocals(self.engine, symbols: self.symbols, offset: held.stop.offset, site: self.symbols.presentedSiteAt(held.stop.offset, hidden: held.hidden), framePointer: held.record.framePointer, registers: DebugRegisterAccess.readable)))
 		end 'stopped'
 	end 'reportStoppedLocals'
 
 	function reportSelectedLocals(replies DebugReplyArray, chosen DebugSelection)
 		match innermostPhysicalFrame(chosen.frames) 'seeded'
-			none then replies.push(DebugReply.failed("thread #{chosen.thread} has no frame inside this program to read locals from", suggestion: DebugNoSuggestion))
+			none then replies.push(DebugReply.failed("thread #{chosen.thread} has no frame inside this program to read locals from", suggestion: StatedText.unstated))
 			at(frame) then replies.push(DebugReply.locals(DebugFunctionNameLookup.named(frame.functionName), values: renderLocals(self.engine, symbols: self.symbols, offset: frame.offset, site: frame.site, framePointer: frame.framePointer, registers: DebugRegisterAccess.unavailable(ParkedThreadRegisterReason))))
 		end 'seeded'
 	end 'reportSelectedLocals'
 
 	function reportValue(replies DebugReplyArray, path String)
 		if path.isEmpty() 'nothingNamed'
-			replies.push(DebugReply.failed("'{PrintCommandWord}' needs the name of a local or a field path", suggestion: DebugNoSuggestion))
+			replies.push(DebugReply.failed("'{PrintCommandWord}' needs the name of a local or a field path", suggestion: StatedText.unstated))
 
 			return
 		end 'nothingNamed'
@@ -1510,14 +1518,14 @@ export type DebugConversation
 
 	function reportStoppedValue(replies DebugReplyArray, path String)
 		match self.position 'stopped'
-			none then replies.push(DebugReply.failed("the program is running: there is nothing to print until it stops", suggestion: DebugNoSuggestion))
+			none then replies.push(DebugReply.failed("the program is running: there is nothing to print until it stops", suggestion: StatedText.unstated))
 			at(held) then self.reportRenderedValue(replies, held: held, path: path)
 		end 'stopped'
 	end 'reportStoppedValue'
 
 	function reportSelectedValue(replies DebugReplyArray, chosen DebugSelection, path String)
 		match innermostPhysicalFrame(chosen.frames) 'seeded'
-			none then replies.push(DebugReply.failed("thread #{chosen.thread} has no frame inside this program to read '{path}' from", suggestion: DebugNoSuggestion))
+			none then replies.push(DebugReply.failed("thread #{chosen.thread} has no frame inside this program to read '{path}' from", suggestion: StatedText.unstated))
 			at(frame) then self.pushRenderedValue(replies, offset: frame.offset, site: frame.site, framePointer: frame.framePointer, functionName: DebugFunctionNameLookup.named(frame.functionName), path: path, registers: DebugRegisterAccess.unavailable(ParkedThreadRegisterReason))
 		end 'seeded'
 	end 'reportSelectedValue'
@@ -1528,8 +1536,8 @@ export type DebugConversation
 
 	function pushRenderedValue(replies DebugReplyArray, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, functionName DebugFunctionNameLookup, path String, registers DebugRegisterAccess)
 		match renderValuePath(self.engine, symbols: self.symbols, offset: offset, site: site, framePointer: framePointer, path: path, registers: registers) 'answered'
-			unknownName(spelling) then replies.push(DebugReply.failed("'{spelling}' is not a local{debugNamePhrase(functionName, lead: " of ")}", suggestion: DebugNoSuggestion))
-			unknownField(spelling) then replies.push(DebugReply.failed("'{spelling}' names no field of that value", suggestion: DebugNoSuggestion))
+			unknownName(spelling) then replies.push(DebugReply.failed("'{spelling}' is not a local{debugNamePhrase(functionName, lead: " of ")}", suggestion: StatedText.unstated))
+			unknownField(spelling) then replies.push(DebugReply.failed("'{spelling}' names no field of that value", suggestion: StatedText.unstated))
 			rendered(tree) then replies.push(DebugReply.value(tree))
 		end 'answered'
 	end 'pushRenderedValue'
@@ -1537,13 +1545,13 @@ export type DebugConversation
 	function walk(replies DebugReplyArray, mode DebugWalkMode)
 		match self.selection 'selected'
 			none then self.walkTheStoppedThread(replies, mode: mode)
-			on then replies.push(DebugReply.failed(SteppingUnderASelectionMessage, suggestion: DebugNoSuggestion))
+			on then replies.push(DebugReply.failed(SteppingUnderASelectionMessage, suggestion: StatedText.unstated))
 		end 'selected'
 	end 'walk'
 
 	function walkTheStoppedThread(replies DebugReplyArray, mode DebugWalkMode)
 		match self.position 'stopped'
-			none then replies.push(DebugReply.failed(RunningMessage if self.released else NotStartedMessage, suggestion: DebugNoSuggestion))
+			none then replies.push(DebugReply.failed(RunningMessage if self.released else NotStartedMessage, suggestion: StatedText.unstated))
 			at(held) then self.walkFrom(replies, mode: mode, held: held)
 		end 'stopped'
 	end 'walkTheStoppedThread'
@@ -1556,7 +1564,7 @@ export type DebugConversation
 		end 'theFaultingInstructionWouldRunAgain'
 
 		if mode == DebugWalkMode.outOfTheFrame and not hasACallerFrame(held.stop) 'theOutermostFrame'
-			replies.push(DebugReply.failed("'{FinishCommandWord}' has no frame to return to: the stopped frame{debugNamePhrase(held.stop.functionName, lead: " in ")} is the outermost frame of this stack", suggestion: DebugNoSuggestion))
+			replies.push(DebugReply.failed("'{FinishCommandWord}' has no frame to return to: the stopped frame{debugNamePhrase(held.stop.functionName, lead: " in ")} is the outermost frame of this stack", suggestion: StatedText.unstated))
 
 			return
 		end 'theOutermostFrame'
@@ -1830,13 +1838,13 @@ export type DebugConversation
 
 	function clearSelection(replies DebugReplyArray)
 		self.selection = DebugSelectionState.none
-		replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenSelectEventName, thread: DebugThreadRef.none, result: ClearedSelectionResult, reason: "")))
+		replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenSelectEventName, thread: DebugThreadRef.none, result: ClearedSelectionResult, reason: StatedText.unstated)))
 	end 'clearSelection'
 
 	function selectThread(replies DebugReplyArray, thread DebugThreadSelector)
 		match self.walkThread(thread) 'walked'
-			missing(reason) then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenSelectEventName, thread: DebugThreadRef.none, result: RefusedResult, reason: reason)))
-			refused(thread, reason) then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenSelectEventName, thread: DebugThreadRef.id(thread), result: RefusedResult, reason: reason)))
+			missing(reason) then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenSelectEventName, thread: DebugThreadRef.none, result: RefusedResult, reason: StatedText.stated(reason))))
+			refused(thread, reason) then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenSelectEventName, thread: DebugThreadRef.id(thread), result: RefusedResult, reason: StatedText.stated(reason))))
 			frames(thread, walked) then self.holdSelection(replies, thread: thread, frames: walked)
 			gone(ending) then self.reportOutcome(replies, ending: ending)
 		end 'walked'
@@ -1844,28 +1852,28 @@ export type DebugConversation
 
 	function holdSelection(replies DebugReplyArray, thread DebugThreadId, frames DebugFrameArray)
 		self.selection = DebugSelectionState.on(DebugSelection.create(thread, frames: frames))
-		replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenSelectEventName, thread: DebugThreadRef.id(thread), result: SelectedResult, reason: "")))
+		replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenSelectEventName, thread: DebugThreadRef.id(thread), result: SelectedResult, reason: StatedText.unstated)))
 	end 'holdSelection'
 
 	function holdThread(replies DebugReplyArray, thread DebugThreadSelector)
 		match self.resolveThread(thread) 'named'
-			none then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenParkEventName, thread: DebugThreadRef.none, result: RefusedResult, reason: DebugNoSuchThreadReason)))
+			none then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenParkEventName, thread: DebugThreadRef.none, result: RefusedResult, reason: StatedText.stated(DebugNoSuchThreadReason))))
 			at(thread, handle) then self.reportThreadCommand(replies, event: GreenParkEventName, thread: thread, result: HeldResult, answered: self.engine.holdGreenThread(handle))
 		end 'named'
 	end 'holdThread'
 
 	function releaseThread(replies DebugReplyArray, thread DebugThreadSelector)
 		match self.resolveThread(thread) 'named'
-			none then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenResumeEventName, thread: DebugThreadRef.none, result: RefusedResult, reason: DebugNoSuchThreadReason)))
+			none then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(GreenResumeEventName, thread: DebugThreadRef.none, result: RefusedResult, reason: StatedText.stated(DebugNoSuchThreadReason))))
 			at(thread, handle) then self.reportThreadCommand(replies, event: GreenResumeEventName, thread: thread, result: ReleasedResult, answered: self.engine.releaseGreenThread(handle))
 		end 'named'
 	end 'releaseThread'
 
 	function reportThreadCommand(replies DebugReplyArray, event String, thread DebugThreadId, result String, answered CommandOutcome)
 		match answered 'answered'
-			done then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(event, thread: DebugThreadRef.id(thread), result: result, reason: "")))
-			nothingParked then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(event, thread: DebugThreadRef.id(thread), result: RefusedResult, reason: DebugNotRunningReason)))
-			refused(reason) then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(event, thread: DebugThreadRef.id(thread), result: RefusedResult, reason: reason)))
+			done then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(event, thread: DebugThreadRef.id(thread), result: result, reason: StatedText.unstated)))
+			nothingParked then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(event, thread: DebugThreadRef.id(thread), result: RefusedResult, reason: StatedText.stated(DebugNotRunningReason))))
+			refused(reason) then replies.push(DebugReply.threadOutcome(DebugThreadOutcome.create(event, thread: DebugThreadRef.id(thread), result: RefusedResult, reason: StatedText.stated(reason))))
 			gone(ending) then self.reportOutcome(replies, ending: ending)
 		end 'answered'
 	end 'reportThreadCommand'
@@ -2038,7 +2046,7 @@ export type DebugConversation
 		return self.engine.userBreakpointAt(record.pc) and not record.conditionMissed
 	end 'breakpointReached'
 
-	function walkArrived(mode DebugWalkMode, landed EngineStop, startFrame DebugAddress, startReturn DebugReturnAddress, startLine DebugLineNumber, startDepth DebugTally) returns WalkArrival
+	function walkArrived(mode DebugWalkMode, landed EngineStop, startFrame DebugAddress, startReturn DebugReturnAddress, startLine DebugLineLookup, startDepth DebugTally) returns WalkArrival
 		let frame = self.frameOf(landed)
 
 		if mode == DebugWalkMode.outOfTheFrame 'leavingTheFrame'
@@ -2069,14 +2077,11 @@ export type DebugConversation
 		return WalkArrival.none
 	end 'walkArrived'
 
-	function arrivesPresented(mode DebugWalkMode, offset DebugAddress, hidden DebugTally, depth DebugTally, framePointer DebugAddress, startFrame DebugAddress, startLine DebugLineNumber, startDepth DebugTally) returns bool
-		let line = self.symbols.presentedLineAt(offset, hidden: hidden)
-
-		if line == NoLine 'noSourcePosition'
-			return false
-		end 'noSourcePosition'
-
-		return presentedPositionArrives(mode, line: line, depth: depth - hidden, framePointer: framePointer, startFrame: startFrame, startLine: startLine, startDepth: startDepth)
+	function arrivesPresented(mode DebugWalkMode, offset DebugAddress, hidden DebugTally, depth DebugTally, framePointer DebugAddress, startFrame DebugAddress, startLine DebugLineLookup, startDepth DebugTally) returns bool
+		return match self.symbols.presentedLineAt(offset, hidden: hidden) 'presented'
+			unknown gives false
+			line(line) gives presentedPositionArrives(mode, line: line, depth: depth - hidden, framePointer: framePointer, startFrame: startFrame, startLine: startLine, startDepth: startDepth)
+		end 'presented'
 	end 'arrivesPresented'
 
 	function hiddenOnLanding(offset DebugAddress, depth DebugTally, sameFrame bool, startDepth DebugTally) returns DebugTally
@@ -2215,13 +2220,13 @@ end 'DebugConversation'
 
 type DebugArmingAttempt
 	export let identity as DebugBreakIdentity
-	export let condition as String
+	export let condition as DebugBreakCondition
 	export var armed as DebugAddressArray
 	export var armRefusals as StringArray
 	export var conditionRefusals as StringArray
 	export var reachedArming as bool
 
-	static function create(identity DebugBreakIdentity, condition String) returns DebugArmingAttempt
+	static function create(identity DebugBreakIdentity, condition DebugBreakCondition) returns DebugArmingAttempt
 		return Self{identity: identity, condition: condition, armed: DebugAddressArray.create(), armRefusals: StringArray.create(), conditionRefusals: StringArray.create(), reachedArming: false}
 	end 'create'
 
@@ -2244,8 +2249,13 @@ type DebugArmingAttempt
 	end 'stoppedBy'
 end 'DebugArmingAttempt'
 
-function refusedTarget(spelling String, file String, line DebugLineNumber, functionName DebugFunctionNameLookup, reason String) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointRefusedAction, target: spelling, functionName: functionName, file: file, line: line, offset: NoOffset, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: DebugNoSuggestion, reason: reason))
+function firstRefusalOf(refusals StringArray) returns StatedText
+	let first = try refusals.get(0) otherwise return StatedText.unstated
+	return StatedText.stated(first)
+end 'firstRefusalOf'
+
+function refusedTarget(spelling String, file DebugFileName, line DebugLineLookup, functionName DebugFunctionNameLookup, reason String) returns DebugReply
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointRefusedAction, target: spelling, functionName: functionName, file: file, line: line, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: StatedText.unstated, reason: StatedText.stated(reason)))
 end 'refusedTarget'
 
 // A leading row that starts a call opens an entry even when a later row enters the line, so a stop
@@ -2280,8 +2290,8 @@ function someCandidateEntersTheLine(candidates DebugLineCandidateArray) returns 
 	return false
 end 'someCandidateEntersTheLine'
 
-function unmatchedTarget(spelling String, suggestion String) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointNoMatchAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: "", line: NoLine, offset: NoOffset, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: suggestion, reason: ""))
+function unmatchedTarget(spelling String, suggestion StatedText) returns DebugReply
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointNoMatchAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: DebugFileName.unknown, line: DebugLineLookup.unknown, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: suggestion, reason: StatedText.unstated))
 end 'unmatchedTarget'
 
 function frameRegisters(frame DebugFrame, held DebugPosition, onTheStoppedThread bool) returns DebugRegisterAccess
@@ -2306,16 +2316,16 @@ function innermostPhysicalFrame(frames DebugFrameArray) returns DebugFrameLookup
 	return DebugFrameLookup.none
 end 'innermostPhysicalFrame'
 
-function refusedCondition(action String, spelling String, file String, line DebugLineNumber, functionName DebugFunctionNameLookup, condition String) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offset: NoOffset, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: DebugNoSuggestion, reason: "", condition: condition))
+function refusedCondition(action String, spelling String, file DebugFileName, line DebugLineLookup, functionName DebugFunctionNameLookup, condition DebugBreakCondition) returns DebugReply
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: StatedText.unstated, reason: StatedText.unstated, condition: condition))
 end 'refusedCondition'
 
 function ambiguousTarget(spelling String, candidates StringArray) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointAmbiguousAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: "", line: NoLine, offset: NoOffset, offsets: DebugAddressArray.create(), candidates: candidates, suggestion: DebugNoSuggestion, reason: ""))
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointAmbiguousAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: DebugFileName.unknown, line: DebugLineLookup.unknown, offsets: DebugAddressArray.create(), candidates: candidates, suggestion: StatedText.unstated, reason: StatedText.unstated))
 end 'ambiguousTarget'
 
-function uncoveredTarget(spelling String, file String, line DebugLineNumber) returns DebugReply
-	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointNoCodeAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: file, line: line, offset: NoOffset, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: DebugNoSuggestion, reason: ""))
+function uncoveredTarget(spelling String, file DebugFileName, line DebugLineLookup) returns DebugReply
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointNoCodeAction, target: spelling, functionName: DebugFunctionNameLookup.none, file: file, line: line, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: StatedText.unstated, reason: StatedText.unstated))
 end 'uncoveredTarget'
 
 function hasACallerFrame(stop DebugStop) returns bool
@@ -2343,9 +2353,9 @@ function decodedAt(code ByteArray, offset DebugAddress, address DebugAddress) re
 	return hostDecodedAt(code, at: offset as DecodedOffset, address: address as DecodedAddress)
 end 'decodedAt'
 
-function presentedPositionArrives(mode DebugWalkMode, line DebugLineNumber, depth DebugTally, framePointer DebugAddress, startFrame DebugAddress, startLine DebugLineNumber, startDepth DebugTally) returns bool
+function presentedPositionArrives(mode DebugWalkMode, line DebugLineNumber, depth DebugTally, framePointer DebugAddress, startFrame DebugAddress, startLine DebugLineLookup, startDepth DebugTally) returns bool
 	if mode == DebugWalkMode.intoTheCallee 'anyLineChange'
-		return line != startLine or framePointer != startFrame or depth != startDepth
+		return leftTheStartLine(line, startLine: startLine) or framePointer != startFrame or depth != startDepth
 	end 'anyLineChange'
 
 	if framePointer < startFrame or (framePointer == startFrame and depth > startDepth) 'insideACallee'
@@ -2353,11 +2363,25 @@ function presentedPositionArrives(mode DebugWalkMode, line DebugLineNumber, dept
 	end 'insideACallee'
 
 	if mode == DebugWalkMode.pastThisLine 'onlyForward'
-		return framePointer > startFrame or line > startLine
+		return framePointer > startFrame or passedTheStartLine(line, startLine: startLine)
 	end 'onlyForward'
 
-	return framePointer > startFrame or line != startLine
+	return framePointer > startFrame or leftTheStartLine(line, startLine: startLine)
 end 'presentedPositionArrives'
+
+function leftTheStartLine(line DebugLineNumber, startLine DebugLineLookup) returns bool
+	return match startLine 'start'
+		unknown gives true
+		line(start) gives line != start
+	end 'start'
+end 'leftTheStartLine'
+
+function passedTheStartLine(line DebugLineNumber, startLine DebugLineLookup) returns bool
+	return match startLine 'start'
+		unknown gives true
+		line(start) gives line > start
+	end 'start'
+end 'passedTheStartLine'
 
 function callOf(instruction DecodedInstruction, at DebugAddress) returns DebugCallLookup
 	if instruction.instructionClass == DbgClassDirectCall or instruction.instructionClass == DbgClassIndirectCall 'aCall'
@@ -2368,7 +2392,7 @@ function callOf(instruction DecodedInstruction, at DebugAddress) returns DebugCa
 end 'callOf'
 
 function motionRefused(verb String, reason String) returns DebugReply
-	return DebugReply.failed("the program refused to {verb} ({reason})", suggestion: DebugNoSuggestion)
+	return DebugReply.failed("the program refused to {verb} ({reason})", suggestion: StatedText.unstated)
 end 'motionRefused'
 
 function wordsOf(line String) returns StringArray

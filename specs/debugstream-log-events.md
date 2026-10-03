@@ -125,21 +125,19 @@ log_phase_end compile unit=7
 
 <!-- test: debugstream-log-events.a-green-thread-program-logs-before-its-scheduler-exists -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⛔⛔ **THE CASE THAT CATCHES A PRE-INITIALIZED SCHEDULER READ, AND IT WAS A SEGFAULT.** Every log
-entry stamps the green thread that authored it, which since the P landed (`sched-processor.md`) is
-`M->currentGt` — reached through this OS thread's TLS slot, at a byte offset `__sched_init_procs`
+⛔⛔ **THE CASE THAT CATCHES A PRE-INITIALIZED SCHEDULER READ, WHICH IS A SEGFAULT.** Every log
+entry stamps the green thread that authored it, which is `M->currentGt` (`sched-processor.md`) —
+reached through this OS thread's TLS slot, at a byte offset `__sched_init_procs`
 computes. A program may log BEFORE its first `async`, i.e. before that offset exists, and this is the
 shape that does: three events, then a spawn.
 
 The offset's uninitialized value is 0, and `gs:[0]` on Win64 is `NT_TIB.ExceptionList` — a **non-null
 pointer**, not a null slot — so an unguarded read follows it and loads `ExceptionList + 0x08`
-(`SchedRuntime.MOffCurrentGt`; it was `+ 0x18` while the field was the P's).
-MEASURED under `maxon monitor`: exit 42 became a **SEGMENTATION FAULT**, reported by the monitor as
-`1 abandoned (producer died mid-entry)`. The `.data` word the P replaced read 0 before init and could
-not fail this way, which is why the discipline had never needed writing down.
+(`SchedRuntime.MOffCurrentGt`). Under `maxon monitor` that is a **SEGMENTATION FAULT** in place of exit 42,
+reported by the monitor as `1 abandoned (producer died mid-entry)`.
 
 ⭐ **THE `gt=` FIELD IS NORMALIZED OUT OF THE GOLDEN, SO THE ASSERTION IS THE EXIT CODE AND THE THREE
-LINES BEING THERE AT ALL** — which is exactly right: what went wrong was not a wrong thread id, it was
+LINES BEING THERE AT ALL** — which is exactly right: what goes wrong is not a wrong thread id, it is
 the process dying while writing the entry. A run that survives to emit all three and then completes
 its `async` is the whole property.
 ```maxon
@@ -271,7 +269,7 @@ error E2004: <fragment>:4:24: Function '__DebugStream.event' does not return a v
 ```
 
 <!-- test: debugstream-log-events.error.a-label-is-refused -->
-⚠ **THE DIVERGENCE, PINNED.** The bootstrap accepts `unitId: 7` here; The compiler refuses it, because it
+⚠ **A LABEL IS REFUSED.** The compiler refuses `unitId: 7` here, because it
 has no parameter names for this family and an unchecked label on a positional call is a mis-slot
 waiting to happen. See this spec's documentation.
 ```maxon

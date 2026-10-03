@@ -55,17 +55,14 @@ array program links.
 Every case below reads `x` back out of a one-element array rather than naming a literal, and that
 is what makes the eight identity cases pin an identity at all. A `binOpImm` whose LEFT operand is
 also constant is not an identity to recognise — it is arithmetic to EVALUATE, and `foldConstants`
-(EC12) evaluates it one pass earlier, leaving a single `mov` in which nothing about this pass is
+evaluates it one pass earlier, leaving a single `mov` in which nothing about this pass is
 visible.
 
-⛔ **`x` USED TO BE THE RETURN OF A ONE-LINE `opaque(n)` HELPER, THROUGH TWO REASONS THAT BOTH
-EXPIRED.** The first was that a call keeps the PARSER's constant folder off the expression, which is
-true and was never sufficient. The second was written down when EC5 falsified the first: `opaque` is
-a tiny leaf, so `inlineLeaves` splices it in and the operand IS a `const` by the time this pass
-runs — and the case was kept on the reading that the Std tier has no constant propagation, so the
-`const` could only ever become an IMMEDIATE. EC12 is that reading expiring. What replaces the call
-is a MEMORY READ, because that rests on a rule the compiler STATES rather than on any pass's current
-policy: a load's result is never a compile-time constant, however constant the initializer looks,
+⛔ **`x` IS NOT THE RETURN OF A ONE-LINE `opaque(n)` HELPER.** A call keeps the PARSER's constant
+folder off the expression, but that is not sufficient: `opaque` is a tiny leaf, so `inlineLeaves`
+splices it in and the operand IS a `const` by the time this pass runs, and `foldConstants` then
+evaluates it. `x` is a MEMORY READ, because that rests on a rule the compiler STATES rather than on
+any pass's current policy: a load's result is never a compile-time constant, however constant the initializer looks,
 since any store since could have replaced it (`FoldConstOperands.classifyFoldableDef`, memory band).
 The `try … otherwise` merge makes the value a phi as well, which no constant domain here looks
 through either.

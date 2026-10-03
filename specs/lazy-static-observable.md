@@ -14,17 +14,15 @@ reads the slot. Ordering among them is by DEPENDENCY: an initializer that reads 
 the one it reads, so no initializer can observe a slot that has not settled.
 
 **⛔ A COMPUTED VALUE CANNOT SEE WHEN ITS INITIALIZER RAN.** A case that reads a static and prints what it
-holds gets the same output under any timing whatsoever — which is why all twenty-four cases of
-`specs/lazy-static.md` pass without pinning one word of the above. The cases here observe the timing
+holds gets the same output under any timing whatsoever — which is why every case of
+`specs/lazy-static.md` passes without pinning one word of the above. The cases here observe the timing
 itself: through a side effect in an initializer, through a slot nothing ever reads, and through an order
 that two initializers cannot both be given.
-
-They are compiler-only because the canonical file is not ours to extend.
 
 ### The scope of the declaration does not change the timing
 
 A `static` member and a module-level `var` agree — both initializers run before `main`, and neither needs a
-read to force one. `specs/dead-top-level-var-elim.md:31` is the canonical half for module scope: a
+read to force one. `specs/dead-top-level-var-elim.md` states the module-scope half: a
 module-level var's initializer *"still runs even when the slot is dead"*. The first two cases below are that
 pair, on one program moved between the two positions.
 
@@ -55,9 +53,6 @@ some value at run time.
 
 The control for the whole feature. Nothing reads `Counter.cached`, so the counter its initializer bumps is
 the only evidence that the initializer ran at all.
-
-⚠ **THE C# BOOTSTRAP DISAGREES AND CANNOT ARBITRATE HERE**: on this program it prints `0`, initializing the
-static only on a read that never arrives.
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -758,7 +753,7 @@ the first thread starts — which is what keeps the green-thread stack guard out
 The recursion drives several grow-and-relocate rounds before the read, so the load is issued from a frame
 the runtime has moved; the record's address lives on the heap and does not move with it. The second thread
 reads the same record, and `built` appears once, ahead of everything either thread prints. The `read`
-marker is what makes the function YIELD: with the initializer no longer reached through the load, a body
+marker is what makes the function YIELD: with the initializer not reached through the load, a body
 that only recurses and returns never reaches a suspension point, and `async` refuses it (E3073).
 
 ```maxon

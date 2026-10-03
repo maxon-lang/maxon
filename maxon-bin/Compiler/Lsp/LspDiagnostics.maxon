@@ -79,11 +79,6 @@ union SubjectDeclaration
 	undeclared
 end 'SubjectDeclaration'
 
-union QuotedName
-	spelled(text String)
-	unquoted
-end 'QuotedName'
-
 union RefusalRoad
 	aCleanParsesCheck
 	aModifiedBuffersParse
@@ -272,7 +267,7 @@ module function attributedTo(diagnostics DiagnosticArray, path FilePath, alone D
 	var kept = DiagnosticArray.create()
 
 	for diagnostic in thisDocumentsOwn(diagnostics, path: path) 'each'
-		if diagnostic.filePath.isEmpty() and not raisedAmong(diagnostic, others: alone) 'reportedOverTheWholeProject'
+		if diagnostic.anchor.isProgramWide() and not raisedAmong(diagnostic, others: alone) 'reportedOverTheWholeProject'
 			continue
 		end 'reportedOverTheWholeProject'
 
@@ -284,7 +279,7 @@ end 'attributedTo'
 
 function raisedAmong(diagnostic Diagnostic, others DiagnosticArray) returns bool
 	for other in others 'eachOther'
-		if other.filePath.isEmpty() and other.code == diagnostic.code and other.message == diagnostic.message 'theSamePositionlessClaim'
+		if other.anchor.isProgramWide() and other.code == diagnostic.code and other.message == diagnostic.message 'theSamePositionlessClaim'
 			return true
 		end 'theSamePositionlessClaim'
 	end 'eachOther'
@@ -459,11 +454,11 @@ function diagnosticSubject(diagnostic Diagnostic, tokens TokenArray) returns Dia
 		return reconstructedUnknownTypeSubject(diagnostic, tokens: tokens)
 	end 'anUnknownType'
 
-	if diagnostic.line == 0 'noAnchorToReadFrom'
-		return DiagnosticSubject.unattributable
-	end 'noAnchorToReadFrom'
-
-	return subjectAnchoredAt(tokens, line: diagnostic.line, column: diagnostic.column)
+	return match diagnostic.anchor 'anchor'
+		programWide or
+			file gives DiagnosticSubject.unattributable
+		at(_, line, column) gives subjectAnchoredAt(tokens, line: line, column: column)
+	end 'anchor'
 end 'diagnosticSubject'
 
 function subjectAnchoredAt(tokens TokenArray, line LineNumber, column ColumnNumber) returns DiagnosticSubject
@@ -484,8 +479,8 @@ end 'subjectAnchoredAt'
 
 function reconstructedUnknownTypeSubject(diagnostic Diagnostic, tokens TokenArray) returns DiagnosticSubject
 	match quotedNameIn(diagnostic.message) 'quoted'
-		unquoted then return DiagnosticSubject.unattributable
-		spelled(typeName) then return unknownTypeSubjectNamed(diagnostic, tokens: tokens, typeName: typeName)
+		unstated then return DiagnosticSubject.unattributable
+		stated(typeName) then return unknownTypeSubjectNamed(diagnostic, tokens: tokens, typeName: typeName)
 	end 'quoted'
 end 'reconstructedUnknownTypeSubject'
 
@@ -510,14 +505,14 @@ function unknownTypeSubjectNamed(diagnostic Diagnostic, tokens TokenArray, typeN
 	return DiagnosticSubject.unattributable
 end 'unknownTypeSubjectNamed'
 
-function quotedNameIn(message String) returns QuotedName
+function quotedNameIn(message String) returns StatedText
 	let segments = message.split(DiagnosticNameQuote)
 
 	if segments.count() <= QuotedNameSegment 'nothingQuoted'
-		return QuotedName.unquoted
+		return StatedText.unstated
 	end 'nothingQuoted'
 
-	return QuotedName.spelled(try segments.get(QuotedNameSegment) otherwise panic("quotedNameIn: the split produced more than {QuotedNameSegment} segments one line above"))
+	return StatedText.stated(try segments.get(QuotedNameSegment) otherwise panic("quotedNameIn: the split produced more than {QuotedNameSegment} segments one line above"))
 end 'quotedNameIn'
 
 // ⛔ **THE DOTTED BASE IS ASKED FOR BEFORE THE BARE NAME, AND SWAPPING THE TWO UNDOES THE FEATURE.** The
@@ -570,16 +565,16 @@ end 'claimsAboutTheWholeProgram'
 
 // Does this diagnostic report on THIS document's text?
 //
-// A diagnostic naming no file at all was reported without a position (`Diagnostic`'s header: "empty
-// when program-wide"), and it is taken to be this document's because every road that reaches here
-// reported over this document alone — the buffer compile holds one file plus the library tiers, and the
-// corpus road parses the reader's file and nothing else — or narrowed first: the project check reports
-// over the whole project, and `attributedTo` keeps a positionless diagnostic only where the buffer
-// compile raised it too. ⚠ A positionless diagnostic carries nothing to narrow BY, so a road that ever
-// reports over more than this document owes its own narrowing before it gets here. One naming ANOTHER file is a library's, and painting it into the author's document would put
-// a squiggle on a line they did not write.
+// A `programWide` diagnostic names no file, and it is taken to be this document's because every
+// road that reaches here reported over this document alone — the buffer compile holds one file plus
+// the library tiers, and the corpus road parses the reader's file and nothing else — or narrowed
+// first: the project check reports over the whole project, and `attributedTo` keeps a program-wide
+// diagnostic only where the buffer compile raised it too. ⚠ A program-wide diagnostic carries
+// nothing to narrow BY, so a road that ever reports over more than this document owes its own
+// narrowing before it gets here. One naming ANOTHER file is a library's, and painting it into the
+// author's document would put a squiggle on a line they did not write.
 module function reportsOn(diagnostic Diagnostic, path FilePath) returns bool
-	return diagnostic.filePath.isEmpty() or namesTheSameFile(diagnostic.filePath, other: path)
+	return namesTheSameFile(try diagnostic.anchor.anchoredFile() otherwise return true, other: path)
 end 'reportsOn'
 
 // Resolved and normalized rather than compared as text: the corpus reports under the spelling it
@@ -623,34 +618,35 @@ end 'diagnosticNode'
 //
 // Two anchors have no token, and both fall back to a ONE-BYTE span converted through the same path:
 //
-//   * **A diagnostic reported WITHOUT a position**, which `Diagnostic` marks by a `line` of 0 — 1-based
-//     lines start at 1, so 0 is unreachable for a real span. `reportsOn` has already established it is
-//     this document's, and there is nowhere better inside it than the start. `E3002` (`main` returning
-//     something other than `ExitCode`) is one that reaches the publish.
+//   * **A diagnostic reported WITHOUT a position** — a `programWide` or `file` anchor. `reportsOn`
+//     has already established it is this document's, and there is nowhere better inside it than the
+//     start. `E3002` (`main` returning something other than `ExitCode`) is one that reaches the
+//     publish.
 //   * **A position no token BEGINS at.** The lexer records a span only for tokens whose text it sliced,
 //     so every punctuator carries `startByte == endByte == 0` (`LspCursor.maxon` states the same fact
 //     from the other side) — `tokenSpanAt` finds one by line and column and hands back a span that is
 //     empty, which is exactly the signal to fall back.
 module function diagnosticSpan(diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns LspSpan
-	if diagnostic.line == 0 'wholeProgram'
-		return documentStartSpan()
-	end 'wholeProgram'
+	return match diagnostic.anchor 'anchor'
+		programWide or
+			file gives documentStartSpan()
+		at(_, line, column) gives anchoredSpan(line, column: column, source: source, index: index, tokens: tokens)
+	end 'anchor'
+end 'diagnosticSpan'
 
-	let anchored = tokenSpanAt(tokens, line: diagnostic.line, column: diagnostic.column)
+function anchoredSpan(line LineNumber, column ColumnNumber, source String, index LspLineIndex, tokens TokenArray) returns LspSpan
+	let anchored = tokenSpanAt(tokens, line: line, column: column)
 
 	if not anchored.isEmpty() 'onAToken'
 		return anchored
 	end 'onAToken'
 
-	// The column is 1-based BYTES (the lexer counts one per consumed byte), and 0 is the same absence
-	// one level down from a line of 0 — an anchor on the line but at no column in it, which is the
-	// line's first byte.
-	let lineStart = index.offsetOf(source, position: LspPosition.create(((diagnostic.line - 1) as LspLineNumber), character: 0))
-	let byteColumn = 1 if diagnostic.column == 0 else diagnostic.column
-	let anchor = (lineStart + byteColumn - 1) as ByteOffset
+	// The column is 1-based BYTES (the lexer counts one per consumed byte).
+	let lineStart = index.offsetOf(source, position: LspPosition.create(((line - 1) as LspLineNumber), character: 0))
+	let anchor = lineStart + (column as ByteOffset) - 1
 
 	return LspSpan.create(anchor, endByte: (anchor + 1) as ByteOffset)
-end 'diagnosticSpan'
+end 'anchoredSpan'
 
 // The first byte of a document, where a diagnostic with no position of its own in it is placed.
 module function documentStartSpan() returns LspSpan

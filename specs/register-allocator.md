@@ -18,9 +18,7 @@ These tests exercise register allocation with progressively increasing difficult
 
 ## Tests
 
-⚠ **PORT NOTE (BATCH29/A3a).** `status:` reads `stable` here and `selfhosted` in `/specs`: that frontmatter names the runner that owns the file, and the owner here is the compiler. Its `/specs` twin stays `status: selfhosted`.
-
-⚠ **PORT NOTE (BATCH29/A3a).** The `/specs` original carries 165 `RequiredIR:<target>` block(s) in v1's single-section dump format. None survives the port: the compiler's spec parser has no `RequiredIR` arm, so every one of them would be read by nobody while reading as coverage — the shape this batch exists to remove, and `SpecParser.isUnimplementedFenceOpen` now refuses the fence rather than walking past it. What pins the emitted code here is each case's MINTED FRAGMENT GOLDEN, which records what THIS compiler emits rather than what v1 did. The `/specs` copy keeps its blocks and stays `status: selfhosted`; its `status-reason:` names this file.
+⚠ This file carries no `RequiredIR:<target>` blocks: the compiler's spec parser has no `RequiredIR` arm, and `SpecParser.isUnimplementedFenceOpen` refuses the fence rather than walking past it. What pins the emitted code here is each case's MINTED FRAGMENT GOLDEN, which records what this compiler emits.
 
 ### Level 1: Basic Value Tracking
 

@@ -43,12 +43,8 @@ The exemption is the RECEIVER slot and nothing wider. Handing the same `let` to 
 callee writes — `bump(b Box)` whose body is `b.n = 99` — is `E3019` at the call, because there the write is
 of a record the caller named `let` rather than of the callee's own `self`.
 
-This is a deliberate divergence from the runnable oracle, taken because **the oracle disagrees with
-itself**. Measured on one program with a `let` receiver: `self.total = self.total + value` is accepted
-and returns 42, while `total = total + value` — the same write, the other spelling — is `E3019`. Its
-analysis matches op TYPES, and only the bare spelling produces the operation its self-field check
-inspects. The compiler has exactly one self-field store for both spellings (splitting them is what v1 did, and it
-cost v1 a field-visibility check that was structurally blind to bare names), so it must give one answer
+`self.total = self.total + value` and `total = total + value` are the same write in two spellings. The
+compiler has exactly one self-field store for both spellings, so it must give one answer
 for both; it gives the one the corpus pins (`self-keyword.md`'s `self-with-params`, which runs at 42).
 
 ### Not checked: a call through a function VALUE
@@ -452,14 +448,13 @@ end 'main'
 ```
 
 <!-- test: let-set-to-mutating-param-ok -->
-⭐⭐ **A `Set` PARAMETER NO LONGER OBEYS THIS RULE (W90), AND IT IS THE SAME RULING ITS RECEIVER TWIN
-CARRIES** — see `immutable-method-call.md`'s Documentation, which owns it. The refusal here was never a
-parameter rule of its own: `add`'s `s` counts as mutated only because `s.insert(1)` mutates the RECEIVER,
-which the parser decides through the builtin `setMethodMutatesReceiver` roster. A declared type never
-reaches that roster, so both shapes drop together and neither is left half-enforced.
+⭐⭐ **A `Set` PARAMETER DOES NOT OBEY THIS RULE, AND IT IS THE SAME RULING ITS RECEIVER TWIN
+CARRIES** — see `immutable-method-call.md`'s Documentation, which owns it. The refusal is not a
+parameter rule of its own: `add`'s `s` would count as mutated only through `s.insert(1)` mutating the
+RECEIVER, which the parser decides through the builtin `setMethodMutatesReceiver` roster. A declared type
+never reaches that roster, so both shapes are exempt together and neither is left half-enforced.
 
-⚠ The `Array` and `String` cases around this one are unaffected and stay green: both are still
-builtin-dispatched.
+⚠ The `Array` and `String` cases around this one are builtin-dispatched, so the rule holds for them.
 
 ⚖ It is also the pin for the TRANSITIVE receiver exemption: `Set.insert` writes its own `self` fields, and a
 callee that merely calls a self-writing method on its parameter is not mutating that parameter, so the bit
@@ -743,7 +738,7 @@ end 'main'
 
 <!-- test: let-struct-to-self-mutating-method-ok -->
 A method writing its OWN receiver's field is legal on a `let` struct — see the documentation above for the
-ruling and for the oracle inconsistency it settles. This is the BARE spelling; the `self.`-prefixed one is
+ruling. This is the BARE spelling; the `self.`-prefixed one is
 `self-keyword.md`'s `self-with-params`, and the two must mean the same thing.
 
 ```maxon
@@ -893,7 +888,7 @@ end 'main'
 <!-- test: let-struct-with-array-field-to-mutating-method-ok -->
 A method that pushes onto a container held in a self FIELD is the same ruling once more: there is no
 principled line between writing `self.total` and writing the array `self.items` points at, so drawing one
-would be the very spelling-dependent inconsistency the documentation above measures in the oracle.
+would be a spelling-dependent inconsistency of the kind the documentation above rules out.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -957,8 +952,8 @@ end 'main'
 ```
 
 <!-- test: function-value-call-is-not-checked -->
-A call through a function VALUE names no callee to summarise, and both reference compilers accept it
-(measured). Pinned so the hole is visible: `a` is a `let` and the push takes effect.
+A call through a function VALUE names no callee to summarise, so it is accepted. Pinned so the hole is
+visible: `a` is a `let` and the push takes effect.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

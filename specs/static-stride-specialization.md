@@ -10,8 +10,8 @@ category: codegen
 
 `ManagedMemoryRuntime.emitStrideDispatch` forks an element access on `element_size@24` — a **runtime**
 field of the array record — into a machine-word arm, a single-byte arm, and everything else.
-`InlineManagedPrimitives` (EC1) puts that fork inline at every array read and write in every program,
-so until EC15 an `Array with Integer` element access paid, per access:
+`InlineManagedPrimitives` puts that fork inline at every array read and write in every program,
+so without a known stride an `Array with Integer` element access pays, per access:
 
 ```
 mov rax, [rbx + 24]      ; element_size@24
@@ -34,11 +34,10 @@ The key survives because `IrModule.ops` allocates indices by `push` and the one 
 clones nor replaces a call: `insertRangeChecks` appends guards and splits blocks, which moves `opRefs`
 and never ops.
 
-⭐ **EC17 SHORTENED THAT LIST.** `inlineLeaves` used to sit between the write and the read as well, and
-what covered it was that a leaf holds no call BY RULE, so it could neither clone nor re-issue a managed
-primitive. It now runs AFTER `inlineManagedPrimitives` — after this table has been read and spent — so a
-splice cannot reach a live key at all. The leaf rule still holds; it is now the argument for the REORDER
-rather than for this key.
+⭐ **`inlineLeaves` IS NOT ON THAT LIST.** It runs AFTER `inlineManagedPrimitives` — after this table has
+been read and spent — so a splice cannot reach a live key at all. The leaf rule (a leaf holds no call BY
+RULE, so it can neither clone nor re-issue a managed primitive) still holds, but this key does not rely
+on it.
 
 ### THE STATIC STAMP IS NOT ALWAYS THE RECORD'S STAMP
 
@@ -63,14 +62,14 @@ clone and slice copy their source), and the one that does not stamps the machine
   site still has to ask. The runtime fork stands, and the fork is exactly the question that
   distinguishes them. (Left open: a byte-stamped site could keep both arms and route the fork's third
   edge to the WORD arm rather than to the call, which is sound by the same reading and would make a
-  `for v in b` over a `ByteArray` call-free the way the word case now is.)
+  `for v in b` over a `ByteArray` call-free the way the word case is.)
 - **A stride is known that takes NEITHER arm** — a 2- or 4-byte element, an unset stride, or a sub-byte
   PACKED one (`element_size@24` is signed: a packed element reads `-1`/`-2`/`-4`). The record is that
   stride or the word, and the CALL is right for both, so nothing is expanded at all. That is strictly
-  better than expanding: such a site used to pay the load and both compares to reach the very call it
-  was always going to make.
+  better than expanding: an expanded site would pay the load and both compares to reach the very call it
+  makes anyway.
 - **Nothing is known** — an opaque `T` element inside the shared body itself, an array reached through
-  an interface or an existential. The runtime fork is emitted exactly as before.
+  an interface or an existential. The full runtime fork is emitted.
 
 ### For `__managed_get_unchecked` a known stride removes the CALL as well
 
@@ -81,7 +80,7 @@ unreachable block. The body of a `for v in a` over a concrete array is then genu
 which is what a later hoisting pass needs: a live range crossing a call is confined to the
 callee-saved registers, and this compiler refuses rather than spills.
 
-### A SHARED GENERIC BODY HAS NO SINGLE STRIDE (W57)
+### A SHARED GENERIC BODY HAS NO SINGLE STRIDE
 
 `Array with T` and `__ManagedMemory with T` are ONE `GenericInstanceId`, and a generic body is compiled
 **once** for every instantiation — so an opaque element has no stride to specialize on, and
@@ -90,18 +89,17 @@ parameter occupies). Recording that answer would specialize an `Array with Byte`
 access. `containerElementIsOpaque` is the refusal, and `a-shared-generic-body-keeps-the-runtime-fork`
 is its control. Its dual — a record BORN in such a body and read back under a substituted concrete type
 — is what the byte rule above exists for, and
-`a-substituted-container-field-is-word-strided-however-it-is-typed` is the program that measured it.
+`a-substituted-container-field-is-word-strided-however-it-is-typed` is the program that pins it.
 
 ## Tests
 
 <!-- test: a-known-word-stride-reads-with-no-dispatch -->
-The shape the row was opened for. `for v in a` over an `Array with` an 8-byte element: the loop body is
+The shape this specialization exists for. `for v in a` over an `Array with` an 8-byte element: the loop body is
 the buffer load and the element load and nothing else — no `[<rec> + 24]`, no `cmpRegImm32 …, 8`, no
 `__im_stride` / `__im_byte` block, and no `callDirect __managed_get_unchecked` anywhere in `total`.
 
-The committed fragment is the reading: `@total` used to be twelve instructions per element across five
-blocks with a call on one of them, and is now eight across four with no call at all — which is also why
-its prologue no longer saves `rbx`/`r12`/`r13`.
+The committed fragment is the reading: `@total` is eight instructions per element across four blocks
+with no call at all — which is also why its prologue saves none of `rbx`/`r12`/`r13`.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
@@ -261,7 +259,7 @@ end 'main'
 ```
 
 <!-- test: a-shared-generic-body-keeps-the-runtime-fork -->
-THE W57 CONTROL. `Bag uses Element` is compiled ONCE and reached here at two different element WIDTHS —
+THE SHARED-BODY CONTROL. `Bag uses Element` is compiled ONCE and reached here at two different element WIDTHS —
 an 8-byte `Word` and a 1-byte `Byte`. There is no stride for its body to be specialized on, and every
 value below is wrong by a factor of eight in one direction or the other if it is specialized anyway: an
 8-byte access into a byte-strided buffer reads seven bytes of its neighbours, and a `u8` access into a
@@ -337,7 +335,7 @@ end 'main'
 ```
 
 <!-- test: a-substituted-container-field-is-word-strided-however-it-is-typed -->
-⛔⛔ **THE RED-GATE CONTROL, AND THE PROGRAM THAT MEASURED THE RULE.** `Bag with Byte`'s `items` is
+⛔⛔ **THE RED-GATE CONTROL, AND THE PROGRAM THAT PINS THE RULE.** `Bag with Byte`'s `items` is
 declared `Array with Element` inside a SHARED generic body, so its record was created at the opaque
 machine-word slot and stamps `element_size@24` with **8**. Read from OUTSIDE that body it wears the
 SUBSTITUTED type `Array with Byte`, whose static stride is **1**. The two disagree, and the record is
@@ -345,8 +343,8 @@ the one that is true.
 
 `elementSize()` asserts the record's own stamp, so the disagreement is stated rather than assumed;
 `items.get(1)` then reads element 1 through it. Change `strideDispatchPlanForStamp`'s byte arm from
-`runtimeFork` back to `singleArm(SingleOpStride.byte)` and this case answers **0** where 7 is correct —
-one byte out of the middle of an eight-byte slot, exit code 3. MEASURED: with that arm restored this is
+`runtimeFork` to `singleArm(SingleOpStride.byte)` and this case answers **0** where 7 is correct —
+one byte out of the middle of an eight-byte slot, exit code 3. With that arm in place this is
 the ONLY case in this file that goes red, `a-byte-stamp-keeps-the-runtime-fork` included, which is why a
 codegen pin could not have stood in for it.
 ```maxon

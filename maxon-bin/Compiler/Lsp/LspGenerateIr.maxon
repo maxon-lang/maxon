@@ -60,7 +60,7 @@ end 'Project'
 function irErrorNode(doc JsonDoc, diagnostic Diagnostic, path FilePath, source String, index LspLineIndex, tokens TokenArray) returns JsonNodeId
 	let inTheSource = reportsOn(diagnostic, path: path)
 	let span = diagnosticSpan(diagnostic, source: source, index: index, tokens: tokens) if inTheSource else documentStartSpan()
-	let message = diagnostic.message if inTheSource else "{diagnostic.filePath}:{diagnostic.line}:{diagnostic.column}: {diagnostic.message}"
+	let message = diagnostic.message if inTheSource else elsewhereMessage(diagnostic)
 	let start = index.positionOf(source, offset: span.startByte)
 
 	var item = LspJsonObject.create(doc)
@@ -69,3 +69,11 @@ function irErrorNode(doc JsonDoc, diagnostic Diagnostic, path FilePath, source S
 	item.put(IrErrorColumnKey, value: JsonNode.numberNode((start.character + ExplorerPositionBase) as JsonFloat))
 	return item.finish()
 end 'irErrorNode'
+
+function elsewhereMessage(diagnostic Diagnostic) returns String
+	return match diagnostic.anchor 'anchor'
+		at(filePath, line, column) gives "{filePath}:{line}:{column}: {diagnostic.message}"
+		file(filePath) gives "{filePath}: {diagnostic.message}"
+		programWide panic("irErrorNode: a program-wide diagnostic reports on every document, so it is never placed as another file's")
+	end 'anchor'
+end 'elsewhereMessage'

@@ -10,19 +10,14 @@ category: type-system
 
 A program names a type in exactly THREE places: a parameter, a return type, and a FIELD. The
 first two reach `TypeResolution.resolveNamedType` — the one place that knows what a `named`
-type denotes — and report `E3011` when no registry declares the name. The third did not.
+type denotes — and report `E3011` when no registry declares the name. The third reaches it through
+`TypeResolution.checkStructFieldTypes`, which `resolveTypes` runs over every `StructLayout.fieldTypes`.
 
-`resolveTypes` walked `func.maxonReturnType` and `func.maxonParamTypes` and nothing else, so
-`StructLayout.fieldTypes` was never read by the authority. A field declared `as Nonexistent`
-therefore reached NO check at all, and `Parser.fieldStorageType`'s recovery value — `integer`,
-handed back so the `loadIndirect` stays well-formed for the instant before the pipeline's error
-gate throws — became the **final answer**: the program compiled clean and the field silently
-typed itself `i64`.
-
-That made `fieldStorageType`'s own comment false. It said the recovery was safe *because*
-"E3011, which `TypeResolution` reports against the merged registry, the authority" would fire —
-and nothing did. The comment described the right design; the implementation never had it. The
-fix is the walk that makes the sentence true, not the deletion of the sentence.
+That walk is what makes `Parser.fieldStorageType`'s recovery value safe. The recovery hands back
+`integer` so the `loadIndirect` stays well-formed for the instant before the pipeline's error gate
+throws; without a check on the field, that value would be the **final answer**: the program would
+compile clean and the field would silently type itself `i64`. The recovery is safe *because* E3011,
+reported by `TypeResolution` against the merged registry, fires first.
 
 ⚠ **The check cannot live at the layout COMMIT point**, which is the obvious other home
 (`ParseStaging.commitStructTypes`, where the layouts arrive in declaration order). `mergeArtifact`
@@ -32,7 +27,7 @@ exactly where `resolveTypes` runs.
 
 The diagnostic is UNPOSITIONED, identically to the parameter/return-type E3011 above it and for
 that one's stated reason: nothing records a source span for a type REFERENCE (only ops and
-parameter NAMES carry one). That is an accepted, documented limitation, not a new one.
+parameter NAMES carry one). That is an accepted, documented limitation.
 
 ### The one route the authority cannot reach — and what stands in for it there
 
@@ -42,18 +37,16 @@ parser throws — and a thrown `ParseError` both stops the file before the pipel
 discards that file's artifact diagnostics (`Parser.abortedParseArtifact`). So on this one route the
 authority never speaks at all, and whatever the parser says IS the whole diagnosis.
 
-What it said was **false**. All three member-access doors — a local binding
-(`Parser.requireStructBase`, serving both the read and the write path), a CLOSURE CAPTURE
-(`Parser.capturedStructBase`) and a VALUE receiver with no binding to name
-(`Parser.structBaseOfReceiver`) — worded their refusal around `typeTagName(<the base's tag>)`, and a
-`named` tag PRINTS AS `int` (that arm is correct for the ranged alias it was written for). So
-`function takes(h NoSuchTypeAtAll)` + `return h.v` was reported as *"a field access on 'h', which is
-declared 'int'"*: a statement about the source that the source does not make, pointing the reader at
-a type the compiler had invented for its own recovery. Measured on all three doors, in three
-different sentences. The runnable oracle answers the same program `Unknown type: NoSuchTypeAtAll`,
-blaming the DECLARATION.
+There are three member-access doors — a local binding (`Parser.requireStructBase`, serving both the
+read and the write path), a CLOSURE CAPTURE (`Parser.capturedStructBase`) and a VALUE receiver with no
+binding to name (`Parser.structBaseOfReceiver`). Each words its ordinary refusal around
+`typeTagName(<the base's tag>)`, and a `named` tag PRINTS AS `int` (that arm is correct for the ranged
+alias it was written for). Worded that way, `function takes(h NoSuchTypeAtAll)` + `return h.v` would be
+reported as *"a field access on 'h', which is declared 'int'"*: a statement about the source that the
+source does not make, pointing the reader at a type the compiler invented for its own recovery. What is
+wrong is the DECLARATION: `NoSuchTypeAtAll` names no type.
 
-**The precedence rule now implemented.** A member-access refusal may not preempt the authority with
+**The precedence rule.** A member-access refusal may not preempt the authority with
 a type it invented. Before wording itself, each of the three doors asks
 `TypeResolution.denotedNamedType` — the ONE cascade that knows what a `named` type denotes, the same
 one the two `as`-cast sites and the generic-type-argument check ask — whether the base's declared
@@ -67,18 +60,14 @@ type name denotes anything:
   `specs/struct-field-assign-precedence.md`'s `error.not-a-struct-outranks-immutable-instance`
   (a bare `let n = 5`) and `specs/self-field-struct-typed.md`'s
   `error.scalar-field-base-is-not-a-struct` (a field declared with a ranged alias, whose tag is
-  `named`). ⭐ **That second one is the whole corpus's coverage of this branch, measured rather than
-  assumed:** widen the query to fire on every `named` and it reports
-  `E3011: Unknown type 'Integer'` about a perfectly declared alias — and it is the ONLY case of 2540
+  `named`). ⭐ **That second one is the whole corpus's coverage of this branch:** widen the query to
+  fire on every `named` and it reports
+  `E3011: Unknown type 'Integer'` about a perfectly declared alias — and it is the ONLY case
   that goes red, so it is the single thing standing between this arm and a new false rejection.
-* **it is the SIXTH compiler-owned name, `CharacterSet`** ⇒ the existing refusal also stands, and
-  ⚠ **since `W115` it no longer stands for the reason this bullet used to give.** The cascade used to
-  say `notDeclared` for it, because its layout was registered under `__CharacterSet` rather than under
-  the name a source writes — so this was the one place the cascade's answer could not be read as "the
-  program declares no such type". `stdlib/CharacterSet.maxon` is listed now, the corpus layout is filed
+* **it is the SIXTH compiler-owned name, `CharacterSet`** ⇒ the existing refusal also stands.
+  `stdlib/CharacterSet.maxon` is listed, the corpus layout is filed
   under the BARE name, and the cascade answers it like any other declared struct.
-  `isCompilerOwnedTypeName` remains the gate for the names that still have no cascade arm; it is simply
-  no longer this name that measures it.
+  `isCompilerOwnedTypeName` remains the gate for the names that have no cascade arm.
 * **it denotes nothing** ⇒ the door reports **E3011 with `unknownTypeMessage`** — the authority's own
   code and the authority's own words — positioned at the base (or, for a method call, the member).
   Not a sentence of its own: `ParseError.unknownTypeName`, the one arm every positioned undeclared
@@ -92,24 +81,23 @@ the denoted type is discarded, never substituted for the base's, because the par
 keeps a `named` value's alias name (the shift rule and the per-instance identity checks read it)
 where `resolveTypes` erases it.
 
-### The code is E3011, and the first cut of this fix got that wrong
+### The code is E3011
 
-⚠ **A BETTER SENTENCE UNDER THE WRONG CODE IS STILL A SECOND HOME FOR ONE FACT.** The first cut kept
-each door's *"a field access on 'h', …"* framing and merely swapped the invented type for the real
-name. That removed the false assertion — but it left `E2015 ParserUnsupportedFeature` (*"a construct
+⚠ **A BETTER SENTENCE UNDER THE WRONG CODE IS STILL A SECOND HOME FOR ONE FACT.** A door that kept
+its *"a field access on 'h', …"* framing and merely put the real name in place of the invented type
+would remove the false assertion — but it would leave `E2015 ParserUnsupportedFeature` (*"a construct
 this compiler does not implement yet"*, which is not what is wrong with the program) carrying a fact
 `E3011 SemanticUnknownType` is registered for, in a second wording, beside the one
 `TypeResolution.unknownTypeMessage` exists to make unique. The registry keys a code to a MEANING, so
 the register is not cosmetic.
 
-**So the arm the two `as`-cast sites already used was renamed to what it always was**:
-`ParseError.unknownCastTargetType` → **`ParseError.unknownTypeName`**. Its payload was never
-cast-specific — a type name and a position — and the cast was simply its only raiser at the time.
-One authority (`denotedNamedType`), one code (E3011), one text (`unknownTypeMessage`), and now SIX
+**So the doors raise the arm the two `as`-cast sites raise**, **`ParseError.unknownTypeName`**. Its
+payload is not cast-specific — a type name and a position.
+One authority (`denotedNamedType`), one code (E3011), one text (`unknownTypeMessage`), and SIX
 anchors: a parameter, a return type and a field report it unpositioned from `resolveTypes`; a body
 `as` cast and a top-level `let`'s cast report it at the `as`; a generic type argument reports it at
 the argument; and these three member-access doors report it at the base. The cast diagnostics are
-byte-for-byte unchanged — `specs/cast-target-type-resolution.md` pins all four of them.
+pinned by `specs/cast-target-type-resolution.md`, all four of them.
 
 **Why a parse-time door reports a code the authority also reports, and why that is not a second
 producer.** It supplies neither the predicate nor the words. What it supplies is a report on a route
@@ -196,10 +184,10 @@ error E3011: <fragment>:14:9: Unknown type 'NoSuchTypeAtAll'
 ```
 
 <!-- test: param-unknown-type-captured-member-access -->
-The same fact reached through a CLOSURE CAPTURE, which is its own door (`capturedStructBase`) and had
-its own copy of the invented `int`. Fixing only the plain access would leave the false assertion
-reachable through one `function(…) gives` — measured, before this case existed: *"a field access or
-method call on the captured 'h', which is declared 'int' and not a struct type"*.
+The same fact reached through a CLOSURE CAPTURE, which is its own door (`capturedStructBase`) with its
+own wording of the refusal (*"a field access or method call on the captured 'h', which is declared 'int'
+and not a struct type"*). A check on only the plain access would leave the false assertion reachable
+through one `function(…) gives`.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -223,9 +211,9 @@ error E3011: <fragment>:11:41: Unknown type 'NoSuchTypeAtAll'
 
 <!-- test: param-unknown-type-method-call -->
 And the THIRD door — a METHOD call, whose receiver is a VALUE with no binding to name
-(`structBaseOfReceiver`). It carried the identical invented type in a differently-worded sentence
-(*"a member access 'readIt' on a 'int' value"*), so a fix that stopped at the two field-access doors
-would have left one of the three still asserting it. All three ask ONE authority
+(`structBaseOfReceiver`). Its refusal is worded differently again (*"a member access 'readIt' on a
+'int' value"*), so a check at only the two field-access doors would leave one of the three asserting
+the invented type. All three ask ONE authority
 (`TypeResolution.denotedNamedType`) and share ONE sentence, so they cannot come to disagree about
 what a name denotes.
 ```maxon
@@ -245,31 +233,19 @@ error E3011: <fragment>:6:11: Unknown type 'NoSuchTypeAtAll'
 ```
 
 <!-- test: compiler-reserved-base-type-is-nameable-at-a-parameter -->
-⭐⭐ **A NAME THE COMPILER RESERVES IS NOT AN UNDECLARED NAME — AND, SINCE W17, IT IS NOT AN UNNAMEABLE ONE
-EITHER.** `CharacterSet`'s layout USED TO BE registered under the RESERVED spelling `__CharacterSet`
-(`SignatureIndex.CharacterSetTypeName`, deleted at W129) precisely so a user `type CharacterSet` could not
-contest its bucket, while the user-facing door was the bare `CharacterSet` (`CharacterSetBuiltinName`, which
-survives as the RESERVATION's key). That made
-`containsStruct("CharacterSet")` FALSE, and this case used to pin the consequence: a parameter declared
-`CharacterSet` was refused, because *"the type is real, it simply cannot be NAMED at a parameter yet"*.
+⭐⭐ **A NAME THE COMPILER RESERVES IS NOT AN UNDECLARED NAME — AND IT IS NOT AN UNNAMEABLE ONE
+EITHER.** `CharacterSet` is reserved: `isCompilerOwnedTypeName`, keyed by `CharacterSetBuiltinName`, stops a
+USER DECLARATION binding the name. The reservation does not stop a source NAMING the type —
+`stdlib/String.maxon` names `CharacterSet` at its `trim`/`trimStart`/`trimEnd` parameters and two private
+scans, and a user parameter may name it the same way.
 
-⚠ **THE `yet` EXPIRED, AND WHAT ENDED IT WAS NOT A DECISION ABOUT THIS TYPE.** `stdlib/String.maxon` names
-`CharacterSet` at four parameters (`trim`/`trimStart`/`trimEnd` and the two private scans), so listing that
-module reported **`E3011 Unknown type 'CharacterSet'` five times** for a type the compiler ships. The
-reservation exists to stop a USER DECLARATION binding the name, and `isCompilerOwnedTypeName` already does
-that on its own — so `Parser.parseTypeReference` now resolves the user-facing spelling to the reserved
-layout, which takes nothing away from the reservation and is the door it was protecting all along.
+⇒ ONE layout, reachable under the name the corpus writes: `stdlib/CharacterSet.maxon` is listed and the
+CORPUS's layout is the only one under the bare name, so the *"one concept has two layouts under two keys"*
+hazard `SignatureIndex.recordStruct`'s header names cannot arise, and the reservation does the one job it
+is for — refusing a USER declaration of the name. What the case below pins is that the name is NAMEABLE at
+a parameter, not which layout answers it.
 
-⇒ ONE layout, reachable under the name the corpus writes — and ⭐ **`W115` settled WHOSE, which is the half
-this paragraph deferred.** It read *"one layout, the COMPILER's … `stdlib/CharacterSet.maxon` stays OFF the
-whitelist deliberately: listing it would land a SECOND layout under the bare name"*, naming the *"one concept
-has two layouts under two keys"* hazard `SignatureIndex.recordStruct`'s header calls the listing rung's
-question. That rung listed the module and settled it the other way: the CORPUS's layout is the only one under
-the bare name, `Parser.parseTypeReference`'s `__CharacterSet` arm is deleted, and the reservation keeps doing
-the one job it was ever for — refusing a USER declaration of the name. The case below is unchanged and still
-passes, because what it pins is that the name is NAMEABLE at a parameter, not which layout answers it.
-
-⚠ The OTHER half of `undeclaredBaseTypeNameOf` is unaffected and keeps its own witness — widen the
+⚠ The OTHER half of `undeclaredBaseTypeNameOf` keeps its own witness — widen the
 `denotedNamedType` ask to fire on every `named` and `self-field-struct-typed`'s
 `error.scalar-field-base-is-not-a-struct` still reddens.
 ```maxon

@@ -1,0 +1,10 @@
+#if not os(Windows)
+	test 'a manifest build in a checkout whose root it may not write is refused with the lock failure and its hint'
+		let build = spawnManifestBuildInAReadOnlyCheckout("tree-lock-in-a-read-only-checkout-is-refused")
+		let stderr = withoutCarriageReturns(build.stderr)
+
+		Expect.equal(build.exitCode(), expected: NothingRanExitCode, message: "`maxon build` in a checkout whose root it may not write exited {build.exitCode()}. It wrote to stderr: {stderr}")
+		Expect.contains(stderr, needle: TreeLockFailureWording, message: "`maxon build` in a checkout whose root it may not write did not report that the tree lock could not be taken. It wrote to stderr: {stderr}")
+		Expect.contains(stderr, needle: TreeLockFailureHintWording, message: "`maxon build` in a checkout whose root it may not write did not say where to build instead. It wrote to stderr: {stderr}")
+	end 'a manifest build in a checkout whose root it may not write is refused with the lock failure and its hint'
+#endif

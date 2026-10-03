@@ -21,15 +21,14 @@ function stripTrailingCR(bytes ByteArray) returns ByteArray
 function stripTrailingCR(line String) returns String
 ```
 
-Two modules of one library must each be able to carry a private helper of the same name. Before this rule
-they could not: both registered the bare name and the program was refused.
+Two modules of one library must each be able to carry a private helper of the same name.
 
-### Why the FILE boundary used to decide this, and no longer does
+### Why the FILE boundary cannot decide this alone
 
 A declaration's **registration name** is minted where the declaration is parsed, and a parser is a pure
 function of its own file. So a later overload of a name the same file already claimed registers as
-`pick#bool`, while a later overload of a name **another** file claimed had no way to know it was later at
-all — both registered the bare name.
+`pick#bool`, while a later overload of a name **another** file claimed has no way to know it is later at
+all — both would register the bare name.
 
 The whole-program declaration sweep is what closes it: it walks every `function` declaration in the program
 before any file is parsed, so it — and only it — can say *"this name is declared by more than one FILE of
@@ -42,41 +41,38 @@ registered under its directory-qualified spelling, and `namespace-qualified-reso
 
 ### When the name is contested, NOBODY keeps the bare spelling
 
-An uncontested declaration registers under its own name, as it always did. A **contested** one registers
+An uncontested declaration registers under its own name. A **contested** one registers
 under its parameter-type spelling — and so does the first of them:
 
 - two declarations whose parameters differ mint **different** suffixes and are two live overloads;
 - two declarations whose parameters are the **same** mint the **same** suffix and collide, which is the
-  `E3006` a genuine redeclaration has always earned.
+  `E3006` a genuine redeclaration earns.
 
 "The same parameters" means the same source SPELLING, which is the same thing every overload key in this
 compiler means by it. Two overloads written at two spellings of one underlying type are two
-registrations. Measured, on two root-level
-files each declaring `export function f(a Integer = 1)` / `f(a Count = 1)`: this compiler answers
-`E3007` at the call.
+registrations: two root-level files each declaring `export function f(a Integer = 1)` /
+`f(a Count = 1)` are answered with `E3007` at the call.
 
 ### A call reads the return type of the overload it MEANS
 
 The reason this needed more than a registration rule is that **a call's result type is fixed while its own
 file is parsed** — it decides the machine type of the result, which register file it travels in, and whether
 a scope-exit drop is enrolled for it — while the overload is resolved a whole pass later. A whole-program
-index that kept ONE return type per NAME therefore typed every call to an overloaded name from whichever
+index that kept ONE return type per NAME would type every call to an overloaded name from whichever
 declaration it read last.
 
 So the sweep publishes each declaration's **parameter-type spellings** beside its return type, and the parse
-asks which member the call means before it types the result. Two boundaries remain, and both DECLINE loudly
-rather than guessing: a parameter spelled as anything but a type NAME (a `with` instantiation, a tuple, a
-function type) is not read, and two members that fit a call equally are not chosen between.
+asks which member the call means before it types the result. It reads a parameter spelled as a type NAME, a
+dotted `<Type>.<member>` name or a tuple. Two members that fit a call equally are not chosen between: the call
+is ambiguous, `E3007`.
 
 ## Tests
 
 <!-- test: two-files-of-one-directory-each-carry-a-private-helper-of-one-name -->
 The headline case, and the one this rule exists for. Each file declares a file-private `pick` and calls its
-own; nothing about either file is visible to the other. Before this rule the program was refused
-**`E3005: a.maxon:6:2: Cannot return 'int' from function declared to return 'String'`** — blaming the file
-that is CORRECT, because `main.maxon`'s `pick` was the last declaration the sweep read and so every call to
-the name in the program, `a.maxon`'s included, was typed to return a `Cnt`. The program prints
-`hi` then `1`, exit 0.
+own; nothing about either file is visible to the other. Typing every call to the name from the last
+declaration the sweep read (`main.maxon`'s, returning a `Cnt`) would refuse `a.maxon` — the file that is
+CORRECT — with an `E3005` on its `return`. The program prints `hi` then `1`, exit 0.
 ```maxon
 // --- file: a.maxon
 function pick(s String) returns String
@@ -179,14 +175,13 @@ end 'main'
 ok!
 ```
 
-### A genuine redeclaration is still refused
+### A genuine redeclaration is refused
 
 
 <!-- test: error.one-signature-declared-by-two-files-of-one-directory -->
 ⛔ **THE NEGATIVE CONTROL.** Two files declaring one name with the SAME parameter spelling are not an
 overload set: they render the same suffix, claim one registration name and collide at the merge — the
-refusal falls out of the mint rather than out of a second check written beside it. MEASURED against the
-bootstrap, which refuses the same program: `E3006: Duplicate function 'pick'`.
+refusal falls out of the mint rather than out of a second check written beside it.
 
 ⚠ The name the message quotes is one **neither declaration wrote**, because a contested name is registered
 under its suffix and never bare. That is the same shape a contested `extension` method has, and it earns the
@@ -219,13 +214,12 @@ error E3006: <fragment>:12:10: duplicate definition of function 'pick#String' �
 <!-- test: error.two-spellings-of-one-type-are-ambiguous-at-the-call -->
 Two overloads written at two SPELLINGS of one underlying type both register — the suffix is the source
 spelling, pre-resolution — so the program is refused at the CALL, which cannot tell them apart, rather than
-at the declaration. The bootstrap flattens the alias and refuses the same program at the declaration
-instead; both refuse it, and no canonical spec pins either site.
+at the declaration.
 
 ⛔ **AND IT MUST EARN EXACTLY ONE DIAGNOSTIC.** A contested set has no member under the bare name, so an op
-left naming it reaches `SemanticCheck.validateCall` and was reported **`E3004: call to undefined function
-'f'`** — about a name declared twice over — underneath the E3007 that had just explained the real fault.
-The ambiguous arm now points the op at a declared member exactly as the no-match arm does.
+left naming it would reach `SemanticCheck.validateCall` and be reported **`E3004: call to undefined function
+'f'`** — about a name declared twice over — underneath the E3007 that explains the real fault. The
+ambiguous arm points the op at a declared member exactly as the no-match arm does.
 ```maxon
 // --- file: a.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -250,20 +244,13 @@ end 'main'
 error E3007: <fragment>:18:9: Ambiguous overload for 'f': multiple overloads match. Candidates: (a Integer), (a Count)
 ```
 
-### The parse-time decider's own boundary
+### A tuple parameter is read
 
-<!-- test: error.a-set-the-parse-time-decider-cannot-settle -->
-⛔ **WHAT THE DECIDER DECLINES, IT DECLINES LOUDLY.** It reads a parameter type only when the source spells
-it as a single type NAME: a `with` instantiation, a tuple, a function type and — much the commonest — a
-RANGED INT (`n int(0 to 100)`) are all compound. Reading one registers it whole-program, and every
-registration the declaration sweep makes moves the instance ids of every later one, which decide mangled
-instance names. So a set with a compound-typed member cannot be settled at the parse,
-the result falls back to the one return type the index keeps per NAME — here the `String` of the last
-declaration — and the call, which resolves to the void member, is refused rather than typed from it.
-
-⚠ The declaration ORDER is load-bearing and is not incidental: with the two swapped, the by-name fallback
-records the void member, the call is typed `void`, that is the answer this call actually gets, and the
-program compiles. The refusal is about the fallback being WRONG for this call, never about the set.
+<!-- test: a-void-overload-beside-a-tuple-taking-one-resolves-by-argument-type -->
+⛔ **THE DECLARATION ORDER IS THE TRAP.** The `String` member is declared LAST, so the one return type the
+index keeps per NAME is `String`, and a call typed from it would hand the void member's call a result the
+callee never writes. The decider reads the tuple parameter, finds that `7` cannot stand at it, and settles
+the call on the void member before its result is typed. It prints `n7`, exit 0.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -280,23 +267,89 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:13:2: the overloads of 'pick' do not agree on their return type ('String' and 'void'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from the parameter types the whole-program declaration sweep publishes — and they did not settle which overload this call means, so the result was typed from the single return type that index keeps per NAME. Only a difference between plain scalars can be corrected once the overload is known, a whole pass later. Make the overloads return the same type, or spell every overload's parameters as type NAMES that this call's arguments match in exactly one of them
+```exitcode
+0
+```
+```stdout
+n7
 ```
 
-### Two facts the decider reads, and what each cost before it read them right
+### A member the caller cannot name
+
+<!-- test: error.a-void-member-the-caller-cannot-name-is-refused -->
+The decider scores only the members the calling file may name, so a call whose one fitting member is
+file-private to another file leaves it undecided, and the result is typed from the `String` of the last
+declaration the sweep read. Resolution still binds the call to that void member, and the call is refused
+for the one fault it has: the member is not exported. The result type the call was given is not reconciled
+against a member the call may not name.
+```maxon
+// --- file: a.maxon
+typealias Count = int(0 to 100)
+
+function pick(n Count)
+	print("n{n}\n")
+end 'pick'
+
+// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pick(pair (Integer, Integer)) returns String
+	return "p{pair.0}"
+end 'pick'
+
+function main() returns ExitCode
+	pick(7)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:17:2: function 'pick#Count' is not exported
+```
+
+### A parameter type the decider does not read
+
+<!-- test: error.a-set-with-a-member-the-decider-cannot-read-is-refused -->
+The decider reads a qualified parameter type of one namespace segment and no deeper, so `lib.fmt.Score`
+leaves the void member unscored and the whole set undecided. The result is typed from the `String` of the
+last declaration the sweep read, resolution binds the call to the void member, and the call is refused
+rather than handed a result its callee never writes.
+```maxon
+// --- file: lib/fmt/score.maxon
+public typealias Score = int(0 to 100)
+
+// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pick(n lib.fmt.Score)
+	print("n{n}\n")
+end 'pick'
+
+function pick(pair (Integer, Integer)) returns String
+	return "p{pair.0}"
+end 'pick'
+
+function main() returns ExitCode
+	pick(7)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:17:2: the overloads of 'pick' do not agree on their return type ('String' and 'void'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from the parameter types the whole-program declaration sweep publishes — and they did not settle which overload this call means, so the result was typed from the single return type that index keeps per NAME. Only a difference between plain scalars can be corrected once the overload is known, a whole pass later. Make the overloads return the same type, or spell every overload's parameters as type NAMES that this call's arguments match in exactly one of them
+```
+
+### Two facts the decider reads
 
 <!-- test: two-exported-overloads-returning-different-aggregates-resolve-by-argument-type -->
-⛔⛔ **A SET RETURNING TWO DIFFERENT AGGREGATES USED TO READ AS *AGREEING*, AND THAT WAS A SILENT WRONG
+⛔⛔ **A SET RETURNING TWO DIFFERENT AGGREGATES MUST NOT READ AS *AGREEING* — THAT IS A SILENT WRONG
 ANSWER.** Two struct returns are both `structRef` and two generic-instance returns are both
-`genericInstance`, so a tag-only test declared the set agreeing, the decider declined, and
-`returnTypeOf`'s last-wins answer typed the call from the OTHER member —
-`SemanticCheck.requireOverloadResultTagAgrees` is blind on the same rule, so nothing reported it either.
+`genericInstance`, so a tag-only test would declare the set agreeing, the decider would decline, and
+`returnTypeOf`'s last-wins answer would type the call from the OTHER member —
+`SemanticCheck.requireOverloadResultTagAgrees` is blind on the same rule, so nothing would report it either.
 
 `Box` and `Bag` declare the same two field NAMES in OPPOSITE orders, which is what makes the failure a
-number rather than a diagnostic: read at the wrong type's offsets, `b.first` finds the other field.
-MEASURED before the fix, on the same-file spelling of this program: **22**, compiled clean, no diagnostic
-at any stage, where the answer is **11**. Both members are `export`ed on purpose — with them
+number rather than a diagnostic: read at the wrong type's offsets, `b.first` finds the other field and
+prints **22**, with no diagnostic at any stage, where the answer is **11**. Both members are `export`ed on
+purpose — with them
 file-private, visibility alone would pick the member and the case would never enter the quadrant it is
 about. It prints `11` then `44`.
 ```maxon
@@ -353,14 +406,14 @@ end 'main'
 ⛔⛔ **THE PER-DECLARATION RETURN TYPE IS A SECOND COPY OF A FACT THREE WHOLE-PROGRAM PASSES RE-DECIDE, AND
 THIS IS THE ONE OF THEM THE READ DOOR CANNOT REPRODUCE.** `typealias-file-scope.md`'s
 `contested-generic-alias-in-a-cross-file-return-type` is this program with `makeBag` declared ONCE: `Bag` is
-spelled by two files over two different elements, so it is CONTESTED, and N3's rewrite resolves a recorded
-return type in the file that declared the FUNCTION. Give `makeBag` an overload that disagrees with it about
-what it returns and the parse-time decider takes over the typing of the call — from a copy the rewrite did
-not reach, which resolves `Bag` in the CALLER's scope instead. That is exactly the bug N3's rewrite exists to
-correct, reintroduced one table over.
+spelled by two files over two different elements, so it is CONTESTED, and the whole-program rewrite resolves
+a recorded return type in the file that declared the FUNCTION. Give `makeBag` an overload that disagrees
+with it about what it returns and the parse-time decider takes over the typing of the call — from a copy the
+rewrite must reach too, or `Bag` resolves in the CALLER's scope: the bug the rewrite exists to correct,
+reintroduced one table over.
 
 `theirs.get(1)` is an `int` only if `Bag` meant `adef.maxon`'s `Array with Num`; had it resolved against
-`cmain.maxon` the value would be a `String` and the arithmetic would not compile. The three rewrites now walk
+`cmain.maxon` the value would be a `String` and the arithmetic would not compile. The three rewrites walk
 `overloadedDecls` in the same act and under the same rule — and against each declaration's OWN file, which is
 strictly better than the one `funcReturnDeclFiles` keeps per key, since that column is last-wins and an
 overload set may span two files.

@@ -40,7 +40,7 @@ end 'main'
 | [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory |
 | [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](/docs/stdlib/data/#json) | Json, Sha256, Hasher |
-| [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, SharedValue, Math, Primitive Extensions |
+| [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, SharedValue, Random, Math, Primitive Extensions |
 | [Testing](/docs/stdlib/testing/) | Testing |
 | [Build](/docs/stdlib/build/) | Build |
 
@@ -49,9 +49,15 @@ end 'main'
 | Name | Definition | Declared by |
 |------|------------|-------------|
 | `ExitCode` | `int(0 to u32.max)` on Windows, `int(0 to 255)` elsewhere | Process |
-| `Byte` | `int(0 to u8.max)` | File |
+| `Byte` | `int(0 to u8.max)` | String |
 | `ByteArray` | `Array with Byte` | File |
 | `StringArray` | `Array with String` | Json |
+| `CharSet` | `Set with Character` | CharacterSet |
+| `FilePathArray` | `Array with FilePath` | Directory |
+| `ParsedInt` / `ParsedIntArray` | `int(i64.min to i64.max)` / `Array with ParsedInt` | Builtins |
+| `ParsedFloat` | `float(f64.min to f64.max)` | Builtins |
+| `IndentDepth` | `int(0 to u64.max)` — a nesting depth while `Json` renders | Json |
+| `RandomDraw` / `RandomBound` | `int(0 to i64.max)` / `int(1 to i64.max)` | Random |
 | `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
 | `Codepoint` | `int(0 to 1114111)` | Character |
 | `CodepointDelta` | `int(-1114111 to 1114111)` | Character |
@@ -70,6 +76,10 @@ end 'main'
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
 | `SegmentByteCount`, `SegmentOffset`, `SegmentWord` | see [SharedMemory](/docs/stdlib/io/#sharedmemory) | SharedMemory |
+
+A program may declare one of these names itself. The declaring file reads its own declaration; any other
+file that sees both refuses the bare name (**E3063**) and spells the one it means, `stdlib.ByteArray` or
+`<directory>.ByteArray` (see [Qualified Names](/docs/language/namespaces/#qualified-names)).
 
 ### Names a library signature asks for
 
@@ -115,7 +125,7 @@ indexes an `Array` with no cast; an index of any other alias, or of a non-intege
 ### Target support
 
 Everything that is pure computation (strings, collections, `Json`, `Sha256`, `Hasher`, `Math`, `URL`
-parsing) works on every target. Operating-system facilities are available on `x64-windows`,
+parsing) works on every target, and so does `Random`. Operating-system facilities are available on `x64-windows`,
 `arm64-macos`, `arm64-linux` and `x64-linux`.
 
 On `wasm32-wasi` a call that needs a facility the target does not provide is refused **at compile time**,

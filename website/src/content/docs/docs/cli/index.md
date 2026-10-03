@@ -47,8 +47,11 @@ argument, so `maxon fmt fmt` formats the directory `fmt/`.
 
 An option the driver does not recognize stops the command before it runs, with
 `error: unknown option: <arg>` and the command list. A recognized option given a value it cannot take,
-such as `--workers=0` or an empty `--filter=`, stops it with `error: invalid option value: <arg>`. The
-first such option on the line is the one reported, and the exit code is 1 (2 for `maxon test`).
+such as `--workers=0` or an empty `--filter=`, stops it with `error: invalid option value: <arg>`; an option
+that takes a value takes a non-empty one, so `--output=` and `--target=` are refused this way. The first such
+option on the line is the one reported, and the exit code is 1 (2 for `maxon test`). An empty positional
+argument (`maxon build ""`) stops the command with `error: invalid argument: an empty word names nothing`,
+with the same exit code.
 
 An option that only other commands take stops the command the same way, before an unknown option is
 looked at, with `error: <option> is taken only by <commands>; <command> does not take it` and the
@@ -583,7 +586,8 @@ FAIL  pricing/pricing.maxtest > ten items take the bulk discount
  2 tests across 1 file.   compile 947ms, run 38ms
 ```
 
-The `file:line` on the `FAIL` line is the assertion's own. Correct the expectation to `2250` and the same
+The `file:line` on the `FAIL` line is the assertion's own. Whatever a failing test printed appears in its
+report, indented under its heading, line for line and blank lines included. Correct the expectation to `2250` and the same
 command reports `2 pass`, `0 fail` and exits 0.
 
 ```bash

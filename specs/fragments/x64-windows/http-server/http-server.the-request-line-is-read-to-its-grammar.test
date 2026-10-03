@@ -29,8 +29,7 @@ function acceptedAs(server HttpServer) returns String
 	return "served {seen}"
 end 'acceptedAs'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let port = server.port()
 	let blocks = [
 		"GET /a b HTTP/1.1\r\nHost: x\r\n\r\n",
@@ -60,6 +59,11 @@ function main() returns ExitCode
 	server.close()
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ---
 ExitCode: 0
@@ -666,7 +670,7 @@ func @main {
     x64.callDirect HttpServer.bind
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body#9
+    x64.jcc equal, __il_body#11
   tryerr:
     x64.movRegImm32 r8, 1
     x64.epilogue 152
@@ -677,9 +681,9 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __il_body#9:
+  __il_body#11:
     x64.loadRegBaseDisp.word64 r12, [rbx + 24]
-  __il_cont#8:
+  __il_cont#10:
     x64.leaRegRdata r13, [rip + __str_rec_188]  ; "GET /a b HTTP/1.1\x0d\x0aHost: x\x0d\x0a\x0d\x0a"
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
@@ -855,10 +859,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 16], rcx
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.word64 [rax + 24], rcx
-  __il_body#11:
+  __il_body#13:
     x64.loadRegSlot rcx, slot5
     x64.callDirect __write_stdout
-  __il_cont#10:
+  __il_cont#12:
     x64.loadRegSlot rcx, slot5
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot2
@@ -873,18 +877,19 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [r14 + 8]
     x64.cmpRegReg rax, rcx
     x64.jcc less, eachBlock
-  __il_body#13:
+  __il_body#15:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.byte [rax + 0], rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#15:
+  __il_body#17:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __ms_close
-  __il_cont#12:
+  __il_cont#14:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
+  __il_cont#3:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_HttpServer
     x64.movRegReg r8, r12

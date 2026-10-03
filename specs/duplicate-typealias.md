@@ -644,11 +644,11 @@ error E3005: <fragment>:17:9: argument type mismatch for 'xs': expected 'Tallies
 ```
 
 <!-- test: error.two-functions-over-a-contested-generic-alias-do-not-merge -->
-A ternary whose two arms are functions over a contested `Tallies`. The two arms render the same `fn(…)` caption, and they still do not merge — agreement is decided on the resolved shapes, and the note is what tells the reader which `Tallies` each caption means.
+A ternary whose two arms are functions over a contested `Tallies`. The two arms do not merge — agreement is decided on the resolved shapes — and each caption names its `Tallies` by its directory, `alpha.Tallies` and `beta.Tallies`, the spellings a reader that sees both must write.
 
-⚠ Both files hand a function VALUE across, so both export their `Tallies` and its element — two exported declarations of one name over two ranges, which is legal (E3105 refuses only two underlying TYPES), and still two instances.
+⚠ Both files hand a function VALUE across, so both export their `Tallies` and its element — two exported declarations of one name in two directories, which is legal whatever their ranges, and still two instances.
 ```maxon
-// --- file: a.maxon
+// --- file: alpha/a.maxon
 export typealias Integer = int(i64.min to i64.max)
 export typealias Tally = int(0 to 1000)
 export typealias Tallies = Array with Tally
@@ -657,7 +657,7 @@ export function sizeA(t Tallies) returns Integer
 	return t.count()
 end 'sizeA'
 
-// --- file: b.maxon
+// --- file: beta/b.maxon
 export typealias Integer = int(i64.min to i64.max)
 export typealias Tally = int(0 to 5)
 export typealias Tallies = Array with Tally
@@ -675,5 +675,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2028: <fragment>:23:16: ternary expression type mismatch: true branch is 'fn(Tallies) returns Integer' (declared in a.maxon) but false branch is 'fn(Tallies) returns Integer' (declared in b.maxon)
+error E2028: <fragment>:23:16: ternary expression type mismatch: true branch is 'fn(alpha.Tallies) returns Integer' but false branch is 'fn(beta.Tallies) returns Integer'
 ```

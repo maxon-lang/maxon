@@ -11,9 +11,21 @@ test 'a manifest program sees MAXON_COMPILER naming the compiler that runs it'
 	Expect.equal(build.exitCode(), expected: 0, message: "`maxon build` over a manifest that reports MAXON_COMPILER and describes an ordinary build did not succeed. {said}")
 	Expect.contains(build.stdout, needle: ReportPrefix, message: "the manifest program's report of MAXON_COMPILER did not reach the build's stdout. {said}")
 
-	let afterPrefix = try build.stdout.split(ReportPrefix).get(1) otherwise ""
-	let reported = try afterPrefix.split(ReportSuffix).get(0) otherwise ""
-	let reportedPath = try FilePath.from(reported) otherwise FilePath.empty()
+	let afterPrefix = try build.stdout.split(ReportPrefix).get(1) otherwise 'noReport'
+		try Expect.fail("the build's stdout holds no MAXON_COMPILER report to read. {said}")
+		panic("Expect.fail returned without throwing")
+	end 'noReport'
+
+	let reported = try afterPrefix.split(ReportSuffix).get(0) otherwise 'unterminated'
+		try Expect.fail("the MAXON_COMPILER report on the build's stdout is not closed by '{ReportSuffix}'. {said}")
+		panic("Expect.fail returned without throwing")
+	end 'unterminated'
+
+	let reportedPath = try FilePath.from(reported) otherwise 'notAPath'
+		try Expect.fail("MAXON_COMPILER, as the manifest program saw it, was '{reported}', which is not a path. {said}")
+		panic("Expect.fail returned without throwing")
+	end 'notAPath'
+
 	let compiler = testedCompilerPath()
 
 	Expect.isTrue(File.exists(reportedPath), message: "MAXON_COMPILER, as the manifest program saw it, was '{reported}', which names no existing file. {said}")

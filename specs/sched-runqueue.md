@@ -11,13 +11,13 @@ category: system
 
 ⚖ **AN `async f(…)` CALL DOES NOT CREATE A GREEN THREAD.** *"async is not supposed to create a new
 green thread. It allows a function to yield the current green thread while waiting for a blocking
-operation"* (user, 2026-08-27). What it creates is a **COROUTINE** of the green thread that called it,
+operation"* (user ruling). What it creates is a **COROUTINE** of the green thread that called it,
 and the whole of the scheduler a Maxon program can reach follows from that one sentence:
 
 | | |
 |---|---|
 | **a coroutine** | what `async f(…)` creates. It is OWNED by one green thread (`GtOffOwner`), joins that green thread's STRAND, and runs only on the machine holding the strand. A coroutine spawned by a coroutine belongs to the SAME green thread, so the relation is transitive and every frame `async` ever creates, at any nesting depth, lands in exactly one strand. |
-| **a green thread** | a unit the P/M scheduler may hand to any OS thread. `main` is one — `__gt_run_main` runs it as an ordinary green thread — and **`spawn` is the producer of every other** (SV1: a spawned SERVICE is a green thread). A green thread's owner is ITSELF, which is what closes the chain above. |
+| **a green thread** | a unit the P/M scheduler may hand to any OS thread. `main` is one — `__gt_run_main` runs it as an ordinary green thread — and **`spawn` is the producer of every other** (a spawned SERVICE is a green thread). A green thread's owner is ITSELF, which is what closes the chain above. |
 
 ⇒ **only one green thread can hold references to a box at a time, and that is a language guarantee
 rather than a thread count.** A strand runs on at most one machine at a time and moves between machines
@@ -42,15 +42,15 @@ placing a yielder. `osLockEnter` is a Win32 CRITICAL_SECTION and therefore RECUR
 without the lock produces no diagnostic anywhere — only a queue two OS threads can be inside at once.
 
 **A yield goes to the TAIL**, which is the whole content of *"let someone else have a turn"*. The
-bootstrap measured what the other choice costs — *"a thousand yields from one green thread left a
-sibling that had never run still unrun"* — and the tail is what refuses it.
+other choice lets a thousand yields from one green thread leave a sibling that has never run still
+unrun, and the tail is what refuses it.
 
 ### The green-thread run-queue hierarchy — and every green-thread program reaches it
 
-W212 built Go's three tiers. What they schedule is strand TOKENS — a green thread standing for itself and
+The run queue is Go's three tiers. What they schedule is strand TOKENS — a green thread standing for itself and
 every coroutine it owns — so every green-thread program reaches them with `main`'s own token:
 `__gt_run_main` readies `main` onto its machine's ring before the scheduler loop's first search. `async`
-never adds a token; a `spawn` does (SV1), so a program that spawns services puts many through all three:
+never adds a token; a `spawn` does, so a program that spawns services puts many through all three:
 
 | Tier | What it is | Who writes it |
 |---|---|---|
@@ -65,7 +65,7 @@ readied onto `main`'s strand, and the machine that fires a timer or reaps a chil
 strand's token itself rather than waking another. So a program whose only green thread is `main` keeps one
 M at every `MAXON_MAX_PROCS` (`SchedRuntime.maxon`'s header).
 
-⭐ **A `spawn` IS WHAT ADDS TOKENS** (`specs/services.md`, *"A send MOVES or LENDS"*). `__svc_spawn` calls
+⭐ **A `spawn` IS WHAT ADDS TOKENS** (`specs/services.md`, *"A send MOVES, and that is load-bearing"*). `__svc_spawn` calls
 `__gt_spawn_green` and publishes the new green thread's token to a P RING, which is exactly what a ring, a
 steal and a worker loop are for — so the five cases at the END of this file, which run services, are where
 the tiers carry more than `main`'s one token.
@@ -95,21 +95,19 @@ status**, because the hand-assembled trampoline overwrites `status` with `comple
 a park overwrites it with `waiting`: a mark left there is erased by exactly the events the rendezvous
 exists to meet.
 
-⛔⛔ **THIS PARAGRAPH USED TO READ *"A SPEC CASE CANNOT SET `MAXON_MAX_PROCS`, SO NOTHING BELOW EXERCISES
-TWO PROCESSORS"*, AND BOTH HALVES OF THAT HAVE SINCE STOPPED BEING TRUE.** A case CAN name its own
+⛔⛔ **A CASE THAT ASSERTS A PROPERTY OF ONE P NAMES ITS PROCESSOR COUNT.** A case CAN name its own
 processor count — `<!-- procs: N -->`, whose parser and whose gate are `specs/sched-default-procs.md`'s
-— and the five SERVICE cases below now carry `procs: 1` explicitly rather than inheriting it from a default
-that is about to become the machine's processor count. Each of them asserts something that IS a property of
+— and the five SERVICE cases below carry `procs: 1` explicitly rather than inheriting the default, which
+is the machine's processor count. Each of them asserts something that IS a property of
 one P — a ring's own monotonic counters, the every-61st-schedule fairness tick, the ring-versus-global
 preference a yielder is routed against, a steal count of zero — so the marker is what preserves the
-assertion rather than what narrows it. And the argument that used to follow, *"one P means one M,
-which is what makes a global counter a legal channel"*, has been **withdrawn at the language level**: a
-message may no longer write a module-level `var` at all (`specs/green-thread-globals.md`, E3143), and
-every service case below now tallies in `self` and reports through an awaited reply. What remains true is
-the COROUTINE half — a strand runs one member at a time, on one machine at a time, in its own queue's order
-at any processor count, so the `async` answers below are the answers everywhere. **Work stealing, the head
+assertion rather than what narrows it. A global counter is not a channel either: a message may not write
+a module-level `var` at all (`specs/green-thread-globals.md`, E3143), so every service case below tallies
+in `self` and reports through an awaited reply. The COROUTINE half holds at any count — a strand runs one
+member at a time, on one machine at a time, in its own queue's order at any processor count, so the
+`async` answers below are the answers everywhere. **Work stealing, the head
 CAS under contention and the Dekker
-fence on the ring publish are still out of reach from a case pinned to one P**; the multi-processor gate is
+fence on the ring publish are out of reach from a case pinned to one P**; the multi-processor gate is
 `scripts/multicore-stress/pin-matrix.sh`, which drives the `multicore-stress` programs across
 `MAXON_MAX_PROCS ∈ {1, 2, 7, 12}` and asserts `workers=1 steals=0` of every COROUTINE-only program whose
 `monitor=` reading is 0 — a second M comes to such a program only from the system monitor — and
@@ -133,17 +131,11 @@ machine running the dropper — so no processor count exposes it.
 `scripts/multicore-stress/drop-running-torture.maxon` measures the shape a `spawn` DOES expose.
 
 ⚠ **NO CASE HERE CARRIES AN `unsupported-targets:` MARKER, AND NONE MAY.** They are all green-thread
-programs, and the green-thread substrate exists on exactly the lanes that have written it — x64-windows and,
-since the arm64-macOS scheduler landed, that one too. A lane without it refuses the program at its own span,
+programs, and the green-thread substrate exists on exactly the lanes that have written it — all four native
+lanes. A lane without it refuses the program at its own span,
 which the harness counts as a SKIP naming the case; a marker would make the same fact invisible
 (`maxon-bin/AGENTS.md`, *do not mark a case the compiler already refuses*). `async-scheduler.md`'s *Targets*
 section is the one statement of that gate.
-
-⚠ **FIVE CASES HERE NAME x64-windows ALONE, AND THE REASON IS NOT THE RUN QUEUE.** Each additionally starts
-a SERVICE, which reaches `__svc_spawn`/`__mbox_send` — a band whose own target gate
-(`SemanticCheck.requireTargetSupportsServiceEntry`) refuses every lane but the first regardless of what the
-scheduler beneath it provides, and which `services.md`'s `error.a-service-is-rejected-on-a-native-target` pins. They
-widen when that band does.
 
 ## Tests
 
@@ -155,9 +147,8 @@ DIRECTLY, in positions rather than in an exit code: `outer` runs first, spawns `
 and then awaits `inner` — which parks `outer`, and the strand runner takes the ONE queue in order, so
 `sibling` runs before `inner` even though `inner` is what is being awaited and `sibling` is nobody's
 business.
-⚠ **IT IS NOT THE ONLY CASE THAT CAN SEE THE STAMP BE *WRONG* RATHER THAN MISSING — a first cut of this
-paragraph said it was, and the review measured otherwise.** MEASURED against `__gt_spawn` stamping
-`gt.owner = currentGt` — the SPAWNER — instead of `currentGt.owner`: this case reads
+⚠ **IT IS NOT THE ONLY CASE THAT CAN SEE THE STAMP BE *WRONG* RATHER THAN MISSING.** With `__gt_spawn`
+stamping `gt.owner = currentGt` — the SPAWNER — instead of `currentGt.owner`, this case reads
 `ra=0 rb=1 posA=1 posB=2 posC=0` (`inner` lands in `outer`'s own queue rather than `main`'s, so `await c`
 bails and answers the unset result slot), **every other case in THIS FILE still passes** because none of
 them nests an `async` inside an `async` — and **EIGHT cases elsewhere go red for the same sabotage**:
@@ -166,7 +157,7 @@ them nests an `async` inside an `async` — and **EIGHT cases elsewhere go red f
 gated whether or not this case exists; what this case adds is a reading that says WHICH queue rather than
 a wrong answer. Removing the stamp altogether is the coarser sabotage and does not need this case: an
 `owner` of 0 makes `__gt_coro_enqueue` write its queue ends through a null pointer, so **every**
-green-thread program takes an access violation (exit `0xC0000005`, measured across all eight cases here).
+green-thread program takes an access violation (exit `0xC0000005`).
 A zero here is not a benign default and a plausible-looking non-zero is not enough either.
 ```maxon
 var order = 0
@@ -273,8 +264,7 @@ ring in its own order. The slot is what keeps a reply beside the thread that wok
 ⚠ **THE ORDER ASSUMES `main` KEEPS THE PROCESSOR ACROSS ALL THREE `spawn`s, WHICH ONLY `preempt: off` MAKES
 TRUE.** The monitor asks a strand that has held its processor for 10 ms of WALL time to yield; a preempted
 `main` goes to the global tail and its machine takes `runnext`, so a `main` held off a core between the second
-and third spawn sees the FIRST service answer first. MEASURED on the arm64-macos runner at a5821384 and
-e7491909: `first=1 sum=6` against this pin. With the switch off nothing takes `main`'s processor until it
+and third spawn sees the FIRST service answer first, and reads `first=1 sum=6` against this pin. With the switch off nothing takes `main`'s processor until it
 parks in `awaitAny`; `specs/sched-preempt.md`'s
 `a-main-preempted-between-two-spawns-runs-the-earlier-one-first` is the same program with the preemption
 forced, pinning the other order.
@@ -328,7 +318,7 @@ puts it there: a `spawn` readies at once, so `Pong`, spawned last, holds the slo
 chain lets it in. A send to a service that has not run yet fills a mailbox and readies nothing, so the
 kick and the poke do not reorder anything.
 
-⭐ **TWO MECHANISMS CUT THE CHAIN, AND MEASURED IT TAKES BOTH TO STARVE THE BYSTANDER** — with either one
+⭐ **TWO MECHANISMS CUT THE CHAIN, AND IT TAKES BOTH TO STARVE THE BYSTANDER** — with either one
 alone the case still passes, and it goes red only when both are gone (`pingpong-done` then
 `bystander-ran`). A thread taken from the slot inherits the slice instead of counting a schedule of its
 own, so the pair reads to the monitor as one long slice and is asked to yield (`specs/sched-preempt.md`);
@@ -504,8 +494,8 @@ queue, where the one it just marked is sitting, and reclaims it — so the next 
 back off the free list. The first spawn has nothing to reuse and each of the other 4,999 reuses the one
 before it, which `__Builtins.schedGtRecycleCount()` counts.
 
-✅ **SABOTAGE-VERIFIED.** With the drop's front sweep removed, this case reads `recycled=0`; the other two
-drop cases below stay GREEN under that sabotage, so the count is this case's road and nobody else's.
+✅ **THIS CASE OWNS THE FRONT SWEEP.** With the drop's front sweep removed, this case reads `recycled=0`
+while the other two drop cases below stay GREEN, so the count is this case's road and nobody else's.
 ```maxon
 var ran = 0
 
@@ -546,7 +536,8 @@ dropper that failed to reclaim `p` would leave each round one record short, and 
 a fresh one. `gtIsComplete` is what proves the case reached the order it names — a `p` that had NOT
 completed would be the tombstone order the two cases above cover instead.
 
-✅ **SABOTAGE-VERIFIED.** With the drop's consumer half removed, this case reads `recycled=3` and exits 75.
+✅ **THIS CASE OWNS THE CONSUMER HALF.** With the drop's consumer half removed, this case reads
+`recycled=3` and exits 75.
 ```maxon
 function done() returns Integer
 	Scheduler.yield()
@@ -599,7 +590,7 @@ iterations with no hang, because nothing ever waits on the 200 ms deadline.
 
 ⛔⛔ **THE DROP MAY NOT PERFORM THE RUNNER's HALF ITSELF, AND THAT IS WHAT THIS COUNT PINS.** The runner's half
 frees the STACK the parked thread is suspended on — and nothing can unwind a suspended frame from outside, so
-every heap value that thread's locals own is stranded. MEASURED with no socket anywhere in it: a coroutine
+every heap value that thread's locals own is stranded. With no socket anywhere in it, a coroutine
 holding one interpolated `String` inside a `sleep`, dropped while parked, exits **101** when the drop frees its
 stack and **0** when the drop renounces it.
 
@@ -608,8 +599,8 @@ IT THIS NUMBER RACES THE RECLAIM AND VARIES BY LANE.** The renounced sleeper is 
 queue, and a coroutine is never stolen off a strand (the case above pins exactly that), so a yield puts `main`
 BEHIND it in one FIFO and the thread has run to completion by the time `main` is scheduled again. That is what
 makes the free list's contents a FACT at every spawn below rather than a question about when a machine got
-round to it. MEASURED without it: x64-windows read `recycled=5` and x64-linux `recycled=4`, from the same
-binary's behaviour, because the spawns and the reclaims interleaved differently. ⚠ A `sleep()` here would be
+round to it. Without it the reading differs by lane, because the spawns and the reclaims interleave
+differently. ⚠ A `sleep()` here would be
 the same race with a longer fuse; the yield waits for the EVENT.
 
 ✅ **TWO READINGS, AND THE COUNT IS THE ONLY THING THAT TELLS THEM APART.** Six spawns happen inside the
@@ -689,7 +680,7 @@ list, however many rounds run. A thousand rounds is more than five times that bo
 record stranded every round cannot stay under it. The bound is taken from `schedProcessorCount()` rather than
 written as a number, so it follows the count the scheduler resolved.
 
-✅ **SABOTAGE-VERIFIED, AND THE EXIT GATE CANNOT SEE IT.** With the runner's half removed from the parked-drop
+✅ **THIS CASE OWNS THE RUNNER'S HALF, AND THE EXIT GATE CANNOT SEE IT.** With the runner's half removed from the parked-drop
 arm, this case reads `bounded=false` — 1,002 records carved at four processors against a bound of 192 — and
 still exits 0, because the consumer's half has already debited `__gt_live_count`. A runtime whose reclaim never
 returns a record to a free list reads `bounded=false` too, with 2,001 carved.
@@ -783,33 +774,28 @@ fills to its 256 slots and the 257th push moves the OLDEST HALF plus the new thr
 drain then unwinds both tiers, and every one of the 300 handles its one message exactly once whichever tier
 it ended up in.
 
-⛔⛔ **A MODULE-LEVEL `var ran` USED TO BE THE ONLY CHANNEL A SERVICE HAD, AND THIS CASE'S OWN NOTE ARGUED IT
-WAS SOUND *"because a spec case gets no environment, `DefaultMaxProcs` is 1, and one P means one M"*.** That
-argument expired with the default, and `specs/green-thread-globals.md` now refuses the write outright —
-so each `Sink` tallies into its own field and `main` sums 300 awaited replies on the one green thread that
-awaited them. The old note's escape hatch, `multicore-stress/service-torture.maxon`, is no longer the only place the
-shape can be read at more than one processor: this program's answer is now processor-independent by
-construction.
+⛔⛔ **A SERVICE HAS NO MODULE-LEVEL CHANNEL.** `specs/green-thread-globals.md` refuses a message's write to
+a module-level `var`, so each `Sink` tallies into its own field and `main` sums 300 awaited replies on the
+one green thread that awaited them. This program's answer is processor-independent by construction, so the
+shape can be read at more than one processor here as well as in `multicore-stress/service-torture.maxon`.
 
-⭐ **AND `beforeAnyRan` IS NOW AN AWAITED REPLY FROM SINK #1, WHICH IS STRICTLY MORE THAN THE GLOBAL COULD
-SAY.** Read off a global, the number could only ever be 0 — nothing had been *sent*, so no handler could have
-run whatever the scheduler did, and the line asserted nothing. Read as a reply from the FIRST-spawned sink —
+⭐ **AND `beforeAnyRan` IS AN AWAITED REPLY FROM SINK #1, WHICH IS STRICTLY MORE THAN A GLOBAL COULD
+SAY.** Read off a global, the number could only ever be 0 — nothing has been *sent*, so no handler can have
+run whatever the scheduler does, and the line would assert nothing. Read as a reply from the FIRST-spawned sink —
 the one the 257th push moved out of the ring and onto the global queue — it says that thread is alive,
 scheduled and answering, at the point in the program where the overflow has just happened and before a single
 `bump` exists to confuse the reading.
 
-⚠ **A LOST THREAD IS NOW A DIAGNOSIS RATHER THAN A SHORT NUMBER, AND THE BOUNDED SPIN IS GONE WITH THE
-GLOBAL.** A thread the overflow dropped never runs, so the reply `main` awaits from it never resolves, every
+⚠ **A LOST THREAD IS A DIAGNOSIS RATHER THAN A SHORT NUMBER, AND NOTHING SPINS WAITING FOR ONE.** A thread the overflow dropped never runs, so the reply `main` awaits from it never resolves, every
 green thread in the program is parked and none can become ready — which is the scheduler's `checkdead`,
 **exit 92**, taken by the last machine to go idle (`services.a-blocking-cycle-through-an-indirect-call-aborts`
 measures it at four processors). The case's `<!-- procs: 1 -->` pins the ring arithmetic above, not the
 detector, which decides under `__sched_lock` at every count.
 
-⭐ **SEEN RED.** With `__sched_runq_put`'s overflow no longer publishing the thread that overflowed it —
+⭐ **ITS RED HALF.** With `__sched_runq_put`'s overflow not publishing the thread that overflowed it —
 one line, the `emitSchedEnqueueLocked` at `moveDone` — exactly one thread is lost, which is the arithmetic:
 pushes 1-256 fill the ring, push 257 moves 128 out and drops the new one, and pushes 258-300 fit in the room
-that made. Under the old global tally that read `ran=299` and exit 101; it now stops at the reply that never
-comes.
+that made. The program then stops at the reply that never comes.
 ```maxon
 typealias SinkHandleArray = Array with Sink.handle
 
@@ -880,10 +866,10 @@ six thousand times while the ring never holds more than one thread — which dri
 256 without ever filling a single slot. A counter used directly as a slot index addresses further and
 further past the end of the P struct.
 
-⚠⚠ **THE COUNT IS SIX THOUSAND FOR A MEASURED REASON, AND IT WAS RE-MEASURED FOR THIS SHAPE.** An
+⚠⚠ **THE COUNT IS SIX THOUSAND BECAUSE A SMALLER ONE IS GREEN UNDER THE SABOTAGE IT EXISTS TO CATCH.** An
 unmasked index writes and reads through the SAME wrong address, so the program's own answer stays correct
 while it scribbles on whatever follows the P struct; the only observable is when it walks out of the
-mapped region entirely. **MEASURED against exactly that sabotage** (`emitRunqSlotAddr` addressing the raw
+mapped region entirely. **Against exactly that sabotage** (`emitRunqSlotAddr` addressing the raw
 monotonic counter with no `and RunqIndexMask`), one round count per build of this very program:
 
 | rounds | reading under the sabotage |
@@ -897,17 +883,13 @@ monotonic counter with no `and RunqIndexMask`), one round count per build of thi
 | 6,000 | SEGFAULT |
 
 ⇒ six thousand is the smallest round number with a comfortable margin past the point where the mask stops
-being invisible. **DO NOT "simplify" it back**: the first cut of this case used 400 rounds, and the table
-above is what that would buy. (The pre-EC10 `async` shape of this case measured 2,000 green and 5,000
-segfaulting — the same threshold within a factor of two, reached through a different producer.)
+being invisible. **DO NOT "simplify" it**: the table above is what a smaller count buys.
 
-⛔ **THE TALLY MOVED OUT OF A MODULE-LEVEL `var sum` AND INTO `self`, WHICH `green-thread-globals.md` NOW
-REQUIRES — AND THE SPIN LOOP WENT WITH IT.** The old round waited for the tick to be handled by watching a
-shared word; the round now ASKS, and a reply is queued behind the tick that came before it, so the await is
-the settle. **That only widens the margin the table above measures:** a round used to publish the service
-once and now publishes it twice — the tick and the reply — so the monotonic counters reach any given
-distance past 256 in FEWER rounds than when the table was taken, and 6,000 remains a floor rather than a
-number to re-derive.
+⛔ **THE TALLY LIVES IN `self`, WHICH `green-thread-globals.md` REQUIRES, AND NOTHING SPINS ON A SHARED
+WORD.** The round ASKS, and a reply is queued behind the tick that came before it, so the await is the
+settle. **That only widens the margin the table above measures:** a round publishes the service twice —
+the tick and the reply — so the monotonic counters reach any given distance past 256 in FEWER rounds than a
+single publish per round would, and 6,000 remains a floor rather than a number to re-derive.
 
 ⚠ **`<!-- procs: 1 -->` IS WHAT KEEPS THAT TABLE APPLICABLE.** The distance a counter travels is per-P; a
 service free to migrate between Ps splits its wakes across several rings and each one advances more slowly,
@@ -962,7 +944,7 @@ ring to the global queue, so leaf #1 — the first published — ends up at the 
 in the ring. The scheduler prefers its ring, so without the every-61st-slice global check leaf #1 would run
 only after all of them; with it, it runs within 61 slices of the first leaf.
 
-⭐ **THE QUANTITY IS SLICES, NOT POSITIONS, AND THAT DISTINCTION IS WHAT THE `runnext` SLOT MADE MATTER.** A
+⭐ **THE QUANTITY IS SLICES, NOT POSITIONS, AND THE `runnext` SLOT IS WHY THAT DISTINCTION MATTERS.** A
 thread taken from the slot inherits the slice it was handed, so it costs no tick — here each leaf's `note`
 readies `Tally` into the slot, and `Tally` therefore rides the leaf's own slice. Counting RUNS would count
 those too and measure something the check does not act on. `__Builtins.schedSliceCount()` is the tick the
@@ -972,7 +954,7 @@ check itself tests, read in the LEAF, since reading it in `Tally` would time `Ta
 `spawn` alone cannot be relied on: 300 spawns take longer than one 10 ms slice, and a preemption in the
 middle (`specs/sched-preempt.md`) lets the leaves drain as they are created, so the ring never fills and
 nothing reaches the global queue. After the sleep every leaf is parked on an empty mailbox, so the 300
-sends ready them all in id order — MEASURED as costing no slices at all, on every lane — the 257th ready
+sends ready them all in id order — which costs no slices at all, on every lane — the 257th ready
 overflows the ring, and the batch it moves is leaves #1..#129 with #1 at its head.
 
 ⛔ **THE CASE STATES WHETHER ITS OWN SETUP HAPPENED.** `__Builtins.schedGlobalPushCount()` across the burst
@@ -980,11 +962,11 @@ is that witness: `pushed=true` means the overflow really did put threads on the 
 reading below is about the check. A `pushed=false` reading is the setup having dissolved, and it fails
 this case rather than passing it quietly.
 
-⭐ **SEEN RED, AND BOTH READINGS MEASURED.** Healthy, an instrumented copy prints `S1-S0` of 2 — the first
+⭐ **BOTH READINGS.** Healthy, an instrumented copy prints `S1-S0` of 2 — the first
 consult after the burst happens to fall three slices away, and the property is the bound of 61 rather than
 that phase. With the check disabled (`atFairness` compared against `GtFairnessInterval`, a value
 `tick mod 61` can never take) it prints 172, and this case reads `within=false`. Identical on all four
-native lanes, three runs each, with and without a preemption during the spawn loop.
+native lanes, with and without a preemption during the spawn loop.
 
 ⛔⛔ **THE SEQUENCE IS A SERVICE'S MAILBOX AND NOT A MODULE-LEVEL `var`, WHICH `green-thread-globals.md`
 REFUSES.** This case's subject is an ORDER ACROSS SERVICES, so its tally cannot live in any one leaf's
@@ -1107,12 +1089,10 @@ the ring); `spawner` then runs and `spawn`s `spawnee` into the ring; the ring is
 runs FIRST and the yielder resumes second. Routed to the ring instead, the yielder would sit ahead of
 `spawnee` and the two positions would swap.
 
-⭐⭐ **SEEN RED TWICE, FOR TWO DIFFERENT CAUSES, AND IT IS THE ONLY CASE IN THIS FILE THAT CATCHES EITHER.**
-Both readings predate the park model, whose strand runner now does the routing. Against the tree this case
-was restored into it read `sPos=2 yPos=1` — not a routing bug but a yield that handed off to nobody at all,
-because the yield asked only about its owner's coroutines. With the yielder's publish re-pointed at the
-local ring it read `sPos=2 yPos=1` again, now for the reason its own prose names. **MEASURED under that
-second sabotage, every other case in this file stayed GREEN, `a-yield-hands-the-processor-to-a-never-run-sibling`
+⭐⭐ **IT GOES RED FOR TWO DIFFERENT CAUSES, AND IT IS THE ONLY CASE IN THIS FILE THAT CATCHES EITHER.**
+A yield that hands off to nobody at all — one that asks only about its owner's coroutines — reads
+`sPos=2 yPos=1`, and so does a yielder's publish re-pointed at the local ring, for the reason this case's
+own prose names. **Under that second sabotage every other case in this file stays GREEN, `a-yield-hands-the-processor-to-a-never-run-sibling`
 included**: that one discriminates the FRONT of a queue from its TAIL, which a single FIFO can express,
 and is blind to RING-versus-GLOBAL, which only a green thread has two tiers to have. The publish this case
 guards is the strand runner's `__gt_enqueue` of the strand's token when a yielder's strand has nothing else
@@ -1122,11 +1102,11 @@ runnable (`GtRuntime.buildGtRunStrand`).
 A drop closes the mailbox, and a closed mailbox DRAINS what is already in it — so the message survives
 its handle and the service still runs it once.
 
-⛔⛔ **THE POSITIONS COME OFF A COLLECTOR'S MAILBOX AND NO LONGER OFF A MODULE-LEVEL `var order`, WHICH
+⛔⛔ **THE POSITIONS COME OFF A COLLECTOR'S MAILBOX AND NOT OFF A MODULE-LEVEL `var`, WHICH
 `green-thread-globals.md` REFUSES.** Like the fairness case above, this one's subject is an ORDER ACROSS
 services, so the sequence cannot live in any one of them; it lives in a `Tally` service each of the three
 sends `note(id)` to as it runs. A send is an ENQUEUE and a mailbox is FIFO, so the arrival order IS the run
-order — the same discrimination the shared word made, through a channel with no read-modify-write in it.
+order — the same discrimination a shared word would make, through a channel with no read-modify-write in it.
 
 ⚠ **`Tally` IS SPAWNED THIRD, AFTER `y` AND `s`.** Both of those keep the publication slots the argument
 above turns on; a collector spawned ahead of them would take `y`'s.
@@ -1189,7 +1169,7 @@ type Spawner
 
 	export function go(sink Tally.handle)
 		let child = spawn Spawnee.create()
-		// A parameter can be neither moved nor lent by a send, so the child gets its own reference.
+		// A parameter cannot be moved by a send, so the child gets its own reference.
 		child.go(sink.clone())
 	end 'go'
 end 'Spawner'
@@ -1245,26 +1225,25 @@ hundred messages DO fill a ring and the steal rounds ARE reached — there is si
 one processor. That is what makes the `steals > 0` reading in `multicore-stress/pin-matrix.sh` a
 measurement rather than a number that is always there.
 
-⭐ **SEEN RED, AND THE TWIN STAYED GREEN — which is the whole reason these are two cases.** With
-`DefaultMaxProcs` raised from 1 to 12, so that a spec case finally HAS somebody to steal from, this case
-reads `done=1200 steals=1062` and `steals=1197` on two builds — while `no-coroutine-is-ever-stolen` above
-**passes unchanged**, because a coroutine is never a token a thief can take, at any processor count. One
-sabotage, two opposite answers, each the one its case claims.
+⭐ **AT TWELVE PROCESSORS IT GOES RED AND ITS TWIN STAYS GREEN — which is the whole reason these are two
+cases.** Run at twelve processors, so that there IS somebody to steal from, this case reads
+`done=1200 steals=1062` or thereabouts — while `no-coroutine-is-ever-stolen` above **passes unchanged**,
+because a coroutine is never a token a thief can take, at any processor count. One change, two opposite
+answers, each the one its case claims.
 
-⛔⛔ **THE TALLY WAS A MODULE-LEVEL `var done` UNTIL `green-thread-globals.md` REFUSED IT, AND THIS CASE'S
-OWN NUMBERS ARE THAT SPEC'S OPENING MEASUREMENT.** `done = done + 1` inside `Work.go` is a load, an add and
-a store on a word twelve green threads share; re-run at `MAXON_MAX_PROCS=16`, ten times, it read 1200, 1200,
-**1199**, **1199**, **1198**, **1199**, **1199**, 1200, **1199**, 1200 — five runs short, all ten exit 0.
-Each `Work` now tallies into its own field and `main` sums twelve awaited replies on the one green thread
-that awaited them, so the 1200 is arithmetic rather than a coincidence of scheduling. **The drain spin loop
-is gone with it and that is a strengthening, not a simplification:** a reply arrives only after the 100 `go`s
-queued ahead of it, so the awaits ARE the drain — where the old bounded spin could give up and print a short
-number that looked like a lost message, a lost message now shows as a short sum and nothing else can produce
-one.
+⛔⛔ **THE TALLY IS IN `self` AND NOT IN A MODULE-LEVEL `var`, WHICH `green-thread-globals.md` REFUSES.**
+`done = done + 1` on a module-level word inside `Work.go` would be a load, an add and a store on a word twelve
+green threads share, and at `MAXON_MAX_PROCS=16` it loses updates with every run exiting 0 — the shape
+`green-thread-globals.md` opens with. Each `Work` tallies into its own field and `main` sums twelve awaited
+replies on the one green thread that awaited them, so the 1200 is arithmetic rather than a coincidence of
+scheduling. **Nothing spins waiting for the drain, and that is a strength, not a simplification:** a reply
+arrives only after the 100 `go`s queued ahead of it, so the awaits ARE the drain — a bounded spin could give
+up and print a short number that looked like a lost message, while here a lost message shows as a short sum
+and nothing else can produce one.
 
-⚠ **AND IT NOW CARRIES `<!-- procs: 1 -->`, WHICH ITS NAME ALWAYS IMPLIED AND THE DEFAULT USED TO SUPPLY.**
-`steals=0` is a claim about ONE processor and is false at any other count — the sabotage above measures
-`steals=1062` at twelve. The `done=1200` half is now processor-independent; the `steals=0` half is not, and
+⚠ **AND IT CARRIES `<!-- procs: 1 -->`, WHICH ITS NAME IMPLIES.**
+`steals=0` is a claim about ONE processor and is false at any other count — at twelve it reads
+`steals=1062`. The `done=1200` half is processor-independent; the `steals=0` half is not, and
 pinning the count is what keeps it the assertion its name makes.
 ```maxon
 typealias WorkHandleArray = Array with Work.handle
@@ -1343,9 +1322,8 @@ the plain `mov` pair is already an acquire pair there and the `wasm32-wasi` lane
 window belongs to arm64, where a `ldr` pair may complete in either order. What a green thread run twice
 looks like is a compiler that dies in its own pass workers — exit 86, a fault inside a refcount step, or
 the leak gate — and the pass pool is the one program in this tree that keeps every P's ring full for
-minutes at a time. **This window is one member of that class, found by reading and closed; the deaths
-measured on arm64-macos (five of six full-suite runs before the change, and still one in the first run
-after it) are not claimed to be this window alone.**
+minutes at a time. **This window is one member of that class, and it is not claimed to be the whole
+class.**
 
 ⇒ the three reads are `StdOp.loadAcquire`, which is `ldar` on arm64 and the same plain `mov` on x64: the
 ordering is a property of the OP, so the lane that needs the barrier gets it and the lane that does not
@@ -1355,7 +1333,7 @@ pays nothing.
 `__sched_steal`'s emitted body into this case's own fragment, and
 `specs/fragments/arm64-macos/sched-runqueue/sched-runqueue.a-thief-reads-the-victims-ring-with-acquire-loads.test`
 is where a reader sees `arm64.ldar.word64` standing against the victim's `runqHead`, `runqTail` and
-`runnext`. A fragment is REFERENCE, NOT A GATE (`SpecTestRunner.maxon:85`, user ruling 2026-08-02):
+`runnext`. A fragment is REFERENCE, NOT A GATE (`SpecTestRunner.maxon:85`, user ruling):
 drift in it is reported and reddens nothing, and on the x64 lanes the golden could not move at all,
 because an acquire load lowers there to the same plain `mov`. ⇒ **what this case checks by itself is
 `hits=1` and exit 0** — that a spawned service still answers its one message.

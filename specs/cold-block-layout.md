@@ -29,7 +29,7 @@ physical successor move as one unit, cold only when every block in it is.
 
 The controls below make a sunk block run — an out-of-bounds access takes its slow arm, a range
 check fires, a panic handler fires — and read the answer back through the hot path the arm returns
-to. Two sabotages were measured. The sink run AFTER the elision stays green: an elided terminator is
+to. Two sabotages show what the controls see. The sink run AFTER the elision stays green: an elided terminator is
 `Terminator.fallthrough`, which names no op, so the unit rule glues every elided block to its
 successor and only self-contained cold units move. With the unit rule removed as well, a guard whose
 terminator had become a fall-through falls into whatever is laid down next: the two panic controls

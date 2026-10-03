@@ -37,28 +37,23 @@ the expression tier, not to `match`. Until then the construct is refused as **E2
 
 **E2015 is deliberate.** The registry defines it as *"the source uses a language construct this compiler
 does not implement yet"*, which is precisely this case. A syntax code (E2001) or a semantic one (E3xxx)
-would file a pending feature as a permanent illegality — the mistake this parser records having made in
-the opposite direction at `expectedDeclaration` and `selfOutsideInstanceMethod`, where a permanent
-refusal had been filed as a pending one.
+would file a pending feature as a permanent illegality.
 
 ## Two Doors Reach It, and Both Are Pinned
 
 The condition is "no arm reaches the merge", so it is reachable from either divergent spelling:
 
 - **every PATTERN arm diverges** — the door `match-expr-arm-divergent` opened;
-- **a diverging `default` is the ONLY arm** — reachable since the `default panic` / `default throws`
-  catch-all landed at P1.4b, and measured crashing the compiler long before per-arm divergence existed.
+- **a diverging `default` is the ONLY arm** — the `default panic` / `default throws` catch-all.
 
 Both are pinned below, because a fix that closed only one of them would leave the other reporting
 whatever the untaken path happened to do.
 
 ## What It Replaced
 
-Before this, both doors ended in `finalizeMatchMerge`'s internal `panic` — a compiler crash with a
-twenty-frame stack trace on a legal program, which is never an acceptable answer. It also stranded the
-checkout's tree lock for its full 60-second abandonment window, blocking every following command in that
-tree. The sibling spec `match-expr-divergent-class` records the same shape one step away in the same
-merge: a backend `panic: crosses register files` on a user program, replaced by real behaviour.
+The refusal stands where a compiler crash would otherwise be the answer, and a crash on a legal program is
+never an acceptable answer. The sibling spec `match-expr-divergent-class` pins the same merge one step
+away, where a user program gets real behaviour rather than a backend `panic`.
 
 ## The Cure the Diagnostic Names
 
@@ -92,9 +87,8 @@ error E2015: specs/fragments/match-expr-all-arms-diverge/error.every-pattern-arm
 ```
 
 <!-- test: error.default-panic-is-the-only-arm -->
-The second door, and the older one: a diverging `default` as the only arm, on a scalar match. This
-spelling reached the crash before per-arm divergence existed, so it is pinned independently rather than
-assumed to travel with the case above.
+The second door: a diverging `default` as the only arm, on a scalar match. It is pinned independently
+rather than assumed to travel with the case above.
 ```maxon
 function main() returns ExitCode
 	let x = 3

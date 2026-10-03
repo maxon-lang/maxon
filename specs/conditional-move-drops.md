@@ -31,10 +31,11 @@ skipped once per path (no double-free); a value moved on NO path is dropped once
 that is moved on some-but-not-all paths past the join stays a conservative use-after-move (E3102) — being
 maybe-moved, it may not be read, even though it is correctly dropped where it is not moved.
 
-Moving a value declared OUTSIDE a loop from INSIDE the loop body is rejected: dropping it on the loop's
-other exit paths needs elaboration across the loop boundary (its back edge would re-move it, or a break
-leaves it live on the normal exit), which is a later wave. Moving a value declared inside the loop body is
-fine — it is reconciled within the body, once per iteration.
+A loop is reconciled the same way: its entry and every back edge meet at the header, and its normal exit
+and every `break` meet after it. A value declared OUTSIDE a loop and moved INSIDE it is moved on exactly the
+paths that move it and dropped on the others; a back edge that brings a moved value round to a read of it is
+E3102 ("moved in an earlier iteration of this loop"). A value declared inside the loop body is reconciled
+within the body, once per iteration.
 
 ## Tests
 
@@ -373,11 +374,10 @@ end 'main'
 error E3102: <fragment>:15:8: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-### Moving a Value Declared Outside a Loop Is Rejected (Straight-Line Re-Move)
+### Moving a Value Declared Outside a Loop on Every Iteration Is a Use After Move
 
 `a` is declared outside the loop and moved into `u` inside the loop body with no `break`. The back edge
-would re-move the already-moved `a` on the next iteration — a double-free. Placing the compensating drop
-needs elaboration across the loop boundary (a later wave), so the move is refused rather than miscompiled.
+brings the already-moved `a` round to the same move on the next iteration, so the read is E3102.
 
 <!-- test: outer-move-in-loop-rejected -->
 ```maxon
@@ -403,16 +403,16 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:7: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary
+error E3102: <fragment>:12:11: use of moved value 'a': it was moved in an earlier iteration of this loop
 ```
 
-### Moving a Value Declared Outside a Loop and `break`ing Is Rejected
+### Moving a Value Declared Outside a Loop and `break`ing Moves It Once
 
 `a` is declared outside the loop and moved into `u` on the branch that then `break`s. The break edge gives
-`a` away while the normal loop exit leaves it live — its drop must land on the normal exit, an elaboration
-across the loop boundary deferred to a later wave. Refused at the move rather than leaked or double-freed.
+`a` away while the normal loop exit leaves it live, so `a` is dropped on the normal exit only. `run(0)` never
+enters the body and `run(3)` moves `a` on its second trip; each releases `a` exactly once.
 
-<!-- test: break-out-of-moved-branch-rejected -->
+<!-- test: break-out-of-moved-branch-moves-once -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -435,11 +435,12 @@ function run(n Integer) returns ExitCode
 end 'run'
 
 function main() returns ExitCode
-	return run(0)
+	_ = run(0)
+	return run(3)
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:13:8: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary
+```stdout
+built value 1 padded out long enough to heap allocate
 ```
 
 ### `try … otherwise` Handler That Moves and Terminates, OK Path Live
@@ -579,4 +580,607 @@ end 'main'
 ```
 ```stdout
 false true
+```
+
+<!-- test: a-string-moved-inside-a-while-loop-that-then-breaks-is-moved-once -->
+A `String` declared outside a `while` loop and moved on the path that breaks is moved once; a call whose loop never reaches the move drops it on the normal exit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function label(n Integer) returns String
+	return "item{n}"
+end 'label'
+
+function movedOnceThenLeaves(stop Integer) returns Integer
+	var s = label(stop)
+	var i = 0
+	var seen = 0
+
+	while i < 3 'trips'
+		if i == stop 'found'
+			let t = s
+			seen = t.count() as Integer
+			break
+		end 'found'
+
+		i = i + 1
+	end 'trips'
+
+	return seen
+end 'movedOnceThenLeaves'
+
+function main() returns ExitCode
+	print("{movedOnceThenLeaves(2)} {movedOnceThenLeaves(9)}\n")
+	return 0
+end 'main'
+```
+```stdout
+5 0
+```
+
+<!-- test: error.a-string-moved-on-every-iteration-is-used-after-its-move -->
+A `String` declared outside a loop and moved on every trip is read, on the second trip, after the first moved it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function label(n Integer) returns String
+	return "item{n}"
+end 'label'
+
+function main() returns ExitCode
+	var s = label(1)
+	var i = 0
+
+	while i < 2 'trips'
+		let t = s
+		print("{t}\n")
+		i = i + 1
+	end 'trips'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:11: use of moved value 's': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-binding-reassigned-before-its-move-on-every-trip-is-legal -->
+A binding reassigned before it is moved on every trip never meets a moved value; the value it held before the loop is released once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function label(n Integer) returns String
+	return "item{n}"
+end 'label'
+
+function reassignedThenMoved(count Integer) returns Integer
+	var s = label(0)
+	var total = 0
+	var i = 0
+
+	while i < count 'trips'
+		s = label(i)
+		let t = s
+		total = total + t.count() as Integer
+		i = i + 1
+	end 'trips'
+
+	return total
+end 'reassignedThenMoved'
+
+function main() returns ExitCode
+	print("{reassignedThenMoved(3)} {reassignedThenMoved(0)}\n")
+	return 0
+end 'main'
+```
+```stdout
+15 0
+```
+
+<!-- test: a-promise-rearmed-before-its-move-on-every-trip-is-legal -->
+The promise form of a binding reassigned before its move on every trip, in a `for` loop.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function keep(p IntPromise, v Integer) returns IntPromise
+	print("keep {v}\n")
+	return p
+end 'keep'
+
+function rearmedPromiseEachTrip(count Integer) returns Integer
+	var p = async work(0)
+	var total = 0
+
+	for i in 0 upto count 'trips'
+		p = async work(i)
+		let q = keep(p, v: i)
+		total = total + await q
+	end 'trips'
+
+	return total
+end 'rearmedPromiseEachTrip'
+
+function main() returns ExitCode
+	print("{rearmedPromiseEachTrip(3)}\n")
+	print("{rearmedPromiseEachTrip(0)}\n")
+	return 0
+end 'main'
+```
+```stdout
+keep 0
+keep 1
+keep 2
+6
+0
+```
+
+<!-- test: a-string-moved-inside-a-for-loop-that-then-breaks-is-moved-once -->
+A `String` declared outside a `for` loop and moved on the path that breaks is moved once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function label(n Integer) returns String
+	return "item{n}"
+end 'label'
+
+function forMoveThenBreak(stop Integer) returns Integer
+	var s = label(stop)
+	var seen = 0
+
+	for i in 0 upto 3 'trips'
+		if i == stop 'found'
+			let t = s
+			seen = t.count() as Integer
+			break
+		end 'found'
+	end 'trips'
+
+	return seen
+end 'forMoveThenBreak'
+
+function main() returns ExitCode
+	print("{forMoveThenBreak(1)} {forMoveThenBreak(9)}\n")
+	return 0
+end 'main'
+```
+```stdout
+5 0
+```
+
+<!-- test: a-reassigned-value-moved-on-one-back-edge-is-dropped-on-the-live-one -->
+A `continue` back edge carries a freshly assigned live `s` while the fall-through back edge moved it: the live edge drops its value, the moved edge drops nothing.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function main() returns ExitCode
+	var s = build(0)
+	var i = 0
+
+	while i < 4 'l'
+		i = i + 1
+		s = build(i)
+
+		if i mod 2 == 0 'even'
+			continue
+		end 'even'
+
+		let u = s
+		print("{u}\n")
+	end 'l'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+built value 1 padded out long enough to heap allocate
+built value 3 padded out long enough to heap allocate
+```
+
+<!-- test: a-read-through-a-merge-that-may-hold-the-moved-header-value-is-use-after-move -->
+`s` is moved on every back edge, and after the `if` with no `else` it may still be the value the previous trip moved, so reading it is E3102.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function main() returns ExitCode
+	var s = build(0)
+	var i = 0
+
+	while i < 3 'l'
+		i = i + 1
+
+		if i > 1 'r'
+			s = build(i)
+		end 'r'
+
+		let u = s
+		print("{u}\n")
+	end 'l'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:11: use of moved value 's': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: reassigning-a-value-that-may-be-the-moved-header-value-releases-only-the-fresh-one -->
+A merge of the header value (moved on the back edge) with a fresh value is reassigned: only the fresh operand is released, on its own edge.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function main() returns ExitCode
+	var s = build(0)
+	var i = 0
+
+	while i < 3 'l'
+		i = i + 1
+
+		if i == 2 'r'
+			s = build(i)
+		end 'r'
+
+		s = build(10 + i)
+		let u = s
+		print("{u}\n")
+	end 'l'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+built value 11 padded out long enough to heap allocate
+built value 12 padded out long enough to heap allocate
+built value 13 padded out long enough to heap allocate
+```
+
+<!-- test: a-value-moved-before-the-loop-and-reassigned-in-it-is-dropped-on-the-back-edge -->
+`s` is moved before the loop; each trip assigns a fresh value that reaches the back edge live and is dropped there.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function main() returns ExitCode
+	var s = build(0)
+	let u = s
+	print("{u}\n")
+	var i = 0
+
+	while i < 3 'l'
+		i = i + 1
+		s = build(i)
+	end 'l'
+
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+built value 0 padded out long enough to heap allocate
+done
+```
+
+<!-- test: an-inner-loop-over-a-value-the-outer-loop-moves-drops-its-fresh-values -->
+The outer loop moves `s` on its back edge; the inner loop's header merges that header value with fresh values, each released once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function main() returns ExitCode
+	var s = build(0)
+	var i = 0
+
+	while i < 3 'outer'
+		i = i + 1
+		var j = 0
+
+		while j < 2 'inner'
+			j = j + 1
+			s = build(100 * i + j)
+		end 'inner'
+
+		s = build(i)
+		let u = s
+		print("{u}\n")
+	end 'outer'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+built value 1 padded out long enough to heap allocate
+built value 2 padded out long enough to heap allocate
+built value 3 padded out long enough to heap allocate
+```
+
+<!-- test: a-for-loop-continue-after-a-reassign-drops-the-live-value -->
+The `for` form of the first case: the `continue` edge reaches the step block holding a live fresh value.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function main() returns ExitCode
+	var s = build(0)
+
+	for k in 1 to 4 'each'
+		s = build(k)
+
+		if k mod 2 == 0 'even'
+			continue
+		end 'even'
+
+		let u = s
+		print("{u}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+built value 1 padded out long enough to heap allocate
+built value 3 padded out long enough to heap allocate
+```
+
+<!-- test: a-break-with-a-live-value-out-of-a-loop-that-moves-it-on-the-back-edge -->
+The break edge carries a live fresh value while the normal exit sees it moved, so the break edge drops it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function main() returns ExitCode
+	var s = build(0)
+	var i = 0
+
+	while i < 5 'l'
+		i = i + 1
+		s = build(i)
+
+		if i == 3 'stop'
+			break
+		end 'stop'
+
+		let u = s
+		print("{u}\n")
+	end 'l'
+
+	print("done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+built value 1 padded out long enough to heap allocate
+built value 2 padded out long enough to heap allocate
+done
+```
+
+<!-- test: a-cell-resident-var-moved-on-one-branch-is-released-once-on-every-path -->
+`word` lives in a cell because `fill` reassigns its parameter. It is moved by a send on one branch, by an `async` call on another, and not at all on the third; every path releases the cell and its contents exactly once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Echo
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function shout(text String) returns String
+		self.count = self.count + 1
+		return "{text}!"
+	end 'shout'
+end 'Echo'
+
+function shoutAsync(text String) returns Integer
+	Scheduler.yield()
+	print("{text}?\n")
+	return 1
+end 'shoutAsync'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function run(h Echo.handle, send bool, spawn bool) returns Integer
+	var word = "hello padded out long enough to heap allocate {1}"
+	fill(word, n: 2)
+	var total = 0
+
+	if send 'sendIt'
+		let loud = try await h.shout(word) otherwise "stopped"
+		print("{loud}\n")
+		total = total + 1
+	end 'sendIt' else if spawn 'spawnIt'
+		let p = async shoutAsync(word)
+		total = total + (await p)
+	end 'spawnIt'
+
+	return total
+end 'run'
+
+function main() returns ExitCode
+	let h = spawn Echo.create()
+	print("{run(h, send: true, spawn: false)}\n")
+	print("{run(h, send: false, spawn: true)}\n")
+	print("{run(h, send: false, spawn: false)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+filled 2 padded out long enough to heap allocate!
+1
+filled 2 padded out long enough to heap allocate?
+1
+0
+```
+
+<!-- test: a-cell-resident-var-reassigned-and-moved-each-trip-with-a-continue -->
+The loop form for a cell: reassigned every trip, moved on one back edge, live on the `continue` edge.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return 1
+end 'shout'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {0}"
+	var i = 0
+	var total = 0
+
+	while i < 4 'l'
+		i = i + 1
+		word = "word {i} padded out long enough to heap allocate"
+		fill(word, n: i)
+
+		if i mod 2 == 0 'skip'
+			continue
+		end 'skip'
+
+		let p = async shout(word)
+		total = total + (await p)
+	end 'l'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+filled 1 padded out long enough to heap allocate!
+filled 3 padded out long enough to heap allocate!
+2
+```
+
+<!-- test: a-cell-resident-var-moved-in-a-loop-and-read-next-trip-is-use-after-move -->
+`fill(word, …)` at the top of the next trip reads the contents the previous trip moved.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return 1
+end 'shout'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {0}"
+	var i = 0
+	var total = 0
+
+	while i < 4 'l'
+		i = i + 1
+		fill(word, n: i)
+		let p = async shout(word)
+		total = total + (await p)
+	end 'l'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:21:8: use of moved value 'word': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-cell-resident-var-restored-on-some-trips-only-is-use-after-move -->
+The cell is re-stored on even trips only, so on an odd trip the read reaches the contents the previous trip moved.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return 1
+end 'shout'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {0}"
+	fill(word, n: 0)
+	var i = 0
+	var total = 0
+
+	while i < 4 'l'
+		i = i + 1
+
+		if i mod 2 == 0 'restore'
+			word = "word {i} padded out long enough to heap allocate"
+		end 'restore'
+
+		let p = async shout(word)
+		total = total + (await p)
+	end 'l'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:27:23: use of moved value 'word': it was moved in an earlier iteration of this loop
 ```

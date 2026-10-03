@@ -430,7 +430,8 @@ function rdataPayloadNote(label ByteArray, globalData GlobalDataTable) returns S
 			unicodeTable or
 			byteArrayRecord or
 			structRecord or
-			stringTableBuffer gives ""
+			stringTableBuffer or
+			functionRecord gives ""
 		stringRecord gives payloadTextNote(globalData.payloadOf(globalData.stringBlobLabelOfRecord(name)))
 	end 'kind'
 end 'rdataPayloadNote'
@@ -480,11 +481,11 @@ let BackslashText = "\\"
 // pure ASCII whatever a String literal holds — including a NEWLINE, which would otherwise break the
 // one-op-per-line format the whole file rests on.
 //
-// The two special bytes come from the LEXER's `Ascii`, not from two fresh constants here: "34 is a double
+// The two special bytes come from the LEXER's `AsciiByte`, not from two fresh constants here: "34 is a double
 // quote" is one fact, and this file's own `BitsPerHexDigit`/`HexDigitMask` pair records what happens when
 // such a fact is written down twice.
 function escapedPayloadByte(b MachineWord) returns String
-	if b == Ascii.dquote or b == Ascii.backslash 'escapedVerbatim'
+	if b == AsciiByte.dquote or b == AsciiByte.backslash 'escapedVerbatim'
 		return "{BackslashText}{oneByteText(b)}"
 	end 'escapedVerbatim'
 
@@ -528,7 +529,7 @@ end 'requireEveryNameRendered'
 
 // True for the functions the compiler synthesizes rather than a source file declares — the entry
 // stub `mrt_start`, the emitted `__` runtime (`__slab_*`, `__mm_*`, `__destruct_*`, …), the
-// `__fnref_` env-thunks, `__module_init`/`__module_cleanup` — and for every `runtime/` tier body.
+// `__fnref_` thunks, `__module_init`/`__module_cleanup` — and for every `runtime/` tier body.
 // One predicate with three readers, so they cannot drift: the golden render (`isSuppliedFunction`),
 // the green-thread stack guard exemption (`skipsGreenThreadStackGuard`), and both backends'
 // `FunctionCodeChunk.compilerScaffolding`.
@@ -568,7 +569,7 @@ export function isRuntimeFunction(func IrFunction, runtimeTier FunctionNameSet) 
 		return true
 	end 'theTierProvesItself'
 
-	return (bytesStartWith(func.name, prefix: b"mrt_") or bytesStartWith(func.name, prefix: b"__")) and func.sourceFilePath.isEmpty()
+	return (bytesStartWith(func.name, prefix: b"mrt_") or bytesStartWith(func.name, prefix: b"__")) and func.isCompilerBuilt()
 end 'isRuntimeFunction'
 
 // ⭐⭐ **EVERYTHING A PROGRAM WAS SUPPLIED WITH RATHER THAN WROTE — the ONE rule the render, the skip
@@ -938,7 +939,7 @@ end 'opIsArm64Band'
 // `TargetOp.divideReg` carries a `IntegerSignedness` because `idiv` and `div` share every fact the
 // dialect records about them (see its header) — but they are two DIFFERENT INSTRUCTIONS, and what a
 // golden fragment is for is showing which one was emitted. Printing `divideReg r8` for both would
-// hide exactly the difference X10 exists to make visible.
+// hide exactly the difference the signedness exists to make visible.
 function x64DivideOpName(signedness IntegerSignedness) returns String
 	return match signedness 's'
 		signed gives "idivReg"
@@ -1167,13 +1168,13 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		// the encoder's and a golden that spelled it would move whenever an unrelated frame grew.
 		leaRegSlot(destReg, slot) gives "leaRegSlot {sharedVregName(destReg, cpu: cpu)}, slot{slot}"
 
-		// F1b: the fill ladders print their NAME and their fill BYTE — never an operand list, because they
+		// The fill ladders print their NAME and their fill BYTE — never an operand list, because they
 		// have none (see `targetOpOperands`). The byte is the one thing that varies between two otherwise
 		// identical fills, so it is exactly what a golden needs to show.
 		x64MemFill(fillByte) gives "x64MemFill 0x{hexByte(fillByte as MachineWord)}"
 		arm64MemFill(fillByte) gives "arm64MemFill 0x{hexByte(fillByte as MachineWord)}"
 
-		// F2 — the atomics print their REAL MNEMONICS, for `x64DivideOpName`'s reason one screen up: what a
+		// The atomics print their REAL MNEMONICS, for `x64DivideOpName`'s reason one screen up: what a
 		// golden is for is showing which instruction was emitted, and `lock xadd` versus `lock add` is exactly
 		// the difference the prior-value peephole makes. `[reg]` renders the memory operand, so the address is
 		// visibly a dereference and not a value.

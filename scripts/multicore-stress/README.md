@@ -126,7 +126,7 @@ family a program is in decides what its rows mean**, so it is the first column h
   against services. A send is a MOVE, so the first send takes the shared `String` away from `main`
   and the second asks `main` to give up a reference it no longer holds. `pin-matrix.sh` asserts the
   build fails **with E3102 specifically** — a must-not-compile program that fails for the wrong
-  reason asserts nothing, and the first cut of this file was refused by E2015 instead.
+  reason asserts nothing.
 
 ### `async` — one M unless the system monitor starts another
 
@@ -150,7 +150,7 @@ COVERS A CROSS-P FREE**, and none should be read as doing so.
   its assertion: how far the scheduler's record-carve count runs past the most a runtime that
   reclaims every dropped record can carve, over enough rounds that one record stranded per round
   would reach twice that bound. A row that prints no `leaked=` is a failure, not a pass.
-- **`refcount-torture.maxon`** — twelve tasks all handed the SAME heap `String`, each pushing it into
+- **`refcount-torture.maxon`** — twelve tasks all reading the SAME module-level heap `String`, each pushing it into
   a local container in a loop: one round is N increfs and N decrefs of ONE word. ⚠ **THE EXIT CODE IS
   THE ONLY DISCRIMINATOR** — the aggregate is byte-identical in passing and crashing runs, and
   `live=` varies with the processor count in both. Its header tabulates the measured builds and the

@@ -75,10 +75,15 @@ function queryTokens(project Project, path FilePath, lexing LexSource = LexSourc
 end 'queryTokens'
 
 // Why a per-file token memo could not answer.
-enum TokenMemoMiss implements Error
+module enum TokenMemoMiss implements Error
 	absent
 	stale
 end 'TokenMemoMiss'
+
+module function memoizedTokensOf(project Project, path FilePath) returns TokenArray throws TokenMemoMiss
+	let entry = try sourceEntryOf(project, path: path) otherwise throw TokenMemoMiss.absent
+	return try validMemoValue(project.db.tokenCache, path: path, entry: entry)
+end 'memoizedTokensOf'
 
 // A per-file memo's value when it was stamped with these bytes' hash.
 function validMemoValue(cache TokenCacheMap, path FilePath, entry SourceFileEntry) returns TokenArray throws TokenMemoMiss
@@ -270,20 +275,20 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// query) sees the answer rather than the seeded `false`. See `livesUnderStdlibDirectory`.
 	signatures.rootIsUnderStdlibDirectory = rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: Directory.currentPath())
 
-	// The sweep is partitioned by provenance, user files first, stdlib files second: the shadow
-	// contest below is decided BETWEEN the two halves, so a stdlib file must already know the
-	// contest's answer when it is folded, because the fold is what records its declarations and every
-	// name its own signatures reference. A single pass could satisfy at most one of those two.
+	// The sweep is partitioned by provenance, user files first, stdlib files second. The shadow
+	// contest is decided ahead of both halves, off the declarations `discoverWholeProgramTokenFacts`
+	// read from every file's tokens, so every file already knows the contest's answer when it is
+	// folded — the fold is what records its declarations and every name its own signatures reference.
 	//
 	// This is a PROVENANCE order, not a dependence on filesystem order — within each half the walk's
 	// own order is untouched and unsorted, so a latent order dependence still surfaces rather than
 	// being hidden. See `StdlibLoader`'s header for the filesystem-order rule this keeps.
 	//
 	// ⚠ A RUNTIME file is on the `userPaths` side of that partition, and deliberately: the contest is
-	// about the stdlib's parser privileges — the shadow rename, the `module` tier, the `__` doors — and a
-	// `runtime/` file holds none of them. What it does need is its OWN namespace anchor, which is a fact
-	// about the PATH and not about the contest, so the fold asks for it separately rather than reading it
-	// off this partition.
+	// about the stdlib's parser privileges — the shadow rename, the `module` tier, the `__` doors —
+	// and a `runtime/` file holds none of them. What it does need is its OWN namespace anchor, which
+	// is a fact about the PATH and not about the contest, so `noteWholeProgramTokenFactsIn` asks for
+	// it separately rather than reading it off this partition.
 	var userPaths = MaxonSourcePathArray.create()
 	var stdlibPaths = MaxonSourcePathArray.create()
 
@@ -297,20 +302,19 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	end 'eachFile'
 
 	// Which declarations carry the array-literal marker, ahead of both halves: the fold itself asks,
-	// so the answer cannot come from the fold — the same ordering argument the contest below makes,
-	// one step earlier because the user half needs it too.
-	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths)
+	// so the answer cannot come from the fold — the same ordering argument the contest below makes.
+	var extents = BlockExtentsByPath.create()
+	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths, extents: extents)
+	try contestStdlibDeclarationsAgainstUserNames(project, signatures: signatures, stdlibPaths: stdlibPaths)
 
 	for path in userPaths 'eachUserFile'
 		try requireStillWanted(project)
-		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false, isRuntimeSource: isRuntimeSourceFile(project, path: path))
+		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false, extents: extents)
 	end 'eachUserFile'
-
-	try contestStdlibDeclarationsAgainstUserNames(project, signatures: signatures, stdlibPaths: stdlibPaths)
 
 	for path in stdlibPaths 'eachStdlibFile'
 		try requireStillWanted(project)
-		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: true, isRuntimeSource: false)
+		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: true, extents: extents)
 	end 'eachStdlibFile'
 
 	// The instances the compiler mints for itself (array literals, byte strings, the `from […]`
@@ -480,7 +484,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	return signatures
 end 'queryProgramSignatures'
 
-function foldOneFileInto(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, isRuntimeSource bool) throws CompileError
+function foldOneFileInto(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, extents BlockExtentsByPath) throws CompileError
 	// Outside the probe, exactly as `queryAllModule` keeps `queryParseOps` outside its `merge` probe:
 	// the tokens query does its own `lex` timing, and a phase that absorbed another's is the defect
 	// CompileTimings' header is about.
@@ -488,20 +492,21 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 
 	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
 
-	// Derived here, once, before the file's declarations are folded, so every later reader (this
-	// sweep's own `module`-tier questions, the real parse, the constant evaluator) reads an index
-	// rather than re-deriving a string from a path. ⚠ The anchor is chosen by where the file lives,
-	// not by whose it is — see `moduleDirectoryForFile`.
-	let moduleDirectory = moduleDirectoryForFile(project, path: path, livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), livesUnderRuntimeDirectory: isRuntimeSource)
-	signatures.recordFileModuleDirectory(path, moduleDirectory: moduleDirectory)
-
 	// A `Parser` IS the sweeper — same cursor, same `parseOptionalReturnType` — so the sweep and the
 	// real parse cannot drift on what `returns X` means. It is handed the index it is building, which
 	// is safe because a sweep types no call and so never reads it.
 	var scanner = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSource, buildsBodies: true)
+
+	if let built = try extents.get(path.toString()) 'theHeaderWalkBuiltThem'
+		scanner.adoptBlockExtents(built)
+		_ = extents.remove(path.toString())
+	end 'theHeaderWalkBuiltThem'
+
 	let producers = try producerMaskFor(project, signatures: signatures, path: path, scanner: scanner)
 	scanner.foldDeclaredSignaturesInto(signatures, producers: producers)
 	recordPhase(project, phase: CompilePhase.signatures, probe: probe)
+
+	scanner.publishMisclosedBlock()
 end 'foldOneFileInto'
 
 // `fileNamesProducerMask` is a COMPLETE walk of the file's tokens — it has to be, because the
@@ -615,9 +620,10 @@ end 'libraryConeAnchor'
 // nothing else, so the scan walks only the kinds a header can contain and stops at the first token
 // that cannot be one. `type` is legal as a parameter name, so a spurious start is expected and is
 // what the allow-list stops: `f(type Foo)` reaches `returns` and ends, having seen no `implements`.
-function discoverWholeProgramTokenFacts(project Project, signatures ProgramSignatures, userPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray) throws CompileError
-	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: userPaths, isStdlibSource: false)
-	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: stdlibPaths, isStdlibSource: true)
+function discoverWholeProgramTokenFacts(project Project, signatures ProgramSignatures, userPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray, extents BlockExtentsByPath) throws CompileError
+	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: userPaths, isStdlibSource: false, extents: extents)
+	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: stdlibPaths, isStdlibSource: true, extents: extents)
+	signatures.settleAliasFamiliesBesideNominals()
 end 'discoverWholeProgramTokenFacts'
 
 // Every question is asked per token and the array is walked once: the `spawn` probe joins the
@@ -627,11 +633,34 @@ end 'discoverWholeProgramTokenFacts'
 // ⚠ Runs over `stdlib/` too, deliberately: the probe is a compare on a walk that visits those
 // tokens either way, so excluding them would buy nothing and would make "stdlib never spawns" a
 // premise this walk depends on instead of a fact about the corpus as it stands.
-function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatures, paths MaxonSourcePathArray, isStdlibSource bool) throws CompileError
+function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatures, paths MaxonSourcePathArray, isStdlibSource bool, extents BlockExtentsByPath) throws CompileError
 	for path in paths 'eachFile'
 		let tokens = try queryActiveTokens(project, path: path)
 		var gate = SpawnGate.always
 		var gateEnd = 0 as ElementIndex
+		let isRuntimeSource = not isStdlibSource and isRuntimeSourceFile(project, path: path)
+
+		// Derived here, once, before any file's declarations are folded, so every later reader (the
+		// type-name admission, the sweep's `module`-tier questions, the real parse, the constant
+		// evaluator) reads an index rather than re-deriving a string from a path. ⚠ The anchor is chosen
+		// by where the file lives, not by whose it is — see `moduleDirectoryForFile`.
+		let moduleDirectory = moduleDirectoryForFile(project, path: path, livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), livesUnderRuntimeDirectory: isRuntimeSource)
+		signatures.recordFileModuleDirectory(path, moduleDirectory: moduleDirectory, isLibrary: isStdlibSource or isRuntimeSource)
+
+		if not isRuntimeSource 'declaresNamesOutsideItsTier'
+			let reader = Parser.structuralReader(tokens, job: parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: false), signatures: signatures, anchors: project.readerAnchors)
+
+			let headers = reader.topLevelDeclarationHeaders()
+			extents.upsert(path.toString(), value: reader.blockExtents())
+
+			for header in headers.types 'eachHeader'
+				noteTopLevelTypeDeclaration(signatures, header: header, path: path, moduleDirectory: moduleDirectory, isStdlibSource: isStdlibSource)
+			end 'eachHeader'
+
+			for binding in headers.bindings 'eachBinding'
+				signatures.noteTopLevelBinding(binding.name, site: TopLevelBindingSite.create(binding.visibility, declFilePath: path))
+			end 'eachBinding'
+		end 'declaresNamesOutsideItsTier'
 
 		for i in 0 upto tokens.count() 'eachToken'
 			let tok = try tokens.get(i) otherwise panic("noteWholeProgramTokenFactsIn: tokens.get OOB at {i} below count {tokens.count()}")
@@ -778,7 +807,7 @@ function tokenKindBelongsInATypeHeader(kind TokenKind) returns bool
 	return kind == TokenKind.identifier or kind == TokenKind.comma or kind == TokenKind.leftParen or kind == TokenKind.rightParen or kind == TokenKind.uses or kind == TokenKind.implements or kind == TokenKind.with or kind == TokenKind.where or kind == TokenKind.is or kind == TokenKind.and or kind == TokenKind.selfType or kind == TokenKind.intLiteral or kind == TokenKind.int or kind == TokenKind.float or kind == TokenKind.bool
 end 'tokenKindBelongsInATypeHeader'
 
-// Every NOMINAL type name a listed stdlib module declares is offered to `contestStdlibTypeName`,
+// Every NOMINAL type name a stdlib module declares is offered to `contestStdlibTypeName`,
 // which keeps only the ones a user file has already claimed. See
 // `SignatureIndex.StdlibShadowRenameMap` for the rule.
 //
@@ -788,9 +817,10 @@ end 'tokenKindBelongsInATypeHeader'
 // such pair and lets `contestStdlibTypeName` discard the uncontested ones.
 //
 // ⚠ The four nominal kinds only; `typealias` is deliberately absent. Those four are what a user
-// declaration collides with today (E3006); an alias form is already file-local, so a user's own
-// ranged `typealias DurationMs` already coexists with `stdlib/Clock.maxon`'s. Contesting an alias
-// would move a name that already works, for nothing.
+// declaration collides with (E3006); a library alias and a user one of one name coexist
+// (`Project.typeNamePairMayCoexist`) and each reader resolves to one by rank
+// (`Project.scopedAliasTier`), so a user's own `typealias DurationMs` already coexists with
+// `stdlib/Clock.maxon`'s. Contesting an alias would move a name that already works, for nothing.
 //
 // ⚠ Collected whole, then contested — not a style choice. Minting a reserved name has to avoid
 // every name the stdlib itself declares, and a walk that contested as it went could only ask about
@@ -799,6 +829,7 @@ end 'tokenKindBelongsInATypeHeader'
 // `stdlib/` in.
 function contestStdlibDeclarationsAgainstUserNames(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
 	var declaredNames = ByteArrayArray.create()
+	var declaringFiles = FilePathArray.create()
 
 	for path in stdlibPaths 'eachStdlibFile'
 		let tokens = try queryActiveTokens(project, path: path)
@@ -817,6 +848,7 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 			end 'malformedDeclaration'
 
 			declaredNames.push(nameTok.value)
+			declaringFiles.push(path)
 		end 'eachToken'
 	end 'eachStdlibFile'
 
@@ -826,12 +858,132 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 		signatures.contestStdlibTypeName(name)
 	end 'eachDeclaredName'
 
+	signatures.settleStdlibShadowSpellings(declaredNames, declaringFiles: declaringFiles)
+	adoptShadowSpellings(project, spellings: signatures.shadowSpellings())
+
 	if not signatures.hasStdlibShadowRenames() 'nothingContested'
 		return
 	end 'nothingContested'
 
 	try refuseContestedNamesUsedAsMembers(project, signatures: signatures, stdlibPaths: stdlibPaths)
 end 'contestStdlibDeclarationsAgainstUserNames'
+
+function noteTopLevelTypeDeclaration(signatures ProgramSignatures, header TypeDeclarationHeader, path FilePath, moduleDirectory String, isStdlibSource bool)
+	if not isStdlibSource 'anAuthorsDeclaration'
+		signatures.noteUserDeclaredTypeName(header.name)
+	end 'anAuthorsDeclaration'
+
+	signatures.noteWrittenTypeClaim(header.name, claim: TypeNameClaim.create(header.kind, declFilePath: path, visibility: header.visibility, declaredByTheCorpus: isStdlibSource))
+
+	if not isTypeAliasDecl(header.kind) and (isProgramWideTier(header.visibility) or not isStdlibSource) 'aQualifiedSpellingToNote'
+		signatures.noteQualifiedNominal(qualifierForNamespace(namespaceForModuleDirectory(moduleDirectory)), member: header.name, kind: header.kind, declaredByTheLibrary: isStdlibSource)
+	end 'aQualifiedSpellingToNote'
+end 'noteTopLevelTypeDeclaration'
+
+typealias NamespaceDirectorySet = Set with String
+
+function reportUnnameableNamespaceDirectories(project Project, signatures ProgramSignatures) returns bool
+	var checked = NamespaceDirectorySet.create()
+	var refusals = DiagnosticArray.create()
+	let reservedHeads = reservedNamespaceHeads()
+
+	for path in project.db.sourcePaths 'eachFile'
+		if isStdlibSourceFile(project, path: path) or isRuntimeSourceFile(project, path: path) 'aLibraryFile'
+			continue
+		end 'aLibraryFile'
+
+		let moduleDirectory = signatures.moduleDirectoryOf(path)
+
+		if moduleDirectory.isEmpty() or checked.contains(moduleDirectory) 'nothingNewToName'
+			continue
+		end 'nothingNewToName'
+
+		checked.insert(moduleDirectory)
+
+		match namespaceDirectoryFault(namespaceForModuleDirectory(moduleDirectory), keywords: project.keywords, reservedHeads: reservedHeads) 'fault'
+			nameable then continue
+			faulted(piece, reason) then refusals.push(Diagnostic.inFile(ErrorCode.namespaceDirectoryNotNameable, message: "Directory '{moduleDirectory}' cannot be a namespace: '{piece}' {namespacePieceReasonText(reason)}. Rename the directory", filePath: path.clone()))
+		end 'fault'
+	end 'eachFile'
+
+	for refusal in refusals 'eachRefusal'
+		reportDiagnostic(project, diagnostic: refusal)
+	end 'eachRefusal'
+
+	return not refusals.isEmpty()
+end 'reportUnnameableNamespaceDirectories'
+
+enum NamespacePieceReason
+	qualifiesTheRoot
+	namesTheLibrary
+	namesTheRuntimeTier
+	isAKeyword
+	isNotAName
+end 'NamespacePieceReason'
+
+union NamespaceDirectoryFault
+	nameable
+	faulted(piece String, reason NamespacePieceReason)
+end 'NamespaceDirectoryFault'
+
+function namespacePieceReasonText(reason NamespacePieceReason) returns String
+	return match reason 'reason'
+		qualifiesTheRoot gives "already qualifies the project root"
+		namesTheLibrary gives "already names the standard library"
+		namesTheRuntimeTier gives "already names the runtime tier"
+		isAKeyword gives "is a keyword, which cannot begin a qualified name"
+		isNotAName gives "is not a name"
+	end 'reason'
+end 'namespacePieceReasonText'
+
+type ReservedNamespaceHead
+	export let head as String
+	export let reason as NamespacePieceReason
+
+	static function create(head String, reason NamespacePieceReason) returns ReservedNamespaceHead
+		return Self{head: head, reason: reason}
+	end 'create'
+end 'ReservedNamespaceHead'
+
+typealias ReservedNamespaceHeadArray = Array with ReservedNamespaceHead
+
+function reservedNamespaceHeads() returns ReservedNamespaceHeadArray
+	var heads = ReservedNamespaceHeadArray.create()
+	heads.push(ReservedNamespaceHead.create(RootNamespaceQualifier, reason: NamespacePieceReason.qualifiesTheRoot))
+	heads.push(ReservedNamespaceHead.create(StdlibDirName, reason: NamespacePieceReason.namesTheLibrary))
+	heads.push(ReservedNamespaceHead.create(RuntimeDirName, reason: NamespacePieceReason.namesTheRuntimeTier))
+	return heads
+end 'reservedNamespaceHeads'
+
+function namespaceDirectoryFault(namespace String, keywords KeywordTable, reservedHeads ReservedNamespaceHeadArray) returns NamespaceDirectoryFault
+	let pieces = namespace.split(".")
+
+	for (iter, piece) in pieces.withIterator() 'eachPiece'
+		let isHead = iter.index() == 0
+		let tokens = try tokenize(piece, keywords: keywords) otherwise return NamespaceDirectoryFault.faulted(piece, reason: NamespacePieceReason.isNotAName)
+		let first = try tokens.get(0) otherwise return NamespaceDirectoryFault.faulted(piece, reason: NamespacePieceReason.isNotAName)
+
+		if not tokenCanBeAName(first) or not String.from(first.value).equals(piece) 'notOneName'
+			return NamespaceDirectoryFault.faulted(piece, reason: NamespacePieceReason.isNotAName)
+		end 'notOneName'
+
+		if not isHead 'aLaterPiece'
+			continue
+		end 'aLaterPiece'
+
+		for reserved in reservedHeads 'eachReservedHead'
+			if piece.equals(reserved.head) 'aReservedHead'
+				return NamespaceDirectoryFault.faulted(piece, reason: reserved.reason)
+			end 'aReservedHead'
+		end 'eachReservedHead'
+
+		if first.kind != TokenKind.identifier 'aKeywordHead'
+			return NamespaceDirectoryFault.faulted(piece, reason: NamespacePieceReason.isAKeyword)
+		end 'aKeywordHead'
+	end 'eachPiece'
+
+	return NamespaceDirectoryFault.nameable
+end 'namespaceDirectoryFault'
 
 function declaresANominalTypeName(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface
@@ -866,7 +1018,7 @@ function refuseContestedNamesUsedAsMembers(project Project, signatures ProgramSi
 				continue
 			end 'notAMember'
 
-			reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.stdlibShadowedNameIsAlsoAMember, message: "'{String.from(tok.value)}' cannot be shadowed: this program declares it as a type, and a stdlib module also uses it as a MEMBER name (a field, a method or an argument label). Shadowing moves the stdlib TYPE into the reserved space, which would leave that member reachable from user code under a name the stdlib side no longer spells — rename the type in this program"))
+			reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.stdlibShadowedNameIsAlsoAMember, message: "'{String.from(tok.value)}' cannot be shadowed: this program declares it as a type, and a stdlib module also uses it as a MEMBER name (a field, a method or an argument label). Shadowing moves the stdlib TYPE into the reserved space, which would leave that member reachable from user code under a name the stdlib side no longer spells — rename the type in this program"))
 			return
 		end 'eachToken'
 	end 'eachStdlibFile'
@@ -924,7 +1076,7 @@ function foldInterfaceDeclarations(project Project, signatures ProgramSignatures
 				break
 			end 'nextFile'
 
-			reader.foldInterfaceDeclarationInto(signatures, tokenPos: site.tokenPos)
+			reader.foldInterfaceDeclarationInto(signatures, tokenPos: site.tokenPos, visibility: site.visibility)
 			i = i + 1
 		end 'eachSiteInFile'
 	end 'eachFile'
@@ -1082,7 +1234,6 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 		// `buildsBodies: false` — this scan settles a CALLING CONVENTION and emits nothing, which is the
 		// one axis on which it differs from the three folds above. See `siteFileReader`.
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: false)
-		reader.noteClosureLiterals()
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")
@@ -1176,15 +1327,54 @@ end 'landParseOutcome'
 
 // A failed parse is never cached. What IS returned carries only the type names the file had declared before it
 // stopped — see `Parser.abortedParseArtifact` for why that one registry crosses an abort and the rest cannot.
-function reportFailedParse(project Project, path FilePath, error ParseError, blame LibraryBlame, salvaged FileParseArtifact) returns FileParseArtifact
+function reportFailedParse(project Project, path FilePath, error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact) returns FileParseArtifact
 	// The only span in the compiler over which `project.libraryBlame` is set, exactly one reporting
 	// call wide — written where the diagnostic is stored rather than at each of
 	// `parseErrorDiagnostic`'s match arms.
 	project.libraryBlame = blameOutsideTheLibrary(project, blame: blame)
-	reportParseError(project, path: path, error: error)
+	reportParseErrorBesideAMisclosedBlock(project, path: path, error: error)
 	project.libraryBlame = LibraryBlame.unblamed
 	return salvaged
 end 'reportFailedParse'
+
+// A declaration whose closing `end` names another label (`Parser.noteDeclarationCloser`) leaves the
+// sweep's reading of every name declared from its body on suspect, so a parse error may be its
+// consequence rather than a mistake. In another file, an error naming one of those names is
+// withheld; in the misclosed file, an error the parse met outside the block gives way to the label
+// refusal, which is the cause.
+function reportParseErrorBesideAMisclosedBlock(project Project, path FilePath, error SourceParseError)
+	let signatures = programSignaturesIn(project, asker: "reportParseErrorBesideAMisclosedBlock")
+
+	if not signatures.hasMisclosedBlocks() 'everyBlockClosesWhereItOpened'
+		reportParseError(project, path: path, error: error)
+		return
+	end 'everyBlockClosesWhereItOpened'
+
+	let diagnostic = parseErrorDiagnostic(error, path: path, keywords: project.keywords)
+
+	let site = try signatures.misclosedBlockIn(path.toString()) otherwise 'anotherFilesBlockMisread'
+		if not signatures.aMisclosedBlockCouldHaveCorrupted(diagnostic.message) 'anErrorOfThisFilesOwn'
+			reportDiagnostic(project, diagnostic: diagnostic)
+		end 'anErrorOfThisFilesOwn'
+
+		return
+	end 'anotherFilesBlockMisread'
+
+	if parseStoppedInside(site, diagnostic: diagnostic) 'theParseStoppedInsideIt'
+		reportDiagnostic(project, diagnostic: diagnostic)
+		return
+	end 'theParseStoppedInsideIt'
+
+	reportParseError(project, path: path, error: site.refusal)
+end 'reportParseErrorBesideAMisclosedBlock'
+
+function parseStoppedInside(site MisclosedBlockSite, diagnostic Diagnostic) returns bool
+	return match diagnostic.anchor 'anchor'
+		at(_, line, column) gives site.encloses(positionKey(line, column: column))
+		programWide or
+			file gives false
+	end 'anchor'
+end 'parseStoppedInside'
 
 // A parse that completed is memoized whatever its artifact records: the parse reaches no `Project`, so its
 // diagnostics ride the artifact and every fold that merges it re-reports them. Stamped through the very
@@ -1196,24 +1386,40 @@ function memoizedArtifact(project Project, path FilePath, artifact FileParseArti
 	return artifact
 end 'memoizedArtifact'
 
-export function queryAllModule(project Project) returns MaxonModule throws CompileError
+export enum NamespaceDirectoryCheck
+	unchecked
+	refuseUnnameable
+end 'NamespaceDirectoryCheck'
+
+export function queryAllModule(project Project, directories NamespaceDirectoryCheck) returns MaxonModule throws CompileError
+	// ⛔ **THE POOL IS CLOSED ON EVERY EXIT.** Dropping the last handle to a worker is what lets its green thread
+	// finish, and a front end that threw with its workers still held would leave services no exit can end.
+	var pool = FrontEndPool.create()
+
+	let merged = try queryAllModuleOn(project, pool: pool, directories: directories) otherwise (err) 'frontEndFailed'
+		pool.close(project)
+		throw err
+	end 'frontEndFailed'
+
+	pool.close(project)
+	return merged
+end 'queryAllModule'
+
+function queryAllModuleOn(project Project, pool FrontEndPool, directories NamespaceDirectoryCheck) returns MaxonModule throws CompileError
+	// Ahead of the memo and the fold, so E3182 is reported before any parse diagnostic, and on a
+	// warm hit too.
+	match directories 'directories'
+		refuseUnnameable then try refuseUnnameableNamespaceDirectories(project, pool: pool)
+		unchecked then break 'directories'
+	end 'directories'
+
 	if allModuleCacheValid(project) 'hit'
 		project.db.allModuleHits = project.db.allModuleHits + 1
 		return project.db.allModuleCache.value
 	end 'hit'
 
 	project.db.allModuleMisses = project.db.allModuleMisses + 1
-
-	// ⛔ **THE POOL IS CLOSED ON EVERY EXIT.** Dropping the last handle to a worker is what lets its green thread
-	// finish, and a front end that threw with its workers still held would leave services no exit can end.
-	var pool = FrontEndPool.create()
-
-	let merged = try foldTheFrontEnd(project, pool: pool) otherwise (err) 'frontEndFailed'
-		pool.close(project)
-		throw err
-	end 'frontEndFailed'
-
-	pool.close(project)
+	let merged = try foldTheFrontEnd(project, pool: pool)
 
 	// The project's ranged-alias registry gets the same range-contest settlement `ProgramSignatures`
 	// did, and it must be settled here because this is where its last declaration lands. The two
@@ -1225,7 +1431,28 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 
 	project.db.allModuleCache = ModuleMemo.create(merged, keyHash: compositeSourceHash(project), computed: true)
 	return merged
-end 'queryAllModule'
+end 'queryAllModuleOn'
+
+function refuseUnnameableNamespaceDirectories(project Project, pool FrontEndPool) throws CompileError
+	// On the pool first, so the signature query reads memoized token streams rather than lexing
+	// each file in turn.
+	try pool.lexEveryFile(project)
+
+	if reportUnnameableNamespaceDirectories(project, signatures: try queryProgramSignatures(project)) 'aDirectoryCannotBeNamed'
+		try refuseCompile(project)
+	end 'aDirectoryCannotBeNamed'
+end 'refuseUnnameableNamespaceDirectories'
+
+module function lexEveryFileOnAPool(project Project) throws CompileError
+	var pool = FrontEndPool.create()
+
+	try pool.lexEveryFile(project) otherwise (err) 'lexingFailed'
+		pool.close(project)
+		throw err
+	end 'lexingFailed'
+
+	pool.close(project)
+end 'lexEveryFileOnAPool'
 
 // Every file lexed, then folded into a module until the stdlib's body demand stops growing — all of it on one
 // pool.
@@ -1375,7 +1602,7 @@ end 'FoldVerdict'
 // program really mints whether or not every file merged, so the type is filed either way.
 function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, moved InstantiatedTypeNameSet) returns FoldVerdict throws CompileError
 	let diagnosticsBeforeTheFold = project.diagnostics.count()
-	resetMergeTargets(project)
+	resetMergeTargets(project, signatures: signatures)
 	signatures.restoreBaseline()
 
 	var artifacts = try pool.parseEveryFile(project, signatures: signatures)
@@ -1611,13 +1838,17 @@ function armFnTypeDisplay(project Project, name ByteArray) returns String
 	end 'declaredFn'
 
 	let alias = try project.functionTypeAliases.get(name) otherwise panic("armFnTypeDisplay: '{String.from(name)}' is armFnTypeResolvable but in neither registry — this and armFnTypeResolvable disagree")
-	return String.from(alias.display)
+
+	match alias.display 'display'
+		unread then panic("armFnTypeDisplay: '{String.from(name)}' reached `project.functionTypeAliases` without its display — the real parse reads every alias it records there")
+		spelled(text) then return String.from(text)
+	end 'display'
 end 'armFnTypeDisplay'
 
 // The compiler carries no full function type on a value, so a function-typed parameter/field/call-result
 // branch has no signature to compare — rejected rather than silently accepted.
 function reportUnverifiableFnMerge(project Project, check PendingFnMergeCheck)
-	reportParseError(project, path: check.filePath, error: ParseError.unsupported("a conditional or match whose branches are function values that are not both NAMED functions (a top-level function or a closure) — the compiler cannot yet compare the signatures of function values recovered from a parameter, field, or call result, so it refuses the merge rather than risk one branch's signature standing in for the other's", line: check.line, column: check.column))
+	reportParseError(project, path: check.filePath, error: SourceParseError.unsupported("a conditional or match whose branches are function values that are not both NAMED functions (a top-level function or a closure) — the compiler cannot yet compare the signatures of function values recovered from a parameter, field, or call result, so it refuses the merge rather than risk one branch's signature standing in for the other's", line: check.line, column: check.column))
 end 'reportUnverifiableFnMerge'
 
 // Re-runs the per-file queries (tokens, then parse) for every source file, so the warm-rebuild gate
@@ -1907,7 +2138,7 @@ end 'buildsBodiesFor'
 
 // Clear the registries that `mergeArtifact` rebuilds from artifacts, so a queryAllModule miss
 // re-derives them cleanly rather than compounding a prior run's commits.
-function resetMergeTargets(project Project)
+function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.funcReturnTypes = FuncReturnTypeMap.create()
 	project.funcSignatures = FuncSignatureMap.create()
 
@@ -1922,7 +2153,7 @@ function resetMergeTargets(project Project)
 	// PUSH/INSERT targets of the merge, so a warm rebuild that re-merged the same files would double
 	// every entry.
 	project.unusedTypeAliasDiagnostics = DeferredNameDiagnosticArray.create()
-	project.hiddenTypeNameDiagnostics = DeferredNameDiagnosticArray.create()
+	project.hiddenTypeNameDiagnostics = DiagnosticArray.create()
 
 	project.deferredParseErrors = DeferredParseErrorArray.create()
 	project.genericAliasNamesWrittenByAFile = UsedTypeNameSet.create()
@@ -1955,6 +2186,7 @@ function resetMergeTargets(project Project)
 	// Re-aimed at the SAME target the project was created with — a reset must not be a second chance
 	// to pick a platform for the builtin `ExitCode`'s range.
 	project.typeAliases = RangedAliasRegistry.create(project.target.os)
+	project.typeAliases.provenance.shareModuleDirectories(signatures.fileModuleDirectories)
 
 	// FIRST-WINS, so it must reset: a warm rebuild that re-merged the same files would find every name
 	// already claimed by its own declaration and report the whole program as duplicates.
@@ -1991,6 +2223,7 @@ function resetMergeTargets(project Project)
 	// pushes and `lookup` is a first-match linear scan, so a stale row does not lose to the fresh one
 	// — it wins.
 	project.moduleVarAccessSites = ModuleVarAccessSiteMap.create()
+	project.synthesizedOpFiles = SynthesizedOpFileMap.create()
 	project.registryUseSites = RegistryUseSiteMap.create()
 	project.serviceAwaitSites = ServiceAwaitSiteMap.create()
 	project.asyncSpawnSites = AsyncSpawnSiteMap.create()
@@ -2032,13 +2265,6 @@ function reportDirectiveError(project Project, path FilePath, error DirectiveErr
 	end 'kind'
 end 'reportDirectiveError'
 
-// The E2003 an `as` cast target that names a typealias the reading file cannot see reports. Worded
-// ONCE because it has two producers that must not drift: the `hiddenCastTargetType` arm below (a
-// top-level constant's cast, re-raised at the declaration) and
-// `TypeResolution.reportDeferredNameDiagnostics` (a body cast, deferred so the report order does
-// not depend on the file walk).
-export let HiddenTypeNameMessage = "Expected type name after 'as'"
-
 // One sentence per clause of `MmRuntime.reservedCalleeReasonOf`, and it is a `match` so a third
 // clause cannot be added there without a sentence here. The two differ in the only way that matters
 // to the author: one names a SHAPE the name has (`__`), the other names a symbol the compiler
@@ -2063,7 +2289,7 @@ function reservedNameReason(name String, reason ReservedCalleeReason) returns St
 	end 'reason'
 end 'reservedNameReason'
 
-// The E2015 sentence, written once for the two `ParseError` cases that carry it — see
+// The E2015 sentence, written once for the two `SourceParseError` cases that carry it — see
 // `tupleElementRejected` for why there are two cases and only one sentence.
 function unsupportedFeatureDiagnostic(feature String, line LineNumber, column ColumnNumber, path FilePath) returns Diagnostic
 	return Diagnostic.create(ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(feature), line: line, column: column, filePath: path)
@@ -2081,25 +2307,29 @@ module function useOfMovedValueMessage(name String) returns String
 	return "use of moved value '{name}': its ownership moved to another binding at an earlier bind or assignment"
 end 'useOfMovedValueMessage'
 
+function useOfValueMovedIntoMessage(name String, into String) returns String
+	return "use of moved value '{name}': its ownership moved to {into}"
+end 'useOfValueMovedIntoMessage'
+
+module function movedInAnEarlierIterationMessage(name String) returns String
+	return "use of moved value '{name}': it was moved in an earlier iteration of this loop"
+end 'movedInAnEarlierIterationMessage'
+
 // E2015's sentence, by its detail.
-module function unsupportedFeatureMessage(feature String) returns String
+function unsupportedFeatureMessage(feature String) returns String
 	return "Unsupported: {feature}"
 end 'unsupportedFeatureMessage'
-
-// ⭐ **WHY A MOVE MAY NOT CROSS OUT OF A LOOP — E2015's detail, for both of its deciders.** The parser refuses a
-// move it makes itself (`Parser.poisonOwningBinding`) and `StorageProvenance` one a mutable door makes of a `let`.
-module let LoopEscapingMoveDetail = "moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary"
 
 // E3077's sentence.
 module function varShouldBeLetMessage(name String) returns String
 	return "variable '{name}' is never reassigned; use 'let' instead of 'var'"
 end 'varShouldBeLetMessage'
 
-function reportParseError(project Project, path FilePath, error ParseError)
+function reportParseError(project Project, path FilePath, error SourceParseError)
 	reportDiagnostic(project, diagnostic: parseErrorDiagnostic(error, path: path, keywords: project.keywords))
 end 'reportParseError'
 
-module function parseErrorDiagnostic(error ParseError, path FilePath, keywords KeywordTable) returns Diagnostic
+module function parseErrorDiagnostic(error SourceParseError, path FilePath, keywords KeywordTable) returns Diagnostic
 	return match error 'kind'
 		// ⚠ The `expected` half is NOT quoted here — `Lexer.expectationDisplayText` decides that, and it
 		// is the only place that does: a bare lexical CATEGORY (`identifier`) is written bare and
@@ -2188,6 +2418,9 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		returnWithoutValue(name, line, column) gives Diagnostic.create(ErrorCode.missingReturn, message: "missing return value: '{name}' declares a return type, so every 'return' must carry a value", line: line, column: column, filePath: path)
 		assignToImmutable(name, line, column) gives Diagnostic.create(ErrorCode.assignToImmutable, message: "cannot assign to immutable variable: '{name}'", line: line, column: column, filePath: path)
 		useAfterMove(name, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: useOfMovedValueMessage(name), line: line, column: column, filePath: path)
+		useAfterMoveInto(name, into, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: useOfValueMovedIntoMessage(name, into: into), line: line, column: column, filePath: path)
+		useAfterMoveInAnEarlierIteration(name, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: movedInAnEarlierIterationMessage(name), line: line, column: column, filePath: path)
+		staleCellOccupantRead(name, door, line, column) gives Diagnostic.create(ErrorCode.semanticBorrowConflict, message: "the value of '{name}' {door} was read before a later argument handed '{name}' by reference to a function that may replace it, so it may no longer be what '{name}' holds. Read '{name}' into a `let` first and pass that", line: line, column: column, filePath: path)
 		promiseCannotBeBorrowed(door, cure, line, column) gives Diagnostic.create(ErrorCode.semanticPromiseCannotBeBorrowed, message: "a promise cannot be borrowed through '{door}': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. {cure}", line: line, column: column, filePath: path)
 		promiseAlreadyConsumed(door, line, column) gives Diagnostic.create(ErrorCode.semanticPromiseAlreadyConsumed, message: "this promise was already consumed by an earlier '{door}': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again", line: line, column: column, filePath: path)
 
@@ -2259,7 +2492,6 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		// REFERENCE, and every raiser of this arm holds a token.
 		unknownTypeName(typeName, line, column) gives Diagnostic.create(ErrorCode.unknownType, message: unknownTypeMessage(typeName), line: line, column: column, filePath: path)
 		throwingFunctionAsValue(name, errorType, line, column) gives Diagnostic.create(ErrorCode.throwingFunctionAsValue, message: "Cannot use throwing function '{name}' as a value: it throws '{errorType}', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.", line: line, column: column, filePath: path)
-		capturingClosureEscapes(message, line, column) gives Diagnostic.create(ErrorCode.capturingClosureEscapes, message: message, line: line, column: column, filePath: path)
 		giveTypeMismatch(got, gotNote, expected, expectedNote, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "match arms give incompatible types: '{got}'{gotNote} vs '{expected}'{expectedNote}", line: line, column: column, filePath: path)
 		ternaryValueTypeMismatch(trueType, trueNote, falseType, falseNote, line, column) gives Diagnostic.create(ErrorCode.matchTypeMismatch, message: "ternary expression type mismatch: true branch is '{trueType}'{trueNote} but false branch is '{falseType}'{falseNote}", line: line, column: column, filePath: path)
 		ternaryNonBoolCondition(got, line, column) gives Diagnostic.create(ErrorCode.matchTypeMismatch, message: "ternary expression requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
@@ -2287,11 +2519,11 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		// E3005 for a top-level `let` cast whose literal is outside its ranged alias — the same code, the
 		// same words and the same anchor a body cast gets from `InsertRangeChecks`; only the tier that
 		// noticed differs.
-		constantCastOutOfRange(value, aliasName, low, high, isFloat, rawBitWidth, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: literalOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
+		constantCastOutOfRange(value, aliasName, low, high, isFloat, domain, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: literalOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, isFloat: isFloat, domain: domain), line: line, column: column, filePath: path)
 
 		// E3005 for a `b"…"` byte the element's declared range does not admit — the same code and range
 		// fact as the arm above, with the OFFSET its subject needs.
-		byteStringByteOutOfRange(value, offset, aliasName, low, high, isFloat, rawBitWidth, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: byteStringByteOutOfRangeMessage(value, offset: offset, aliasName: aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
+		byteStringByteOutOfRange(value, offset, aliasName, low, high, isFloat, domain, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: byteStringByteOutOfRangeMessage(value, offset: offset, aliasName: aliasName, low: low, high: high, isFloat: isFloat, domain: domain), line: line, column: column, filePath: path)
 
 		// E3117 for a RAW-BYTE fill of an element that cannot hold every byte — the same range fact as
 		// the two arms above asked PER TYPE rather than per value, so it takes its own code: E3005 says a
@@ -2341,7 +2573,7 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		expectedDeclaration(got, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{got}'", line: line, column: column, filePath: path)
 		expectedNewlineAfterBlockLabel(got, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "Expected newline after block label, got '{got}'", line: line, column: column, filePath: path)
 
-		// The FOURTH shape of E2001. See `ParseError.bareTryInAClosure` for why a closure earns a
+		// The FOURTH shape of E2001. See `SourceParseError.bareTryInAClosure` for why a closure earns a
 		// different sentence from the one a declared function earns for the same situation, and why the
 		// difference is the REMEDY rather than the rule.
 		bareTryInAClosure(line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "try without otherwise requires the enclosing function to have 'throws'", line: line, column: column, filePath: path)
@@ -2365,10 +2597,9 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		// this point in the grammar", and a second `module` after an `export` is exactly that. Pinned
 		// byte-for-byte by `module-keyword/error.module-and-export-conflict`.
 		visibilityModifiersCombined(earlier, later, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "{visibilityModifierSpelling(earlier)} and {visibilityModifierSpelling(later)} cannot be combined", line: line, column: column, filePath: path)
-		hiddenTypeName(typeName, line, column) gives Diagnostic.create(ErrorCode.invalidFieldAccess, message: "Unknown type '{typeName}' in field access chain", line: line, column: column, filePath: path)
 
 		// Pinned byte-for-byte by `typealias-collision/error.exported-typealias-collision`.
-		ambiguousTypeAlias(name, candidates, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousTypeAlias, message: "Ambiguous typealias '{name}': multiple visible definitions found. Qualify with a directory name. Candidates: {candidates}", line: line, column: column, filePath: path)
+		ambiguousTypeAlias(name, candidates, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousTypeAlias, message: ambiguousNameMessage("type name '{name}'", candidates: candidates), line: line, column: column, filePath: path)
 
 		// The scalar-match arms. Each carries the code its meaning is registered under in
 		// `ErrorCodeRegistry.maxon`, and each message is pinned byte-for-byte by the `maxoncstderr` goldens
@@ -2450,7 +2681,7 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		// this compile did not get from the file being refused.
 		declarationTakesCompilerOwnedTypeName(name, line, column) gives Diagnostic.create(ErrorCode.parserUnsupportedFeature, message: "Unsupported: a declaration of the type name '{name}', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one", line: line, column: column, filePath: path)
 
-		// E3058/E3059/E2049 render the parser's error-handling diagnostics (the `ParseError` variants are
+		// E3058/E3059/E2049 render the parser's error-handling diagnostics (the `SourceParseError` variants are
 		// declared in `Parser.maxon`; this is their render half). Pinned by the
 		// `error-handling.md`/`match-statements.md` `maxoncstderr` goldens.
 		otherwiseWithoutTry(line, column) gives Diagnostic.create(ErrorCode.otherwiseRequiresTry, message: "otherwise requires try expression", line: line, column: column, filePath: path)
@@ -2480,7 +2711,7 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		awaitThrowingPromiseNeedsTry(errorType, line, column) gives Diagnostic.create(ErrorCode.throwingFunctionRequiresTry, message: "throwing function requires try: 'await' on a promise from a function that throws '{errorType}' drops the error and leaks its payload — use 'try await'", line: line, column: column, filePath: path)
 		awaitNonPromise(got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'await' requires a promise value from 'async', got {got}", line: line, column: column, filePath: path)
 		promiseStorageMismatch(detail, line, column) gives Diagnostic.create(ErrorCode.promiseErrorTypeMismatch, message: detail, line: line, column: column, filePath: path)
-		byteStringCodepointRange(message) gives Diagnostic.create(ErrorCode.lexerInvalidEscape, message: message, line: 0, column: 0, filePath: path)
+		byteStringCodepointRange(message, line, column) gives Diagnostic.create(ErrorCode.lexerInvalidEscape, message: message, line: line, column: column, filePath: path)
 		propagateTypeMismatch(propagated, enclosing, line, column) gives Diagnostic.create(ErrorCode.errorTypeMismatch, message: "try propagates '{propagated}' but enclosing function throws '{enclosing}' — add 'otherwise' to convert", line: line, column: column, filePath: path)
 		thrownValueNotAnErrorEnum(line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "throw requires an error enum value", line: line, column: column, filePath: path)
 
@@ -2574,11 +2805,10 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 
 		// Worded beside its narrowing twin rather than inline here, so the two E3005s that quote one
 		// alias's bounds share the range renderer and the name strip.
-		otherwiseOutsideRangedReturn(value, aliasName, low, high, rawBitWidth, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: otherwiseOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, rawBitWidth: rawBitWidth), line: line, column: column, filePath: path)
-		hiddenCastTargetType(line, column) gives Diagnostic.create(ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: line, column: column, filePath: path)
+		otherwiseOutsideRangedReturn(value, aliasName, low, high, domain, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: otherwiseOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, domain: domain), line: line, column: column, filePath: path)
 		uninferrableClosureParam(paramName, line, column) gives Diagnostic.create(ErrorCode.parserExpectedType, message: "Cannot infer type for closure parameter '{paramName}'. Add an explicit type annotation.", line: line, column: column, filePath: path)
 
-		// The SENTENCE arrives rendered — see the three arms' own note in `ParseError`. These mapper
+		// The SENTENCE arrives rendered — see the three arms' own note in `SourceParseError`. These mapper
 		// lines carry the CODE and nothing else, which is what keeps the words beside the rule that chose
 		// them.
 		serviceNotASpawnTarget(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceNotASpawnTarget, message: explanation, line: line, column: column, filePath: path)
@@ -2588,7 +2818,6 @@ module function parseErrorDiagnostic(error ParseError, path FilePath, keywords K
 		serviceReplyNotCarriable(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceReplyNotCarriable, message: explanation, line: line, column: column, filePath: path)
 		serviceReplyAliasesState(explanation, line, column, note) gives Diagnostic.create(ErrorCode.semanticServiceReplyAliasesState, message: explanation, line: line, column: column, filePath: path).withNote(note)
 		serviceReplyInstanceUnknown(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceReplyInstanceUnknown, message: explanation, line: line, column: column, filePath: path)
-		lentGraphEscapes(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticLentGraphEscapes, message: explanation, line: line, column: column, filePath: path)
 		registryRefused(code, explanation, line, column, note) gives Diagnostic.create(code, message: explanation, line: line, column: column, filePath: path).withNote(note)
 		extensionMemberHidesOwnMember(explanation, line, column, note) gives Diagnostic.create(ErrorCode.extensionMemberHidesOwnMember, message: explanation, line: line, column: column, filePath: path).withNote(note)
 	end 'kind'

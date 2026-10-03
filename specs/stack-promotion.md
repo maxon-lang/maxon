@@ -7,9 +7,8 @@ category: optimization
 
 # Stack Promotion for Structs
 
-Tests verifying that the escape analysis correctly promotes eligible structs to stack allocation.
-Uses `MmTrace: true` to verify that promoted structs produce NO heap allocation trace lines,
-while escaped structs still produce normal heap allocation traces.
+Tests of the escape analysis that promotes eligible structs to stack allocation. Each case pins its
+exit code; `specs/stack-promotion-escape.md` pins that an escaping struct is not promoted.
 
 ## Tests
 

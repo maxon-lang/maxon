@@ -20,10 +20,10 @@ path no node is ever linked, so the callee must destroy the element itself or no
 exactly that reason — the same helper, and the same contract, that `__managed_set` and `__managed_mem_set`
 call from theirs.
 
-⚠ **`/specs/list.md` CANNOT CATCH THIS, AND THAT IS WHY THESE CASES ARE HERE.** All four of that file's
+⚠ **`specs/list.md` CANNOT CATCH THIS, AND THAT IS WHY THESE CASES ARE HERE.** All four of that file's
 `insert` cases (`insert.at-beginning`, `insert.at-middle`, `insert.at-end`, `insert.out-of-bounds`) use
 `int` elements, where `moveElementIntoContainer` takes its trivial arm and the callee owns nothing at all.
-The refused-insert leak was shipped green over 32 of 32 canonical cases and found in review; the managed
+A refused-insert leak passes every case in that file; the managed
 case below is the one that reddens, and the `int` case beside it is the **control** that says the
 difference is the managed move-in and not the throw.
 
@@ -37,7 +37,7 @@ successfully, so both halves of that contract are pinned by one program.
 
 <!-- test: a-refused-insert-does-not-leak-the-element-it-was-given -->
 
-The reproduction, as measured. Before the reject-destroy existed this printed `rejected` and exited
+The reproduction. Without the reject-destroy this prints `rejected` and exits
 **101** — a leak, not a wrong answer, which is why the exit code is pinned and not just the output.
 
 ```maxon
@@ -61,9 +61,10 @@ rejected
 
 <!-- test: a-trivial-element-refused-insert-is-the-control -->
 
-The identical program over an `int` element. It passed throughout the defect's life — the element is an
-inline word the callee never owns — so it is what identifies the leak above as the **managed move-in**
-rather than the throw. It is also the shape all four of `/specs/list.md`'s `insert` cases take, which is
+The identical program over an `int` element. It passes whether or not the reject block destroys the
+element — the element is an inline word the callee never owns — so it is what identifies a leak above as
+the **managed move-in** rather than the throw. It is also the shape all four of `specs/list.md`'s `insert`
+cases take, which is
 the whole reason that file could not see the defect.
 
 ```maxon

@@ -3,7 +3,6 @@ feature: two-address-regression
 status: selfhosted
 keywords: [register-allocator, reuse, two-address, lea, imul, neg, reuse-copy-transient, return-register]
 category: codegen
-milestone: M5.2
 ---
 
 # Two-address reuse regression
@@ -11,10 +10,9 @@ milestone: M5.2
 ## Documentation
 
 x64's `sub` and `imul` are genuinely two-address (`dest = dest <op> rhs`), and `neg`
-is two-address unary. M5.1 handled that by pre-emitting a seed copy `mov result, lhs`
-in ISel and hoping biased coloring would elide it. M5.2 deletes that seed: ISel emits
-ONE reuse-def op, and the register allocator supplies the copy ONLY when the two-address
-input actually outlives the op.
+is two-address unary. ISel does not pre-emit a seed copy `mov result, lhs` and hope
+biased coloring elides it: it emits ONE reuse-def op, and the register allocator supplies
+the copy ONLY when the two-address input actually outlives the op.
 
 The structural consequence this spec locks in: a `-` or `*` over **loop-carried,
 non-constant** values (a constant operand folds away to an immediate, so both operands
@@ -45,7 +43,7 @@ have counted it.
 
 **That situation is prevented upstream, not handled downstream** — and
 `reuse-dest-cannot-coalesce` below is the program that pins it. The reuse hint makes the dest
-and the input COPY PARTNERS, and `preferredClassMask` (M5.12) makes a copy group adopt the
+and the input COPY PARTNERS, and `preferredClassMask` makes a copy group adopt the
 scarcest register class any of its members needs. So when the dest is confined to the
 callee-saved set (because it is live across a call), the INPUT is allocated a callee-saved
 register too — even though nothing about the input alone requires one — and the reuse
@@ -238,7 +236,7 @@ clobbered `x` gives `(−7)·100 + 7 = −693`, which the self-check catches —
 a wrong run could otherwise land on 0.
 
 ⚠ `p` is read from a MODULE-LEVEL `var`, not passed as a literal: `inlineLeaves` splices `negs` into
-`main`, and with a literal argument `foldConstants` (which since 2026-08-31 evaluates a `neg` over a
+`main`, and with a literal argument `foldConstants` (which evaluates a `neg` over a
 constant) folds the whole chain to `mov rax, 707` — no `neg` is emitted and the self-check above
 checks a constant. Neither the parser's constant domain nor the fold pass looks through memory, so a
 load of a global keeps the three `neg`s, and the reuse copy this case exists to pin, on every lane.
@@ -336,7 +334,7 @@ are still free, and `pickPreferredRegister` prefers caller-saved so a leaf funct
 prologue. Left alone, `a` would take one, and `d` could not follow it there.
 
 It does not, and THAT is what this test pins. The reuse hint makes `a` and `d` copy PARTNERS,
-and `preferredClassMask` (M5.12) makes a copy group adopt the scarcest class any member needs —
+and `preferredClassMask` makes a copy group adopt the scarcest class any member needs —
 so `a` is allocated **`rbx`**, callee-saved, purely because its reuse partner will need to live
 there. The fragment shows the payoff directly: `subRegReg rbx, rbx, rax`, dest == input, a clean
 coalesce, no copy, and `d` sits in `rbx` across the call with no spill anywhere in the function.

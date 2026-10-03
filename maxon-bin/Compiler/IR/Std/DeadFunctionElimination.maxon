@@ -48,9 +48,13 @@
 // label no live function loads would need a witness-conditional root sidetable, an init write-set map,
 // a second "live vars excluding inits" pre-walk, and a hand-maintained allow-list of name prefixes.
 // Keeping the data and pruning only code is what lets the root set below stay three lines long:
-// because every `.rdata` function slot survives, every function a slot NAMES must survive too, and
-// "is this label reachable?" never has to be asked. Dead-`.rdata` elimination is a
-// separate change with its own goldens (`.rdata` offsets move, so `RequiredData` moves with them).
+// because every witness and layout `.rdata` function slot survives, every function such a slot
+// NAMES must survive too. A FUNCTION RECORD is the one label whose reachability is asked: it is
+// reached through the `rdataAddr` that reads it or an `.rdata` slot that names it, and a record
+// nothing reached keeps its bytes with its code slot unbaked
+// (`GlobalDataTable.dropFunctionRecordRelocsExcept`) — so a function only ever named by a dead
+// function's value use is swept. Dead-`.rdata` elimination is a separate change with its own
+// goldens (`.rdata` offsets move, so `RequiredData` moves with them).
 //
 // ⚠ **A USER GLOBAL'S SLOT IS DECIDED UPSTREAM, AND DELIBERATELY NOT HERE**: a dead top-level global's slot
 // is never BUILT, by `IR/Maxon/DeadGlobalElimination` filtering the arena in `compileToCodeResult`, and it
@@ -95,14 +99,22 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 
 	var reference = StdFunctionReference.create()
 	var referencedGlobals = ReferencedGlobalLabelSet.create()
+	var referencedRecords = ReferencedGlobalLabelSet.create()
+	let recordCodes = functionRecordCodesOf(globalData)
 	try seedRoots(globalData, project: project, index: index, reached: reached, worklist: worklist)
+
+	for label in globalData.functionRecordLabelsNamedInRdata() 'eachRecordAnImageNames'
+		markFunctionRecordCode(label.toByteArray(), recordCodes: recordCodes, referencedRecords: referencedRecords, byName: byName, reached: reached, worklist: worklist)
+	end 'eachRecordAnImageNames'
 
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("eliminateDeadFunctions: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
 		requireNotSplicedAway(module, func: func, byName: byName, reached: reached)
-		markReferencesOf(module, func: func, byName: byName, reached: reached, worklist: worklist, reference: reference, referencedGlobals: referencedGlobals)
+		markReferencesOf(module, func: func, byName: byName, reached: reached, worklist: worklist, reference: reference, referencedGlobals: referencedGlobals, recordCodes: recordCodes, referencedRecords: referencedRecords)
 	end 'walk'
+
+	globalData.dropFunctionRecordRelocsExcept(referencedRecords)
 
 	requireUnreachableLibraryStayedDead(project, byName: byName, reached: reached)
 	sweepUnreachedFunctions(module, reached: reached, project: project)
@@ -314,9 +326,27 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	end 'eachOwnedRoot'
 
 	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
+		if isFunctionRecordLabel(reloc.rdataLabel) 'reachedThroughItsReaders'
+			continue
+		end 'reachedThroughItsReaders'
+
 		markLiveFunction(reloc.funcName, byName: index.byName, reached: reached, worklist: worklist)
 	end 'eachRdataSlot'
 end 'seedRoots'
+
+typealias FunctionRecordCodeMap = Map with (ByteArray, ByteArray)
+
+function functionRecordCodesOf(globalData GlobalDataTable) returns FunctionRecordCodeMap
+	var codes = FunctionRecordCodeMap.create()
+
+	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
+		if isFunctionRecordLabel(reloc.rdataLabel) 'aFunctionRecord'
+			codes.upsert(reloc.rdataLabel.toByteArray(), value: reloc.funcName)
+		end 'aFunctionRecord'
+	end 'eachRdataSlot'
+
+	return codes
+end 'functionRecordCodesOf'
 
 // ⭐ **KIND 2, AS ONE ROSTER** — every name an entry stub or a hand-assembled chunk calls, on `target`. Read
 // here to root them and by the inliner to keep them out of the called-once rule (a body the stub still
@@ -416,7 +446,7 @@ function markCompilerOwnedRoot(root CompilerOwnedRoot, project Project, index Fu
 		return
 	end 'notAModuleFunction'
 
-	if not func.sourceFilePath.isEmpty() 'declared'
+	if not func.isCompilerBuilt() 'declared'
 		reportAtFunctionName(project, func: func, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{String.from(root.name)}' takes a name the compiler owns: it roots that name into every program's reachability set, for a function it emits itself. This program installs no runtime under it, so the declaration is what the root would keep — with an EMPTY body, since the passes that lower bodies were told the name was unreachable. Rename the declaration")
 		throw CompileError.compileError
 	end 'declared'
@@ -499,16 +529,24 @@ end 'referenceKeepingAlive'
 // (`IrModule.liveOpIndices`), never the flat `module.ops` array: that array is append-only and holds the
 // ops every prior block-rebuilding pass replaced, so scanning it would resurrect callees — and keep runtime
 // words alive — from IR that no longer exists.
-function markReferencesOf(module StdModule, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, reference StdFunctionReference, referencedGlobals ReferencedGlobalLabelSet)
+function markReferencesOf(module StdModule, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, reference StdFunctionReference, referencedGlobals ReferencedGlobalLabelSet, recordCodes FunctionRecordCodeMap, referencedRecords ReferencedGlobalLabelSet)
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("eliminateDeadFunctions: live op index {opIdx} not in module.ops")
 		markCalleeOf(op, byName: byName, reached: reached, worklist: worklist, reference: reference)
 
-		if stdOpNamesAGlobalLabel(op) 'namesASlot'
-			referencedGlobals.insert(stdOpGlobalLabel(op))
-		end 'namesASlot'
+		match stdOpLabelKindOf(op) 'label'
+			none then continue
+			dataSlot then referencedGlobals.insert(stdOpLabel(op))
+			rdata then markFunctionRecordCode(stdOpLabel(op), recordCodes: recordCodes, referencedRecords: referencedRecords, byName: byName, reached: reached, worklist: worklist)
+		end 'label'
 	end 'eachOp'
 end 'markReferencesOf'
+
+function markFunctionRecordCode(label ByteArray, recordCodes FunctionRecordCodeMap, referencedRecords ReferencedGlobalLabelSet, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
+	let code = try recordCodes.get(label) otherwise return
+	referencedRecords.insert(label)
+	markLiveFunction(code, byName: byName, reached: reached, worklist: worklist)
+end 'markFunctionRecordCode'
 
 // The static reachability edge one `StdOp` names, if any. Read here to walk the call graph and by the
 // inliner's called-once census, which counts the direct calls and refuses a callee anything else names.
@@ -649,6 +687,8 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -682,6 +722,7 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or

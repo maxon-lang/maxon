@@ -8,7 +8,7 @@ category: codegen
 
 ## Documentation
 
-A `for v in a` over an `Array with` an 8-byte element used to reload two words of the array's header on
+A `for v in a` over an `Array with` an 8-byte element would otherwise reload two words of the array's header on
 **every element**: the LENGTH, read in the loop header to test the index, and the BUFFER BASE, read in
 the body to address the slot. Neither can change while the loop runs. `hoistLoopInvariants` moves both
 into the block that runs once before the loop, which takes the anchor loop's executed body from eight
@@ -43,16 +43,16 @@ a loop holding a store, a call, an atomic or an OS primitive is refused whole an
 `a-loop-that-writes-keeps-its-loads-inside` is the control, and it is a WRONG-ANSWER control rather than
 a fragment pin — drop Rule 1 and its exit code changes.
 
-The rule became sufficient for the anchor loop when `EC15` made that loop CALL-FREE by specializing the
-element stride; before that, the `__managed_get_unchecked` in the slow arm was a call and Rule 1 would
-have refused it.
+The rule suffices for the anchor loop because the element stride is specialized, which makes that loop
+CALL-FREE; an unspecialized `__managed_get_unchecked` in the slow arm would be a call and Rule 1 would
+refuse it.
 
 ### RULE 2 — a load may only be speculated where it was going to run anyway
 
 A hoisted op executes even when the loop body never does. In the anchor the length is read in the
 HEADER, which runs the moment the preheader does; the buffer base is read in the block the header's
-guard branches to, which **for an empty array never runs at all**. Moving a load to a point where it did
-not previously execute can fault, so a load needs one of two admissions:
+guard branches to, which **for an empty array never runs at all**. Moving a load to a point where it would
+not otherwise execute can fault, so a load needs one of two admissions:
 
 - **2a — must-execute.** Its block dominates every block through which control leaves the loop, and
   every latch. Any execution that either iterates or exits has already run it.
@@ -78,16 +78,15 @@ where it was.
 Rules 1 and 2 are correctness. **Rule 3 is a BOUND, it applies to BOTH phases** — arithmetic as well as
 loads — and it is the largest thing this pass declines to do.
 
-A hoisted value is live across the WHOLE loop where its computation used to live for a few ops, and a
-range crossing a CALL is confined to the five callee-saved registers x64-windows leaves. `EC13` measured
-one end of that: The compiler REFUSES rather than spills, and a single reused expression across a call took
-`generic-hash-table-regalloc`'s pressured-loop case red with `E5001`. `EC14` measured the other end —
-what happens when the allocator does *not* refuse: with the bound off, 48 `map` fragments gained **+96
-`loadRegSlot` and +48 `storeSlotReg`** and every one of their frames grew, because the hoisted value was
-cold-spilled and reloaded. In `Map.grow` the whole trade was one `leaRegRegImm32` replaced by one
-`loadRegSlot` — an ALU op for a memory op, which is not a win at any instruction count.
+A hoisted value is live across the WHOLE loop where its computation would otherwise live for a few ops,
+and a range crossing a CALL is confined to the five callee-saved registers x64-windows leaves. At one end
+of that, the compiler REFUSES rather than spills, and a single reused expression hoisted across a call
+takes `generic-hash-table-regalloc`'s pressured-loop case red with `E5001`. At the other end, where the
+allocator does *not* refuse, the hoisted value is cold-spilled and reloaded: with the bound off, 48 `map`
+fragments gain **+96 `loadRegSlot` and +48 `storeSlotReg`** and every one of their frames grows. In
+`Map.grow` the whole trade is one `leaRegRegImm32` replaced by one `loadRegSlot` — an ALU op for a memory op, which is not a win at any instruction count.
 
-It costs the anchor nothing, which is what makes it affordable: `EC15` made that loop call-free, and
+It costs the anchor nothing, which is what makes it affordable: that loop is call-free, and
 `regalloc/many-call-crossing` — where nine invariant computations DO leave a loop — holds no call either.
 
 ⚠ **NO CASE BELOW GOES RED IF RULE 3 IS DELETED, and that is stated rather than left to be discovered.**
@@ -98,8 +97,7 @@ is the fragment that would move if the rule were *widened* to refuse call-free l
 ### What is deliberately NOT hoisted
 
 `const` (`classifyArithOperands` answers "not arithmetic" for it, and rematerializing a literal beats a
-live range spanning the loop — v1's own header records that a hoisted canonical constant "conflicts with
-ABI-constrained uses"); the pure ADDRESS ops `globalAddr` / `rdataAddr` / `funcAddr` / `stackRecordAddr`,
+live range spanning the loop, and a hoisted constant conflicts with ABI-constrained uses); the pure ADDRESS ops `globalAddr` / `rdataAddr` / `funcAddr` / `stackRecordAddr`,
 which are always invariant and whose hoist is therefore a pure register-pressure trade with no
 instruction-count argument behind it; `div`/`mod`, which trap; **anything at all in a loop holding a
 call** (Rule 3); and any loop with no single preheader, or whose preheader's branch could go somewhere
@@ -111,7 +109,7 @@ other than the loop header.
 The anchor. `for v in a` reads the array's LENGTH in the loop header and its BUFFER BASE in the body,
 neither of which can change while the loop runs; both move to `entry`, leaving the header a `cmp`/`jcc`
 and the body a single indexed load. The committed fragment for `@total` is the whole reading — six
-instructions on the executed path, against eight before this rung. The sum is checked so a wrong address
+instructions on the executed path, against eight with nothing hoisted. The sum is checked so a wrong address
 or a stale length is a wrong exit code rather than a silent pass.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -145,7 +143,7 @@ end 'main'
 
 <!-- test: an-empty-container-still-runs-the-hoisted-load -->
 ⭐ **THE SPECULATION CASE.** The buffer-base load lives in the block the loop header's guard branches
-to, so for an array of length ZERO it never executed before this rung — and after it, hoisted into the
+to, so for an array of length ZERO it would never execute in place — and hoisted into the
 preheader, it does. Rule 2b is the whole of why that is safe: the length load at `[a+8]` is admitted
 unconditionally by 2a and proves the object at `a` spans sixteen bytes, so the field at `[a+0]` is
 inside it whether or not the loop ever iterates.
@@ -221,11 +219,11 @@ end 'main'
 <!-- test: a-loop-that-writes-keeps-its-loads-inside -->
 ⭐ **RULE 1's CONTROL, AND IT IS A WRONG ANSWER RATHER THAN A FRAGMENT DIFFERENCE.** The loop's exit test
 READS a field the loop's body WRITES, so that load is not invariant at all: hoisted, the condition would
-test the value the field held before the loop for ever. MEASURED by sabotage — make `loopWritesNoMemory`
+test the value the field held before the loop for ever. Make `loopWritesNoMemory`
 answer `true` unconditionally and this program answers `trips=5 left=2` where `trips=3 left=0` is
 correct, so the case returns 1.
 
-⚠⚠ **TWO EARLIER SPELLINGS OF THIS CASE STAYED GREEN UNDER THAT SABOTAGE, AND BOTH WERE PASSING FOR
+⚠⚠ **TWO OTHER SPELLINGS OF THIS CASE STAY GREEN UNDER THAT SABOTAGE, AND BOTH PASS FOR
 SOMETHING OTHER THAN THEIR SUBJECT.** A module-level `var` fails to reach Rule 1 because a global's read
 is `globalAddr` + `loadIndirect` and the `globalAddr` is minted INSIDE the loop — the load is already
 refused for having a loop-defined ADDRESS. A field read in the loop's BODY fails to reach it because

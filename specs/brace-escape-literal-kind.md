@@ -14,7 +14,7 @@ interpolation**, so an author who wants a literal brace needs a way to say so.
 `"Use \{expr\} syntax"` is the string `Use {expr} syntax` (see `string-interpolation.md`).
 
 That reason does not reach the other two quoted forms. A **character literal** cannot interpolate —
-`/specs/character-type.md` lists its escapes as `\n \t \\ \'`, with no brace — and a **byte string
+`specs/character-type.md` lists its escapes as `\n \t \\ \'`, with no brace — and a **byte string
 literal** (`b"…"`) does not interpolate either. In both, `{` is an ordinary character that needs no
 rescuing, so `\{` and `\}` name no known escape and are refused.
 
@@ -52,14 +52,13 @@ end 'main'
 <!-- test: open-brace-escape-refused-in-character-literal -->
 ### `'\{'` is not an escape in a character literal
 
-MEASURED 2026-08-26: The compiler accepted this and produced the character `{`, because one shared escape
-table served every quoted body and had no way to state a per-kind fact (D14). The bootstrap oracle
-refuses it — `error E1004: Invalid escape sequence '\{' in character literal`.
+Which escapes a quoted body accepts is a per-kind fact: an escape table shared by every quoted body
+cannot state it, and would accept this as the character `{`. The compiler refuses it (E2016).
 
-The binding is USED on purpose. Left unused, the pre-fix compiler — which accepted the escape — failed
-this case with `E3012: unused variable`, a diagnostic that names nothing about braces and would have
-masked the subject if the rule ever regressed. Used, the pre-fix compiler compiles and RUNS, so the
-case's red is the behaviour under test: a character `{` where there should have been a refusal.
+The binding is USED on purpose. Left unused, a compiler that accepted the escape would fail this case
+with `E3012: unused variable`, a diagnostic that names nothing about braces and would mask the subject
+if the rule regressed. Used, such a compiler compiles and RUNS, so the case's red is the behaviour
+under test: a character `{` where there should be a refusal.
 
 ```maxon
 function main() returns ExitCode
@@ -92,10 +91,9 @@ error E2016: <fragment>:3:10: invalid character literal: unknown escape sequence
 <!-- test: brace-escape-refused-in-byte-string -->
 ### `\{` is not an escape in a byte string literal
 
-The second arrival of the same defect, and the one D14's row did not name: a `b"…"` blob does not
-interpolate, so it has no more use for a brace escape than a character literal does. Before the fix
-`b"a\{b"` decoded to the three bytes `a { b`; it is now refused with `error E1004: Invalid
-escape sequence '\{' in byte string literal`.
+The same rule holds for a byte string: a `b"…"` blob does not interpolate, so it has no more use for a
+brace escape than a character literal does. `b"a\{b"` is refused rather than decoded to the three bytes
+`a { b`.
 
 ```maxon
 function main() returns ExitCode

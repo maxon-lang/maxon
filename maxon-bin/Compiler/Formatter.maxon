@@ -13,10 +13,6 @@
 // `tests/fmt/` is the authority for every layout decision here: its expectations pin this emitter's
 // output byte for byte, so a divergence is a failure of this file rather than an improvement.
 
-// How deep the emitter is indented, counted in levels. What one level is SPELLED as is `FormatOptions`'
-// business — `maxon fmt` always wants a tab, an LSP client may ask for spaces.
-typealias IndentDepth = int(0 to u64.max)
-
 // How deeply `(`/`[`/`{` are nested at the token being emitted. Its only reader asks whether a line
 // starts a match ARM or merely continues a bracketed literal inside an arm body, so any depth past
 // zero answers the same — the width just has to hold what a real file nests.
@@ -214,7 +210,7 @@ type SourceLines
 		while i < bytes.count() as ByteOffset 'eachByte'
 			let b = try bytes.get(i as ElementIndex) otherwise panic("SourceLines.of: index {i} below the {bytes.count()}-byte source")
 
-			if b == Ascii.lf 'endOfLine'
+			if b == AsciiByte.lf 'endOfLine'
 				starts.push(lineStart)
 				ends.push(i)
 				lineStart = i + 1
@@ -278,7 +274,7 @@ end 'SourceLines'
 // Space, tab and CR — the whitespace a LINE can carry. LF cannot appear inside one by construction, so
 // this is the whole of "layout" for every question `SourceLines` answers.
 function isLayoutByte(b Byte) returns bool
-	return b == Ascii.space or b == '\t' or b == '\r'
+	return b == AsciiByte.space or b == '\t' or b == '\r'
 end 'isLayoutByte'
 
 /// The raw-source scan that recovers `//` and `/* … */` comments, keyed by line.
@@ -332,7 +328,7 @@ type CommentScan
 			return false
 		end 'tooShort'
 
-		return lines.byteAt(0, offset: 0) == Ascii.hash and lines.byteAt(0, offset: 1) == Ascii.bang
+		return lines.byteAt(0, offset: 0) == AsciiByte.hash and lines.byteAt(0, offset: 1) == AsciiByte.bang
 	end 'opensWithShebang'
 
 	function scanLine()
@@ -344,19 +340,19 @@ type CommentScan
 				continue
 			end 'insideALiteral'
 
-			if c == Ascii.dquote or c == Ascii.quote 'opensALiteral'
+			if c == AsciiByte.dquote or c == AsciiByte.quote 'opensALiteral'
 				self.nesting.push(c)
 				self.at = self.at + 1
 				continue
 			end 'opensALiteral'
 
-			if c == Ascii.slash and self.nextByteIs(Ascii.slash) 'lineComment'
+			if c == AsciiByte.slash and self.nextByteIs(AsciiByte.slash) 'lineComment'
 				// Either way the rest of the line belongs to the comment.
 				self.scanLineComment()
 				return
 			end 'lineComment'
 
-			if c == Ascii.slash and self.nextByteIs(Ascii.star) 'blockComment'
+			if c == AsciiByte.slash and self.nextByteIs(AsciiByte.star) 'blockComment'
 				self.scanBlockComment()
 				continue
 			end 'blockComment'
@@ -370,8 +366,8 @@ type CommentScan
 	function stepInsideLiteral(c Byte)
 		let context = try self.nesting.get(self.nesting.count() - 1) otherwise panic("CommentScan.stepInsideLiteral: the count is non-zero at the call site")
 
-		if context == Ascii.dquote or context == Ascii.quote 'quotedText'
-			if c == Ascii.backslash and self.at + 1 < lines.length(self.line) 'escape'
+		if context == AsciiByte.dquote or context == AsciiByte.quote 'quotedText'
+			if c == AsciiByte.backslash and self.at + 1 < lines.length(self.line) 'escape'
 				// The escaped byte is skipped whole, so `\"` does not close the literal and `\\` does
 				// not leave a lone backslash to be read as an escape lead.
 				self.at = self.at + 2
@@ -380,8 +376,8 @@ type CommentScan
 
 			if c == context 'closes'
 				_ = try self.nesting.pop() otherwise panic("CommentScan.stepInsideLiteral: the count is non-zero at the call site")
-			end 'closes' else if c == '{' and context == Ascii.dquote 'opensInterpolation'
-				// `c` rather than a fresh `'{'`: the byte in hand IS the opener, and `Ascii` names no
+			end 'closes' else if c == '{' and context == AsciiByte.dquote 'opensInterpolation'
+				// `c` rather than a fresh `'{'`: the byte in hand IS the opener, and `AsciiByte` names no
 				// brace to spell it with.
 				self.nesting.push(c)
 			end 'opensInterpolation'
@@ -392,7 +388,7 @@ type CommentScan
 
 		// An interpolation's expression: ordinary code, which may open a string of its own, and whose
 		// `}` closes back into the literal.
-		if c == Ascii.dquote or c == Ascii.quote 'opensNested'
+		if c == AsciiByte.dquote or c == AsciiByte.quote 'opensNested'
 			self.nesting.push(c)
 		end 'opensNested' else if c == '}' 'closesInterpolation'
 			_ = try self.nesting.pop() otherwise panic("CommentScan.stepInsideLiteral: the count is non-zero at the call site")
@@ -408,7 +404,7 @@ type CommentScan
 	// once by this index and once by the emit loop. This is the highest-blast-radius mistake available
 	// in this file.
 	function scanLineComment()
-		if self.at + 2 < lines.length(self.line) and lines.byteAt(self.line, offset: self.at + 2) == Ascii.slash 'docComment'
+		if self.at + 2 < lines.length(self.line) and lines.byteAt(self.line, offset: self.at + 2) == AsciiByte.slash 'docComment'
 			return
 		end 'docComment'
 
@@ -446,7 +442,7 @@ type CommentScan
 				continue
 			end 'lineRanOut'
 
-			if lines.byteAt(self.line, offset: self.at) == Ascii.star and self.nextByteIs(Ascii.slash) 'closes'
+			if lines.byteAt(self.line, offset: self.at) == AsciiByte.star and self.nextByteIs(AsciiByte.slash) 'closes'
 				self.at = self.at + 2
 				let trailingBlank = lines.blankBetween(self.line, from: self.at, to: lines.length(self.line))
 				self.recordSegment(lines.textIn(self.line, from: segmentStart, to: self.at), startLine: startLine, startPrefixBlank: startPrefixBlank, ownsTheLine: trailingBlank)
@@ -982,7 +978,7 @@ type FormatState
 				// left context is deliberately untouched: nothing between here and the `)` could have
 				// changed it.
 				self.prevKind = TokenKind.identifier
-				self.prevValue = EmptySourceText
+				self.prevValue = tok.value
 				self.prevProducedValue = true
 				return afterPattern + 1
 			end 'allDiscarded'
@@ -1101,7 +1097,7 @@ type FormatState
 			self.out.append("\n")
 		end 'previousLineEnds'
 
-		let groups = self.currentGrouping() != ScopeGrouping.literal
+		let commentIsAGroup = self.currentGrouping() != ScopeGrouping.literal and not self.armContinuation
 		var sawFirst = false
 		var lastCommentLine = self.lastEmittedSourceLine
 		var probe = self.lastEmittedSourceLine + 1
@@ -1117,11 +1113,11 @@ type FormatState
 					let userHadBlank = probe >= self.lastEmittedSourceLine + 2
 
 					if self.blankDecisionPending 'decide'
-						if groups 'scopeGroups'
+						if commentIsAGroup 'scopeGroups'
 							self.appendBlanks(self.forcedBlanksBefore(GroupKey.of(GroupKeyKind.comment), userHadBlank: userHadBlank))
-						end 'scopeGroups' else if userHadBlank 'literalKeepsOne'
+						end 'scopeGroups' else if userHadBlank 'keepsTheAuthorsOne'
 							self.out.append("\n")
-						end 'literalKeepsOne'
+						end 'keepsTheAuthorsOne'
 
 						self.blankDecisionPending = false
 					end 'decide'
@@ -1144,7 +1140,7 @@ type FormatState
 			probe = probe + 1
 		end 'eachLine'
 
-		if groups 'commentIsTheGroup'
+		if commentIsAGroup 'commentIsTheGroup'
 			self.prevGroupKey = GroupKey.of(GroupKeyKind.comment)
 		end 'commentIsTheGroup'
 
@@ -1771,7 +1767,7 @@ function findSectionSeparator(bytes ByteArray) returns SectionSeparator
 			at = at + 1
 		end 'skipIndent'
 
-		if at + 3 <= lines.length(index) and lines.byteAt(index, offset: at) == Ascii.minus and lines.byteAt(index, offset: at + 1) == Ascii.minus and lines.byteAt(index, offset: at + 2) == Ascii.minus 'threeDashes'
+		if at + 3 <= lines.length(index) and lines.byteAt(index, offset: at) == AsciiByte.minus and lines.byteAt(index, offset: at + 1) == AsciiByte.minus and lines.byteAt(index, offset: at + 2) == AsciiByte.minus 'threeDashes'
 			if lines.blankBetween(index, from: at + 3, to: lines.length(index)) 'nothingElseOnTheLine'
 				return SectionSeparator.at(lines.startOf(index))
 			end 'nothingElseOnTheLine'

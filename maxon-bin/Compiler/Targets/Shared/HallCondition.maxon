@@ -477,34 +477,34 @@ end 'valueIdListContains'
 // spills (accumulators across a call in a loop) this runs at EVERY op of the loop, on EVERY splitter
 // iteration.
 //
-// Reusing them changes NO arithmetic: every column is fully re-initialized over the extent this
-// point's live list actually reads (`hallVerdictAt` refills both matching maps, `augmentValue` refills
-// its parent links, and both walks `clear()` the shared queue), so the augmenting searches run in the
-// same order, over the same edges, and land on the same matching. `queue` is shared by the two graph
+// Reusing them changes NO arithmetic: `hallVerdictAt` resets `valueMatched` and `heldRegisters`,
+// both walks `clear()` the shared queue, and every other column is trusted only where those say it
+// was written in this call (`regOfValue` for a matched value, `valueOfReg` for a held register,
+// `parentOfReg` for a register this search visited), so the augmenting searches run in the same
+// order, over the same edges, and land on the same matching. `queue` is shared by the two graph
 // walks because they never overlap — `tightRegisterSet` runs only after the last `augmentValue`
 // returns.
 //
 // `regOfValue` HOLDS REGISTER NUMBERS AND IS TYPED AS ONE, and the width is the reason that matters.
-// `RegNum` is `int(0 to 16)`, a NARROW range, and a narrow range is a narrow ELEMENT:
-// `sizeof(int(0 to 16)) == 1` against `sizeof(int(0 to u64.max)) == 8`. Refilling this column through a
-// FREE function whose parameter is a `DenseColumn` — an 8-byte element — would hand a 1-byte-per-element
-// array to code that addresses it 8 bytes per element: memory corruption whose SYMPTOM is a false
-// `E5001` on a program that fits the machine, and whose failure set MOVES when unrelated allocations
-// elsewhere change the heap layout.
+// `RegNum` is `int(0 to 62)`, a NARROW range, and a narrow range is a narrow ELEMENT:
+// `sizeof(int(0 to 62)) == 1` against `sizeof(int(0 to u64.max)) == 8`. Sizing this column through
+// a FREE function whose parameter is a `DenseColumn` — an 8-byte element — would hand a
+// 1-byte-per-element array to code that addresses it 8 bytes per element: memory corruption whose
+// SYMPTOM is a false `E5001` on a program that fits the machine, and whose failure set MOVES when
+// unrelated allocations elsewhere change the heap layout.
 //
 // Two things stop it. A generic's ranged element type is part of its type, so the substitution is a
-// compile error (E3005) rather than corruption; and the refill is `Array.refill`, a METHOD, which is
-// generic over the element type and cannot be handed the wrong width at all. Every value that goes in
-// is a `RegNum` — a register `0..RegisterFileSize-1` (GPRs
-// 0-15, XMMs 16-31), or the `noRegister` sentinel, which is `RegisterFileSize` itself and exactly
-// why `RegNum`'s bound is inclusive of it.
+// compile error (E3005) rather than corruption; and the sizing is `Array.resize`, a METHOD, which
+// is generic over the element type and cannot be handed the wrong width at all.
 export type HallScratch
 	// value position -> the registers it is allowed (`A(v)`), for THIS point's live list.
 	export var allowed as RegMaskColumn
 
 	// The matching, as its two inverse maps (positions in `live`, not ValueIds).
 	export var regOfValue as RegNumColumn
+	export var valueMatched as BoolArray
 	export var valueOfReg as LiveIndexColumn
+	export var heldRegisters as RegMask
 
 	// One augmenting search's parent links: register -> the value position that offered it.
 	export var parentOfReg as LiveIndexColumn
@@ -522,7 +522,7 @@ export type HallScratch
 	export var verdict as HallVerdict
 
 	export static function create() returns HallScratch
-		return Self{allowed: RegMaskColumn.create(), regOfValue: RegNumColumn.create(), valueOfReg: LiveIndexColumn.create(), parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create(), classLive: ValueIdArray.create(), verdict: HallVerdict.create()}
+		return Self{allowed: RegMaskColumn.create(), regOfValue: RegNumColumn.create(), valueMatched: BoolArray.create(), valueOfReg: LiveIndexColumn.create(), heldRegisters: 0, parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create(), classLive: ValueIdArray.create(), verdict: HallVerdict.create()}
 	end 'create'
 end 'HallScratch'
 
@@ -622,10 +622,6 @@ end 'HallVerdict'
 export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask, scratch HallScratch) returns HallVerdict
 	let valueCount = live.count()
 
-	// "No register" / "no value" markers, each one past the last valid index of its side.
-	let noRegister = RegisterFileSize as RegNum
-	let noValue = valueCount
-
 	var allowed = scratch.allowed
 	allowed.resize(valueCount)
 
@@ -635,17 +631,19 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 	end 'eachValue'
 
 	// The matching, as its two inverse maps. Positions in `live`, not ValueIds — the search is over
-	// this point's live set alone, so a dense 0..valueCount numbering is the right one. `noValue` IS
-	// `valueCount`, so `valueOfReg` must be re-filled on every call, not merely on a resize.
+	// this point's live set alone, so a dense 0..valueCount numbering is the right one.
 	var regOfValue = scratch.regOfValue
-	regOfValue.refill(valueCount, value: noRegister)
+	regOfValue.resize(valueCount)
+	var valueMatched = scratch.valueMatched
+	valueMatched.refill(valueCount, value: false)
 	var valueOfReg = scratch.valueOfReg
-	valueOfReg.refill(RegisterFileSize, value: noValue)
+	valueOfReg.resize(RegisterFileSize)
+	scratch.heldRegisters = 0
 
 	var matched = 0 as RegCount
 
 	for i in 0 upto valueCount 'augment'
-		if augmentValue(i, scratch: scratch, noRegister: noRegister, noValue: noValue) 'grew'
+		if augmentValue(i, scratch: scratch) 'grew'
 			matched = matched + 1
 		end 'grew'
 	end 'augment'
@@ -657,7 +655,7 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 		return verdict
 	end 'saturated'
 
-	let witness = tightRegisterSet(scratch, valueCount: valueCount, noRegister: noRegister, noValue: noValue)
+	let witness = tightRegisterSet(scratch, valueCount: valueCount)
 	let tight = countConfinedTo(allowed, witness: witness, valueCount: valueCount)
 
 	// The tight set is exactly the unmatched values plus the holders of the witness registers — every
@@ -684,16 +682,15 @@ end 'hallVerdictAt'
 // ITERATIVE — a worklist plus one parent link per register — like every other graph walk in the
 // allocator. The parent links are not just an anti-recursion device: they ARE the path the
 // augmentation walks back along.
-function augmentValue(start ElementIndex, scratch HallScratch, noRegister RegNum, noValue ElementIndex) returns bool
+function augmentValue(start ElementIndex, scratch HallScratch) returns bool
 	var allowed = scratch.allowed
 	var valueOfReg = scratch.valueOfReg
 
 	// register -> the value position that offered it during THIS search (its predecessor on the
 	// alternating path). Only registers in `visited` have a meaningful entry, and `visited` is local to
-	// this search — but the column is re-filled anyway, so a stale link can never be read even if that
-	// reasoning is ever broken by an edit.
+	// this search.
 	var parentOfReg = scratch.parentOfReg
-	parentOfReg.refill(RegisterFileSize, value: noValue)
+	parentOfReg.resize(RegisterFileSize)
 	var visited = 0 as RegMask
 	var queue = scratch.queue
 	queue.clear()
@@ -719,14 +716,12 @@ function augmentValue(start ElementIndex, scratch HallScratch, noRegister RegNum
 			visited = regMaskAdd(visited, regNum: r)
 			try parentOfReg.set(r, value: u) otherwise panic("augmentValue: parentOfReg.set OOB at {r}")
 
-			let holder = try valueOfReg.get(r) otherwise panic("augmentValue: valueOfReg.get OOB at {r}")
-
-			if holder == noValue 'freeRegister'
-				applyAugmentingPath(r, start: start, scratch: scratch, noRegister: noRegister)
+			if not regMaskContains(scratch.heldRegisters, regNum: r) 'freeRegister'
+				applyAugmentingPath(r, start: start, scratch: scratch)
 				return true
 			end 'freeRegister'
 
-			queue.push(holder)
+			queue.push(try valueOfReg.get(r) otherwise panic("augmentValue: valueOfReg.get OOB at {r}"))
 		end 'eachRegister'
 	end 'alternatingPaths'
 
@@ -737,23 +732,27 @@ end 'augmentValue'
 // register on it is re-assigned to the value that offered it, and THAT value's previous register —
 // vacated by the re-assignment — is the next one to hand on. The walk ends at `start`, which held no
 // register, so the matching finishes one edge larger.
-function applyAugmentingPath(freeReg RegNum, start ElementIndex, scratch HallScratch, noRegister RegNum)
+function applyAugmentingPath(freeReg RegNum, start ElementIndex, scratch HallScratch)
 	var parentOfReg = scratch.parentOfReg
 	var regOfValue = scratch.regOfValue
+	var valueMatched = scratch.valueMatched
 	var valueOfReg = scratch.valueOfReg
 	var reg = freeReg
-	var reachedStart = false
 
-	while not reachedStart 'walkBack'
-		let u = try parentOfReg.get(reg as ElementIndex) otherwise panic("applyAugmentingPath: parentOfReg.get OOB at {reg}")
+	while true 'walkBack'
+		let u = try parentOfReg.get(reg) otherwise panic("applyAugmentingPath: parentOfReg.get OOB at {reg}")
+		try valueOfReg.set(reg, value: u) otherwise panic("applyAugmentingPath: valueOfReg.set OOB at {reg}")
+		scratch.heldRegisters = regMaskAdd(scratch.heldRegisters, regNum: reg)
+		let held = try valueMatched.get(u) otherwise panic("applyAugmentingPath: valueMatched.get OOB for value position {u}")
 		let vacated = try regOfValue.get(u) otherwise panic("applyAugmentingPath: regOfValue.get OOB for value position {u}")
-
-		try valueOfReg.set(reg as ElementIndex, value: u) otherwise panic("applyAugmentingPath: valueOfReg.set OOB at {reg}")
 		try regOfValue.set(u, value: reg) otherwise panic("applyAugmentingPath: regOfValue.set OOB for value position {u}")
+		try valueMatched.set(u, value: true) otherwise panic("applyAugmentingPath: valueMatched.set OOB for value position {u}")
 
-		reachedStart = u == start
+		if u == start 'reachedStart'
+			return
+		end 'reachedStart'
 
-		if (not reachedStart) and vacated == noRegister 'brokenPath'
+		if not held 'brokenPath'
 			panic("applyAugmentingPath: value position {u} is on the alternating path but held no register, yet it is not the search's start — only the start is unmatched, so the parent links are corrupt")
 		end 'brokenPath'
 
@@ -769,9 +768,9 @@ end 'applyAugmentingPath'
 // set and outnumber it by the deficiency. That is the set Hall's condition fails on, and it is why
 // removing any ONE of its values drops the deficiency by exactly one: the freed register lets an
 // unmatched value augment into the chain.
-function tightRegisterSet(scratch HallScratch, valueCount ElementIndex, noRegister RegNum, noValue ElementIndex) returns RegMask
+function tightRegisterSet(scratch HallScratch, valueCount ElementIndex) returns RegMask
 	var allowed = scratch.allowed
-	var regOfValue = scratch.regOfValue
+	var valueMatched = scratch.valueMatched
 	var valueOfReg = scratch.valueOfReg
 	var reachable = 0 as RegMask
 
@@ -781,7 +780,7 @@ function tightRegisterSet(scratch HallScratch, valueCount ElementIndex, noRegist
 	queue.clear()
 
 	for i in 0 upto valueCount 'seedUnmatched'
-		if (try regOfValue.get(i) otherwise panic("tightRegisterSet: regOfValue.get OOB at {i}")) == noRegister 'unmatched'
+		if not (try valueMatched.get(i) otherwise panic("tightRegisterSet: valueMatched.get OOB at {i}")) 'unmatched'
 			queue.push(i)
 		end 'unmatched'
 	end 'seedUnmatched'
@@ -805,11 +804,11 @@ function tightRegisterSet(scratch HallScratch, valueCount ElementIndex, noRegist
 
 			reachable = regMaskAdd(reachable, regNum: r)
 
-			let holder = try valueOfReg.get(r) otherwise panic("tightRegisterSet: valueOfReg.get OOB at {r}")
-
-			if holder == noValue 'freeRegister'
+			if not regMaskContains(scratch.heldRegisters, regNum: r) 'freeRegister'
 				panic("tightRegisterSet: register {r} is reachable from an unmatched value along an alternating path yet is held by nobody — that is an augmenting path, so the matching `augmentValue` produced is not maximum")
 			end 'freeRegister'
+
+			let holder = try valueOfReg.get(r) otherwise panic("tightRegisterSet: valueOfReg.get OOB at {r}")
 
 			queue.push(holder)
 		end 'eachRegister'

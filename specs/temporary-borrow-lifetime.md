@@ -23,30 +23,24 @@ print("{n.count()}")                                     // reads into the freed
 `get`/`first`/`last` hand back the element the container KEEPS (a borrow — the container's own
 `__managed_decref` walk destroys it), and a managed field read hands back the field the box KEEPS. Freed
 at the end of the statement, the container takes the borrowed element with it, and the next read is
-of poisoned memory — measured as `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s fill byte read back as a
-`count()`. A **wrong answer**, with no crash, no refusal, and no leak: the free is legitimate, so
+of poisoned memory — `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s fill byte read back as a `count()`. A **wrong answer**, with no crash, no refusal, and no leak: the free is legitimate, so
 nothing in the compiler or the runtime has anything to report.
 
-⚖ **USER RULING, 2026-08-01 — the temporary's LIFETIME is extended.** A temporary that yields a
+⚖ **The temporary's LIFETIME is extended.** A temporary that yields a
 borrow is promoted from statement-scoped to the **borrower's scope**: it becomes a nameless owned
 binding of the innermost open scope frame, dropped exactly once at that frame's exit, on every path.
-So `make().get(0)` answers **5** and reads as it looks. This matches the oracle, which accepts the
-program and answers 5.
+So `make().get(0)` answers **5** and reads as it looks.
 
-It was chosen over the two alternatives:
+It is chosen over the two alternatives:
 
-* **refusing the borrow** — a loud, cheap divergence that would reject natural code the reference
-  compilers both compile;
+* **refusing the borrow** — loud and cheap, but it would reject natural code;
 * **retaining at the accessor** — which would make `get` mean two things depending on the
   receiver's PROVENANCE.
 
-Both reference compilers extend the lifetime rather than retain. v1 does it as a per-value liveness
-EXTENSION over SSA (`StdLiveness.maxon`'s "interior-borrow liveness extension (the UAF fix)":
-`baseOf[result] = receiver`, and every read of the borrow counts as a read of its base). The compiler has no
-liveness pass at drop-insertion time — it emits drops at parse, statically scoped — so it states the
-same fact in its own vocabulary: **the base's drop moves from the statement to the scope.** That is
-the conservative direction v1's own soundness note names: *"the worst case is a slightly-later
-decref … never an early free."*
+The compiler has no liveness pass at drop-insertion time — it emits drops at parse, statically
+scoped — so the extension is stated in scope terms: **the base's drop moves from the statement to the
+scope.** That is the conservative direction: the worst case is a slightly-later decref, never an early
+free.
 
 ### What is promoted, and what is not
 
@@ -297,7 +291,7 @@ end 'main'
 
 <!-- test: a-borrow-out-of-a-temporary-returned-out-of-the-frame -->
 A `return` LAUNDERS a borrow into an owned value (`promoteBorrowedToOwned` — the aggregate arm
-increfs). That incref has to run while the container is still alive, which it now does.
+increfs). That incref has to run while the container is still alive, which it does.
 ```maxon
 typealias Bytes = Array with ByteArray
 
@@ -384,9 +378,7 @@ end 'main'
 
 <!-- test: a-managed-field-borrowed-out-of-a-temporary-box -->
 A managed FIELD read is the other borrow door, and it is the SAME promotion: the box `makeHolder()`
-built is held to the scope's exit, so the text `name` borrows is live when it is read. This program
-used to be REFUSED (`E2015`), and the refusal's own sentence named this rung as the one that would
-lift it.
+built is held to the scope's exit, so the text `name` borrows is live when it is read.
 ```maxon
 type Holder
 	export var name as String
@@ -413,7 +405,7 @@ end 'main'
 ⛔⛔ **NOTHING ELSE MAKES THE RESULT PHI OWNED HERE, SO NOTHING ELSE LAUNDERS THE ARMS.** Each arm
 builds its own box and gives a borrow into it; each box dies at ITS arm's exit, on the edge that
 built it. The give is therefore given a reference of its own at the arm's exit, BEFORE the arm's
-records are released (`settleArmGive`) — measured at `0x3F3F3F3F3F3F3F3F` without it, both arms.
+records are released (`settleArmGive`) — without it both arms read `0x3F3F3F3F3F3F3F3F`.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -455,8 +447,8 @@ end 'main'
 ```
 
 <!-- test: both-ternary-arms-give-a-borrow-out-of-their-own-temporary -->
-The ternary twin of the case above, through the same door: a ternary arm is a fork arm, and until
-this rung it was the one fork region with no owned-binding floor at all.
+The ternary twin of the case above, through the same door: a ternary arm is a fork arm, with an
+owned-binding floor of its own like every other fork region.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -492,9 +484,9 @@ end 'main'
 <!-- test: a-borrow-out-of-a-temporary-inside-a-while-condition -->
 ⛔ **THE RISK INVERTS HERE, AND THE LEAK GATE IS WHAT CATCHES IT.** A `while` condition is
 re-evaluated on every trip, so it builds a FRESH record each time while the promotion records ONE —
-held to the frame's exit, that frees the last trip's record and leaks all the others. Measured as
-exit **101**. The condition's records are therefore released per iteration, in the condition's own
-exit block, exactly as its temporaries already were. 200 trips, so a per-trip leak is unmissable.
+held to the frame's exit, that frees the last trip's record and leaks all the others: exit **101**.
+The condition's records are therefore released per iteration, in the condition's own exit block,
+exactly as its temporaries are. 200 trips, so a per-trip leak is unmissable.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 typealias Bytes = Array with ByteArray
@@ -523,8 +515,8 @@ end 'main'
 
 <!-- test: a-borrow-out-of-a-temporary-inside-a-short-circuit-right-hand-side -->
 The right-hand side of an `and`/`or` runs on ONE path, so a record held for a borrow taken inside it
-must die there too — the frame's exit is a block the skipped path never reached. Measured, before
-the rhs got its own floor, as the allocator's `seedInUse: a use dominates its def`.
+must die there too — the frame's exit is a block the skipped path never reached. The rhs has its own
+floor; without it the allocator panics with `seedInUse: a use dominates its def`.
 ```maxon
 typealias Bytes = Array with ByteArray
 
@@ -586,14 +578,13 @@ end 'main'
 ```
 
 <!-- test: control-an-arm-giving-a-read-of-an-immutable-global -->
-⛔ **CONTROL, AND IT WAS RED FOR A WHILE: THE SETTLEMENT RULE MAY NOT LAUNDER A READ OF MODULE
-STORAGE.** The arm holds a managed payload binding (`h`), which puts it above its own owned floor —
-but the give is `A`, a `let`-declared top-level array, which outlives every scope and so cannot point
-into anything the arm releases. Laundering it anyway sends it to the merge promotion, whose aggregate
-arm exists precisely to REFUSE an incref of a record the language calls immutable: this program
-COMPILED and answered 1 before the rung, and was refused with `E2015 … merging a read of a
-`let`-declared top-level global into an OWNED result` after it. Refusing a legal program is a
-regression whichever direction it points.
+⛔ **CONTROL: THE SETTLEMENT RULE MAY NOT LAUNDER A READ OF MODULE STORAGE.** The arm holds a managed
+payload binding (`h`), which puts it above its own owned floor — but the give is `A`, a `let`-declared
+top-level array, which outlives every scope and so cannot point into anything the arm releases.
+Laundering it anyway sends it to the merge promotion, whose aggregate arm exists precisely to REFUSE an
+incref of a record the language calls immutable, and this legal program would be refused with
+`E2015 … merging a read of a `let`-declared top-level global into an OWNED result`. It compiles and
+answers 1.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -636,8 +627,7 @@ end 'main'
 
 <!-- test: control-pop-out-of-a-temporary-is-an-owned-move-out -->
 **CONTROL.** `pop()` MOVES the element out — the runtime nulls the slot, so the element outlives the
-container by construction and the result is already OWNED. It was correct before this rung and must
-stay correct: a promotion that fired here would keep a container alive for a value it no longer
+container by construction and the result is already OWNED: a promotion that fired here would keep a container alive for a value it no longer
 holds.
 ```maxon
 typealias Bytes = Array with ByteArray

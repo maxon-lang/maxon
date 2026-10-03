@@ -265,18 +265,37 @@ export function rangedAliasStorageBytes(low ParsedInt, high ParsedInt) returns B
 	return unsignedSlotBytes(high)
 end 'rangedAliasStorageBytes'
 
-// ⭐ **THE WIDTH OF A SUB-BYTE-PACKED ELEMENT, IN BITS** — 1, 2 or 4, the widths that DIVIDE a byte so a
-// field never straddles one. `NotSubBytePacked` is the answer "this element is a byte or wider; ask
-// `rangedAliasStorageBytes`", and it is 0 rather than a throw because it is a complete answer for every
-// element that is not narrow — the overwhelming majority.
-export typealias PackedBitWidth = int(0 to 4)
+export typealias PackedBitWidth = int(1 to 4)
 
-export let NotSubBytePacked = 0 as PackedBitWidth
+let OneBitWidth = 1 as PackedBitWidth
+let TwoBitWidth = 2 as PackedBitWidth
+let FourBitWidth = 4 as PackedBitWidth
+
+export enum ElementPackingLookup implements Error
+	byteStrided
+end 'ElementPackingLookup'
+
+export enum ElementPacking
+	byteStrided
+	oneBit
+	twoBits
+	fourBits
+end 'ElementPacking'
+
+export function packedWidthOf(packing ElementPacking) returns PackedBitWidth throws ElementPackingLookup
+	match packing 'packing'
+		byteStrided then throw ElementPackingLookup.byteStrided
+		oneBit then return OneBitWidth
+		twoBits then return TwoBitWidth
+		fourBits then return FourBitWidth
+	end 'packing'
+end 'packedWidthOf'
 
 // ⭐⭐ **THE SUB-BYTE PACKED WIDTH OF A RANGED-INT ALIAS — the ladder above CONTINUED BELOW ONE BYTE**, and
 // the single producer of a packed element stride. `int(0 to 1)` ⇒ 1 bit; `int(0 to 3)` ⇒ 2; `int(0 to 15)`
-// ⇒ 4; `int(0 to 16)` and everything wider ⇒ `NotSubBytePacked`, so a byte is where the two ladders meet.
-// The thresholds are exactly "the position of `high`'s highest set bit, rounded up to a width dividing 8".
+// ⇒ 4; `int(0 to 16)` and everything wider ⇒ `byteStrided`, so a byte is where the two ladders
+// meet. The thresholds are exactly "the position of `high`'s highest set bit, rounded up to a width
+// dividing 8".
 //
 // ⚠⚠ **THE `low != 0` REFUSAL IS `rangedAliasStorageBytes`'s OWN ARGUMENT ONE RUNG NARROWER, NOT A SECOND
 // DECISION.** That ladder keeps the machine word for a negative lower bound because the shared element load
@@ -289,42 +308,38 @@ export let NotSubBytePacked = 0 as PackedBitWidth
 //
 // ⚠ `high` rides as the raw 64-bit pattern (`RangedTypeAlias`'s header), so a `u64.max` upper bound arrives
 // NEGATIVE — tested ahead of the ladder for the identical reason the width ladder tests it there.
-export function rangedAliasPackedBits(low ParsedInt, high ParsedInt) returns PackedBitWidth
+export function rangedAliasPackedBits(low ParsedInt, high ParsedInt) returns ElementPacking
 	if low != 0 or high < 0 'onlyAZeroBasedRangeMapsOntoItsBits'
-		return NotSubBytePacked
+		return ElementPacking.byteStrided
 	end 'onlyAZeroBasedRangeMapsOntoItsBits'
 
 	if high <= 1 'oneBit'
-		return 1
+		return ElementPacking.oneBit
 	end 'oneBit'
 
 	if high <= 3 'twoBits'
-		return 2
+		return ElementPacking.twoBits
 	end 'twoBits'
 
 	if high <= 15 'fourBits'
-		return 4
+		return ElementPacking.fourBits
 	end 'fourBits'
 
-	return NotSubBytePacked
+	return ElementPacking.byteStrided
 end 'rangedAliasPackedBits'
 
 export typealias InlineRecordBitOffset = int(0 to 63)
 
 export let InlineRecordWordBits = 64 as BitWidth
 
-export let NotAnInlinePackableField = 0 as BitWidth
+export typealias NarrowFieldWidth = int(1 to 63)
 
-export function inlineFieldMask(width BitWidth) returns ParsedInt
-	if width == 0 or width >= InlineRecordWordBits 'notANarrowField'
-		panic("inlineFieldMask: a {width}-bit field has no narrowing mask — a whole-word field is read unmasked and a zero width is `NotAnInlinePackableField`, which never reaches a packed layout")
-	end 'notANarrowField'
-
+export function inlineFieldMask(width NarrowFieldWidth) returns ParsedInt
 	return (1 shl (width as ParsedInt)) - 1
 end 'inlineFieldMask'
 
-export function inlineFieldBits(packedBits PackedBitWidth, storageBytes ByteOffset) returns BitWidth
-	if packedBits != NotSubBytePacked 'subBytePacked'
+export function inlineFieldBits(packing ElementPacking, storageBytes ByteOffset) returns BitWidth
+	if let packedBits = try packedWidthOf(packing) 'subBytePacked'
 		return packedBits as BitWidth
 	end 'subBytePacked'
 
@@ -349,8 +364,8 @@ export typealias ElementStride = int(-4 to 8)
 // the number stored at `element_size@24`, so no producer of that field can spell the encoding differently
 // from another (`ProgramSignatures.arrayElementSize` is the sole producer of the ANSWER; this is the sole
 // producer of its FORM).
-export function elementStrideOf(packedBits PackedBitWidth, storageBytes ByteOffset) returns ElementStride
-	if packedBits != NotSubBytePacked 'subBytePacked'
+export function elementStrideOf(packing ElementPacking, storageBytes ByteOffset) returns ElementStride
+	if let packedBits = try packedWidthOf(packing) 'subBytePacked'
 		return -packedBits
 	end 'subBytePacked'
 
@@ -641,7 +656,7 @@ export function primitiveTypeTagName(tag ValueTypeTag) returns String
 		// element is interned through `internTupleType` and reached this panic on a program the front end had
 		// accepted. Stating the RULE rather than one of its enforcers is what makes the assertion honest.
 		cstring then return "cstring"
-		interfaceRef then panic("primitiveTypeTagName: an interface type reached descriptor labelling. A descriptor labels a TYPE ARGUMENT, and an existential is a 16-byte fat pointer `(value, witness)` where every slot named here is one machine word — so `checkGenericArgType` refuses one, as do the other positions `Parser.DeclaredStoragePosition` enumerates. A struct FIELD is the one place that DOES take an existential (a two-slot carve-out, P1.7a-existentials slice 2), and it reaches no descriptor: descriptors are minted per generic instance. Reaching here means a way to write a type into a type-argument slot exists that asks neither door")
+		interfaceRef then panic("primitiveTypeTagName: an interface type reached descriptor labelling. A descriptor labels a TYPE ARGUMENT, and an existential is a 16-byte fat pointer `(value, witness)` where every slot named here is one machine word — so `checkGenericArgType` refuses one, as do the other positions `Parser.DeclaredStoragePosition` enumerates. A struct FIELD is the one place that DOES take an existential (a two-slot carve-out), and it reaches no descriptor: descriptors are minted per generic instance. Reaching here means a way to write a type into a type-argument slot exists that asks neither door")
 	end 'name'
 end 'primitiveTypeTagName'
 

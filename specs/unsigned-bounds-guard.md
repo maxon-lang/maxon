@@ -38,19 +38,17 @@ jcc             aboveEqual, __im_slow
 ```
 
 That is x64's standard bounds-check idiom, `cmp`+`jae`; arm64 spells it `cmp`/`cset hs`/`cbnz` and
-wasm `i64.ge_u`. The compiler could not say it until upstream's X11 put signedness on a compare's
-`operandType` — `emitIsNegative`'s header still claimed *"the compiler's `StdCmpPred` has NO unsigned
-compare"* two weeks after that stopped being true, and that sentence was the stated reason the guard
-cost seven instructions.
+wasm `i64.ge_u`. What lets the compiler say it is the signedness a compare carries on its
+`operandType`.
 
 ### ⛔⛔ THE PRECONDITION IS `length >= 0`, AND IT IS THE WHOLE CORRECTNESS ARGUMENT
 
 For a NEGATIVE limit the two readings are OPPOSITE rather than merely different. Signed, every index
 is `>= length`, so the guard refuses EVERYTHING. Unsigned, the limit reads as enormous, so the guard
-ADMITS everything — an out-of-bounds heap read or write with no diagnostic at all. This tree has
-already paid that bill once in the other direction: `__mf_read`'s capacity bound was useless because
-a logical shift turned `capacity = -1` into `0x1FFFFFFFFFFFFFFF`, and a 24-byte read into a 4-byte
-zero-copy view was ACCEPTED and rewrote 20 bytes past the parent's allocation.
+ADMITS everything — an out-of-bounds heap read or write with no diagnostic at all. The same hazard
+arrives by another road when a logical shift turns `capacity = -1` into `0x1FFFFFFFFFFFFFFF`: a
+capacity bound like `__mf_read`'s is then useless, and a 24-byte read into a 4-byte zero-copy view is
+ACCEPTED and rewrites 20 bytes past the parent's allocation.
 
 `BoundsCompareOperandType`'s header carries the argument in full. Its three parts: `length@8` carries
 no sentinel (`BufferOwnership`'s negative values live in `capacity@16` alone, at a type whose range
@@ -59,10 +57,10 @@ from the user refusing a negative one first; and the single guard whose limit IS
 inlined `__managed_mem_set` — is emitted BEHIND `emitBufferNotOwned`, which refuses every sentinel
 capacity, so the bound runs on one already proven non-negative.
 
-### ⛔⛔ WHERE A NEGATIVE INDEX IS STILL *REACHABLE* — AND IT IS NO LONGER THE `Array` SURFACE
+### ⛔⛔ WHERE A NEGATIVE INDEX IS *REACHABLE* — THE BUFFER SURFACE, NOT `Array`
 
 **This row's subject is a NEGATIVE index arriving at the guard, and on `Array.get`/`set`/`resize` one
-no longer can.** `stdlib/Array.maxon` declares those doors over `ElementIndex = int(0 to i64.max)`,
+cannot.** `stdlib/Array.maxon` declares those doors over `ElementIndex = int(0 to i64.max)`,
 and a declared lower bound of 0 is ENFORCED: a foldable negative is `E3005` at compile time and a
 laundered one is an uncatchable `Range check failed` panic at the door
 (`Parser.recordArmServedIndexRangeCheck`). Neither ever reaches `emitIndexOutOfRange`. Written
@@ -90,23 +88,15 @@ its own home in `specs/arrays.md`
 one-past-the-end is a legal place to stand — so its unsigned form is `cmp` + `ja` rather than `jae`.
 Its second job is to refuse a COMPUTED boundary that overflowed: `__managed_fill`'s `start + count`
 for two non-negative operands either fits an `i64` or wraps into `[-2^63, -2]`, never into a small
-positive number. Under the old signed test the wrapped end was caught by the NEGATIVE disjunct; under
+positive number. A signed test catches the wrapped end only through a NEGATIVE disjunct; under
 the unsigned one it is `>= 2^63` while every length is below `2^63`, so it is caught by the compare
 itself. Same values refused, one instruction instead of six.
 
-### ⛔ SABOTAGE-VERIFIED — RE-MEASURED 2026-08-30, AND THE EARLIER VERDICTS ARE SUPERSEDED
+### ⛔ WHAT THE SIGNED READING BREAKS
 
 The one-token change is `ManagedMemoryRuntime.BoundsCompareOperandType`, `StdType.u64` → `StdType.i64`:
-it drops the negative half and leaves the past-the-end half standing.
-
-⛔ **THE VERDICT PARAGRAPH THAT STOOD HERE IS DEAD AND MUST NOT BE RESTORED.** It read *"six of this
-spec's eight cases go red"* and named exit codes including a `0xC0000005` ACCESS VIOLATION — measured
-honestly, against cases that indexed the `Array` surface. Three of those six then stopped COMPILING
-when `ElementIndex` gained its lower bound, so the recorded verdict was describing programs that no
-longer existed. A verdict nobody can re-run is a claim; this one is re-run and re-stated with the
-cases as they are now.
-
-**MEASURED 2026-08-30 against the cases as they stand below: SEVEN of this spec's nine go red.**
+it drops the negative half and leaves the past-the-end half standing. Under it, **SEVEN of this spec's
+nine cases go red.**
 
 | case | verdict |
 |---|---|
@@ -123,20 +113,18 @@ cases as they are now.
 and `one-past-the-end-is-a-legal-fill-window-and-one-more-is-not` (both windows in range). That
 partition IS the claim: what the sabotage removes is the negative half, and nothing else.
 
-⛔ **TWO THINGS A PREDICTION GOT WRONG HERE, BOTH CAUGHT ONLY BY RUNNING IT** — recorded because the
-paragraph this replaced was itself a prediction that outlived its cases:
+⛔ **TWO OF THE VERDICTS ARE NOT WHAT REASONING ALONE PREDICTS:**
 
-  • **`a-fill-window-that-overflows-is-refused` GOES RED, and it was expected to stay green** on the
-    reasoning that it holds no negative index. It holds no negative *index* and its window END is
-    negative: `start + count` wraps into `[-2^63, -2]`, and with the disjunct gone a single SIGNED
-    compare reads that as far below the length and ADMITS it. The overflow guard is not an extra the
-    unsigned reading merely keeps — the unsigned reading is the ONLY thing catching it now.
-  • **The `0xC0000005` did NOT go away when the case moved to the buffer surface**, though it was
-    predicted to become an ordinary wrong answer. A freshly `create()`d container has no allocation
-    for an admitted read to land inside, on either surface, so the read is still off the page.
+  • **`a-fill-window-that-overflows-is-refused` GOES RED** though it holds no negative *index*: its
+    window END is negative — `start + count` wraps into `[-2^63, -2]`, and with the disjunct gone a
+    single SIGNED compare reads that as far below the length and ADMITS it. The overflow guard is not
+    an extra the unsigned reading merely keeps — the unsigned reading is the ONLY thing catching it.
+  • **`an-empty-container-refuses-every-index` is an ACCESS VIOLATION on the buffer surface**, not an
+    ordinary wrong answer. A freshly `create()`d container has no allocation for an admitted read to
+    land inside, on either surface, so the read is off the page.
 
-⚖ **Do not re-state a verdict here without re-running it.** These numbers are a MEASUREMENT of one
-tree on one day, and the case list they range over has already changed once underneath them.
+⚖ **Do not re-state a verdict here without re-running it.** The table is a measurement over the cases
+as they stand below.
 
 ## Tests
 
@@ -484,10 +472,10 @@ end 'main'
 <!-- test: a-fill-window-that-overflows-is-refused -->
 ⭐ **THE OVERFLOW GUARD, WHICH THE UNSIGNED READING KEEPS RATHER THAN INHERITS.** `start + count` for
 two non-negative operands lands in `[0, 2^64-2]`, so it either fits an `i64` or wraps into
-`[-2^63, -2]` — never into a small positive number. The old signed test caught the wrapped end
-through its NEGATIVE disjunct; the unsigned one catches it because a wrapped end is at or above
-`2^63` while every length is below it. Measured before the guard existed:
-`fill(1, count: i64.max, …)` on a length-3 buffer answered `applied` while writing nothing.
+`[-2^63, -2]` — never into a small positive number. A signed test catches the wrapped end only
+through a NEGATIVE disjunct; the unsigned one catches it because a wrapped end is at or above
+`2^63` while every length is below it. Unguarded, `fill(1, count: i64.max, …)` on a length-3 buffer
+answers `applied` while writing nothing.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -522,7 +510,7 @@ end 'main'
 <!-- test: a-byte-strided-element-is-guarded-the-same-way -->
 The other single-op arm. `InlineManagedPrimitives` emits one fast arm per stride, and both call
 `guardIndexInRange`, so a rewrite that reached only the word arm would leave every `ByteArray` and
-every String element on the old seven-instruction guard.
+every String element on a seven-instruction guard.
 
 ⛔ **THIS PARAGRAPH SAID *"the fragment shows the byte arm's `cmp`/`jae`"*, AND THE FRAGMENT HAS NEVER
 CONTAINED ONE** — checked at the file, on this version and on the one before it: zero `aboveEqual`,

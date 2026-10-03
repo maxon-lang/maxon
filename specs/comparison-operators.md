@@ -3,7 +3,6 @@ feature: comparison-operators
 status: selfhosted
 keywords: [operators, comparison, equals, not-equals, greater, less]
 category: operators
-milestone: M4a
 ---
 
 # Comparison Operators
@@ -19,7 +18,7 @@ Comparison operators compare two integer values and yield a boolean (`i1`):
 - `<=` less than or equal to
 - `>=` greater than or equal to
 
-At M4a the comparisons are integer-only and bind LOOSER than the arithmetic
+The comparisons bind LOOSER than the arithmetic
 operators (below additive), so `x + 1 == 5` groups as `(x + 1) == 5`. A comparison
 in the compiler exists to feed an `if`: the Std→x64 lowering FUSES the comparison with the
 branch it feeds — `cmp reg, reg` + a signed `jcc` (`==`→JE, `<`→JL, `>=`→JGE, …) —
@@ -138,11 +137,11 @@ A fused compare — one whose boolean is consumed only as the EFLAGS a `jcc` rea
 out of a register — leaves NO trace among the target ops: it is neither an operand nor a
 def there. So when it is the function's HIGHEST-numbered value, `scanFunctionValueCount`
 (which counts target operands) sizes the value-class column one short of it, and recording
-that boolean's class runs off the end — a backend panic on a valid program. This pins the
+that boolean's class must not run off the end — a backend panic on a valid program. This pins the
 shape: both `if` branches return an already-bound value (`a`, `b`), so nothing is minted
 after the `a < b` compare and the compare IS the top id. With `a = 7`, `b = 3`, `7 < 3` is
 false, so it falls through to `return a` and exits 7. See `setValueClass` in
-StdToX64Conversion — the column now GROWS to cover every defined id.
+StdToX64Conversion — the column GROWS to cover every defined id.
 ```maxon
 function main() returns ExitCode
 	let a = 7
@@ -159,22 +158,22 @@ end 'main'
 
 <!-- test: compare-against-a-literal-keeps-the-operand-width -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⚠ **A WINDOWS-LANE READING SINCE BATCH27.** `return 4000000000` is E3005 on every other target —
+⚠ **A WINDOWS-LANE READING.** `return 4000000000` is E3005 on every other target —
 `ExitCode` is `int(0 to 255)` there — so those lanes cannot express this program, which is what the
 `unsupported-targets:` restriction says. It cannot be re-pinned on wasm through any other type, and the reason it
 cannot (plus the array-element route that looks like a substitute and measurably is not) is stated once,
 in `exit-code-range.md`'s *"What the narrowing costs the other lanes"*.
 
 ⭐⭐ **A COMPARE AGAINST A LITERAL IS A DIFFERENT INSTRUCTION, AND IT MUST NOT BE A DIFFERENT
-QUESTION (X5).** `foldConstOperands` rewrites `e > 100` into the immediate form, and the immediate
-form used to carry no operand TYPE — so a backend that does not keep every value in a 64-bit register
-had to re-derive the compare's width from the left operand. `ExitCode` is a **u32**
-(`valueTagToStdType`), so on `wasm32-wasi` it lives in an `i32`, and the re-derived width made this a
-32-bit SIGNED compare of a number whose top bit is set. MEASURED, before the fix: x64 printed `gt` and
-wasm printed `le` — the same source, the same value, opposite answers.
+QUESTION.** `foldConstOperands` rewrites `e > 100` into the immediate form, and the immediate form
+must carry the compare's operand TYPE, because a backend that does not keep every value in a 64-bit
+register would otherwise re-derive the width from the left operand. `ExitCode` is a **u32**
+(`valueTagToStdType`), so on `wasm32-wasi` it lives in an `i32`, and a re-derived width makes this a
+32-bit SIGNED compare of a number whose top bit is set — x64 printing `gt` and wasm printing `le` for the
+same source and the same value.
 
-The companion is the SAME comparison against a non-constant, which never folded and was right all
-along: printing both is the assertion, because a fix that widened only one of the two forms leaves the
+The companion is the SAME comparison against a non-constant, which never folds: printing both is the
+assertion, because a fix that widened only one of the two forms leaves the
 pair disagreeing, and a case with a single reading cannot see that. `4000000000` exceeds `i32.max` and
 fits `u32.max` — exactly the band where a signed and an unsigned reading disagree.
 ```maxon
@@ -374,21 +373,14 @@ end 'main'
 
 
 <!-- test: a-wide-domain-orders-unsigned -->
-⭐⭐ **A VALUE ABOVE `i64.max` COMPARED AGAINST A SMALL CONSTANT** — the one shape this rule used to
-get WRONG, pinned here as the answer it now gives.
+⭐⭐ **A VALUE ABOVE `i64.max` COMPARED AGAINST A SMALL CONSTANT** — pinned here as the unsigned answer.
 
-The rule once carried a narrowing clause: a folded constant that FIT the signed domain vetoed the
-unsigned reading. It existed because the standard library passed negative sentinels through types
-declared `int(0 to u64.max)` — `Map.findSlot` encoded "not found" as `-(insertIndex + 1)` through a
-return type declared `TableSlotIndex`, and `if slotIndex >= 0` decoded it. Believing the declaration
-cost **81 measured behaviour failures**. The clause's price was exactly this case: `big > 100` read
-signed answers **false** for a `big` of `u64.max`.
-
-The clause is gone because its premise is. `findSlot` THROWS rather than encoding a miss, and an
-`int(...)` alias is a checked QUANTITY: a value that arrived from a signed domain and is negative is
-refused at that alias's own door rather than arriving intact, whatever its upper bound. So a
-zero-low-bound declaration cannot be carrying a sentinel, the declaration is evidence again, and
-`100` — which says nothing about which reading its author meant — no longer overrides it.
+A folded constant that FITS the signed domain does not veto the unsigned reading: `big > 100` read signed
+would answer **false** for a `big` of `u64.max`. The declaration is evidence because an `int(...)` alias is
+a checked QUANTITY: a value that arrived from a signed domain and is negative is refused at that alias's own
+door rather than arriving intact, whatever its upper bound. So a zero-low-bound declaration cannot be
+carrying a sentinel (`Map.findSlot` THROWS rather than encoding a miss), and `100` — which says nothing
+about which reading its author meant — does not override it.
 
 ```maxon
 typealias Wide = bits(64)
@@ -413,7 +405,7 @@ end 'main'
 
 <!-- test: an-honest-signed-sentinel-still-decodes -->
 **A SENTINEL IS WRITTEN IN A RANGE THAT ADMITS IT** — which is what lets the rule believe a
-declaration at all, and the replacement for the negative-sentinel case this file used to pin.
+declaration at all.
 
 `int(-1 to 4095)` says `-1` is a value this function returns. That declaration does two things at
 once: it is narrow enough that the return door GUARDS it, so an out-of-range slot could not escape;
@@ -447,15 +439,15 @@ end 'main'
 
 
 <!-- test: a-value-outside-a-narrowed-alias-never-reaches-a-comparison -->
-The other half of what the deleted sentinel case pinned, stated the way it is now true: the value
-that used to contradict a non-negative declaration cannot ARRIVE. `stdlib`'s
+The other half of the sentinel rule: a value that would contradict a non-negative declaration cannot
+ARRIVE. `stdlib`'s
 `ElementIndex = int(0 to i64.max)` is narrow enough to be guarded, so a laundered `-1` is refused at
 `Array.get`'s own door — uncatchably, and before any comparison inside `Array` reads it. The
 `otherwise` arm is written and does not run, which is the proof this is the range guard rather than
 either `ArrayError`.
 
 This is the load-bearing dependency of the rule above, pinned live in this file by name so that
-widening `ElementIndex` back reddens the comparison spec and not only the array one.
+widening `ElementIndex` reddens the comparison spec and not only the array one.
 
 ```maxon
 typealias Signed = int(i64.min to i64.max)

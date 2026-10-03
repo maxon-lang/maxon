@@ -77,7 +77,7 @@ end 'EdgeMovePlan'
 export typealias EdgeMovePlanArray = Array with EdgeMovePlan
 
 // A sequenced parallel copy: `dsts[i]` ← `srcs[i]`, a swap when `isSwap[i]`.
-type MoveSequence
+type MoveSequence implements ParallelCopyEmitter
 	export var dsts as RegNumColumn
 	export var srcs as RegNumColumn
 	export var isSwap as BoolArray
@@ -86,15 +86,19 @@ type MoveSequence
 		return Self{dsts: RegNumColumn.create(), srcs: RegNumColumn.create(), isSwap: BoolArray.create()}
 	end 'create'
 
+	function emitCopy(dst ElementIndex, src ElementIndex)
+		self.pushMove(dst as RegNum, src: src as RegNum, swap: false)
+	end 'emitCopy'
+
+	function emitSwap(a ElementIndex, b ElementIndex)
+		self.pushMove(a as RegNum, src: b as RegNum, swap: true)
+	end 'emitSwap'
+
 	function pushMove(dst RegNum, src RegNum, swap bool)
 		self.dsts.push(dst)
 		self.srcs.push(src)
 		self.isSwap.push(swap)
 	end 'pushMove'
-
-	function count() returns ElementIndex
-		return self.dsts.count()
-	end 'count'
 end 'MoveSequence'
 
 // Build the per-edge SSA-destruction plan for a function. A fully-coalesced edge
@@ -124,20 +128,14 @@ function buildEdgePlan(module TargetModule, topo FuncTopology, predBlock IrBlock
 	let targetBlock = blockAt(module, topo: topo, local: succLocal)
 	let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: PhiEdgeConsumer.ssaDestruction)
 
-	var dsts = RegNumColumn.create()
-	var srcs = RegNumColumn.create()
+	var copy = ParallelCopy.create()
 
 	for k in 0 upto view.count 'eachPhi'
-		let dstReg = alloc.regNumOf(view.phiValueIdAt(k))
-		let srcReg = alloc.regNumOf(view.incomingAt(k))
-
-		if dstReg != srcReg 'needsMove'
-			dsts.push(dstReg)
-			srcs.push(srcReg)
-		end 'needsMove'
+		copy.add(alloc.regNumOf(view.phiValueIdAt(k)), src: alloc.regNumOf(view.incomingAt(k)))
 	end 'eachPhi'
 
-	let moves = sequenceParallelCopy(dsts, srcs: srcs)
+	var moves = MoveSequence.create()
+	copy.sequence(moves)
 	let placement = classifyPlacement(topo, predLocal: predLocal, succLocal: succLocal)
 	let predBlockRef = try topo.blockRefByLocal.get(predLocal) otherwise panic("buildEdgePlan: predLocal out of range")
 	let succBlockRef = try topo.blockRefByLocal.get(succLocal) otherwise panic("buildEdgePlan: succLocal out of range")
@@ -158,105 +156,6 @@ function classifyPlacement(topo FuncTopology, predLocal ElementIndex, succLocal 
 
 	return EdgePlacement.split
 end 'classifyPlacement'
-
-// Sequence a parallel copy (`dsts[i]` ← `srcs[i]`, dsts distinct) into ordered
-// moves. Repeatedly emit a move whose dst is no other move's source (a leaf); when
-// only cycles remain, break one with an `xchg` and rewrite the remaining sources
-// through the swap. This is the standard parallel-move algorithm.
-//
-// CONSUMES ITS ARGUMENTS: `dsts`/`srcs` ARE the worklists — each move is removed as
-// it is emitted, so both are EMPTY on return. `buildEdgePlan`, the sole caller,
-// builds them for this call alone and never reads them again, so they are handed
-// over rather than copied. A second caller must likewise pass arrays it owns and is
-// finished with.
-function sequenceParallelCopy(dsts RegNumColumn, srcs RegNumColumn) returns MoveSequence
-	var moves = MoveSequence.create()
-
-	while dsts.count() > 0 'sequence'
-		// Drop moves already satisfied (dst == src) — the initial ones the caller may
-		// leave, and the one a preceding `xchg` just fulfilled (its source, rewritten
-		// through the swap, now equals its dst). Emitting `xchg r, r` would be a no-op.
-		removeSatisfiedMoves(dsts, ps: srcs)
-
-		if dsts.count() == 0 'allDone'
-			break
-		end 'allDone'
-
-		if let leaf = try findLeafMove(dsts, ps: srcs) 'foundLeaf'
-			let d = try dsts.get(leaf) otherwise panic("sequenceParallelCopy: dsts.get OOB")
-			let s = try srcs.get(leaf) otherwise panic("sequenceParallelCopy: srcs.get OOB")
-			moves.pushMove(d, src: s, swap: false)
-			removeMoveAt(dsts, ps: srcs, idx: leaf)
-		end 'foundLeaf' else 'cycle'
-			let a = try dsts.get(0) otherwise panic("sequenceParallelCopy: dsts.get(0) OOB")
-			let b = try srcs.get(0) otherwise panic("sequenceParallelCopy: srcs.get(0) OOB")
-			moves.pushMove(a, src: b, swap: true)
-			removeMoveAt(dsts, ps: srcs, idx: 0)
-			rewriteSourcesThroughSwap(srcs, a: a, b: b)
-		end 'cycle'
-	end 'sequence'
-
-	return moves
-end 'sequenceParallelCopy'
-
-// Index of a move whose dst is NOT any pending move's source (safe to emit now). It throws when every
-// remaining dst is still needed as a source: the moves left form a pure cycle.
-function findLeafMove(pd RegNumColumn, ps RegNumColumn) returns ElementIndex throws MapError
-	for i in 0 upto pd.count() 'eachMove'
-		let d = try pd.get(i) otherwise panic("findLeafMove: pd.get OOB")
-
-		if not isAnySource(ps, reg: d) 'leaf'
-			return i
-		end 'leaf'
-	end 'eachMove'
-
-	throw MapError.keyNotFound
-end 'findLeafMove'
-
-// Remove every pending move whose dst already equals its src (an already-satisfied
-// copy). Scans back-to-front so removals do not shift not-yet-visited indices.
-function removeSatisfiedMoves(pd RegNumColumn, ps RegNumColumn)
-	let n = pd.count()
-
-	for ri in 0 upto n 'each'
-		let i = n - 1 - ri
-		let d = try pd.get(i) otherwise panic("removeSatisfiedMoves: pd.get OOB")
-		let s = try ps.get(i) otherwise panic("removeSatisfiedMoves: ps.get OOB")
-
-		if d == s 'satisfied'
-			removeMoveAt(pd, ps: ps, idx: i)
-		end 'satisfied'
-	end 'each'
-end 'removeSatisfiedMoves'
-
-function isAnySource(ps RegNumColumn, reg RegNum) returns bool
-	for s in ps 'each'
-		if s == reg 'match'
-			return true
-		end 'match'
-	end 'each'
-
-	return false
-end 'isAnySource'
-
-function removeMoveAt(pd RegNumColumn, ps RegNumColumn, idx ElementIndex)
-	_ = try pd.remove(idx) otherwise panic("removeMoveAt: pd.remove OOB")
-	_ = try ps.remove(idx) otherwise panic("removeMoveAt: ps.remove OOB")
-end 'removeMoveAt'
-
-// After `xchg a, b`, registers a and b hold each other's old contents, so a pending
-// move reading a now finds its value in b and vice-versa.
-function rewriteSourcesThroughSwap(ps RegNumColumn, a RegNum, b RegNum)
-	for i in 0 upto ps.count() 'each'
-		let s = try ps.get(i) otherwise panic("rewriteSourcesThroughSwap: ps.get OOB")
-
-		if s == a 'wasA'
-			try ps.set(i, value: b) otherwise panic("rewriteSourcesThroughSwap: ps.set OOB")
-		end 'wasA' else if s == b 'wasB'
-			try ps.set(i, value: a) otherwise panic("rewriteSourcesThroughSwap: ps.set OOB")
-		end 'wasB'
-	end 'each'
-end 'rewriteSourcesThroughSwap'
 
 // ==========================================================================
 // Commit: rewrite ops to physical, drop self-moves, splice edge moves, clear phis

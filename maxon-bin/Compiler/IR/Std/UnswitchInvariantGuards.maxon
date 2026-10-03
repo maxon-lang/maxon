@@ -473,28 +473,32 @@ type UnswitchPlan
 		return false
 	end 'hasGuard'
 
-	// The admitted guard whose block is `position`, if there is one — answered as the guard's index
-	// plus one so the column's own zero means "none".
-	//
 	// An INDEX loop rather than `withIterator`, here and at the two sites below: an iterator's `current`
 	// and `advance` are witness dispatches, and this pass runs on a pool worker, where a dispatch the
 	// compiler cannot name widens E3143 over every address-taken function in the program.
-	function guardAt(position ElementIndex) returns GuardSiteCount
+	function guardAt(position ElementIndex) returns UnswitchGuard throws UnswitchGuardLookup
 		for index in 0 upto self.guards.count() 'eachGuard'
 			let guard = try self.guards.get(index) otherwise panic("unswitchInvariantGuards: guards.get OOB at {index}")
 
 			if guard.position == position 'found'
-				return index + 1
+				return guard
 			end 'found'
 		end 'eachGuard'
 
-		return NoGuardAtBlock
+		throw UnswitchGuardLookup.noGuardAtTheBlock
 	end 'guardAt'
+
+	function hasGuardAt(position ElementIndex) returns bool
+		try self.guardAt(position) otherwise return false
+		return true
+	end 'hasGuardAt'
 end 'UnswitchPlan'
 
 typealias UnswitchPlanArray = Array with UnswitchPlan
 
-let NoGuardAtBlock = 0 as GuardSiteCount
+enum UnswitchGuardLookup implements Error
+	noGuardAtTheBlock
+end 'UnswitchGuardLookup'
 
 // ══════════════════════════════════════════════════════════════════════════
 // Admission
@@ -1183,7 +1187,7 @@ function hoistFitsBudget(module StdModule, func IrFunction, plan UnswitchPlan, b
 			countHoistedReads(module, opIdx: opIdx, plan: plan, scratch: scratch)
 		end 'eachOp'
 
-		if plan.guardAt(position) == NoGuardAtBlock 'terminatorStays'
+		if not plan.hasGuardAt(position) 'terminatorStays'
 			countHoistedReads(module, opIdx: block.terminatorIndex(), plan: plan, scratch: scratch)
 		end 'terminatorStays'
 
@@ -1730,13 +1734,12 @@ function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, positi
 
 	let terminatorIdx = original.terminatorIndex()
 	module.spans.current = module.spans.at(terminatorIdx)
-	let guardPlusOne = plan.guardAt(position)
 	var folded = false
 	var keptTargetId = 0 as BlockId
 
-	if guardPlusOne != NoGuardAtBlock 'foldTheGuard'
+	if let guard = try plan.guardAt(position) 'foldTheGuard'
 		folded = true
-		keptTargetId = (try plan.guards.get((guardPlusOne - 1) as ElementIndex) otherwise panic("unswitchInvariantGuards: guards.get OOB at {guardPlusOne - 1}")).elseBlockId
+		keptTargetId = guard.elseBlockId
 		module.setTerminator(copy, op: StdOp.branch(clonedBlock(keptTargetId, subst: columns.blockSubst)))
 	end 'foldTheGuard' else 'cloneTheExit'
 		module.setTerminator(copy, op: scratch.cloner.clone(module.getOp(terminatorIdx), valueSubst: columns.valueSubst, blockSubst: columns.blockSubst, payloads: ClonePayloads.owned))

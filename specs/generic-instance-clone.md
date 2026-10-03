@@ -16,7 +16,7 @@ substituted field's own clone strategy.
 
 Without it an `Array with (Box with String)` cannot be copied at all — `slice`/`clone`/`append` need a
 single `(box) -> newBox` cloner for the element to bake into the layout descriptor's `copyFunc@32`, and a
-non-`Array` instance had none. The refusal is raised inside `stdlib/Array.maxon`'s shared body and blamed
+non-`Array` instance would have none. The refusal is raised inside `stdlib/Array.maxon`'s shared body and blamed
 at the instantiation the user wrote.
 
 ## Tests
@@ -190,9 +190,9 @@ end 'main'
 
 <!-- test: a-struct-owning-a-set-instance-clones -->
 ### The SOURCE-LEVEL `p.clone()` gate admits a struct owning a declared generic's instance
-`requireStructCloneSupported` refused `clone` on any struct owning a `Set`/`Map` field, because a
-non-`Array` generic instance had no per-instance cloner to route the field through. `Set` is a DECLARED
-generic (`stdlib/Set.maxon`), so `__clone_Set_String` is now a field cascade over its substituted columns —
+`requireStructCloneSupported` admits `clone` on a struct owning a `Set`/`Map` field, because a declared
+generic's instance has a per-instance cloner to route the field through. `Set` is a DECLARED
+generic (`stdlib/Set.maxon`), so `__clone_Set_String` is a field cascade over its substituted columns —
 `elements` through `__managed_clone_managed` + `__str_clone`, `states` and `hashes` through
 `__managed_clone` — and a hash table copied column-for-column is a valid independent set.
 
@@ -244,12 +244,12 @@ two clone doors read that `false` as *"a trivial element, so the record's own wo
 instance the program actually builds stamps `element_drop@24` from the enclosing descriptor and that word can
 be live.
 
-⚠ **The door is a container of CONTAINERS, and it is the one the filed row's "not reachable today" missed.**
+⚠ **The door is a container of CONTAINERS.**
 The OUTER array's element is `Array with Element` — a `genericInstance`, so the outer array is not itself
 opaque and takes the CONCRETE copy path rather than the descriptor-reading one. The per-element cloner that
 path resolves for the inner array is `__managed_clone`, a word-for-word buffer copy that retains no element,
-so the copy and the source then cascade `__str_decref` over the same records. **MEASURED before the refusal
-existed: the row count printed and the program died `0xC0000005` at teardown.**
+so the copy and the source would then cascade `__str_decref` over the same records. **Without the refusal
+the row count prints and the program dies `0xC0000005` at teardown.**
 
 <!-- test: error.a-container-of-opaque-element-containers-is-refused -->
 ```maxon
@@ -293,7 +293,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:19: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
+error E2015: <fragment>:6:19: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported.
 note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above
 ```
 
@@ -358,11 +358,8 @@ instantiation is in scope: `Bag` is compiled once against the declaration view, 
 `Bag with Integer` fixes nothing inside `holdsNinetyOne`. So the program is refused even though every `with`
 in it binds `Element` to `Integer` — which is what makes this about the DISPATCH and not about the crossing.
 
-⚠ It previously carried the same program as the case below, and that program runs now. The refusal was
-right for the wrong reason there: the value had crossed a shared body's return and lost its substitution.
-⚠ The diagnostic here was once a compiler PANIC — the phrase builder asked which of the CALLER's parameters
-the token named, and at file scope there is no caller: a parameter's name is a property of the TOKEN, not of
-whatever encloses the use.
+⚠ The phrase builder reads the parameter's name from the TOKEN, not from the CALLER's parameters — at file
+scope there is no caller: a parameter's name is a property of the TOKEN, not of whatever encloses the use.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -402,25 +399,21 @@ The same program as the case above, RUNNING. `IntBag` binds `Element` to `Intege
 `Array with (Box with Element)` is an `Array with (Box with Integer)` at this receiver, `e.v` is an
 `Integer`, and `.equals(91)` is the ordinary builtin conformance the control below pins. Returns 4.
 
-⭐⭐ **AN ARGUMENT SPELLED AS A NAME WAS CARRIED THROUGH SUBSTITUTION UNTOUCHED.**
+⭐⭐ **AN ARGUMENT SPELLED AS A NAME IS SUBSTITUTED LIKE ONE WRITTEN INLINE.**
 `typealias EBoxArray = Array with EBox` and `Array with (Box with Element)` written inline denote the same
-thing; the inline one compiled and ran throughout, and only the alias-named one was refused. The inline
-spelling records a real nested instance, so substitution recurses into it and reaches `Element`; the named
-one records an unresolved leaf, which substitution passes straight over. The cure asks the edge that
-already answers *"which instance does this argument denote"* — a reader that road had never had.
+thing, and both compile and run. The inline spelling records a real nested instance, so substitution
+recurses into it and reaches `Element`; the named one records an unresolved leaf, so substitution asks the
+edge that answers *"which instance does this argument denote"* and recurses into that.
 
 ⚠ **What converges is the SUBSTITUTED RESULT, not the interning.** The two spellings are still two
-interned instances; this case pins that they now behave alike, not that they are one entry. Making them one
+interned instances; this case pins that they behave alike, not that they are one entry. Making them one
 means rewriting recorded alias instances after the fold, which has to run after the alias CONTEST settles or
 a contested argument gets a last-wins answer baked in — that is a separate piece of work and this case does
 not claim it.
 
-⚠ **THIS IS NOT `W178`, and the note that said so was reading a shared word.** `W178` is an exit-139
-SEGFAULT on the drop/descriptor road; this is a type-substitution miss with no memory component. The earlier
-probe that reported the result "tagged `struct` and named `Box`" measured the ELEMENT two hops on, not the
-call's result — and `struct` is what `typeTagName` prints for a `genericInstance` as well as a `structRef`,
-so the call result was a correct instance all along. The FIELD road below is what settles that the fault is
-in the substitution rather than in the return.
+⚠ **`struct` is a shared word.** `typeTagName` prints it for a `genericInstance` as well as a
+`structRef`, so a probe reporting a result "tagged `struct` and named `Box`" does not say which one the call
+returned. The FIELD road below is what attributes this to the substitution rather than to the return.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -468,10 +461,10 @@ end 'main'
 ```
 
 <!-- test: element-payload-through-a-shared-body-field-read -->
-⭐ **THE SAME MISS REACHED WITHOUT A RETURN AT ALL**, which is what attributes it to the shared
+⭐ **THE SAME SUBSTITUTION REACHED WITHOUT A RETURN AT ALL**, which is what attributes it to the shared
 substitution rather than to the method-return crossing. Reading `b.items` directly — the field whose
-declared type is the same nested alias — was refused with the identical sentence, at the identical column.
-A repair that lived in the return road would leave this one broken.
+declared type is the same nested alias — takes no return road, so a repair that lived in the return road
+would leave this one refused.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -521,15 +514,15 @@ end 'main'
 <!-- test: error.a-cyclic-alias-reaching-the-clone-gate-is-refused-not-overflowed -->
 ⭐⭐ **THE DEEP-CLONE GATE WALKS THE TYPE GRAPH, SO IT OWES THAT WALK A CYCLE BREAK.** `Cyc` is
 `Array with Cyc`, an infinite type, and E2012 refuses it — but only if the compile survives long enough to
-say so. The gate's generic-alias arm descended without marking the name, and a container's ELEMENT is the
-same alias again, so it re-entered at the same name until the stack was gone: **STATUS_STACK_OVERFLOW, exit
+say so. A gate arm that descended without marking the name would re-enter at the same name, because a
+container's ELEMENT is the same alias again, until the stack was gone: **STATUS_STACK_OVERFLOW, exit
 0xC00000FD, and ZERO BYTES OF OUTPUT.** A crash with no diagnostic reads to a build script like a missing
 binary.
 
 ⚠ **`Cyc` is DECLARED AND NEVER USED**, and the reach is not the declaration — declaring the alias,
 constructing the instance, and even reading the field are all clean. It takes the `.clone()` inside a shared
 body to enter the gate, which is why this case sits with the clone family and not with the alias ones.
-The break already existed on the struct arm; this pins that both arms reach it.
+The struct arm and the generic-alias arm both mark the name; this pins that both reach the break.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Cyc = Array with Cyc
@@ -561,8 +554,8 @@ error E2012: <fragment>:3:28: Circular typealias dependency: Cyc
 
 <!-- test: element-payload-through-a-concretely-instantiated-box -->
 The FALSE-REJECT CONTROL for the pair above, and the reason they are a set: the identical `.v.equals(…)`
-spelling on a box whose argument was concrete all along never crossed a shared body's return, so it compiled
-and ran throughout. It is what makes the refusal attributable to the SUBSTITUTION rather than to the
+spelling on a box whose argument is concrete never crosses a shared body's return, so it compiles
+and runs. It is what makes the refusal attributable to the SUBSTITUTION rather than to the
 spelling — a `.equals()` on a value of a ranged int alias is an ordinary builtin conformance dispatch, and
 this case is what says so. Returns 4.
 ```maxon

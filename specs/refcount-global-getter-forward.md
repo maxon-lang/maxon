@@ -1,7 +1,6 @@
 ---
 feature: refcount-global-getter-forward
 status: selfhosted
-status-reason: its one case PASSES here, but its committed golden was minted by another compiler and disagrees with what this one emits, so un-suspending re-mints it and overwrites the only record of what v1 emitted (measured 2026-08-06, BATCH29/A3a, by un-suspending the file and running the full suite). The compiler cannot take it either: E2015 for a top-level instantiation of a user generic.
 keywords: [refcount, borrow, global, cache, getter, forward, memory, leak]
 category: memory-safety
 ---
@@ -31,10 +30,9 @@ forward needs (`optionValue`'s `return parts.get(1)`, whose local `parts` dies a
 return) is here HARMFUL: retaining the global's outliving occupant mints a `+1`
 that no one ever releases. On a cached global that single leaked reference then
 survives the exit-time global-cleanup decref, stranding the whole object (and, for
-a cached IR module, its entire op/block working set) — the runtime-module leak the
-self-hosted compiler carried on every compile.
+a cached IR module, its entire op/block working set).
 
-The fix classifies such getters (`funcReturnsGlobalBorrow`, a strict subset of the
+The compiler classifies such getters (`funcReturnsGlobalBorrow`, a strict subset of the
 borrow set) and suppresses the forward's retain, so the whole chain stays a clean
 borrow. A torn-down-local element forward keeps its retain (its source really does
 die at return), so this is scoped to genuinely-outliving global sources.

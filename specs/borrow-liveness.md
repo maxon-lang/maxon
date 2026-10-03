@@ -8,63 +8,36 @@ category: memory
 
 ## Documentation
 
-`specs/borrow-checker.md` and `specs/array-realloc-dangling-ref.md` are ports of the
-corpus and pin what the LANGUAGE promises. This file pins the shapes the compiler's own borrow-liveness
-mechanism reaches — every one of them found by probing it, and each one is either a defect it
-closed or a guard against it over-rejecting.
+`specs/borrow-checker.md` and `specs/array-realloc-dangling-ref.md` pin what the LANGUAGE promises.
+This file pins the shapes the compiler's own borrow-liveness mechanism reaches — each one either a
+use-after-free it refuses or a guard against it over-rejecting.
 
-**Why some of these DIVERGE from the runnable oracle, in the refusing direction.** `arr.get(i)`
-in the compiler hands back the element pointer and takes no reference for it
-(`Parser.emitArrayElementAccessor(owned: false)`); the oracle RETAINS, so a program that frees the
-array under an outstanding borrow is merely wasteful there and is a **use-after-free here**. Where
-that is so, the only two sound answers are retain-on-get or refuse, and P1.8 Slice A already ruled
-the element a borrow — so the compiler refuses. Each such case says so, with the measurement the refusal
-replaces.
+**Why these refuse.** `arr.get(i)` hands back the element pointer and takes no reference for it
+(`Parser.emitContainerElementAccessor` with `ContainerElementReference.borrowed`), so a program that frees
+the array under an outstanding borrow is a **use-after-free**. The only two sound answers are
+retain-on-get or refuse; the element is a borrow, so the compiler refuses. Without the refusal the
+program reads freed memory — a fault, or `__mm_free`'s always-on poison `0x3F3F3F3F3F3F3F3F`
+(`4557430888798830399`) read back as a length.
 
-⭐⭐ **THE `for … in` ELEMENT IS ONE OF THEM — ⚖ USER RULING, 2026-08-26 — AND IT SPENT ONE RELEASE NOT
-BEING ONE, SO READ THE ROUND TRIP RATHER THAN EITHER HALF.** Four cases below refuse a `clear()`
-reached from inside a `for … in` over the array being cleared. They refused it at P1.8 Slice A;
-they ACCEPTED it from the day `stdlib/Array.maxon` was listed, because that made `for x in a` take
-the CURSOR form, whose `ArrayIterator.current()` returns a `+1` through `coOwnBorrowedOpaque` — no
-borrow left to dangle, so the refusal would have been a false one; and they refuse it again from
-**EC3**, which stopped rewriting an `Array` source to its cursor and put the counter form, and with
-it the borrowed element, back.
+⭐⭐ **THE `for … in` ELEMENT IS A BORROW TOO — ⚖ USER RULING.** Four cases below refuse a `clear()`
+reached from inside a `for … in` over the array being cleared. `for x in a` over an `Array` takes the
+counter form, whose element is a borrowed element exactly as `get`'s is. The cursor form, whose
+`ArrayIterator.current()` returns a `+1` through `coOwnBorrowedOpaque`, would leave no borrow to dangle,
+but at two heap records per loop entry and three calls per trip; the ruling makes the element a BORROW.
 
-⚠ **THE MIDDLE VERDICT WAS NEVER A RE-RULING; IT WAS THE MECHANISM MOVING UNDER THE RULE.** The
-paragraph above says the choice is retain-on-get *or* refuse, and that P1.8 Slice A ruled the
-element a borrow. Listing the corpus array bought retain-on-get by accident, at two heap records
-per loop entry and three calls per trip — about half of the compiler-emitted compiler's allocations,
-which is what EC3 measured and removed. **The 2026-08-26 ruling settles it in the same direction
-P1.8 did: the element is a BORROW.**
+⚠ **A RUNTIME-BUILT STRING IS WHAT MAKES THESE CASES EVIDENCE.** A literal would be a false negative — an
+immortal `.rdata` record survives a free it never had — so the element each case borrows is heap.
 
-⚠⚠ **SO TWO OF THE FOUR ARE PROGRAMS THE RUNNABLE ORACLE COMPILES AND RUNS, AND the compiler REFUSES THEM
-BY DECISION.** The bootstrap prints **44** for `receiver-method-inside-a-for-loop` and **53** for
-`forin-over-module-storage`, because it retains on element read; The compiler does not retain, so the same
-programs are use-after-frees here unless refused. **That is a documented divergence and not a bug on
-either side** — it is this file's opening divergence, reached through the `for … in` door instead of
-the `get` door. The other two the oracle cannot arbitrate in either spelling (see them).
-
-⚠ **THE EVIDENCE ON BOTH SIDES IS KEPT, because each half measured a real program.** Under a BORROW
-the body reads the free-poison byte `4557430888798830399` = `0x3F3F3F3F3F3F3F3F`, which is what these
-four were opened on and what they refuse today. Under the cursor's `+1` the same programs ran: a
-runtime-built 40-byte String (a literal would be a false negative — an immortal `.rdata` record
-survives a free it never had) pushed into an array a callee `clear()`s, refilled so the freed slot is
-REUSED, read back as **40** with exit 0.
-
-⚠ **`arr.get(i)` NEVER MOVED IN EITHER DIRECTION** — it is a different door, which is why only the
-four `for … in` cases changed verdict twice and every `get`-based refusal here stood throughout.
-
-**Why one of them diverges in the ACCEPTING direction.** The compiler keys a borrow on the BINDING
+**A shadowing name is a different binding.** The compiler keys a borrow on the BINDING
 (`Scope`-resolved, object identity), not on the variable's NAME, so a block that shadows a
-borrowed array's name is correctly writable. The oracle is name-keyed and rejects it.
+borrowed array's name is writable.
 
 ## Tests
 
 <!-- test: rebind-drops-the-borrowed-record -->
 ### Rebinding the source frees what the borrow points at
 `arr = <fresh>` drops the record `arr` held, so every element borrowed out of it is freed.
-Measured **0xC0000005** before this rule; the oracle prints the string, because it retains on
-`get` and therefore just forgets the borrow at a reassignment.
+Without the refusal the read of `s` faults (**0xC0000005**).
 ```maxon
 typealias StringArray = Array with String
 
@@ -80,11 +53,37 @@ end 'main'
 error E3070: specs/fragments/borrow-liveness/rebind-drops-the-borrowed-record.test:7:2: cannot mutate 'arr' via '=' while it is borrowed by 's' (borrowed at line 6)
 ```
 
+<!-- test: a-borrow-read-early-in-a-loop-body-is-live-at-a-later-write-in-it -->
+`first` is bound before the loop and read at the top of its body, so the `clear()` below the read is followed by
+that read on the next trip: the borrow is live at the write even though no read follows it in the text.
+```maxon
+function main() returns ExitCode
+	var arr = StringArray.create()
+	arr.push("a{3}")
+	arr.push("b{4}")
+	let first = try arr.get(0) otherwise "none"
+	var i = 0
+
+	while i < 2 'loop'
+		print("{first}\n")
+		arr.clear()
+		arr.push("c{5}")
+		i = i + 1
+	end 'loop'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:11:7: cannot mutate 'arr' via 'clear' while it is borrowed by 'first' (borrowed at line 6)
+error E3070: <fragment>:12:7: cannot mutate 'arr' via 'push' while it is borrowed by 'first' (borrowed at line 6)
+```
+
 <!-- test: field-chain-source -->
 ### A borrow taken through a field chain is a borrow
 `b.items.get(0)` borrows, and `b.items.clear()` frees it. The subject is the chain's BASE — the
-same key `for it in b.items` locks — so the two spellings cannot disagree. Measured
-**0xC0000005** before this rule; the oracle accepts it (it retains).
+same key `for it in b.items` locks — so the two spellings cannot disagree. Without the refusal the
+read of `s` faults (**0xC0000005**).
 ```maxon
 typealias StringArray = Array with String
 
@@ -111,7 +110,7 @@ error E3070: specs/fragments/borrow-liveness/field-chain-source.test:15:10: cann
 <!-- test: self-field-alias-source -->
 ### A bare self-field alias is a borrow source
 `items` inside a method of `Bag` names the field, and the borrow and the write reach the ONE alias
-installed at method entry. Byte-identical to the oracle's diagnostic.
+installed at method entry.
 ```maxon
 typealias StringArray = Array with String
 
@@ -173,7 +172,7 @@ error E3070: specs/fragments/borrow-liveness/self-field-rebind.test:13:3: cannot
 <!-- test: parameter-source -->
 ### A PARAMETER may be a borrow source
 A parameter's container is writable (it is a borrowed reference to the caller's record), which is
-exactly why a borrow out of it can dangle. Byte-identical to the oracle's diagnostic.
+exactly why a borrow out of it can dangle.
 ```maxon
 typealias StringArray = Array with String
 
@@ -196,8 +195,7 @@ error E3070: specs/fragments/borrow-liveness/parameter-source.test:6:6: cannot m
 <!-- test: mutating-callee-argument -->
 ### Handing the source to a callee that writes it
 The one write the parser cannot settle — whether `grow` mutates what it was handed depends on its
-body — so it is decided against the whole-program parameter-mutation summary. Byte-identical to
-the oracle's diagnostic, anchor included.
+body — so it is decided against the whole-program parameter-mutation summary.
 ```maxon
 typealias StringArray = Array with String
 
@@ -220,8 +218,7 @@ error E3070: specs/fragments/borrow-liveness/mutating-callee-argument.test:11:2:
 <!-- test: mutating-callee-labelled-argument -->
 ### The argument's SOURCE order is bridged to the parameter's DECLARATION order
 `grow(1, dest: arr, other: spare)` writes parameter 2 while `arr` is source argument 1, so the
-labelled slotting has to be inverted before the mutation mask can be read. Byte-identical to the
-oracle's diagnostic.
+labelled slotting has to be inverted before the mutation mask can be read.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -274,8 +271,8 @@ end 'main'
 <!-- test: shadowed-source-is-writable -->
 ### A block that SHADOWS the source's name writes a different array
 the compiler keys a borrow on the BINDING, not on the name, so the inner `arr` is a different storage and
-writing it cannot free the outer array's element. The oracle is name-keyed and rejects this
-program; The compiler accepts it and returns the right answer.
+writing it cannot free the outer array's element. The compiler accepts the program and returns the
+right answer.
 ```maxon
 typealias StringArray = Array with String
 
@@ -302,7 +299,6 @@ end 'main'
 <!-- test: first-is-a-borrow-source -->
 ### `first()` borrows exactly as `get()` does
 All three read-in-place accessors are one door, so none of them can be taught the rule separately.
-Byte-identical to the oracle's diagnostic.
 ```maxon
 function main() returns ExitCode
 	var arr = ["hello world this is a long string for heap allocation"]
@@ -381,8 +377,8 @@ end 'main'
 
 <!-- test: mutation-in-otherwise-handler -->
 ### The source is mutable inside the `otherwise` handler
-The array shape of `specs/borrow-checker.md:borrow-not-live-in-otherwise` (whose own `Map` form
-waits for Phase 2). On the handler's path the get FAILED and `s` was never bound, so there is no
+The array shape of `specs/borrow-checker.md:borrow-not-live-in-otherwise`, which pins the `Map` form.
+On the handler's path the get FAILED and `s` was never bound, so there is no
 live borrow and the push must be allowed — which activation-at-the-BINDING gives structurally.
 ```maxon
 typealias StringArray = Array with String
@@ -403,28 +399,12 @@ end 'main'
 
 <!-- test: forin-element-borrow-via-callee -->
 ### A `for … in` element is a borrow, and a callee can free it
-P1.8 Slice A's lock refuses every write that NAMES the iterated array; it structurally cannot
-refuse one that hands the array to a callee. The compiler read the free-poison byte here — `0x3F`,
-`4557430888798830399` — before this rule. The oracle accepts the program, because it retains the
-element, so this is a deliberate divergence in the refusing direction: ⚖ **USER RULING, 2026-08-26**,
-which upheld P1.8's borrow after EC3 put the counter form back.
+The iteration lock refuses every write that NAMES the iterated array; it structurally cannot
+refuse one that hands the array to a callee. Without this rule the body reads the free-poison
+`4557430888798830399` (`0x3F3F3F3F3F3F3F3F`). ⚖ **USER RULING**: the `for … in` element is a borrow.
 
-⭐⭐ **THIS CASE HELD THE OPPOSITE VERDICT FOR ONE RELEASE, AND ITS NAME WENT WITH IT.** Between the
-`stdlib/Array.maxon` listing and EC3 it read *"A `for … in` element is OWNED, so a callee that clears
-the array cannot free it"*, under the name `forin-element-survives-a-callee-that-clears`, pinning
-exit 0 / stdout `53`. That was correct **for the cursor form**, whose `ArrayIterator.current()` hands
-back a `+1` (`coOwnBorrowedOpaque`): there was no borrow left to dangle, so the refusal would have
-been a false one. EC3 stopped rewriting an `Array` source to its cursor, the borrowed element came
-back, and the refusal came back with it — name included, by this file's own rule that a case may not
-carry a noun asserting the opposite of its verdict.
-
-⚠ **THE ORACLE CANNOT ARBITRATE THIS PARTICULAR PROGRAM IN EITHER SPELLING.** With `let b` it is
-`E3019 … cannot pass immutable 'let' variable to function that mutates parameter 'dest'` — the
-container-through-a-`let`-field divergence `Parser.paramMaskOfValue`'s header states as a RULING and
-`forin-mutation-after-loop` below already pins — and with `var b` it is `E3077 … variable 'b' is
-never reassigned; use 'let' instead`. The two shapes the oracle DOES compile are
-`receiver-method-inside-a-for-loop` and `forin-over-module-storage` below, and those are where this
-rule's divergence is visible rather than inferred.
+⚠ **THIS SPELLING IS THE ONLY ONE THE BORROW DECIDES.** Written with `var b` it is `E3077 … variable 'b'
+is never reassigned; use 'let' instead`, so the `let` binding is what reaches the borrow check.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -460,21 +440,16 @@ error E3070: specs/fragments/borrow-liveness/forin-element-borrow-via-callee.tes
 ### The loop element's borrow runs to the loop's `end`, NOT to the variable's last use
 `it` is never read again after the write, so ordinary last-use liveness would call the borrow dead
 and let this through — but the ITERATION keeps reading the record on every later trip. The loop
-element's liveness is the body's extent, which is the same lexical liveness the Slice A lock models.
+element's liveness is the body's extent, which is the same lexical liveness the iteration lock models.
 
 ⚠ Kept as a SEPARATE case from the one above rather than folded into it: the two differ only in
 where `wipe` sits, and that difference is the whole content of the liveness question the pair asks.
 
-⭐⭐ **AND THIS LEXICAL EXTENT IS THE FACT EC3's OWN CURE RESTS ON.** The 32 loops EC3 restructured in
-the compiler's source are `for … in` walks whose element was live across a mutating call for exactly this
-reason; each became an index loop over `count()` + `get(i)`, whose borrow **is** ordinary last-use
-liveness and therefore dies at the call it feeds. So this case pins the difference between the two
-loop forms, not a curiosity: see `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs` for the note the
-restructured sites point at.
-
-⚠ It spent one release as `forin-element-outlives-a-clear-later-in-the-body` pinning exit 0 / stdout
-`53` — correct for the cursor form's `+1` element and for nothing else. ⚖ Ruling of 2026-08-26. The
-oracle cannot arbitrate this spelling either: same two spellings, same two refusals as above.
+⭐⭐ **THIS LEXICAL EXTENT IS WHY THE COMPILER'S OWN SOURCE WRITES SOME WALKS AS INDEX LOOPS.** A walk
+whose element is live across a mutating call is written as an index loop over `count()` + `get(i)`, whose
+borrow **is** ordinary last-use liveness and therefore dies at the call it feeds. So this case pins the
+difference between the two loop forms, not a curiosity: see `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`
+for the note those sites point at.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -548,7 +523,7 @@ end 'main'
 ### `for _ in` reads no element into a name, so it borrows nothing
 The discard binds nothing, so no borrow can outlive the read. The RECORD itself survives any
 callee — a callee can clear a container but cannot rebind the caller's binding — and a write that
-WOULD drop it is refused by the Slice A lock instead.
+WOULD drop it is refused by the iteration lock instead.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -583,12 +558,52 @@ end 'main'
 1
 ```
 
+<!-- test: forin-over-a-fresh-clone-borrows-nothing-of-the-field -->
+### A loop over a fresh clone of a field borrows the clone, not the field
+The iterated container is a new array the loop owns, so pushing onto the field inside the body is a
+write to a different record.
+```maxon
+typealias Strings = Array with String
+typealias Tally = int(0 to u64.max)
+
+type Paths
+	var items as Strings
+
+	static function create() returns Self
+		return Self{items: ["first path", "second path"]}
+	end 'create'
+
+	function doubled()
+		for p in self.items.clone() 'each'
+			self.items.push(p)
+		end 'each'
+	end 'doubled'
+
+	function size() returns Tally
+		return self.items.count()
+	end 'size'
+end 'Paths'
+
+function main() returns ExitCode
+	let paths = Paths.create()
+	paths.doubled()
+	print("{paths.size()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
 <!-- test: otherwise-return-preserves-the-borrow -->
 ### A diverging `otherwise` does not destroy the borrow
 `try arr.get(0) otherwise return 1` still binds `s` on the success path, so the borrow is real and
 the later `clear()` must be refused. The handler is parsed by re-entering the STATEMENT parser
 mid-initializer, so a borrow that were tracked by statement position rather than by the VALUE it
-produced would be wiped here — measured **0xC0000005** while it was.
+produced would be wiped here, and the read of `s` would fault (**0xC0000005**).
 ```maxon
 function main() returns ExitCode
 	var arr = ["hello world this is a long string for heap allocation"]
@@ -678,11 +693,10 @@ end 'main'
 
 <!-- test: sibling-field-shares-the-subject -->
 ### A SIBLING field of the same base is the same subject — conservative, and it must be
-The subject of a field chain is its BASE (`b`), the key P1.8 Slice A's iteration lock already uses,
+The subject of a field chain is its BASE (`b`), the key the iteration lock uses,
 and it has to be: a rebind `b = other` drops the record `b.items` points at, so a finer
 `(base, field)` key would miss that use-after-free. The price is that writing `b.other` while
-`b.items` is borrowed is refused too. The oracle accepts it — as it accepts `b.items.clear()`
-itself, because it retains — so this is the same divergence one field over, not a new one.
+`b.items` is borrowed is refused too.
 ```maxon
 typealias StringArray = Array with String
 
@@ -710,8 +724,8 @@ error E3070: specs/fragments/borrow-liveness/sibling-field-shares-the-subject.te
 <!-- test: ternary-merge-carries-the-borrow -->
 ### A borrow survives a TERNARY merge
 A merge MINTS A NEW VALUE, and the borrow is keyed on the value the accessor produced — so the phi
-has to inherit it or the binding holds an element nothing is tracking. Measured **0xC0000005**
-while it did not.
+has to inherit it or the binding holds an element nothing is tracking, and the read faults
+(**0xC0000005**).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -789,10 +803,9 @@ error E3070: specs/fragments/borrow-liveness/match-gives-merges-every-arms-borro
 No merge, no phi, nothing to retarget — the borrow is the value the binding takes. The third of the
 parser's three value merges is therefore the only `try` form that needs one.
 
-⚠ `look` declares `throws ArrayError` — the error `arr.get` actually throws — and it did NOT until R4.4.
-It declared `throws Oops`, an unrelated enum, and compiled only because the compiler did not yet know the array
-family's error TYPE (`runtimeThrowsClause` answered `none`, so nothing checked the propagation). Registering
-that type made the mismatch visible, and the runnable oracle reports it identically:
+⚠ `look` declares `throws ArrayError` — the error `arr.get` actually throws. An unrelated enum in its
+`throws` clause is refused, because the compiler knows the array family's error TYPE
+(`runtimeThrowsClause`) and checks the propagation against it:
 `E3059: try propagates 'ArrayError' but enclosing function throws 'Oops'`. The `Oops` enum stays declared but
 unused so the line numbers this case's expected diagnostic names do not move.
 ```maxon
@@ -821,8 +834,8 @@ error E3070: specs/fragments/borrow-liveness/propagating-try-carries-the-borrow.
 <!-- test: var-reassigned-from-an-element-copies-it -->
 ### Assigning an element into a `var` COPIES it, so there is no borrow to conflict with
 A managed value stored into a `var` is promoted to an owned copy at the store, so `s` owns its own
-record and clearing the array cannot reach it. The oracle refuses this program; The compiler accepts it and
-returns the right answer, because here it genuinely does not borrow.
+record and clearing the array cannot reach it. The compiler accepts the program and returns the right
+answer, because here it genuinely does not borrow.
 ```maxon
 function main() returns ExitCode
 	var arr = ["hello world this is a long string for heap allocation"]
@@ -844,8 +857,7 @@ end 'main'
 ### A loop-header phi over a `var` carries a COPY, not a borrow
 The fourth and last merge class the parser mints. It needs no borrow retarget and correctly has
 none: every store into a managed `var` promotes to an owned copy first, so the value the phi joins
-already owns its own record. The oracle refuses this program; The compiler accepts it and prints the right
-string.
+already owns its own record. The compiler accepts the program and prints the right string.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -874,8 +886,8 @@ end 'main'
 `b.wipe()` destroys the element `s` holds exactly as `wipe(b.items)` does — the array just arrives in
 the RECEIVER column instead of an argument one. Answering it needs a second question of the callee:
 *"does this body write the storage this parameter points at?"*, which is **yes** here while E3019's
-*"does passing an immutable binding here make it an error?"* stays **no**. Measured before the split:
-the oracle prints 44 (it retains), the compiler ran and printed `4557430888798830399` out of freed memory.
+*"does passing an immutable binding here make it an error?"* stays **no**. Without the refusal the
+program prints `4557430888798830399` out of freed memory.
 ```maxon
 typealias StringArray = Array with String
 
@@ -972,22 +984,13 @@ error E3070: specs/fragments/borrow-liveness/receiver-method-rebinding-its-own-f
 ### … and inside a `for … in` over the field it clears
 The loop element's borrow is lexical, so the call is refused wherever in the body it sits.
 
-⭐⭐ **THE ONE OF THE FOUR THE ORACLE CAN ARBITRATE — AND IT ARBITRATES *AGAINST* THIS REFUSAL, WHICH
-IS EXACTLY WHY THE CASE IS HERE.** The bootstrap compiles this program and prints **44**, because it
-RETAINS on element read. The compiler does not retain, so the same program is a use-after-free here unless
-refused. ⚖ **USER RULING, 2026-08-26: refuse.** This is therefore the sharpest instance of the
-divergence this file opens with — where the two sound answers are retain-on-get *or* refuse, the compiler
-refuses — and it is **a documented divergence, not a bug on either side**.
-
-⚠ It printed 44 here too for the one release the `stdlib/Array.maxon` listing had `for … in` taking
-the cursor form, whose element is a `+1`. EC3 put the counter form and the borrow back.
-
-⚠ **THE NAME NEVER MOVED, BECAUSE IT NAMES A SHAPE AND NOT A VERDICT** — unlike the two cases higher
-up, which asserted "borrow" in their own ids and could not keep them across the round trip.
+⭐⭐ **THE SHARPEST INSTANCE OF THE RULE THIS FILE OPENS WITH.** The element is not retained, so the
+program is a use-after-free unless refused; where the two sound answers are retain-on-get *or* refuse,
+the compiler refuses (⚖ **USER RULING**).
 
 ⚠ The sibling directly above (`receiver-method-rebinding-its-own-field`) borrows through
-`arr.get(0)`, a different door, and has expected E3070 throughout — which is what made the pair
-readable as "which door moved" while one of them was moving.
+`arr.get(0)`, a different door, and reaches the same E3070 — so the pair pins that the `for … in`
+door and the `get` door answer alike.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1058,31 +1061,24 @@ error E3070: specs/fragments/borrow-liveness/receiver-method-writes-transitively
 
 <!-- test: receiver-method-writing-its-own-field-through-a-corpus-member -->
 ### … and the write reaches the caller through a member the COMPILER does not serve
-⛔⛔ **THE SAME WRITE, SPELLED THROUGH A CORPUS-DECLARED MEMBER, AND IT WAS A USE-AFTER-FREE ON THIS
-TREE.** Every case above writes through `clear`, which `Parser.arraySurfaceMemberNames` still serves —
-so the parser settles the write itself and stamps the enclosing method's `storageWrittenParamMask`
-directly. `truncate` has NEVER been on that roster: it is `stdlib/Array.maxon:426`, an ordinary
-declared function, and the enclosing method's bit then had to arrive through the call graph instead.
-It did not. `SemanticCheck.collectCallParamEdges` records an edge only for an argument that IS one of
-the caller's own parameters, and `items` is a FIELD of one — so `wipe` was summarised as writing
-nothing and `b.wipe()` was waved through.
+⛔⛔ **THE SAME WRITE, SPELLED THROUGH A CORPUS-DECLARED MEMBER.** `truncate` is not on
+`Parser.arraySurfaceMemberNames`: it is an ordinary declared function in `stdlib/Array.maxon`, so the
+parser cannot settle the write itself, and the enclosing method's `storageWrittenParamMask` bit has to
+arrive through the call graph. `SemanticCheck.collectCallParamEdges` records an ordinary edge only for
+an argument that IS one of the caller's own parameters, and `items` is a FIELD of one — so without a
+second edge kind `wipe` would be summarised as writing nothing, `b.wipe()` would be waved through, and
+the program would print `4557430888798830399` (`__mm_free`'s `0x3F` poison read back as a length)
+where 44 is correct.
 
-**MEASURED on the tree that shipped it, with the suite green over it: this program compiled clean and
-printed `4557430888798830399`** — `__mm_free`'s `0x3F` poison read back as a length — where 44 is
-correct and the oracle prints 44. It is the exact symptom `receiver-method-writing-its-own-field`
-records from before the roster door existed, reappearing one member over.
-
-⇒ The edge set the STORAGE column is closed over now carries a second edge kind: *"the caller's
+⇒ The edge set the STORAGE column is closed over therefore carries a second edge kind: *"the caller's
 parameter `p` owns the ARRAY this call's receiver denotes"*, recorded at the one ordinary-call
 receiver door (`Parser.prependReceiverArg`). It is storage-only — feeding it into E3019's column
 would refuse a `let` receiver for a method writing its own field, which is the ruling
 `self-keyword.md:self-with-params` pins.
 
-⚠ **THIS IS THE RETIREMENT CHAIN'S OWN HAZARD, AND IT IS WHY THE CASE IS WRITTEN OVER `truncate`
-RATHER THAN OVER A NAME THAT JUST LEFT.** Every member struck from the roster moves from the door
-that settles the write to the door that had to infer it, so the hole was opened by `insert` (ARR1) and
-`reserve` (ARR2) and would have been re-opened by `clear` (ARR4). Pinning it on a member that was
-NEVER on the roster is what keeps it pinned after the roster empties.
+⚠ **EVERY ARRAY MEMBER OFF THE ROSTER REACHES THE CALLER THIS WAY** — `clear`, `insert`, `reserve` and
+`truncate` alike are declared in `stdlib/Array.maxon`, so the write is inferred through the call graph
+rather than settled by the parser, and this edge kind is what carries it.
 ```maxon
 typealias StringArray = Array with String
 
@@ -1187,8 +1183,7 @@ end 'main'
 
 <!-- test: receiver-method-that-writes-nothing -->
 ### A method that does NOT write the field stays callable while the borrow is live
-The over-rejection guard for the five above, and the one this fix is one step away from breaking: a
-receiver is now an argument the conflict check sees, so a rule that blamed the receiver for merely
+The over-rejection guard for the five above: a receiver is an argument the conflict check sees, so a rule that blamed the receiver for merely
 BEING one would refuse every method call on `b`. Only a callee the summary says writes the storage
 counts.
 ```maxon
@@ -1272,7 +1267,7 @@ end 'main'
 `reset()` clears `items` while `s` borrows an element of it — the same use-after-free as `b.wipe()`,
 one level in. It needs its own answer because the receiver here is `self`, which stands for the WHOLE
 receiver, while the borrow was recorded against the FIELD's alias: a single site keyed on `self` would
-match nothing. Measured before this door: The compiler printed `4557430888798830399`, the oracle 44.
+match nothing. Without this door the program prints `4557430888798830399` where 44 is correct.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1386,12 +1381,12 @@ end 'main'
 <!-- test: method-writing-a-non-array-field-is-not-a-conflict -->
 ### A method that writes a NON-ARRAY field of the receiver is not a conflict
 E3070 tracks an array element and nothing else, so only an ARRAY write can free one — the same line
-the `String` and `Set` receiver doors already draw. Ungated, `total = total + v` marked the whole
-receiver written and this legal program was refused; the oracle compiles and runs it.
+the `String` and `Set` receiver doors draw. Ungated, `total = total + v` would mark the whole
+receiver written and this legal program would be refused.
 
 ⚠ The gate needs the TYPE TAG and not just the name: a `TypeNameId` and a `GenericInstanceId` share a
-numeric space, so asking "is this an Array instance?" of a plain alias answered TRUE by coincidence,
-which is exactly how the false rejection arrived.
+numeric space, so asking "is this an Array instance?" of a plain alias by its number alone can answer
+TRUE by coincidence, which is a false rejection.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1427,9 +1422,9 @@ end 'main'
 
 <!-- test: module-storage-source -->
 ### A top-level `var` is a borrow source
-Module storage differs from a local in WHERE the record is anchored and in nothing a borrow can see.
-The subject was `Scope`-only until this case: `g.clear()` compiled clean and faulted with
-**0xC0000005**, on a program the oracle refuses with this exact diagnostic.
+Module storage differs from a local in WHERE the record is anchored and in nothing a borrow can see,
+so the borrow subject reaches beyond `Scope`: without it `g.clear()` would compile clean and the read
+would fault (**0xC0000005**).
 ```maxon
 var g = ["hello world this is a long string for heap allocation"]
 
@@ -1447,7 +1442,7 @@ error E3070: specs/fragments/borrow-liveness/module-storage-source.test:6:4: can
 <!-- test: module-storage-rebind -->
 ### … and rebinding one frees what the borrow points at
 The global store DECREFS the record the slot held (`emitCheckedGlobalStore`), so it is the local
-rebind door one anchoring out. Measured **0xC0000005** before it existed.
+rebind door one anchoring out. Without the refusal the read of `s` faults (**0xC0000005**).
 ```maxon
 typealias StringArray = Array with String
 
@@ -1466,9 +1461,7 @@ error E3070: specs/fragments/borrow-liveness/module-storage-rebind.test:8:2: can
 
 <!-- test: module-storage-to-a-mutating-callee -->
 ### … and handing one to a callee that writes it
-The call-argument door reaches module storage through the same subject derivation as a local. The
-oracle ACCEPTS this program — its borrow check is over var slots, which a global is not, and it
-retains anyway — so this is the refusing-direction divergence one storage class over.
+The call-argument door reaches module storage through the same subject derivation as a local.
 ```maxon
 typealias StringArray = Array with String
 
@@ -1491,19 +1484,13 @@ error E3070: specs/fragments/borrow-liveness/module-storage-to-a-mutating-callee
 
 <!-- test: forin-over-module-storage -->
 ### … and a `for … in` over one borrows its element lexically
-The loop element's borrow reaches module storage too. Measured before this rule: the body read the
-free-poison byte and printed `4557430888798830399` — `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s always-on
-poison. That number is what makes this case EVIDENCE rather than an assertion: the element's record
-is genuinely freed by the `clear()`, and the poison is genuinely readable at that address.
-
-⭐⭐ **THE SECOND CASE THE ORACLE ARBITRATES, AND IT ARBITRATES AGAINST THIS REFUSAL TOO.** The
-bootstrap compiles this program and prints **53**, because it retains on element read; The compiler refuses
-it by ⚖ **USER RULING, 2026-08-26** — a documented divergence, not a bug on either side. It printed
-53 here as well for the one release `for … in` took the cursor form; EC3 restored the counter form
-and the borrow.
+The loop element's borrow reaches module storage too. Without this rule the body prints
+`4557430888798830399` — `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s always-on poison: the element's record is
+freed by the `clear()`, and the poison is readable at that address. ⚖ **USER RULING**: the element is a
+borrow, so the program is refused.
 
 ⚠ **WITHOUT THIS RULE THE STORAGE CLASS WOULD DECIDE THE PROGRAM, WHICH IS WHY MODULE STORAGE IS IN
-THE SUBJECT SPACE AT ALL.** P1.8 Slice A's lock refuses a write NAMING the iterated array and does
+THE SUBJECT SPACE AT ALL.** The iteration lock refuses a write NAMING the iterated array and does
 not reach module storage, so `g.clear()` inside `for it in g` passes the LOCK — while the same two
 lines over a LOCAL array are `E3019 … cannot pass 'arr' to function that mutates parameter 'self'`
 from the lock alone. The E3070 borrow is what makes the two spellings agree; the lock's reach is a
@@ -1621,9 +1608,8 @@ because the two reach the storage by different doors: that one calls a mutating 
 (`b.items = <fresh>`, `Parser.parseFieldAssignment`), whose `emitFieldWrite` decrefs the record the
 field held and frees every element some other name still borrows.
 
-⚠ **This door had nothing to guard until PBR-1** — a field store through a PARAMETER was E2013, so no
-write here could reach a caller's record. Measured on the permission change with the seeds absent:
-this program compiled clean and faulted **0xC0000005**, where the oracle reports the conflict.
+⚠ **A field store through a PARAMETER reaches the caller's record**, so without this door the program
+faults (**0xC0000005**).
 ```maxon
 typealias StringArray = Array with String
 
@@ -1658,9 +1644,9 @@ The store door's twin of `method-writing-a-non-array-field-is-not-a-conflict`, a
 case because the two doors key their subject DIFFERENTLY. A self-field store's subject is the FIELD
 (`iterationSubjectNameAt` names it), so a write to one field cannot collide with a borrow out of
 another; a `b.n = 5` store's subject is the chain BASE, `b`, which every field of `b` collapses onto.
-Ungated, the write conflicted with every live borrow rooted at `b` — including, as here, one it
-cannot possibly free — and this legal program was refused *"cannot mutate 'b' via '='"* where the
-oracle compiles it and prints `hello`.
+Ungated, the write would conflict with every live borrow rooted at `b` — including, as here, one it
+cannot possibly free — and this legal program, which prints `hello`, would be refused
+*"cannot mutate 'b' via '='"*.
 
 ⚠ The gate is MANAGED-ness and deliberately not array-ness, which is the narrower gate the mask
 beside it uses: `b.inner = other` frees a nested struct and cascades to ITS arrays, and a borrow taken
@@ -1698,10 +1684,9 @@ hello 5
 <!-- test: error.a-borrow-taken-out-of-a-borrow-holds-the-root -->
 ### A borrow of a borrow holds the ROOT storage, not just the value it was read from
 `c.current()` reads an element out of the CURSOR, and the cursor is itself a standing borrow of
-`xs`. Keyed only on `c`, the element's borrow expires with `c`'s own last use while the element it
-names still points into `xs` — measured **0xC0000005** on exactly this program, which
-`dispatchArrayMethod`'s `createCursor` arm predicted in as many words and left to this rung. A
-borrow therefore composes: minting one on storage that is ITSELF borrowed mints one on its base
+`xs`. Keyed only on `c`, the element's borrow would expire with `c`'s own last use while the element
+it names still points into `xs`, and this program would fault (**0xC0000005**). A borrow therefore
+composes: minting one on storage that is ITSELF borrowed mints one on its base
 too, up to the root.
 ```maxon
 function main() returns ExitCode
@@ -1776,39 +1761,22 @@ error E3070: specs/fragments/borrow-liveness/error.a-try-merge-keeps-every-link-
 <!-- test: a-callee-clearing-a-managed-list-frees-a-node-handle -->
 ### A callee that clears a `__ManagedList` does NOT free the node a handle still names
 
-⚖ **THIS CASE PINNED E3070 UNTIL `W138`, AND THE ANSWER MOVED BECAUSE THE MEMORY MODEL DID — SO IT IS
-KEPT, RUNNING, RATHER THAN DELETED.** The name is left as it was written: it is the claim the case was
-built on, and a reader who greps for it must land on the record of it being withdrawn rather than on
-nothing at all.
+⚠ **THE CASE'S NAME STATES THE OPPOSITE OF ITS VERDICT; THE HEADING AND THE PINNED OUTPUT ARE THE
+VERDICT.** The program is memory-safe and runs.
 
-**What it pinned.** E3070 has **two halves** — the same-body site and the cross-function
-`storageWrittenParamMask` — and until W-BORROW they were recorded at two doors off two different flags.
-`dispatchManagedListMethod` was the one surface whose two answers DIFFERED
-(`managedListMethodFreesANode` was narrower than `managedListMethodMutatesReceiver`), so it got E3019's
-answer for E3070 as well and set no storage bit at all. ⚠ **MEASURED: this program
-compiled clean and ran to `0xC0000005`**. That measurement was
-correct, and under the one-owner node model so was a refusal: `clear` FREED every node, so a handle
-outliving the call named freed memory.
+⚖ **USER RULING — NODES ARE REFCOUNTED AND A HANDLE IS A SECOND OWNER.** `clear` drops the CHAIN's
+reference and nothing else; a node a handle still holds walks out of the walk alive, still carrying its
+element, and dies with its last owner. So a `clear` in a callee frees nothing a caller's handle names,
+and `dispatchManagedListMethod` calls `noteBorrowSubjectWrite` not at all.
 
-⚖ **WHAT CHANGED: USER RULING 2026-08-17 (`W138`, option (iii)) — NODES ARE REFCOUNTED AND A HANDLE IS A
-SECOND OWNER.** `clear` now drops the CHAIN's reference and nothing else; a node a handle still holds
-walks out of the walk alive, still carrying its element, and dies with its last owner. **The program is
-memory-safe**, so the E3070 was an over-rejection of a legal program and the predicate the cure read
-(`managedListMethodFreesANode`) is deleted — `dispatchManagedListMethod` now calls
-`noteBorrowSubjectWrite` not at all.
+⭐ **THIS IS THE SHAPE THE RULING IS ABOUT.** `managed-list-node-handle-lifetime.md:a-returned-handle-survives-
+a-clear` is its twin with the mint in another function.
 
-⭐ **AND THE PROGRAM IS EXACTLY THE BOUNDARY WORTH PINNING, WHICH IS WHY IT BECOMES A RUNNING CASE.** It
-is the shape the ruling was taken ON — `managed-list-node-handle-lifetime.md:a-returned-handle-survives-
-a-clear` is its twin with the mint in another function, and calls itself *"THE CASE THE SECOND RULING WAS
-TAKEN FOR"*. Under the SUPERSEDED design (a handle retained its LIST, nodes unrefcounted) this printed
-`0x3F3F3F3F3F3F3F3F` — `__mm_free`'s poison — at exit 0. It now prints the string.
-
-⚠ **W-BORROW's ARCHITECTURE IS UNTOUCHED BY THIS, AND IS WHAT MAKES THE WITHDRAWAL EXPRESSIBLE.** Both
-halves of E3070 still come off one flag at one door; this surface's flag is simply now empty where its
-E3019 flag is not, which is the same "two answers differ" point in its strongest form. Every OTHER case
-in this file is unaffected — an ELEMENT borrow is not a node handle, and the `List`/`Array`/nested-struct
-store-door refusals below all stay red. MEASURED at this merge: `--filter=borrow-liveness` moved this
-case and no other.
+⚠ **BOTH HALVES OF E3070 COME OFF ONE FLAG AT ONE DOOR** — the same-body site and the cross-function
+`storageWrittenParamMask`. This surface's E3070 flag is empty where its E3019 flag
+(`managedListMethodMutatesReceiver`) is not, which is the "two answers differ" point in its strongest
+form. An ELEMENT borrow is not a node handle, so the `List`/`Array`/nested-struct store-door refusals
+below are unaffected.
 ```maxon
 typealias StringChain = __ManagedList with String
 
@@ -1833,21 +1801,14 @@ end 'main'
 
 <!-- test: a-callee-inserting-into-a-managed-list-keeps-every-handle -->
 ### An INSERTION in a callee disturbs no handle the caller holds
-⚠ **THIS CASE'S ORIGINAL RATIONALE WAS WITHDRAWN BY THE `W138` RULING, AND THE CASE OUTLIVED IT.** It
-was written as the *width guard* for the case above — the argument being that a chain's nodes are
-individually allocated and never move, so an insertion rewrites two link words and dangles nothing,
-where *"only `remove` and `clear` free a node"*. **That last clause is no longer true of anything**:
-nodes are refcounted, a handle is a second owner, and neither `remove` nor `clear` frees a node a
-handle still names — which is why the case above is now a running program rather than a refusal.
+A chain's nodes are individually allocated and never move, so an insertion rewrites two link words
+and dangles nothing. This case pins that a **cross-function** insertion leaves every outstanding handle
+readable, which is the normal way a program builds a list it holds handles into
+(`specs/managed-list.md:core.insert-first-multiple` is its same-body twin) — a *composition* case: a
+callee mutating a chain the caller holds handles into.
 
-So it guards something narrower and still worth pinning: that a **cross-function** insertion leaves
-every outstanding handle readable, which is the normal way a program builds a list it holds handles
-into (`/specs/managed-list.md:core.insert-first-multiple` is its same-body twin). What made it a
-*width* guard is gone; what makes it a *composition* case — a callee mutating a chain the caller holds
-handles into — is not.
-
-⚠ The exit code is pinned, not just the output: a node read back out of freed memory is a wrong answer
-this file has measured before, and a stdout-only case never checks that the run succeeded.
+⚠ The exit code is pinned, not just the output: a node read back out of freed memory is a wrong answer,
+and a stdout-only case never checks that the run succeeded.
 ```maxon
 typealias StringChain = __ManagedList with String
 
@@ -1871,22 +1832,17 @@ end 'main'
 ```
 
 <!-- test: a-method-rebinding-a-list-field-frees-the-borrowed-element -->
-### A method that REBINDS a `List` field no longer frees the element a caller holds
-⚖ **RULED 2026-08-18 (W160). THIS CASE AND ITS TWIN BELOW PINNED `E3070`, AND `W153` MOVED WHAT THEY ARE
-ABOUT — NOT WHETHER THE GATE WORKS.** `emitCheckedSelfFieldStore`'s E3070 seed was gated on
-`typeIsArrayInstance`, under the sentence *"an array element is the only borrow E3070 tracks"*, and a
-`List`-typed struct field was waved through as "not an array": **measured: this program
-compiled clean and ran to `0xC0000005`.** The gate became `typeOwnsBorrowableStorage`, which asks what the
-store can FREE rather than what the field is named after, and that gate is UNCHANGED and still name-agnostic
-— `a-field-store-in-a-callee-freeing-its-parameters-array` and
-`a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it` are the cases that hold it.
+### A method that REBINDS a `List` field does not free the element a caller holds
+⚖ **USER RULING. THE CASE'S NAME DESCRIBES A BORROW THIS PROGRAM NEVER MINTS; THE PINNED OUTPUT IS THE
+VERDICT.** `emitCheckedSelfFieldStore`'s E3070 seed is gated on `typeOwnsBorrowableStorage`, which asks
+what the store can FREE rather than what the field is named after, so a `List`-typed struct field is a
+store that can free storage — `a-field-store-in-a-callee-freeing-its-parameters-array` and
+`a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it` are the cases that hold that gate.
 
-⭐ **WHAT MOVED IS THE BORROW, WHICH IS NOW NEVER MINTED.** Retiring the synthesized `List` made
-`first()` corpus-served, so it discharges a real `+1` (`coOwnBorrowedOpaque`) and `s` is an OWNED `String`.
-There is no borrow for the store to conflict with, the use-after-free is structurally absent rather than
-merely undetected, and the program prints the string the oracle prints. **Re-measured at `W153`: exit 0,
-no leak, correct output.** The oracle still refuses — that is the `arr.last()` divergence
-`BorrowCheck.maxon` documents, stated for this family in its header.
+⭐ **WHAT IS ABSENT HERE IS THE BORROW.** `List`'s `first()` is corpus-served, so it discharges a real
+`+1` (`coOwnBorrowedOpaque`) and `s` is an OWNED `String`. There is no borrow for the store to conflict
+with, the use-after-free is structurally absent rather than merely undetected, and the program exits 0
+with no leak and prints the string.
 ```maxon
 typealias StringList = List with String
 
@@ -1923,12 +1879,11 @@ end 'main'
 The `List` twin of `a-field-store-in-a-callee-freeing-its-parameters-array` above, and it needs its own
 case because it is a DIFFERENT door: that store is `items = <fresh>` inside a method
 (`emitCheckedSelfFieldStore`), this one is `b.items = <fresh>` through a parameter
-(`parseFieldAssignment`). Both carried the same `typeIsArrayInstance` gate and both were open; neither
-was reachable from the other's fix.
+(`parseFieldAssignment`). Both ask the same `typeOwnsBorrowableStorage` gate, and neither reaches the
+other.
 
-⚠ **MEASURED: compiled clean, ran to `0xC0000005`.** It takes the accepting answer above
-for the same reason and under the same W160 ruling — the `Array` twin directly above is the case that still
-holds this door's gate red.
+⚠ It takes the accepting answer above for the same reason and under the same ruling — the `Array` twin
+directly above is the case that holds this door's gate red.
 ```maxon
 typealias StringList = List with String
 
@@ -1962,15 +1917,13 @@ end 'main'
 
 <!-- test: a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it -->
 ### A store does not free an ELEMENT — it drops the RECORD, and the drop cascades
-The `Array`-keyed gate was wrong a second way, and this shape has nothing to do with `List`: the field
-here is a plain STRUCT. Dropping `inner` releases the `Array` that struct owns, freeing the element a
+An `Array`-keyed gate would be wrong a second way, and this shape has nothing to do with `List`: the
+field here is a plain STRUCT. Dropping `inner` releases the `Array` that struct owns, freeing the element a
 caller borrowed through `b.inner.items.get(0)` — and that borrow's subject is the chain base `b`,
 which is exactly what the call to `b.reset()` is checked against. `a-scalar-field-store-is-not-a-conflict`
-records this same cascade as the reason the SAME-BODY seed was already gated on managed-ness rather
-than array-ness; the cross-function seed beside it was not, and the two halves of one rule disagreeing
-is what this case pins shut.
-
-⚠ **MEASURED: compiled clean, ran to `0xC0000005`.**
+records this same cascade as the reason the SAME-BODY seed is gated on managed-ness rather than
+array-ness; this case pins the cross-function seed beside it to the same answer, so the two halves of
+one rule cannot disagree. Without it the program faults (**0xC0000005**).
 ```maxon
 typealias StringArray = Array with String
 
@@ -2010,15 +1963,15 @@ error E3070: specs/fragments/borrow-liveness/a-method-rebinding-a-nested-struct-
 <!-- test: a-string-field-store-is-not-a-conflict -->
 ### The over-rejection guard for the three above: storing a `String` field frees no container
 The store doors' gate is *"can dropping this record free storage a tracked borrow points into"*, and
-the plausible spelling of that — bare managed-ness — is a **measured false rejection**, which is why
+the plausible spelling of that — bare managed-ness — is a **false rejection**, which is why
 `typeOwnsBorrowableStorage` carves out the two managed types that are not aggregates. Every borrow
 E3070 tracks is a reference INTO A CONTAINER (an element, a chain node, a cursor); a `String` owns a
 byte buffer and hands out no such reference, so replacing one can invalidate nothing.
 
 ⚠ It is the same fact `method-writing-a-string-or-set-field-is-not-a-conflict` already pins for the
-METHOD door — one fact may not have two answers depending on which door asks. Written with a `String`
-store gated at bare managed-ness, `b.retag()` was refused *"cannot mutate 'b' via 'retag'"* on a
-program the runnable oracle compiles and runs (`44 another tag entirely`). Both store doors are
+METHOD door — one fact may not have two answers depending on which door asks. With a `String` store
+gated at bare managed-ness, `b.retag()` would be refused *"cannot mutate 'b' via 'retag'"* on a legal
+program. Both store doors are
 exercised: `retag` is the self-field spelling, `rename` the field-chain one through a parameter.
 ```maxon
 typealias StringArray = Array with String
@@ -2060,20 +2013,16 @@ end 'main'
 <!-- test: a-managed-field-handed-to-the-method-that-reassigns-it -->
 ### A borrowed argument is HELD across the call — the receiver and one of its fields, to one method
 E3070 refuses a write the parser can PROVE conflicts with a NAMED live borrow. A borrow that no name
-holds has no borrower to blame and no diagnostic to raise — and it was handed to the callee with no
-reference at all. `Parser.anchorBorrowedArguments` closes that: when a call is given both a value read
+holds has no borrower to blame and no diagnostic to raise, and it reaches the callee with no reference
+of its own. `Parser.anchorBorrowedArguments` closes that: when a call is given both a value read
 out of storage and the storage itself, the caller holds a reference for the length of the statement.
 
-⛔⛔ **THREE MEASURED SYMPTOMS OF ONE CORRUPTION, ALL FROM PROGRAMS THAT COMPILED CLEAN.** The compiler gave
-`panic: Range check failed` on the `byteLength()` spelling and exit **82 `slabOsAllocFailed`** on the
-interpolating one; on `f(g.s)` reaching the field through a module `var` it gave **0xC0000005**.
-
-⚠⚠ **AND THE BOOTSTRAP ORACLE IS WRONG HERE TOO, WHICH IS WHY THIS IS A RULE the compiler MAKES RATHER THAN A
-DIVERGENCE IT REPAIRS.** On this very program spelled with `"[{other}]"` in place of the length, the
-bootstrap prints `[[[[[[[[[[[]` where the field held `xxxxxxxxxx` — exit 0, silent, the freed buffer
-read back after the interpolation reused it. Its `byteLength()` spelling survives only because the
-length word at `@8` outlives the free, which is exactly how *"runs correctly on the oracle"* came to
-be written down about one spelling of a broken program.
+⛔⛔ **ONE CORRUPTION, THREE SYMPTOMS, ALL FROM PROGRAMS THAT COMPILE CLEAN.** Without the anchor the
+`byteLength()` spelling panics `Range check failed`, the interpolating one exits **82
+`slabOsAllocFailed`**, and `f(g.s)` reaching the field through a module `var` faults **0xC0000005**. A
+spelling that happens to run is no evidence either way: a `byteLength()` read can survive only because
+the length word at `@8` outlives the free, while `"[{other}]"` reads the freed buffer back after the
+interpolation reused it.
 
 ⚠ **THE FIELD IS FILLED AT RUN TIME ON PURPOSE.** A literal would be an immortal `.rdata` record that
 survives a free it never had — a false negative. `fill` builds the bytes in a loop, so the record the
@@ -2162,14 +2111,14 @@ end 'main'
 ```
 
 <!-- test: an-array-element-handed-to-a-callee-that-clears-the-array -->
-### The ARRAY-ELEMENT analogue — E3070's own subject, in the one shape it could not see
+### The ARRAY-ELEMENT analogue — E3070's own subject, in the one shape it cannot see
 `try a.get(0) otherwise ""` mints a pending borrow, and a pending borrow becomes a `BorrowRecord` only
 when a BINDING claims it (`Parser.attachPendingBorrows`). Written inline as an argument, no binding
 ever does — so the entry is dropped unclaimed at the statement's end and the write door's
-`functionHoldsABorrow` gate answers false. The element was handed to a callee that frees it with
-nothing anywhere recording that it had been borrowed.
+`functionHoldsABorrow` gate answers false. The element is handed to a callee that frees it with no
+borrow recorded anywhere, so the anchor is what holds it for the length of the statement.
 
-⚠ **THE BOUND SPELLING IS STILL REFUSED AND THAT IS NOT AN INCONSISTENCY** — see
+⚠ **THE BOUND SPELLING IS REFUSED AND THAT IS NOT AN INCONSISTENCY** — see
 `mutating-callee-argument` above, where `let s = try arr.get(0) …` then `grow(arr)` is E3070. There
 the borrow outlives the statement under a name, which is the fact E3070 is about; here it cannot
 outlive the call it is an argument to.
@@ -2209,8 +2158,7 @@ end 'main'
 `clobber` is handed nothing but the string. It reaches the cell by NAME, which no argument list can
 show — so the reachability test that settles the two cases above cannot settle this one, and the rule
 answers it the other way: a top-level `var` is reachable from everywhere, so a borrow out of one is
-anchored unconditionally. **MEASURED before the anchor: exit 82 `slabOsAllocFailed`.** The oracle
-prints `[[[[[[[[[[[]` on this program.
+anchored unconditionally. Without the anchor the program exits 82 `slabOsAllocFailed`.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -2255,7 +2203,7 @@ end 'main'
 No field and no container — the argument IS the global's value, and `emitCheckedGlobalStore` drops
 the record it displaces. `recordGlobalReadValue`'s writable arm is the second of
 `markRebindableSlotRead`'s three producers, so the read carries the mark exactly as a field read does.
-**MEASURED before the anchor: exit 82.**
+Without the anchor the program exits 82.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -2289,11 +2237,10 @@ end 'main'
 
 <!-- test: a-receiver-read-out-of-a-module-var-outlives-a-callee-that-replaces-it -->
 ### The RECEIVER is an argument too, and a call with an EMPTY argument list still has one
-`parseCallArgs` used to `return` the moment it saw `)`, so a method call taking no arguments never
-reached the anchor pass at all — and the receiver is prepended into the same column an argument
-occupies (`prependReceiverArg`). `g.measure()` reads its receiver out of a module `var` and the body
-replaces that very global, so `self` dangles for the rest of the method.
-**MEASURED before the anchor: 0xC0000005.**
+A method call taking no arguments still reaches the anchor pass, because the receiver is prepended
+into the same column an argument occupies (`prependReceiverArg`). `g.measure()` reads its receiver out of a module `var` and the body
+replaces that very global, so without the anchor `self` dangles for the rest of the method and the
+program faults (**0xC0000005**).
 
 ⚠ The receiver does NOT satisfy its own reachability — only its being MODULE storage does. Were it to,
 every method call through a self field (`self.items.push(v)`) would anchor its own receiver, which is a
@@ -2345,9 +2292,9 @@ stops narrowing. `measure` is handed `b.s` and nothing else: it cannot name the 
 module storage, and no other argument denotes it — so nothing it can do frees the record and the
 caller owes no reference. The committed fragment's `main` carries **no `__str_retain` at all**, against
 exactly one in the free-callee case above whose only difference is that the owner travels beside the
-field. Anchoring unconditionally instead was measured to put one at every `f(self.field)` in the tree
-— most of the calls a compiler writes — and to push `Parser.foldFile`'s 24-argument call over the x64
-register file (**E5001: needs 9 more registers than are available**), so the compiler stopped self-compiling.
+field. Anchoring unconditionally instead would put one at every `f(self.field)` in the tree — most of
+the calls a compiler writes — and push the compiler's widest calls over the x64 register file (E5001),
+so the compiler would not self-compile.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -2393,11 +2340,10 @@ phi reaches `Parser.borrowedArgumentIsAtRisk`, which must ask its reachability q
 — `a` here, then `b`, and only `b` is what the call is handed. Which entry comes first is push order,
 which is not a rule.
 
-⛔ **CAUGHT AT REVIEW, BEFORE IT SHIPPED, AND IT IS THE DEFECT `Parser.retargetPendingBorrow`'s OWN ⚠⚠
-BLOCK RECORDS ONE DOOR OVER** — that walk was written to stop at its first match on the reasoning *"a value
-id is DEFINED ONCE, so at most one entry can carry it"*, true of the id and never the claim that mattered.
-**SABOTAGE-VERIFIED**: stop the walk at its first link and this program exits **82 `slabOsAllocFailed``**,
-exactly as it does on the pre-change binary; run it whole and it prints the bytes.
+⛔ **A WALK THAT STOPS AT ITS FIRST MATCH IS WRONG HERE** — the same trap `Parser.retargetPendingBorrow`'s
+⚠⚠ block records one door over: *"a value id is DEFINED ONCE, so at most one entry can carry it"* is
+true of the id and never the claim that matters. Stop the walk at its first link and this program exits
+**82 `slabOsAllocFailed`**; run it whole and it prints the bytes.
 
 ⚠ A composed borrow reaches the same walk the same way — `composePendingBorrowOntoBases` files one entry
 per link of the chain, all keyed on the accessor's result — so this case guards both producers of the
@@ -2443,4 +2389,968 @@ end 'main'
 ```
 ```stdout
 [xxxxxxxxxx]
+```
+
+<!-- test: iterating-a-conditional-of-two-fields-refuses-a-call-that-rebinds-one -->
+A `for` over a conditional of two field chains is borrowed from storage the body can rebind through `weigh`, so the call is E3070.
+```maxon
+typealias Tally = int(0 to i64.max)
+
+type Decl
+	export let name as String
+	export let weight as Tally
+
+	static function create(name String, weight Tally) returns Decl
+		return Decl{name: name, weight: weight}
+	end 'create'
+end 'Decl'
+
+typealias DeclArray = Array with Decl
+
+type Holder
+	export var items as DeclArray = DeclArray.create()
+
+	static function create() returns Holder
+		return Holder{}
+	end 'create'
+end 'Holder'
+
+type Driver
+	var holder as Holder
+	var other as Holder
+	var flag as bool = true
+
+	static function create() returns Driver
+		return Driver{holder: Holder.create(), other: Holder.create()}
+	end 'create'
+
+	function fill()
+		self.holder.items.push(Decl.create("first {self.holder.items.count()}", weight: 1))
+		self.holder.items.push(Decl.create("second {self.holder.items.count()}", weight: 2))
+	end 'fill'
+
+
+	function churn()
+		var junk = DeclArray.create()
+
+		for i in 0 upto 50 'each'
+			junk.push(Decl.create("garbage-garbage-garbage {i}", weight: 99))
+		end 'each'
+
+		print("{junk.count()}\n")
+	end 'churn'
+
+	function weigh(w Tally) returns Tally
+		return self.deeper(w)
+	end 'weigh'
+
+	function deeper(w Tally) returns Tally
+		self.holder.items = DeclArray.create()
+		self.churn()
+		return w + 1
+	end 'deeper'
+
+	function run() returns Tally
+		var total = 0 as Tally
+
+		for candidate in self.holder.items if self.flag else self.other.items 'eachCandidate'
+			let w = self.weigh(candidate.weight)
+			print("{candidate.name} {w}\n")
+			total = total + w
+		end 'eachCandidate'
+
+		return total
+	end 'run'
+end 'Driver'
+
+function main() returns ExitCode
+	var d = Driver.create()
+	d.fill()
+	let t = d.run()
+	print("total {t}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:62:17: cannot mutate 'holder' via 'weigh' while it is borrowed by 'candidate' (borrowed at line 61)
+```
+
+<!-- test: iterating-a-field-of-a-call-result-survives-a-rebind-of-that-field -->
+The loop holds its own reference to the array it walks, so the body rebinding `self.holder.items` frees nothing the loop still reads.
+```maxon
+typealias Tally = int(0 to i64.max)
+
+type Decl
+	export let name as String
+	export let weight as Tally
+
+	static function create(name String, weight Tally) returns Decl
+		return Decl{name: name, weight: weight}
+	end 'create'
+end 'Decl'
+
+typealias DeclArray = Array with Decl
+
+type Holder
+	export var items as DeclArray = DeclArray.create()
+
+	static function create() returns Holder
+		return Holder{}
+	end 'create'
+end 'Holder'
+
+type Driver
+	var holder as Holder
+
+	static function create() returns Driver
+		return Driver{holder: Holder.create()}
+	end 'create'
+
+	function fill()
+		self.holder.items.push(Decl.create("first {self.holder.items.count()}", weight: 1))
+		self.holder.items.push(Decl.create("second {self.holder.items.count()}", weight: 2))
+	end 'fill'
+
+	function theHolder() returns Holder
+		return self.holder
+	end 'theHolder'
+
+	function churn()
+		var junk = DeclArray.create()
+
+		for i in 0 upto 50 'each'
+			junk.push(Decl.create("garbage-garbage-garbage {i}", weight: 99))
+		end 'each'
+
+		print("{junk.count()}\n")
+	end 'churn'
+
+	function weigh(w Tally) returns Tally
+		return self.deeper(w)
+	end 'weigh'
+
+	function deeper(w Tally) returns Tally
+		self.holder.items = DeclArray.create()
+		self.churn()
+		return w + 1
+	end 'deeper'
+
+	function run() returns Tally
+		var total = 0 as Tally
+
+		for candidate in self.theHolder().items 'eachCandidate'
+			let w = self.weigh(candidate.weight)
+			print("{candidate.name} {w}\n")
+			total = total + w
+		end 'eachCandidate'
+
+		return total
+	end 'run'
+end 'Driver'
+
+function main() returns ExitCode
+	var d = Driver.create()
+	d.fill()
+	let t = d.run()
+	print("total {t}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+50
+first 0 2
+50
+second 1 3
+total 5
+```
+
+
+
+
+
+
+
+<!-- test: a-borrowed-field-survives-its-root-handed-to-a-consuming-constructor -->
+### A consuming argument co-owns the root, so a field borrowed out of it stays alive
+`Holder.create(b)` stores `b` and takes a reference of its own; `b` keeps its own, so `inner` names a live record.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+type Holder
+	export var box as Outer
+
+	static function create(box Outer) returns Self
+		return Self{box: box}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let b = Outer.create(1)
+	let inner = b.inner
+	let h = Holder.create(b)
+	print("{inner.label.byteLength()} {h.box.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+52 52
+```
+
+<!-- test: a-borrowed-field-survives-the-co-owner-of-its-root-letting-go -->
+### The record a consuming constructor co-owns outlives that co-owner
+Replacing `h.box` releases the holder's reference; `b`'s own still keeps the record and the field `inner` borrows.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+type Holder
+	export var box as Outer
+
+	static function create(box Outer) returns Self
+		return Self{box: box}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	var h = Holder.create(b)
+	h.box = Outer.create(5)
+	print("{inner.label.byteLength()} {h.box.inner.label.byteLength()} {b.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+52 52 52
+```
+
+<!-- test: a-borrowed-field-survives-the-field-its-root-was-stored-into-being-replaced -->
+### A field store co-owns the root, so replacing that field frees nothing a borrow names
+`h.box = b` takes a reference of its own, so replacing `h.box` again releases only that one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+type Holder
+	export var box as Outer
+
+	static function create(box Outer) returns Self
+		return Self{box: box}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	var h = Holder.create(Outer.create(0))
+	h.box = b
+	h.box = Outer.create(5)
+	print("{inner.label.byteLength()} {b.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+52 52
+```
+
+<!-- test: a-borrowed-field-survives-its-root-pushed-into-a-cleared-container -->
+### A container store co-owns the root, so clearing the container frees nothing a borrow names
+`xs.push(b)` takes a reference of its own, so clearing `xs` releases only that one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+typealias Outers = Array with Outer
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	var xs = Outers.create()
+	xs.push(b)
+	xs.clear()
+	print("{inner.label.byteLength()} {xs.count()} {b.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+52 0 52
+```
+
+<!-- test: a-captured-borrowed-field-survives-the-co-owner-of-its-root-letting-go -->
+### A closure holding a borrowed field still reads a live record after the root's co-owner lets go
+The closure reads `inner` after the holder lets go of its reference to `b`'s record, which `b` still keeps.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+type Holder
+	export var box as Outer
+
+	static function create(box Outer) returns Self
+		return Self{box: box}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	let peek = function() gives inner.label.byteLength()
+	var h = Holder.create(b)
+	h.box = Outer.create(5)
+	print("{peek()} {h.box.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+52 52
+```
+
+<!-- test: error.a-borrowed-field-outlives-a-move-of-its-root-into-a-nested-block -->
+### The binding a root moves into is dropped at its block's end, under a borrow still read after it
+`let r = b` moves the record into `r`, which is dropped at the end of `nested` while `inner` is still read after it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+
+	if inner.label.byteLength() > 0 'nested'
+		let r = b
+		print("{r.inner.label.byteLength()}\n")
+	end 'nested'
+
+	print("{inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:27:2: cannot drop 'r' at the end of its block while it is borrowed by 'inner' (borrowed at line 22)
+```
+
+<!-- test: error.a-borrowed-field-outlives-a-match-give-of-its-root -->
+### A match arm that gives the root away hands it to a binding the borrow must follow
+The `first` arm moves `b` into the match's result, which `r = Outer.create(3)` then releases while `inner` is still read.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+enum Pick
+	first
+	second
+end 'Pick'
+
+function choose(n Integer) returns Pick
+	return Pick.first if n > 0 else Pick.second
+end 'choose'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	var r = match choose(1) 'pick'
+		first gives b
+		second gives Outer.create(2)
+	end 'pick'
+	r = Outer.create(3)
+	print("{inner.label.byteLength()} {r.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:33:3: cannot move 'b' into the value its branch gives while it is borrowed by 'inner' (borrowed at line 31)
+```
+
+<!-- test: error.a-borrowed-field-blocks-a-rebind-of-its-root -->
+### Rebinding the root frees the record a field borrow points into
+Rebinding `b` releases the record `inner` points into.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	b = Outer.create(2)
+	print("{inner.label.byteLength()} {b.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:23:2: cannot mutate 'b' via '=' while it is borrowed by 'inner' (borrowed at line 22)
+```
+
+<!-- test: error.a-borrowed-field-blocks-a-rebind-of-the-binding-its-root-moved-into -->
+### A reassignment that moves the root carries the borrow to the binding it moved into
+`c = b` moves the record into `c`, so rebinding `c` releases the record `inner` points into.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	var c = Outer.create(2)
+	c = b
+	c = Outer.create(3)
+	print("{inner.label.byteLength()} {c.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:25:2: cannot mutate 'c' via '=' while it is borrowed by 'inner' (borrowed at line 22)
+```
+
+<!-- test: error.a-borrowed-element-outlives-a-move-of-its-array-into-a-nested-block -->
+### The binding an array moves into is dropped at its block's end, under an element borrow read after it
+`let r = xs` moves the array into `r`, which is dropped at the end of `nested` while `s` is still read after it.
+```maxon
+typealias Words = Array with String
+
+function main() returns ExitCode
+	var xs = Words.create()
+	xs.push("a word padded out long enough to heap allocate {1}")
+	let s = try xs.get(0) otherwise ""
+
+	if s.byteLength() > 0 'nested'
+		let r = xs
+		print("{r.count()}\n")
+	end 'nested'
+
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:12:2: cannot drop 'r' at the end of its block while it is borrowed by 's' (borrowed at line 7)
+```
+
+<!-- test: error.a-borrowed-element-outlives-a-match-give-of-its-array -->
+### A match arm that gives an array away hands it to a binding its element borrow must follow
+The `first` arm moves `xs` into the match's result, which `r.clear()` then empties while `s` is still read.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Words = Array with String
+
+enum Pick
+	first
+	second
+end 'Pick'
+
+function choose(n Integer) returns Pick
+	return Pick.first if n > 0 else Pick.second
+end 'choose'
+
+function main() returns ExitCode
+	var xs = Words.create()
+	xs.push("a word padded out long enough to heap allocate {1}")
+	let s = try xs.get(0) otherwise ""
+	var r = match choose(1) 'pick'
+		first gives xs
+		second gives Words.create()
+	end 'pick'
+	r.clear()
+	print("{s.byteLength()} {r.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:19:3: cannot move 'xs' into the value its branch gives while it is borrowed by 's' (borrowed at line 17)
+```
+
+<!-- test: error.a-borrowed-element-blocks-a-clear-of-the-binding-its-array-moved-into -->
+### A reassignment that moves an array carries its element borrow to the binding it moved into
+`c = xs` moves the array into `c`, so clearing `c` frees the element `s` points at.
+```maxon
+typealias Words = Array with String
+
+function main() returns ExitCode
+	var xs = Words.create()
+	xs.push("a word padded out long enough to heap allocate {1}")
+	let s = try xs.get(0) otherwise ""
+	var c = Words.create()
+	c = xs
+	c.clear()
+	print("{s.byteLength()} {c.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:10:4: cannot mutate 'c' via 'clear' while it is borrowed by 's' (borrowed at line 7)
+```
+
+<!-- test: a-closure-capturing-a-borrowed-field-is-copied-into-an-outer-binding -->
+### A closure capturing a borrowed field holds a reference of its own
+`g` outlives `nested` and the rebind of `b`; the closure's environment keeps `inner` alive.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	var g = function() gives Inner.create(0).label.byteLength()
+
+	if inner.label.byteLength() > 0 'nested'
+		let peek = function() gives inner.label.byteLength()
+		g = peek
+	end 'nested'
+
+	b = Outer.create(22)
+	print("{g()} {b.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```stdout
+52 53
+```
+
+<!-- test: a-closure-capturing-a-borrowed-field-is-returned -->
+### A closure capturing a borrowed field of a local can be returned
+`b` is released when `reader` returns; the closure's environment still holds `inner`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+typealias Reader = function() returns Integer
+
+function reader() returns Reader
+	let b = Outer.create(1)
+	let inner = b.inner
+	return function() gives inner.label.byteLength() as Integer
+end 'reader'
+
+function main() returns ExitCode
+	let r = reader()
+	print("{r()}\n")
+	return 0
+end 'main'
+```
+```stdout
+52
+```
+
+<!-- test: a-closure-capturing-a-borrowed-field-is-stored-in-a-field -->
+### A closure capturing a borrowed field of a local can be stored in a record
+`b` is released when `fill` returns; the stored closure still holds `inner`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+typealias Reader = function() returns Integer
+
+type Slot
+	export var read as Reader
+
+	static function create(read Reader) returns Self
+		return Self{read: read}
+	end 'create'
+end 'Slot'
+
+function fill(slot Slot)
+	let b = Outer.create(1)
+	let inner = b.inner
+	slot.read = function() gives inner.label.byteLength() as Integer
+end 'fill'
+
+function zero() returns Integer
+	return 0
+end 'zero'
+
+function main() returns ExitCode
+	var s = Slot.create(zero)
+	fill(s)
+	print("{s.read()}\n")
+	return 0
+end 'main'
+```
+```stdout
+52
+```
+
+<!-- test: a-closure-capturing-a-borrowed-field-is-handed-to-a-function-that-keeps-it -->
+### A closure capturing a borrowed field of a local can be handed to a callee that stores it
+`Slot.create` keeps the closure past `build`, which releases `b`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+typealias Reader = function() returns Integer
+
+type Slot
+	export var read as Reader
+
+	static function create(read Reader) returns Self
+		return Self{read: read}
+	end 'create'
+end 'Slot'
+
+function build() returns Slot
+	let b = Outer.create(1)
+	let inner = b.inner
+	return Slot.create(function() gives inner.label.byteLength() as Integer)
+end 'build'
+
+function main() returns ExitCode
+	let s = build()
+	print("{s.read()}\n")
+	return 0
+end 'main'
+```
+```stdout
+52
+```
+
+<!-- test: a-closure-capturing-a-borrowed-field-is-run-by-a-coroutine-after-its-block -->
+<!-- unsupported-targets: wasm32-wasi -->
+### A coroutine runs a closure capturing a borrowed field after the closure's block
+The coroutine owns the closure, whose environment holds `inner` past the rebind of `b`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+typealias Reader = function() returns Integer
+
+function later(read Reader) returns Integer
+	Scheduler.yield()
+	return read()
+end 'later'
+
+function nothing() returns Integer
+	Scheduler.yield()
+	return 0
+end 'nothing'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	var p = async nothing()
+
+	if inner.label.byteLength() > 0 'nested'
+		let peek = function() gives inner.label.byteLength() as Integer
+		p = async later(peek)
+	end 'nested'
+
+	b = Outer.create(22)
+	print("{await p} {b.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```stdout
+52 53
+```
+
+<!-- test: a-borrowed-field-follows-its-root-into-a-binding-of-the-same-block -->
+### A move of the root into a binding of the same block carries the borrow with it
+`r` owns the record from `let r = b` until the end of `main`, which outlives every read of `inner`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+	let r = b
+	print("{inner.label.byteLength()} {r.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+52 52
+```
+
+<!-- test: a-closure-argument-holds-a-borrowed-field-only-to-the-end-of-its-block -->
+### A closure handed to a call holds the borrow it captures only until the end of its block
+`apply` only calls the closure, so the root may be rebound once `nested` has ended.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var label as String
+
+	static function create(n Integer) returns Self
+		return Self{label: "an inner label padded long enough to heap allocate {n}"}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Integer) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+typealias Reader = function() returns Integer
+
+function apply(read Reader) returns Integer
+	return read()
+end 'apply'
+
+function main() returns ExitCode
+	var b = Outer.create(1)
+	let inner = b.inner
+
+	if inner.label.byteLength() > 0 'nested'
+		print("{apply(function() gives inner.label.byteLength() as Integer)}\n")
+	end 'nested'
+
+	b = Outer.create(22)
+	print("{b.inner.label.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+52
+53
 ```

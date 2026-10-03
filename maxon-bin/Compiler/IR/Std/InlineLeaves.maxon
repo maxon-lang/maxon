@@ -169,10 +169,6 @@ enum InlineOpRole
 	// retain/release/scope-drop is a `call`) — and the called-once rule copies it.
 	calling
 
-	// A body op whose diagnostic names a FRAME: a panic op, or a divide that can fault. Copied like any
-	// other op where the target emits inline frame records; refused by the leaf rule where it does not.
-	framed
-
 	// An op the dialect itself marks unsupported inside an inline body. See `inlineOpRole`.
 	refusing
 end 'InlineOpRole'
@@ -254,11 +250,11 @@ end 'StdOpMetaMemo'
 // and `div`/`mod` carry `false` while `idiv` faults on `i64.min / -1` — the fault handler symbolizes the
 // faulting address through the same inline ranges a panic's return address goes through
 // (`safety/integer-overflow-fault-from-int-min-over-minus-one` and `inline-called-once`'s hardware fault
-// case pin the two shapes). Those four are `framed`, the role a target without inline frame records
-// refuses. Everything else answers off the flag, which is what gives that field its first reader and
-// means an op added with it set is refused here without this file learning its name. ⛔ The tail has no
-// `calling` answer to give, so a CALL reaching it would be filed a body op — `StdOpMetaMemo.bodyRole` is
-// where that disagreement stops being silent.
+// case pin the two shapes). Those four are `body` ops. Everything else answers off the flag, which
+// is what gives that field its first reader and means an op added with it set is refused here
+// without this file learning its name. ⛔ The tail has no `calling` answer to give, so a CALL
+// reaching it would be filed a body op — `StdOpMetaMemo.bodyRole` is where that disagreement stops
+// being silent.
 //
 // ⚠ Every other variant is NAMED, so a variant added later fails to compile here until it is
 // consciously placed.
@@ -322,6 +318,8 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -355,6 +353,7 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or
@@ -375,7 +374,7 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 		div or
 			mod or
 			osPanic or
-			osPanicValue then return InlineOpRole.framed
+			osPanicValue then return InlineOpRole.body
 		param then return InlineOpRole.parameter
 		call or
 			tryCall or
@@ -397,7 +396,7 @@ enum LeafVerdict
 	tooManyOps
 
 	// Everything else, and the list is the whole eligibility rule read backwards: a call of any kind, an
-	// `isUnsupportedInInlineBody` op, a `framed` op on a target without inline frame records, a
+	// `isUnsupportedInInlineBody` op, a
 	// by-reference parameter, a body that carries the green-thread stack guard, an entry block carrying
 	// phis, a block still in `Terminator.unset` (a body the lowering never emitted), or no body at all.
 	notALeaf
@@ -525,7 +524,7 @@ type LeafPlan
 	end 'blockCountOf'
 end 'LeafPlan'
 
-function buildLeafPlan(module StdModule, framesAreRecorded bool, namedByGolden BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
+function buildLeafPlan(module StdModule, namedByGolden BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
 	var plan = LeafPlan.create(module.funcCount())
 	var reference = StdFunctionReference.create()
 
@@ -535,7 +534,7 @@ function buildLeafPlan(module StdModule, framesAreRecorded bool, namedByGolden B
 		// Splicing every site of a golden-named leaf would drop the body the golden asks the printer for; a
 		// callee this round does not admit is not a leaf here either (`roundAdmitsCallee`).
 		let declined = isGoldenNamed(namedByGolden, funcIndex: funcIndex) or not roundAdmitsCallee(round, callee: func, runtimeTier: runtimeTier)
-		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if declined else scanLeafBody(module, func: func, framesAreRecorded: framesAreRecorded, meta: meta, byName: byName, reference: reference)
+		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if declined else scanLeafBody(module, func: func, meta: meta, byName: byName, reference: reference)
 		plan.record(funcIndex, scan: scan, module: module, func: func)
 	end 'eachFunc'
 
@@ -543,7 +542,7 @@ function buildLeafPlan(module StdModule, framesAreRecorded bool, namedByGolden B
 end 'buildLeafPlan'
 
 // One candidate body's whole verdict, from ONE walk: the shape both rules refuse, then the leaf rule's
-// own — a call of any kind, a `framed` op where the target records no inline frames, and the op budget.
+// own — a call of any kind, and the op budget.
 //
 // ⚠ **IT WALKS `blockRefs` → `opRefs` + terminator DIRECTLY rather than `IrModule.liveOpIndices`, and
 // that is the same descent** — but the array version MATERIALIZES the index list, and this runs over
@@ -556,7 +555,7 @@ end 'buildLeafPlan'
 // helpers below are shared with `scanSpliceableShape`, which asks them of a called-once candidate and
 // nothing else. A leaf scan RETURNS at the first call — the commonest op there is — where the shape scan
 // has to read the whole body for its refusal reason.
-function scanLeafBody(module StdModule, func IrFunction, framesAreRecorded bool, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference) returns LeafBodyScan
+function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byName FunctionNameIndex, reference StdFunctionReference) returns LeafBodyScan
 	// The row's cost rules are waived here and nowhere else in this scan — see `leafOpRefusesTheBody` and
 	// the budget below.
 	let alwaysSpliced = func.mustBeSplicedAtEverySite
@@ -585,7 +584,7 @@ function scanLeafBody(module StdModule, func IrFunction, framesAreRecorded bool,
 			// ⭐ **RETURNED FROM, NOT FLAGGED — a call is the commonest op there is, and this scan runs over
 			// the whole module.** Bailing at the first refusing op is what keeps a 5,000-op function from
 			// being walked to the end to learn something its second op already said.
-			if leafOpRefusesTheBody(role, op: op, module: module, framesAreRecorded: framesAreRecorded, alwaysSpliced: alwaysSpliced, byName: byName, reference: reference) 'theRuleRefusesThisOp'
+			if leafOpRefusesTheBody(role, op: op, module: module, alwaysSpliced: alwaysSpliced, byName: byName, reference: reference) 'theRuleRefusesThisOp'
 				return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
 			end 'theRuleRefusesThisOp'
 
@@ -618,25 +617,20 @@ function countedBodyOps(role InlineOpRole) returns ElementIndex
 	return 0 if role == InlineOpRole.parameter else 1
 end 'countedBodyOps'
 
-// ⭐⭐ **WHETHER ONE OP PUTS ITS BODY OUTSIDE THE LEAF RULE, AND THE TWO ANSWERS A
+// ⭐⭐ **WHETHER ONE OP PUTS ITS BODY OUTSIDE THE LEAF RULE, AND THE ANSWER A
 // `__Raw.splicedAtEverySite()` BODY GETS DIFFERENTLY.**
 //
-//   • A `framed` op — a panic, or a divide that can fault — is copyable only where the target records the
-//     frame it names, because a trace raised inside the copy would otherwise print the caller's frame and
-//     not the callee's. That is TRACE FIDELITY, not correctness, and it is exactly what a BUILDER emitting
-//     the same code inline gives up, so the row overrides it.
 //   • A `calling` op refuses — which is what makes ownership free here, a retain, a release and a scope
 //     drop all being calls — UNLESS this body and the callee both declare the row. That edge is spliced
 //     away before this body is copied anywhere (`spliceAlwaysSplicedCallees`), and the cascade terminates
 //     because a cycle among those edges is refused rather than capped (`alwaysSplicedSpliceOrder`).
 //
 // ⛔ `refusing` is the dialect's own `isUnsupportedInInlineBody`, which no row overrides.
-function leafOpRefusesTheBody(role InlineOpRole, op StdOp, module StdModule, framesAreRecorded bool, alwaysSpliced bool, byName FunctionNameIndex, reference StdFunctionReference) returns bool
+function leafOpRefusesTheBody(role InlineOpRole, op StdOp, module StdModule, alwaysSpliced bool, byName FunctionNameIndex, reference StdFunctionReference) returns bool
 	return match role 'role'
 		// A parameter is the call's argument, not an instruction — it is neither counted nor copied.
 		parameter or
 			body gives false
-		framed gives not framesAreRecorded and not alwaysSpliced
 		calling gives not (alwaysSpliced and callIsIntoAnAlwaysSplicedBody(op, module: module, byName: byName, reference: reference))
 		refusing gives true
 	end 'role'
@@ -762,12 +756,11 @@ enum TerminatorRole
 	refusing
 end 'TerminatorRole'
 
-// The role of the op in a terminator slot. A terminator is never a parameter and never framed; either
-// would be a malformed block, and saying so here is cheaper than a rule elsewhere that has to remember it.
+// The role of the op in a terminator slot. A terminator is never a parameter; one would be a
+// malformed block, and saying so here is cheaper than a rule elsewhere that has to remember it.
 function terminatorRole(term StdOp, func IrFunction, meta StdOpMetaMemo) returns TerminatorRole
 	match inlineOpRole(term, meta: meta) 'termRole'
 		parameter then panic("terminatorRole: '{String.from(func.name)}' has a `param` op in a TERMINATOR slot")
-		framed then panic("terminatorRole: '{String.from(func.name)}' has a panic or a divide in a TERMINATOR slot")
 		body then return TerminatorRole.body
 		calling then return TerminatorRole.calling
 		refusing then return TerminatorRole.refusing
@@ -1296,7 +1289,7 @@ function isClosedToTheCallerWalk(closed BoolArray, funcIndex ElementIndex) retur
 end 'isClosedToTheCallerWalk'
 
 function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByGolden BoolArray, round SpliceRound)
-	let plan = buildLeafPlan(module, framesAreRecorded: targetEmitsInlineFrameRecords(project.target), namedByGolden: namedByGolden, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
+	let plan = buildLeafPlan(module, namedByGolden: namedByGolden, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
 
 	if plan.eligibleCount == 0 'nothingToInline'
 		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
@@ -1501,8 +1494,8 @@ end 'whyTheSpliceWasRefused'
 
 // The first op or block of the body the leaf rule will not copy, named.
 //
-// ⚠ `framesAreRecorded` and `alwaysSpliced` are both `true` here because both are what the row makes
-// them: an answer derived with either false would name a refusal that is not the one standing.
+// ⚠ `alwaysSpliced` is `true` here because it is what the row makes it: an answer derived with it
+// false would name a refusal that is not the one standing.
 function bodyOpRefusalText(module StdModule, calleeIndex ElementIndex, byName FunctionNameIndex) returns String
 	var meta = StdOpMetaMemo.create()
 	var reference = StdFunctionReference.create()
@@ -1518,7 +1511,7 @@ function bodyOpRefusalText(module StdModule, calleeIndex ElementIndex, byName Fu
 		for opIdx in block.opRefs 'eachOp'
 			let op = module.getOp(opIdx)
 
-			if leafOpRefusesTheBody(inlineOpRole(op, meta: meta), op: op, module: module, framesAreRecorded: true, alwaysSpliced: true, byName: byName, reference: reference) 'thisOpRefuses'
+			if leafOpRefusesTheBody(inlineOpRole(op, meta: meta), op: op, module: module, alwaysSpliced: true, byName: byName, reference: reference) 'thisOpRefuses'
 				return refusedOpText(op, module: module, byName: byName, reference: reference)
 			end 'thisOpRefuses'
 		end 'eachOp'
@@ -1590,10 +1583,6 @@ enum CalledOnceRefusal
 	unsupportedOp
 	pressureBudgetExceeded
 
-	// The target emits no inline frame records, so a trace raised inside any spliced body would lose the
-	// callee's frame with nothing to restore it — every called-once callee stays a call there.
-	noInlineFrameRecords
-
 	// A ```RequiredRuntime golden asks the printer for this body after the pipeline; spliced away, it
 	// would be dropped and the golden would pin nothing.
 	namedByGoldenRequest
@@ -1619,7 +1608,6 @@ function calledOnceRefusalText(reason CalledOnceRefusal) returns String
 		entryCarriesPhis gives "its entry block carries phis"
 		unsupportedOp gives "it holds an op the splice cannot copy"
 		pressureBudgetExceeded gives "the caller's values live across the site plus the body's loop live-ins are over the register budget"
-		noInlineFrameRecords gives "the target emits no inline frame records to keep its frame in a trace"
 		namedByGoldenRequest gives "a golden request names its body"
 		siteOutsideThisRound gives "its one site lies outside the caller range this round considers"
 		calleeOutsideThisRound gives "it is not a runtime tier body, which is the only callee the band's round joins a builder caller to"
@@ -2285,7 +2273,6 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 	processed.resize(funcCount)
 	var ready = FuncIndexArray.create()
 	var candidateCount = 0 as ElementIndex
-	let framesAreRecorded = targetEmitsInlineFrameRecords(project.target)
 
 	for funcIndex in 0 upto funcCount 'eachFunc'
 		if not census.isCalledOnce(funcIndex) 'notCalledOnce'
@@ -2303,11 +2290,6 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 			refusals.add(CalledOnceRefusal.calleeOutsideThisRound.ordinal, count: 1)
 			continue
 		end 'notThePairThisRoundJoins'
-
-		if not framesAreRecorded 'noRecordsOnThisTarget'
-			refusals.add(CalledOnceRefusal.noInlineFrameRecords.ordinal, count: 1)
-			continue
-		end 'noRecordsOnThisTarget'
 
 		if isGoldenNamed(namedByGolden, funcIndex: funcIndex) 'aGoldenWantsTheBody'
 			refusals.add(CalledOnceRefusal.namedByGoldenRequest.ordinal, count: 1)
@@ -3099,6 +3081,8 @@ type SiteSplicer
 					osCommandLine or
 					osStdHandle or
 					osExecutablePath or
+					osProcessNamespace or
+					osRandomFill or
 					osWriteStderr or
 					stackRecordAddr or
 					osOpenNamedSegment or
@@ -3132,6 +3116,7 @@ type SiteSplicer
 					osSetEvent or
 					osEnterBackgroundPriority or
 					osFileOpenWriteExecutable or
+					osFileOpenCreateNew or
 					osEnvBlock or
 					osEnvBlockFree or
 					loadAcquire or
@@ -3310,6 +3295,8 @@ type SiteSplicer
 				osCommandLine or
 				osStdHandle or
 				osExecutablePath or
+				osProcessNamespace or
+				osRandomFill or
 				osWriteStderr or
 				stackRecordAddr or
 				osOpenNamedSegment or
@@ -3343,6 +3330,7 @@ type SiteSplicer
 				osSetEvent or
 				osEnterBackgroundPriority or
 				osFileOpenWriteExecutable or
+				osFileOpenCreateNew or
 				osEnvBlock or
 				osEnvBlockFree or
 				loadAcquire or
@@ -3487,7 +3475,7 @@ type SiteSplicer
 	// forwarding a `RegNum` parameter to two more calls, and `assertOneCallClobber`).
 	//
 	// ⚠ **A REASSIGNED PARAMETER IS EXCLUDED, AND IT IS NOT A CORNER CASE.** `reassignedParamMask` names
-	// the parameters that arrive as a CELL ADDRESS (PBR-2): the range describes what the cell HOLDS, the
+	// the parameters that arrive as a CELL ADDRESS: the range describes what the cell HOLDS, the
 	// body may store a new value into it, and the entry guard reads THROUGH the cell rather than checking
 	// the pointer (`GuardedOperand.pointeeOf`). The id would still match here, and matching it would spend
 	// a proof about the cell's arriving contents on whatever the body last wrote into it.
@@ -3562,10 +3550,6 @@ type SiteSplicer
 			try blocks.blockSubst.set(calleeBlock.id, value: fresh.id) otherwise panic("SiteSplicer.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
 			let freshRef = registeredBlockRef(self.module, func: self.func, block: fresh)
 			blocks.copiedRefs.push(freshRef)
-
-			// Coverage follows the code: a copied block's source footprint is the CALLEE block's, which is
-			// where its ops were written. `addBlock` pushed an empty entry, parallel to `blocks`.
-			self.carryBlockSourceInfo(calleeBlockRef, to: freshRef)
 		end 'eachBlock'
 
 		self.mapDeclinedCascadeHeads(calleeFunc, blocks: blocks, guards: guards)
@@ -3821,6 +3805,8 @@ type SiteSplicer
 				osCommandLine or
 				osStdHandle or
 				osExecutablePath or
+				osProcessNamespace or
+				osRandomFill or
 				osWriteStderr or
 				stackRecordAddr or
 				osOpenNamedSegment or
@@ -3854,6 +3840,7 @@ type SiteSplicer
 				osSetEvent or
 				osEnterBackgroundPriority or
 				osFileOpenWriteExecutable or
+				osFileOpenCreateNew or
 				osEnvBlock or
 				osEnvBlockFree or
 				loadAcquire or
@@ -3949,13 +3936,6 @@ type SiteSplicer
 	function opAt(blockRef ElementIndex, pos ElementIndex) returns StdOp
 		return self.module.getOp(self.blockOpRefAt(blockRef, pos: pos))
 	end 'opAt'
-
-	// A copied block's source footprint. Read and written in ONE call for `IrModule.getOp`'s reason: the read
-	// borrows `module` and the write mutates it.
-	function carryBlockSourceInfo(sourceRef ElementIndex, to ElementIndex)
-		let sourceInfo = try self.module.blockSourceInfo.get(sourceRef) otherwise panic("SiteSplicer.carryBlockSourceInfo: blockSourceInfo has no entry for blockRef {sourceRef}")
-		try self.module.blockSourceInfo.set(to, value: sourceInfo) otherwise panic("SiteSplicer.carryBlockSourceInfo: blockSourceInfo.set OOB at {to}")
-	end 'carryBlockSourceInfo'
 end 'SiteSplicer'
 
 // `site` into `plan` at its place in (block position, op position) order — a handful of sites per caller
@@ -4052,6 +4032,8 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -4085,6 +4067,7 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or

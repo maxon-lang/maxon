@@ -142,6 +142,9 @@ FAIL  users/lookup.maxtest > a missing user throws
   at lookup.maxtest:2
 ```
 
+The error is named as the test's file would write it, so a library error whose name the project also
+declares is reported as `stdlib.ParseError.invalidFormat`.
+
 - A bare `try` means the same thing, and an `otherwise` clause you write always takes precedence. An
   explicit `try` covers only the operation that produces its value; a throwing argument or operand inside it
   is handled by the test. A [`try` block](/docs/language/error-handling/#try-blocks) inside the test handles its own body's errors first.

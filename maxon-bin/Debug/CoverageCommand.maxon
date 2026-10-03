@@ -49,24 +49,21 @@ typealias CoverageSeconds = float(0.0 to f64.max)
 // What one `coverage` command line asked for. A record rather than a local per flag, for
 // `MaxonArgs.parse`'s reason: an accumulating chain carries one value across its joins instead of one
 // register per option.
-//
-// The three `*Given` fields are not derivable from their values. `--data=` and `--timeout=` are refused
-// for being on the WRONG VERB whatever they spell, so an empty `--data=` must still be seen as present;
-// and an empty argument is a perfectly bad executable name that is nonetheless one the caller supplied.
 type CoverageRequest
 	export let verb as String
 	export var json as bool
-	export var exePath as String
-	export var exeGiven as bool
-	export var dataPath as String
-	export var dataGiven as bool
-	export var timeoutSeconds as CoverageSeconds
-	export var timeoutGiven as bool
+	export var executable as StatedText
+	export var data as StatedText
+	export var deadline as CoverageDeadline
 	export var targetArgs as StringArray
 
 	static function create(verb String) returns CoverageRequest
-		return Self{verb: verb, json: false, exePath: "", exeGiven: false, dataPath: "", dataGiven: false, timeoutSeconds: DefaultRunTimeoutSeconds, timeoutGiven: false, targetArgs: StringArray.create()}
+		return Self{verb: verb, json: false, executable: StatedText.unstated, data: StatedText.unstated, deadline: CoverageDeadline.defaulted, targetArgs: StringArray.create()}
 	end 'create'
+
+	function exePath() returns String
+		return try self.executable.text() otherwise panic("CoverageRequest.exePath: `runCoverage` refuses a command line that names no executable before anything reads it")
+	end 'exePath'
 end 'CoverageRequest'
 
 /// `maxon coverage <run|report> <exe> [--json] [--data=<file>] [--timeout=<seconds>] [args...]`.
@@ -90,25 +87,29 @@ export function runCoverage(args MaxonArgs) returns ExitCode
 		if arg == JsonFlag 'jsonFlag'
 			request.json = true
 		end 'jsonFlag' else if arg.startsWith(DataFlag) 'dataFlag'
-			request.dataPath = try CommandLine.optionValue(arg) otherwise ""
-			request.dataGiven = true
+			let dataPath = optionValueOf(arg)
+
+			if dataPath.isEmpty() 'namesNoFile'
+				return refuseCoverage("'{DataFlag}' names no file")
+			end 'namesNoFile'
+
+			request.data = StatedText.stated(dataPath)
 		end 'dataFlag' else if arg.startsWith(TimeoutFlag) 'timeoutFlag'
-			let raw = try CommandLine.optionValue(arg) otherwise ""
+			let raw = optionValueOf(arg)
 
 			if not recordDeadline(request, raw: raw) 'notADeadline'
 				return refuseCoverage("'{TimeoutFlag}' {PositiveSecondsRequirement}, got '{raw}'")
 			end 'notADeadline'
-		end 'timeoutFlag' else if not request.exeGiven and not arg.startsWith(OptionPrefix) 'theExecutable'
-			request.exePath = arg
-			request.exeGiven = true
-		end 'theExecutable' else if request.exeGiven 'aTargetArgument'
+		end 'timeoutFlag' else if not request.executable.isStated() and not arg.startsWith(OptionPrefix) 'theExecutable'
+			request.executable = StatedText.stated(arg)
+		end 'theExecutable' else if request.executable.isStated() 'aTargetArgument'
 			request.targetArgs.push(arg)
 		end 'aTargetArgument' else 'unknownOption'
 			return refuseCoverage("unknown option '{arg}'")
 		end 'unknownOption'
 	end 'eachArgument'
 
-	if not request.exeGiven 'noExecutable'
+	if not request.executable.isStated() 'noExecutable'
 		return refuseCoverage("expected an executable")
 	end 'noExecutable'
 
@@ -121,18 +122,18 @@ export function runCoverage(args MaxonArgs) returns ExitCode
 	// A program writes to the path baked into it at BUILD time, so telling `run` to read somewhere else
 	// would delete that file, run, and then report on a file nothing wrote. Naming the combination is the
 	// honest answer; silently ignoring the flag is not.
-	if request.verb == RunVerb and request.dataGiven 'dataOnTheWrongVerb'
+	if request.verb == RunVerb and request.data.isStated() 'dataOnTheWrongVerb'
 		return refuseCoverage("'{DataFlag}' names where to READ counters, so it belongs to '{ReportVerb}' — '{RunVerb}' reports on the file the program itself just wrote")
 	end 'dataOnTheWrongVerb'
 
 	// Refused rather than ignored, for the reason the flag above is: a deadline handed to a verb that
 	// launches nothing is a setting the caller believes is in force and that nothing reads.
-	if request.verb == ReportVerb and request.timeoutGiven 'deadlineWithoutALaunch'
+	if request.verb == ReportVerb and request.deadline.isStated() 'deadlineWithoutALaunch'
 		return refuseCoverage("'{TimeoutFlag}' bounds a RUN, so it belongs to '{RunVerb}' — '{ReportVerb}' launches nothing to wait for")
 	end 'deadlineWithoutALaunch'
 
 	if request.verb == ReportVerb 'readWhatIsAlreadyThere'
-		return printCoverageReport(request.exePath, dataPath: dataPathFor(request), targetStatus: CovTargetStatus.notObserved, json: request.json)
+		return printCoverageReport(request.exePath(), dataPath: dataPathFor(request), targetStatus: CovTargetStatus.notObserved, json: request.json)
 	end 'readWhatIsAlreadyThere'
 
 	return launchAndReport(request)
@@ -147,7 +148,7 @@ function launchAndReport(request CoverageRequest) returns ExitCode
 
 	return match launchTarget(request, dataPath: dataPath) 'launched'
 		refused(reason) gives refuseCoverageReport(reason)
-		exited(code) gives printCoverageReport(request.exePath, dataPath: dataPath, targetStatus: CovTargetStatus.observed(code), json: request.json)
+		exited(code) gives printCoverageReport(request.exePath(), dataPath: dataPath, targetStatus: CovTargetStatus.observed(code), json: request.json)
 	end 'launched'
 end 'launchAndReport'
 
@@ -159,10 +160,10 @@ union CoverageLaunch
 end 'CoverageLaunch'
 
 function launchTarget(request CoverageRequest, dataPath String) returns CoverageLaunch
-	let target = try FilePath.from(request.exePath) otherwise return CoverageLaunch.refused("'{request.exePath}' is not a spellable path")
+	let target = try FilePath.from(request.exePath()) otherwise return CoverageLaunch.refused("'{request.exePath()}' is not a spellable path")
 
 	if not File.exists(target) 'noSuchExecutable'
-		return CoverageLaunch.refused("no such executable: {request.exePath}")
+		return CoverageLaunch.refused("no such executable: {request.exePath()}")
 	end 'noSuchExecutable'
 
 	let data = try FilePath.from(dataPath) otherwise return CoverageLaunch.refused("'{dataPath}' is not a spellable path")
@@ -176,7 +177,7 @@ function launchTarget(request CoverageRequest, dataPath String) returns Coverage
 	// Rooted, because a spawn resolves a bare program name against PATH rather than against the
 	// working directory, so `dir/prog.exe` would be reported missing by the OS moments after this file
 	// found it.
-	let capture = try runProcess(Executable.path(target.anchoredAt(Directory.currentPath())), argv: request.targetArgs, workingDirectory: inheritedWorkingDirectory(), timeoutMs: deadlineMs(request.timeoutSeconds)) otherwise (e) 'didNotFinish'
+	let capture = try runProcess(Executable.path(target.anchoredAt(Directory.currentPath())), argv: request.targetArgs, workingDirectory: inheritedWorkingDirectory(), timeoutMs: deadlineMs(request.deadline.seconds())) otherwise (e) 'didNotFinish'
 		return CoverageLaunch.refused(launchFailureText(request, error: e))
 	end 'didNotFinish'
 
@@ -191,22 +192,12 @@ end 'launchTarget'
 // ⚠ The recourse is offered only for the DEADLINE, which is the one failure here a caller can act on:
 // telling someone whose executable does not exist to lengthen a timeout is a refusal nobody can act on.
 function launchFailureText(request CoverageRequest, error SubprocessError) returns String
-	if timedOut(error) 'deadlineExpired'
-		return "{request.exePath} did not finish within {reportWholeNumberText(request.timeoutSeconds as ReportNumber)}s and was killed. It wrote no counters. Raise the deadline with {TimeoutFlag}<seconds> and run again."
+	if error.timedOut() 'deadlineExpired'
+		return "{request.exePath()} did not finish within {reportWholeNumberText(request.deadline.seconds() as ReportNumber)}s and was killed. It wrote no counters. Raise the deadline with {TimeoutFlag}<seconds> and run again."
 	end 'deadlineExpired'
 
-	return "could not run {request.exePath}: {error.displayReason()}"
+	return "could not run {request.exePath()}: {error.displayReason()}"
 end 'launchFailureText'
-
-function timedOut(error SubprocessError) returns bool
-	return match error 'kind'
-		timeout gives true
-		executableNotFound or
-			spawnFailed or
-			ioFailed or
-			inputTooLarge gives false
-	end 'kind'
-end 'timedOut'
 
 // Floored at one millisecond: a sub-millisecond deadline the caller asked for must still bound the
 // run rather than truncating to `Subprocess`'s wait-forever sentinel.
@@ -218,7 +209,7 @@ end 'deadlineMs'
 
 // Where counters are read from: what `DataFlag` named, or the file the binary writes beside itself.
 function dataPathFor(request CoverageRequest) returns String
-	return request.dataPath if request.dataGiven else "{request.exePath}{MxcovDataExtension}"
+	return try request.data.text() otherwise "{request.exePath()}{MxcovDataExtension}"
 end 'dataPathFor'
 
 // Record a caller-spelled decimal number of seconds, held to the one rule: finite and strictly positive.
@@ -238,11 +229,37 @@ function recordDeadline(request CoverageRequest, raw String) returns bool
 		return false
 	end 'notAPositiveFiniteDuration'
 
-	request.timeoutSeconds = seconds as CoverageSeconds
-	request.timeoutGiven = true
+	request.deadline = CoverageDeadline.stated(StatedCoverageSeconds.of(seconds as CoverageSeconds))
 
 	return true
 end 'recordDeadline'
+
+type StatedCoverageSeconds
+	export let seconds as CoverageSeconds
+
+	static function of(seconds CoverageSeconds) returns StatedCoverageSeconds
+		return Self{seconds: seconds}
+	end 'of'
+end 'StatedCoverageSeconds'
+
+union CoverageDeadline
+	defaulted
+	stated(given StatedCoverageSeconds)
+
+	function seconds() returns CoverageSeconds
+		return match self 'deadline'
+			defaulted gives DefaultRunTimeoutSeconds
+			stated(given) gives given.seconds
+		end 'deadline'
+	end 'seconds'
+
+	function isStated() returns bool
+		return match self 'deadline'
+			defaulted gives false
+			stated gives true
+		end 'deadline'
+	end 'isStated'
+end 'CoverageDeadline'
 
 // Both lines go to stderr; this file's header says why stdout stays empty.
 function refuseCoverage(problem String) returns ExitCode

@@ -305,6 +305,50 @@ function cycleThrough(cameFrom CsrColumn, closedBy CsrIndex, start CsrIndex) ret
 	return path
 end 'cycleThrough'
 
+// Iterated over an explicit stack for the reason `nodesOnACycle` gives.
+export function postorderOf(graph CsrGraph) returns CsrColumn
+	var order = CsrColumn.create()
+	var visited = BoolArray.create()
+	visited.refill(graph.nodeCount(), value: false)
+	var frameNode = CsrColumn.create()
+	var frameEdge = CsrColumn.create()
+
+	for root in 0 upto graph.nodeCount() 'eachRoot'
+		if (try visited.get(root) otherwise panic("postorderOf: visited.get({root}) below the node count")) 'reachedFromAnEarlierRoot'
+			continue
+		end 'reachedFromAnEarlierRoot'
+
+		try visited.set(root, value: true) otherwise panic("postorderOf: visited.set({root}) below the node count")
+		frameNode.push(root)
+		frameEdge.push(0)
+
+		while frameNode.count() > 0 'walkFrames'
+			let top = frameNode.count() - 1
+			let node = try frameNode.get(top) otherwise panic("postorderOf: frameNode.get({top}) below its own count()")
+			let edge = try frameEdge.get(top) otherwise panic("postorderOf: frameEdge.get({top}) below its own count()")
+
+			if edge < graph.degree(node) 'moreNeighbours'
+				try frameEdge.set(top, value: edge + 1) otherwise panic("postorderOf: frameEdge.set({top}) below its own count()")
+				let next = graph.neighbour(node, k: edge)
+
+				if not (try visited.get(next) otherwise panic("postorderOf: visited.get({next}) below the node count")) 'descend'
+					try visited.set(next, value: true) otherwise panic("postorderOf: visited.set({next}) below the node count")
+					frameNode.push(next)
+					frameEdge.push(0)
+				end 'descend'
+
+				continue
+			end 'moreNeighbours'
+
+			_ = try frameNode.pop() otherwise panic("postorderOf: pop from a non-empty frameNode")
+			_ = try frameEdge.pop() otherwise panic("postorderOf: pop from a non-empty frameEdge")
+			order.push(node)
+		end 'walkFrames'
+	end 'eachRoot'
+
+	return order
+end 'postorderOf'
+
 // Is `node` its own neighbour? The one way a component of ONE node is still a cycle, and the only reason
 // a component's size is not the whole test.
 function nodeNamesItself(graph CsrGraph, node CsrIndex) returns bool

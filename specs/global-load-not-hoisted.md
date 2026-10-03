@@ -25,10 +25,8 @@ see it: the program compiles, runs, and returns a plausible number. So the prope
 pinned here, by a program whose answer is only reachable if the load really happens each
 time round.
 
-These cases are compiler-authored rather than ported. `/specs` has no test for this because the
-reference compilers reached globals long before they had an optimizer that could hoist one —
-the property was never at risk there, and is at risk here from the first Std pass that
-treats `isPure` as licence to move.
+The property is at risk from any Std pass that treats `isPure` as licence to move, which is why
+these cases pin it.
 
 ## Tests
 

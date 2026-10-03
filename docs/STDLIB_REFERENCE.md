@@ -35,7 +35,7 @@ end 'main'
 | [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory |
 | [Network](#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](#json) | Json, Sha256, Hasher |
-| [System](#clock) | Clock, Scheduler, SharedValue, Math, Primitive Extensions |
+| [System](#clock) | Clock, Scheduler, SharedValue, Random, Math, Primitive Extensions |
 | [Testing](#testing) | Testing |
 | [Build](#build) | Build |
 
@@ -44,9 +44,15 @@ end 'main'
 | Name | Definition | Declared by |
 |------|------------|-------------|
 | `ExitCode` | `int(0 to u32.max)` on Windows, `int(0 to 255)` elsewhere | Process |
-| `Byte` | `int(0 to u8.max)` | File |
+| `Byte` | `int(0 to u8.max)` | String |
 | `ByteArray` | `Array with Byte` | File |
 | `StringArray` | `Array with String` | Json |
+| `CharSet` | `Set with Character` | CharacterSet |
+| `FilePathArray` | `Array with FilePath` | Directory |
+| `ParsedInt` / `ParsedIntArray` | `int(i64.min to i64.max)` / `Array with ParsedInt` | Builtins |
+| `ParsedFloat` | `float(f64.min to f64.max)` | Builtins |
+| `IndentDepth` | `int(0 to u64.max)` — a nesting depth while `Json` renders | Json |
+| `RandomDraw` / `RandomBound` | `int(0 to i64.max)` / `int(1 to i64.max)` | Random |
 | `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
 | `Codepoint` | `int(0 to 1114111)` | Character |
 | `CodepointDelta` | `int(-1114111 to 1114111)` | Character |
@@ -65,6 +71,10 @@ end 'main'
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
 | `SegmentByteCount`, `SegmentOffset`, `SegmentWord` | see [SharedMemory](#sharedmemory) | SharedMemory |
+
+A program may declare one of these names itself. The declaring file reads its own declaration; any other
+file that sees both refuses the bare name (**E3063**) and spells the one it means, `stdlib.ByteArray` or
+`<directory>.ByteArray` (see [Qualified Names](LANGUAGE_REFERENCE.md#qualified-names)).
 
 ### Names a library signature asks for
 
@@ -110,7 +120,7 @@ indexes an `Array` with no cast; an index of any other alias, or of a non-intege
 ### Target support
 
 Everything that is pure computation (strings, collections, `Json`, `Sha256`, `Hasher`, `Math`, `URL`
-parsing) works on every target. Operating-system facilities are available on `x64-windows`,
+parsing) works on every target, and so does `Random`. Operating-system facilities are available on `x64-windows`,
 `arm64-macos`, `arm64-linux` and `x64-linux`.
 
 On `wasm32-wasi` a call that needs a facility the target does not provide is refused **at compile time**,
@@ -512,7 +522,7 @@ It is what the `String` trimming methods take.
 | `CharacterSet.punctuation()` | Punctuation (P\*) |
 | `CharacterSet.symbols()` | Symbols (S\*) |
 | `CharacterSet.controlCharacters()` | Control and format characters (Cc, Cf) |
-| `CharacterSet.from(chars Set with Character)` | Exactly the characters given |
+| `CharacterSet.from(chars CharSet)` | Exactly the characters given; `CharSet` is `Set with Character` |
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -1057,9 +1067,10 @@ Output: `250 cents | EUR 250 | true greaterThan 1`.
 
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `File.readText(path FilePath)` | `String` | `FileReadError` | The whole file as text. |
-| `File.readBinary(path FilePath)` | `ByteArray` | `FileReadError` | The whole file as bytes. |
+| `File.readText(path FilePath)` | `String` | `FileReadError` | The whole file as text, read to its end — bytes appended while it is read are included. |
+| `File.readBinary(path FilePath)` | `ByteArray` | `FileReadError` | The whole file as bytes, read the same way. |
 | `File.writeText(path FilePath, content String, mode FilePermission = .normal)` | — | `FileWriteError` | Create or truncate, then write. |
+| `File.createText(path FilePath, content String)` | — | `FileWriteError` | Create a file that must not exist yet, then write. An existing file is `alreadyExists` and is left as it was. A failed write deletes the new file and throws the write's error; when that delete fails too, it throws `partialFileLeft`. |
 | `File.writeBinary(path FilePath, content ByteArray, mode FilePermission = .normal)` | — | `FileWriteError` | Create or truncate, then write. |
 | `File.exists(path FilePath)` | `bool` | — | True when a file exists at `path`. |
 | `File.delete(path FilePath)` | — | `FileDeleteError` | Delete a file. |
@@ -1072,7 +1083,6 @@ Output: `250 cents | EUR 250 | true greaterThan 1`.
 |------|------------|
 | `FileSize` | `int(0 to u64.max)` — bytes |
 | `Timestamp` | `int(0 to u64.max)` — whole seconds since the Unix epoch |
-| `Byte` | `int(0 to u8.max)` |
 | `ByteArray` | `Array with Byte` |
 
 `FileInfo` has read-only fields and a factory, `FileInfo.create(size, modifiedTime:, createdTime:,
@@ -1089,13 +1099,26 @@ accessedTime:, isDirectory:, isReadOnly:)`:
 
 `FilePermission` is `normal` (0666) or `executable` (0755 on Unix).
 
-| Error enum | Case | Thrown when |
-|------------|------|-------------|
-| `FileReadError` | `notFound` | The file cannot be opened or read |
-| `FileWriteError` | `failed` | The file cannot be created or written |
-| `FileDeleteError` | `notFound` | The file cannot be deleted |
-| `FileRenameError` | `failed` | The rename fails |
-| `FileInfoError` | `notFound` | The path does not exist |
+Each operation throws its own error enum. They share these cases:
+
+| Case | Thrown when |
+|------|-------------|
+| `notFound` | The file, or a directory on its path, does not exist |
+| `accessDenied` | The operating system refuses access to the path |
+| `busy` | Another process holds the file open in a way that excludes this operation |
+| `failed` | Any other failure |
+
+| Error enum | Cases |
+|------------|-------|
+| `FileReadError` | `notFound`, `accessDenied`, `busy`, `failed` |
+| `FileWriteError` | `failed`, `notFound`, `accessDenied`, `alreadyExists`, `busy`, `partialFileLeft` |
+| `FileDeleteError` | `notFound`, `accessDenied`, `busy`, `failed` |
+| `FileRenameError` | `failed`, `notFound`, `accessDenied`, `busy` |
+| `FileInfoError` | `notFound`, `accessDenied`, `busy`, `failed` |
+
+`alreadyExists` and `partialFileLeft` come only from `File.createText`. Every one of these enums has
+`failure()`, which returns the cause as a `FileFailure` — `notFound`, `accessDenied`, `alreadyExists`, `busy`
+or `failed` (`partialFileLeft` gives `failed`) — so one `match` handles the causes of any file operation.
 
 ```maxon
 function main() returns ExitCode
@@ -1204,7 +1227,7 @@ Output: `main.maxon main .maxon src`, `true true false true`, `main.txt`.
 
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `Directory.list(path FilePath)` | `Array with FilePath` | `DirectoryListError` | The entries of a directory, each joined onto `path`. |
+| `Directory.list(path FilePath)` | `FilePathArray` | `DirectoryListError` | The entries of a directory, each joined onto `path`. |
 | `Directory.exists(path FilePath)` | `bool` | — | True when `path` is an existing directory. |
 | `Directory.isDirectory(path FilePath)` | `bool` | — | The same as `exists`. |
 | `Directory.create(path FilePath)` | `bool` | — | Create the directory and any missing parents. True when the directory exists afterwards. |
@@ -1727,6 +1750,7 @@ union SubprocessError implements Error
 	ioFailed(reason String)
 	timeout(elapsedMs DurationMs, stdout String, stderr String)
 	inputTooLarge
+	endOfStream
 end 'SubprocessError'
 ```
 
@@ -1739,8 +1763,26 @@ fails with a not-found code; its reason carries the OS error number (`os error 5
 text is usually the only evidence of why it hung. Both fields are empty when the layer that threw was not
 collecting output, which is `StreamingSubprocess.waitWithTimeout`.
 
+`endOfStream` is what a `StreamingSubprocess` line reader throws when the stream it reads has ended.
+
 `displayReason()` renders any case as one line, such as
-`timed out after 5000ms, and the kill was sent to the child's whole process tree`.
+`timed out after 5000ms, and the kill was sent to the child's whole process tree`. `timedOut()` is true for
+`timeout` and `endedTheStream()` for `endOfStream`, so a caller can test for either without a `match`.
+
+`SpawnPreparation` — `none`, `standardStream`, `workingDirectory` — names the step of a spawn the runtime
+records a failure at; a not-found code at `none` is what makes a failure `executableNotFound`.
+
+### RunProcessError
+
+```maxon
+enum RunProcessError implements Error
+	spawnFailed
+end 'RunProcessError'
+```
+
+The error the runtime's `__Builtins.runProcess` intrinsic throws when its command names nothing the host
+can start. An `otherwise (e)` handler on that call can `match` on `spawnFailed`. `Subprocess` reports its own
+failures as `SubprocessError`.
 
 ### StreamingSubprocess
 
@@ -1755,7 +1797,7 @@ request after request. A read parks the calling green thread until data arrives.
 | `StreamingSubprocess.spawnTraceable(executable, arguments:, workingDirectory:, environment Environment, traced bool)` | `StreamingSubprocess` | `SubprocessError` | As `spawnWithEnvironment`; with `traced`, the child is created for a debugger: on Windows and Linux this process becomes its debugger, and on macOS the child is created suspended, for a debugger to attach to by its `processId()`. |
 | `processId()` | `Pid` | `SubprocessError` | The child's operating-system process id. Throws once the handle is released. |
 | `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline. Throws on a broken pipe. |
-| `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF). `""` means end of stream. Lines over 1 MiB arrive in pieces. |
+| `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF); `""` is a blank line. Throws `endOfStream` when the stream has ended. Lines over 1 MiB arrive in pieces. |
 | `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | With an explicit per-call cap. |
 | `readStdoutBytes(count)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; nothing is stripped. For length-framed protocols. Shares a buffer with the line readers. |
 | `readStderrLine()` | `String` | `SubprocessError` | As `readStdoutLine`, for stderr. |
@@ -1800,7 +1842,11 @@ function main() returns ExitCode
 		return 1
 	end 'spawn'
 
-	let line = try child.readStdoutLine() otherwise ""
+	let line = try child.readStdoutLine() otherwise (e) 'read'
+		print("{e.displayReason()}\n")
+		return 1
+	end 'read'
+
 	let code = try child.wait() otherwise -1
 
 	let state = match child.pollExit() 'poll'
@@ -1977,9 +2023,10 @@ end 'echoOnce'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let port = listener.port()
 	let server = async echoOnce(listener)
 
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return 2
 	try client.setReadDeadline(5000) otherwise return 3
 	_ = try client.send("ping") otherwise return 4
 	let reply = try client.recv(1024) otherwise return 5
@@ -2089,9 +2136,10 @@ end 'serveOnce'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let port = listener.port()
 	let server = async serveOnce(listener)
 
-	let response = try HttpClient.get("http://127.0.0.1:{listener.port()}/hello") otherwise (e) 'failed'
+	let response = try HttpClient.get("http://127.0.0.1:{port}/hello") otherwise (e) 'failed'
 		print("request failed: {e}\n")
 		return 1
 	end 'failed'
@@ -2622,6 +2670,33 @@ end 'main'
 ```
 
 Output: `1 false true 5`.
+
+## Random
+
+`Random` draws integers from the operating system's cryptographic random source, on every target —
+`wasm32-wasi` included, through `wasi:random`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `Random.draw()` | `RandomDraw` | `RandomError` | A uniformly distributed integer from 0 to `i64.max`. |
+| `Random.below(bound RandomBound)` | `RandomDraw` | `RandomError` | A uniformly distributed integer from 0 to `bound - 1`. |
+
+| Name | Definition |
+|------|------------|
+| `RandomDraw` | `int(0 to i64.max)` |
+| `RandomBound` | `int(1 to i64.max)`, implementing `RandomDraw` |
+
+`RandomError` has one case, `unavailable`: the operating system refused to supply random bytes.
+
+```maxon
+function main() returns ExitCode
+	let roll = try Random.below(6) otherwise panic("no random source")
+	print("{roll + 1}\n")
+	return 0
+end 'main'
+```
+
+It prints a number from 1 to 6.
 
 ## Math
 

@@ -114,10 +114,10 @@ export function accessWidthFor(t StdType) returns X64AccessWidth
 			f64 then return X64AccessWidth.word64
 		i8 or
 			i16 or
-			i32 then panic("accessWidthFor: no memory-access form for {t.name} — a narrow integer needs the `as` cast (P1.9), and its SIGNEDNESS then decides the sign/zero-extending load rather than defaulting to a width")
+			i32 then panic("accessWidthFor: no memory-access form for {t.name} — a narrow integer needs the `as` cast, and its SIGNEDNESS then decides the sign/zero-extending load rather than defaulting to a width")
 		u16 or
 			u32 or
-			u64 then panic("accessWidthFor: no memory-access form for {t.name} — an unsigned type wider than a byte needs the `as` cast (P1.9)")
+			u64 then panic("accessWidthFor: no memory-access form for {t.name} — an unsigned type wider than a byte needs the `as` cast")
 		f32 then panic("accessWidthFor: f32 is 4 bytes and moves through a single-precision form, a width this enum does not carry; Maxon's `float` is f64, so nothing produces one")
 	end 'w'
 end 'accessWidthFor'
@@ -649,6 +649,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		osReadFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileOpenWrite(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileOpenWriteExecutable(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osFileOpenCreateNew(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osEnvBlock(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileSize(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileDelete(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
@@ -662,6 +663,8 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		osCommandLine(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osStdHandle(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osExecutablePath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osProcessNamespace(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osRandomFill(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osWriteStdout(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osWriteStderr(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		stackRecordAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
@@ -1227,6 +1230,8 @@ export type ScaledIndexFolds
 				osCommandLine or
 				osStdHandle or
 				osExecutablePath or
+				osProcessNamespace or
+				osRandomFill or
 				osWriteStderr or
 				stackRecordAddr or
 				osOpenNamedSegment or
@@ -1260,6 +1265,7 @@ export type ScaledIndexFolds
 				osSetEvent or
 				osEnterBackgroundPriority or
 				osFileOpenWriteExecutable or
+				osFileOpenCreateNew or
 				osEnvBlock or
 				osEnvBlockFree or
 
@@ -1743,6 +1749,8 @@ export type CompareFusionCensus
 					osCommandLine or
 					osStdHandle or
 					osExecutablePath or
+					osProcessNamespace or
+					osRandomFill or
 					osWriteStderr or
 					stackRecordAddr or
 					osOpenNamedSegment or
@@ -1776,6 +1784,7 @@ export type CompareFusionCensus
 					osSetEvent or
 					osEnterBackgroundPriority or
 					osFileOpenWriteExecutable or
+					osFileOpenCreateNew or
 					osEnvBlock or
 					osEnvBlockFree or
 					loadAcquire or
@@ -2117,6 +2126,8 @@ export type MemoryDestinationFolds
 				osCommandLine or
 				osStdHandle or
 				osExecutablePath or
+				osProcessNamespace or
+				osRandomFill or
 				osWriteStderr or
 				stackRecordAddr or
 				osOpenNamedSegment or
@@ -2150,6 +2161,7 @@ export type MemoryDestinationFolds
 				osSetEvent or
 				osEnterBackgroundPriority or
 				osFileOpenWriteExecutable or
+				osFileOpenCreateNew or
 				osEnvBlock or
 				osEnvBlockFree or
 				loadAcquire or
@@ -2259,11 +2271,11 @@ function addressesAgree(loadAddrId ValueId, storeAddrId ValueId, module StdModul
 		return false
 	end 'notTwoGlobals'
 
-	return stdOpGlobalLabel(module.getOp(defs.definingOp(loadAddrId))).equals(stdOpGlobalLabel(module.getOp(defs.definingOp(storeAddrId))))
+	return stdOpLabel(module.getOp(defs.definingOp(loadAddrId))).equals(stdOpLabel(module.getOp(defs.definingOp(storeAddrId))))
 end 'addressesAgree'
 
 function namesAGlobalLabel(valueId ValueId, module StdModule, defs StdValueDefs) returns bool
-	return defs.isDefinedByAnOp(valueId) and stdOpNamesAGlobalLabel(module.getOp(defs.definingOp(valueId)))
+	return defs.isDefinedByAnOp(valueId) and stdOpLabelKindOf(module.getOp(defs.definingOp(valueId))) == StdOpLabelKind.dataSlot
 end 'namesAGlobalLabel'
 
 // The fused instruction's one operand size is a qword, so each of the three must be exactly that wide; a

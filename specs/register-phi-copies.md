@@ -3,7 +3,6 @@ feature: register-phi-copies
 status: selfhosted
 keywords: [register-allocator, ssa-destruction, parallel-copy, phi, block-arg, xchg, cycle, swap, permutation]
 category: register-allocator
-milestone: M5.14
 ---
 
 # Parallel copies, copy cycles, and `xchg`
@@ -14,7 +13,8 @@ Coloring assigns a register to every value. SSA destruction then has to make the
 model REAL: on each edge, every block-arg of the successor must end up holding the value
 the predecessor's `branchEdge` names for it — *simultaneously*, because a phi is a
 parallel assignment, not a sequence. `buildEdgePlan` reads the coloring off both sides
-and hands `sequenceParallelCopy` a set of register moves `dsts[i] ← srcs[i]`.
+and hands `ParallelCopy.sequence` a set of register moves `dsts[i] ← srcs[i]` — the sequencer
+the native targets' SSA destruction and the wasm lowering share, each supplying its own swap.
 
 Sequencing them is the classic parallel-move problem. Emit a LEAF first — a move whose
 destination is nobody else's source, so writing it destroys nothing anyone still needs.
@@ -39,34 +39,27 @@ SELF-VERIFYING — it encodes the permuted values positionally as decimal digits
 returns `0` only on an exact match, `99` otherwise. A swap that is dropped, half-applied,
 or applied in the wrong order changes a digit.
 
-### Why this file exists
+### What only a permutation reaches
 
-Before it, **not one of the 88 committed goldens contained an `xchgRegReg`**. Nothing in
-the corpus made a back edge carry a permutation, so `sequenceParallelCopy`'s cycle arm,
-`rewriteSourcesThroughSwap`, `moveOpOf`'s swap branch, the encoder's `REX.W 87 /r`, and
-the prologue's callee-saved scan over `xchg` operands had never once executed. The very
-first program that did exercise them — `back-edge-swap` below, the smallest possible
-input — miscompiled: the sequencer emitted the `xchg` and then ALSO emitted the cycle's
-second move as if it were still pending, so the loop body was
+A back edge that carries a permutation is the only input that runs `ParallelCopy.sequence`'s
+cycle arm, `rewriteSourcesThroughSwap`, `moveOpOf`'s swap branch, the encoder's `REX.W 87 /r`,
+and the prologue's callee-saved scan over `xchg` operands. The failure it guards is a
+sequencer that emits the `xchg` and then ALSO emits the cycle's second move as if it were
+still pending, so the loop body is
 
 ```
 x64.xchgRegReg rax, rcx      // swap a and b — correct, and complete on its own
 x64.movRegReg rcx, rax       // clobbers b with a, undoing half the swap
 ```
 
-and after one iteration both registers held `b`. The root cause was not in the sequencer
-at all — `rewriteSourcesThroughSwap` was correct — but underneath it:
-`RegNumColumn` is an `Array with RegNum` where `RegNum` is `int(0 to 16)`, a
-one-byte element, and `Array.clone()` (which `sequenceParallelCopy` calls on its pending
-columns) returned a view that read those bytes EIGHT at a time. Every register number it
-compared came back garbage, so the rewrite matched nothing and the stale move survived.
-See `specs/array-clone-element-size.md`.
+and after one iteration both registers hold `b`. The stale move survives whenever
+`rewriteSourcesThroughSwap` fails to match a pending source against the swapped pair.
 
 ## Tests
 
 <!-- test: back-edge-swap -->
-The 2-CYCLE — the smallest input that must emit an `xchg`, and the one that caught the
-bug above. `a` and `b` are both live at the loop header, so they interfere and hold
+The 2-CYCLE — the smallest input that must emit an `xchg`, and the one that exposes the
+failure above. `a` and `b` are both live at the loop header, so they interfere and hold
 different registers; the back edge passes them to each other's phi. The whole parallel
 copy is `reg(a) ← reg(b)`, `reg(b) ← reg(a)`, and a single `xchgRegReg` satisfies BOTH —
 the sequencer must recognise the second move as already delivered and emit nothing more.

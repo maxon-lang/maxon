@@ -1,0 +1,9 @@
+let EvalTool = "debug_eval"
+let ExpressionArgument = "expression"
+
+test 'an empty string given to an argument is refused by name rather than read as absent'
+	let doc = callTool(EvalTool, argumentsJson: "\{\"{ExpressionArgument}\":\"\"\}")
+
+	try Expect.equal(rpcErrorCode(doc), expected: RpcInvalidParamsCode, message: "`{EvalTool}` with an empty `{ExpressionArgument}` must be refused as invalid params, not read as an argument that was left out")
+	try Expect.contains(rpcErrorMessage(doc), needle: ExpressionArgument, message: "the refusal must name the argument it refused; it said: {rpcErrorMessage(doc)}")
+end 'an empty string given to an argument is refused by name rather than read as absent'

@@ -174,12 +174,9 @@ error E3065: specs/fragments/discarded-results/impure-function-discarded.test:13
 A method that writes `self` is IMPURE, so its result may not fall off a statement: E3065, the same
 cure as a free function.
 
-⚠ **THE ORACLE DIVERGES HERE, AND IT DIVERGES TWICE** (MEASURED 2026-09-03 on this exact program). It
-classifies a `self` field write as PURE and answers `E3064: result of pure function 'bump' must be used` —
-a different code, and the subject unqualified where the compiler spells the method under the name it is keyed by
-(`Counter.bump`, as `String.count` is spelled above). The consequence is that the CURE differs: `_ = c.bump()`
-compiles here and is refused there, since E3064 admits no `_ =` opt-out. A write the caller observes
-afterwards is an effect, so the compiler refuses under the impure code and offers the discard.
+A write the caller observes afterwards is an effect, so the compiler refuses under the impure code and
+offers the discard: `_ = c.bump()` compiles, where the pure code E3064 would admit no `_ =` opt-out. The
+subject is spelled under the name the method is keyed by (`Counter.bump`, as `String.count` is spelled above).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -252,12 +249,12 @@ error E3065: specs/fragments/discarded-results/impure-field-chain-statement-disc
 ```
 
 <!-- test: impure-static-member-statement-discarded -->
-⭐⭐ **A STATIC CALLED ON A LINE OF ITS OWN, AND THE CASE THAT OPENED THAT DOOR.** `Clock.tick()` was
-`E2015: Unsupported: identifier statement` — a message about the SHAPE, said of a shape the same compiler
-lowers perfectly one line up in expression position. The statement door claims a qualified static call
+⭐⭐ **A STATIC CALLED ON A LINE OF ITS OWN.** `Clock.tick()` is a statement, not
+`E2015: Unsupported: identifier statement` — the compiler lowers the same shape one line up in expression
+position. The statement door claims a qualified static call
 whatever it returns and files the site here, so the RESULT is what earns the refusal: an impure static is
-E3065 with the `_ =` cure, exactly as the three shapes above are. The oracle answers E3065 for this program
-too, spelling the subject `tick` where the compiler spells it under the `Type.method` key it is stored by.
+E3065 with the `_ =` cure, exactly as the three shapes above are, the subject spelled under the
+`Type.method` key it is stored by.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 var ticks = 0 as Integer
@@ -281,7 +278,7 @@ error E3065: specs/fragments/discarded-results/impure-static-member-statement-di
 <!-- test: pure-static-member-statement-discarded -->
 The PURE half of the same door, and the half that says the verdict is the discard rule's rather than the
 statement door's: a static with nothing to do but compute is E3064, which admits no `_ =` opt-out at all.
-Without it the door would be provable only in its impure direction. Measured identical on the oracle.
+Without it the door would be provable only in its impure direction.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -301,8 +298,8 @@ error E3064: specs/fragments/discarded-results/pure-static-member-statement-disc
 ```
 
 <!-- test: void-static-member-statement-ok -->
-⭐ **A VOID RESULT IS NOT A DISCARD, and this is the case that keeps the widened door from refusing the
-programs it was widened for.** `recordDiscardedCallResult` drops a void result before filing anything, so a
+⭐ **A VOID RESULT IS NOT A DISCARD, and this is the case that keeps the statement door from refusing the
+programs it exists to admit.** `recordDiscardedCallResult` drops a void result before filing anything, so a
 static that returns nothing compiles clean through the same arm the two cases above are refused by. It must
 RUN, not merely compile: `bump` is the only writer of `ticks`, so the exit code is what tells the two apart.
 ```maxon
@@ -432,7 +429,7 @@ end 'main'
 
 <!-- test: underscore-not-prefix-suppression -->
 An unused BINDING is E3012 and has nothing to do with a discarded RESULT: the name is what went unread, not a
-call's answer, and a `_` prefix does not suppress it. Both compilers report it here (MEASURED).
+call's answer, and a `_` prefix does not suppress it.
 ```maxon
 
 function main() returns ExitCode
@@ -499,8 +496,6 @@ instruction over its arguments, reading no memory and writing none. A statement 
 answer therefore has no other reason to run, and the parser can prove it at the call — where the
 whole-program effect summary the DECLARED-callee doors wait on cannot even be asked, since an intrinsic
 emits no call and has no entry in the module's function index.
-
-⛔ It used to compile SILENTLY, exit 0, emitting the instruction and throwing the answer away.
 ```maxon
 function main() returns ExitCode
 	round(1.5)
@@ -668,7 +663,7 @@ end 'main'
 error E3064: specs/fragments/discarded-results/pure-array-read-underscore-discard.test:8:2: result of pure function 'Array.first' must be used
 ```
 
-A read that MOVES the element out is not one of them: `pop` vacates the slot, so the call changed the
+A read that MOVES the element out is not one of them: `pop` vacates the slot, so the call changes the
 container and `_ =` is the explicit discard the language asks for.
 
 <!-- test: move-out-read-underscore-discard -->
@@ -726,9 +721,8 @@ end 'main'
 error E3064: specs/fragments/discarded-results/set-contains-underscore-discard.test:8:2: result of pure function 'Set.contains' must be used
 ```
 
-⚠ The reference names this member `Set.contains$element` — its own overload key, in a message. The compiler reports
-the member's registration name, which for an un-overloaded member is the bare `Set.contains`. Same member,
-same code, same position; only the subject is spelled without the key.
+⚠ The compiler reports the member's registration name, which for an un-overloaded member is the bare
+`Set.contains` — never an overload key such as `Set.contains$element`.
 
 The control is the read that CHANGES the table: `remove` tombstones a slot, so the call has a reason to run
 and its `bool` answer may be discarded.
@@ -753,8 +747,7 @@ end 'main'
 
 A method written on a line of its own takes none of what the call produced, exactly as a bare `f()` does —
 so a pure callee reached that way is refused there too. The diagnostic anchors on the METHOD NAME rather
-than on the receiver, which is where the reference puts it (measured at `arr.count()`, `b.ops.count()` and
-`utils.twice(4)` alike).
+than on the receiver (at `arr.count()`, `b.ops.count()` and `utils.twice(4)` alike).
 
 <!-- test: method-call-statement-discarded -->
 ```maxon
@@ -914,7 +907,7 @@ end 'main'
 call".** The three cases below each compute a value nothing was ever going to complain about: an intrinsic
 folds to an instruction, a field read loads a word, and `a + b` adds two. None can be the subject of E3064
 or E3065, so `_` claims an exemption from a rule the statement is not under and the whole line does nothing.
-MEASURED against the runnable oracle: all three are E3067 at the `_`, same message, same column.
+All three are E3067 at the `_`, same message, same column.
 
 ⚠ The refusal reads the ops the statement EMITTED, not its tokens, which is why `_ = round(1.5)` is E3067
 and not E3064 — an intrinsic emits no call, so there is no callee for a "result must be used" sentence to
@@ -970,13 +963,11 @@ error E3067: specs/fragments/discarded-results/error.underscore-discard-of-an-ar
 
 ⭐⭐ **THE ONE CALL-FREE DISCARD THAT STAYS LEGAL IS A BARE BINDING NAME, BECAUSE E3012 LEAVES NOWHERE ELSE
 TO STAND.** `_ = seen` is the only spelling that names a binding without using it, and E3012 requires every
-binding to be named — delete the acknowledgement and `unused variable` is what you get, on BOTH compilers
-(MEASURED). A spawned promise deliberately never awaited is the shape that needs it: the binding must live
+binding to be named — delete the acknowledgement and `unused variable` is what you get.
+A spawned promise deliberately never awaited is the shape that needs it: the binding must live
 to scope exit, because that is where the drop happens.
 
-⚠ **THE ORACLE REFUSES THIS ONE**, and it is the single shape where matching it is impossible — it demands
-the statement through E3012 and refuses it through E3067, escaping its own contradiction only by having no
-program of this shape. The line is drawn at ONE name token: every longer call-free right-hand side is
+The line is drawn at ONE name token: every longer call-free right-hand side is
 refused above, because `_ = c.count` already names `c` and so acknowledges nothing a bare `c` would not.
 
 <!-- test: underscore-discard-of-a-bare-binding-is-the-e3012-acknowledgement -->
@@ -996,8 +987,8 @@ end 'main'
 ⭐⭐ **THE CONTROL THAT PINS THE PROBE'S DIRECTION: A CALL THE `try` FORK LAUNDERED IS STILL A CALL.**
 `try f() otherwise panic(…)` hands its value back from a block the failing arm never rejoins, so the
 "which callee produced this value" probe E3064 files its site through cannot follow it. That probe answering
-"none" is silence for E3064 and would be a REFUSAL here — MEASURED 2026-09-03, 54 statements are exactly this
-shape (52 in `maxon-bin/`, 2 in `stdlib/`), and the oracle compiles every one. The fallback has to DIVERGE
+"none" is silence for E3064 and would be a REFUSAL here — `maxon-bin/` and `stdlib/` both spell this
+shape. The fallback has to DIVERGE
 for the launder: `otherwise 0` merges, and the probe's backward walk does follow that one, which is why
 `try-pure-let-discard` above still answers E3064. So the discard asks the weaker question whose misses are
 safe: did the statement call anything AT ALL.
@@ -1020,9 +1011,8 @@ end 'main'
 
 ⭐ **AND THE SAME WEAKER QUESTION MAKES A CALL FEEDING AN OPERATOR A DISCARD OF SOMETHING.** `_ = bump() + 1`
 computes a sum nobody reads, but a call DID happen, so the statement is not the empty gesture E3067 refuses.
-⚠ The oracle refuses it (MEASURED 2026-09-03: `E3067: expected a function call`, because its rule asks only
-whether the LAST op is a call) — this case is what pins the widening, which the 54 laundered `try` statements
-above are the reason for.
+A rule that asked only whether the LAST op is a call would refuse it with E3067 — this case is what pins
+the widening, which the laundered `try` statements above are the reason for.
 
 <!-- test: call-feeding-an-operator-underscore-discard -->
 ```maxon

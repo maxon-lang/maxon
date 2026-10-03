@@ -7,8 +7,8 @@
 // E3011 in every compile including the one a released seed makes of this tree. MEASURED with the v0.1.0 seed
 // against this checkout: a stdlib type holding a `__ManagedListener` field refused hello-world, while the same
 // file CALLING `__ManagedListener.bind` compiled clean. ⇒ **a NEW builtin TYPE NAME cannot enter `stdlib/`
-// until a release carries the compiler that resolves it**, and this rung would otherwise be four red lanes
-// with no fix available in-tree (`feedback_the_published_seed_is_a_gate`).
+// until a release carries the compiler that resolves it**; before then it would be red on every
+// lane with no fix available in-tree.
 //
 // ⭐ **WHAT USERS SEE IS UNCHANGED BY THAT**: `stdlib/TcpListener.maxon` has no `send` and no `recv`, so a
 // listening socket still cannot transfer — Go's `net.Listener` against `net.Conn`. What is shared is the BOX,
@@ -154,7 +154,7 @@ end 'emitLiveListenerOrThrow'
 // collide; `__ml_port` is how the caller learns the port. Every scratch is freed on every exit, the
 // throwing ones included.
 function buildManagedListenerBind(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedListenerBindName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedListenerThrows())
+	var func = IrFunction.createFromStd(ManagedListenerBindName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedListenerThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -231,7 +231,7 @@ end 'buildManagedListenerBind'
 // no other way to learn. It makes no park because it makes no wait: `getsockname` answers out of
 // the socket object the kernel already holds.
 function buildManagedListenerPort(module StdModule)
-	var func = IrFunction.createFromStd(ManagedListenerPortName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedListenerThrows())
+	var func = IrFunction.createFromStd(ManagedListenerPortName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedListenerThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -275,7 +275,7 @@ end 'buildManagedListenerPort'
 // the listener's box is untouched. The wait costs no machine on either shape, which
 // `specs/netpoll-socket.md`'s `a-parked-accept-is-on-the-poller` reads off `schedNetpollBlockCount`.
 function buildManagedListenerAccept(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedListenerAcceptName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedListenerThrows())
+	var func = IrFunction.createFromStd(ManagedListenerAcceptName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedListenerThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -528,9 +528,7 @@ export function installManagedListenerRuntime(module StdModule, usage RuntimeUsa
 			continue
 		end 'notOurs'
 
-		if not throwsClauseIsThrowing(func.throwsTypeName) 'namedNotStamped'
-			panic("installManagedListenerRuntime: isManagedListenerRuntimeCallee names '{String.from(func.name)}' as throwing — every `__ml_` entry point does — but its builder stamps NO `throws` clause, so a caller's `try` would stop being required")
-		end 'namedNotStamped'
+		requireThrowsStampMatchesPredicate("installManagedListenerRuntime", predicate: "isManagedListenerRuntimeCallee", callee: func.name, stamped: throwsClauseIsThrowing(func.throwsTypeName), named: true)
 
 		requireQuotableSourceSpelling(managedListenerSourceMethodName(func.name), callee: func.name)
 	end 'eachFunc'

@@ -26,11 +26,9 @@ A `var` target is a declaration like any other, so it carries every rule a body 
 
 ## Tests
 
-⚠ **THIS FILE EXISTS BECAUSE THE CANONICAL SPEC PROVES NOTHING ABOUT THIS SHAPE.**
+⚠ **THIS FILE EXISTS BECAUSE `tuple-assign.md` PROVES NOTHING ABOUT THIS SHAPE.**
 `tuple-assign.md`'s `tuple-assign-mixed-var-decl` and `tuple-assign-let-decl` are byte-identical programs
-and both spell `(x, let y)`, so the `var`-qualified target is exercised by no committed case there. That
-file is the canonical language definition and is copied byte for byte; the coverage it lacks belongs in an
-compiler-authored file rather than in an edit to it.
+and both spell `(x, let y)`, so the `var`-qualified target is exercised by no case there.
 
 <!-- test: var-target-declares-a-mutable-binding -->
 The declared `b` is reassignable afterwards, which is the whole of what `var` adds over `let`.

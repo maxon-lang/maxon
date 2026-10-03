@@ -119,15 +119,13 @@ end 'main'
 ```
 
 <!-- test: error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused -->
-⛔⛔ **THE DEEP-CLONE GATE AND THE CLONE STRATEGY HAD TO AGREE ABOUT THE COMPILER'S OWN AGGREGATES, AND THEY
-DID NOT (A4n).** `CharacterSet`, `__ManagedFile` and `__ManagedDirectory` have a REGISTERED layout — they need
+⛔⛔ **THE DEEP-CLONE GATE AND THE CLONE STRATEGY MUST AGREE ABOUT THE COMPILER'S OWN AGGREGATES.**
+`CharacterSet`, `__ManagedFile` and `__ManagedDirectory` have a REGISTERED layout — they need
 a nominal identity — but they are declared in no FILE, so `installStructCloners` (which walks the project's
-own declarations) synthesizes no `__clone_<T>` for them. `managedNameDropCallee` has always tested the three
-names and routed each to its compiler-owned destructor; its clone twin tested none, fell through to the
-struct arm, and handed back `__clone___ManagedFile`.
-
-MEASURED on the parent commit's binary, on exactly this program — a compiler PANIC, after the front end had
-accepted it:
+own declarations) synthesizes no `__clone_<T>` for them. `managedNameDropCallee` tests the three names and
+routes each to its compiler-owned destructor; a clone strategy that tested none would fall through to the
+struct arm and hand back `__clone___ManagedFile`, and on exactly this program the front end would accept
+it and the backend PANIC:
 
 ```
 panic at X64Backend.maxon:1892: resolveCallFixups: call to unknown function '__clone___ManagedFile'
@@ -135,17 +133,15 @@ panic at X64Backend.maxon:1892: resolveCallFixups: call to unknown function '__c
 
 ⇒ The verdict is a REFUSAL and not a gap. An OS HANDLE cannot be deep-copied at all: duplicating one would
 hand two owners a
-descriptor whose `__mf_destruct` closes once. Both `typeSupportsDeepClone` and `managedNameCloneStrategy` now
+descriptor whose `__mf_destruct` closes once. Both `typeSupportsDeepClone` and `managedNameCloneStrategy`
 ask one `compilerOwnedAggregateOf`, so the gate refuses exactly what the strategy cannot emit — which is what
-the gate's own header exists to say — and the front end reports a positioned E2015 where the backend used to
-die.
+the gate's own header exists to say — and the front end reports a positioned E2015.
 
-⚠ **THE REFUSAL IS THE LIBRARY'S SINCE ARRH STRUCK `clone` FROM THE `Array` ROSTER, AND BLAME GIVES IT
-THE USER'S SPAN BACK** — `arr.clone()` is the library's own declaration now, so this program is refused by the
-OPAQUE copy gate inside that body rather than by the concrete gate at the call, and the sentence printed is
+⚠ **THE REFUSAL IS THE LIBRARY'S, AND BLAME GIVES IT THE USER'S SPAN** — `arr.clone()` is the library's
+own declaration, so this program is refused by the OPAQUE copy gate inside that body rather than by the concrete gate at the call, and the sentence printed is
 the opaque one. What the refusal is POSITIONED at is the user's own instantiation, with `stdlib/Array.maxon`'s
 line kept as a `note:`; `specs/array-conditional-conformance-withheld.md` explains that relocation and
-the blame edge once, for all four cases ARRH touched.
+the blame edge once, for every case it applies to.
 ```maxon
 type Holder
 	export var f as __ManagedFile
@@ -162,7 +158,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
+error E2015: <fragment>:8:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported.
 note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above
 ```
 
@@ -198,7 +194,7 @@ end 'main'
 
 <!-- test: clone-of-an-array-of-lists-is-deep -->
 ### Clone of an array of LISTS, source freed before access
-⭐ **A CHAIN IS AN ELEMENT-BEARING RECORD EXACTLY AS THE MANAGED BUFFER IS (W173).** A `List with T` owns a
+⭐ **A CHAIN IS AN ELEMENT-BEARING RECORD EXACTLY AS THE MANAGED BUFFER IS.** A `List with T` owns a
 `__list_create` record, a chain of nodes and — for a managed `T` — each node's element; none of it is
 reachable from a generic `__mm_decref` and none of it is reachable from a byte blit either. So its deep copy
 is a chain WALK (`__list_clone`), the structural twin of the buffer's `__managed_clone`, and it is what makes
@@ -301,12 +297,12 @@ second list element, long enough to need a heap record
 
 <!-- test: an-array-of-string-arrays-needs-no-copy-to-compile -->
 ### An array of string ARRAYS compiles on a program that copies nothing
-⭐⭐ **G18.** `Array.clone`'s own `managed.slice(0, len)` is answerable for EVERY instantiation of `Array`
-in the program, because the corpus body is compiled once over an opaque `Element` — so any program that
-reaches `stdlib/Array.maxon` at all (here, through `for … in`) used to be refused for an element it never
-copies. What makes the refusal go away is not a reachability exemption but the missing CLONER: a
-managed-element container now has a per-instance one-argument `__clone_<mangled>` thunk, so the element is
-deep-cloneable and the gate has nothing left to refuse.
+⭐⭐ **AN ELEMENT THE PROGRAM NEVER COPIES IS NOT REFUSED.** `Array.clone`'s own `managed.slice(0, len)` is
+answerable for EVERY instantiation of `Array` in the program, because the corpus body is compiled once over
+an opaque `Element` — so any program that reaches `stdlib/Array.maxon` at all (here, through `for … in`)
+needs its element deep-cloneable even where it never copies one. What admits it is not a reachability
+exemption but the CLONER: a managed-element container has a per-instance one-argument `__clone_<mangled>`
+thunk, so the element is deep-cloneable and the gate has nothing left to refuse.
 ```maxon
 typealias StringArrayArray = Array with StringArray
 
@@ -500,12 +496,11 @@ the deepest string, long enough to need a heap record
 
 <!-- test: clone-of-an-array-of-managed-element-lists -->
 ### Clone of an array of managed-element LISTS
-⚠ **A CONTROL, NOT A NEW CAPABILITY — IT PASSES ON THE MERGE BASE TOO, AND SAYING SO IS THE POINT.** A
-`List with T` is a DECLARED struct whose single field is the chain (W153), so this element clones through
-its ordinary per-instance `__clone_<mangled>` field cascade — already a one-argument entry — and it never
-met the arity bound G18 removes. It is here because it is the CLOSEST NEIGHBOUR to what G18 changed: the
-same router (`elementRecordCloneStrategy`) decides both, and the chain's own managed-element form
-(`__list_clone_managed`) is the container slot the thunk would fill if the chain record were ever spellable
+⚠ **A CONTROL FOR THE DECLARED-BOX ROUTE.** A `List with T` is a DECLARED struct whose single field is
+the chain, so this element clones through its ordinary per-instance `__clone_<mangled>` field cascade — a
+one-argument entry — and never reaches the managed-element container thunk of the case above. It is here
+because it is that thunk's CLOSEST NEIGHBOUR: the same router (`elementRecordCloneStrategy`) decides
+both, and the chain's own managed-element form (`__list_clone_managed`) is the container slot the thunk would fill if the chain record were ever spellable
 as an array element directly. It is not, so that half of the router is reached by construction rather than
 by a corpus program — and this case is what would go red if the declared-box route were disturbed reaching
 for it.

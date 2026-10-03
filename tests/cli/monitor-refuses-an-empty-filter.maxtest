@@ -1,0 +1,12 @@
+let MonitorCommandWord = "monitor"
+let EmptyFilterOption = "--filter="
+let AbsentProgram = "no-such-program-for-the-monitor"
+let UnknownFilterRefusal = "Unknown --filter value ''"
+
+test 'monitor refuses a filter stated with an empty value rather than reading it as every family'
+	let run = runDriver([MonitorCommandWord, EmptyFilterOption, AbsentProgram])
+	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+	Expect.equal(run.exitCode(), expected: 1, message: "`maxon {MonitorCommandWord} {EmptyFilterOption} {AbsentProgram}` did not exit 1. {said}")
+	Expect.contains(run.stderr, needle: UnknownFilterRefusal, message: "`maxon {MonitorCommandWord} {EmptyFilterOption}` did not refuse the empty filter. {said}")
+end 'monitor refuses a filter stated with an empty value rather than reading it as every family'

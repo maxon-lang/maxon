@@ -10,38 +10,35 @@ category: memory
 
 `Array.clone()` and `Array.slice()` both return `Self`. Resolving that `Self` at a
 call site means resolving `Array`'s `Element` binding back to a concrete alias — and
-for a RANGED element type that resolution used to throw the range away.
+for a RANGED element type that resolution must keep the range.
 
-`ResolveStructReturnTypeThroughSelf` matches a struct element by NAME and an enum
-element by NAME, but a primitive element fell through to a lookup keyed on its
-`MaxonValueKind`. A ranged typealias' value kind is merely `Integer`, so
-`int(0 to 16)` (one byte per element) and `int(0 to u64.max)` (eight) were
-indistinguishable: the lookup could not find the user's alias, and synthesized
+`ResolveStructReturnTypeThroughSelf` matches a struct element, an enum element and a
+ranged element alike by NAME. A ranged typealias' value kind is merely `Integer`, so a
+lookup keyed on its `MaxonValueKind` cannot tell `int(0 to 16)` (one byte per element)
+from `int(0 to u64.max)` (eight): it misses the user's alias and synthesizes
 `__Array_i64` instead.
 
-The result was a silent miscompile with a nasty signature. The heap data and the
-`__ManagedMemory` header were both correct — element addresses are computed from the
-struct's runtime `elementSize` field, so the ADDRESS arithmetic still used the true
-1-byte stride. Only the LOAD WIDTH came from the static element type, and that was now
-`i64`. So a cloned `Array with int(0 to 16)` holding `[1, 2, 3]` read element 0 as
+That miss is a silent miscompile with a nasty signature. The heap data and the
+`__ManagedMemory` header stay correct — element addresses are computed from the
+struct's runtime `elementSize` field, so the ADDRESS arithmetic uses the true
+1-byte stride. Only the LOAD WIDTH comes from the static element type, and that would be
+`i64`. So a cloned `Array with int(0 to 16)` holding `[1, 2, 3]` would read element 0 as
 `0x030201` = 131328: the right address, eight bytes wide, splicing its neighbours in.
-Reading the LAST element still returned the right value (the trailing bytes are zero),
+Reading the LAST element would still return the right value (the trailing bytes are zero),
 which is exactly the kind of half-right behaviour that hides a bug.
 
 A second `Array` instantiation of a DIFFERENT element width has to exist for this to
-bite. With only one integer-element array in the program, the kind-keyed lookup landed
+bite. With only one integer-element array in the program, a kind-keyed lookup lands
 on the right alias by luck — which is why the tests below declare two.
 
-This was not theoretical. The compiler's register allocator keeps its parallel-copy
+The compiler itself depends on it. Its register allocator keeps its parallel-copy
 sequencer's pending moves in a `RegNumColumn` (`Array with RegNum`, and `RegNum` is
-`int(0 to 16)`), alongside several `int(0 to u64.max)` columns. `sequenceParallelCopy`
-opens with `var ps = srcs.clone()`, so every register number it read back out of that
-clone was garbage. Comparisons against it silently failed, `rewriteSourcesThroughSwap`
-never rewrote anything, and a phi-copy CYCLE broken with `xchg` emitted a stale trailing
-`mov` that undid half the swap. A loop that permutes two variables across its back edge
-computed the wrong answer.
-
-The fix keys a ranged element by NAME, exactly as struct and enum elements already are.
+`int(0 to 16)`), alongside several `int(0 to u64.max)` columns, and `sequenceParallelCopy`
+opens with `var ps = srcs.clone()`. A wrong load width there makes every register number
+read back out of that clone garbage: comparisons against it fail silently,
+`rewriteSourcesThroughSwap` rewrites nothing, and a phi-copy CYCLE broken with `xchg`
+emits a stale trailing `mov` that undoes half the swap, so a loop that permutes two
+variables across its back edge computes the wrong answer.
 
 ### ⚠ A STRIDE IS NOT DIRECTLY OBSERVABLE FROM SOURCE, AND AN ASSERTION THAT CANNOT FAIL IS NOT A GATE
 
@@ -59,7 +56,7 @@ an `Array with Byte` succeeds at a 1-byte stride and aborts at any other.
 
 The front-end guard cannot stand in for it: `ProgramSignatures.arrayAppendArgAdmits`'s
 REPRESENTATION half compares `arrayElementSize(receiver)` against `arrayElementSize(argument)` —
-still, unchanged, after A4b gave that rule a value-domain half beside it — and for these two the *instance is
+beside that rule's separate value-domain half — and for these two the *instance is
 the same*, so both sides re-derive the same number through the same function and the check passes
 whatever that number is. A check that re-derives both of its sides through one function cannot catch
 that function being wrong. Only the run can.

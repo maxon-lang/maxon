@@ -443,10 +443,9 @@ end 'main'
 ```
 
 <!-- test: error.associated-value-positional-second-arg -->
-⚠ **The compiler DIVERGES FROM THE CANONICAL PIN, AND KEEPS THE SHARPER ANSWER.** The bootstrap reports this as
-the general `E3005` type mismatch anchored at the CALLEE; The compiler has a dedicated code for the rule
-(`E2053 ParserCallArgMissingLabel`, which every call site shares) and anchors at the ARGUMENT the author
-has to move. A dedicated code is greppable and a general one is not, and the anchor is where the fix goes.
+⚠ **A DEDICATED CODE, AT THE ARGUMENT.** This is not reported as a general `E3005` type mismatch at the
+CALLEE: the rule has a dedicated code (`E2053 ParserCallArgMissingLabel`, which every call site shares),
+anchored at the ARGUMENT the author has to move. A dedicated code is greppable and a general one is not, and the anchor is where the fix goes.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1152,11 +1151,11 @@ end 'main'
 <!-- test: explicit-string-raw-value-decodes-escapes -->
 ### An explicit string raw value is read like every other string literal
 `\{` and `\}` are the literal braces (see string-interpolation.md) and `\n` is a newline, in a raw
-value exactly as in an expression. Keeping the raw token slice for a
-string raw value (while decoding a char raw value) made `"\{"` reach the binary as TWO bytes — and
-the compiler's own `Lexer.maxon` names its `{` token that way, so every diagnostic naming it printed `\{` under
+value exactly as in an expression, and one reader decodes both arms. Keeping the raw token slice for a
+string raw value (while decoding a char raw value) would make `"\{"` reach the binary as TWO bytes — and
+the compiler's own `Lexer.maxon` names its `{` token that way, so every diagnostic naming it would print `\{` under
 a compiler built one way and `{` under one built the other: a self-hosting fixed-point violation the
-byte-identical gate could not see. One reader for both arms now.
+byte-identical gate cannot see.
 ```maxon
 enum Tok
 	leftBrace = "\{"

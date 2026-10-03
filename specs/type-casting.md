@@ -1175,14 +1175,14 @@ end 'main'
 
 ### E3010 through a MERGED BINDING — the two joins whose incoming set is complete
 
-⭐⭐ **A MERGE MAY NOT SPEND ITS DECLARED ALIAS AS A PROOF (G14), BUT IT MUST STILL SPEND IT WHERE EVERY
-EDGE PROVES IT — AND THESE TWO CASES ARE THE DIFFERENCE.** G14 withheld the ranged-alias claim from every
-phi, because a LOOP HEADER cannot answer: its back edge is not parsed when it is minted, so nothing at the
-mint can see what will reach it. An `if` continuation and a `match`'s carried binding are not loop headers
-— both predecessors are branched in one statement after the phi is minted — and withholding there cost two
-things at once, neither visible in a green suite: the `return` below grew a range cascade over a value the
-two entry guards had already proved, and this E3010 stopped being reported at all. The two cases below
-pin that it IS reported, at that line and column.
+⭐⭐ **A MERGE MAY NOT SPEND ITS DECLARED ALIAS AS A PROOF, BUT IT MUST STILL SPEND IT WHERE EVERY
+EDGE PROVES IT — AND THESE TWO CASES ARE THE DIFFERENCE.** A LOOP HEADER phi is denied the ranged-alias
+claim because it cannot answer: its back edge is not parsed when it is minted, so nothing at the mint can
+see what will reach it. An `if` continuation and a `match`'s carried binding are not loop headers — both
+predecessors are branched in one statement after the phi is minted — and withholding there would cost two
+things at once, neither visible in a green suite: the `return` below would grow a range cascade over a
+value the two entry guards already proved, and this E3010 would not be reported at all. The two cases
+below pin that it IS reported, at that line and column.
 
 <!-- test: error.unneeded.if-merged-binding-same-alias -->
 ```maxon

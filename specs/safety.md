@@ -19,7 +19,7 @@ status 1. Every native lane installs one: a vectored exception handler on **x64-
 engine owns the stack, so running out of it is wasmtime's own trap, like every other wasm fault. The
 handler needs stack of its own once the thread's is spent: Windows reserves it with
 `SetThreadStackGuarantee`, and a POSIX lane runs the handler on the thread's alternate signal stack. A
-POSIX handler tells an overflow from a bad address by where the fault landed — within 64 KiB of the
+POSIX handler tells an overflow from a bad address by where the fault lands — within 64 KiB of the
 stack pointer is the stack's own guard. A green thread's stack does not overflow this way: its prologue
 guard grows it first, up to 1 GiB, and a recursion that needs more stops there with the same panic, trace
 and exit code.
@@ -41,9 +41,9 @@ propagate it). A divisor proven non-zero — a non-zero literal, or a ranged typ
 range excludes 0 — compiles to a bare divide with no check. A divisor the compiler
 holds as the constant 0 (`a / 0`) is rejected at compile time. Because the failure is
 in the type system rather than in a CPU trap, the behavior is identical on every
-target: x64 no longer relies on the `idiv` `#DE`, AArch64 no longer returns 0 from
-`SDIV`/`UDIV`, and `wasm32-wasi` no longer trap-exits **3** past the fault handler
-that never sees a wasm trap. The fault handler still classifies a stray `SIGFPE` it
+target: x64 does not rely on the `idiv` `#DE`, AArch64 does not hand back the 0
+`SDIV`/`UDIV` produce for a zero divisor, and `wasm32-wasi` does not trap-exit **3** past a fault
+handler that never sees a wasm trap. The fault handler still classifies a stray `SIGFPE` it
 happens to receive (e.g. a floating-point trap) to a divide-by-zero panic, but a
 correctly compiled integer divide never reaches it. The nil-pointer
 (`SIGSEGV`/`SIGBUS`) path traps identically on both architectures, so the
@@ -173,7 +173,7 @@ end 'main'
 
 ### The same three programs in the expression form the compiler parses
 
-The two ported cases above are gated on block-form `try` alone. These carry their DIVISION
+The two cases above are gated on block-form `try` alone. These carry their DIVISION
 subject — the throw, the `(e)` binding, and the `match e` discrimination of `divisionByZero`
 — in the `try (…) otherwise (e) 'label' … end` form, so the rule is pinned rather than merely
 documented while the block form is outstanding.
@@ -238,11 +238,11 @@ divides by `+0.0`, and `+0.0`'s bit pattern is 0, so it would pass even if the z
 divisor's bits as an integer. `-0.0` is `0x8000000000000000`, so it is the operand that tells a float
 compare apart from a bit compare.
 
-⚠ **What this case does NOT pin, measured rather than assumed.** Emitting that zero test as an
+⚠ **What this case does NOT pin.** Emitting that zero test as an
 INTEGER compare does not silently yield `-inf`: it is refused loudly by the x64 emitter's
 register-file guard (`requireClass`, `Targets/X64/X64Backend.maxon` — *"xmm0 is in the xmm register
 file where the gpr file is required"*), because the divisor is in an xmm and an integer compare wants
-a gpr. Verified by sabotage, and under that sabotage this case fails **together with**
+a gpr. Under that sabotage this case fails **together with**
 `float-divide-by-runtime-negative-zero`'s `+0.0` sibling rather than instead of it — so it does not
 discriminate there, and the structural guard is the real protection. What is left for this case to
 hold is the SEMANTICS (both zeros throw, and `x / -0.0` is not quietly `-inf`) and one future
@@ -275,8 +275,7 @@ end 'main'
 ### A possibly-zero divisor without `try` is refused (E3057)
 
 The divide is a throwing operation, so a bare one drops an error flag the caller never reads.
-The message names DIVISION rather than the array accessor whose wording every other throwing
-builtin family used to inherit.
+The message names DIVISION rather than borrowing the array accessor's wording.
 
 <!-- test: error.divide-without-try -->
 ```maxon
@@ -323,11 +322,11 @@ is sound only while the target is guaranteed to have PUT an op there: a parenthe
 inner expression is a bare NAME emits no op at all (a name is a lookup), so "the last op the target
 emitted" silently becomes *the last op the previous statement emitted*.
 
-⚠ **Measured before the guard existed, and it was not merely a wrong message.** The second case below
-COMPILED and returned **99**: the `try`/`otherwise` was transplanted onto the `arr.get(2)` two
-statements above it, so the handler fired for the ARRAY's out-of-bounds error, `w` took the handler's
-value instead of `a`'s, and the E3057 that bare `arr.get(2)` owed disappeared along the way — because
-the op it would have been reported against was no longer a plain `call`. Two diagnostics lost and a
+⚠ **Without the guard it is not merely a wrong message.** The second case below would COMPILE and
+return **99**: the `try`/`otherwise` is transplanted onto the `arr.get(2)` two statements above it, so
+the handler fires for the ARRAY's out-of-bounds error, `w` takes the handler's value instead of `a`'s,
+and the E3057 that bare `arr.get(2)` owes disappears along the way — because the op it would be
+reported against has become the `try`'s target rather than a plain `call`. Two diagnostics lost and a
 wrong value produced, from one widened door.
 
 The guard is a DERIVATION rather than a paren-shaped special case: `parseTry` records the module's op
@@ -404,13 +403,13 @@ error E3103: <fragment>:4:12: division by zero: the divisor of 'mod' is always 0
 ```
 
 <!-- test: error.divide-by-a-folded-mod-of-minus-one -->
-⭐ **THE FOLD MUST SURVIVE THE OVERFLOW GUARD (A1x).** `a mod -1` is `0` for every `a`, so the parser
+⭐ **THE FOLD MUST SURVIVE THE OVERFLOW GUARD.** `a mod -1` is `0` for every `a`, so the parser
 holds this `z` as the constant `0` and the divide by it is refused at COMPILE time — exactly as
-`error.divide-by-let-bound-zero` below is. It is pinned because A1x is the reason it could break: `-1` is
+`error.divide-by-let-bound-zero` below is. It is pinned because the overflow guard is how it could break: `-1` is
 the only constant divisor that leaves the bare route for a guarded expansion, and an expansion that
 forgot to record its fold would silently turn this compile-time refusal into a runtime `DivisionByZero`
-a `try` could swallow. The fold is stronger than the one it replaced — it needs no constant DIVIDEND,
-because the answer does not depend on one.
+a `try` could swallow. The fold needs no constant DIVIDEND, because the answer does not depend on
+one.
 ```maxon
 function main() returns ExitCode
 	let z = 10 mod -1
@@ -459,15 +458,15 @@ end 'main'
 error E3103: <fragment>:4:12: division by zero: the divisor of '/' is always 0
 ```
 
-### `i64.min mod -1` is `0`, through every door a `mod` has (A1x)
+### `i64.min mod -1` is `0`, through every door a `mod` has
 
-Three doors reach a `mod`, they are decided by what the compiler can prove about the DIVISOR, and
-before A1x **all three died** — so all three are pinned. `-1` is not a special divisor to the
+Three doors reach a `mod`, they are decided by what the compiler can prove about the DIVISOR, and on
+x64 a bare `idiv` makes **all three die** — so all three are pinned. `-1` is not a special divisor to the
 language; it is only special to `idiv`, and the point of these cases is that nothing about the
 answer depends on which door the program came through.
 
-They run on **every** target, which is the other half of the claim: `wasm32-wasi` passed the first
-of them all along (`i64.rem_s` is defined to answer 0) and arm64's `sdiv`+`msub` computes it too, so
+They run on **every** target, which is the other half of the claim: `wasm32-wasi` passes the first
+of them natively (`i64.rem_s` is defined to answer 0) and arm64's `sdiv`+`msub` computes it too, so
 a green x64 lane beside them is what makes the answer the LANGUAGE's rather than one backend's.
 
 <!-- test: mod-at-int-min-by-minus-one-is-zero -->
@@ -597,12 +596,11 @@ could drop. `4198346131161219195` is a 62-bit number, so it has 30 significant b
 and a mask of
 `0x00000000FFFFFFFF` answers `123` (the low limb alone) where the language answers `161219195`.
 
-MEASURED, before the fix, on `wasm32-wasi`: `r=123`, while x64 answered `161219195` — the mask's `add`
-had been folded to an immediate that dropped the operand WIDTH, and the i1 compare result it reads made
-the backend re-derive that width as 32 bits. x64 could not see it: its registers are 64-bit whatever the
-Std type says. This is the case that makes the mask's width the LANGUAGE's rather than one backend's,
-which is also why the dividend is a `mod` a real program performs — the shortest-round-trip float
-printer divides exactly this way (`__bigDivModSmall`), and it is what went wrong there.
+A mask `add` folded to an immediate that drops the operand WIDTH, reading an i1 compare result, lets
+the backend re-derive that width as 32 bits: `r=123` on `wasm32-wasi`, and invisible on x64, whose
+registers are 64-bit whatever the Std type says. This is the case that makes the mask's width the
+LANGUAGE's rather than one backend's, which is also why the dividend is a `mod` a real program performs
+— the shortest-round-trip float printer divides exactly this way (`__bigDivModSmall`).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -628,9 +626,9 @@ q=4198346131 r=161219195
 
 <!-- test: error.try-over-a-total-mod-names-the-operator -->
 #### A `try` over a guarded `mod` is refused — and answers as a `mod`, not as a "builtin call"
-The overflow guard makes this `mod` a compiler-expanded CALL where it used to be a bare `binOp`, so the
-`try` now reaches the throwing-target check instead of the not-a-call one. That change of shape must not
-change what the author is told: they wrote an operator, and the emitted symbol behind it (`__guarded_mod`)
+The overflow guard makes this `mod` a compiler-expanded CALL rather than a bare `binOp`, so the
+`try` reaches the throwing-target check instead of the not-a-call one. That shape must not change what
+the author is told: they wrote an operator, and the emitted symbol behind it (`__guarded_mod`)
 is exactly the kind of name the `__` reservation exists to keep out of a diagnostic. So E3055 names the
 OPERATOR and the reason — the divisor's range, which is the thing they would have to change.
 ```maxon
@@ -677,27 +675,25 @@ r=-3
 0
 ```
 
-### ⭐⭐ The premise the divide's proof rests on, ENFORCED (A1f)
+### ⭐⭐ The premise the divide's proof rests on, ENFORCED
 
-The two cases below used to be this file's record of a hole. They are now its record of the cure, and
-the pair is worth reading as one thing.
+The two cases below are this file's record of the cure, and the pair is worth reading as one thing.
 
 `/` and `mod` are throwing operations, and a divisor **proven** non-zero compiles to a bare `idiv`
 with no check and no `try` spellable. One of the two things that can constitute the proof is *a ranged
-type whose range excludes 0* — so when a `NonZero` PARAMETER was the proof, the whole guarantee rested
-on a premise **nothing enforced**. A call argument was the one position of five a ranged typealias was
-checked at compile time but deliberately not at runtime: a runtime check is a BRANCH, and an argument
-is evaluated part-way through building an argument list, so a guard emitted where the argument is
-WRITTEN lands past the call with the callee already run. A `NonZero` parameter handed a runtime `0`
-therefore reached the bare `idiv`, and the catchable `DivisionByZero` the language promises became an
-**uncatchable hardware fault** — a different failure, on a path `recover()` cannot see.
+type whose range excludes 0* — so when a `NonZero` PARAMETER is the proof, the whole guarantee rests
+on a premise that must be **enforced**. A call argument cannot be checked at runtime where it is
+written: a runtime check is a BRANCH, and an argument is evaluated part-way through building an
+argument list, so a guard emitted where the argument is WRITTEN lands past the call with the callee
+already run. Unguarded, a `NonZero` parameter handed a runtime `0` reaches the bare `idiv`, and the
+catchable `DivisionByZero` the language promises becomes an **uncatchable hardware fault** — a
+different failure, on a path `recover()` cannot see.
 
-**A1f moved the guard rather than defeating the obstacle.** The obstacle is real and unchanged; the
-runtime half of the argument door simply belongs to the **callee's entry** instead — one guard per
-narrowed parameter per function, standing in front of every caller. So both cases below now panic with
-the RANGE message, naming the alias whose range was broken and the line the premise is DECLARED on,
-before the callee's body runs at all. The `idiv` is still bare; what changed is that its proof is now
-true.
+**The guard moves rather than defeating the obstacle.** The obstacle is real; the runtime half of the
+argument door belongs to the **callee's entry** — one guard per narrowed parameter per function,
+standing in front of every caller. So both cases below panic with the RANGE message, naming the alias
+whose range was broken and the line the premise is DECLARED on, before the callee's body runs at all.
+The `idiv` is bare, and its proof is true.
 
 ⚠ **The panic names the PARAMETER's line, not the caller's**, and that is forced rather than chosen:
 one guard serves every call site, including a call through a function value that has no argument list
@@ -706,28 +702,27 @@ is declared.
 
 ⚠ **A guarded leaf function stops being a leaf.** The panic block calls `mrt_panic`, so a function
 whose body contained no call at all acquires one and gains a real frame (`x64.prologue 32`). That is a
-per-FUNCTION cost paid on the in-range path — the honest price of an elision that is now legitimate.
+per-FUNCTION cost paid on the in-range path — the honest price of a legitimate elision.
 
-⚠⚠ **THE `mod` HALF IS THE SAME PREMISE, NOT A SECOND ONE.** A1x made `i64.min mod -1` come back as
-`0` wherever the compiler's proof runs — and the proof reads a divisor's DECLARED RANGE. So a
+⚠⚠ **THE `mod` HALF IS THE SAME PREMISE, NOT A SECOND ONE.** `i64.min mod -1` comes back as `0`
+wherever the compiler's proof runs — and the proof reads a divisor's DECLARED RANGE. So a
 `d BelowMinusOne` parameter (`int(i64.min to -2)`, a range that rules out both of `idiv`'s hazards)
-handed a runtime `-1` used to fault exactly as its divide-by-zero twin did. One cure closed both.
+handed a runtime `-1` breaks the same premise as its divide-by-zero twin, and one guard refuses both.
 
-⚠⚠ **AND THE FAULT THUNK STILL HAS TESTS — WHICH HAD TO BE CHECKED, NOT ASSUMED.** These two cases
-were the suite's only programs reaching the `#DE` handler through a broken premise, so closing the door
-threatened to delete the fault runtime's coverage along with the bug. It does not:
+⚠⚠ **AND THE FAULT THUNK HAS TESTS OF ITS OWN.** Behind the entry guard these two cases do not reach
+the `#DE` handler, so the fault runtime's coverage comes from elsewhere:
 `integer-overflow-fault-from-int-min-over-minus-one` reaches `STATUS_INTEGER_OVERFLOW` (0xC0000095) with
-a divisor that is genuinely IN range (`-1` in `int(-1 to -1)`, so the new entry guard passes and the
+a divisor that is genuinely IN range (`-1` in `int(-1 to -1)`, so the entry guard passes and the
 quotient overflows anyway), and `a-checked-divide-still-faults-at-int-min-over-minus-one` reaches it
-through the fallible spelling. The `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm keeps its own test —
-see `divide-by-zero-fault-through-a-resized-array-slot` below, and the paragraph above it for why the
-route had to MOVE when `A1f-arrayelem` shut the array-element STORE.
+through the fallible spelling. The `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm has its own test —
+see `divide-by-zero-fault-through-a-resized-array-slot` below, and the paragraph above it for why its
+route is a resized slot rather than an array-element STORE.
 
 <!-- test: divide-by-zero-premise-enforced-at-the-callee-entry -->
 #### ⭐ A runtime zero is refused AT `divide`'S PARAMETER — the `idiv` it would have reached is still bare
 `d` excludes 0, so the divide is proven safe and compiles to the unguarded `idiv` — no throw, no `try`.
-The proof is the CALLER's to keep, and A1f is what holds it to it: the entry guard fires at line 9,
-the parameter's own declaration, before a single body op runs. Before A1f this program died
+The proof is the CALLER's to keep, and the entry guard holds it to it: the guard fires at line 9,
+the parameter's own declaration, before a single body op runs. Unguarded, this program would die
 `panic: integer divide by zero` — an uncatchable CPU fault where the language promises a catchable
 `DivisionByZero`.
 ```maxon
@@ -760,15 +755,15 @@ Stack trace:
 ```
 
 <!-- test: mod-overflow-premise-enforced-at-the-callee-entry -->
-#### ⭐ A runtime `-1` is refused at `remainder`'S PARAMETER — what A1x's guarantee actually rests on
+#### ⭐ A runtime `-1` is refused at `remainder`'S PARAMETER — what the `i64.min mod -1` guarantee rests on
 
-The twin of the case above, through the same door, and the one that says what A1x's guarantee rests
+The twin of the case above, through the same door, and the one that says what the `i64.min mod -1` guarantee rests
 on: the compiler's PROOF, not the hardware. `BelowMinusOne` rules out BOTH of `idiv`'s hazardous
 divisors, so `n mod d` compiles to the bare sequence with no guard and no `try` spellable — correctly,
-given the declared type. A caller that breaks the type it declared used to get the fault the type was
-standing in front of; it now gets the range panic, naming `BelowMinusOne` at the parameter that
-declared it. **One cure, two hazards** — the divide-by-zero premise and the `i64.min mod -1` premise
-were never two defects.
+given the declared type. A caller that breaks the type it declared gets the range panic rather than
+the fault the type stands in front of, naming `BelowMinusOne` at the parameter that declared it.
+**One cure, two hazards** — the divide-by-zero premise and the `i64.min mod -1` premise are one
+premise.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias BelowMinusOne = int(i64.min to -2)
@@ -801,16 +796,16 @@ Stack trace:
 <!-- test: array-element-premise-enforced-at-the-store -->
 #### ⭐ THE LAST DOOR: a runtime zero is refused at the `push`, not at the `idiv`
 
-A1f closed the call-argument door at the CALLEE's entry, and could not reach this one — an element
+The entry guard closes the call-argument door at the CALLEE's entry, and cannot reach this one — an element
 travels as `__managed_push`'s third argument into a shared `Array` body whose parameter is the OPAQUE
-element type, so there is no narrowed parameter for an entry guard to stand behind. `A1f-arrayelem`
+element type, so there is no narrowed parameter for an entry guard to stand behind. The store guard
 shuts it from the other side: the guard goes at the **store**, in the caller, which is the one place
 that still knows the element type. Everything the entry guard could not see is visible here, and the
 value never reaches the array.
 
-Before it, this program printed `before` and died `panic: integer divide by zero` — the element read
-back out was a `NonZero` the compiler still believed, so `100 / d` was a bare `idiv`. The `print` is
-kept and now does NOT run: the guard fires at the `push`, ahead of it, which is what proves the check
+Unguarded, this program would print `before` and die `panic: integer divide by zero` — the element
+read back out is a `NonZero` the compiler believes, so `100 / d` is a bare `idiv`. The `print` is
+there and does NOT run: the guard fires at the `push`, ahead of it, which is what proves the check
 lands at the store rather than at the read.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -844,18 +839,17 @@ Stack trace:
 #### ⚠⚠ THE ROUTE TO `#DE` A STORE GUARD STRUCTURALLY CANNOT CLOSE — a slot `resize` EXPOSED, which no value ever crossed a door into
 
 **Closing a door deletes the tests that came through it, and that is the trap this case exists to
-disarm.** `divide-by-zero-fault-through-an-unchecked-array-element` was the suite's ONLY program
-reaching the `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm of the Windows fault thunk; the case
-above is what it became, and it no longer reaches the arm. Sabotage-verified in both directions:
-break that arm and this case fails, and it is the only 0xC0000094 case there is.
+disarm.** The store-guard case above does not reach the `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094)
+arm of the Windows fault thunk; this one does. Break that arm and this case fails, and it is the only
+0xC0000094 case there is.
 
 **The route is `Array.resize`, and it is not a store at all.** Growing an array *exposes*
 zero-initialized slots, which `stdlib/Array.maxon` documents as elements for exactly the inline
 element types this range applies to — *"a zero is an ELEMENT only while the element lives INLINE in the
 buffer — an int, a float, a bool, a byte, **a ranged typealias over one of those**"*. So an
 `Array with NonZero` acquires a `0` element with **no value crossing any door**: there is nothing for a
-store guard to stand in front of, and `A1f-arrayelem`'s cure is structurally out of reach of it exactly
-as A1f's was out of reach of the store. `100 / d` is a bare `idiv` because the compiler still believes
+store guard to stand in front of, and the store guard is structurally out of reach of it exactly
+as the entry guard is out of reach of the store. `100 / d` is a bare `idiv` because the compiler believes
 `NonZero`, and `print("before")` runs, proving the zero travelled the whole way.
 
 ⛔ **This is a REMAINING unenforced ranged premise, not a settled rule.** Whether `resize` should be
@@ -887,22 +881,19 @@ Stack trace:
   in mrt_start
 ```
 
-⭐⭐ **NO DOOR LEAKS ANY MORE — WHICH WAS NOT TRUE UNTIL THE TWO CASES BELOW WERE PINNED.** The claim
-above rests on every door into a ranged binding enforcing its range at runtime, and for a **wholly
-NEGATIVE** divisor range they did not: a `-1` stored upper bound was read as the unbounded `u64.max`
-whatever the low bound said, so `int(-100 to -1)` and `int(i64.min to -2)` carried no upper compare and
-the plain `as` cast admitted anything (`specs/ranged-typealias.md`'s
-`negative-upper-bound-cast-is-checked` owns the rule). Both of `idiv`'s hazards were reachable through
-it, so both are pinned here — and they were the SAME defect as the array-element store above, arriving
-through a door that is supposed to be shut. What remains is not a door at all: it is the EXPOSED slot
+⭐⭐ **NO DOOR LEAKS, AND THE TWO CASES BELOW PIN THE WHOLLY-NEGATIVE RANGES.** The claim above rests
+on every door into a ranged binding enforcing its range at runtime, including for a **wholly
+NEGATIVE** divisor range: a `-1` stored upper bound read as the unbounded `u64.max` whatever the low
+bound says would leave `int(-100 to -1)` and `int(i64.min to -2)` with no upper compare and let the
+plain `as` cast admit anything (`specs/ranged-typealias.md`'s `negative-upper-bound-cast-is-checked`
+owns the rule). Both of `idiv`'s hazards are reachable that way, so both are pinned here — the SAME
+hazard as the array-element store above, through a door that is supposed to be shut. What remains is not a door at all: it is the EXPOSED slot
 `resize` hands back, which no value ever crossed into.
 
-⚠ **THAT LAST SENTENCE SAID "IT" AND MEANT "ONE OF THEM" — there were TWO producers that are not
-doors, and only one had been enumerated (G14).** The other is a MERGE, which claims the declared type
-of ONE incoming edge while another edge hands it whatever an assignment or a `gives` arm put there;
-it reached the same uncatchable `#DE` and is pinned by
-`error.divide-by-a-loop-carried-merge-is-refused` below. It is now CLOSED — a merge no longer proves a
-range — so `resize`'s slot is once again the only one left, this time counted rather than assumed.
+⚠ **THERE ARE TWO PRODUCERS THAT ARE NOT DOORS.** The other is a MERGE, which claims the declared
+type of ONE incoming edge while another edge hands it whatever an assignment or a `gives` arm put
+there; it is pinned by `error.divide-by-a-loop-carried-merge-is-refused` below, and it is CLOSED — a
+merge does not prove a range — so `resize`'s slot is the only one left.
 
 <!-- test: negative-range-cast-guard-fires-before-the-divide -->
 #### A zero cast into a wholly-negative divisor range is refused at the CAST, not at the `idiv`
@@ -937,11 +928,12 @@ Stack trace:
 ```
 
 <!-- test: negative-range-cast-guard-fires-before-the-remainder -->
-#### ⭐ The A1x hazard through the same door — `int(i64.min to -2)` admitting a `-1`
-The remainder's own twin, and the reason this pair belongs beside A1x rather than only in
-`ranged-typealias.md`: `BelowMinusOne` rules out BOTH of `idiv`'s divisors, so `n mod d` is bare and
-`i64.min mod -1` came back as `panic: integer overflow` — the exact fault A1x exists to remove — through
-a cast the division proof was entitled to trust.
+#### ⭐ The `i64.min mod -1` hazard through the same door — `int(i64.min to -2)` admitting a `-1`
+The remainder's own twin, and the reason this pair belongs beside the `i64.min mod -1` cases rather
+than only in `ranged-typealias.md`: `BelowMinusOne` rules out BOTH of `idiv`'s divisors, so `n mod d`
+is bare, and a cast admitting `-1` would bring `i64.min mod -1` back as `panic: integer overflow` — the
+exact fault the overflow guard exists to remove — through a cast the division proof is entitled to
+trust.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias BelowMinusOne = int(i64.min to -2)
@@ -1043,22 +1035,22 @@ Stack trace:
 ```
 
 <!-- test: error.divide-by-a-loop-carried-merge-is-refused -->
-#### ⚠⚠ A MERGE IS THE SECOND PRODUCER THAT IS NOT A DOOR — and the paragraph above had to be amended for it (G14)
+#### ⚠⚠ A MERGE IS THE SECOND PRODUCER THAT IS NOT A DOOR
 
 **`resize`'s exposed slot is not the only way a ranged binding acquires a value that crossed no
 door.** A `var` declared from a `NonZero` and then REASSIGNED inside a loop merges at the loop header,
 and a merge takes its declared type from ONE incoming edge — here the seed — while the other edge is
-an ASSIGNMENT, which is a door on no tier. So the binding went on claiming `NonZero` while holding
-`0`, `divisorProof` answered `neverZero` off that claim, and `100 / d` compiled to a **bare `idiv`
-that needed no `try` at all**: MEASURED before G14 as `panic: integer divide by zero` — the
-uncatchable `#DE` where the language promises a catchable `DivisionByZero`, which is the very fault
-A1f shut the PARAMETER door to prevent, arriving through a producer nobody had enumerated.
+an ASSIGNMENT, which is a door on no tier. A merge that proved a range would let the binding claim
+`NonZero` while holding `0`, `divisorProof` answer `neverZero` off that claim, and `100 / d` compile to
+a **bare `idiv` that needs no `try` at all** — `panic: integer divide by zero`, the uncatchable `#DE`
+where the language promises a catchable `DivisionByZero`, which is the very fault the entry guard shuts
+the PARAMETER door to prevent.
 
 ⭐ **IT IS REFUSED AT COMPILE TIME RATHER THAN GUARDED AT RUNTIME, and that is the honest answer here.**
-The cure is not a check on the divide: it is that a merge no longer PROVES a range, so the divisor
+The cure is not a check on the divide: it is that a merge does not PROVE a range, so the divisor
 falls to `possiblyZero` — the conservative arm this rule already documents — and the program is exactly
-the `error.divide-without-try` above wearing a loop. The proof is gone because it was never true; the
-`try` the language has always asked for is what replaces it.
+the `error.divide-without-try` above wearing a loop. There is no proof because none would be true; the
+`try` the language asks for takes its place.
 ```maxon
 typealias NonZero = int(1 to i64.max)
 
@@ -1341,7 +1333,7 @@ Stack trace:
 <!-- test: force-segfault -->
 <!-- unsupported-targets: arm64-macos, wasm32-wasi -->
 ⭐⭐ **THE ONLY CASE THAT CAN REACH THE FAULT HANDLER ON PURPOSE.** Every other route into
-`mrt_fault_thunk` is a compiler BUG, so before `__Builtins.forceSegfault()` existed the whole thunk was code
+`mrt_fault_thunk` is a compiler BUG, so without `__Builtins.forceSegfault()` the whole thunk would be code
 no suite could exercise: green everywhere, and unmeasured. The intrinsic lowers to
 `maxon_force_segfault`, whose body is Maxon source the compiler reads out of `runtime/FaultProbe.maxon`
 (`specs/runtime-source-tier.md`): a `__Raw.storeWord` through address 0, which the handler's
@@ -1349,8 +1341,7 @@ EXCEPTION_ACCESS_VIOLATION arm turns into this line, this backtrace and exit 1.
 
 ⚠ **THE ENTRY POINT IS A FUNCTION AND NOT A STORE INLINED AT THE CALL SITE, BECAUSE THE FRAME LIST IS WHAT
 THIS ASSERTS.** Inlined, frame 0 would be `main` and the case would stop saying that the walk crosses a frame
-boundary at all. `__Raw.ownFrame()` is what keeps it a frame; both compilers emit the same symbol for the
-same reason.
+boundary at all. `__Raw.ownFrame()` is what keeps it a frame.
 ### Deliberate access violation produces a clean panic with backtrace
 ```maxon
 function main() returns ExitCode
@@ -1376,7 +1367,7 @@ Stack trace:
 count it — which is why its target list excludes every other lane rather than marking it as a restriction
 about the FEATURE. A fragment is minted from a RUN, so its golden exists only because a Mac minted it.
 
-⭐ **MEASURED ON arm64-macOS, AND IT ANSWERS FRAME FOR FRAME WITH THE x64 CASE ABOVE.** The handler
+⭐ **ON arm64-macOS IT ANSWERS FRAME FOR FRAME WITH THE x64 CASE ABOVE.** The handler
 reads Darwin's `ucontext`, recovers the faulting frame and walks out through `main` to `mrt_start` — so the
 backtrace below is a reading of this host, not a transcription. That is what makes the two cases one claim
 about the fault path rather than one claim and one placeholder.
@@ -1483,7 +1474,7 @@ end 'main'
 <!-- test: error.force-segfault-name-is-reserved -->
 ⛔⛔ **`maxon_force_segfault` IS THE ONE COMPILER-OWNED FUNCTION SYMBOL WEARING NO RESERVED PREFIX, SO A
 RESERVATION IS WHAT PROTECTS IT.** The three cases above assert the name as a FRAME a backtrace prints, which
-is why it can never be moved into the `__` band a shape test could recognise — and its body is now ordinary
+is why it can never be moved into the `__` band a shape test could recognise — and its body is ordinary
 Maxon source, `runtime/FaultProbe.maxon`, rather than IR the compiler builds after parsing.
 
 ⚠ **WHAT THE REFUSAL PREVENTS IS A RENAME, NOT A DUPLICATE.** A second declaration of the bare name makes it

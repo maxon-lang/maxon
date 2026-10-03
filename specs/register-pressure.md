@@ -3,7 +3,6 @@ feature: register-pressure
 status: selfhosted
 keywords: [register-allocator, E5001, register-pressure, hot-spill, diagnostic, value-origin, callee-saved]
 category: register-allocator
-milestone: M5.7
 ---
 
 # Register-pressure diagnostic (E5001)
@@ -75,7 +74,7 @@ rather than one shared case. `wasm32-wasi` is excluded from all of them because 
 register cap to exceed, so E5001 cannot fire there at all. The float case is gated to x64 for the same
 reason one file down: it is calibrated to x64's sixteen-deep XMM pool.
 
-⚠ Verified 2026-07-28 by widening every marker and re-running: each x64 twin fails on arm64 and each
+⚠ Each x64 twin fails on arm64 and each
 arm64 twin on x64 with a *compiler-error mismatch* — the deficits genuinely differ — so no twin is
 gated merely because nobody generated its golden.
 
@@ -303,8 +302,8 @@ does not touch a value they can see it assigning. ⚠ It also means a 0 here is 
 sufficient** as the tell of a surplus value (`docs/internals/register-allocation.md`, The contract): nothing
 upstream over-produced anything in this program.
 
-No arm64 twin, and that is MEASURED rather than a missing golden: arm64 allocates from 25 GPRs, so
-seventeen live values fit and the same source compiles there (`--target=arm64-macos`, verified). The
+No arm64 twin, and not for want of a golden: arm64 allocates from 25 GPRs, so
+seventeen live values fit and the same source compiles there. The
 pool is the subject, exactly as this file's header says. `main` reaches `parseFlags` from two sites so the
 called-once inliner leaves it a function; spliced into `main`, `i < 0` folds and the loop vanishes.
 ```maxon
@@ -406,10 +405,10 @@ leaves it exactly one home, the stack. So the splitter stores it before the call
 after — a placement it does not choose, only obeys — and the loop body grows by one store and one
 load, bracketing a call that costs far more. Nothing is searched, and no error is raised.
 
-This is the case that must never regress to E5001. The program fits the machine: six values,
-fourteen registers. The array rewrite an E5001 would have demanded puts all five accumulators in
+This case must never raise E5001. The program fits the machine: six values,
+fourteen registers. The array rewrite an E5001 would demand puts all five accumulators in
 memory and reads *and writes* each one every iteration — ten memory ops per iteration to avoid
-two. Refusing the spill would have produced strictly worse code AND a false error.
+two. Refusing the spill would produce strictly worse code AND a false error.
 
 Every accumulator is loop-carried (an SSA phi) and its update is a back-edge arg, so this also
 covers the two shapes a forced spill must handle: a phi's store anchors at its block's entry, and
@@ -450,7 +449,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: rescued-idle-around-loop -->
-The CONTRAST to `hot-loop-overflow`: the SAME sixteen values, but now they are idle across
+The CONTRAST to `hot-loop-overflow`: the SAME sixteen values, but here they are idle across
 the loop (computed before it, summed after it) rather than updated inside it. The loop's
 genuine working set is just `sum` and `i` — two values — so it fits, and the cold-spill
 splitter stores the sixteen idle values around the loop. The loop body stays exactly
@@ -577,25 +576,23 @@ error E5001: the loop at <fragment>:18 needs 1 more register(s) than are availab
 ⚠ **THE SUBJECT IS THE x64 REGISTER POOL.** How wide a signature has to be before the allocator spills is
 a property of how many registers there are, and arm64 has a different count — which is why this file
 pairs its overflow cases with explicit `-arm64` twins rather than running one case on both.
-⚠⚠ **THIS CASE ASSERTED AN `E5001` UNTIL P1.9's CLOSE, AND THAT `E5001` WAS FALSE.** Twenty-one parameters,
+⚠⚠ **NO `E5001` HERE: THE PEAK IS ALREADY PAID FOR.** Twenty-one parameters,
 each read by both calls and again by the sum, are live across the calls and outnumber the fourteen-GPR pool
-with no loop anywhere — so the case was written to pin the STRAIGHT-LINE form of the message (`the code at`,
-not a loop that does not exist; a real source line, not `:0`; uses counted over the FUNCTION). The refusal
-itself was never examined.
+with no loop anywhere.
 
-It does not survive examination. Every one of those values is ALREADY IN MEMORY by the time the full-pool
+Every one of those values is ALREADY IN MEMORY by the time the full-pool
 peak is reached: each is confined at the two calls, and the forced bracket the ABI owes it puts it in a slot.
 Relieving the peak therefore costs NOTHING that has not already been paid — no new store, no new slot, only a
-reload before the uses that remain — and `isForcedBracketVictim` now offers exactly that at a COLD peak as
+reload before the uses that remain — and `isForcedBracketVictim` offers exactly that at a COLD peak as
 well as a confined one. The program compiles, and returns 21 + 21 + 21.
 
-⚠ **THE `E5001` THE CONTRACT DEFINES IS UNTOUCHED, AND THAT IS THE LINE THIS CASE NOW SITS BESIDE**
+⚠ **THE `E5001` THE CONTRACT DEFINES IS THE LINE THIS CASE SITS BESIDE**
 (`docs/internals/register-allocation.md`, The contract).
 The refusal is for *"a value the LOOP genuinely uses, when the working set exceeds the whole pool"* — the
 per-iteration cost of a reload at every use inside a loop body. A value used inside a loop is not
 cold-spillable, so the re-relief arm cannot reach it: `hot-loop-overflow`, `hot-loop-param-used` and every
-other loop case above still raise E5001, byte for byte. What changed is only the case the cost argument never
-covered — straight-line code, where there is no iteration and no per-iteration cost.
+other loop case above raise E5001, byte for byte. This case is the one the cost argument does not
+cover — straight-line code, where there is no iteration and no per-iteration cost.
 ```maxon
 function sink(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer, p7 Integer, p8 Integer, p9 Integer, p10 Integer, p11 Integer, p12 Integer, p13 Integer, p14 Integer, p15 Integer, p16 Integer, p17 Integer, p18 Integer, p19 Integer, p20 Integer, p21 Integer) returns Integer
 	return p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 + p21
@@ -618,7 +615,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: hot-loop-param-used-arm64 -->
 <!-- unsupported-targets: x64-windows, x64-linux, wasm32-wasi -->
-The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators and the counter it is one of twenty-eight values live against arm64's 25-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 3. `main` reaches `hot` from two sites so the called-once inliner leaves it a function; spliced into `main`, `p` would fold to a constant and the diagnostic would be a DIFFERENT one — MEASURED on `--target=arm64-macos`, twenty-seven values and deficit 2, with every span pointing into `main`. The x64 twin fits its pool outright when spliced; this one does not, so the second site is what keeps the case pinning `hot`'s own shape rather than what makes it compile.
+The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators and the counter it is one of twenty-eight values live against arm64's 25-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 3. `main` reaches `hot` from two sites so the called-once inliner leaves it a function; spliced into `main`, `p` would fold to a constant and the diagnostic would be a DIFFERENT one — twenty-seven values and deficit 2, with every span pointing into `main`. The x64 twin fits its pool outright when spliced; this one does not, so the second site is what keeps the case pinning `hot`'s own shape rather than what makes it compile.
 ```maxon
 function hot(p Integer) returns Integer
 	var s1 = 1
@@ -735,7 +732,7 @@ parsing, has no origin of its own. When it lands in the blocking set it must NOT
 Rule-3 panic: it is chased through `SplitLineage` back to the original constant, so it resolves
 to the `let d` literal (`<fragment>:24:11`). The remaining working set (thirteen accumulators
 plus the counter) still overflows by two, and the deficit (2) never exceeds the sixteen listed
-values. Regression for the fresh-rematerialized-id false panic.
+values. This pins that a fresh rematerialized id never trips a false panic.
 ```maxon
 function hot() returns Integer
 	var s1 = 1
@@ -925,16 +922,16 @@ error E5001: the loop at <fragment>:31 needs 3 more register(s) than are availab
 <!-- unsupported-targets: arm64-macos, arm64-linux, wasm32-wasi -->
 ⭐ **THE ANCHOR IS THE PEAK'S OWN LOOP, NOT THE FIRST LOOP IN THE FILE.** Two loops in one function
 and only the SECOND overflows: the `pad` loop's entire body is `pad = pad + 1`, while the sixteen
-accumulators and the counter are the working set of the loop below it. The anchor used to be the
-smallest source line over EVERY block at loop depth ≥ 1 — i.e. over every loop in the function — so
-it named `pad`'s body at `:5` while every value it went on to rank was declared *after* that loop had
-ended. A value declared at `:22` cannot be live in a loop that ends at `:6`: the report contradicted
-itself only because the headline and the ranked list came from different places.
+accumulators and the counter are the working set of the loop below it. An anchor at the
+smallest source line over EVERY block at loop depth ≥ 1 — i.e. over every loop in the function — would
+name `pad`'s body at `:5` while every value it went on to rank was declared *after* that loop had
+ended. A value declared at `:22` cannot be live in a loop that ends at `:6`: such a report contradicts
+itself because the headline and the ranked list come from different places.
 
 `pad` shows the same wrong region in the RANKING. It is live across the second loop (the `return`
-reads it) and used ZERO times inside it, yet its two uses in the FIRST loop were counted as uses "in
-the loop" and ranked it *below* every accumulator — the one value the author could most cheaply move
-out of the way, listed last. Both numbers now come from the peak's own loop.
+reads it) and used ZERO times inside it; counting its two uses in the FIRST loop as uses "in the
+loop" would rank it *below* every accumulator — the one value the author could most cheaply move
+out of the way, listed last. Both numbers come from the peak's own loop.
 
 It really is one of the eighteen, and that is the point of keeping it in the set: the value the
 `return` reads is the first loop's own carried phi, defined at depth 1, so the store of a cold split
@@ -1037,7 +1034,7 @@ Naming the INNER loop instead would report `acc` as "used 0 times in the loop" a
 removed from a loop it is not in, while the array rewrite that would actually relieve the peak has to
 happen in the outer body either way. This case is the difference between those two readings: every
 line of it is identical under a whole-function anchor, so it also pins that restricting the scan to
-the peak's own nest changed nothing for a function that has only one.
+the peak's own nest changes nothing for a function that has only one.
 ```maxon
 function hot(_ Integer) returns Integer
 	var acc = 0
@@ -1286,9 +1283,9 @@ typealias Real = float(f64.min to f64.max)
 
 <!-- test: dead-def-past-the-arm64-pool-across-register-files -->
 The arm64 twin of `dead-def-inherits-only-its-own-register-file`, at the arm64 cliff: twenty-six live
-integer parameters plus a dead GPR def whose only dying operand is a float. It panicked `chooseRegister`
-on arm64 for exactly the reason the x64 case did, so the class filter is pinned on BOTH lanes of the
-shared pressure model rather than on the one that happened to be probed. Ungated: on x64 the same
+integer parameters plus a dead GPR def whose only dying operand is a float. Without the class filter
+it panics `chooseRegister` on arm64 for exactly the reason the x64 case does, so the class filter is
+pinned on BOTH lanes of the shared pressure model. Ungated: on x64 the same
 program is well past the pool and the splitter relieves it cold, which is worth pinning too. The
 trailing arguments are zero so the sum fits an exit code. Result is `sum(1..20) = 210`.
 ```maxon
@@ -1343,8 +1340,8 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: dead-def-parameter-past-the-arm64-pool -->
 The arm64 twin of the boundary. arm64 allocates from 25 GPRs (x0-x14 ∪ x19-x28 — x15 is the
 asynchronous-preemption trampoline's return register), so the dead-def cliff sits at 26 where x64's
-sits at 15 — twenty-six live parameters plus one dead materialization is two past the arm64 pool, and it panicked `chooseRegister` there for exactly the reason it did on
-x64. It is not gated to arm64: on x64 the same program is simply well past the pool and the
+sits at 15 — twenty-six live parameters plus one dead materialization is two past the arm64 pool, the
+same cliff the x64 boundary pins. It is not gated to arm64: on x64 the same program is simply well past the pool and the
 splitter relieves it cold, which is worth pinning too. The trailing arguments are zero so the sum
 fits an exit code while the first twenty stay distinct — a swapped register still changes the
 answer. Result is `sum(1..20) = 210`.
@@ -1371,11 +1368,11 @@ real call on every iteration of the first loop — an impure helper, so it is ne
 see `cold-call-spilling`). Five values are live across it — confined to the five callee-saved GPRs —
 and `carry = widened shr 32` is a two-address reuse def that becomes a SIXTH. It holds a register at
 an op where it is in no live set, so no popcount over a live row can see it; the full-pool figure
-counted it (14 registers, no overflow) and the CONFINED census did not, on the premise that
-*"a transient is not a value, so it is not confined by anything"*. It is a value: it crosses the next
-iteration's call and may live in exactly those five registers. The splitter relieved nothing and
-`chooseRegister` died with `forbidden` covering the caller-saved half and the held set covering the
-rest. `opConfinedTransient` is the rule; inheriting the input's register is only free when every
+counts it (14 registers, no overflow), and the CONFINED census must too, whatever the premise that
+*"a transient is not a value, so it is not confined by anything"* suggests. It is a value: it crosses
+the next iteration's call and may live in exactly those five registers. A census that misses it
+relieves nothing, and `chooseRegister` dies with `forbidden` covering the caller-saved half and the
+held set covering the rest. `opConfinedTransient` is the rule; inheriting the input's register is only free when every
 register the input may hold is one the def may hold too.
 
 `0xFFFFFFFF << 4` is `0xFFFFFFFF0`, so limb 0 keeps `0xFFFFFFF0` and carries `0xF` into limb 1,
@@ -1424,19 +1421,20 @@ end 'main'
 ```
 
 <!-- test: confined-reuse-defs-past-the-callee-saved-half -->
-⛔⛔ **THE SAME REUSE-DEF CONFINEMENT AS ABOVE, IN A PROGRAM WITH NOTHING EXOTIC IN IT — AND
-IT REACHES `chooseRegister`'s EXHAUSTION PANIC ON BOTH ISAs.**
+⛔⛔ **THE SAME REUSE-DEF CONFINEMENT AS ABOVE, IN A PROGRAM WITH NOTHING EXOTIC IN IT, ON
+BOTH ISAs.**
 
 Twenty-six ints that cross no call, then eleven `b` values that do. Each `b` is a
 two-address `imul` reuse def whose input is still live, so each holds a register of its own
 at an op where it is in NO live set; all eleven are live across `sink(s)`, which confines
 them to the callee-saved half of the GPR file.
 
-The masks say which half owns it: `FORBIDDEN` is non-empty and covers the caller-saved
-registers, and `HELD` covers everything else — so the point is CONFINED to a subset, not a
-full-pool pigeonhole. **Twenty-four and twelve compiles clean, and so does twenty-two and
-fourteen**, which is the control: adding MORE call-crossing values does not reproduce it.
-The demand this shape creates is not one any popcount over the full pool can see.
+The point is CONFINED to a subset, not a full-pool pigeonhole: each `b` is forbidden the
+caller-saved registers, and the callee-saved ones are held. **Twenty-four and twelve, and
+twenty-two and fourteen, do not create it**: adding MORE call-crossing values is not what
+confines the point. The demand this shape creates is not one any popcount over the full pool
+can see; `opConfinedTransient` counts it, and a value the greedy colorer still cannot place is
+split and re-coloured by `colorRepairingConfinements`.
 
 `n = 4`, so `a0`..`a25` are `5`..`30` summing to `455`; `c = 456`; `b0`..`b10` are `10`,
 `12`, … `30`, summing to `220`. Total `676`.
@@ -1497,9 +1495,9 @@ end 'main'
 ```
 
 <!-- test: confined-reuse-defs-past-the-callee-saved-half-float -->
-**THE SIMD TWIN, AND IT IS THE SAME BUG AND NOT A FLOAT ONE.** Thirty-two floats that cross
-no call and eight that do — `mulsd` / `fmul` reuse defs, live across `fsink(s)`, confined to
-the callee-saved vector registers. It reaches the identical panic on both ISAs.
+**THE SIMD TWIN, AND IT IS THE SAME CONFINEMENT AND NOT A FLOAT ONE.** Thirty-two floats that
+cross no call and eight that do — `mulsd` / `fmul` reuse defs, live across `fsink(s)`, confined
+to the callee-saved vector registers. It is relieved the same way on both ISAs.
 
 The pair exists because the two register files reach the same wall at different counts, and
 a fix that reads one file's pool size is a fix only one file ever tests.
@@ -1566,10 +1564,10 @@ typealias Real = float(f64.min to f64.max)
 
 <!-- test: confined-reuse-defs-at-x64s-own-scale-float -->
 ⭐ **THE SAME DEMAND, TWENTY-FIVE LINES LONG.** x64 has sixteen XMMs of which ten are
-callee-saved, so it reaches the wall at sixteen non-crossing floats and four crossing ones —
-which is the shape this defect was originally reported as. arm64's thirty-two vector
-registers absorb it, so this case is a plain correctness program there; the value of keeping
-it is that it is the SMALLEST program that has ever reached the panic.
+callee-saved, so it reaches the wall at sixteen non-crossing floats and four crossing ones.
+arm64's thirty-two vector registers absorb it, so this case is a plain correctness program
+there; the value of keeping it is that it is the SMALLEST program of this shape that reaches
+the wall.
 
 **Twenty and twenty-four unconstrained floats both compile clean**, which is the pigeonhole
 control: nineteen live floats already pass x64's pool, so the difference this case makes is
@@ -1669,10 +1667,10 @@ sift-down, holding **18 GPRs against x64's pool of 14** at a point inside its ou
 allocator raises E5001 — against a function with no source file, no line numbers, and no value the author
 can see or delete. The diagnostic cannot even be BUILT for it: `defRangeOf`'s four routes all end in
 tables only the parser fills, so it PANICS on the first blocking value (RULE 3) and no binary is produced.
-MEASURED on the parent of the change that greens this: **every program using a green thread failed to
-compile**, this one included, and so did the compiler's own self-compile.
+So refusing would make **every program using a green thread fail to compile**, this one included, and
+the compiler's own self-compile with it.
 
-⇒ The splitter now retries such a peak under the FORCED bracket — a reload before every use, paid per
+⇒ The splitter retries such a peak under the FORCED bracket — a reload before every use, paid per
 iteration — because that cost is the only alternative to refusing, and refusing is a message to nobody
 (`SplitLiveRanges.relievePressure`, `noAuthorToRefuse`). The relief is worth exactly what it costs and no
 more: the four splits it takes here are inside the scheduler's timer walk, which runs once per netpoll

@@ -212,11 +212,8 @@ typealias Integer = int(i64.min to i64.max)
 // An interface (or type-parameter) method call may name its FIRST argument:
 // the receiver dispatches through interface monomorphization, which is
 // receiver-type-dependent and so cannot be ruled out syntactically at parse
-// time. The C# bootstrap accepts this (it routes interface/type-param method
-// calls through a path that silently consumes a first-arg label); the self-
-// hosted parser defers the E2052 check to TypeResolution, which re-applies it
-// only for concrete-struct / enum / builtin receivers. This is the regression
-// guard for that split.
+// time. The E2052 check is deferred to TypeResolution, which re-applies it
+// only for concrete-struct / enum / builtin receivers.
 interface Combiner
 	function combine(first Integer, second Integer) returns Integer
 end 'Combiner'
@@ -292,13 +289,11 @@ error E2053: <fragment>:22:23: the second and later arguments must be named ('na
 
 <!-- test: dispatch-error-unknown-arg-label -->
 A label that names no parameter of the dispatched requirement is the same error it
-is at a direct call. The dispatch path used to CONSUME a label without reading it,
-so `bogus:` bound to `second` positionally and the program compiled and ran — a
-wrong answer with no diagnostic, which is the worst of the three ways this can go.
+is at a direct call. A dispatch path that consumed a label without reading it would
+bind `bogus:` to `second` positionally and run — a wrong answer with no diagnostic,
+which is the worst of the three ways this can go.
 
-The compiler answers `E3037`, which names the requirement the label failed against; the
-bootstrap reuses its direct-call answer, `E3003 unknown parameter name`. Same rule,
-two spellings — the diagnostic-parity rung's business, not this one's.
+The compiler answers `E3037`, which names the requirement the label failed against.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -861,18 +856,16 @@ end 'main'
 
 <!-- test: dispatch-interface-return-type -->
 ⭐⭐ **THE RETURN ABI.** An interface RETURN hands back a fat pointer, so it needs a second return
-register on a NON-throwing call — and the compiler already had one. `StdOp.errorReturn`/`StdOp.tryCall` and the
+register on a NON-throwing call — and the compiler has one. `StdOp.errorReturn`/`StdOp.tryCall` and the
 R10 / x9 / second-wasm-result plumbing behind them exist for the error flag; an interface-returning
 function writes the WITNESS there instead. **Same register convention, same op shape, no new Std op and
-no new backend arm** — which is exactly the arrangement v1 reaches from the identical constraint
-(`LowerMaxonToStd.maxon:13493-13525`). The one gate that moved is the predicate: *does this function use
-the secondary return slot* is now `throws` **OR** *returns an interface*, spelled once in
+no new backend arm**. The one gate is the predicate: *does this function use
+the secondary return slot* is `throws` **OR** *returns an interface*, spelled once in
 `functionUsesSecondaryReturnSlot` and asked by both return emitters and the wasm signature builder.
 
 ⚠ There is exactly ONE such register and both halves want it, so a function that is BOTH is refused —
-see `error.interface-returning-function-cannot-throw` below. v1 hits that same wall and SILENTLY SKIPS
-its return-witness path (`LowerMaxonToStd.maxon:13520-13567`), degrading the value to a bare pointer with
-no diagnostic at all; silence is the one unacceptable outcome.
+see `error.interface-returning-function-cannot-throw` below. Skipping the return-witness path instead
+would degrade the value to a bare pointer with no diagnostic at all; silence is the one unacceptable outcome.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -964,7 +957,7 @@ end 'main'
 
 
 <!-- test: interface-return-of-a-field-read -->
-An interface-typed FIELD read handed back through an interface RETURN — slice 2's two halves meeting.
+An interface-typed FIELD read handed back through an interface RETURN — the field and return halves meeting.
 The value half comes out of the field's first slot and the witness out of the one beside it, and the
 return then puts them in the two registers a caller reads.
 ```maxon
@@ -1116,9 +1109,8 @@ end 'main'
 
 <!-- test: error.interface-returning-function-cannot-throw -->
 ⛔ **THE ONE SECONDARY REGISTER, CONTESTED.** A throwing function already spends it on the error flag, so
-an interface return has nowhere left to put the witness. ⚠ v1 is representable-by-silence here: it SKIPS
-its return-witness path for exactly this combination (`LowerMaxonToStd.maxon:13520-13567`), emits the
-throwing return with a constant-0 flag and hands back a bare pointer with no diagnostic. This refusal is
+an interface return has nowhere left to put the witness. Admitted, it would emit the throwing return
+with a constant-0 flag and hand back a bare pointer with no diagnostic. This refusal is
 what keeps the E2015 sentence about the second register true.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1158,7 +1150,7 @@ error E2015: specs/fragments/interface-dispatch/error.interface-returning-functi
 
 <!-- test: error.interface-return-of-a-nonconformer -->
 ⭐ **THE VERDICT THE PARSER CANNOT TAKE.** A `returns <Interface>` function is a WIDENING position, so the
-parse-time tag check that used to refuse every concrete return is gone — and what replaced it is the
+parse-time tag check refuses no concrete return — its verdict is the
 whole-program conformance door the call ARGUMENT already asked (`SemanticCheck.existentialWideningVerdict`),
 because an `implements` clause is recorded when its own file is parsed and the two files have no ordering.
 Without it a non-conformer reaches `ensureWitnessTable` and PANICS the compiler on a slot no conformance
@@ -1219,9 +1211,8 @@ error E3121: specs/fragments/interface-dispatch/error.interface-return-of-a-floa
 <!-- test: error.function-value-of-an-interface-returning-function -->
 ⛔ A DIRECT call reads the secondary return register; a call through a function VALUE does not — its whole
 signature rides on `StdOp.callIndirect`, which has room for one result. So the refusal is at the line that
-makes the VALUE, not at the call: the same ABI fact that has refused a THROWING function as a function
-value since P1.4b. ⚠ MEASURED without it: `witnessOfValue` panicked the compiler on a `callIndirect`
-result nothing could pair.
+makes the VALUE, not at the call: the same ABI fact that refuses a THROWING function as a function
+value. ⚠ Without it, `witnessOfValue` panics the compiler on a `callIndirect` result nothing can pair.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1597,12 +1588,9 @@ end 'ConcreteQuery'
 // short-lived local dropped at the end of `allocateFor`, and its synthesized
 // destructor decrefs the interface field. The conformer passed in is OWNED by
 // `main` and kept alive across the whole loop, so the field holds only a BORROW —
-// the destructor must NOT release it. Before interface values were refcount-managed
-// consistently (the field is drop-tracked, but the borrowed value stored into it
-// got no store-incref), the destructor over-released the caller's conformer — the
-// `__destruct_FunctionRegAllocator` `regTarget`/`opQuery` over-release that blocked
-// the self-hosted bootstrap. Runs under the suite's leak gate (and `--rc-sanitize`),
-// so an over-release or leak fails it.
+// the destructor must NOT release it: the borrowed value stored into the field takes
+// its own store-incref, so the destructor's decref balances it. Runs under the
+// suite's leak gate, so an over-release or leak fails it.
 type Allocator
 	export var query as Query
 	export var f0 as StrArray
@@ -1799,11 +1787,10 @@ end 'main'
 `int` and `bool` conform intrinsically (`isIntrinsicBuiltinConformance`) and are held at an interface as
 their RAW VALUE in a general-purpose register — that is precisely what makes them representable there
 where a `float` is not (E3121). A `var` bound to a borrowed managed aggregate becomes a SECOND OWNER of it
-(OPEN #40's `__mm_retain`), and P1.7a-existentials slice 2 brought existentials under that rule — so the
+(`__mm_retain`), and an existential is under that rule too — so the
 incref has to be gated on the same `destroyFunc@8` word the DROP is gated on, which is 0 for a conformer
-that owns no record. **MEASURED with a plain `__mm_retain` on the value half: this program compiled and
-died with 0xC0000005, writing through `7 - 24 + 16`, where it answers 11 the moment the retain is
-witness-gated.** `__retain_existential` is that gate, and it is the exact inverse of `__drop_existential`:
+that owns no record. **A plain `__mm_retain` on the value half would write through `7 - 24 + 16`; the
+witness-gated retain answers 11.** `__retain_existential` is that gate, and it is the exact inverse of `__drop_existential`:
 a conformer whose drop is inert has an inert retain.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1832,10 +1819,8 @@ record NEVER reaches a refcount write. On the CONCRETE borrow→own doors that i
 `retainBorrowedByteRecord`, and `__str_retain` reads the record's own `capacity@16` and takes the CLONE
 arm for an immortal one and the incref arm for a heap one, which is a question no frame holding a
 borrowed `String` can answer for itself. The EXISTENTIAL path splits the same fact one level up — per
-CONFORMER, at compile time, where the type is known — and before this case it had no split at all:
-`__retain_existential` called `__mm_incref` whatever the conformer was, which on an `.rdata` record is a
-read-modify-write of READ-ONLY memory. **MEASURED before the retain word existed: this program printed
-`A` and died with a Segmentation fault (exit 139); `B` never printed.** The witness table's
+CONFORMER, at compile time, where the type is known — because an `__mm_incref` on an `.rdata` record is a
+read-modify-write of READ-ONLY memory. The witness table's
 `retainFunc@16` is what splits it — `__str_clone` for a byte-record conformer (an independently-droppable
 fresh heap record, which is what launders the literal), `__mm_retain` for an aggregate, 0 for a scalar.
 ```maxon
@@ -2164,7 +2149,7 @@ end 'main'
 ```
 
 <!-- test: dispatch-discriminating-merge -->
-⭐⭐ **compiler-authored, and it is the ONE case that can tell a correct existential from a broken one.**
+⭐⭐ **The ONE case that can tell a correct existential from a broken one.**
 Every merge case the corpus holds is undiscriminating in BOTH axes at once:
 `cross-block-method-receiver`'s `interface-method-statement-after-if-merge` branches on the constant
 `if 2 > 1` and hands the SAME implementor to both parameters, so an implementation that dispatches on
@@ -2225,11 +2210,10 @@ EXISTENTIAL.** `ExitCode` is a `u32`, so `Runner.take` is emitted with a wasm `i
 every other argument of every indirect call is an `i64`; `call_indirect` type-checks the call site's
 declared functype against the target's own EXACTLY, so the two must agree on that one argument or the
 call cannot be made at all. Returns `31`.
-**MEASURED RED before the fix, on this exact program: exit `31` on x64-windows, and
-`wasm trap: indirect call type mismatch` under wasmtime — `call_indirect` declaring
+**Where the two disagree, x64-windows still exits `31` while wasmtime traps with
+`wasm trap: indirect call type mismatch` — `call_indirect` declaring
 `(param i64 i64) (result i64)` against `$Runner.take (param i64 i32) (result i64)`.**
-⚠ **`ExitCode` IS THE ONLY NARROW TYPE THAT CAN REACH THIS, WHICH IS WHY 3,958 GREEN TESTS COULD NOT
-SEE IT.** `bool` is the other narrow Std type, and it is safe by an accident of SYNTAX rather than by
+⚠ **`ExitCode` IS THE ONLY NARROW TYPE THAT CAN REACH THIS.** `bool` is the other narrow Std type, and it is safe by an accident of SYNTAX rather than by
 the mechanism: it is a KEYWORD, so `parseTypeReference` tags it `boolean` directly and never mints a
 `named`, and `typealias Flag = bool` is refused (E2015). `ExitCode` is an IDENTIFIER, so the same
 function mints a bare `named` for it, which collapses to `i64` — while the conformer's impl declares
@@ -2271,7 +2255,6 @@ The CONSTRAINED-TYPE-PARAMETER twin of the case above — the other receiver kin
 dispatch mechanism serves. It is not a second repro: the two receivers reach `appendWitnessCall`
 by different routes (a threaded witness PARAMETER against a fat pointer's witness half), and a
 call-site width derived from anything the RECEIVER carries would have to answer for both.
-**MEASURED RED before the fix: `31` on x64-windows, `indirect call type mismatch` on wasm.**
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2317,8 +2300,7 @@ end 'main'
 The THROWING twin, which lowers to `witnessTryCall` rather than `witnessCall` — a different Std op
 with its own argument marshalling and its own interned functype (the trailing i64 error flag makes it
 a distinct wasm type even at the same arity). The masks are built at both `appendWitnessCall` and
-`appendWitnessTryCall`, so a fix applied to one and not the other leaves exactly this program broken.
-**MEASURED RED before the fix: `31` on x64-windows, `indirect call type mismatch` on wasm.**
+`appendWitnessTryCall`, so a mask built at one and not the other leaves exactly this program broken.
 See `witness-throws.md` for the throwing witness ABI itself; this case is about the ARGUMENT width.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2377,19 +2359,19 @@ what a dispatch hands the impl as its receiver, read out of an integer register 
 and a float lives in a floating-point register. Widening one is a cross-register-file move, which no
 `TargetOp` performs: a move's two ends are colored into one file by construction, and the two converts
 and the `movqGprXmm` bitcast are each their own op.
-**MEASURED before the rule: this program compiled all the way to the x64 emitter and PANICKED there —
+**Without the rule this program reaches the x64 emitter and PANICS there —
 `a register-to-register move from xmm0 to rcx crosses register files` — with no source position and
 nothing an author could act on.** It is E2062's fact one widening position over: dictionary passing
 gives a type parameter and an existential the SAME opaque slot, so it gives them the same limit.
-⚠ ONE parameter, named `_`, and a second one PROVING the check is per-argument is not expressible today —
-MEASURED, all three ways. A `float` actual is the only thing that reaches E3121, so the parameter must be
+⚠ ONE parameter, named `_`, and a second one PROVING the check is per-argument is not expressible,
+three ways over. A `float` actual is the only thing that reaches E3121, so the parameter must be
 a builtin protocol; those declare only `Self`-typed requirements, which are undispatchable on an
 existential (`requireWitnessSelfArgs`), so the parameter can never be USED; an unused NAMED parameter is
 E3012 and a second `_` cannot be supplied, because arguments after the first must carry a label and `_`
 is not one (E2053). The check itself is written per position (`checkOneArgType` runs once per argument),
-and the day a builtin protocol declares a nullary requirement this case grows its second parameter. This case is about the ARGUMENT, and an earlier draft used
-the two operands of `c < other` to consume them — which is the address-compare shape
-`error.existentials-cannot-be-compared` below refuses, so the program stopped reaching E3121 at all.
+and the day a builtin protocol declares a nullary requirement this case grows its second parameter. This case is about the ARGUMENT; consuming it through
+the two operands of `c < other` is the address-compare shape
+`error.existentials-cannot-be-compared` below refuses, which never reaches E3121 at all.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2406,19 +2388,18 @@ error E3121: specs/fragments/interface-dispatch/error.float-cannot-be-held-at-an
 ```
 
 <!-- test: error.existentials-cannot-be-compared -->
-⭐⭐ **COMPARING TWO VALUES HELD AT ONE INTERFACE ANSWERED WITH THEIR HEAP ADDRESSES, SILENTLY, ON EVERY
-TARGET.** `typeClassOf` gives `interfaceRef` its own class, so a pair of existentials passed the
-agreement gate; neither is a float, so the domain test passed them too — and the comparison lowered to
-an integer compare of the two fat pointers' VALUE HALVES.
-**MEASURED before the rule, identically on x64-windows and wasm32-wasi, on two distinct `Wrapped(7)`
-boxes: `7 == 7` answered `false`, `7 != 7` answered `true`, `7 >= 7` answered `false`, and
-`a(2) > b(1)` FLIPPED its answer when the two allocations were reordered.** Reference identity
+⭐⭐ **COMPARING TWO VALUES HELD AT ONE INTERFACE WOULD ANSWER WITH THEIR HEAP ADDRESSES, SILENTLY, ON
+EVERY TARGET.** `typeClassOf` gives `interfaceRef` its own class, so a pair of existentials passes the
+agreement gate; neither is a float, so the domain test passes them too — and without the rule the
+comparison lowers to an integer compare of the two fat pointers' VALUE HALVES.
+**On two distinct `Wrapped(7)` boxes that compare answers `7 == 7` with `false`, `7 != 7` with `true` and
+`7 >= 7` with `false`, and `a(2) > b(1)` FLIPS its answer when the two allocations are reordered.** Reference identity
 answering a question the author asked about values — word for word the hazard `comparableOperands`
-already refused for two structs, one tag over.
-It is also the OPERATOR half of a rule whose METHOD half was already closed: dispatching a `Self`-typed
+refuses for two structs, one tag over.
+It is also the OPERATOR half of a rule whose METHOD half is this: dispatching a `Self`-typed
 requirement on an existential is refused by `requireWitnessSelfArgs`, because two values held at one
 interface may have different dynamic types and nothing can prove they match — which is exactly what
-`==` and `<` need. Both doors now read the one sentence in `IrInterface.ExistentialPairUnprovableReason`.
+`==` and `<` need. Both doors read the one sentence in `IrInterface.ExistentialPairUnprovableReason`.
 ⚠ All six operators are refused, not only the two the corpus exercises. A MIXED pair (an existential
 against an `int`) is untouched and still reads as the type mismatch it is.
 ```maxon
@@ -2455,20 +2436,18 @@ error E3005: specs/fragments/interface-dispatch/error.existentials-cannot-be-com
 ```
 
 <!-- test: error.closure-parameter-at-an-interface-type -->
-⭐⭐ **A CLOSURE PARAMETER DECLARED AT AN INTERFACE TYPE PANICKED THE PARSER, WITH NO POSITION.**
+⭐⭐ **A CLOSURE PARAMETER DECLARED AT AN INTERFACE TYPE IS REFUSED; UNREFUSED, IT PANICS THE PARSER WITH NO
+POSITION.**
 ```text
 panic at Parser.maxon: Parser.witnessOfValue: value v0 is typed as an interface but no witness half is
 paired with it — every producer of an existential must call `pairInterfaceWitness`
 ```
 A value held at an interface is a two-word fat pointer `(value, witness)`, and the witness half travels
 as an ADJACENT HIDDEN ARGUMENT that only a named function's signature reserves. A lifted closure's
-parameters are bound by a different door than a function's, and that door paired no witness — so the
-first use of the parameter asked for a half that was never there.
-**MEASURED identically on the tip and on the control, so it is not a regression** — it is one of the
-seven interface-typed positions, and the one a round of this rung missed because a closure's parameters
-are parsed somewhere else.
+parameters are bound by a different door than a function's, and that door pairs no witness — so the
+first use of the parameter would ask for a half that is never there.
 ⚠ The closure is bound to a LOCAL rather than passed at a declared function type, and that is
-deliberate: `typealias ShapeFn = function(Shape) returns Integer` is itself refused now
+deliberate: `typealias ShapeFn = function(Shape) returns Integer` is itself refused
 (`error.interface-typed-function-type-parameter`), and it is refused EARLIER — so routing this case
 through one would test that rule instead of this one. A local binding is the shape that still reaches
 the closure's own parameter list.
@@ -2497,22 +2476,20 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.closure-parameter-at-an-interface-type.test:21:19: Unsupported: a closure parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
+error E2015: specs/fragments/interface-dispatch/error.closure-parameter-at-an-interface-type.test:21:19: Unsupported: a closure parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called indirectly, through a call that reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
 ```
 
 <!-- test: error.interface-typed-requirement-parameter -->
-⭐⭐ **AN INTERFACE-TYPED PARAMETER ON A REQUIREMENT WAS THE ONE POSITION THAT STILL COMPILED, AND IT
-NEVER WORKED.** Five declared places already refused an existential for the same reason — a struct
+⭐⭐ **AN INTERFACE-TYPED PARAMETER ON A REQUIREMENT IS REFUSED, BECAUSE A WITNESS CALL HAS ROOM FOR ONE
+WORD.** Five other declared places refuse an existential for the same reason — a struct
 field, a union payload, a return type, a container element and a closure parameter — because a value
-held at an interface is a two-word fat pointer and each of those has room for one word. A witness
-call has room for one word too, and this position was missed.
-**MEASURED on the CONTROL, so this is a completion rather than a new restriction: exit 139 (SEGFAULT)
-on x64-windows and a trap on wasm — with a proper CONFORMER actual**, not merely with a mistyped one.
-The isolating measurement: with the parameter present but never dispatched on, x64 answered CORRECTLY
-(the value half arrives, the witness half is simply dropped) while wasm still trapped on the call
-itself — which is what says the formal is unrepresentable rather than unchecked.
+held at an interface is a two-word fat pointer and each of those has room for one word.
+**Unrefused, it faults with a proper CONFORMER actual**, not merely with a mistyped one: exit 139
+(SEGFAULT) on x64-windows and a trap on wasm. With the parameter present but never dispatched on, x64
+answers CORRECTLY (the value half arrives, the witness half is simply dropped) while wasm still traps on
+the call itself — which is what says the formal is unrepresentable rather than unchecked.
 ⚠ Refused at the DECLARATION, where the author has something to change, and not at the dispatch — the
-rule the four storage positions already state. The refusal is NOTED by the shared interface reader and
+rule the four storage positions state. The refusal is NOTED by the shared interface reader and
 thrown only on the real-parse path, because that reader's other caller is the tolerant whole-program
 fold, which swallows a `ParseError` and would silently drop the interface from the index.
 ```maxon
@@ -2564,9 +2541,9 @@ error E2015: specs/fragments/interface-dispatch/error.interface-typed-requiremen
 
 <!-- test: error.interface-typed-requirement-parameter-through-a-type-parameter -->
 The SECOND dispatch door. The requirement is refused at its declaration, so it does not matter which
-receiver reaches it — but both doors collapsed the formal identically before the refusal existed
-(**MEASURED: 139 on x64, trap on wasm, through a `where T is` body exactly as through an existential**),
-and a refusal placed at either dispatch site instead of at the declaration would have closed only one.
+receiver reaches it — but both doors collapse the formal identically (139 on x64, a trap on wasm,
+through a `where T is` body exactly as through an existential), so a refusal placed at either dispatch
+site instead of at the declaration would close only one.
 This case is what proves the declaration is the right place.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2627,9 +2604,8 @@ error E2015: specs/fragments/interface-dispatch/error.interface-typed-requiremen
 
 <!-- test: error.interface-typed-parameter-on-a-throwing-requirement -->
 The THIRD door: a throwing requirement lowers to `witnessTryCall`, a different Std op with its own
-argument marshalling, and it collapsed the formal identically (**MEASURED: 139 on x64, trap on wasm**).
-Pinned because a refusal wired into the non-throwing dispatch alone would leave exactly this shape live,
-which is the split that has cost this rung two rounds already.
+argument marshalling, and it collapses the formal identically (139 on x64, a trap on wasm).
+Pinned because a refusal wired into the non-throwing dispatch alone would leave exactly this shape live.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2689,7 +2665,7 @@ error E2015: specs/fragments/interface-dispatch/error.interface-typed-parameter-
 the position that DOES have room — its signature reserves an adjacent hidden argument for the witness
 half — so it must keep compiling and answering correctly while the requirement's parameter is refused.
 The two are one token apart in the source and one `DeclaredStoragePosition` apart in the compiler.
-MEASURED against the control, unchanged: `20 + 11`.
+`20 + 11`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2740,11 +2716,9 @@ end 'main'
 ```
 
 <!-- test: error.interface-typed-function-type-parameter -->
-⭐⭐ **A SEVENTH INTERFACE-TYPED POSITION, AND THIS RUNG IS WHAT MADE IT REACHABLE.** (It was not the last: a TUPLE ELEMENT was an eighth, reached by a route no field/parameter/return reader owns — see `error.interface-typed-tuple-element`. The count is deliberately not written down in the compiler either; `DeclaredStoragePosition` is the count.) At the
-merge base an interface name in a parameter position was E3011 — existentials did not exist — so the
-shape only became writable when this rung landed them. It has never worked:
-**MEASURED, exit 139 (SEGFAULT) on x64-windows and a PANIC in the wasm backend**, given a proper
-conformer.
+⭐⭐ **AN INTERFACE-TYPED POSITION INSIDE A FUNCTION TYPE.** (A TUPLE ELEMENT is another, reached by a route no field/parameter/return reader owns — see `error.interface-typed-tuple-element`. The count is deliberately not written down in the compiler either; `DeclaredStoragePosition` is the count.)
+Unrefused, it faults even given a proper conformer: exit 139 (SEGFAULT) on x64-windows and a PANIC in
+the wasm backend.
 The reason is the closure parameter's, exactly: a function VALUE is called through the uniform
 `(userargs, env)` indirect ABI, which carries one machine word per argument, so the fat pointer's
 witness half has nowhere to travel. The value reaching the call is a `__fnref_` thunk or a lifted
@@ -2787,7 +2761,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-type-parameter.test:20:30: Unsupported: a function type's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
+error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-type-parameter.test:20:30: Unsupported: a function type's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called indirectly, through a call that reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
 ```
 
 <!-- test: error.function-value-of-an-interface-taking-function -->
@@ -2796,19 +2770,18 @@ REFUSE IT.** `let f = measure` takes a function value off the NAME, so nothing d
 `parseTypeReference` to catch — and `measure`'s own parameter list is legal, because a DIRECT call reserves
 the adjacent witness slot and fills it. What is unrepresentable is the VALUE USE, so that is where the
 refusal sits, and the remedy is to call `measure` directly.
-⚠ **MEASURED before this refusal existed: the program compiled and faulted inside `measure`, reached
-through `__fnref_measure`** — the thunk forwards one word per user parameter and the witness companion
-`Parser.bindExistentialWitnessParams` reserved went unwritten, so `c.area()` dispatched through whatever the
-register held.
+⚠ **Unrefused, the program faults inside `measure`, reached through `__fnref_measure`** — the thunk
+forwards one word per user parameter and the witness companion `Parser.bindExistentialWitnessParams`
+reserves goes unwritten, so `c.area()` dispatches through whatever the register holds.
 ⚠ It is E3156 rather than E2015 because the answer needs RESOLVED parameter types: the interface arm of
 `parseTypeReference` is gated on `allFilesFolded`, so a parameter type the declaration sweep recorded still
 carries a bare `named`. A function value's RETURN type has no such problem — it crosses the signature index
 through `adoptReturnType` — which is why `error.function-value-of-an-interface-returning-function` above is
 the parser's and this one is not.
 ⭐ Its FALSE-REJECT CONTROL is the whole of `first-class-functions.md`: a function value whose target takes
-a concrete parameter is untouched, and so is one whose target takes a FUNCTION parameter, whose own hidden
-companion IS suppliable — the thunk passes a null, the only environment a value handed across a
-`callIndirect` carries (`first-class-function.nested-function-type-agrees-by-alias-name`).
+a concrete parameter is untouched, and so is one whose target takes a FUNCTION parameter, because a function
+value is one word — its closure record — and travels in its argument's own slot
+(`first-class-function.nested-function-type-agrees-by-alias-name`).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2838,14 +2811,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3156: <fragment>:25:10: cannot use 'measure' as a function value: its parameter 'c' is declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called through the uniform `(userargs, env)` indirect ABI, which carries one machine word per argument and reserves no adjacent slot for the witness half. Call 'measure' DIRECTLY, whose signature reserves that slot, or declare the parameter at a concrete type
+error E3156: <fragment>:25:10: cannot use 'measure' as a function value: its parameter 'c' is declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called indirectly, through a call that reserves no adjacent slot for the witness half. Call 'measure' DIRECTLY, whose signature reserves that slot, or declare the parameter at a concrete type
 ```
 
 <!-- test: interface-dispatch.function-values-over-concrete-types-still-compile -->
 The FALSE-REJECT CONTROL for the case above. A function type whose parameter is a CONCRETE type is
 untouched, and so is a function value stored in a struct FIELD and called back out of it — the two
 shapes closest to the refused one. Only an interface-typed parameter loses its second word; nothing
-about function values in general changed. `31 + 11`.
+else about function values is refused. `31 + 11`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2896,17 +2869,14 @@ end 'main'
 ```
 
 <!-- test: error.interface-typed-tuple-element -->
-⭐⭐ **THE EIGHTH INTERFACE-TYPED POSITION, AND THE ONE THAT REACHED THE BACKEND.** A tuple type is
+⭐⭐ **AN INTERFACE-TYPED POSITION THAT REACHES THE BACKEND WITHOUT ITS OWN DOOR.** A tuple type is
 interned as a SYNTHESIZED STRUCT, so its element list is read by `parseTupleTypeReference` — a third
-route, belonging to no field, parameter or return reader — and it asked no door at all. The
-`interfaceRef` travelled into `internTupleType` → `mangleTypeArg` and **PANICKED** in
+route, belonging to no field, parameter or return reader — so it asks a door of its own. Without one the
+`interfaceRef` travels into `internTupleType` → `mangleTypeArg` and **PANICS** in
 `LayoutDescriptor.primitiveTypeTagName`.
-⚠ **The panic asserted something FALSE**, and that is why nobody guarded this: it said an interface
-type is refused at the front end by `checkGenericArgType` — true of a generic ARGUMENT and of nothing
-else. A tuple element is not a generic argument. The assertion now states the RULE rather than one of
-its enforcers, and says that reaching it means a further way to write a type into a slot exists.
-**MEASURED: the merge base answered `E3011 Unknown type 'Shape'` (existentials did not exist, so the
-shape was unreachable by construction); this rung made it writable and it panicked.**
+⚠ `checkGenericArgType` refuses an interface type as a generic ARGUMENT and nowhere else, and a tuple
+element is not a generic argument. So that panic's assertion states the RULE rather than one of its
+enforcers, and says that reaching it means a further way to write a type into a slot exists.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2942,9 +2912,8 @@ error E2015: specs/fragments/interface-dispatch/error.interface-typed-tuple-elem
 
 <!-- test: error.interface-typed-tuple-element-in-a-parameter -->
 The SECOND of the three spellings that reach `parseTupleTypeReference` — an inline tuple type in a
-parameter position, with no `typealias` in sight. **MEASURED: merge base `E3011`, and a PANIC here
-before the door was asked.** Pinned separately because each spelling reaches the element loop by a
-different caller, and a guard placed at the `typealias` alone would have closed only one.
+parameter position, with no `typealias` in sight. Pinned separately because each spelling reaches the
+element loop by a different caller, and a guard placed at the `typealias` alone would close only one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2977,9 +2946,8 @@ error E2015: specs/fragments/interface-dispatch/error.interface-typed-tuple-elem
 ```
 
 <!-- test: error.interface-typed-tuple-element-in-a-return -->
-The THIRD spelling. It is the one the merge base handled DIFFERENTLY from the other two — `E3005`
-rather than `E3011` — which is worth pinning because it shows the three reach the element loop by
-genuinely different paths rather than being one shape written three ways.
+The THIRD spelling, pinned because the three reach the element loop by genuinely different paths rather
+than being one shape written three ways.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3048,12 +3016,11 @@ end 'main'
 ```
 
 <!-- test: error.interface-typed-requirement-return -->
-⭐⭐ **THE RETURN HALF OF THE REQUIREMENT POSITION, WHICH COMPILED AND LINKED.** `parseInterfaceMethod`
-reads its return through `parseOptionalReturnType` and never asked the door, so the declared type
-degraded silently to the machine word — **MEASURED on the merge base: the program COMPILED**, and the
-first dispatch on the result reported the misdirecting `a member access 'area' on a 'int' value`.
-⚠ It shared one `returnType` arm with a declared function's return until the RETURN ABI landed, and
-now has its own: a direct call's return WRITES the second register, and a witness slot's signature is
+⭐⭐ **THE RETURN HALF OF THE REQUIREMENT POSITION.** `parseInterfaceMethod` reads its return through
+`parseOptionalReturnType`, so without the door the declared type degrades silently to the machine word —
+the program COMPILES and links, and the first dispatch on the result reports the misdirecting
+`a member access 'area' on a 'int' value`.
+⚠ It has its own `returnType` arm, apart from a declared function's return: a direct call's return WRITES the second register, and a witness slot's signature is
 rebuilt from the requirement's rendered return-type NAME, which no interface has a spelling in. It is
 noted-then-thrown rather than thrown in place, for the reason the parameter half is — the reader is
 shared with a tolerant whole-program fold.
@@ -3077,8 +3044,8 @@ error E2015: specs/fragments/interface-dispatch/error.interface-typed-requiremen
 ```
 
 <!-- test: error.interface-typed-function-type-return -->
-The other unguarded return: a FUNCTION TYPE's. `readFunctionTypeAlias` read it with a bare
-`parseTypeReference`, so it degraded the same way. Its own position too since the return ABI landed —
+The other return: a FUNCTION TYPE's. `readFunctionTypeAlias` reads it with a bare
+`parseTypeReference`, so without the door it degrades the same way. It is its own position too —
 `StdOp.callIndirect` carries its whole signature ON THE OP and has room for one result — gated on the
 same `recordSignature` flag its parameter half uses so the tolerant sweep cannot veto.
 ```maxon
@@ -3103,20 +3070,18 @@ error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-t
 ```
 
 <!-- test: dispatch-arg-per-instance-alias-mismatch-error -->
-⭐ **THE SAME COMPILER STILL DISAGREEING WITH ITSELF, one identity KIND over (BATCH18 review, second
-pass).** `witnessFormalDeclaredType` recovered the formal's pre-erasure identity through `containsEnum`
-alone, which is a THIRD classification of "which identities does resolution destroy?" beside
-`Parser.erasedAggregateNameOf` and `SemanticCheck.aggregateNameFor` — and it was the narrow one. A
-PER-INSTANCE ranged alias erases to bare `integer` exactly as a boxed enum does, so with no carrier the
-formal read as a plain int and any int satisfied it.
+⭐ **A WITNESS DISPATCH AGREES WITH A DIRECT CALL, one identity KIND over.** `witnessFormalDeclaredType`
+recovers the formal's pre-erasure identity for more than a boxed enum: a PER-INSTANCE ranged alias erases
+to bare `integer` exactly as a boxed enum does, so with no carrier the formal would read as a plain int
+and any int would satisfy it.
 
-**MEASURED: the DIRECT call `im.take(n)` is `E3005: expected 'IntPool.Idx', got 'int'`, while the
-identical requirement dispatched through a witness compiled clean and ran `9999` — a value four orders of
-magnitude outside the declared `int(0 to 15)` — straight into the formal, printing `v=10019`.** A ranged
-type's guarantee silently voided on one of the two routes.
+**The DIRECT call `im.take(n)` is `E3005: expected 'IntPool.Idx', got 'int'`, and the identical
+requirement dispatched through a witness answers the same.** Otherwise `9999` — a value four orders of
+magnitude outside the declared `int(0 to 15)` — would reach the formal, and a ranged type's guarantee
+would be silently voided on one of the two routes.
 
-The cure writes no fourth rule: the carrier is now asked of `aggregateNameFor`, the whole-program
-classifier this pass already owns, LIVE first and PRE-ERASURE second — the same two steps
+The carrier is asked of `SemanticCheck.aggregateNameFor`, the whole-program
+classifier this pass already owns, rather than of a classification of its own — LIVE first and PRE-ERASURE second — the same two steps
 `checkOneArgType` takes for every other argument.
 ```maxon
 
@@ -3237,29 +3202,24 @@ v=23
 
 A witness table's method slots are `.rdata` relocations, so the implementation each one names is named
 by no `call` anywhere in the module. The Maxon-tier reachability walk that decides which stdlib bodies
-this compile even BUILDS (`StdlibSource.reachableMaxonFunctionNames`) therefore cannot see them — and
-when a requirement implementation's body calls a stdlib function, that function is filed unreachable
-while dead-function elimination, which DOES follow the relocations, reaches it. The two derivations
-disagree and the compiler PANICS (`requireUnreachableLibraryStayedDead`).
+this compile even BUILDS (`StdlibSource.reachableMaxonFunctionNames`) therefore credits them itself, at
+the conformer it reaches (`markEveryDeclaredWitnessImplOf`): dead-function elimination DOES follow the
+relocations, so a stdlib function a requirement implementation calls and the walk missed would be one
+the two derivations disagree on, which `requireUnreachableLibraryStayedDead` refuses with a panic.
 
-`print` is why this is pinned and not merely noted. The hole predates `print` becoming an ordinary
-`stdlib/Print.maxon` call — substituting `sleep(1)` panics identically — but *a witness impl that
-prints* is among the commonest shapes in the language, where *a witness impl that sleeps* is exotic.
+`print` is why this is pinned and not merely noted. It is an ordinary `stdlib/Print.maxon` call and
+reaches this route exactly as `sleep(1)` does, but *a witness impl that prints* is among the commonest shapes in the language, where *a witness impl that sleeps* is exotic.
 
 ⚠ **THESE ARE THREE ROUTES, NOT THREE SPELLINGS OF ONE.** `LowerMaxonToStd.ensureWitnessTable` has three
-callers and only the first involves a dispatch, which is exactly how the first fix was wrong: it keyed
-on the `witnessDispatch` op and left the other two panicking. The second fix was wrong the other way —
-keyed on a signature, it credited every conformance in the program, including every LISTED STDLIB
-module's, and cost a boxing program **+81% allocations** and 400 emitted bytes. What holds is the
+callers and only the first involves a dispatch, so a reach keyed on the `witnessDispatch` op leaves the
+other two panicking. A reach keyed on a signature is wrong the other way: it credits every conformance
+in the program, including every LISTED STDLIB module's. What holds is the
 CONFORMER: a witness table for `T` needs a `T` VALUE, and a `T` value needs a reached function OF `T`.
 
-⚠⚠ **THE CONFORMER'S FIELD IS AN INT ON PURPOSE — DO NOT "IMPROVE" IT TO A `String`.** A conformer with
-a MANAGED field is released through the witness header's `destroyFunc@8`, another `.rdata` edge, and
-THAT destructor's own transitive runtime need is never declared: `panic … resolveCallFixups: call to
-unknown function '__str_decref'`. MEASURED on the merge base as well as here, on a program whose witness
-impl calls no stdlib at all — so it is a DIFFERENT, pre-existing defect, and a `String` field here would
-hide these three cases behind it. (It is itself hidden whenever anything else in the program
-interpolates, which is why it is rarely met.)
+⚠ **THE CONFORMER'S FIELD IS AN INT, SO THESE THREE CASES ARE ABOUT THE WITNESS IMPL ALONE.** A
+conformer with a MANAGED field is released through the witness header's `destroyFunc@8`, another
+`.rdata` edge, whose destructor needs `__str_decref` on a program whose witness impl calls no stdlib at
+all; `witness-conformer-with-a-managed-field-reaching-no-stdlib` pins that route.
 
 The DISPATCHED route — the table is built, and jumped through.
 
@@ -3552,4 +3512,42 @@ end 'bothWays'
 ```
 ```exitcode
 1
+```
+
+<!-- test: witness-conformer-with-a-managed-field-reaching-no-stdlib -->
+```maxon
+typealias Tag = int(0 to 100)
+
+interface Sized
+	function size() returns Tag
+end 'Sized'
+
+type Thing implements Sized
+	let label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function size() returns Tag
+		return 7
+	end 'size'
+end 'Thing'
+
+type Holder
+	export let p as Sized
+	export let n as ExitCode
+
+	static function create(p Sized, n ExitCode) returns Self
+		return Self{p: p, n: n}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Thing.create("a label"), n: 3)
+	return h.n + (h.p.size() as ExitCode)
+end 'main'
+```
+```exitcode
+10
 ```

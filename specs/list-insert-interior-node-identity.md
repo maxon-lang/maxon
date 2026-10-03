@@ -19,20 +19,18 @@ owes both by hand.** Its two end arms are `__list_prepend`/`__list_append`, call
 the middle splice writes four link words itself and must therefore stamp the destructor and record the owner
 itself as well.
 
-⛔ **NEITHER OF THE TWO BRANCHES THAT MET HERE COULD SEE THIS, AND THAT IS THE WHOLE REASON THIS FILE
-EXISTS.** `__list_insert` was written (spec-port `list`) against ONE-OWNER nodes, which had neither word;
-`W138` gave nodes both words and put every *other* insertion through the helper that writes them. Each side
-was green. Composed, a middle-inserted node came out with `element_drop@24 == 0` and `owner@32 == 0`:
+⛔ **EVERY OTHER INSERTION GETS BOTH WORDS FROM A HELPER, AND THAT IS THE WHOLE REASON THIS FILE
+EXISTS.** An interior splice that skipped them would leave a middle-inserted node with
+`element_drop@24 == 0` and `owner@32 == 0`:
 
-- **the stamp** — its element is never released, because `__list_node_decref` is the one site that drops a
-  node's element and it reads that word to decide whether there is one. A `clear()` over a heap `String`
-  inserted in the middle exits **101**.
+- **the stamp** — its element would never be released, because `__list_node_decref` is the one site that
+  drops a node's element and it reads that word to decide whether there is one. A `clear()` over a heap
+  `String` inserted in the middle would exit **101**.
 - **the owner** — `__list_remove_node` gates its unlink on `owner@32` naming *this* chain, so a later
-  `remove(at:)` takes the already-detached arm: it hands the element out and leaves the node linked, the
+  `remove(at:)` would take the already-detached arm: it hands the element out and leaves the node linked, the
   header un-decremented and every index past it naming an emptied slot.
 
-⚠ **`/specs/list.md` CANNOT CATCH EITHER HALF**, which is why these cases are compiler-authored rather than
-ported. All four of that file's `insert` cases use `int` elements (the stamp is 0 for a trivial element by
+⚠ **`specs/list.md` CANNOT CATCH EITHER HALF**, which is why these cases live here. All four of that file's `insert` cases use `int` elements (the stamp is 0 for a trivial element by
 design, so the first half is invisible), and not one of them removes or re-reads through the node it
 inserted (so the second half is invisible too). The `int` case below is the **control** that says the
 difference is the managed element and the chain membership, not the insertion.
@@ -74,8 +72,8 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 3
 
 The owner half. `remove(at:)` walks to the node and hands it to `__list_remove_node`, whose `owner@32` gate
 asks *"is this node linked HERE?"* — a question a node the interior splice never claimed answers with `no`.
-The removal then became a silent no-op that still handed the element out: `count` stayed at 3 and `get(1)`
-read the slot the move-out had just emptied.
+For such a node the removal would be a silent no-op that still hands the element out: `count` would stay
+at 3 and `get(1)` would read the slot the move-out had just emptied.
 
 ```maxon
 typealias StringList = List with String
@@ -111,7 +109,7 @@ cccccccccccccccccccccccccccccc
 The identical pair of shapes over an `int` element, in one program. The stamp half is 0 for a trivial
 element by construction, so this case can only ever see the OWNER half — and it did see it, which is what
 says the second case above is about chain membership rather than about `String`. It is also the shape all
-four of `/specs/list.md`'s `insert` cases take.
+four of `specs/list.md`'s `insert` cases take.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

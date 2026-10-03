@@ -13,12 +13,11 @@ category: concurrency
 `f` throws — from the moment it is minted, exactly as `stdlib/Builtins.maxon` declares it: an *opaque
 handle*, typed by both the value its thunk returns and the error its thunk throws.
 
-It used to be minted as a bare machine word (`int`). The handle IS a machine word, but that is a
-representation, not a type, and a value carrying its representation as its type is accepted everywhere
-that word is accepted. So `return async work()` satisfied a `returns Integer`, and printed a raw green-
-thread pointer; `p + 1` was pointer arithmetic; `p.clone()` handed out a second copy of a handle exactly
-one owner may reclaim; and an `Integer` parameter took a promise. None of those was diagnosed, because
-by the compiler's own account nothing was wrong.
+The handle IS a machine word, but that is a representation, not a type, and a value carrying its
+representation as its type would be accepted everywhere that word is accepted: `return async work()`
+would satisfy a `returns Integer` and print a raw green-thread pointer; `p + 1` would be pointer
+arithmetic; `p.clone()` would hand out a second copy of a handle exactly one owner may reclaim; and an
+`Integer` parameter would take a promise.
 
 Typing the promise at birth is what refuses all of them, and it does so through the checks that already
 exist rather than a new roster: a promise is not an `Integer`, so every position that wants an `Integer`
@@ -28,10 +27,10 @@ There is no list to keep in step with the language.
 ⚠ **THESE REFUSALS ARE PINNED TO `x64-windows`, AND THE REASON IS THE THUNK RATHER THAN THE RULE.** The
 rules themselves are target-neutral — nothing about "a promise is not an `Integer`" depends on a backend.
 But an `async` thunk must have a yield point or **E3073** refuses the spawn outright (*"function never
-yields"*), and the yield points available at this rung lower to runtime entries `wasm32-wasi` does not
+yields"*), and the yield points available lower to runtime entries `wasm32-wasi` does not
 have: `File.exists` reaches `__mf_exists` and raises **E3104** there. Either way the case's own subject is
-MASKED by an error about the thunk. Dropping the marker to win the lane simply trades E3104 for E3073 —
-measured, both ways — so the case is pinned instead of quietly testing something else.
+MASKED by an error about the thunk. Dropping the marker to win the lane simply trades E3104 for E3073,
+so the case is pinned instead of quietly testing something else.
 
 ⚠ **ON THE SPELLINGS IN THESE DIAGNOSTICS.** Two are the compiler's existing renderings rather than
 anything this rule chose, and both are worth knowing. A refusal taken at the TAG arm prints the tag word
@@ -73,8 +72,7 @@ error E3005: <fragment>:10:3: Cannot return 'struct' from function declared to r
 ```
 
 <!-- test: promise-typing.error.arithmetic-on-a-promise -->
-A promise is not a number, so it has no arithmetic. `p + 1` used to be pointer arithmetic on a green-
-thread address that happened to compile.
+A promise is not a number, so it has no arithmetic.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -120,8 +118,8 @@ error E3005: <fragment>:15:10: argument type mismatch for 'n': expected 'Integer
 ```
 
 <!-- test: promise-typing.error.clone-a-promise -->
-⭐ The one that was a latent double-reclaim rather than merely a wrong type. A promise owns a green
-thread that exactly one owner may reclaim; `p.clone()` used to hand back a second copy of the handle,
+⭐ The one that would be a latent double-reclaim rather than merely a wrong type. A promise owns a green
+thread that exactly one owner may reclaim; a `p.clone()` would hand back a second copy of the handle,
 with nothing to say which of the two owned the thread. `Promise` declares no `clone`, and synthesizing
 one is refused at the receiver.
 ```maxon
@@ -169,9 +167,9 @@ names a thread true
 ```
 
 <!-- test: promise-typing.a-promise-array-element-may-be-spelled-inline -->
-⛔⛔ **`Array with Promise with (T, E)` AND THE TWO-STEP ALIAS ARE ONE TYPE, AND THE INLINE SPELLING USED TO
-PANIC THE COMPILER.** `typealias Ps = Promise with (Integer, ServiceError)` followed by `Array with Ps`
-compiled and ran correctly the whole time; writing the element inline instead raised
+⛔⛔ **`Array with Promise with (T, E)` AND THE TWO-STEP ALIAS ARE ONE TYPE.**
+`typealias Ps = Promise with (Integer, ServiceError)` followed by `Array with Ps` and the element written
+inline must mean the same thing; an inline element sized through the primitive helper raises
 
 ```
 panic at LayoutDescriptor.maxon:563: primitiveTypeByteSize: a `genericInstance` is an aggregate —
@@ -183,21 +181,19 @@ size it through its base StructLayout.sizeBytes, not this helper
 than the absence of a crash: the array is built, a reply promise is pushed into it, popped and awaited, and
 the value arrives.
 
-⭐ **THE CAUSE WAS A PREDICATE THAT STOPPED MEANING WHAT IT WAS ASKED FOR.** `arrayElementSize` decided
-"is this element stored as a POINTER?" by asking `containerElementIsManaged` — *"is it an `__mm` box?"* —
-and those two came apart at `W217`, when a promise became a pointer into the scheduler's own slab that
-`__gt_promise_drop` reclaims and no refcount owns. `typeIsManaged` therefore answers **false** for a
-promise by design (*"an `Array with Promise` answers `false` there and `true` here"*, in
-`containerElementOwesDrop`'s words), the element fell through to the INLINE-STORAGE path, and
-`trivialElementSlot` — whose own header claimed *"a trivial element is never a struct or a generic
-instance"* — sized an aggregate through the primitive helper. The two-step spelling escaped only because
-its element is still the alias NAME, which the undeclared-`named` fallback happens to size at a machine
-word. `containerElementOccupiesAPointerSlot` is the question actually being asked, and both populations
-now answer it.
+⭐ **"IS IT AN `__mm` BOX?" IS NOT "IS THIS ELEMENT STORED AS A POINTER?".** A promise is a pointer into
+the scheduler's own slab that `__gt_promise_drop` reclaims and no refcount owns, so `typeIsManaged`
+answers **false** for a promise by design (*"an `Array with Promise` answers `false` there and `true`
+here"*, in `containerElementOwesDrop`'s words). Sizing the element by `containerElementIsManaged` would
+send it to the INLINE-STORAGE path, where `trivialElementSlot` would size an aggregate through the
+primitive helper; the two-step spelling would escape only because its element is the alias NAME, which
+the undeclared-`named` fallback sizes at a machine word. `arrayElementSize` asks
+`containerElementOccupiesAPointerSlot`, which is the question actually being asked, and both populations
+answer it.
 
-⚠ **THE FIX IS BYTE-NEUTRAL, WHICH IS THE EVIDENCE THAT THE TWO SPELLINGS AGREE.** A drop-the-promises
-program — an `Array with Promise` filled and abandoned, `W217`'s own shape — emits **41,351 bytes and
-exits 0** under both spellings, so the inline form gets the same `element_size@24` stride and the same
+⚠ **THE TWO SPELLINGS AGREE TO THE BYTE.** A drop-the-promises
+program — an `Array with Promise` filled and abandoned — emits the same bytes and
+exits 0 under both spellings, so the inline form gets the same `element_size@24` stride and the same
 `element_destroy@40` stamp rather than merely stopping short of the panic.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

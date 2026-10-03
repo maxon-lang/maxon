@@ -28,19 +28,16 @@ to measure a duration). They are `int`-valued and take no arguments.
 ### The fourth is the only one that is NOT a clock
 
 The three above all measure WALL time, so a duration taken with any of them counts every OTHER
-process on the box: a compiler phase timed on a busy machine reports the machine. A single
-`scale-test` run once read its parse phase at ×5.03 and then ×1.78 across a DOUBLING ladder, which
-is not a curve of any shape — it is preemption.
+process on the box: a compiler phase timed on a busy machine reports the machine, and on a
+`scale-test` DOUBLING ladder that preemption reads as ratios that fit no curve of any shape.
 
 `threadCpuTicks` advances only while the CALLING THREAD is scheduled on a core, so it cannot see
 preemption and it cannot see any other process. That is what makes a per-phase cost survive a
 loaded host, and it is why `Compiler/PhaseProbe.maxon` brackets it beside the wall clock and
 `docs/optimization-log.md` carries a `## CPU` table.
 
-MEASURED on this host, in one program: a busy loop advanced it **137,272,601** ticks while a
-200 ms `sleep` advanced it **101,505** — a ratio of **1352** between a thread that was running and
-one that was not, across two intervals of comparable WALL length. The bootstrap answers the same
-shape (126,231,142 against 459,968).
+A busy loop advances it about three orders of magnitude further than a `sleep` of comparable WALL
+length: a thread that is not running accrues almost nothing.
 
 ⚠ **ITS UNIT IS PLATFORM-DEFINED AND NOTHING CONVERTS IT**: TSC ticks on Windows
 (`QueryThreadCycleTime`), nanoseconds under POSIX (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`).
@@ -78,9 +75,9 @@ is therefore either one of the intrinsics the table above lists, or a name that 
 and the second is refused at the call site with `E3004`, the same code a plain undefined function
 gets.
 
-Before this rule the reserved prefix routed such a call PAST every unknown-callee check
+Without this rule the reserved prefix would route such a call PAST every unknown-callee check
 (`SemanticCheck.validateCall` returns early on a `__` callee, on the premise that nothing but the
-compiler can produce one), and it reached the linker, where the failure had neither a file nor a
+compiler can produce one), and it would reach the linker, where the failure has neither a file nor a
 line:
 
 ```text
@@ -94,8 +91,8 @@ that reaches one on a lane whose `targetProvidesFacility` row denies the facilit
 at the call site rather than panicking three tiers down in the backend.
 
 ⭐ **arm64-macOS SERVES ALL FOUR, WHICH IS WHY THE READING CASES BELOW NAME IT.** The calendar and the
-thread-CPU read landed with the Darwin host surface; the MONOTONIC one landed with the green-thread
-scheduler, because `__gt_now_ns` is a scheduler function and rides `usesGt`. All three are one libSystem
+thread-CPU read belong to the Darwin host surface; the MONOTONIC one is `__gt_now_ns`, a scheduler
+function that rides `usesGt`. All three are one libSystem
 import asked with three different `clockid_t`s (`clock_gettime_nsec_np`), which is why one lane's
 arithmetic is exact where Windows's is not: `Arm64DarwinRuntime` reports the monotonic frequency as 1e9
 against a reading already in nanoseconds, making the ticks-to-nanos scaling the identity.
@@ -106,10 +103,10 @@ green-thread floor — `CLOCK_MONOTONIC`, the Linux id whose semantics match Dar
 
 For `threadCpuTicks` the refusal is stronger than *"not yet"*, and it is the SHAPE argument the
 machine query makes one family over: `QueryThreadCycleTime` answers TSC ticks through a `ULONG64*`
-while `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` answers nanoseconds through a `timespec`, so a POSIX
-lane is a rung rather than a lowering — and WASI exposes no per-thread CPU clock at all. A lowering
-there could only fabricate a cost, which is a silent wrong answer rather than a missing feature. Both
-POSIX lanes have now paid that rung, in nanoseconds, and nothing converts between their unit and
+while `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` answers nanoseconds through a `timespec`, so each lane
+writes its own read rather than re-spelling another's — and WASI exposes no per-thread CPU clock at all.
+A lowering there could only fabricate a cost, which is a silent wrong answer rather than a missing
+feature. The POSIX lanes answer in nanoseconds, and nothing converts between their unit and
 Windows's: `__thread_cpu_ticks` promises only that two readings may be SUBTRACTED.
 
 ⚠ **ITS BAND IS `__thread_`, DELIBERATELY NOT `__clock_`**, and the split is about COST rather than
@@ -370,8 +367,8 @@ error E3004: <fragment>:3:9: call to undefined function '__whatever': the '__' p
 ```
 
 <!-- test: builtins-clock.unknown-internal-callee-statement -->
-The same rejection in STATEMENT position, where the call's result is discarded — the path that
-reached `resolveCallFixups` and panicked.
+The same rejection in STATEMENT position, where the call's result is discarded — the path on which an
+unrejected call would reach `resolveCallFixups` and panic.
 ```maxon
 function main() returns ExitCode
 	__whatever()
@@ -480,8 +477,7 @@ against the wall clock, and deliberately: the two are in different, unconvertibl
 absolute threshold across them would be a normalization this spec's Documentation refuses. A ratio
 is unit-free.
 
-MEASURED on this host: 137,272,601 ticks busy against 101,505 asleep, a factor of **1352** where
-the case asks for 4. Under a wall-clock lowering both readings become the interval's own duration,
+The case asks for a factor of 4. Under a wall-clock lowering both readings become the interval's own duration,
 and the busy interval is the SHORTER of the two.
 ```maxon
 typealias SpinCount = int(0 to 100000000)

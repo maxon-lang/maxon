@@ -3,7 +3,6 @@ feature: if-statements
 status: selfhosted
 keywords: [if, else, conditional, branching, control flow]
 category: control-flow
-milestone: M4a
 ---
 
 # If Statements
@@ -43,7 +42,7 @@ end 'case2' else 'default'
 end 'default'
 ```
 
-Lowering (M4a): the entry block evaluates the condition (a comparison, fused with
+Lowering: the entry block evaluates the condition (a comparison, fused with
 the branch — see `specs/comparison-operators.md`) and takes a two-way branch
 to the then block or the false target (the else block, or the continuation when
 there is no else). A branch that returns terminates itself; one that falls through

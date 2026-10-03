@@ -289,10 +289,10 @@ end 'main'
 
 
 <!-- test: float-alias-struct-field-float-default -->
-The pair: a FLOAT literal default through the same alias, which must NOT be widened a second time. It
-was a false `E3009: cannot implicitly convert 'float' to 'int'` — a lossy-conversion rejection of a
-float meeting a float — because the declaration sweep reads an unresolved alias NAME as an integer.
-The verdict now waits for the whole-program index; the widening decision is a separate question the
+The pair: a FLOAT literal default through the same alias, which must NOT be widened a second time, nor
+refused with a false `E3009: cannot implicitly convert 'float' to 'int'` — a lossy-conversion rejection of a
+float meeting a float. The declaration sweep reads an unresolved alias NAME as an integer, so the
+verdict waits for the whole-program index; the widening decision is a separate question the
 recorded tag answers, so neither half stands on the other.
 ```maxon
 
@@ -385,21 +385,19 @@ end 'main'
 ```
 
 <!-- test: float.panic-in-a-float-returning-function -->
-**THE CONSTRUCT `float.fromString` IS BUILT ON, PINNED IN USER CODE — and the pre-existing compiler PANIC
-that stood between this rung and its two float cases.** `stdlib/Builtins.maxon`'s `__float_fromString`
-divides under `try (digit / fracDiv) otherwise panic(…)`, so enabling `parsable.float-fromstring` made a
-`panic()` inside a FLOAT-returning function reachable for the first time — and it did not compile:
-`panic at X64Backend.maxon:745: a register-to-register move from rax to xmm0 crosses register files`.
+**THE CONSTRUCT `float.fromString` IS BUILT ON, PINNED IN USER CODE.** `stdlib/Builtins.maxon`'s
+`__float_fromString` divides under `try (digit / fracDiv) otherwise panic(…)`, so `parsable.float-fromstring`
+reaches a `panic()` inside a FLOAT-returning function.
 
-The cause is in `Parser.emitDeadReturn`. A diverging `panic()` still owes its block a terminator, and the
-parser emitted `ret <integer 0>` on the grounds that the value is dead. Its BITS are dead; its REGISTER FILE
-is not — `ret` moves the value into the return register, which is XMM0 here. `LowerMaxonToStd`'s
-`emitZeroConstOfReturnType` already states exactly this rule for the THROW edge, quoting the same panic; the
-parser's dead return is the same defect one door over, and now reads the same fact (through
-`floatResolvedTag`, so a `returns ParsedFloat` ranged alias is XMM-classed too).
+A diverging `panic()` still owes its block a terminator, and `Parser.emitDeadReturn` emits a `ret` whose
+value is dead. Its BITS are dead; its REGISTER FILE is not — `ret` moves the value into the return register,
+which is XMM0 here, so an integer zero would be a register-to-register move from rax to xmm0 across register
+files. `LowerMaxonToStd`'s `emitZeroConstOfReturnType` states this rule for the THROW edge, and the
+parser's dead return reads the same fact (through `floatResolvedTag`, so a `returns ParsedFloat` ranged
+alias is XMM-classed too).
 
 ⚠ **IT NEEDS NO `try` AND NO `Parsable` — THE REPRODUCER IS BELOW, AND THAT IS WHY IT LIVES HERE.** It
-reached the compiler through `float.fromString` (A1s-prim) only because `stdlib/Builtins.maxon` happens to write
+reaches the compiler through `float.fromString` only because `stdlib/Builtins.maxon` happens to write
 that shape; the property is a float function's DEAD RETURN, which every `panic()` in one emits.
 ```maxon
 function scaled(x Real) returns Real

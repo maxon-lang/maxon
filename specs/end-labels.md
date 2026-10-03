@@ -368,3 +368,116 @@ end 'main'
 ```maxoncstderr
 error E2008: <fragment>:19:2: Mismatched end label: expected 'failed', got 'recovered'
 ```
+
+<!-- test: error.a-stray-closer-in-a-method-is-refused-where-it-stands -->
+```maxon
+typealias Integer = int(0 to 100)
+
+type Box
+	var v as Integer
+
+	static function make(v Integer) returns Self
+		return Self{v: v, w: 2}
+	end 'make'
+
+	function show()
+		print("{self.v}")
+	end 'noEnclosingType'
+		print("y")
+	end 'show'
+
+	var w as Integer
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.make(3)
+	b.show()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:13:2: Mismatched end label: expected 'show', got 'noEnclosingType'
+```
+
+<!-- test: error.a-missing-closer-in-a-method-is-refused-where-the-next-one-stands -->
+```maxon
+typealias Integer = int(0 to 100)
+
+type Box
+	var v as Integer
+
+	static function make(v Integer) returns Self
+		return Self{v: v, w: 2}
+	end 'make'
+
+	function show()
+		if self.v > 1 'big'
+			print("{self.v}")
+	end 'show'
+
+	function other()
+		print("o")
+	end 'other'
+
+	var w as Integer
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.make(3)
+	b.show()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:14:2: Mismatched end label: expected 'big', got 'show'
+```
+
+<!-- test: error.a-stray-closer-in-a-value-function-is-named-before-its-missing-return -->
+```maxon
+typealias Integer = int(0 to 100)
+
+function helper(x Integer) returns Integer
+	let y = x + 1
+end 'noEnclosingType'
+	return y
+end 'helper'
+
+function main() returns ExitCode
+	return helper(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:6:1: Mismatched end label: expected 'helper', got 'noEnclosingType'
+```
+
+<!-- test: error.another-files-syntax-error-is-reported-beside-a-misclosure -->
+A misclosed block can swallow the declarations that follow it in its own file, so another file's error that
+names one of them may be a consequence and is held back. An error that names none of them is that file's own,
+and is reported beside the misclosure.
+```maxon
+// --- file: x.maxon
+export function first() returns ExitCode
+	if true 'check'
+		return 1
+
+	return 2
+end 'first'
+
+export function second() returns ExitCode
+	return 3
+end 'second'
+
+// --- file: y.maxon
+function main() returns ExitCode
+	return first() + second() + helper()
+end 'main'
+
+// --- file: z.maxon
+function helper() returns ExitCode
+	return 1 + )
+end 'helper'
+```
+```maxoncstderr
+error E3071: <fragment>:7:2: unreachable code after 'return'
+error E2004: <fragment>:21:13: Expected expression but got ')'
+```

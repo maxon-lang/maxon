@@ -746,7 +746,6 @@ that reason. ⚠ Its range is the compile TARGET's — `int(0 to u32.max)` on Wi
 Linux, macOS and WASI (`stdlib/Process.maxon`) — and this case is portable across that difference
 because what it needs from the alias is the SHAPE and not the bounds: non-negative, admitting zero, and
 unable to reach bit 63. Every one of those is true of both ranges, and the value cast through it is `8`.
-**MEASURED before the fix: every line below printed `0`.**
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias MachineWord = bits(64)
@@ -875,15 +874,15 @@ magnitude=8
 
 ⭐ **A LOCAL'S SLOT RECORDS A WIDTH AND NOT A SIGNEDNESS, SO A NARROW VALUE IS WIDENED ON THE WAY
 IN.** The rule above chooses the machine operation a `/` runs at; it does not license a narrow PLACE
-to keep the answer. A slot that held 32 bits was a slot whose contents were neither reading of
-themselves, and it answered wrongly in BOTH directions: the 4-byte store paired with a ZERO-extending
-4-byte load (`mov r32, [rbp+d]` on x64, `ldr w` on arm64) lost a negative value's sign, and the load's
-result could not say an UNSIGNED value had been stored, so the next consumer that widens sign-extended
+to keep the answer. A slot that holds 32 bits is a slot whose contents are neither reading of
+themselves, and it answers wrongly in BOTH directions: the 4-byte store paired with a ZERO-extending
+4-byte load (`mov r32, [rbp+d]` on x64, `ldr w` on arm64) loses a negative value's sign, and the load's
+result cannot say an UNSIGNED value has been stored, so the next consumer that widens sign-extends
 a `u32` above `i32.max`.
 
 ⚠ **AND IT IS NOT ABOUT DIVISION.** `/` is the one operator whose emitted WIDTH is real, but `+`,
 `-`, `*`, `and`, `or` and `xor` between narrow operands produce a narrow VALUE just the same, and it
-reached the same slot. The second case below is a subtraction.
+reaches the same slot. The second case below is a subtraction.
 
 ⚠ **WHICH CONSUMER READS THE VALUE DECIDES WHETHER THE ANSWER LOOKS RIGHT**, which is what kept
 this hidden and is why the two signednesses need opposite cases. A consumer that sign-extends first
@@ -1497,9 +1496,8 @@ error E3005: specs/fragments/ranged-typealias/error.otherwise-outside-ranged-ret
 ```
 
 The same check must fire on a value that overruns the range's **upper** end. This twin is not
-redundant with the one above: a first cut of the check reached the literal through a path that only
-handled a *negated* literal, so `otherwise -1` was rejected while `otherwise 101` compiled clean and
-returned 50. A single-signed case cannot see that.
+redundant with the one above: a check that reaches the literal through a path handling only a
+*negated* literal rejects `otherwise -1` while `otherwise 101` compiles clean and returns 50. A single-signed case cannot see that.
 
 <!-- test: error.otherwise-above-ranged-return -->
 ```maxon
@@ -1540,9 +1538,9 @@ error E2003: specs/fragments/ranged-typealias/error.bare-shorthand.test:2:21: Ba
 
 `int(0 to u64.max)` admits every 64-bit PATTERN, so no RUNTIME guard on it can ever fail. It still
 declares `≥ 0`, and a literal the source wrote as a negative number is below that bound. The two
-questions are different and the compiler used to conflate them: the full-range test short-circuited
-the COMPILE-TIME literal check as well as the runtime one, so `take(-1)` compiled clean into such a
-parameter and printed **18446744073709551615**.
+questions are different: a full-range test that short-circuited the COMPILE-TIME literal check as well
+as the runtime one would let `take(-1)` compile clean into such a parameter and print
+**18446744073709551615**.
 
 ⚠⚠ **NO TEST OF THE VALUE CAN DECIDE THIS.** `-1`, `u64.max` and `0xFFFFFFFFFFFFFFFE` are the SAME
 64 bits; the first denotes a negative number and the other two denote the two largest non-negative
@@ -1551,10 +1549,9 @@ companion of the `unsignedMaxLiterals` mark the ordering rule already reads — 
 below are as load-bearing as the refusal: they are what says the check reads the source and not the
 bit pattern.
 
-⛔ **THIS SECTION USED TO PIN THE OPPOSITE.** `unsigned-domain-negative-sentinel-cast` asserted that
-`(-1) as Slot` "wraps to `u64.max` rather than being out of range" and was a deliberate sentinel
-idiom. It was the defect written down as the rule. The honest spelling of that sentinel is `u64.max`,
-which is what the source means and what the case below now writes.
+⛔ **`(-1) as Slot` IS NOT A SENTINEL IDIOM.** It does not wrap to `u64.max`: it is out of range. The
+honest spelling of that sentinel is `u64.max`, which is what the source means and what the case below
+writes.
 
 <!-- test: error.written-negative-into-unsigned-full-alias -->
 ```maxon
@@ -1626,17 +1623,17 @@ end 'main'
 
 `writtenNegativeLiterals` is keyed by ValueId, and ValueIds are function-local — so the set must be
 cleared at the start of every function body or a mark names a DIFFERENT value in the next one.
-`parseFunction` cleared it; **`parseDefaultHelperBody` did not**, and a parameter default's helper is
-the one body that cannot be reached by re-entering `parseFunction`: the helpers are drained at
-end-of-file (`parseDefaultHelpers`), so what one inherits is the LAST function in the file, marks and
-all.
+`parseFunction` clears it, and **so must `parseDefaultHelperBody`**: a parameter default's helper is
+the one body that cannot be reached by re-entering `parseFunction`. The helpers are drained at
+end-of-file (`parseDefaultHelpers`), so an uncleared one inherits the LAST function in the file, marks
+and all.
 
-⛔ **MEASURED**: with `let written = -1` present in `main`, the bit-63 hex default two functions above
-it was refused — *"`error E3005: Value -9223372036854775808 is outside the range of 'Wide'`"* — because
-both literals are ValueId 0 in their own function. **Delete that one line and the identical program
-compiled.** The legal default this case pins is the same one
-`unsigned-full-alias-admits-a-bit-63-hex-literal` above pins as an argument; what was new is that a
-line in an UNRELATED function could take it away.
+⛔ With the mark uncleared, `let written = -1` in `main` gets the bit-63 hex default two functions above
+it refused — *"`error E3005: Value -9223372036854775808 is outside the range of 'Wide'`"* — because
+both literals are ValueId 0 in their own function, and **deleting that one line lets the identical
+program compile.** The legal default this case pins is the same one
+`unsigned-full-alias-admits-a-bit-63-hex-literal` above pins as an argument; what this case adds is that
+a line in an UNRELATED function cannot take it away.
 
 
 <!-- test: a-written-negative-in-one-function-does-not-reach-another-functions-default -->
@@ -1700,12 +1697,12 @@ end 'main'
 error E3005: specs/fragments/ranged-typealias/error.written-negative-returned-into-unsigned-full-alias.test:5:2: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
 ```
 
-⛔ **THE TOP-LEVEL `let` DOOR REACHED THE SAME VERDICT BY A DIFFERENT REPAIR, AND IT WAS BROKEN FOR
-EVERY RANGE — not just the unsigned ones.** The constant evaluator bound a trailing `as` to the
-OPERAND of a unary minus (`-(1 as Narrow)`) where a body binds it to the whole negated literal
-(`(-1) as Narrow`), so **`let A = -1 as int(0 to 100)` compiled clean and produced -1** while the
-identical cast inside a function was E3005. A negated int literal is now ONE literal in the evaluator, exactly as it already was
-for a negated FLOAT literal and exactly as it is in a body.
+⛔ **THE TOP-LEVEL `let` DOOR REACHES THE SAME VERDICT BY A DIFFERENT ROUTE, FOR EVERY RANGE — not
+just the unsigned ones.** A constant evaluator that bound a trailing `as` to the OPERAND of a unary
+minus (`-(1 as Narrow)`) where a body binds it to the whole negated literal (`(-1) as Narrow`) would
+compile **`let A = -1 as int(0 to 100)` clean and produce -1** while the identical cast inside a
+function is E3005. A negated int literal is ONE literal in the evaluator, exactly as a negated FLOAT
+literal is and exactly as it is in a body.
 
 <!-- test: error.written-negative-in-a-top-level-let -->
 ```maxon
@@ -1770,7 +1767,7 @@ A typealias declared inside the stdlib is reachable as a cast target from any
 file, regardless of its source-level visibility modifier. The stdlib's internal
 ranged aliases (`ElementIndex`, `EntryCount`, …) appear in the public collection
 API, so user code must be able to name them in an `as` cast — `5 as ElementIndex`
-resolves rather than failing with "Expected type name after 'as'".
+resolves rather than being refused as a typealias that is not exported.
 ```maxon
 function main() returns ExitCode
 	let n = 5 as ElementIndex
@@ -1852,15 +1849,15 @@ error E3005: specs/fragments/ranged-typealias/error.unsigned-max-upper-literal-o
 
 ### ⭐⭐ A NEGATIVE UPPER BOUND IS A REAL BOUND — only the UNSIGNED-MAX shape has an unbounded one
 
-⚠⚠ **A `-1` STORED UPPER MEANS `u64.max` IN EXACTLY ONE SHAPE, AND THE RUNTIME CHECK USED TO READ
-IT THAT WAY IN ALL OF THEM.** `int(N>=0 to u64.max)` above rides its upper as the signed `-1` and is
+⚠⚠ **A `-1` STORED UPPER MEANS `u64.max` IN EXACTLY ONE SHAPE.** `int(N>=0 to u64.max)` above rides its upper as the signed `-1` and is
 genuinely unbounded upwards, so its upper compare is elided on purpose. A **wholly NEGATIVE** range —
 `int(-100 to -1)`, `int(i64.min to -2)` — also stores a negative upper, and there the bound is
 ordinary: `-1` is the largest value it admits and `0` is out of range. `rangeIsUnsignedMaxUpper` (low
-`>= 0` **and** high `== -1`) is what tells the two apart, and the COMPILE-TIME literal check has always
-asked it while the RUNTIME check tested only the bound's sign — so the two halves of one rule disagreed
-about the same alias: a literal `0 as int(-100 to -1)` was **E3005** while a runtime `0` cast into it
-was admitted, and `-1` reached an `int(i64.min to -2)` binding through a plain `as`.
+`>= 0` **and** high `== -1`) is what tells the two apart, and both halves of the rule ask it — the
+COMPILE-TIME literal check and the RUNTIME check alike. A runtime check that tested only the bound's
+sign would disagree with the literal check about the same alias: a literal `0 as int(-100 to -1)` is
+**E3005**, while a runtime `0` cast into it would be admitted, and `-1` would reach an
+`int(i64.min to -2)` binding through a plain `as`.
 
 ⚠ It matters beyond the binding, because `specs/safety.md`'s division proof reads a divisor's
 DECLARED range: `int(-100 to -1)` excludes `0` (so `/` earns a bare `idiv`) and `int(i64.min to -2)`
@@ -1869,7 +1866,7 @@ excludes `-1` as well (so `mod` earns one too). Both consequences are pinned the
 <!-- test: negative-upper-bound-cast-is-checked -->
 #### A runtime cast into a wholly-negative range tests its upper bound
 `0` is above `-1`, so the cast is the violation and the guard must fire at the cast's own line — as it
-does for the positive `int(0 to 150)` in `runtime-check-fail` above. Before the fix `a` simply became
+does for the positive `int(0 to 150)` in `runtime-check-fail` above. Unguarded, `a` would simply become
 `0`, a value its declared type does not admit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2046,7 +2043,7 @@ end 'main'
 typealias, the bounds are enforced — a compile-time E3005 when the value is known, a runtime check
 where the value lands when it is not. The cases below cover the STORAGE positions (a struct field's
 declared default, a field store, an array element) and the u64-upper shape that the extra check
-sites must not regress.
+sites must not break.
 
 ### Error: field default out of range
 
@@ -2160,11 +2157,10 @@ Stack trace:
 
 ### Array element: runtime panic
 
-The array-element door's other half, and the one that was missing until `A1f-arrayelem`. An element
-is a storage slot the alias governs exactly as a field is, so an UNFOLDABLE element owes the runtime
-check a folded one owes the compile error — and until this rung it owed neither: `push` of an opaque
-out-of-range value was admitted in silence and the element read back out was a `Percent` the compiler
-still believed. The guard goes at the STORE, in the caller, where the element type is still known; the
+The array-element door's other half. An element is a storage slot the alias governs exactly as a
+field is, so an UNFOLDABLE element owes the runtime check a folded one owes the compile error —
+unguarded, `push` of an opaque out-of-range value would be admitted in silence and the element read
+back out would be a `Percent` the compiler believes. The guard goes at the STORE, in the caller, where the element type is still known; the
 panic names the `push` that wrote it.
 
 <!-- test: array-element-runtime-panic -->
@@ -2199,9 +2195,8 @@ Stack trace:
 (`requireArrayElementType`), so all three owe the same two halves — a rule that held for one spelling
 and not the others would be the door half-shut.
 
-⚠ **AND THE COMPILE-TIME HALF OF `set` WAS THE ONE STILL MISSING (ARR1).** `push` and `insert` each have
-their literal refusal above; `set` had only the runtime panic below, so the prose *"all three owe the same
-two halves"* was two-thirds tested for a second time, one half over. This is the missing sixth.
+⚠ **AND THE COMPILE-TIME HALF OF `set`.** `push` and `insert` each have their literal refusal above,
+and `set` its runtime panic below; this is `set`'s literal refusal, the sixth of the six halves.
 
 <!-- test: error.array-set-out-of-range -->
 ```maxon
@@ -2252,14 +2247,13 @@ Stack trace:
 
 ### Array `insert`: the third spelling, and the one the prose above claimed without testing
 
-⚠ The paragraph above says all three spellings owe the same two halves, and until ARR3c only `push`
-and `set` had cases — a prose invariant with no case for its third member. **MEASURED (ARR3c): with
-`insert` struck from `Parser.arraySurfaceMemberNames` and served from `stdlib/Array.maxon` instead,
-BOTH halves vanish and the suite stays GREEN.** `insert(0, value: 300)` into an `Array with
-int(0 to 255)` compiles, runs, and reads back **44**; a runtime-computed 300 exits 0 reading 44 too.
-That is the corpus declaring `value Element`, so the shared callee knows no range and the call site has
-no site kind for the substituted one — `set`'s blocker, on a second member. These two cases are what
-would have said so.
+⚠ The paragraph above says all three spellings owe the same two halves, and these two cases are
+`insert`'s. **With `insert` struck from `Parser.arraySurfaceMemberNames` and served from
+`stdlib/Array.maxon` instead, BOTH halves vanish and nothing else in the suite notices.**
+`insert(0, value: 300)` into an `Array with int(0 to 255)` then compiles, runs, and reads back **44**; a
+runtime-computed 300 exits 0 reading 44 too. That is the corpus declaring `value Element`, so the
+shared callee knows no range and the call site has no site kind for the substituted one — `set`'s
+blocker, on a second member.
 
 <!-- test: error.array-insert-out-of-range -->
 ```maxon
@@ -2314,8 +2308,8 @@ so both halves are owed there: the compile-time E3005 for a literal, and the run
 else. The guard stands immediately in front of the call, which is exactly where the callee's entry guard
 would have stood.
 
-`Box with Percent` has no container in it and `b.put(505)` stored **505** in silence until this rung —
-the same loss `insert` measured through `stdlib/Array.maxon`, one door up.
+`Box with Percent` has no container in it, and without the call-site check `b.put(505)` would store
+**505** in silence — the same loss `insert` shows through `stdlib/Array.maxon`, one door up.
 
 <!-- test: error.type-parameter-argument-out-of-range -->
 ```maxon
@@ -2527,11 +2521,11 @@ end 'main'
 
 ### The `Array` half: an element reached through a shared body's `Element` parameter
 
-⭐ This is `push`/`set`/`insert`'s shape with nothing retired to reach it. An `extension Array` method
+⭐ This is `push`/`set`/`insert`'s shape with nothing struck to reach it. An `extension Array` method
 declaring `value Element` is compiled ONCE — exactly as `stdlib/Array.maxon`'s own three mutators are —
-so the element's range is invisible inside it and visible only at the call. It measured the identical
-loss: **compiled clean, stored 300 twice, exit 2.** The roster-served `insert` beside it refuses the same
-literal today; when `insert` is struck, this is the door it arrives at.
+so the element's range is invisible inside it and visible only at the call; without the call-site check
+the program **compiles clean, stores 300 twice and exits 2.** The roster-served `insert` beside it
+refuses the same literal; were `insert` struck from the roster, this is the door it would arrive at.
 
 <!-- test: error.array-extension-element-argument-out-of-range -->
 ```maxon
@@ -2560,9 +2554,9 @@ error E3005: <fragment>:14:4: Value 300 is outside the range of 'Byte' (int(0 to
 ⛔ The boundary, pinned by the program that fell through it. The declaration sweep keys by BARE NAME — the
 limitation `Parser.requireOverloadableName` states in full — so `stdlib/Array.maxon`'s two `contains`
 declarations, `contains(element Element)` and `contains(sequence ElementArray)`, arrive under one key.
-Answering for the set from either member checks the OTHER member's argument: **MEASURED in this rung's own
-first build, `a.contains(needle)` — which compiles and runs — had its ARRAY POINTER range-checked against
-`0 to 255` and died `panic … value outside typealias 'Byte'`.** A disagreeing pair is therefore CONTESTED
+Answering for the set from either member checks the OTHER member's argument: **`a.contains(needle)` —
+which compiles and runs — would have its ARRAY POINTER range-checked against `0 to 255` and die
+`panic … value outside typealias 'Byte'`.** A disagreeing pair is therefore CONTESTED
 and gets no check at all, which costs a missed refusal on an overloaded generic method and can never cost
 a wrong one. This case is that program, and it must stay green.
 
@@ -2629,8 +2623,8 @@ error E3005: specs/fragments/ranged-typealias/error.crossfile-call-argument-uses
 
 The call-argument door in the FLOAT domain. It is a separate case because the parser's constant view is
 integer-only — a float literal is not in `valueConstKnown`, so a float argument is recorded on its tag
-and the domain-partitioned const map in `InsertRangeChecks` decides. Without that arm the value reached
-the callee and was caught only by its ranged `return`, at run time, where the reference refuses it at
+and the domain-partitioned const map in `InsertRangeChecks` decides. Without that arm the value would
+reach the callee and be caught only by its ranged `return`, at run time, rather than refused at
 compile time.
 
 <!-- test: error.float-call-argument-out-of-range -->
@@ -2671,11 +2665,10 @@ end 'main'
 
 ### Unsigned-max upper: a call argument and a return are unguarded
 
-⚠ **THE REGRESSION GUARD FOR `int(0 to u64.max)`'s UPPER BOUND.** The upper stores as `-1`, so a
+⚠ **THE GUARD ON `int(0 to u64.max)`'s UPPER BOUND.** The upper stores as `-1`, so a
 signed `value > u64.max` test compares against `-1` and every valid value fails it. This shape's guard
 is a LOWER check and nothing else — the unsigned upper is unbounded, so
-there is nothing above to test — and that has to hold at every position a check site is recorded, not
-only at the two that had one when it was written.
+there is nothing above to test — and that has to hold at every position a check site is recorded.
 
 <!-- test: unsigned-max-upper-call-argument -->
 ```maxon
@@ -2861,7 +2854,7 @@ Stack trace:
 #### Three guards in ONE block, each at its own site
 
 Positions and the guard CHAIN have to compose: the k-th guard splits its block, so the (k+1)-th must
-land at its own site measured in the continuation the split just made, not at that continuation's end
+land at its own site within the continuation the split just made, not at that continuation's end
 and not back in the original head. Only the third cast is out of range, so the first two statements
 after a guard must have printed and the third must not — which is the whole claim, and it is invisible
 to an exit code.
@@ -3173,13 +3166,13 @@ check recorded inside a closure body therefore names a ValueId and a BlockId in 
 the guard has to be emitted there — resolving it against the ENCLOSING function makes those numbers name
 unrelated values.
 
-Both directions were live before the P1.9 review, and each is a wrong answer on its own:
+Resolving it in the wrong function fails in both directions, and each is a wrong answer on its own:
 
-- **A correct program was killed.** Here every value is in range — `605 - 600 = 5` — and the enclosing
-  `j` is 600. The site leaked into `main`, the guard read `main`'s `j` through the id the closure had
-  numbered, and the program panicked against `Small` — though every value is in range.
-- **An out-of-range closure cast went unchecked**, because the guard that should have been in the
-  closure was somewhere else entirely.
+- **A correct program is killed.** Here every value is in range — `605 - 600 = 5` — and the enclosing
+  `j` is 600. A site leaked into `main` has its guard read `main`'s `j` through the id the closure
+  numbered, and the program panics against `Small` — though every value is in range.
+- **An out-of-range closure cast goes unchecked**, because the guard that should be in the
+  closure is somewhere else entirely.
 
 <!-- test: closure-body-site-guards-the-closures-own-value -->
 ```maxon
@@ -3445,7 +3438,7 @@ in the same order the `return`s are written.** A site records the BLOCK its `ret
 instead — the first live `ret` for the first site, and so on — and every case above still passes while
 the two below report the line of a DIFFERENT `return` than the one the value left through.
 
-Both shapes were MEASURED WRONG before the block was recorded, and both are ordinary code rather than
+Both shapes report the wrong line under ordinal pairing, and both are ordinary code rather than
 corner cases: nothing about a loop or a cast is unusual in a function with a ranged return type.
 
 #### A `return` inside a LOOP BODY, whose block is registered AFTER the block that follows the loop
@@ -3544,11 +3537,11 @@ Stack trace:
 
 ## A RANGED ALIAS'S TYPE IDENTITY IS ITS RANGE, NOT ITS NAME (R-1)
 
-⭐⭐ **TWO RANGED ALIASES OVER ONE RANGE ARE ONE TYPE, SO THEIR GENERIC INSTANCES ARE ONE INSTANCE**
-(user ruling, 2026-08-22). `typealias DenseInt = int(0 to u64.max)` and `typealias RegCount = int(0 to
+⭐⭐ **TWO RANGED ALIASES OVER ONE RANGE ARE ONE TYPE, SO THEIR GENERIC INSTANCES ARE ONE INSTANCE.**
+`typealias DenseInt = int(0 to u64.max)` and `typealias RegCount = int(0 to
 u64.max)` differ only in what the author called them, so `Array with DenseInt` and `Array with RegCount`
-name one type. The VALUES were never in question; calling them two types refused three sites in the
-compiler's own source.
+name one type. The VALUES are not in question, so calling them two types would refuse sound
+programs.
 
 ⚠ **THE RULE IS THE RANGE, AND THE CONTROL BELOW IS WHAT SAYS SO.** A generic's ranged
 element is part of its type: two aliases over DIFFERENT ranges are two types and
@@ -3560,8 +3553,8 @@ the rule outright.
 cannot be pinned here.** `__ManagedByte` carries a byte's range and is minted expressly to be a DIFFERENT
 instance from the user-visible `Byte`, because the admission between them is one-way (see
 `SignatureIndex.byteBufferBoundaryAdmits`). `RangedAliasRegistry.identifiableRangeName` excludes the `__`
-prefix for that reason; `array-hashable/byte-array-hash` is the case that measured it, having gone red for
-exactly this when the exclusion was absent.
+prefix for that reason; `array-hashable/byte-array-hash` is the case that fails without the
+exclusion.
 
 <!-- test: error.two-aliases-over-one-range-are-two-instances -->
 Two ranged aliases over one range are two element types, so the containers over them are two instances: a
@@ -3655,13 +3648,9 @@ wrote. `filledColumn(…) returns DenseColumn` in `Targets/Shared/TargetLiveness
 `Array` over an `int(0 to u64.max)` element shares, and without this the diagnostic at
 `RegisterAllocator.maxon:93` could only fall back to the element RANGE.
 
-⚠ **THE EXAMPLE THIS PARAGRAPH USED TO NAME NO LONGER BELONGS TO THAT SET, WHICH IS WHY IT NAMES THE
-SET AND NOT A MEMBER.** It read *"a gid that `DurationNanosArray` and 26 other `int(0 to u64.max)`
-aliases share"*; `stdlib/Clock.maxon`'s `DurationNanos` has since been narrowed to
-`int(0 to i64.max)`, so `DurationNanosArray` is a DIFFERENT instance now and the 26 was a census of a
-tree that has moved. The mechanism is unchanged — several distinct alias names still collapse onto one
-`Array` instance whenever their element ranges agree — and it is the mechanism, not the census, that
-this test pins.
+⚠ **THIS PARAGRAPH NAMES THE SET AND NOT A MEMBER**, because membership moves whenever an alias's range
+does. Several distinct alias names collapse onto one `Array` instance whenever their element ranges
+agree, and it is that mechanism, not a census of its members, that this test pins.
 
 ⚠ **THE SPELLING IS CAPTURED AS THE TOKEN'S TEXT AND NOTHING IS ASKED ABOUT IT AT CAPTURE TIME.** Whether the
 name is a generic alias is a WHOLE-PROGRAM question and the capture runs inside the declaration sweep that
@@ -3707,8 +3696,8 @@ its bounds. So the keyword is legal in exactly one place — the RHS of a `typea
 type position must name a declared alias. `bool` and `cstring` are exempt: they are already constrained
 types with nothing to range.
 
-This is not a new rule. `docs/LANGUAGE_REFERENCE.md` has stated it since long before it was enforced
-everywhere. What these cases pin is that it now holds at **both** cast doors — the body cast and the
+`docs/LANGUAGE_REFERENCE.md` states this rule. What these cases pin is that it holds at **both** cast
+doors — the body cast and the
 top-level `let`'s, which are two different walks over two different code paths.
 
 <!-- test: error.bare-int-parameter -->

@@ -181,9 +181,9 @@ body — where the type parameter is an opaque word. Nothing written there can p
 concrete type is not known until an instantiation, and two instantiations may bind it differently. So the
 default is refused at the declaration.
 
-⚠ Both cases below **compiled** before this rule existed, and both were MEASURED to be memory-unsafe rather
+⚠ Without this rule both cases below would **compile**, and both are memory-unsafe rather
 than merely wrong: instantiated as `Box with String`, the field read treats the integer the default produced
-as a String record, and the compiler access-violated (`0xC0000005`). A compiler that crashes on a program is
+as a String record, and the compiler access-violates (`0xC0000005`). A compiler that crashes on a program is
 not a definition of what that program means.
 
 <!-- test: type-parameter-field-expression-default-errors -->
@@ -444,10 +444,9 @@ A `Self{...}` literal whose field initializer contains control flow — here a
 `try … otherwise panic(…)` nested in a constructor call argument — splits the
 enclosing block: the `structAlloc` lands in one block and that field's
 `fieldStore` in a continuation block (after the `try` resolves). The
-field-initialization pass collected provided fields by scanning only the
-structAlloc's own block, so it missed the continuation-block store and reported
-a spurious E3086 for a field that IS provided. The pass now collects
-fieldStores on the literal's SSA-unique alloc pointer across the whole function.
+field-initialization pass collects fieldStores on the literal's SSA-unique
+alloc pointer across the whole function, so the continuation-block store counts
+and no E3086 is reported for a field that IS provided.
 Returns `7`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

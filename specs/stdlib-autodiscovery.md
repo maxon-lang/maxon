@@ -39,29 +39,12 @@ end 'main'
 
 If a stdlib function depends on other stdlib functions, they're also discovered automatically. For example, `pow()` uses `log()` and `exp()`, which are all linked automatically.
 
-### the compiler note on `wrong-arg-count`
+### A wrong argument count
 
-That case carries the compiler's own wording for **the same code**, `E3036`, and at a different column. Neither
-compiler points at the absent argument — `3:20` is the member name `pow` and `3:15` is the start of the
-whole qualified callee `Math.pow`, so the column moves only because the compiler includes the qualifier in the
-callee's range. The difference is ratified by the registry and by specs already ported, not decided here:
-
-- `ErrorCodeRegistry.maxon` names E3036 **`callArgCountMismatch`** and documents it as *"A call passes a
-  different number of arguments than the callee declares parameters."* — an ARITY rule, and the
-  compiler's sentence is that rule stated directly. The bootstrap folds a
-  named-parameter diagnostic (*"missing argument for parameter 'exponent'"*) into the same code; The compiler
-  does not have a second sentence for it.
-- **Eight live cases across seven already-ported specs pin the compiler's spelling**, so it is the settled one
-  and this file is the outlier: `functions.md` (`'add' expects 2 argument(s) but 1 were provided`),
-  `method-calls.md`, `where-clauses.md` (twice), `first-class-functions.md`,
-  `implicit-self-methods.md`, `parsable-interface.md`, and the two builtin-arity variants in
-  `builtins-clock.md` / `builtins-sleep.md`. Not one of them anchors on an argument; which callee token
-  they land on varies with the call shape (bare name in `functions.md`, whole call expression in
-  `method-calls.md`, method name in `where-clauses.md`), so the pins settle the SENTENCE, and the column
-  is whatever the emit site's own `callRange` already reports.
-
-⇒ Making this file's original text pass would mean changing those eight instead, which is a behaviour
-change with a blast radius far beyond this spec. The expectation moves; The compiler does not.
+A stdlib call with the wrong number of arguments is **E3036** (`callArgCountMismatch`), an ARITY rule: the
+sentence states the declared and supplied counts, the same one every other call reports
+(`'Math.pow' expects 2 argument(s) but 1 were provided`). It is anchored at the callee's member name, not at
+the absent argument, and there is no separate named-parameter sentence for it.
 
 ## Tests
 

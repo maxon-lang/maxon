@@ -77,21 +77,26 @@ typealias CachePathSet = Set with String
 // directory whose real cause was a file several levels down. One record because a read and a removal fail
 // the same way and owe the reader the same sentence.
 type FirstFailure
-	export var reason as String
+	export var first as StatedText
 
 	static function create() returns FirstFailure
-		return Self{reason: ""}
+		return Self{first: StatedText.unstated}
 	end 'create'
 
-	// Nothing to report leaves the record untouched, so a caller may hand over another record's reason
-	// without first asking whether there is one.
 	function note(what String)
-		if what.isEmpty() or not self.reason.isEmpty() 'nothingToRecord'
-			return
-		end 'nothingToRecord'
-
-		self.reason = what
+		match self.first 'first'
+			unstated then self.first = StatedText.stated(what)
+			stated then return
+		end 'first'
 	end 'note'
+
+	// Another record with nothing to report leaves this one untouched, so a caller may hand one over
+	// without first asking whether it holds a failure.
+	function adopt(other FirstFailure)
+		if let reason = try other.first.text() 'somethingToAdopt'
+			self.note(reason)
+		end 'somethingToAdopt'
+	end 'adopt'
 end 'FirstFailure'
 
 // One file or directory under a cache root.
@@ -137,7 +142,7 @@ type CacheCensus
 	function add(other CacheCensus)
 		self.builds = self.builds + other.builds
 		self.bytes = self.bytes + other.bytes
-		self.failure.note(other.failure.reason)
+		self.failure.adopt(other.failure)
 	end 'add'
 end 'CacheCensus'
 
@@ -204,7 +209,7 @@ function reportCache() returns ExitCode
 		let census = censusOf(readCacheTree(root))
 		let mark = InUseMark if isRootInUse(root, inUse: inUse) else ""
 
-		trouble.note(census.failure.reason)
+		trouble.adopt(census.failure)
 		report.append("{RootLineIndent}{root.toString()}{mark}: {rootState(census)}\n")
 
 		if census.isEmpty() 'holdsNothing'
@@ -223,8 +228,8 @@ function reportCache() returns ExitCode
 
 	print(report)
 
-	if not trouble.reason.isEmpty() 'somethingUnread'
-		printError("{commandAsTyped()}: {trouble.reason}\n")
+	if let reason = try trouble.first.text() 'somethingUnread'
+		printError("{commandAsTyped()}: {reason}\n")
 		return OwnFailureExit
 	end 'somethingUnread'
 
@@ -251,8 +256,8 @@ end 'isRootInUse'
 // What one root's line says after its path: why it could not be read, else what it holds, else that it
 // holds nothing.
 function rootState(census CacheCensus) returns String
-	if not census.failure.reason.isEmpty() 'unreadable'
-		return census.failure.reason
+	if let reason = try census.failure.first.text() 'unreadable'
+		return reason
 	end 'unreadable'
 
 	if census.isEmpty() 'holdsNothing'
@@ -269,7 +274,7 @@ end 'rootState'
 // unmeasured file is a number that reads exactly like an honest one.
 function censusOf(contents CacheContents) returns CacheCensus
 	var census = CacheCensus.create()
-	census.failure.note(contents.failure.reason)
+	census.failure.adopt(contents.failure)
 
 	for entry in contents.entries 'eachEntry'
 		if entry.isDirectory 'notAFile'
@@ -304,8 +309,8 @@ function clearCache() returns ExitCode
 		removeContents(readCacheTree(root), removal: removal)
 	end 'eachCache'
 
-	if not removal.failure.reason.isEmpty() 'somethingStayed'
-		printError("{commandAsTyped()}: {removal.failure.reason}\n")
+	if let reason = try removal.failure.first.text() 'somethingStayed'
+		printError("{commandAsTyped()}: {reason}\n")
 		return OwnFailureExit
 	end 'somethingStayed'
 
@@ -410,7 +415,7 @@ end 'collectCacheTree'
 // The walk's entries removed in the order it collected them, which is what lets a directory go: it was
 // collected after everything inside it.
 function removeContents(contents CacheContents, removal CacheRemoval)
-	removal.failure.note(contents.failure.reason)
+	removal.failure.adopt(contents.failure)
 
 	for entry in contents.entries 'eachEntry'
 		// A directory still holding a kept build would refuse the delete and fail the clear. Every kept

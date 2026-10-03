@@ -1,16 +1,6 @@
 // Pure number parsing functions for the compiler.
 // Converts string representations of integer and float literals to numeric values.
 
-export typealias ParsedInt = int(i64.min to i64.max)
-
-// A column of parsed integers. Lives HERE, beside the type it is a column OF, because two passes
-// now keep one — the parser's constant folder and `foldConstOperands`' ConstValueMap — and a
-// typealias declared twice over the same element type is the same fact written down twice.
-//
-// A `ParsedInt` is SIGNED, so this is NOT a `DenseColumn` (which is unsigned): never widen one into
-// the other.
-export typealias ParsedIntArray = Array with ParsedInt
-
 // How a literal's text can fail to become a number. EXACTLY the two failures `parseInt` /
 // `__float_bitsFromText` actually raise — `unhandledToken`, `typeError` and `unexpectedEof` sat here
 // unthrown and unmatched, and a dead arm in an error union is a case every handler has to invent a
@@ -35,15 +25,12 @@ end 'ParserError'
 let I64MaxDigits = b"9223372036854775807"
 let I64MinMagnitudeDigits = b"9223372036854775808"
 
-// ⭐⭐ **THE FLOAT HALF OF THIS FILE MOVED TO `stdlib/Builtins.maxon` (spec-port: sin).** Text ↔
-// binary64 — `__float_bitsFromText`, `__float_textFromBits`, the bignum they rest on, and the
-// shortest-round-trip digit search — now lives there, because a THIRD caller appeared that this file
-// could never serve: `"{x}"` interpolating a float in an EMITTED PROGRAM, which needs the routine at
-// the program's runtime rather than at the compiler's. `stdlib/` is the one place both reach. What is
-// left here is integer literal parsing, which has no such second caller.
+// Text ↔ binary64 (`__float_bitsFromText`, `__float_textFromBits`) lives in `stdlib/Builtins.maxon`,
+// not here: `"{x}"` interpolating a float in an EMITTED PROGRAM needs the routine at the program's
+// runtime, and `stdlib/` is the one place both the compiler and the program reach.
 //
-// ⚠ `ParserError` stays HERE and is the INTEGER path's: the float entry point answers with
-// `__FloatTextResult` instead, for the reason that union's header gives.
+// ⚠ `ParserError` is the INTEGER path's: the float entry point answers with `__FloatTextResult`
+// instead, for the reason that union's header gives.
 
 // ⭐⭐ **A SCALAR CONSTANT AS THE TEXT SOMEBODY WROTE — the ONE renderer, for a payload the compiler
 // carries as a bare `ParsedInt` in both of the shapes it can mean.** An integer constant IS its number;
@@ -82,16 +69,16 @@ module function scalarConstantText(value ParsedInt, isFloat bool) returns String
 end 'scalarConstantText'
 
 // ⭐⭐ **THE THREE BIT FACTS ABOUT A `ParsedInt` THAT HOLDS A DOUBLE, AND THEY LIVE HERE FOR
-// `scalarConstantText`'s REASON.** A float constant rides this file's `ParsedInt` as an IEEE-754 BIT
-// PATTERN, and three separate tiers now have to take that pattern apart: the PARSER folds a leading `-`
+// `scalarConstantText`'s REASON.** A float constant rides `ParsedInt` as an IEEE-754 BIT
+// PATTERN, and three separate tiers have to take that pattern apart: the PARSER folds a leading `-`
 // into a literal's sign bit, `TypeRules` folds `abs`/`-x` over a constant, and `IR/Std/FoldConstants`
 // asks whether a folded answer came out a NaN. `module` rather than `export`, and that is enough: the
 // visibility is the `Compiler/` subtree, which is exactly the three of them.
 //
 // ⚠ **THEY ARE BIT OPERATIONS, DELIBERATELY, WHERE THE HOST'S OWN `abs`/`-` WOULD HAVE READ SHORTER.**
 // Reinterpreting to f64 and letting the host negate would make the answer depend on how the compiler
-// COMPILING THIS FILE spells a float negate — and that has been `0.0 - x` in a shipped compiler, which
-// is `+0.0` for `-(+0.0)` and loses a NaN's sign. An `xor`/`and` over the pattern is the operation
+// COMPILING THIS FILE spells a float negate — and a `0.0 - x` spelling gives `+0.0` for `-(+0.0)`
+// and loses a NaN's sign. An `xor`/`and` over the pattern is the operation
 // IEEE-754 defines and every target emits, and it computes the same answer under any compiler.
 //
 // ⚠ `stdlib/Builtins.maxon` holds `__FloatSignBit`/`__FloatMagnitudeMask` for the EMITTED program's

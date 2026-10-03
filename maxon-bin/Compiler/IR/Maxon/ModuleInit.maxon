@@ -81,12 +81,12 @@ export function installManagedGlobalInit(module MaxonModule, project Project, gl
 		return false
 	end 'noManagedGlobals'
 
-	let range = anchorRange(globals, defaults: defaults)
-	buildModuleInit(module, project: project, globals: globals, sharedLets: sharedLets, defaults: defaults, range: range)
-	buildGlobalCleanup(module, project: project, globals: globals, range: range)
+	let site = anchorSite(globals, defaults: defaults)
+	buildModuleInit(module, project: project, globals: globals, sharedLets: sharedLets, defaults: defaults, site: site)
+	buildGlobalCleanup(module, project: project, globals: globals, site: site)
 
 	if defaults.count() > 0 'aRegistry'
-		buildRegistryRelease(module, project: project, defaults: defaults, range: range)
+		buildRegistryRelease(module, project: project, defaults: defaults, site: site)
 	end 'aRegistry'
 
 	return true
@@ -126,7 +126,8 @@ export function letShareWalksOf(globals ManagedGlobalArray, spawnsAService bool)
 	if spawnsAService 'aSecondGreenThreadMayCount'
 		for global in globals 'eachGlobal'
 			match global.threadReach 'reach'
-				mainOnly then continue
+				mainOnly or
+					packedInItsSlot then continue
 				everyThreadThrough(callee) then marked.push(SharedLet.create(global, walk: callee))
 				everyThreadUnwalkable then unmarkable.push(global)
 			end 'reach'
@@ -152,16 +153,16 @@ end 'letShareWalksOf'
 // `GlobalInitOrder.dependencyOrderedGlobals` is what settles that, over the merged module's call graph, and
 // it is the caller's to apply: this function emits the array it is handed, in the order it is handed. A
 // cycle has no such order and is refused there rather than reaching this loop.
-function buildModuleInit(module MaxonModule, project Project, globals ManagedGlobalArray, sharedLets SharedLetArray, defaults DefaultSlotArray, range SourceRange)
+function buildModuleInit(module MaxonModule, project Project, globals ManagedGlobalArray, sharedLets SharedLetArray, defaults DefaultSlotArray, site SynthesizedSite)
 	var fn = SynthesizedFunction.open(module, project: project, name: ModuleInitName, returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create())
 
 	for global in globals 'eachGlobal'
 		let record = initialRecordOf(fn, global: global)
-		fn.emit(MaxonOp.storeIndirect(fn.emitSlotAddr(global), offset: GlobalSlotOffset, value: record, valueType: declaredAggregateSlotWidth()), range: global.range)
+		fn.emit(MaxonOp.storeIndirect(fn.emitSlotAddr(global), offset: GlobalSlotOffset, value: record, valueType: declaredAggregateSlotWidth()), site: globalSite(global))
 	end 'eachGlobal'
 
 	if sharedLets.count() > 0 'messagesReadTheLets'
-		markLetsShared(fn, sharedLets: sharedLets, range: range)
+		markLetsShared(fn, sharedLets: sharedLets, site: site)
 	end 'messagesReadTheLets'
 
 	// After the marks: a `default` may spawn, and a service started before them could step a plain
@@ -171,53 +172,52 @@ function buildModuleInit(module MaxonModule, project Project, globals ManagedGlo
 		buildDefault(fn, slot: slot)
 	end 'eachDefault'
 
-	fn.terminate(MaxonOp.retVoid, range: range)
+	fn.terminate(MaxonOp.retVoid, site: site)
 end 'buildModuleInit'
 
 function buildDefault(fn SynthesizedFunction, slot DefaultSlot)
-	let range = slot.declaration.keyRange
-	let value = fn.emitPositionalCall(slot.initializer, args: ValueIdArray.create(), resultTag: maxonTypeTag(slot.valueType), resultNameId: typeNameIdOf(slot.valueType), range: range)
-	let slotAddr = fn.emitLabelAddr(slot.label, range: range)
+	let site = defaultSite(slot)
+	let value = fn.emitPositionalCall(slot.initializer, args: ValueIdArray.create(), resultTag: maxonTypeTag(slot.valueType), resultNameId: typeNameIdOf(slot.valueType), site: site)
+	let slotAddr = fn.emitLabelAddr(slot.label, site: site)
 
 	match slot.kind 'kind'
-		service then fn.emitPositionalCallDiscarding(RegistryServiceInstallName, args: pairArgs(slotAddr, second: value), range: range)
-		value(dropCallee, retainCallee, shareWalk) then buildDefaultValue(fn, value: value, slotAddr: slotAddr, dropCallee: dropCallee, retainCallee: retainCallee, shareWalk: shareWalk, range: range)
+		service then fn.emitPositionalCallDiscarding(RegistryServiceInstallName, args: pairArgs(slotAddr, second: value), site: site)
+		value(dropCallee, retainCallee, shareWalk) then buildDefaultValue(fn, value: value, slotAddr: slotAddr, dropCallee: dropCallee, retainCallee: retainCallee, shareWalk: shareWalk, site: site)
 	end 'kind'
 end 'buildDefault'
 
-function buildDefaultValue(fn SynthesizedFunction, value ValueId, slotAddr ValueId, dropCallee ByteArray, retainCallee ByteArray, shareWalk TransferWalk, range SourceRange)
+function buildDefaultValue(fn SynthesizedFunction, value ValueId, slotAddr ValueId, dropCallee OwnershipCallee, retainCallee OwnershipCallee, shareWalk TransferWalk, site SynthesizedSite)
 	// Marked before the install publishes it: from then on any thread may retain it.
-	emitDefaultShareWalk(fn, value: value, shareWalk: shareWalk, range: range)
+	emitDefaultShareWalk(fn, value: value, shareWalk: shareWalk, site: site)
 
 	var installArgs = ValueIdArray.create()
 	installArgs.push(slotAddr)
 	installArgs.push(value)
-	installArgs.push(runtimeFunctionOrNone(fn, callee: dropCallee, range: range))
-	installArgs.push(runtimeFunctionOrNone(fn, callee: retainCallee, range: range))
-	fn.emitPositionalCallDiscarding(SharedValueInstallName, args: installArgs, range: range)
+	installArgs.push(runtimeFunctionOrNone(fn, callee: dropCallee, site: site))
+	installArgs.push(runtimeFunctionOrNone(fn, callee: retainCallee, site: site))
+	fn.emitPositionalCallDiscarding(SharedValueInstallName, args: installArgs, site: site)
 end 'buildDefaultValue'
 
-function emitDefaultShareWalk(fn SynthesizedFunction, value ValueId, shareWalk TransferWalk, range SourceRange)
+function emitDefaultShareWalk(fn SynthesizedFunction, value ValueId, shareWalk TransferWalk, site SynthesizedSite)
 	match shareWalk 'walk'
 		closed then return
-		walkedBy(callee) then emitSettledWalk(fn, value: value, walk: callee, range: range)
-		walkedAlone(callee) then fn.emitPositionalCallDiscarding(callee, args: singletonArgs(value), range: range)
+		walkedBy(callee) then emitSettledWalk(fn, value: value, walk: callee, site: site)
+		walkedAlone(callee) then fn.emitPositionalCallDiscarding(callee, args: singletonArgs(value), site: site)
 		walkedThroughWitness then panic("emitDefaultShareWalk: a registry value is a declared struct, and a declared struct's graph is walked by its own per-type walk rather than through a witness")
 		refused then panic("emitDefaultShareWalk: `Parser.requireShareableRegistryValue` refuses a key no share walk can mark (E3171)")
 	end 'walk'
 end 'emitDefaultShareWalk'
 
-function emitSettledWalk(fn SynthesizedFunction, value ValueId, walk ByteArray, range SourceRange)
-	let visits = fn.emitPositionalCall(walk, args: pairArgs(value, second: fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-	fn.emitPositionalCallDiscarding(WalkSettleName, args: singletonArgs(visits), range: range)
+function emitSettledWalk(fn SynthesizedFunction, value ValueId, walk ByteArray, site SynthesizedSite)
+	let visits = fn.emitPositionalCall(walk, args: pairArgs(value, second: fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, site: site)), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: site)
+	fn.emitPositionalCallDiscarding(WalkSettleName, args: singletonArgs(visits), site: site)
 end 'emitSettledWalk'
 
-function runtimeFunctionOrNone(fn SynthesizedFunction, callee ByteArray, range SourceRange) returns ValueId
-	if callee.isEmpty() 'noFunction'
-		return fn.emitTypedLiteral(NoRuntimeFunction, valueType: MaxonType.integer, range: range)
-	end 'noFunction'
-
-	return fn.emitRuntimeFuncAddr(callee, range: range)
+function runtimeFunctionOrNone(fn SynthesizedFunction, callee OwnershipCallee, site SynthesizedSite) returns ValueId
+	return match callee 'callee'
+		inert gives fn.emitTypedLiteral(NoRuntimeFunction, valueType: MaxonType.integer, site: site)
+		named(name) gives fn.emitCodeAddress(name, site: site)
+	end 'callee'
 end 'runtimeFunctionOrNone'
 
 // ⭐⭐ **EVERY MARKABLE `let` RECORD IS MARKED SHARED BEFORE `main` RUNS**, so the count every message steps on it
@@ -226,16 +226,16 @@ end 'runtimeFunctionOrNone'
 // slots as owners; `__mm_walk_settle` aborts on an owner no `let` holds, which is a record a `var` could still
 // write. It runs after the LAST store, when no initializer temporary holds a record any more. A program with no
 // walked `let` opens no table: `__mm_walk_settle` is installed only beside a walk.
-function markLetsShared(fn SynthesizedFunction, sharedLets SharedLetArray, range SourceRange)
-	var visits = fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, range: range)
+function markLetsShared(fn SynthesizedFunction, sharedLets SharedLetArray, site SynthesizedSite)
+	var visits = fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, site: site)
 
 	for shared in sharedLets 'eachLet'
 		let record = fn.mintOfType(shared.global.valueType)
-		fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(shared.global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), range: shared.global.range)
-		visits = fn.emitPositionalCall(shared.walk, args: pairArgs(record, second: visits), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: shared.global.range)
+		fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(shared.global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), site: globalSite(shared.global))
+		visits = fn.emitPositionalCall(shared.walk, args: pairArgs(record, second: visits), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: globalSite(shared.global))
 	end 'eachLet'
 
-	fn.emitPositionalCallDiscarding(WalkSettleName, args: singletonArgs(visits), range: range)
+	fn.emitPositionalCallDiscarding(WalkSettleName, args: singletonArgs(visits), site: site)
 end 'markLetsShared'
 
 // The OWNED value a managed global's slot starts life holding — either a record this function MATERIALIZES,
@@ -252,8 +252,8 @@ end 'markLetsShared'
 // with its call (`TopLevelDecl.declaredByTheCorpus`).
 function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
 	return match global.initializer 'initializer'
-		record(build) gives builtRecord(fn, build: build, valueType: global.valueType, range: global.range)
-		factoryCall(calls, root) gives initializerNodeRecord(fn, calls: calls, id: root, valueType: global.valueType, range: global.range)
+		record(build) gives builtRecord(fn, build: build, valueType: global.valueType, site: globalSite(global))
+		factoryCall(calls, root) gives initializerNodeRecord(fn, calls: calls, id: root, valueType: global.valueType, site: globalSite(global))
 	end 'initializer'
 end 'initialRecordOf'
 
@@ -277,12 +277,12 @@ end 'initialRecordOf'
 // ⚠ **A `CharacterSet` PRESET NEEDS NO ARM OF ITS OWN.** `stdlib/CharacterSet.maxon` declares the eleven
 // presets, so a preset at module scope is an ordinary static calling ordinary declared code, and there is no
 // compiler-owned record for a global to hold.
-function builtRecord(fn SynthesizedFunction, build ManagedGlobalRecord, valueType MaxonType, range SourceRange) returns ValueId
+function builtRecord(fn SynthesizedFunction, build ManagedGlobalRecord, valueType MaxonType, site SynthesizedSite) returns ValueId
 	return match build 'build'
-		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: valueType, range: range)
-		constArrayRecord(elementSize, elementCount, bytes) gives ownedConstArrayRecord(fn, elementSize: elementSize, elementCount: elementCount, bytes: bytes, valueType: valueType, range: range)
-		containerRecord(create, elements) gives builtContainerRecord(fn, create: create, elements: elements, valueType: valueType, range: range)
-		boxedUnionCaseRecord(tag, payloadSlotOffsets, boxSize) gives builtUnionCaseBox(fn, tag: tag, payloadSlotOffsets: payloadSlotOffsets, boxSize: boxSize, valueType: valueType, range: range)
+		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: valueType, site: site)
+		constArrayRecord(elementSize, elementCount, bytes) gives ownedConstArrayRecord(fn, elementSize: elementSize, elementCount: elementCount, bytes: bytes, valueType: valueType, site: site)
+		containerRecord(create, elements) gives builtContainerRecord(fn, create: create, elements: elements, valueType: valueType, site: site)
+		boxedUnionCaseRecord(tag, payloadSlotOffsets, boxSize) gives builtUnionCaseBox(fn, tag: tag, payloadSlotOffsets: payloadSlotOffsets, boxSize: boxSize, valueType: valueType, site: site)
 	end 'build'
 end 'builtRecord'
 
@@ -291,10 +291,10 @@ end 'builtRecord'
 // need the identical promotion for the identical reason — the array's `element_destroy@40` walk drops every
 // live slot, so an element must be a record its owner may free — which is why it takes the type and bytes
 // rather than reading them off a global.
-function clonedStringRecord(fn SynthesizedFunction, bytes ByteArray, valueType MaxonType, range SourceRange) returns ValueId
+function clonedStringRecord(fn SynthesizedFunction, bytes ByteArray, valueType MaxonType, site SynthesizedSite) returns ValueId
 	let literal = fn.mintOfType(valueType)
-	fn.emit(MaxonOp.stringLiteral(literal, bytes: bytes), range: range)
-	return fn.emitPositionalCall(StrCloneName, args: singletonArgs(literal), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+	fn.emit(MaxonOp.stringLiteral(literal, bytes: bytes), site: site)
+	return fn.emitPositionalCall(StrCloneName, args: singletonArgs(literal), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
 end 'clonedStringRecord'
 
 // ⭐⭐ **A BOXED UNION'S PAYLOAD-FREE CASE AT MODULE SCOPE — THE BOX, THE TAG, THEN THE ZEROES.** The same
@@ -312,12 +312,12 @@ end 'clonedStringRecord'
 // ⚠ **THE BOX IS NOT ENROLLED AS AN OWNED TEMPORARY**, for the reason `SynthesizedFunction.emitBoxAlloc`
 // states: `__module_init` has no statement to hang a drop on, and this record is stored straight into a
 // `.data` slot whose owner releases it through `__maxon_global_cleanup`.
-function builtUnionCaseBox(fn SynthesizedFunction, tag ParsedInt, payloadSlotOffsets ByteOffsetArray, boxSize ByteOffset, valueType MaxonType, range SourceRange) returns ValueId
-	let box = fn.emitBoxAlloc(boxSize as ParsedInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
-	fn.emit(MaxonOp.storeIndirect(box, offset: UnionTagOffset, value: fn.emitTypedLiteral(tag, valueType: MaxonType.integer, range: range), valueType: MaxonType.integer), range: range)
+function builtUnionCaseBox(fn SynthesizedFunction, tag ParsedInt, payloadSlotOffsets ByteOffsetArray, boxSize ByteOffset, valueType MaxonType, site SynthesizedSite) returns ValueId
+	let box = fn.emitBoxAlloc(boxSize as ParsedInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
+	fn.emit(MaxonOp.storeIndirect(box, offset: UnionTagOffset, value: fn.emitTypedLiteral(tag, valueType: MaxonType.integer, site: site), valueType: MaxonType.integer), site: site)
 
 	for offset in payloadSlotOffsets 'zeroFill'
-		fn.emit(MaxonOp.storeIndirect(box, offset: offset, value: fn.emitTypedLiteral(0, valueType: MaxonType.integer, range: range), valueType: MaxonType.integer), range: range)
+		fn.emit(MaxonOp.storeIndirect(box, offset: offset, value: fn.emitTypedLiteral(0, valueType: MaxonType.integer, site: site), valueType: MaxonType.integer), site: site)
 	end 'zeroFill'
 
 	return box
@@ -327,9 +327,9 @@ end 'builtUnionCaseBox'
 // record the slot must hold. The stride and the element count ride the description rather than being
 // re-derived here — a `b"…"` fixes them from its bytes, an `[…]` from the instance it was typed by, and
 // neither is a fact this function could re-ask without picking one of the two to be authoritative.
-function ownedConstArrayRecord(fn SynthesizedFunction, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray, valueType MaxonType, range SourceRange) returns ValueId
+function ownedConstArrayRecord(fn SynthesizedFunction, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray, valueType MaxonType, site SynthesizedSite) returns ValueId
 	let record = fn.mintOfType(valueType)
-	fn.emit(MaxonOp.constArrayLiteral(record, elementSize: elementSize, elementCount: elementCount, bytes: bytes), range: range)
+	fn.emit(MaxonOp.constArrayLiteral(record, elementSize: elementSize, elementCount: elementCount, bytes: bytes), site: site)
 	return record
 end 'ownedConstArrayRecord'
 
@@ -357,8 +357,8 @@ end 'ownedConstArrayRecord'
 // three arms read alike: nothing here is a fact about a GLOBAL, and a builder that cannot see one cannot
 // come to read a second field off it that the other two arms would not have — which is also what lets all
 // three serve a factory ARGUMENT unchanged.
-function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall, elements ConstArrayElementArray, valueType MaxonType, range SourceRange) returns ValueId
-	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
+function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall, elements ConstArrayElementArray, valueType MaxonType, site SynthesizedSite) returns ValueId
+	let record = bornContainerRecord(fn, create: create, valueType: valueType, site: site)
 
 	// ⭐ **THE ADD CALLEE IS THE INSTANCE'S OWN** — `__managed_push` for an `Array`, `Set.insert` for a
 	// declared `Set`. `ProgramSignatures.containerCreateCall` is where "which container is this?" is already
@@ -367,7 +367,7 @@ function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall
 		let add = elementAddCallee(create, count: elements.count() as ParsedInt)
 
 		for element in elements 'eachElement'
-			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: elementRecordOf(fn, element: element, site: site)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, site: site)
 		end 'eachElement'
 	end 'hasElements'
 
@@ -382,14 +382,14 @@ end 'builtContainerRecord'
 // ⚠ **NO SIZING CALL STANDS IN THIS SEQUENCE.** A fixed-size container whose elements are addressable from
 // birth publishes those slots from its own `create()` (`stdlib/Vector.maxon`), so the sizing rides inside the
 // callee this function emits and the description carries no `sizing` field at all.
-function bornContainerRecord(fn SynthesizedFunction, create ContainerCreateCall, valueType MaxonType, range SourceRange) returns ValueId
+function bornContainerRecord(fn SynthesizedFunction, create ContainerCreateCall, valueType MaxonType, site SynthesizedSite) returns ValueId
 	var args = ValueIdArray.create()
 
 	for stamp in create.stamps 'eachStamp'
-		args.push(containerStampValue(fn, stamp: stamp, range: range))
+		args.push(containerStampValue(fn, stamp: stamp, site: site))
 	end 'eachStamp'
 
-	return fn.emitPositionalCall(create.callee, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+	return fn.emitPositionalCall(create.callee, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
 end 'bornContainerRecord'
 
 // ⭐⭐ **`var table = [b"if": Info.create(…), …]` — A MAP LITERAL AT FILE SCOPE**, emitted as the
@@ -400,14 +400,14 @@ end 'bornContainerRecord'
 // ⚠ **IT IS AN ARENA NODE AND NOT A `ManagedGlobalRecord`, WHICH IS WHY IT TAKES `calls`.** Either half of a
 // pair may itself be a CALL — `Info.create(…)` above — and only an arena entry can name one. `materializedValue` recurses back through
 // `initializerNodeRecord`, exactly as a factory ARGUMENT does.
-function builtMapLiteralRecord(fn SynthesizedFunction, create ContainerCreateCall, entries GlobalInitMapEntryArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
-	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
+function builtMapLiteralRecord(fn SynthesizedFunction, create ContainerCreateCall, entries GlobalInitMapEntryArray, calls GlobalInitCallArray, valueType MaxonType, site SynthesizedSite) returns ValueId
+	let record = bornContainerRecord(fn, create: create, valueType: valueType, site: site)
 
 	if entries.count() > 0 'hasPairs'
 		let add = keyedElementAddCallee(create, count: entries.count() as ParsedInt)
 
 		for entry in entries 'eachPair'
-			emitMapEntryUpsert(fn, add: add, record: record, entry: entry, calls: calls, range: range)
+			emitMapEntryUpsert(fn, add: add, record: record, entry: entry, calls: calls, site: site)
 		end 'eachPair'
 	end 'hasPairs'
 
@@ -424,14 +424,14 @@ end 'builtMapLiteralRecord'
 // `materializedValue` reaches hands back a record this frame owns, the add makes the container its sole
 // owner, and the container's own element destructor releases it, so a drop here would be the second half of
 // a double free.
-function builtArrayLiteralRecord(fn SynthesizedFunction, create ContainerCreateCall, elements GlobalInitValueAndTypeArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
-	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
+function builtArrayLiteralRecord(fn SynthesizedFunction, create ContainerCreateCall, elements GlobalInitValueAndTypeArray, calls GlobalInitCallArray, valueType MaxonType, site SynthesizedSite) returns ValueId
+	let record = bornContainerRecord(fn, create: create, valueType: valueType, site: site)
 
 	if elements.count() > 0 'hasElements'
 		let add = elementAddCallee(create, count: elements.count() as ParsedInt)
 
 		for element in elements 'eachElement'
-			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: materializedValue(fn, value: element.value, valueType: element.valueType, calls: calls, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: materializedValue(fn, value: element.value, valueType: element.valueType, calls: calls, site: site)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, site: site)
 		end 'eachElement'
 	end 'hasElements'
 
@@ -446,20 +446,20 @@ end 'builtArrayLiteralRecord'
 // header carries the use-after-free measured without it). The LABELS are the resolution's
 // (`ProgramSignatures.globalMapEntry`): the receiver is positional, the key is positional and the value
 // carries `value:`, which is what `LowerMaxonToStd.lowerCall` slots the third argument against.
-function emitMapEntryUpsert(fn SynthesizedFunction, add ByteArray, record ValueId, entry GlobalInitMapEntry, calls GlobalInitCallArray, range SourceRange)
-	let key = materializedValue(fn, value: entry.key.value, valueType: entry.key.valueType, calls: calls, range: range)
-	let value = materializedValue(fn, value: entry.value.value, valueType: entry.value.valueType, calls: calls, range: range)
+function emitMapEntryUpsert(fn SynthesizedFunction, add ByteArray, record ValueId, entry GlobalInitMapEntry, calls GlobalInitCallArray, site SynthesizedSite)
+	let key = materializedValue(fn, value: entry.key.value, valueType: entry.key.valueType, calls: calls, site: site)
+	let value = materializedValue(fn, value: entry.value.value, valueType: entry.value.valueType, calls: calls, site: site)
 
 	var labels = ByteArrayArray.create()
 	labels.push(EmptySourceText)
 	labels.push(entry.key.label)
 	labels.push(entry.value.label)
-	_ = fn.emitCall(add, args: tripleArgs(record, second: key, third: value), argLabels: labels, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	_ = fn.emitCall(add, args: tripleArgs(record, second: key, third: value), argLabels: labels, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, site: site)
 
 	var borrowed = GlobalInitArgumentArray.create()
 	borrowed.push(entry.key)
 	borrowed.push(entry.value)
-	dropBorrowedArguments(fn, args: borrowed, values: pairArgs(key, second: value), range: range)
+	dropBorrowedArguments(fn, args: borrowed, values: pairArgs(key, second: value), site: site)
 end 'emitMapEntryUpsert'
 
 // The callee one element joins this container through — asked only when there IS an element, so a container
@@ -493,14 +493,14 @@ end 'keyedElementAddCallee'
 
 // One stamp a container's `create` is born holding: a number, or the drop callee's raw `.text` ADDRESS. The
 // emitting twin of `Parser.columnDestroyValue`, over the ONE decision both read
-// (`ProgramSignatures.columnDestroyStamp`). The address rides a `functionRef`, which
-// `LowerMaxonToStd.lowerFunctionRef` materializes BARE for a `__`-prefixed callee (not the `__fnref_` env
-// thunk — the drop walk invokes it through a plain `callIndirect(ptr)`) and `scanRuntimeUsage` records, so
-// naming it here is what installs the destructor.
-function containerStampValue(fn SynthesizedFunction, stamp ContainerCreateStamp, range SourceRange) returns ValueId
+// (`ProgramSignatures.columnDestroyStamp`). The address rides a `codeAddress` `functionRef`, which
+// `LowerMaxonToStd.lowerFunctionRef` materializes BARE (the drop walk invokes it through a plain
+// `callIndirect(ptr)`) and `scanRuntimeUsage` records, so naming it here is what installs the
+// destructor.
+function containerStampValue(fn SynthesizedFunction, stamp ContainerCreateStamp, site SynthesizedSite) returns ValueId
 	return match stamp 'stamp'
-		inline(value) gives fn.emitTypedLiteral(value, valueType: MaxonType.integer, range: range)
-		dropCallee(callee) gives fn.emitRuntimeFuncAddr(callee, range: range)
+		inline(value) gives fn.emitTypedLiteral(value, valueType: MaxonType.integer, site: site)
+		dropCallee(callee) gives fn.emitCodeAddress(callee, site: site)
 	end 'stamp'
 end 'containerStampValue'
 
@@ -518,12 +518,13 @@ end 'containerStampValue'
 // `valueType` is supplied by whoever RECEIVES the result — the global's slot for the root, the argument or
 // field for a nested one — which is why no arena entry carries a return type of its own, and why both arms
 // mint at it identically.
-function initializerNodeRecord(fn SynthesizedFunction, calls GlobalInitCallArray, id ElementIndex, valueType MaxonType, range SourceRange) returns ValueId
+function initializerNodeRecord(fn SynthesizedFunction, calls GlobalInitCallArray, id ElementIndex, valueType MaxonType, site SynthesizedSite) returns ValueId
 	return match globalInitCallAt(calls, id: id) 'node'
-		call(callee, args) gives calledFactoryRecord(fn, callee: callee, args: args, calls: calls, valueType: valueType, range: range)
-		construct(sizeBytes, fields) gives builtStructBox(fn, sizeBytes: sizeBytes, fields: fields, calls: calls, valueType: valueType, range: range)
-		mapLiteral(create, entries) gives builtMapLiteralRecord(fn, create: create, entries: entries, calls: calls, valueType: valueType, range: range)
-		arrayLiteral(create, elements) gives builtArrayLiteralRecord(fn, create: create, elements: elements, calls: calls, valueType: valueType, range: range)
+		call(callee, args) gives calledFactoryRecord(fn, callee: callee, args: args, calls: calls, valueType: valueType, site: site)
+		construct(sizeBytes, fields) gives builtStructBox(fn, sizeBytes: sizeBytes, fields: fields, calls: calls, valueType: valueType, site: site)
+		mapLiteral(create, entries) gives builtMapLiteralRecord(fn, create: create, entries: entries, calls: calls, valueType: valueType, site: site)
+		arrayLiteral(create, elements) gives builtArrayLiteralRecord(fn, create: create, elements: elements, calls: calls, valueType: valueType, site: site)
+		functionValue(funcName) gives fn.emitFunctionValue(funcName, valueType: valueType, site: site)
 	end 'node'
 end 'initializerNodeRecord'
 
@@ -543,17 +544,17 @@ end 'initializerNodeRecord'
 // this frame owns them; a body's call site hands that job to the statement's own temp list
 // (`Parser.trackOwnedTemp`) and `__module_init` has no statement to end. So each one is dropped right after
 // the call, on the decision the index already made per argument (`GlobalInitArgumentCleanup`).
-function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args GlobalInitArgumentArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
+function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args GlobalInitArgumentArray, calls GlobalInitCallArray, valueType MaxonType, site SynthesizedSite) returns ValueId
 	var values = ValueIdArray.create()
 	var labels = ByteArrayArray.create()
 
 	for arg in args 'eachArgument'
-		values.push(materializedValue(fn, value: arg.value, valueType: arg.valueType, calls: calls, range: range))
+		values.push(materializedValue(fn, value: arg.value, valueType: arg.valueType, calls: calls, site: site))
 		labels.push(arg.label)
 	end 'eachArgument'
 
-	let record = fn.emitCall(callee, args: values, argLabels: labels, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
-	dropBorrowedArguments(fn, args: args, values: values, range: range)
+	let record = fn.emitCall(callee, args: values, argLabels: labels, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
+	dropBorrowedArguments(fn, args: args, values: values, site: site)
 	return record
 end 'calledFactoryRecord'
 
@@ -575,16 +576,16 @@ end 'calledFactoryRecord'
 // ⚠ The stores go down in DECLARATION order because `fields` is layout-parallel, which is the ordering
 // `emitStructLiteral` also stores in and deliberately not the order the literal was written
 // (`ConstFactoryCall.construct`).
-function builtStructBox(fn SynthesizedFunction, sizeBytes ByteOffset, fields GlobalStructFieldArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
-	let box = fn.emitBoxAlloc(sizeBytes as ParsedInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+function builtStructBox(fn SynthesizedFunction, sizeBytes ByteOffset, fields GlobalStructFieldArray, calls GlobalInitCallArray, valueType MaxonType, site SynthesizedSite) returns ValueId
+	let box = fn.emitBoxAlloc(sizeBytes as ParsedInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
 
 	for field in fields 'eachField'
-		let value = materializedValue(fn, value: field.value, valueType: field.valueType, calls: calls, range: range)
-		fn.emit(MaxonOp.storeIndirect(box, offset: field.offset, value: value, valueType: field.storageType), range: range)
+		let value = materializedValue(fn, value: field.value, valueType: field.valueType, calls: calls, site: site)
+		fn.emit(MaxonOp.storeIndirect(box, offset: field.offset, value: value, valueType: field.storageType), site: site)
 
 		match field.slot 'slot'
 			oneWord then continue
-			existential(interfaceName, claims, fieldSite, declFilePath) then storeWidenedWitness(fn, box: box, offset: field.offset, value: value, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, declFilePath: declFilePath, range: range)
+			existential(interfaceName, claims, fieldSite, declFilePath) then storeWidenedWitness(fn, box: box, offset: field.offset, value: value, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, declFilePath: declFilePath, site: site)
 		end 'slot'
 	end 'eachField'
 
@@ -595,24 +596,24 @@ end 'builtStructBox'
 // (`Parser.fieldStoreWitness`), recorded for the same whole-program check. The witness is always materialized:
 // a folded constant is concrete, and a nested factory returning an interface is refused before an initializer
 // reaches here (`Parser.nestedFactoryReturnRefusal`), so no value already held at an interface arrives.
-function storeWidenedWitness(fn SynthesizedFunction, box ValueId, offset ByteOffset, value ValueId, interfaceName ByteArray, claims GenericInstanceIdArray, fieldSite ByteArray, declFilePath FilePath, range SourceRange)
-	fn.recordExistentialFieldStore(ExistentialFieldStore.create(value, subject: box, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, place: ExistentialStorePlace.structField, line: range.line, column: range.column, filePath: declFilePath))
+function storeWidenedWitness(fn SynthesizedFunction, box ValueId, offset ByteOffset, value ValueId, interfaceName ByteArray, claims GenericInstanceIdArray, fieldSite ByteArray, declFilePath FilePath, site SynthesizedSite)
+	fn.recordExistentialFieldStore(ExistentialFieldStore.create(value, subject: box, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, place: ExistentialStorePlace.structField, line: site.range().line, column: site.range().column, filePath: declFilePath))
 
 	let witness = fn.mintOfType(MaxonType.integer)
-	fn.emit(MaxonOp.existentialWitness(witness, interfaceName: interfaceName, conformer: value), range: range)
-	fn.emit(MaxonOp.storeIndirect(box, offset: offset + InterfaceWitnessHalfOffset, value: witness, valueType: MaxonType.integer), range: range)
+	fn.emit(MaxonOp.existentialWitness(witness, interfaceName: interfaceName, conformer: value), site: site)
+	fn.emit(MaxonOp.storeIndirect(box, offset: offset + InterfaceWitnessHalfOffset, value: witness, valueType: MaxonType.integer), site: site)
 end 'storeWidenedWitness'
 
 // Release every argument record the callee did not take. AFTER the call, never before: the callee reads
-// through the borrow, so the record has to outlive the body it was lent to.
-function dropBorrowedArguments(fn SynthesizedFunction, args GlobalInitArgumentArray, values ValueIdArray, range SourceRange)
+// through the borrow, so the record has to outlive the body that borrowed it.
+function dropBorrowedArguments(fn SynthesizedFunction, args GlobalInitArgumentArray, values ValueIdArray, site SynthesizedSite)
 	for i in 0 upto args.count() 'eachArgument'
 		let arg = try args.get(i) otherwise panic("dropBorrowedArguments: args.get OOB at {i} below count {args.count()}")
 		let value = try values.get(i) otherwise panic("dropBorrowedArguments: values.get OOB at {i} — the materialization above pushes one value per argument")
 
 		match arg.cleanup 'cleanup'
 			none then continue
-			dropAfterCall(dropCallee) then fn.emitPositionalCallDiscarding(dropCallee, args: singletonArgs(value), range: range)
+			dropAfterCall(dropCallee) then fn.emitPositionalCallDiscarding(dropCallee, args: singletonArgs(value), site: site)
 		end 'cleanup'
 	end 'eachArgument'
 end 'dropBorrowedArguments'
@@ -631,11 +632,11 @@ end 'dropBorrowedArguments'
 // decided by the caller: an argument the callee only borrowed is dropped after the call
 // (`ProgramSignatures.recordArgumentCleanup`), a field is consumed by the box and dropped by its destructor
 // (`builtStructBox`). Nothing downstream of here has to know which arm produced the value.
-function materializedValue(fn SynthesizedFunction, value GlobalInitArgumentValue, valueType MaxonType, calls GlobalInitCallArray, range SourceRange) returns ValueId
+function materializedValue(fn SynthesizedFunction, value GlobalInitArgumentValue, valueType MaxonType, calls GlobalInitCallArray, site SynthesizedSite) returns ValueId
 	return match value 'value'
-		scalar(payload) gives fn.emitTypedLiteral(payload, valueType: valueType, range: range)
-		record(build) gives builtRecord(fn, build: build, valueType: valueType, range: range)
-		call(id) gives initializerNodeRecord(fn, calls: calls, id: id, valueType: valueType, range: range)
+		scalar(payload) gives fn.emitTypedLiteral(payload, valueType: valueType, site: site)
+		record(build) gives builtRecord(fn, build: build, valueType: valueType, site: site)
+		call(id) gives initializerNodeRecord(fn, calls: calls, id: id, valueType: valueType, site: site)
 	end 'value'
 end 'materializedValue'
 
@@ -651,15 +652,15 @@ end 'literalStorageType'
 // immortal `.rdata` literal CLONED, because the array becomes the element's sole owner and `__managed_decref`'s
 // walk `__str_decref`s every live slot — the same promotion `Parser.moveElementIntoContainer` applies to a
 // borrowed String literal at a body's `push`, reached through the same `__str_clone`.
-function elementRecordOf(fn SynthesizedFunction, element ConstArrayElement, range SourceRange) returns ValueId
+function elementRecordOf(fn SynthesizedFunction, element ConstArrayElement, site SynthesizedSite) returns ValueId
 	return match element 'element'
-		integer(payload) gives fn.emitTypedLiteral(payload, valueType: MaxonType.integer, range: range)
-		string(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: MaxonType.string, range: range)
+		integer(payload) gives fn.emitTypedLiteral(payload, valueType: MaxonType.integer, site: site)
+		string(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: MaxonType.string, site: site)
 
 		// A Character element is the String arm at a different TAG, which is the whole of the difference in
 		// The compiler: `Parser.emitCharacterLiteral` emits the same `stringLiteral` op and the same `__str_clone`
 		// promotes it, and the tag is what makes the value a `Character` for the set's key check.
-		character(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: MaxonType.character, range: range)
+		character(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: MaxonType.character, site: site)
 
 		// ⭐ **AN ENUM CASE IS THE INTEGER ARM, and it is written out rather than folded into it because the
 		// two bind different shapes.** A payload-free enum's value IS its tag, so the slot takes the same i64
@@ -667,7 +668,7 @@ function elementRecordOf(fn SynthesizedFunction, element ConstArrayElement, rang
 		// types its op that way: the ELEMENT TYPE is the array instance's business (`Array with Reg`, fixed by
 		// `constArrayValueType`), and this is the STORAGE. The enum's name is carried on the element for the
 		// instance to be built from, and is not wanted here.
-		enumCase(payload, _) gives fn.emitTypedLiteral(payload, valueType: MaxonType.integer, range: range)
+		enumCase(payload, _) gives fn.emitTypedLiteral(payload, valueType: MaxonType.integer, site: site)
 	end 'element'
 end 'elementRecordOf'
 
@@ -684,21 +685,24 @@ end 'elementRecordOf'
 //
 // Every decref is unconditional and nothing here tests a slot for null: `__module_init` fills every slot in
 // this list before `main`, so a null guard would test a condition the program cannot be in.
-function buildGlobalCleanup(module MaxonModule, project Project, globals ManagedGlobalArray, range SourceRange)
+function buildGlobalCleanup(module MaxonModule, project Project, globals ManagedGlobalArray, site SynthesizedSite)
 	var fn = openExitCodePassThrough(module, project: project, name: GlobalCleanupName)
 
 	for global in globals 'eachGlobal'
-		if not global.owesCleanupDrop 'theSlotHoldsAValue'
-			continue
-		end 'theSlotHoldsAValue'
-
-		let record = fn.mintOfType(global.valueType)
-		fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), range: global.range)
-		fn.emitPositionalCallDiscarding(global.dropCallee, args: singletonArgs(record), range: global.range)
+		match global.cleanupDrop 'drop'
+			inert then continue
+			named(dropCallee) then emitGlobalCleanupDrop(fn, global: global, dropCallee: dropCallee)
+		end 'drop'
 	end 'eachGlobal'
 
-	fn.terminate(MaxonOp.ret(ExitCodeParam), range: range)
+	fn.terminate(MaxonOp.ret(ExitCodeParam), site: site)
 end 'buildGlobalCleanup'
+
+function emitGlobalCleanupDrop(fn SynthesizedFunction, global ManagedGlobal, dropCallee ByteArray)
+	let record = fn.mintOfType(global.valueType)
+	fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), site: globalSite(global))
+	fn.emitPositionalCallDiscarding(dropCallee, args: singletonArgs(record), site: globalSite(global))
+end 'emitGlobalCleanupDrop'
 
 function openExitCodePassThrough(module MaxonModule, project Project, name ByteArray) returns SynthesizedFunction
 	var paramTypes = MaxonTypeArray.create()
@@ -706,20 +710,20 @@ function openExitCodePassThrough(module MaxonModule, project Project, name ByteA
 	return SynthesizedFunction.open(module, project: project, name: name, returnType: MaxonReturnType.value(MaxonType.integer), paramTypes: paramTypes)
 end 'openExitCodePassThrough'
 
-function buildRegistryRelease(module MaxonModule, project Project, defaults DefaultSlotArray, range SourceRange)
+function buildRegistryRelease(module MaxonModule, project Project, defaults DefaultSlotArray, site SynthesizedSite)
 	var fn = openExitCodePassThrough(module, project: project, name: RegistryReleaseName)
 
 	for slot in defaults 'eachDefault'
-		let slotAddr = fn.emitLabelAddr(slot.label, range: slot.declaration.keyRange)
+		let slotAddr = fn.emitLabelAddr(slot.label, site: defaultSite(slot))
 		let release = match slot.kind 'kind'
 			service gives RegistryServiceReleaseName
 			value gives SharedValueRegistryReleaseName
 		end 'kind'
 
-		fn.emitPositionalCallDiscarding(release, args: singletonArgs(slotAddr), range: slot.declaration.keyRange)
+		fn.emitPositionalCallDiscarding(release, args: singletonArgs(slotAddr), site: defaultSite(slot))
 	end 'eachDefault'
 
-	fn.terminate(MaxonOp.ret(ExitCodeParam), range: range)
+	fn.terminate(MaxonOp.ret(ExitCodeParam), site: site)
 end 'buildRegistryRelease'
 
 // The span a synthesized function's TERMINATOR carries. No source token spawns a `return` that the user
@@ -727,13 +731,36 @@ end 'buildRegistryRelease'
 // key — the declaration that caused the whole function to exist. The caller has already established
 // the lists are not both empty (`installManagedGlobalInit` builds nothing then), so the miss is an
 // invariant break rather than a case.
-function anchorRange(globals ManagedGlobalArray, defaults DefaultSlotArray) returns SourceRange
+function anchorSite(globals ManagedGlobalArray, defaults DefaultSlotArray) returns SynthesizedSite
 	if let global = try globals.get(0) 'aManagedGlobal'
-		return global.range
+		return globalSite(global)
 	end 'aManagedGlobal'
 
-	return (try defaults.get(0) otherwise panic("anchorRange: no managed global and no default — `installManagedGlobalInit` returns before building a function when both lists are empty")).declaration.keyRange
-end 'anchorRange'
+	return defaultSite(try defaults.get(0) otherwise panic("anchorSite: no managed global and no default — `installManagedGlobalInit` returns before building a function when both lists are empty"))
+end 'anchorSite'
+
+function globalSite(global ManagedGlobal) returns SynthesizedSite
+	return SynthesizedSite.declaredAt(global.declFilePath, range: global.range)
+end 'globalSite'
+
+function defaultSite(slot DefaultSlot) returns SynthesizedSite
+	return SynthesizedSite.declaredAt(slot.declaration.declFilePath, range: slot.declaration.keyRange)
+end 'defaultSite'
+
+// `declaredAt` files a synthesized op under the declaration that caused it
+// (`Project.synthesizedOpFiles`), so a diagnostic on the op names the author's file; an op with no
+// such declaration is the compiler's own.
+export union SynthesizedSite
+	compilersOwn
+	declaredAt(filePath FilePath, range SourceRange)
+
+	export function range() returns SourceRange
+		return match self 'site'
+			compilersOwn gives SourceRange.none()
+			declaredAt(_, range) gives range
+		end 'site'
+	end 'range'
+end 'SynthesizedSite'
 
 // ⭐ **A MAXON FUNCTION BUILT BY THE COMPILER RATHER THAN PARSED** — the emit + value-minting discipline
 // `FileParseArtifact` gives the parser, for the one caller that has no artifact.
@@ -767,8 +794,6 @@ export type SynthesizedFunction
 	var valueNameIds as TypeNameIdArray
 	var valueBrandIds as TypeNameIdArray
 	var valueMintedSole as BoolArray
-	var valueClosureEnv as ValueIdArray
-	var valueIsCapturingClosure as BoolArray
 
 	// Create the function, register it and its single `entry` block on `module`, and seed the value
 	// columns with the parameters — whose ids (`0..paramCount-1`) the value numbering RESERVES rather than
@@ -778,16 +803,12 @@ export type SynthesizedFunction
 		var valueNameIds = TypeNameIdArray.create()
 		var valueBrandIds = TypeNameIdArray.create()
 		var valueMintedSole = BoolArray.create()
-		var valueClosureEnv = ValueIdArray.create()
-		var valueIsCapturingClosure = BoolArray.create()
 
 		for paramType in paramTypes 'eachParam'
 			valueTags.push(maxonTypeTag(paramType))
 			valueNameIds.push(typeNameIdOf(paramType))
 			valueBrandIds.push(UnnamedTypeId)
 			valueMintedSole.push(false)
-			valueClosureEnv.push(0)
-			valueIsCapturingClosure.push(false)
 		end 'eachParam'
 
 		// ⚠ `synthesized()` is a POSITIVE claim, not a default: it is what makes `__module_init` /
@@ -796,11 +817,11 @@ export type SynthesizedFunction
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
 		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. Both functions run on `main`'s green
 		// thread in a program with green threads, so both carry its stack guard (`IrFunction.needsGreenThreadStackGuard`).
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueWitnessIds: ValueIdArray.create(), declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
 		let funcIndex = module.funcCount()
 		module.pushFunc(func)
 
-		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry", heat: BlockHeat.normal), valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure}
+		return Self{module: module, project: project, funcIndex: funcIndex, func: func, block: module.addBlock(func, label: b"entry", heat: BlockHeat.normal), valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole}
 	end 'open'
 
 	// Allocate a fresh ValueId AND record its type, in lockstep — `Parser.mintValue`'s twin over the
@@ -816,8 +837,6 @@ export type SynthesizedFunction
 		self.valueNameIds.push(self.projectScopedNameId(tag, nameId: nameId))
 		self.valueBrandIds.push(UnnamedTypeId)
 		self.valueMintedSole.push(false)
-		self.valueClosureEnv.push(0)
-		self.valueIsCapturingClosure.push(false)
 		return id
 	end 'mint'
 
@@ -874,12 +893,12 @@ export type SynthesizedFunction
 	// compiler accepted. The OFFSET is not repeated for the same reason: `GlobalSlotOffset` is the one
 	// constant both stores and loads spell.
 	function emitSlotAddr(global ManagedGlobal) returns ValueId
-		return self.emitLabelAddr(global.label, range: global.range)
+		return self.emitLabelAddr(global.label, site: globalSite(global))
 	end 'emitSlotAddr'
 
-	function emitLabelAddr(label ByteArray, range SourceRange) returns ValueId
+	function emitLabelAddr(label ByteArray, site SynthesizedSite) returns ValueId
 		let addr = self.mintOfType(MaxonType.integer)
-		self.emit(MaxonOp.globalAddr(addr, label: label), range: range)
+		self.emit(MaxonOp.globalAddr(addr, label: label), site: site)
 		return addr
 	end 'emitLabelAddr'
 
@@ -913,10 +932,10 @@ export type SynthesizedFunction
 
 	// Append a body op, recording its span and the origin of the value it defines — the choke point
 	// `FileParseArtifact.emitOp` is for parsed code, and it keeps the identical two invariants.
-	export function emit(op MaxonOp, range SourceRange)
+	export function emit(op MaxonOp, site SynthesizedSite)
 		let opIndex = self.module.opCount()
 		self.module.appendOp(self.block, op: op)
-		self.recordOpTables(op, opIndex: opIndex, range: range)
+		self.recordOpTables(op, opIndex: opIndex, site: site)
 	end 'emit'
 
 	// ⭐ **OPEN A FRESH BLOCK AND CONTINUE EMITTING INTO IT.**
@@ -944,22 +963,27 @@ export type SynthesizedFunction
 
 	// Set the terminator of a block that is not the current one — the two-way branch a diamond's head needs,
 	// written after both successors exist.
-	export function terminateBlock(target IrBlock, op MaxonOp, range SourceRange)
+	export function terminateBlock(target IrBlock, op MaxonOp, site SynthesizedSite)
 		let opIndex = self.module.opCount()
 		self.module.setTerminator(target, op: op)
-		self.recordOpTables(op, opIndex: opIndex, range: range)
+		self.recordOpTables(op, opIndex: opIndex, site: site)
 	end 'terminateBlock'
 
 	// Terminate the block ops are CURRENTLY landing in. It is `terminateBlock` over `self.block` and nothing
 	// else, because how a terminator joins the op tables must not be written twice.
-	export function terminate(op MaxonOp, range SourceRange)
-		self.terminateBlock(self.block, op: op, range: range)
+	export function terminate(op MaxonOp, site SynthesizedSite)
+		self.terminateBlock(self.block, op: op, site: site)
 	end 'terminate'
 
 	// The span + value-origin recording both emitters share, so a body op and a terminator cannot come to
 	// disagree about which tables an op joins.
-	function recordOpTables(op MaxonOp, opIndex ElementIndex, range SourceRange)
-		self.project.opRanges.record(opIndex, range: range)
+	function recordOpTables(op MaxonOp, opIndex ElementIndex, site SynthesizedSite)
+		self.project.opRanges.record(opIndex, range: site.range())
+
+		match site 'site'
+			compilersOwn then break 'site'
+			declaredAt(filePath, _) then self.project.synthesizedOpFiles.upsert(opIndex, value: filePath)
+		end 'site'
 
 		match maxonOpResultValue(op) 'result'
 			none then break 'result'
@@ -987,9 +1011,9 @@ export type SynthesizedFunction
 	// WAY OR THE OTHER — and this compiler's own lexer is written that way.** Minting at the op's `integer`
 	// gave **`E3005 argument type mismatch for 'kind': expected 'TokenKind', got 'int'`**, once per keyword;
 	// carrying `named` onto the op instead panicked the lowering. Both are the same missing distinction.
-	export function emitTypedLiteral(value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
+	export function emitTypedLiteral(value ParsedInt, valueType MaxonType, site SynthesizedSite) returns ValueId
 		let result = self.mintOfType(valueType)
-		self.emit(MaxonOp.literal(result, value: value, valueType: literalStorageType(valueType)), range: range)
+		self.emit(MaxonOp.literal(result, value: value, valueType: literalStorageType(valueType)), site: site)
 		return result
 	end 'emitTypedLiteral'
 
@@ -1003,11 +1027,11 @@ export type SynthesizedFunction
 	// this returns is stored straight into a `.data` slot (or into an enclosing box), whose owner then drops it
 	// through `__maxon_global_cleanup` or through a destructor cascade. That difference is why the two are
 	// twins rather than one function on a shared carrier.
-	function emitBoxAlloc(sizeBytes ParsedInt, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+	function emitBoxAlloc(sizeBytes ParsedInt, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
 		var allocArgs = ValueIdArray.create()
-		allocArgs.push(self.emitTypedLiteral(sizeBytes, valueType: MaxonType.integer, range: range))
-		allocArgs.push(self.emitTypedLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range))
-		return self.emitPositionalCall(MmAllocName, args: allocArgs, resultTag: resultTag, resultNameId: resultNameId, range: range)
+		allocArgs.push(self.emitTypedLiteral(sizeBytes, valueType: MaxonType.integer, site: site))
+		allocArgs.push(self.emitTypedLiteral(TrivialDestructor, valueType: MaxonType.integer, site: site))
+		return self.emitPositionalCall(MmAllocName, args: allocArgs, resultTag: resultTag, resultNameId: resultNameId, site: site)
 	end 'emitBoxAlloc'
 
 	// A two-operand comparison yielding an i1 — `Parser.emitCompareAgainstLiteral`'s twin on this carrier,
@@ -1017,23 +1041,31 @@ export type SynthesizedFunction
 	// builds is an equality or inequality against a word the compiler mints itself, whose two readings are
 	// the same instruction. There is no source operand here whose declared range could ask for anything
 	// else, so the answer is stated rather than threaded.
-	export function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, range SourceRange) returns ValueId
+	export function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, site SynthesizedSite) returns ValueId
 		let result = self.mint(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.emit(MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op, signedness: IntegerSignedness.signed), range: range)
+		self.emit(MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op, signedness: IntegerSignedness.signed), site: site)
 		return result
 	end 'emitCompare'
 
-	// The raw `.text` ADDRESS of a compiler-internal runtime function, as a value — `Parser.emitRuntimeFuncAddr`'s
-	// twin on this carrier, for the array element destructor `__managed_create` stamps into `element_destroy@40`.
+	// The raw `.text` ADDRESS of a compiler-internal runtime function, as a value —
+	// `Parser.emitCodeAddress`'s twin on this carrier, for the array element destructor
+	// `__managed_create` stamps into `element_destroy@40`.
 	//
 	// The value is typed `integer` for `emitSlotAddr`'s reason (an address is a machine word, and the Maxon
-	// tier has no pointer type) rather than the parser's `function` tag: the parser's result may be BOUND by
-	// user code, whose type then has to name the function, while this one is an argument and nothing else.
-	function emitRuntimeFuncAddr(callee ByteArray, range SourceRange) returns ValueId
+	// tier has no pointer type) rather than a `function` type: a function VALUE (`emitFunctionValue`)
+	// may be BOUND by user code, whose type then has to name the function, while this one is an
+	// argument and nothing else.
+	function emitCodeAddress(callee ByteArray, site SynthesizedSite) returns ValueId
 		let result = self.mintOfType(MaxonType.integer)
-		self.emit(MaxonOp.functionRef(result, funcName: callee), range: range)
+		self.emit(MaxonOp.functionRef(result, funcName: callee, form: FunctionRefForm.codeAddress), site: site)
 		return result
-	end 'emitRuntimeFuncAddr'
+	end 'emitCodeAddress'
+
+	function emitFunctionValue(funcName ByteArray, valueType MaxonType, site SynthesizedSite) returns ValueId
+		let result = self.mintOfType(valueType)
+		self.emit(MaxonOp.functionRef(result, funcName: funcName, form: FunctionRefForm.functionValue), site: site)
+		return result
+	end 'emitFunctionValue'
 
 	// ⭐ **A CALL WHOSE ARGUMENTS ARE ALL POSITIONAL** — every runtime entry point (`__str_clone`,
 	// `__str_decref`, `__managed_create`, `__managed_push`), because the runtime has no parameter names for a label to
@@ -1041,16 +1073,16 @@ export type SynthesizedFunction
 	// all (`Parser.evalConstContainerCreate`). It is named for that property rather than for the runtime,
 	// because the runtime is not the only thing it serves: a user factory taking ARGUMENTS goes
 	// to `emitCall` directly, its labels being what `LowerMaxonToStd.lowerCall` reorders against the signature.
-	export function emitPositionalCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
-		return self.emitCall(callee, args: args, argLabels: emptyArgLabels(args), resultTag: resultTag, resultNameId: resultNameId, range: range)
+	export function emitPositionalCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
+		return self.emitCall(callee, args: args, argLabels: emptyArgLabels(args), resultTag: resultTag, resultNameId: resultNameId, site: site)
 	end 'emitPositionalCall'
 
 	// ⭐ **A POSITIONAL CALL WHOSE RESULT NOBODY READS** — a drop, a runtime step, a mailbox close. It is
 	// `emitPositionalCall` with `void`/`UnnamedTypeId` and the result discarded, which keeps a three-part
 	// incantation in ONE spelling: the `_ =`, the `ValueTypeTag.void` and the `UnnamedTypeId` are one fact —
 	// *this call answers nothing* — and `Runtime/ServiceLoop.maxon` makes eight more of them.
-	export function emitPositionalCallDiscarding(callee ByteArray, args ValueIdArray, range SourceRange)
-		_ = self.emitPositionalCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	export function emitPositionalCallDiscarding(callee ByteArray, args ValueIdArray, site SynthesizedSite)
+		_ = self.emitPositionalCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, site: site)
 	end 'emitPositionalCallDiscarding'
 
 	// ⭐ **CALL A FUNCTION THE AUTHOR DECLARED — a top-level factory** (spec-port `map-struct-bytearray`), and
@@ -1064,9 +1096,9 @@ export type SynthesizedFunction
 	//
 	// `argDefaultSlots` is empty and that is exact: this walk passes every argument the source wrote and
 	// synthesizes none, so there is no supplied default whose declaration slot `slotCallArgs` would need.
-	function emitCall(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+	function emitCall(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
 		let result = self.mint(resultTag, nameId: resultNameId)
-		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), range: range)
+		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), site: site)
 		return result
 	end 'emitCall'
 end 'SynthesizedFunction'

@@ -101,7 +101,7 @@ is read as a green-thread handle and its status word compared against `completed
 
 ⚠ **A promise that has already been AWAITED leaves a stale handle in its slot**, because `await` recycles
 the green-thread struct and nothing writes the slot back. That is the same contract
-`__Builtins.gtIsComplete` has had since G17 — the intrinsic asks nothing of its handle beyond it being one
+`__Builtins.gtIsComplete` has — the intrinsic asks nothing of its handle beyond it being one
 — and the same slot-level linearity gap named above. A caller that re-selects over an array must
 overwrite a consumed slot, exactly as `Testing/SpecWorkerPool.sendAndDrain` re-arms a drain with `set`.
 The registration writes the awaiter word of every slot it parks on, so a stale handle there is a write

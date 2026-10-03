@@ -25,7 +25,7 @@ already uses to reach the buffer under an array.
 
 `Array with T` and `__ManagedMemory with T` are ONE RECORD with TWO SURFACES:
 `SignatureIndex.ManagedMemoryTypeName` is registered as a generic ALIAS of the very
-`Array with Byte` instance a `b"…"` literal has. So the reference's `Self{managed: managed}`
+`Array with Byte` instance a `b"…"` literal has. So `stdlib/Array.maxon`'s `Self{managed: managed}`
 allocates nothing here — there is no second record for the buffer to be a field of, and the
 bytes the two names reach are the same bytes.
 
@@ -63,14 +63,14 @@ receiver alias's, which is element-agnostic and strictly stronger.
 
 It is not "carries the buffer mark" either, and that is the second half of the choice. The mark
 (`bufferSurfaceValues`) is a per-function fact about a `ValueId`, so it is GONE after a closure capture
-while the record and its stride are unchanged — `a-captured-buffer-adopts-inside-a-closure` is measured
+while the record and its stride are unchanged — `a-captured-buffer-adopts-inside-a-closure` is the
 proof. A door keyed on the mark would refuse `stdlib/File.maxon:135`'s shape for a reason having nothing
 to do with the stride. So an ORDINARY array of the instance is admitted too
 (`an-ordinary-array-of-the-instance-adopts`), and adopting one is an ordinary co-owning retain.
 
-### ⚠ Every adoption reachable TODAY is a BYTE one, and the reason is not this door
+### ⚠ Every reachable adoption is a BYTE one, and the reason is not this door
 
-MEASURED, and it is worth writing down because the door looks byte-agnostic and is:
+It is worth writing down because the door looks byte-agnostic and is:
 
 | receiver alias | buffer | verdict |
 |---|---|---|
@@ -79,23 +79,23 @@ MEASURED, and it is worth writing down because the door looks byte-agnostic and 
 | `Array with Small` (`int(0 to 200)`) | `__ManagedMemory.create(n, elementSize: 1)` | refused — `Array_Byte` |
 
 The verdict column names the INSTANCE the buffer minted. The DIAGNOSTIC spells that instance by the
-`typealias` the program declares for it where one exists (user ruling, 2026-08-04), which is why the byte
+`typealias` the program declares for it where one exists, which is why the byte
 row's refusal below reads `got 'ByteArray'` — `stdlib/File.maxon`'s own
 `export typealias ByteArray = Array with Byte`, the same instance under a name a person wrote. The word
-row has no such name, which is the next paragraph's whole subject, so it still reads `Array_int`.
+row has no such name, which is the next paragraph's whole subject, so it reads `Array_int`.
 
 `managedMemoryInstanceForElementSize` mints exactly two instances — `Array with Byte` for width 1
 and `Array with int` for width 8 — and **`Array with int` is a type no program can name**:
 `typealias IntArray = Array with int` is `E2061: Cannot use bare type 'int' as a type argument; use
 a ranged typealias instead`, and every ranged alias over it (`Integer`, `Small`) interns a DIFFERENT instance, exactly
-as `default-values.md` and `string-views.md` already pin for array literals (`Array_int` vs
+as `default-values.md` and `string-views.md` pin for array literals (`Array_int` vs
 `Array_Integer`). So the only nameable alias a `__ManagedMemory` value can be adopted into is
 `Array with Byte`. That is the standing `Array_int`-unnameability gap, observed here rather than
 caused here — a door that keyed on element WIDTH instead would close it only by giving up the
 soundness the row above depends on.
 
 `stdlib/File.maxon:135`'s `return ByteArray.init(managed)` is the byte row, which is why this
-rung unblocks it.
+door admits it.
 
 ## Tests
 
@@ -413,7 +413,7 @@ end 'main'
 ```
 
 <!-- test: an-ordinary-array-of-the-instance-adopts -->
-⭐ **WHAT THE DOOR ACTUALLY ASKS, PINNED (review).** The rule is SAME-INSTANCE, and that admits an
+⭐ **WHAT THE DOOR ACTUALLY ASKS, PINNED.** The rule is SAME-INSTANCE, and that admits an
 ORDINARY array of the instance as well as a buffer — `requireSameArrayInstance` never consults the
 buffer mark. Adopting one is an ordinary co-owning retain: `src` and `b` are two owners of one record,
 so a `push` through either shows through the other and both drop at the same scope exit. The stricter
@@ -439,8 +439,8 @@ end 'main'
 
 <!-- test: a-captured-buffer-adopts-inside-a-closure -->
 ⭐ **THE MARK DOES NOT CROSS A CLOSURE BOUNDARY AND THE ADOPTION MUST.** `bufferSurfaceValues` is a
-per-function fact about a `ValueId`, so a captured `mm` has lost it inside the closure body — measured:
-`mm.length()` there is already refused. `ByteArray.init(mm)` nonetheless adopts, because the door asks
+per-function fact about a `ValueId`, so a captured `mm` has lost it inside the closure body —
+`mm.length()` there is refused. `ByteArray.init(mm)` nonetheless adopts, because the door asks
 the INSTANCE, which erasure cannot take away. This is the case that makes the door's choice of test a
 correctness property rather than a preference: keyed on the mark, `stdlib/File.maxon:135`'s shape would
 stop compiling the day it moved inside a closure.
@@ -457,8 +457,9 @@ end 'apply'
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
+	let length = mm.length()
 	let r = apply(function(n Integer) gives (ByteArray.init(mm).count() as Integer) + n, x: 5)
-	return (r * 10 + mm.length()) as ExitCode
+	return (r * 10 + length) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -468,7 +469,7 @@ end 'main'
 <!-- test: an-opaque-element-array-adopts-and-becomes-the-last-owner -->
 ⭐⭐ **THE OPAQUE INSTANCE, AND THE ADOPTION AS SOLE OWNER.** `parseArrayStaticCall`'s header claims the
 adoption serves an OPAQUE instance (`Array with Element` inside a generic body) exactly as a concrete
-one, "element-agnostic by construction" — a claim nothing ran until this case. It is reachable through
+one, "element-agnostic by construction" — and this case is what runs that claim. It is reachable through
 a nested `typealias ElementArray = Array with Element` whose own FIELD supplies the same instance. The
 element is a `String`, so the record's elements are managed, and `drain` then drops the container's
 reference — leaving the adopted array the LAST owner, whose drop must free the record AND destroy both
@@ -512,7 +513,7 @@ end 'main'
 ```
 
 <!-- test: an-inner-alias-adopts -->
-`parseArrayStaticCall` has TWO call sites and this rung edited both: a top-level generic alias, and an
+`parseArrayStaticCall` has TWO call sites and both adopt: a top-level generic alias, and an
 alias declared INSIDE a type body (`enclosingInnerAliases` → `innerArrayStatic`). Every case above
 reaches only the first. This one reaches the second, in the shape it will actually be written — a
 static factory adopting its `__ManagedMemory` parameter straight into the type's own field.
@@ -677,9 +678,9 @@ error E3005: <fragment>:7:19: argument type mismatch for 'managed': expected '__
 ```
 
 <!-- test: error.an-unknown-array-static -->
-The unknown-static refusal names what the type ACTUALLY provides. It said "`create()` only" until
-this rung, which stopped being true the moment `init` landed — a refusal's noun is the authority a
-reader trusts, so a stale one sends them looking for a mechanism that exists.
+The unknown-static refusal names what the type ACTUALLY provides, `create()` and `init(managed)` — a
+refusal's noun is the authority a reader trusts, so a stale one sends them looking elsewhere for a
+mechanism the type has.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -694,13 +695,13 @@ error E2015: <fragment>:6:20: Unsupported: `Array` static method 'nosuch' — th
 ```
 
 <!-- test: a-synthesized-byte-buffer-adopts -->
-⭐⭐ **THE BYTE-BUFFER BOUNDARY AT THIS DOOR (W5).** A COMPILER-SYNTHESIZED buffer wears the
+⭐⭐ **THE BYTE-BUFFER BOUNDARY AT THIS DOOR.** A COMPILER-SYNTHESIZED buffer wears the
 reserved element `__ManagedByte`, deliberately a DIFFERENT instance from the user-visible `Byte` —
 a user may declare `Byte`, and a compiler-minted buffer's stride may not follow. Raw instance
-equality therefore refused it, and this is the NINTH door of the class
+equality would therefore refuse it, and this is the NINTH door of the class
 `ProgramSignatures.byteBufferBoundaryAdmits`'s header enumerates — and the only one that does not
-ride `aggregatesConflict`, which is why the other eight did not cover it: `stdlib/Console.maxon:68` is
-`ByteArray.init(__Builtins.readStdin(n))`, and it got `E3005 … expected '__ManagedMemory with
+ride `aggregatesConflict`, so the other eight do not cover it. `stdlib/Console.maxon:68` is
+`ByteArray.init(__Builtins.readStdin(n))`, which without it is `E3005 … expected '__ManagedMemory with
 Byte', got 'Array___ManagedByte'` on a module that must compile.
 
 The buffer here is `__ManagedDirectory.currentPath()` rather than a stdin read, deliberately: the
@@ -709,7 +710,7 @@ header uses for the other six. It is restricted to x64-windows by the marker lin
 producer's substrate, which is the only reason this case is not target-neutral like the rest of the
 file. (Quoting the marker's TEXT in prose would be a second marker: `SpecParser` reads the directive
 with `line.contains`, so a sentence inside a test's region sets it too — see
-`bytearray-element-size.md`'s exit-code case, where for one revision the sentence was the only one.)
+`bytearray-element-size.md`'s exit-code case.)
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -728,7 +729,7 @@ end 'main'
 ```
 
 <!-- test: error.a-synthesized-buffer-is-refused-at-a-narrowed-byte -->
-⛔ **AND THE ADMISSION IS THREE QUESTIONS, NOT ONE — THIS IS THE ONE THAT STOPS THE MEASURED 223.**
+⛔ **AND THE ADMISSION IS THREE QUESTIONS, NOT ONE — THIS CASE IS THE THIRD.**
 The element is still NAMED `Byte` and the record still strides one byte, so a door that asked only
 those two would adopt a buffer of raw OS bytes as an array of `int(0 to 200)` and hand back
 whichever bytes fell outside it, with no diagnostic anywhere. The third question — does the

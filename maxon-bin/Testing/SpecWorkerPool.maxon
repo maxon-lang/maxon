@@ -115,12 +115,9 @@
 // line; a drain whose last line is not it reached EOF first, which means the worker died mid-job.
 // See `drainResultsThunk` and `endedWithReady`.
 //
-// INVARIANT, and the drain leans on it: a worker NEVER writes an empty line to stdout. The four
-// lines above are the only ones it can write and all four are non-empty — so an empty line back
-// from `readStdoutLine()` is unambiguously EOF, i.e. the worker died. Keeping stdout clean takes
-// no effort here: the compiled test programs a worker spawns run under `Subprocess.run` with
-// COLLECTED output, so their streams are captured, never inherited — and the COMPILES spawn
-// nothing at all, they run inside the worker.
+// A worker's stdout carries only the lines above: the compiled test programs a worker spawns run
+// under `Subprocess.run` with COLLECTED output, so their streams are captured, never inherited —
+// and the COMPILES spawn nothing at all, they run inside the worker.
 //
 // ============================================================================================
 // THE WORKER IS THE COMPILER, AND THAT IS WHAT THESE THREE GUARDS EXIST FOR
@@ -1178,9 +1175,9 @@ end 'resultsFromLines'
 // SubprocessError on failure. Naming the error is what lets the dispatcher bind it below — and
 // what makes its payload get RELEASED. A `Promise with StringArray` names the result only, so
 // boxing a drain into one ERASES `SubprocessError`: the box keeps a single bit saying
-// whether the error is a heap pointer, that bit reads `false` for a union, and every dead
-// worker leaks the String inside its error. A green suite never shows it: the drain only
-// throws when a worker dies.
+// whether the error is a heap pointer, that bit reads `false` for a union, and every failed
+// read leaks the String inside its error. A green suite never shows it: the drain throws only
+// when a read fails.
 typealias DrainPromise = Promise with (StringArray, SubprocessError)
 typealias DrainPromiseArray = Array with DrainPromise
 
@@ -1203,9 +1200,9 @@ typealias SlotInstantArray = Array with InstantMs
 // which is what a worker that DIED mid-job leaves behind.
 //
 // ⭐⭐ **DEATH COMES BACK AS AN ANSWER, NOT AS A THROW, AND THE TERMINATOR IS WHAT DISTINGUISHES THEM.**
-// A `throw SubprocessError.ioFailed` on EOF would take the whole run down through
-// `abortOnDeadWorker`, and a compiler panic kills the WORKER itself rather than a grandchild — so that
-// is a usability regression, not a fault report. The parent instead FAILS that job's tests
+// A throw at end of stream would take the whole run down through `abortOnDeadWorker`, and a
+// compiler panic kills the WORKER itself rather than a grandchild — so one case's crash would end
+// the run. The parent instead FAILS that job's tests
 // and carries on, and to do that it needs two things this hands back: whether the job finished, and
 // the last `WORKER_STEP:` breadcrumb. Both ride in the lines — the READY line is not swallowed,
 // and the breadcrumbs are ordinary lines the parent strips.
@@ -1213,13 +1210,12 @@ typealias SlotInstantArray = Array with InstantMs
 // ⚠ **`DrainPromise`'s TWO TYPE ARGUMENTS STAY AS THEY ARE, ON PURPOSE.** Widening the
 // RESULT type to carry the death bit (a union, a struct) would mint a new generic instantiation on the
 // one path whose known failure mode is a boxed payload nobody releases — `Promise with StringArray`
-// erases `SubprocessError` and leaks the String inside it, once per dead worker, invisibly, because the
-// drain only throws when a worker dies. The terminator is a LINE because everything else on this wire is one.
+// erases `SubprocessError` and leaks the String inside it, once per failed read, invisibly, because
+// the drain throws only when a read fails. The terminator is a LINE because everything else on this
+// wire is one.
 //
-// It still THROWS, and the declaration is not vestigial: `readStdoutLine` is declared `throws`, so a
-// future read that does signal an error rather than answering EOF reaches the dispatcher's own
-// handler. Today it cannot — the stdlib reader turns every failure into a zero-length line, which IS
-// this function's EOF.
+// A read that fails for any reason other than end of stream is thrown on to the dispatcher's own
+// handler.
 //
 // A FREE FUNCTION, not a method on PersistentWorkerHandle, and deliberately so: `async
 // handle.drain()` would capture the handle STRUCT, which the dispatcher must keep mutating while
@@ -1228,11 +1224,11 @@ typealias SlotInstantArray = Array with InstantMs
 // address the same OS object.
 //
 // ⭐⭐ **IT PUBLISHES PROGRESS AS IT READS, AND THAT IS THE ONLY WAY THE PARENT CAN SEE ANY.** A job's
-// lines are handed back in one array when the job ENDS, so until this rung the dispatcher could not
-// tell a worker two seconds into a compile from one that stopped four minutes ago — and bounded the
-// whole job by an estimate for want of the distinction. `spokeAt` is the parent's own array, handed to
-// this thread by the spawn: `async` gives a managed argument its OWN REFERENCE to the same heap object
-// (`Parser.emitAsyncCall`), and this drain is a COROUTINE of the dispatcher green thread — a member of its
+// lines are handed back in one array when the job ENDS, so without this the dispatcher could not
+// tell a worker two seconds into a compile from one that stopped four minutes ago. `spokeAt` is the
+// parent's own array, handed to this thread by the spawn: `async` gives a managed PARAMETER passed
+// on its OWN REFERENCE to the same heap object (`Parser.emitAsyncCall`), and this drain is a
+// COROUTINE of the dispatcher green thread — a member of its
 // strand, which runs one member at a time (see the section at the top of this file). So a write here is
 // visible to the dispatcher by its next turn — this GT yields only inside `readStdoutLine`.
 //
@@ -1244,22 +1240,19 @@ function drainResultsThunk(child StreamingSubprocess, spokeAt SlotInstantArray, 
 	var lines = StringArray.create()
 
 	while true 'lineLoop'
-		let line = try child.readStdoutLine()
+		let line = try child.readStdoutLine() otherwise (e) 'unread'
+			if not e.endedTheStream() 'aReadFailure'
+				throw e
+			end 'aReadFailure'
 
-		// STAMPED BEFORE THE EOF TEST, so there is exactly ONE stamp site: every read that RETURNS is
-		// evidence from the worker's own pipe, EOF included. Stamping only real lines would leave a dead
-		// worker's last stamp stale for the interval between its EOF and the dispatcher serving the
-		// drain — a window in which the sweep would terminate a worker that is already gone, and print a
-		// line accusing it of silence.
-		try spokeAt.set(slot, value: Clock.nowMs()) otherwise panic("drainResultsThunk: spokeAt.set({slot}) is in bounds — the dispatcher sizes it to the pool before any drain is spawned")
-
-		if line.isEmpty() 'eof'
-			// Workers never print an empty line (see the protocol note at the top of this file), so this
-			// IS EOF: the worker died with the job unfinished. What it managed to say comes back WITHOUT
-			// the READY terminator, which is exactly how the parent tells the two apart.
+			// End of stream is evidence from the worker too. Unstamped, a dead worker's last stamp goes
+			// stale until the dispatcher serves this drain, and the sweep terminates a worker that is
+			// already gone and accuses it of silence.
+			stampWorkerSpoke(spokeAt, slot: slot)
 			return lines
-		end 'eof'
+		end 'unread'
 
+		stampWorkerSpoke(spokeAt, slot: slot)
 		lines.push(line)
 
 		if line.trim() == WorkerReadyMarker 'jobDone'
@@ -1269,6 +1262,10 @@ function drainResultsThunk(child StreamingSubprocess, spokeAt SlotInstantArray, 
 
 	panic("drainResultsThunk: the loop above is only left by `return` or `throw`")
 end 'drainResultsThunk'
+
+function stampWorkerSpoke(spokeAt SlotInstantArray, slot WorkerId)
+	try spokeAt.set(slot, value: Clock.nowMs()) otherwise panic("drainResultsThunk: spokeAt.set({slot}) is in bounds — the dispatcher sizes it to the pool before any drain is spawned")
+end 'stampWorkerSpoke'
 
 // Did this drain end the way a FINISHED job ends? See `drainResultsThunk`: the terminator rides in the
 // lines, so its presence is the whole question and an empty drain (a worker that died before saying
@@ -1346,11 +1343,6 @@ function drainChildStderr(child StreamingSubprocess) returns String
 
 	while true 'lineLoop'
 		let line = try child.readStderrLine() otherwise break
-
-		if line.isEmpty() 'eof'
-			break
-		end 'eof'
-
 		out.push(line)
 	end 'lineLoop'
 
@@ -1628,14 +1620,6 @@ end 'WorkerExit'
 // A process exit status as every supported host reports one: a Win32 DWORD, or a POSIX `128 + signal`.
 typealias WorkerExitCode = int(0 to u32.max)
 
-// ⭐ **WHAT A CODE MEANS, WHERE THIS HARNESS RECOGNISES IT.** A union rather than a String that may be
-// empty: "this number has no name here" is a real answer, and an empty string would be a second thing
-// an unnamed code could be.
-union ExitCodeName
-	named(name String)
-	unrecognised
-end 'ExitCodeName'
-
 // ⭐ **THE WINDOWS STATUSES A CRASHING WORKER REPORTS AS ITS EXIT CODE — AND IT CHOOSES NONE OF THEM.**
 // The OS ends a faulting process with the exception's own NTSTATUS and `GetExitCodeProcess` hands that
 // number straight back, which is why these four are worth naming and an ordinary `1` is not.
@@ -1686,54 +1670,54 @@ end 'describeExitCode'
 // ⛔ **AN UNRECOGNISED CODE IS PRINTED IN BOTH RADICES AND NEVER SWALLOWED.** Which one a reader needs
 // depends on what they are about to look the number up in, and this harness cannot know that — while a
 // code it dropped would be a death with no evidence at all, which is what this whole block exists to end.
-function renderExitCode(code WorkerExitCode, name ExitCodeName, inItsOwnBand String) returns String
+function renderExitCode(code WorkerExitCode, name StatedText, inItsOwnBand String) returns String
 	return match name 'decoded'
-		named(text) gives "{inItsOwnBand} ({text})"
-		unrecognised gives "{code} ({hexOf(code)})"
+		stated(text) gives "{inItsOwnBand} ({text})"
+		unstated gives "{code} ({hexOf(code)})"
 	end 'decoded'
 end 'renderExitCode'
 
-function windowsStatusName(code WorkerExitCode) returns ExitCodeName
+function windowsStatusName(code WorkerExitCode) returns StatedText
 	if code == WindowsStatusAccessViolation 'accessViolation'
-		return ExitCodeName.named("access violation")
+		return StatedText.stated("access violation")
 	end 'accessViolation'
 
 	if code == WindowsStatusNoMemory 'noMemory'
-		return ExitCodeName.named("out of memory")
+		return StatedText.stated("out of memory")
 	end 'noMemory'
 
 	if code == WindowsStatusStackOverflow 'stackOverflow'
-		return ExitCodeName.named("stack overflow")
+		return StatedText.stated("stack overflow")
 	end 'stackOverflow'
 
 	if code == WindowsStatusControlC 'controlC'
-		return ExitCodeName.named("Ctrl+C")
+		return StatedText.stated("Ctrl+C")
 	end 'controlC'
 
-	return ExitCodeName.unrecognised
+	return StatedText.unstated
 end 'windowsStatusName'
 
 // ⚠ IT COMPARES THE CODE RATHER THAN SUBTRACTING THE BASE OUT OF IT. `WorkerExitCode` starts at 0, so
 // `code - PosixSignalExitCodeBase` on an ordinary small exit code leaves that range — a panic taken
 // inside the one function whose whole job is explaining a death.
-function posixSignalName(code WorkerExitCode, host Os) returns ExitCodeName
+function posixSignalName(code WorkerExitCode, host Os) returns StatedText
 	if code == signalExitCode(PosixSigAbort) 'aborted'
-		return ExitCodeName.named("SIGABRT")
+		return StatedText.stated("SIGABRT")
 	end 'aborted'
 
 	if code == signalExitCode(posixSigBusOn(host)) 'busError'
-		return ExitCodeName.named("SIGBUS")
+		return StatedText.stated("SIGBUS")
 	end 'busError'
 
 	if code == signalExitCode(PosixSigKill as PosixSignal) 'killed'
-		return ExitCodeName.named("SIGKILL")
+		return StatedText.stated("SIGKILL")
 	end 'killed'
 
 	if code == signalExitCode(PosixSigSegv) 'segfault'
-		return ExitCodeName.named("SIGSEGV")
+		return StatedText.stated("SIGSEGV")
 	end 'segfault'
 
-	return ExitCodeName.unrecognised
+	return StatedText.unstated
 end 'posixSignalName'
 
 // The exit code a child the kernel killed reports: `128 + signal`. One spelling of the convention, so
@@ -2210,7 +2194,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 			let drain = try drains.get(readySlot) otherwise panic("runSpecPool: a busy slot always has a drain promise, and slot {readySlot} is busy")
 
 			// `DrainPromise` names its error type, so `e` here is the real SubprocessError the
-			// drain threw. ⚠ **THIS IS NO LONGER THE DEAD-WORKER PATH, AND THE DISTINCTION IS THE WHOLE
+			// drain threw. ⚠ **THIS IS NOT THE DEAD-WORKER PATH, AND THE DISTINCTION IS THE WHOLE
 			// RECOVERY**: a worker that DIES leaves EOF, and `drainResultsThunk` answers that with the
 			// lines it got rather than throwing (see the `endedWithReady` branch below). What still
 			// reaches here is a read that FAILED — the parent unable to read a pipe it owns, which is no

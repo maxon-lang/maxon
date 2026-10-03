@@ -15,12 +15,12 @@ In Maxon, all struct-typed variables are references (heap pointers). The `==` op
 
 Binding one name to another (`let b = a`) creates a **reference** (alias) — `b` points to the same object as `a`. To create a new independent object, use `var b = a.clone()`. To check if two references point to the same object, use `is`.
 
-> **The compiler retraction (user ruling, 2026-08-13).** Canonical says `var b = a` also aliases, and pins it
+> **`var b = a` is a move.** Canonical says `var b = a` also aliases, and pins it
 > with a `mutation-through-alias` case expecting a write through `b` to be visible through `a`. Under
-> Maxon's ownership model as ruled on 2026-08-04 — *"single ownership, everything is a reference … the
+> Maxon's ownership model — *"single ownership, everything is a reference … the
 > key is mutability"* — that shape is a **move**, precisely because a second name could watch the value
-> change; The compiler answers `E3102 use of moved value`. The ruling wins, so that one case is retracted here.
-> `let b = a` from an immutable `a` is still a second reference, which is what `assignment-creates-alias`
+> change; The compiler answers `E3102 use of moved value`. The ownership model wins, so that one case is not carried here.
+> `let b = a` from an immutable `a` is a second reference, which is what `assignment-creates-alias`
 > pins and what the compiler does. Nothing else in this file is affected: reference identity itself is
 > orthogonal to how a binding acquires its reference.
 
@@ -364,11 +364,11 @@ constant into an array, take the element back out and `push` to it: without the 
 wasm32-wasi. The seven `*-detaches-from-rdata` cases in `byte-string-literal.md` pin the mutation half;
 this pins what the reader sees.
 
-⚠ **THE BOOTSTRAP ANSWERS `2` HERE AND THAT IS NOT A BUG IN EITHER.** Its constant is an ordinary heap
-record, so it can co-own where the compiler must copy, and identity survives its store. The two compilers make
-different representation choices and `is` is where the difference becomes visible; nothing in `specs/`
-pins a store, and this case is where the compiler says which answer is its own. `self-identity`,
-`assignment-creates-alias` and `byte-array-constant-identity` are unaffected and agree on both.
+⚠ **THE ANSWER FOLLOWS FROM THE REPRESENTATION, NOT FROM `is`.** A constant held as an ordinary heap
+record could co-own where this one must copy, and identity would survive its store; `is` is where the
+representation choice becomes visible. Nothing else in `specs/` pins a store, and this case is where the
+compiler says which answer is its own. `self-identity`, `assignment-creates-alias` and
+`byte-array-constant-identity` are unaffected.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
@@ -405,10 +405,9 @@ the `structRef` arm and falls through to a plain incref. The sink then holds the
 and a write through it lands on the image: **a panic in `Map.ensureCapacity` on x64, and on wasm32-wasi —
 which has no read-only section — a SILENT rewrite of the constant.**
 
-⚠ **Both compilers once answered `11` here**, meaning the `upsert` reached `Shared` and the module-level
-`let` came back holding an entry. That is the wrong answer the copy exists to prevent, and it is only
-memory-safe while the constant is an ordinary heap record: the moment a `let` Map becomes image data the
-same aliasing is a write to a read-only page. `held` must see its own entry and `Shared` must still be
+⚠ **`11` here would mean the `upsert` reached `Shared`** and the module-level `let` came back holding
+an entry. That is the wrong answer the copy exists to prevent, and because a `let` Map is image data the
+same aliasing is also a write to a read-only page. `held` must see its own entry and `Shared` must still be
 empty — `1` and `0`, so `10`.
 ```maxon
 typealias Key = int(0 to 1000)
@@ -431,12 +430,11 @@ end 'main'
 
 <!-- test: a-field-of-an-imaged-container-let-is-readable -->
 ⭐ **AN IMAGED RECORD IS STILL A RECORD, AND ITS FIELDS ARE STILL FIELDS.** Imaging changes where a
-module-level `let` LIVES, never what may be read from it. The receiver road for a managed constant was
-written when the only imageable records were a `String`, a `b"…"` blob and an empty `Array` — none of
-which has a field a caller can name — so a field chain off one resolved to `undefinedVariable`. A
-declared container box has fields, and the reader must reach them.
+module-level `let` LIVES, never what may be read from it. A `String`, a `b"…"` blob and an empty
+`Array` have no field a caller can name; a declared container box has fields, and the receiver road for
+a managed constant must reach them rather than resolve the chain to `undefinedVariable`.
 
-⚠ **THE TWO LINES BELOW TAKE DIFFERENT ROADS AND ONLY ONE OF THEM WAS BUILT.** `Shared.size()` is a
+⚠ **THE TWO LINES BELOW TAKE DIFFERENT ROADS.** `Shared.size()` is a
 method call and resolves through the receiver dispatch; `Shared.items` is a field chain. A diagnostic
 that fires on the second while the first compiles reports the base as undefined on the line AFTER the
 line that used it successfully, which sends the reader hunting for a typo in a name that is plainly

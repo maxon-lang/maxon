@@ -57,15 +57,15 @@
 // string — the alias spelling is a contract shared with the parser's interner. Grows
 // into a builtin-alias table (Character, etc.) when the stdlib cone lands.
 //
-// ⚠ **FILE-PRIVATE, AND IT IS THE `builtinTypeNameTag` BELOW THAT CARRIES THE NAME ACROSS FILES (W1).** The
+// ⚠ **FILE-PRIVATE, AND IT IS THE `builtinTypeNameTag` BELOW THAT CARRIES THE NAME ACROSS FILES.** The
 // re-derivation doors — an interface's rendered return STRING, a function typealias's stored return NAME —
-// need the ANSWER, not the bytes, and handing them the bytes is what produced three hand-written copies of
-// one rule and a wasm trap in two of them. Nothing outside this file names the constant now; the doors ask
-// the table, which is the only thing that keeps them from drifting (P1.7a slice 2b-iv-B, W1).
+// need the ANSWER, not the bytes: handed the bytes, each door spells its own copy of the rule. Nothing
+// outside this file names the constant; the doors ask the table, which is the only thing that keeps them
+// from drifting.
 let ExitCodeBuiltinName = b"ExitCode"
 
 // ⭐⭐ **THE TAG A BUILTIN TYPE NAME DENOTES — THE ONE ANSWER FOR EVERY DOOR THAT HOLDS A TYPE ONLY AS ITS
-// SOURCE-SPELLED NAME (W1).** Two registries store a declared type INTERNER-FREE, as the bytes the source
+// SOURCE-SPELLED NAME.** Two registries store a declared type INTERNER-FREE, as the bytes the source
 // wrote: an INTERFACE method's return type (a rendered source STRING — `IrInterface`) and a FUNCTION
 // TYPEALIAS's parameters and return (`FunctionTypeAlias`, whose `(tag, name)` pairs are what let it ride the
 // merge with no interner remap). Both therefore RE-DERIVE what a declaration derived once, and a
@@ -75,17 +75,16 @@ let ExitCodeBuiltinName = b"ExitCode"
 // nominal `named` all collapse to the same i64 machine word whichever route arrives at them
 // (`valueTagToStdType`).
 //
-// ⚠ **`ExitCode` IS THE ONE THAT DOES NOT, AND WHAT IT COST WAS A wasm TRAP.** It is the only builtin whose
+// ⚠ **`ExitCode` IS THE ONE THAT DOES NOT, AND WHAT IT COSTS IS A wasm TRAP.** It is the only builtin whose
 // tag carries a SUB-64 width (u32 — `valueTagToStdType`'s `exitCode` arm is the sole home of that width), so
 // a `returns ExitCode` rebuilt as a `named` is an i64 while the callee's own resolved declaration is a u32.
 // Invisible on every register target, where both occupy one 64-bit GPR, and a hard
 // **`wasm trap: indirect call type mismatch`** on wasm, whose `call_indirect` checks the declared functype
-// against the funcref's own EXACTLY: the call site declared `() -> i64` against a `__fnref_` thunk typed
-// `() -> i32`. MEASURED both ways — `typealias Thunk = function() returns ExitCode` + `nine() returns
-// ExitCode` returned 9 natively and trapped 134 under wasmtime, while the identical program over a user
-// `int(0 to u32.max)` alias of the SAME RANGE ran clean on both. That pair is what says the fact is a WIDTH
-// recovered from a NAME, not a name treated specially, and both halves of it are pinned
-// (`specs/first-class-functions.md`, `exitcode-return-through-alias` + its `ranged-alias` control).
+// against the funcref's own EXACTLY: the call site declares `() -> i64` against a `__fnref_` thunk typed
+// `() -> i32`. The identical program over a user `int(0 to u32.max)` alias of the SAME RANGE runs clean,
+// which is what says the fact is a WIDTH recovered from a NAME, not a name treated specially; both halves
+// are pinned (`specs/first-class-functions.md`, `exitcode-return-through-alias` + its `ranged-alias`
+// control).
 //
 // ⇒ **The rule is stated ONCE, here, and asked by all three doors** — `Parser.interfaceSpelledType`,
 // `Parser.functionAliasReturnType`, and this file's own `functionAliasReturnType`/`functionAliasParamType`
@@ -99,13 +98,11 @@ let ExitCodeBuiltinName = b"ExitCode"
 // from the caller's interned id. Every caller feeds this straight into that rebuild, so there is no second
 // decision to keep in step and nothing to test the answer against.
 //
-// ⚠⚠ **BUT THE FALL-THROUGH IS SILENT ON EVERY REGISTER TARGET, AND ONLY THE wasm LANE MAKES IT LOUD (W1
-// review).** A name that BELONGS here and is missing gets `named` — an i64 — and an i64 and a u32 occupy the
-// same GPR, so x64 and arm64 compute the right answer and say nothing; wasm's `call_indirect` is the only
-// reader that checks. That is not a reason to distrust the classification, it is the reason the wasm lane is
-// a gate: the omission this table exists to prevent was found by wasm and by nothing else. `denotedNamedType`
-// now sources its own builtin arm from here, so a name the compiler resolves at all cannot be added there and
-// forgotten here — which closes the direction the omission was actually made in.
+// ⚠⚠ **BUT THE FALL-THROUGH IS SILENT ON EVERY REGISTER TARGET, AND ONLY THE wasm LANE MAKES IT LOUD.** A
+// name that BELONGS here and is missing gets `named` — an i64 — and an i64 and a u32 occupy the same GPR, so
+// x64 and arm64 compute the right answer and say nothing; wasm's `call_indirect` is the only reader that
+// checks, which is why the wasm lane is a gate. `denotedNamedType` sources its own builtin arm from here, so
+// a name the compiler resolves at all cannot be added there and forgotten here.
 //
 // ⚠⚠ **THE ANSWER IS ONLY VALID AT A DOOR THAT HOLDS A *RENDERED* TYPE NAME — NOT AT ONE ASKING WHAT A
 // `named` REFERENCE DENOTES.** `bool`/`int`/`float`/`String` are unreachable as a `named` reference's name
@@ -114,49 +111,37 @@ let ExitCodeBuiltinName = b"ExitCode"
 // they mean the builtin. That is why `denotedNamedType` admits only the `exitCode` answer and not every
 // non-`named` one; a new caller must decide the same question before it may read past the `exitCode` arm.
 //
-// ⛔ **IT DOES NOT REST ON "a user `enum String` is legal, and its `Self` arrives as `named("String")`" —
-// BOTH HALVES ARE FALSE.** MEASURED: `enum String` is
-// **`E2015 … a declaration of the type name 'String', which the compiler owns`** —
-// `Parser.requireTypeNameNotCompilerOwned` refuses it, because `String` and `Character` are on
-// `isCompilerOwnedTypeName`. And a `Self` inside the one
+// ⛔ **A USER `enum String` CANNOT ROUTE THE NAME HERE.** `Parser.requireTypeNameNotCompilerOwned` refuses
+// it (E2015), because `String` and `Character` are on `isCompilerOwnedTypeName`, and a `Self` inside the one
 // body that MAY wear the name — the corpus's own `type String` — is the builtin tag rather than any
-// `named` reference (`Parser.enclosingSelfType`, which asks `byteRecordTagOfTypeName`). The restriction
-// above stands on the STRUCTURAL fact, which is stronger than any counter-example: neither name
+// `named` reference (`Parser.enclosingSelfType`, which asks `byteRecordTagOfTypeName`). Neither name
 // can wear a `named` tag at all, in any program, so the answers past `exitCode` are unreachable here rather
 // than merely risky.
 //
 // ⚠ **`Character` IS DELIBERATELY ABSENT, and admitting it would be a FEATURE rather than a re-spelling.**
-// The set here is exactly the set the interface door already answered for, because this rung single-sources
-// that door and does not widen it. A function typealias cannot reach the question at all:
-// `parseTypeReference` answers `Character` (and `String`) SYNTACTICALLY, so an alias stores them by TAG with
-// an EMPTY name and the `named` arm is never asked about either. ⭐ That is not an argument but a
-// MEASUREMENT (W1 review): `typealias CharThunk = function() returns Character` and its `String` twin both
-// compile and run correctly on the host AND on wasm, which is only possible by the TAG route — the name
-// column is empty, so this table is never consulted. Both are pinned
-// (`first-class-function.character-return-through-alias`, `.string-return-through-alias`), so a future change
-// that started storing them by NAME would turn this reasoning red instead of quietly relying on it. The
-// interface door can reach it, and
-// MEASURED it is REFUSED — an interface method declared `returns Character`, dispatched through a witness,
-// reports `E3005 Cannot return 'int' from function declared to return 'Character'`. That is a clean refusal
-// rather than a wrong answer, and admitting it means adopting a managed record as an owned temp at the
-// dispatch site (`Parser.enrolOwnedCallTemp`, which the witness door reaches through
-// `mintWitnessDispatchResult`), which is a mechanism with its own acceptance cases.
+// The set here is exactly the set the interface door answers for. A function typealias cannot reach the
+// question at all: `parseTypeReference` answers `Character` (and `String`) SYNTACTICALLY, so an alias stores
+// them by TAG with an EMPTY name and the `named` arm is never asked about either. Both are pinned
+// (`first-class-function.character-return-through-alias`, `.string-return-through-alias`), so a change that
+// started storing them by NAME would turn this reasoning red instead of quietly relying on it. The
+// interface door can reach it, and refuses it — an interface method declared `returns Character`,
+// dispatched through a witness, reports `E3005 Cannot return 'int' from function declared to return
+// 'Character'`. That is a clean refusal rather than a wrong answer, and admitting it means adopting a
+// managed record as an owned temp at the dispatch site (`Parser.enrolOwnedCallTemp`, which the witness door
+// reaches through `mintWitnessDispatchResult`), which is a mechanism with its own acceptance cases.
 //
 // ⚠ Every name is spelled by the CANONICAL constant the compiler already exports for it, never a fresh
 // `b"…"` — `BoolConformerName`'s own header says a second spelling of one of these "is the same fact and so
 // must not become a second constant".
 //
-// ⛔⛔ **AND THE THREE PRIMITIVE ROWS ARE NOW *DELEGATED*, NOT RESTATED (W133 review), BECAUSE THE PARAGRAPH
-// ABOVE STOPPED BEING TRUE OF THIS FUNCTION THE DAY A SECOND name→tag TABLE EXISTED.** Spelling each name
-// through its canonical CONSTANT stops two rows disagreeing about the BYTES `int` is written in; it does
-// nothing about two TABLES disagreeing about which names are in the set at all. W133 added
-// `IrInterface.primitiveTagOfTypeName`, whose `int`/`float`/`bool` rows answered
-// `integer`/`float`/`boolean` — the identical three rows this function already carried, in another file,
-// with nothing forcing them to agree. Two hand-written `equals` chains over one set is this project's
+// ⛔⛔ **AND THE THREE PRIMITIVE ROWS ARE *DELEGATED*, NOT RESTATED.** Spelling each name through its
+// canonical CONSTANT stops two rows disagreeing about the BYTES `int` is written in; it does nothing about
+// two TABLES disagreeing about which names are in the set at all, and `IrInterface.primitiveTagOfTypeName`
+// is a second name→tag table. Two hand-written `equals` chains over one set is this project's
 // signature bug, and the failure mode is not a compile error: a fourth primitive added to one table is a
 // value the OTHER door silently classifies `named`, so the extension door would admit a target whose written
-// type reference resolves to a struct reference no registry holds — which is the very defect W133's
-// `enclosingSelfType` arm exists to close, reintroduced one door over.
+// type reference resolves to a struct reference no registry holds — the defect `Parser.enclosingSelfType`'s
+// arm closes, reintroduced one door over.
 //
 // ⇒ The set is stated ONCE, in `primitiveTagOfTypeName`, and this function adds only the two rows that are
 // genuinely its own (`String`, `ExitCode` — see the two ⚠ paragraphs above for why `Character` is not a
@@ -186,6 +171,33 @@ export function builtinTypeNameTag(name ByteArray) returns ValueTypeTag
 	return ValueTypeTag.named
 end 'builtinTypeNameTag'
 
+// ⭐⭐ **WHICH IDENTITY A STORED ALIAS SLOT CARRIES BESIDE ITS NAME — the ONE classification, and it is a
+// UNION so that adding a fourth kind STOPS THE BUILD at every reader.**
+//
+// The REBUILD (`maxonTypeOfStoredTypeName`, which turns the slot back into a `MaxonType`) and the HASH
+// (`ProgramSignatures.mixAliasReturnSlot`, which folds it into the parse-memo key) both dispatch on this, in
+// different files. They cannot share a body: routing the hash through the rebuild would make hashing INTERN
+// into the index's own interner as a side effect, and `mixType`'s `named` arm skips `builtinTypeNameTag`, so
+// `ExitCode` would hash differently by path.
+//
+// ⛔⛔ **SO THE DUPLICATION IS JUSTIFIED, AND THE UNION IS ITS ENFORCEMENT.** Were either reader a tag test
+// ending in a bare tag+name fallthrough, a fourth identity added to the other alone would fall silently
+// through to `(tag, name)`: two different return types, one hash, no compile error anywhere. A union match
+// must be EXHAUSTIVE, so a fourth case makes BOTH matches stop compiling and the reader has to answer for it
+// in both places.
+export union AliasSlotIdentity
+	// The DIGEST of `(declaring type, parameter name)` — not an interner id at all, which is why it needs
+	// a column of its own rather than the name slot.
+	typeParamToken(token TypeParamId)
+
+	// The whole-program `GenericInstanceId` keying `GenericInstanceRegistry`.
+	genericInstance(id GenericInstanceId)
+
+	// The tag and the name are the whole of the slot — every primitive, every `named`/`structRef`/`function`/
+	// `interfaceRef`, and `void`.
+	nameOnly
+end 'AliasSlotIdentity'
+
 // ⭐ **THE ONE REBUILD OF A TYPE STORED AS AN INTERNER-FREE `(tag, NAME)` PAIR** — the shape
 // `FunctionTypeAlias` keeps for its parameters and its return (see there for why it travels by name rather
 // than by id). The stored TAG already answers for every type whose spelling `parseTypeReference` settled
@@ -195,105 +207,45 @@ end 'builtinTypeNameTag'
 // the whole of what a caller does, which is what keeps the two tiers' rebuilds one function rather than two.
 // It interns rather than taking an id because the empty-name rule below belongs to the storage convention.
 //
-// ⭐⭐ **WHICH IDENTITY A STORED ALIAS SLOT CARRIES BESIDE ITS NAME — the ONE classification, and it is a
-// UNION so that adding a fourth kind STOPS THE BUILD at every reader (F3g review, D2).**
+// ⭐ **TWO SLOTS ARE THE ONES THE INTERNER CANNOT ANSWER FOR, AND NEITHER IS ANSWERED BY A CALLER.** A
+// `typeParameter`'s id is a digest; a `genericInstance`'s is its whole-program `GenericInstanceId`. Neither
+// is an interner id, so each is carried beside the name in its own column (`FunctionAliasParam.identity`,
+// `FunctionTypeAlias.returnIdentity`) and substituted for the name's id here. Doing it in this one place is
+// what keeps the two interners' rebuilds one function, and neither caller has to know that two arms of the
+// union are not about interning.
 //
-// Two readers dispatch on this and they live in different files: the REBUILD (`maxonTypeOfStoredTypeName`,
-// which turns the slot back into a `MaxonType`) and the HASH (`ProgramSignatures.mixAliasReturnSlot`, which
-// folds it into the parse-memo key). They cannot share a body — the reviewer measured why: routing the hash
-// through the rebuild would make hashing INTERN into the index's own interner as a side effect, and
-// `mixType`'s `named` arm skips `builtinTypeNameTag`, so `ExitCode` would hash differently by path.
-//
-// ⛔⛔ **SO THE DUPLICATION IS JUSTIFIED AND THE ENFORCEMENT WAS WHAT WAS MISSING.** Both were three-armed
-// tag tests ending in a bare tag+name fallthrough, in two files, with nothing but a header promising they
-// agreed. Add a fourth identity column to the rebuild alone and the hash falls silently through to
-// `(tag, name)` for it: two different return types, one hash, no compile error anywhere — which is F3g's own
-// defect reproduced against the next column. A union match must be EXHAUSTIVE, so a fourth case makes BOTH
-// matches stop compiling and the reader has to answer for it in both places.
-export union AliasSlotIdentity
-	// The W14 DIGEST of `(declaring type, parameter name)` — not an interner id at all, which is why it needs
-	// a column of its own rather than the name slot.
-	typeParamToken(token TypeParamId)
-
-	// The whole-program `GenericInstanceId` keying `GenericInstanceRegistry`. Validated by the classifier, so
-	// no reader has to know that `NoGenericInstance` exists.
-	genericInstance(id GenericInstanceId)
-
-	// The tag and the name are the whole of the slot — every primitive, every `named`/`structRef`/`function`/
-	// `interfaceRef`, and `void`.
-	nameOnly
-end 'AliasSlotIdentity'
-
-// ⭐ **THE CLASSIFIER, AND THE ONE PLACE A MISSING IDENTITY IS REFUSED.** The `genericInstance` check lives
-// here rather than at either reader because this is where the slot's CLAIM to be an instance is read: a slot
-// that claims it and carries no id would otherwise rebuild as instance 0 at one reader and mix a raw
-// `u64.max` at the other, which is two wrong answers from one bad record. See `NoGenericInstance`.
-export function aliasSlotIdentity(tag ValueTypeTag, typeParamToken TypeParamId, genericInstanceId GenericInstanceId, slotName ByteArray) returns AliasSlotIdentity
-	if tag == ValueTypeTag.typeParameter 'anOpaqueParameterOfTheDeclaringType'
-		return AliasSlotIdentity.typeParamToken(typeParamToken)
-	end 'anOpaqueParameterOfTheDeclaringType'
-
-	if tag == ValueTypeTag.genericInstance 'anInstantiationOfAGenericBase'
-		if genericInstanceId == NoGenericInstance 'theIdentityWasNeverCarried'
-			panic("aliasSlotIdentity: a function alias slot tagged `genericInstance` (declared as '{String.from(slotName)}') carries no GenericInstanceId — the identity is minted beside the tag by `functionAliasInstanceId`, so a record reaching here without one was built by a route that did not fill the column, and reading it would silently name instance 0")
-		end 'theIdentityWasNeverCarried'
-
-		return AliasSlotIdentity.genericInstance(genericInstanceId)
-	end 'anInstantiationOfAGenericBase'
-
-	return AliasSlotIdentity.nameOnly
-end 'aliasSlotIdentity'
-
-// ⭐ **TWO SLOTS ARE THE ONES THE INTERNER CANNOT ANSWER FOR, AND NEITHER IS ANSWERED BY A CALLER
-// (F3, F3g).** A `typeParameter`'s id column is the W14 digest; a `genericInstance`'s is its whole-program
-// `GenericInstanceId`. Neither is an interner id, so each is carried beside the name in its own column
-// (`FunctionAliasParam.typeParamToken`, `.genericInstanceId`) and substituted for the name's id here. Doing
-// it in this one place is what keeps the property the header above claims: the two interners' rebuilds stay
-// one function, and neither caller has to know that two arms of the union are not about interning.
-//
-// ⛔ The `genericInstance` arm's absence was a WRONG ANSWER rather than a refusal: without it a
-// `genericInstance` fell through to `maxonTypeOfTag` carrying the NAME column's "no name" id —
-// `UnnamedTypeId`, which is 0, which is a live instance. See `FunctionAliasParam.genericInstanceId`.
-//
-// ⚠ **FILE-PRIVATE SINCE F1 CONSOLIDATED THE TWO TIERS, AND THAT IS A CONSEQUENCE OF THE CONSOLIDATION
-// RATHER THAN AN ENCAPSULATION CHOICE.** It was `export` while `Parser` had its own rebuild body calling it;
-// now the only callers are the two slot doors below, so an `export` here would be `E3092: never
-// referenced outside its declaring file` — which only the self-compile can see, because
-// `checkUnusedExports` runs when the compiler compiles a PROGRAM. The narrowing is also right on its
-// merits: a caller holding a stored alias should reach the RETURN or PARAM door, which know that
-// record's column list, rather than spell the columns itself.
-function maxonTypeOfStoredTypeName(tag ValueTypeTag, name ByteArray, typeNames TypeNameInterner, typeParamToken TypeParamId, genericInstanceId GenericInstanceId) returns MaxonType
-	match aliasSlotIdentity(tag, typeParamToken: typeParamToken, genericInstanceId: genericInstanceId, slotName: name) 'identity'
+// ⚠ **FILE-PRIVATE.** The only callers are the two slot doors below, so an `export` here would be `E3092:
+// never referenced outside its declaring file` — which only the self-compile can see, because
+// `checkUnusedExports` runs when the compiler compiles a PROGRAM. A caller holding a stored alias should
+// reach the RETURN or PARAM door, which know that record's column list, rather than spell the columns itself.
+function maxonTypeOfStoredTypeName(tag ValueTypeTag, name ByteArray, typeNames TypeNameInterner, identity AliasSlotIdentity) returns MaxonType
+	match identity 'identity'
 		typeParamToken(token) then return MaxonType.typeParameter(token)
 		genericInstance(id) then return MaxonType.genericInstance(id)
 		nameOnly then break 'identity'
 	end 'identity'
 
 	// ⭐ **THE EMPTY-NAME RULE, AND IT LIVES HERE BECAUSE IT IS PART OF THE STORAGE CONVENTION RATHER THAN
-	// PART OF ANY CALLER (F1 review).** A primitive carries no name (`Parser.functionAliasTypeName`), and
-	// `UnnamedTypeId` is what the name column means by that. It was spelled twice — inlined at the parser
-	// tier, as a `functionAliasNameId` helper at the resolution tier — which is one rule with two homes and
-	// the exact shape the two tiers' rebuild bodies were already in.
+	// PART OF ANY CALLER.** A primitive carries no name (`Parser.functionAliasTypeName`), and
+	// `UnnamedTypeId` is what the name column means by that.
 	let nameId = UnnamedTypeId if name.isEmpty() else typeNames.intern(name)
 	return maxonTypeOfTag(tag if tag != ValueTypeTag.named else builtinTypeNameTag(name), nameId: nameId)
 end 'maxonTypeOfStoredTypeName'
 
 // ⭐⭐ **THE WHOLE STORED RETURN SLOT OF A FUNCTION ALIAS, REBUILT — THE ONE HOME OF THE VOID TEST AND OF THE
-// COLUMN LIST (F1 review).** Both tiers rebuild the same stored alias and differ ONLY in which interner the
+// COLUMN LIST.** Both tiers rebuild the same stored alias and differ ONLY in which interner the
 // names go into: the parser's file-local one during a parse, the project's merged one at resolution. That
 // difference is the `typeNames` parameter and it is the whole of the difference.
 //
-// ⛔⛔ **IT WAS TWO BODIES, AND THE PROOF THAT THEY MUST MOVE IN LOCKSTEP IS THAT ADDING
-// `returnGenericInstanceId` HAD TO EDIT BOTH.** Nothing but their headers made that happen. A sixth column
-// added to one and not the other would have the two tiers rebuild ONE stored alias into two different
-// `MaxonType`s — a wrong answer with no compile error anywhere, which is precisely the defect the
-// `genericInstance` column above exists to have closed.
+// ⛔⛔ **ONE BODY, BECAUSE TWO WOULD HAVE TO MOVE IN LOCKSTEP.** A column added to one and not the other
+// would have the two tiers rebuild ONE stored alias into two different `MaxonType`s — a wrong answer with no
+// compile error anywhere.
 export function maxonTypeOfStoredAliasReturn(alias FunctionTypeAlias, typeNames TypeNameInterner) returns MaxonReturnType
 	if alias.returnTag == ValueTypeTag.void 'returnsNothing'
 		return MaxonReturnType.void
 	end 'returnsNothing'
 
-	return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, typeNames: typeNames, typeParamToken: alias.returnTypeParamToken, genericInstanceId: alias.returnGenericInstanceId))
+	return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, typeNames: typeNames, identity: alias.returnIdentity))
 end 'maxonTypeOfStoredAliasReturn'
 
 // ⭐ **THE PARAMETER TWIN OF THE RETURN DOOR ABOVE, AND THE PAIR IS THE POINT.** It holds the parameter
@@ -301,39 +253,30 @@ end 'maxonTypeOfStoredAliasReturn'
 // rebuild through, so the parameter half cannot drift from the return half by one reader spelling the columns
 // differently.
 export function maxonTypeOfStoredAliasParam(param FunctionAliasParam, typeNames TypeNameInterner) returns MaxonType
-	return maxonTypeOfStoredTypeName(param.tag, name: param.typeName, typeNames: typeNames, typeParamToken: param.typeParamToken, genericInstanceId: param.genericInstanceId)
+	return maxonTypeOfStoredTypeName(param.tag, name: param.typeName, typeNames: typeNames, identity: param.identity)
 end 'maxonTypeOfStoredAliasParam'
 
-// ⭐ **THE W14 TOKEN ONE SLOT OF A FUNCTION ALIAS'S SIGNATURE STORES — the mint that pairs with the rebuild
-// above (F3).** `NoTypeParamId` for every tag but `typeParameter`, whose payload IS the token
-// `Parser.parseTypeReference` already minted against the enclosing type's `uses` list, so this reads an
-// identity rather than deriving a second one.
-//
-// ⚠ It takes the whole `MaxonType` rather than a tag plus an id because the pairing of the two is exactly
-// what must not be re-spelled: reading the id column of a NON-type-parameter arm would file that arm's
-// interner id as a digest, which is the shape W14 exists to have removed.
-export function functionAliasTypeParamToken(declared MaxonType) returns TypeParamId
-	if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notAnOpaqueParameter'
-		return NoTypeParamId
-	end 'notAnOpaqueParameter'
+export function functionAliasSlotIdentity(declared MaxonType) returns AliasSlotIdentity
+	let tag = maxonTypeTag(declared)
 
-	return typeParamIdOf(declared)
-end 'functionAliasTypeParamToken'
+	if tag == ValueTypeTag.typeParameter 'anOpaqueParameter'
+		return AliasSlotIdentity.typeParamToken(typeParamIdOf(declared))
+	end 'anOpaqueParameter'
 
-// ⭐ **THE `GenericInstanceId` ONE SLOT OF A FUNCTION ALIAS'S SIGNATURE STORES — `functionAliasTypeParamToken`'s
-// twin, one tag over (F3g).** `NoGenericInstance` for every tag but `genericInstance`, whose payload IS the id
-// `Parser.parseTypeReference` already interned against the whole-program registry, so this reads an identity
-// rather than deriving a second one.
-//
-// ⚠ It takes the whole `MaxonType` for its twin's reason: reading the id column of a non-instance arm would
-// file that arm's interner id as a gid, which is the shape this column exists to have removed.
-export function functionAliasInstanceId(declared MaxonType) returns GenericInstanceId
-	if maxonTypeTag(declared) != ValueTypeTag.genericInstance 'notAnInstantiation'
-		return NoGenericInstance
-	end 'notAnInstantiation'
+	if tag == ValueTypeTag.genericInstance 'anInstantiation'
+		return AliasSlotIdentity.genericInstance(genericInstanceIdOf(declared))
+	end 'anInstantiation'
 
-	return genericInstanceIdOf(declared)
-end 'functionAliasInstanceId'
+	return AliasSlotIdentity.nameOnly
+end 'functionAliasSlotIdentity'
+
+export function remappedAliasSlotIdentity(identity AliasSlotIdentity, remap TypeIdRemap) returns AliasSlotIdentity
+	return match identity 'identity'
+		genericInstance(id) gives AliasSlotIdentity.genericInstance(remap.applyInstance(id))
+		typeParamToken or
+			nameOnly gives identity.clone()
+	end 'identity'
+end 'remappedAliasSlotIdentity'
 
 // `denotedNamedType`'s "this name is in none of the sources" answer. Payload-free — the caller
 // already holds the name it asked about — so it is a scalar and the throw allocates nothing on a
@@ -366,7 +309,7 @@ module function resolveTypes(project Project, module MaxonModule)
 
 		func.maxonParamTypes = resolvedParams
 
-		// ⚠ **NOT one of the derived per-callee maps A2l routed through `FunctionNameIndex`, and the
+		// ⚠ **NOT one of the derived per-callee maps routed through `FunctionNameIndex`, and the
 		// difference is which fact it is.** This RE-SYNCS a registry whose KEY SET was already fixed at
 		// merge: `ParseStaging.commitFuncReturnTypes` filled it, `commitFuncSignatures` beside it is the
 		// whole-program duplicate detection for both (E3006 at the later declaration), and this only
@@ -379,18 +322,15 @@ module function resolveTypes(project Project, module MaxonModule)
 
 	checkStructFieldTypes(project, signatures: signatures)
 	resolveFunctionAliasShapes(project, signatures: signatures)
-
-	// M1 op value-types are all concrete (`integer` literals) — nothing to stamp.
-	// Op-type resolution (typed constants whose type is a named alias) grows at M9.
 end 'resolveTypes'
 
-// ⭐⭐ **THE DEFERRED NAME DIAGNOSTICS (P1.9) — UNUSED TYPEALIASES FIRST, HIDDEN CAST TARGETS SECOND.**
+// ⭐⭐ **THE DEFERRED NAME DIAGNOSTICS — UNUSED TYPEALIASES FIRST, HIDDEN TYPE NAMES SECOND.**
 //
 // The two orders this fixes are both load-bearing and neither can be had where the diagnostics are
 // FOUND. `DeferredNameDiagnostic` carries the argument in full; the short of it is that the parser
-// reports per file, the file walk is alphabetical, and the corpus pins a program whose E3062 is in
-// `types.maxon` and whose E2003 is in `main.maxon` — so per-file reporting orders them by two
-// FILENAMES. Draining here orders them by what they ARE.
+// reports per file, the file walk is in the filesystem's order, and the corpus pins a program whose
+// E3062 is in `types.maxon` and whose E2003 is in `main.maxon` — so per-file reporting orders them by
+// how the OS enumerates two FILENAMES. Draining here orders them by what they ARE.
 //
 // ⚠ It runs in a pass, and the pipeline's gate fires only BETWEEN passes, so both lists are drained
 // before anything stops the build — which is the second half of the same requirement: two diagnostics
@@ -403,7 +343,7 @@ module function reportDeferredNameDiagnostics(project Project, signatures Progra
 	let alreadyReported = project.diagnostics.count()
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// recorded as writing that same storage. ⚖ Canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for unusedIndex in 0 upto project.unusedTypeAliasDiagnostics.count() 'eachUnused'
 		let entry = try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")
@@ -443,12 +383,10 @@ module function reportDeferredNameDiagnostics(project Project, signatures Progra
 	end 'eachUnused'
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
+	// recorded as writing that same storage. ⚖ Canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for hiddenIndex in 0 upto project.hiddenTypeNameDiagnostics.count() 'eachHidden'
-		let line = (try project.hiddenTypeNameDiagnostics.get(hiddenIndex) otherwise panic("reportDeferredNameDiagnostics: hiddenIndex {hiddenIndex} is below project.hiddenTypeNameDiagnostics.count()")).line
-		let column = (try project.hiddenTypeNameDiagnostics.get(hiddenIndex) otherwise panic("reportDeferredNameDiagnostics: hiddenIndex {hiddenIndex} is below project.hiddenTypeNameDiagnostics.count()")).column
-		reportPositioned(project, code: ErrorCode.parserExpectedType, message: HiddenTypeNameMessage, line: line, column: column, filePath: (try project.hiddenTypeNameDiagnostics.get(hiddenIndex) otherwise panic("reportDeferredNameDiagnostics: hiddenIndex {hiddenIndex} is below project.hiddenTypeNameDiagnostics.count()")).filePath)
+		reportDiagnostic(project, diagnostic: (try project.hiddenTypeNameDiagnostics.get(hiddenIndex) otherwise panic("reportDeferredNameDiagnostics: hiddenIndex {hiddenIndex} is below project.hiddenTypeNameDiagnostics.count()")).clone())
 	end 'eachHidden'
 end 'reportDeferredNameDiagnostics'
 
@@ -465,22 +403,29 @@ end 'reportDeferredNameDiagnostics'
 // The scan is linear in the diagnostics reported BEFORE the drain (`upTo`) and runs once per
 // UNUSED-alias candidate — a population that is empty for every program that compiles, so a clean build
 // never enters the loop.
-//
-// Paths compare by their own spelling rather than through `FilePath.equals`, which case-folds by
-// cloning and lower-casing both sides on Windows. Every path here came out of `project.db.sourcePaths`,
-// so two references to one file are literally the same string — the identical assumption
-// `RangedAliasRegistry.multiplyDeclared` keys and probes on.
 function declarationAlreadyReported(project Project, entry DeferredNameDiagnostic, upTo ElementIndex) returns bool
 	for i in 0 upto upTo 'each'
 		let reported = try project.diagnostics.get(i) otherwise panic("declarationAlreadyReported: i < upTo <= diagnostics.count() but get({i}) failed")
 
-		if reported.line == entry.line and reported.filePath.toString().equals(entry.filePath.toString()) 'sameDeclaration'
+		if reportedAtTheDeclaration(reported, entry: entry) 'sameDeclaration'
 			return true
 		end 'sameDeclaration'
 	end 'each'
 
 	return false
 end 'declarationAlreadyReported'
+
+// Paths compare by their own spelling rather than through `FilePath.equals`, which case-folds by
+// cloning and lower-casing both sides on Windows. Every path here came out of `project.db.sourcePaths`,
+// so two references to one file are literally the same string — the identical assumption
+// `RangedAliasRegistry.multiplyDeclared` keys and probes on.
+function reportedAtTheDeclaration(reported Diagnostic, entry DeferredNameDiagnostic) returns bool
+	return match reported.anchor 'anchor'
+		at(filePath, line, _) gives line == entry.line and filePath.toString().equals(entry.filePath.toString())
+		programWide or
+			file gives false
+	end 'anchor'
+end 'reportedAtTheDeclaration'
 
 // ⭐ **THE FOURTH DECLARATION SITE — a FUNCTION TYPEALIAS's parameter and return types.** A
 // `typealias Scaler = function(v Real) returns Real` names two types the three sweeps above never reach:
@@ -762,10 +707,9 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSig
 		// A type PARAMETER's id is a `(declaring type, parameter name)` DIGEST and a generic INSTANCE's is
 		// its whole-program `GenericInstanceId`; two function types agree only if they take the same
 		// instances and the same type parameters, so both are compared the same way for their own reasons.
-		// ⚠ **THE PARAMETER HALF WAS ONLY APPROXIMATELY TRUE UNTIL W14**: with the id spelled as a POSITION,
-		// `fn(T)` in one generic type and `fn(U)` in another compared EQUAL — a false ACCEPT between two
-		// unrelated opaque types. The digest makes this arm correct by construction rather than by the two
-		// sides happening to come from one declaration.
+		// ⚠ The digest is what makes the parameter half correct: an id spelled as a POSITION would compare
+		// `fn(T)` in one generic type and `fn(U)` in another EQUAL — a false ACCEPT between two unrelated
+		// opaque types.
 		typeParameter or
 			genericInstance gives true
 
@@ -864,17 +808,9 @@ function pendingWithPair(pending FunctionTypePairArray, declaredName ByteArray, 
 end 'pendingWithPair'
 
 // ⭐ **THE THIRD DECLARATION SITE.** A program names a type in exactly three places — a PARAMETER,
-// a RETURN type, and a FIELD — and until P1.1a wave 3 this pass walked only the first two. So a
-// field declared `as Nonexistent` reached no check at all, and `Parser.fieldStorageType`'s recovery
-// value became the FINAL answer: the program compiled clean and the field silently typed itself
-// `i64`. A wrong answer, not a crash.
-//
-// It also made `fieldStorageType`'s own comment false. That comment justified its recovery value by
-// pointing here — "E3011, which `TypeResolution` reports against the merged registry, the
-// authority... Returning `integer` keeps the op well-formed for the instant before the pipeline's
-// error gate throws" — and nothing was reporting it, so there was no instant and no gate. The
-// comment described the right design; the implementation never had it. This walk is what makes the
-// sentence true, which is why the sentence stayed.
+// a RETURN type, and a FIELD. Without this walk a field declared `as Nonexistent` reaches no check at
+// all, and `Parser.fieldStorageType`'s recovery value becomes the FINAL answer: the program compiles
+// clean and the field silently types itself `i64`. A wrong answer, not a crash.
 //
 // ⚠ **IT VALIDATES AND DOES NOT REWRITE**, and there are two independent reasons — either alone
 // would be sufficient:
@@ -919,14 +855,14 @@ end 'checkStructFieldTypes'
 // `func.maxonParamTypes` (both from one param-parse), so the resolved
 // `func.maxonParamTypes` above is exactly the concrete type list to write back; the
 // param NAMES are untouched (resolution never renames a parameter). A function with
-// no registered signature (none at M5 — the parser records one per function it
-// builds) is left alone rather than fabricated.
+// no registered signature (the parser records one per function it builds) is left
+// alone rather than fabricated.
 //
-// All three pre-erasure name columns — `paramAggregateNames` (OPEN #54 Slice B2), its `returnAggregateName`
-// twin (BATCH18-b) and `paramDeclaredNames` (the display spelling) — are carried STRAIGHT THROUGH. They are
+// All three pre-erasure name columns — `paramAggregateNames`, its `returnAggregateName`
+// twin and `paramDeclaredNames` (the display spelling) — are carried STRAIGHT THROUGH. They are
 // precisely what resolving `func.maxonParamTypes` destroys (a `named` union AND a `named` ranged alias both
 // collapse to `integer` here), so they must be read off the SIGNATURE (which the parser captured before this
-// pass) and never re-derived from the now-erased types. The two EXISTENTIAL columns (W58) ride through for the
+// pass) and never re-derived from the now-erased types. The two EXISTENTIAL columns ride through for the
 // same reason and a stronger one: `instanceDenotedType` had already dropped the `with` arguments before this
 // pass ever saw the type, so there is nothing here to re-derive them from at all.
 function syncResolvedSignature(project Project, func IrFunction)
@@ -982,7 +918,7 @@ function resolveReturnType(project Project, signatures ProgramSignatures, ret Ma
 	end 'r'
 end 'resolveReturnType'
 
-// ⚠ EXPORTED for `SemanticCheck.resolvedSlotThroughCallInstance` (F3), the one door outside this pass that
+// ⚠ EXPORTED for `SemanticCheck.resolvedSlotThroughCallInstance`, the one door outside this pass that
 // asks it. A function shape SUBSTITUTED at a call site holds one slot this pass never saw — the instance's
 // own type ARGUMENT, interned before the alias registries existed and so still a `named` LEAF — and it must
 // be erased exactly as this pass erased every other slot of the shapes being compared. A second erasure
@@ -1017,12 +953,12 @@ export function resolveType(project Project, signatures ProgramSignatures, t Max
 		// never arrives as a `named` to resolve. Idempotent under a second `resolveTypes` — nothing to do.
 		function then return t
 
-		// Already concrete, and by the PARSER (P1.6-A): `Parser.parseTypeReference` mints a
+		// Already concrete, and by the PARSER: `Parser.parseTypeReference` mints a
 		// `typeParameter` for a `T` in scope and a `genericInstance` for a generic-instance alias
-		// reference, both directly. There is no substitution at this trivial slice — a `T` stays `T` (an
+		// reference, both directly. There is no substitution here — a `T` stays `T` (an
 		// opaque i64) and an instance stays an instance (a struct pointer) — so resolution leaves both
 		// untouched, exactly as it leaves `structRef`/`string`/`function`. The type parameter's payload is a
-		// source-derived digest since W14, so there is nothing here a resolution could resolve.
+		// source-derived digest, so there is nothing here a resolution could resolve.
 		typeParameter then return t
 		genericInstance then return t
 
@@ -1038,14 +974,14 @@ export function resolveType(project Project, signatures ProgramSignatures, t Max
 	end 'r'
 end 'resolveType'
 
-// ⭐ **THE TYPE NAMES THE COMPILER OWNS — a user declaration may not bind one (P1.7a slice 2b-ii).** Homed
+// ⭐ **THE TYPE NAMES THE COMPILER OWNS — a user declaration may not bind one.** Homed
 // here because this is where the coupling lives: `resolveNamedType` below claims `ExitCode` and `HashValue`
 // BEFORE it consults `structTypes`/`enumTypes`, and `createEnumRegistry` seeds `Ordering` INTO those
 // registries — so under all three names the AUTHORITY's answer is fixed, while the PARSER's own `named`
 // resolution (`resolveNamedStruct`, which reads the struct registry and knows nothing of these names) would
-// happily follow a user declaration instead. That disagreement is not academic: **MEASURED — a user
-// `type HashValue` made `Hashable.hash()`'s witness result a `structRef`, adopted as an owned struct box and
-// dropped as one, faulting with 0xC0000005.** The compiler has no namespacing to keep a user's `Ordering` distinct
+// happily follow a user declaration instead. That disagreement is not academic: a user `type HashValue`
+// would make `Hashable.hash()`'s witness result a `structRef`, adopted as an owned struct box and dropped as
+// one, and fault. The compiler has no namespacing to keep a user's `Ordering` distinct
 // from the builtin, so the cure is to make
 // the collision unrepresentable: `Parser.requireTypeNameNotCompilerOwned` refuses any declaration that would
 // mint a NOMINAL identity under one of these names, which is what makes the arms below and the registry seed
@@ -1059,22 +995,21 @@ end 'resolveType'
 // second of which fills the `CharSet` entry of the SAME `genericAliases` map a user `typealias` folds into.
 // A map entry is OVERWRITTEN rather than contested, so without this line a user declaration is not
 // refused — it is silently taken, and the author is then blamed at the first USE of the name the compiler
-// took from them. MEASURED, on `typealias CharSet = Set with String` + `s.insert("a")`:
-// *"`Set with Character` requires a Character key — got a 'String' value"*, reported at line 5 for a
-// declaration written on line 1. The rule the author broke is stated on line 1, so that is where it is
-// reported.
+// took from them: `typealias CharSet = Set with String` + `s.insert("a")` would report *"`Set with
+// Character` requires a Character key — got a 'String' value"* at the insert. The rule the author broke is
+// stated on the declaration, so that is where it is reported.
 //
 // ⚠ **THE RANGED CARVE-OUT IS INHERITED UNCHANGED, AND IT IS SOUND FOR THESE TWO FOR A DIFFERENT REASON.**
 // A `typealias CharSet = int(0 to 5)` carries a nominal identity of its own, and it still cannot contest
 // the seed, because a RANGED alias and a GENERIC-INSTANCE alias live in different registries and are
 // reached by different syntax: `CharSet from ['x']` asks `genericAliases`, a ranged reference asks the
-// alias registry. MEASURED: both readings coexist and each answers for its own syntax (a
-// `CharSet from ['x']` still builds the member set, `true`, exit 0). So the argument here is a
+// alias registry, so both readings coexist and each answers for its own syntax (a
+// `CharSet from ['x']` still builds the member set). So the argument here is a
 // DISJOINTNESS one rather than the erasure one above, and the answer is the same — legal.
 // ⭐ **`Codepoint` IS ON THE LIST FOR `HashValue`'S EXACT REASON.** It is the
 // second name `isSynthesizedIntAliasName` erases to `integer` without a registry entry, so
 // `denotedNamedType`'s synthesized-alias arm answers for it BEFORE `containsStruct` is consulted — which is
-// precisely the disagreement the `HashValue` measurement records: the AUTHORITY would erase a user
+// precisely the `HashValue` disagreement above: the AUTHORITY would erase a user
 // `type Codepoint` to `integer` while the PARSER's own `named` resolution followed the declaration and
 // tagged the value `structRef`. Adding a name to `isSynthesizedIntAliasName` without adding it here
 // re-opens that hole under a new name.
@@ -1087,15 +1022,14 @@ end 'resolveType'
 // UNDER A BARE NAME.** `Project.builtinArrayErrorEnum` is a compiler-owned enum registered there that
 // cannot wear the `__` prefix its two `__ManagedMemoryError` / `__ManagedFileError` siblings do, because
 // user source already spells the bare name in a `throws` clause (see `SignatureIndex.ArrayErrorTypeName`).
-// A bare seed and no entry here is precisely the hole this function's header describes, and it is not
-// hypothetical.
-// ⚠ **MEASURED, without this line:** a program declaring `enum ArrayError` with cases
-// `somethingElse`/`another` COMPILES, `upsertDeclaredEnum` lets the declaration displace the seed, and
+// A bare seed and no entry here is precisely the hole this function's header describes.
+// ⚠ **Without this line** a program declaring `enum ArrayError` with cases `somethingElse`/`another`
+// compiles, `upsertDeclaredEnum` lets the declaration displace the seed, and
 // `try arr.get(5) otherwise (e) … match e` routes the runtime's `indexOutOfBounds` (ordinal 0) into the
-// user's `somethingElse` arm — exit 11, no diagnostic anywhere. One error type under two meanings, decided
+// user's `somethingElse` arm, with no diagnostic anywhere. One error type under two meanings, decided
 // by whichever write landed last: the wrong answer the seed is supposed to be undisplaceable against.
 // ⇒ The reservation is only over a DECLARATION. `throws ArrayError` is a type REFERENCE and stays legal —
-// which is the whole reason the name is bare — and the four committed cases that write it are unaffected.
+// which is the whole reason the name is bare.
 //
 // ⭐⭐ **`String` AND `Character` ARE ON THE LIST FOR A REASON NONE OF THE SEVEN ABOVE HAS: THEIR COLLISION
 // IS OVER A *SYMBOL*, NOT OVER A TYPE.** Every name above collides because
@@ -1110,12 +1044,11 @@ end 'resolveType'
 // already DEFINE the name (`undefinedImplNames`), so the user's inert declaration does not collide with the
 // builtin, it silently REPLACES it.
 //
-// ⚠⚠ **TWO WRONG ANSWERS, BOTH MEASURED WITHOUT THIS RESERVATION, NEITHER WITH ANY DIAGNOSTIC ANYWHERE:**
-//   • `Box uses T where T is Hashable`, `Box with String`, `.itemHash()` of `""` returns **7** — the user's
-//     `hash()` body — where djb2 answers **5381**. The `__witness_String.Hashable` slot is stamped with a
-//     `funcAbs64` reloc naming `String.hash`, and the user owns that symbol.
-//   • `Set with String` probes through the same two slots, so `insert("alice"); insert("bob");
-//     insert("alice")` counts **3** against a control's **2** — a duplicate key stored twice, because the
+// ⚠⚠ **TWO WRONG ANSWERS WITHOUT THIS RESERVATION, NEITHER WITH ANY DIAGNOSTIC ANYWHERE:**
+//   • `Box uses T where T is Hashable`, `Box with String`: `.itemHash()` runs the user's `hash()` body
+//     rather than djb2. The `__witness_String.Hashable` slot is stamped with a `funcAbs64` reloc naming
+//     `String.hash`, and the user owns that symbol.
+//   • `Set with String` probes through the same two slots, so a duplicate key is stored twice when the
 //     user's `equals` answers `false`.
 // A third door — the direct `s.hash()` / `s.equals(t)` dispatch — reaches the same two symbols, which is
 // why the fact is ENFORCED here rather than merely asserted in prose.
@@ -1136,11 +1069,10 @@ end 'resolveType'
 //
 // ⚠ Neither name costs a program anything it could use. `Character` is the same case in every particular,
 // including the same two synthesized impls under `Character.hash`/`Character.equals`; it is reserved with
-// `String` rather than after the next measurement, because the two are one fact and finding out which of a
-// pair is enforced by measuring the other is how this list grows.
+// `String` because the two are one fact.
 // ⛔⛔ **`StringError` AND `MapError` ARE NOT ON THIS LIST, AND THEY ARE THE CASE THAT SHOWS A RESERVATION
 // CAN OUTLIVE ITS REASON.** Each would belong for `ArrayError`'s reason — a bare seed
-// `createEnumRegistry` writes and a user declaration can displace, the hole the paragraph above measures.
+// `createEnumRegistry` writes and a user declaration can displace, the hole the paragraph above describes.
 // Neither is seeded: `stdlib/String.maxon:6` and `stdlib/Map.maxon:6` are the declarations, no runtime
 // transcribes either enum's ordinals (`Compiler.compileToCodeResult` claims neither), and there is no
 // `builtinStringErrorEnum`/`builtinMapErrorEnum`. An entry here would be a reservation with nothing behind
@@ -1160,8 +1092,8 @@ end 'resolveType'
 // wins. The corpus holds the ONE declaration, so the reservation sits HERE, where `String` and
 // `Character`'s live, and buys that property with no second layout behind it — a second, `__`-prefixed
 // layout would instead make the corpus's `charAt(idx StringIndex)` unsatisfiable (`E3005 … expected
-// 'StringIndex', got '__StringIndex'`) by a value any program can actually produce. MEASURED without this
-// entry: `type StringIndex  var a as int  end` COMPILES, and `specs/string-index.md`'s
+// 'StringIndex', got '__StringIndex'`) by a value any program can actually produce. Without this entry
+// `type StringIndex  var a as int  end` compiles; `specs/string-index.md`'s
 // `error.a-user-may-not-declare-the-string-index-type` is that program.
 //
 // ⛔⛔ **`CharacterError` IS THE ONE THAT SHOWS THE MEMBERSHIP TEST IS NOT
@@ -1173,7 +1105,7 @@ end 'resolveType'
 // `Runtime/GraphemeRuntime.buildCharAscii` returns `notAscii`'s ordinal as `__char_ascii`'s error flag, so a
 // user `enum CharacterError` displacing the corpus one in `upsertDeclaredEnum` leaves the runtime emitting 0
 // into whichever case that user wrote first — `IterationError`'s stake, arrived at from the other direction.
-// MEASURED: without this entry that program compiles clean, and `specs/character-type.md`'s
+// Without this entry that program compiles clean; `specs/character-type.md`'s
 // `error.declare-character-error-enum` is it.
 //
 // ⭐⭐ **AND TWO OF THESE NAMES ARE NOT SEEDED AT ALL — THEY ARE READ FROM THE CORPUS.**
@@ -1185,7 +1117,7 @@ end 'resolveType'
 // not over whether one exists. `HashValue` is the same shape one registry over: `stdlib/Interfaces.maxon:6`
 // declares the ranged alias and its bounds are the program's, while the name stays reserved here.
 export function isCompilerOwnedTypeName(name ByteArray) returns bool
-	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName) or name.equals(IterationErrorTypeName) or name.equals(CharacterErrorTypeName) or name.equals(StringConformerName) or name.equals(CharacterConformerName) or name.equals(StringIndexTypeName)
+	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName) or name.equals(RunProcessErrorTypeName) or name.equals(IterationErrorTypeName) or name.equals(CharacterErrorTypeName) or name.equals(StringConformerName) or name.equals(CharacterConformerName) or name.equals(StringIndexTypeName)
 end 'isCompilerOwnedTypeName'
 
 // The name a `named` type denotes, ERASED to a concrete `MaxonType` — or `notDeclared` when it
@@ -1281,18 +1213,16 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 		return MaxonType.structRef(id)
 	end 'isStruct'
 
-	// ⭐⭐ **A DECLARED `interface` KEEPS ITS NAME ID TOO, and for the struct arm's reason one level up
-	// (P1.7a-existentials slice 1).** A value held at an interface type is nothing BUT a nominal
+	// ⭐⭐ **A DECLARED `interface` KEEPS ITS NAME ID TOO, and for the struct arm's reason one level up.** A
+	// value held at an interface type is nothing BUT a nominal
 	// distinction: `b.run()` needs to know WHICH interface `b` is held at to number its witness slot, and
 	// two interfaces declaring identical methods are still two types with two witness tables. So the id
 	// survives, carried by `interfaceRef`.
 	//
-	// ⚠ **THIS ARM IS WHAT REPLACES THE INTEGER FALLBACK, AND THE FALLBACK WAS THE BUG.** Without it the
-	// cascade fell through to its recovery `MaxonType.integer` — so an interface-typed field or parameter
-	// resolved to an INT, `TypeRules.typeClassOf` read it as numeric and `typeTagName` printed it `int`.
-	// MEASURED: a field declared `as Backend` was refused *"E3005: cannot assign 'struct' to variable 'b'
-	// of type 'int'"* for an interface declared three lines above, and a method call on such a parameter
-	// was *"E3011: Unknown type 'Backend'"* — a message that was false about a name the program declares.
+	// ⚠ **WITHOUT THIS ARM THE CASCADE FALLS THROUGH TO ITS RECOVERY `MaxonType.integer`** — an
+	// interface-typed field or parameter resolves to an INT, `TypeRules.typeClassOf` reads it as numeric and
+	// `typeTagName` prints it `int`, so a field declared `as Backend` is refused as an `int` and a method
+	// call on such a parameter reports *"E3011: Unknown type 'Backend'"* about a name the program declares.
 	//
 	// It is asked of `interfaceMap()`, the SAME whole-program store `Parser.parseTypeReference` and every
 	// witness resolution read, so the AUTHORITY and the parser cannot come to disagree about which names
@@ -1352,7 +1282,7 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 		end 'itIsTheReadersOwnForm'
 	end 'isPlainAlias'
 
-	// ⭐ A QUALIFIED ALIAS (P1.6-C) — a base-template inner alias ("Wrapper.Idx", the shared-body form a
+	// ⭐ A QUALIFIED ALIAS — a base-template inner alias ("Wrapper.Idx", the shared-body form a
 	// generic method's `Idx` carries) OR a per-instance alias ("IntWrapper.Idx"). Both ERASE to their
 	// underlying primitive here, EXACTLY as a plain ranged alias does — so `maxonTypeToStdType` never sees a
 	// `named` residue in a signature or field type. The per-instance one's nominal name survives only in the
@@ -1374,14 +1304,11 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// this pass reports E3011 unpositioned and recovers, the two cast sites raise the same
 	// code anchored on the `as` they were written at.
 	//
-	// ⚠ **ONE ARRIVAL HERE IS NOT A TYPO, AND ITS NOUN IS WRONG: a CROSS-KIND CONTESTED name whose reader
-	// means a NON-RANGED alias form.** Such a reference is re-tagged by `Parser.parseTypeReference` long
-	// before this door — the whole reason the ranged arm above declines it — so the only way one reaches
-	// this line is through a caller that resolves a type WITHOUT that re-tag, and "Unknown type 'Handler'"
-	// is then false about a name the program declares twice over. It is left rather than papered over: the
-	// honest text is a sentence about a name meaning something else HERE, which is a diagnostic this
-	// registry has no code for, and inventing one is not this change's to do. Reported to the coordinator
-	// with that reasoning rather than guessed at.
+	// ⚠ **A NON-RANGED ALIAS FORM ALSO ARRIVES HERE, AND IT IS NOT A TYPO.** A reference to a function,
+	// generic or tuple alias is re-tagged by `Parser.parseTypeReference` long before this door — the whole
+	// reason the ranged arm above declines a contested name — so it reaches this line only through a caller
+	// that resolves a type WITHOUT that re-tag. Such a caller asks `denotedAliasForm` once this throws
+	// (`resolveNamedType`); one that does not would report E3011 about a name the program declares.
 	throw UnknownTypeName.notDeclared
 end 'denotedNamedType'
 
@@ -1440,8 +1367,8 @@ export function barePrimitiveCastMessage(spelling String) returns String
 	return "Cannot cast to bare '{spelling}'. Define a typealias with range constraints, e.g., 'value as {barePrimitiveAliasNameFor(spelling)}' where 'typealias {barePrimitiveAliasNameFor(spelling)} = {spelling}({barePrimitiveExampleRangeFor(spelling)})'"
 end 'barePrimitiveCastMessage'
 
-// `denotedNamedType` for the DECLARATION sites this pass walks — a parameter, a return type, a
-// struct field. Each reports and recovers rather than failing the pass, so a file with three
+// `denotedNamedType`, then `denotedAliasForm`, for the DECLARATION sites this pass walks — a parameter,
+// a return type, a struct field. Each reports and recovers rather than failing the pass, so a file with three
 // undeclared types reports three diagnostics.
 //
 // UNPOSITIONED, exactly like E3001/E3002 — nothing records a source span for a type REFERENCE in a
@@ -1452,8 +1379,12 @@ end 'barePrimitiveCastMessage'
 function resolveNamedType(project Project, signatures ProgramSignatures, id TypeNameId, readerFilePath FilePath) returns MaxonType
 	let name = try project.typeNames.nameOf(id) otherwise panic("resolveTypes: named type id {id} is not in the project interner (merge did not fold this file's interner)")
 
-	return try denotedNamedType(signatures, name: name, id: id, readerFilePath: readerFilePath) otherwise 'undeclared'
-		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name))))
+	if let declared = try denotedNamedType(signatures, name: name, id: id, readerFilePath: readerFilePath) 'aDeclaredType'
+		return declared
+	end 'aDeclaredType'
+
+	return try denotedAliasForm(signatures, name: name, readerFilePath: readerFilePath, into: project.typeNames) otherwise 'undeclared'
+		reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name))))
 
 		// A RECOVERY type, not a sentinel answer: `PassPipeline.run` gates on diagnostics
 		// after EVERY pass and `resolveTypes` IS a pass, so the build throws the moment
@@ -1464,3 +1395,13 @@ function resolveNamedType(project Project, signatures ProgramSignatures, id Type
 		return MaxonType.integer
 	end 'undeclared'
 end 'resolveNamedType'
+
+export function denotedAliasForm(signatures ProgramSignatures, name ByteArray, readerFilePath FilePath, into TypeNameInterner) returns MaxonType throws UnknownTypeName
+	let form = try signatures.aliasFormFor(name, readerFilePath: readerFilePath)
+
+	match form 'form'
+		functionAlias then return MaxonType.function(into.intern(signatures.functionAliasScopedName(name, readerFilePath: readerFilePath)))
+		genericAlias then return signatures.instanceDenotedType(signatures.genericAliasInstanceFrom(name, readerFilePath: readerFilePath), into: into)
+		tupleAlias then return MaxonType.structRef(into.intern(signatures.tupleAliasTargetFrom(name, readerFilePath: readerFilePath)))
+	end 'form'
+end 'denotedAliasForm'

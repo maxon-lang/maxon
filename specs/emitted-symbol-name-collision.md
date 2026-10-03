@@ -9,7 +9,7 @@ category: diagnostics
 
 ## Documentation
 
-`specs/reserved-double-underscore.md` reserves the `__` prefix at the PARSER, and A1t/A1w refuse a
+`specs/reserved-double-underscore.md` reserves the `__` prefix at the PARSER, and the compiler refuses a
 declaration that collides with a compiler-emitted **module function** (E4015, at `FunctionNameIndex`). Both
 of those doors see only names a *module* carries.
 
@@ -29,23 +29,23 @@ one of them into a **name → `.text` offset** map that `resolveCallFixups` then
 through.
 
 ⚠ **A bare last-wins `upsert` there does not degrade an answer — it BINDS EVERY CALL TO THE OTHER BODY.**
-MEASURED, before A2l: the program under `runtime-chunk-name` below compiled clean, linked, ran, and
-**exited 127** where its source says 7. The user's `mrt_runtime_init` was laid out, the hand-assembled
-panic-runtime chunk of the same name was laid *after* it, last-wins overwrote the label, and the program's
-call to its own function silently reached the runtime chunk. No diagnostic anywhere. `mrt_start` was worse
-only in being loud: it tripped the entry-offset guard and PANICKED the compiler on a plain user program,
-which is not a diagnostic either.
+Under one, the program under `runtime-chunk-name` below compiles clean, links, runs, and **exits 127**
+where its source says 7. The user's `mrt_runtime_init` is laid out, the hand-assembled panic-runtime chunk
+of the same name is laid *after* it, last-wins overwrites the label, and the program's call to its own
+function silently reaches the runtime chunk. No diagnostic anywhere. `mrt_start` is worse only in being
+loud: it trips the entry-offset guard and PANICS the compiler on a plain user program, which is not a
+diagnostic either.
 
 **The rule: a `.text` label is claimed exactly once, and a second claim is refused at the point of layout.**
-It is the SAME code as A1t's — **E4015**, positioned at the declaration, with the same cure (rename it) —
+It is the SAME code as the module-function collision's — **E4015**, positioned at the declaration, with the same cure (rename it) —
 because it is the same rule: a declaration took a symbol the compiler emits, and the compiler's copy is the
 one its own emitted code is bound to.
 
 ### Why it is DETECTED at layout rather than PREDICTED upstream
 
-A1t's finding was that the collision never needed predicting because it was already detectable, and its
-proposed cure — an up-front roster of every name the compiler might emit — was both impossible and
-unnecessary. The same holds one tier down, and more sharply: **which chunks exist depends on the target and
+A collision never needs predicting, because it is detectable where the name is claimed, and an up-front
+roster of every name the compiler might emit would be both impossible and unnecessary. At the target tier
+that holds more sharply: **which chunks exist depends on the target and
 on `RuntimeUsage`.** The `__gt_*` chunks appear only under `usesGt`; wasm
 synthesizes its `run` entry with no name key at all and has no hand-assembled chunks whatsoever. A roster
 would therefore be one list per (target × usage) combination, maintained by hand, with nothing between it
@@ -63,9 +63,9 @@ gap.** Each case's `<!-- unsupported-targets: -->` marker names the targets that
 Both cases span the four native lanes: every one installs a fault handler, so every one lays
 `mrt_runtime_init`, and `entry-stub-name` is what keeps arm64's `recordChunkLabel` covered through the stub.
 
-⚠ **EVERY CASE BELOW REACHES ITS BODY THROUGH A FUNCTION VALUE, AND THAT IS LOAD-BEARING (EC5, 2026-08-26).** The rule is
-about a body the compiler LAYS DOWN, and a direct call to a one-line function no longer guarantees one: `inlineLeaves`
-splices the leaf into `main`, `dfe` drops the now-uncalled declaration, and nothing is ever laid down under the label.
+⚠ **EVERY CASE BELOW REACHES ITS BODY THROUGH A FUNCTION VALUE, AND THAT IS LOAD-BEARING.** The rule is
+about a body the compiler LAYS DOWN, and a direct call to a one-line function does not guarantee one: `inlineLeaves`
+splices the leaf into `main`, `dfe` drops the uncalled declaration, and nothing is ever laid down under the label.
 Written that way the two refusals below would COMPILE and return 7 — the rule's own correct answer for a body that is
 never emitted — and, worse, the NEGATIVE CONTROL would pass without the layout door ever being asked about its name,
 which is a control standing somewhere its cases do not. Taking the function as a VALUE roots it (`funcAddr` is a
@@ -76,9 +76,8 @@ in exactly one thing: the NAME.
 
 <!-- test: runtime-chunk-name -->
 <!-- unsupported-targets: wasm32-wasi -->
-The measured silent miscompile: this exact program returned **127** instead of **7** before A2l, with the
-build exiting 0 — re-measured with the refusal removed from `recordChunkLabel`, 2026-07-31, still **127**.
-Every native lane lays `mrt_runtime_init` and refuses the declaration alike.
+The silent miscompile: with the refusal removed from `recordChunkLabel`, this exact program returns
+**127** instead of **7**, with the build exiting 0. Every native lane lays `mrt_runtime_init` and refuses the declaration alike.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -100,10 +99,10 @@ error E4015: <fragment>:4:10: declaration of 'mrt_runtime_init' collides with a 
 The ENTRY STUB's own name — **the case that spans all four native targets**, because every one of them
 lays a `mrt_start` chunk down (x64 as a module function via `prependEntryStub`, arm64 as a hand-assembled
 chunk via `appendArm64RuntimeChunks`), and therefore the one that keeps arm64's half of the shared
-`recordChunkLabel` covered. Verified by cross-compiling: E4015 on x64-windows, x64-linux, arm64-macos and
-arm64-linux alike. Before A2l this reached the entry-offset guard — `panic at X64Backend.maxon:
+`recordChunkLabel` covered: E4015 on x64-windows, x64-linux, arm64-macos and arm64-linux alike. Without
+the refusal this reaches the entry-offset guard — `panic at X64Backend.maxon:
 concatX64FunctionChunks: 'mrt_start' must be laid out FIRST in .text but is at offset 33` — a compiler
-panic, with no file and no line, on a program whose only fault is a name. The refusal now fires at the
+panic, with no file and no line, on a program whose only fault is a name. The refusal fires at the
 label, which is one chunk EARLIER than the guard, so the guard keeps its own meaning (the stub was
 appended in the wrong ORDER) rather than doubling as a collision report.
 ```maxon

@@ -616,22 +616,18 @@ end 'main'
 ```
 
 <!-- test: a-user-type-can-be-a-map-key -->
-⭐⭐ **THE CAPABILITY THE RETIREMENT BOUGHT (W41), and it is the reason the retirement was worth
-doing rather than a like-for-like swap.** While `Map` was SYNTHESIZED its keys were a fixed roster of
-four — `int`, `String`, `Character`, `Array` — and anything else was refused outright with *"a
-'<Type>' key is a later slice"*. `Map` is `stdlib/Map.maxon` now, declared
-`where Key is Hashable and Equatable`, so **the roster is not a list any more: it is the constraint**,
+⭐⭐ **ANY TYPE THAT DECLARES THE CONFORMANCES IS A MAP KEY.** `Map` is `stdlib/Map.maxon`, declared
+`where Key is Hashable and Equatable`, so **the set of key types is not a roster: it is the constraint**,
 and a user type that declares both conformances is a key like any other.
 
-⛔⛔ **THE UPSERTS ARE IN A LOOP, AND THAT IS THE WHOLE POINT OF THE SHAPE (W41-trivial).** This case
-was written with two STRAIGHT-LINE `upsert`s, and it passed for a reason that had nothing to do with
-the capability it advertised: a straight-line `Point.create(…)` temporary is promoted to a binding of
-`main`'s OWN frame (`giveTemporaryScopeLifetime`), so it happens to outlive every read that follows.
-Put the identical inserts in a loop and the promotion scopes them to the **loop body**, which frees
-each key at the end of its iteration while the map still points at it — **`total 0` where the oracle
-prints `total 15`, exit 0, no diagnostic**. The map's `count()` was right the whole time; every key in
-it was dangling. A capability that evaporates the moment its subject is written in a loop was not a
-capability, and a case that cannot tell the difference was not testing one.
+⛔⛔ **THE UPSERTS ARE IN A LOOP, AND THAT IS THE WHOLE POINT OF THE SHAPE.** Two STRAIGHT-LINE
+`upsert`s would pass for a reason that has nothing to do with the capability: a straight-line
+`Point.create(…)` temporary is promoted to a binding of `main`'s OWN frame (`giveTemporaryScopeLifetime`),
+so it happens to outlive every read that follows. In a loop the promotion scopes each key to the **loop
+body**, so a map that did not own its keys would hold a key freed at the end of every iteration —
+**`total 0` instead of `total 15`, exit 0, no diagnostic**, with `count()` right and every
+key dangling. A capability that evaporates the moment its subject is written in a loop is not a
+capability, and a case that cannot tell the difference does not test one.
 
 ⚠ the compiler's signature match erases a ranged alias to its underlying primitive, so `hash()` written
 `returns Val` — an `int` alias of `HashValue`'s span — is ACCEPTED rather than refused with
@@ -673,22 +669,20 @@ end 'main'
 
 ### A TRIVIAL key column is co-owned, and survives every rehash its load factor triggers
 
-⭐⭐ **THE TRIVIAL-KEY TWIN OF THE TWO MANAGED-COLUMN CASES BELOW, AND IT WAS THE ONE THAT WAS
-MISSING (W41-trivial).** A `String` key and a `String`-owning-struct key both reach the map by being
-**CONSUMED** — `typeArgIsOwned` says they own heap, so the call site MOVES them in and the column's
-own element walk frees them. An all-scalar struct key answers that question `false` and was therefore
-**BORROWED**, with a scope-lifetime extension as its entire protection; the container outlives the
-scope in every loop, so the column held dangling keys and every `get` missed.
+⭐⭐ **THE TRIVIAL-KEY TWIN OF THE TWO MANAGED-COLUMN CASES BELOW.** A `String` key and a
+`String`-owning-struct key both reach the map by being **CONSUMED** — `typeArgIsOwned` says they own
+heap, so the call site MOVES them in and the column's own element walk frees them. An all-scalar struct
+key answers that question `false`; BORROWED, with a scope-lifetime extension as its entire protection, it
+would dangle, because the container outlives the scope in every loop and every `get` would miss.
 
-The cure is that a trivial aggregate key is **CO-OWNED**, exactly as a trivial `Box with Point`
-constructor field already was: the call site takes a real `__mm_retain`, and the column's element walk
-releases it. Both ends read `typeIsManaged`, so the descriptor's `retainFunc@64` and its
-`destroyFunc@40` are non-zero together — they used to read two DIFFERENT questions, which is the same
-defect stated at the descriptor.
+So a trivial aggregate key is **CO-OWNED**, exactly as a trivial `Box with Point` constructor field is:
+the call site takes a real `__mm_retain`, and the column's element walk releases it. Both ends read
+`typeIsManaged`, so the descriptor's `retainFunc@64` and its `destroyFunc@40` are non-zero together — two
+DIFFERENT questions there would be the same defect stated at the descriptor.
 
 The three sizes are not decoration. **5** is below the first `grow()`, **50** crosses it three times
 (16 → 32 → 64 → 128) and **500** eight; a rehash re-inserts every key through the shared body's
-BORROWED path, so a fix that landed only on the concrete call site would be green at 5 and red at 50.
+BORROWED path, so co-ownership on the concrete call site alone would be green at 5 and red at 50.
 
 <!-- test: trivial-key-column-survives-rehash -->
 ```maxon
@@ -745,9 +739,8 @@ end 'main'
 The pair that proves the descriptor is read **per type parameter** and not once per instance: the key
 column co-owns a trivial aggregate by `__mm_retain`, the value column consumes a `String` outright, and
 the two blocks sit at `layoutBlockOffsetFor(0)` and `(1)` of one `__layout_Map_Point_String`. Stamping
-one column's protocol into the other's block is the wild free `managedOpaqueArrayElementOf` already
-carries the measurement for (W43b), so a map whose two arguments DISAGREE about their protocol is the
-program that would find it again. The value is read back and compared, so a rehash that merely
+one column's protocol into the other's block is a wild free, so a map whose two arguments DISAGREE
+about their protocol is the program that would find it. The value is read back and compared, so a rehash that merely
 survived without faulting would still fail here.
 
 <!-- test: trivial-key-with-managed-value-column -->
@@ -797,12 +790,12 @@ hits 40 count 40
 
 ### A managed KEY column survives the rehash its load factor triggers
 
-⛔ **The rehash double-freed every entry, and the suite was 4769/0 over it because no case had ever
-built a managed-column map past its load factor.** `Map.grow()` reads a BORROWED key out of the old
-column and hands it to `insertAtSlot`, whose parameter is enrolled OWNED and moved into the new one — so
-the new array's element walk and the old array's each destroyed the same record. `Map with (String, …)`
-printed the right answer for 12 entries and **segfaulted at 13**, which is exactly `trunc(16 * 3/4) + 1`:
-the first insert that calls `grow()`. The oracle prints `count 200` on the identical program.
+⛔ **A rehash moves every entry, and only a map filled past its load factor exercises it.** `Map.grow()`
+reads a BORROWED key out of the old column and hands it to `insertAtSlot`, whose parameter is enrolled
+OWNED and moved into the new one — so unless the new column takes its own reference, the new array's
+element walk and the old array's each destroy the same record. `Map with (String, …)` then prints the
+right answer for 12 entries and **segfaults at 13**, which is exactly `trunc(16 * 3/4) + 1`: the first
+insert that calls `grow()`.
 
 The guard is the ENTRY COUNT and nothing else, so this case crosses the threshold three times over
 (16 → 32 → 64 → 128 → 256): a case that stopped at 12 would be green on the defect.
@@ -843,9 +836,9 @@ count 200
 
 The same store, one ownership protocol along: a `String` column takes its reference by COPYING
 (`__str_clone`, because an immortal `.rdata` record admits no incref) and an aggregate takes it with a
-real `__mm_retain`. Both words are read out of the same layout descriptor, so a fix landing on only one
-of them would leave this red — and it was red identically (`0xC0000005` at the first `grow()`) where the
-oracle prints `total 21190`. The value is read back and summed, so a rehash that merely survived without
+real `__mm_retain`. Both words are read out of the same layout descriptor, so a column that takes its
+reference by only one of them fails here the same way (`0xC0000005` at the first `grow()`) instead of
+printing `total 21190`. The value is read back and summed, so a rehash that merely survived without
 faulting would still fail here.
 
 <!-- test: managed-aggregate-column-survives-rehash -->
@@ -892,28 +885,21 @@ total 21190
 0
 ```
 
-## The `[k: v]` LITERAL is the same map — the door the retirement missed (W41-lit)
+## The `[k: v]` LITERAL is the same map
 
-⭐⭐ **EVERY `Map` DOOR WAS GATED BY THE RETIREMENT SWITCH EXCEPT THE LITERAL.** `Map` is
-`stdlib/Map.maxon` now, and at the time this was written `ProgramSignatures.isMapBaseName` answering
-false for a declared `Map` was what retired the synthesized record at every door that asked it. **W105
-then deleted the synthesized record outright, and the switch with it** — the retirement is unconditional
-today and there is no predicate left to ask, so read the paragraph below as the history of how the
-literal got here rather than as a control that still exists. `Parser.parseMapLiteralBody` asked
-none of them for its COLUMN RULES: it called `requireMapColumnTypes` — the *builtin's* rule —
-directly, and it moved each column value in under the *builtin's* ownership protocol. So a `[k: v]`
-literal and the `create()` + `upsert` spelling of the identical map were two different containers,
-which is the one thing that function's own header has always promised they are not.
+⭐⭐ **A LITERAL IS HELD TO THE SAME `Map` EVERY OTHER DOOR IS.** `Map` is `stdlib/Map.maxon`, and a
+`[k: v]` literal takes both its COLUMN RULES and its OWNERSHIP PROTOCOL from that declaration: its keys
+are judged by `Map`'s own `where` clause, and its values reach the table through ordinary `Map.upsert`
+calls. So a `[k: v]` literal and the `create()` + `upsert` spelling of the identical map are one
+container, which is what `Parser.parseMapLiteralBody`'s own header promises.
 
-The four cases below are the two halves of that, each with its regression pin.
+The four cases below are the two halves of that, each with its control.
 
 ### A user `Hashable` key is a literal's key too
 
 ⭐ **THE GATE HALF.** `map.md`'s `a-user-type-can-be-a-map-key` pins a user `Point` reaching a map
-through `PointMap.create()` + `upsert`; the byte-identical key written in a LITERAL was
-**`error E2015: … a key must be one of int, String, Character, Array — a 'Point' key is a later
-slice`** — the retired builtin's own roster sentence, quoted by the one door that never learned the
-roster was gone. Both compilers exit **42** on this program.
+through `PointMap.create()` + `upsert`; this is the byte-identical key written in a LITERAL, which no
+fixed roster of key types may refuse. The program exits **42**.
 
 <!-- test: literal.user-type-key -->
 ```maxon
@@ -963,7 +949,7 @@ that reference was ever taken, because the builder's temporaries are still alive
 map is what makes the reference load-bearing: the keys' own frame is gone by the time `main` reads
 them.
 
-Both compilers print `total 42 count 3` and exit **42**.
+The program prints `total 42 count 3` and exits **42**.
 
 <!-- test: literal.user-type-key-escapes-its-builder -->
 ```maxon
@@ -1011,18 +997,17 @@ total 42 count 3
 
 ### An AGGREGATE value column in a literal leaks nothing
 
-⛔⛔ **THE OWNERSHIP HALF, AND IT WAS AN OUTRIGHT LEAK: exit 101 where the oracle exits 42.** The
-literal desugars to `Map.create()` plus one `Map.upsert(map, key, value:)` per pair — an ORDINARY
-call, whose arguments the ordinary machinery transfers or co-owns (`applyCallerConsume`). The literal
-ALSO ran the synthesized record's move-in (`moveColumnValueIntoTable`), which drains the value from
-the statement's pending drops because `__map_upsert` is a runtime call with no signature to read. Two
-protocols on one value: the map took its reference and the statement no longer released its own.
+⛔⛔ **THE OWNERSHIP HALF: ONE PROTOCOL PER VALUE, OR AN OUTRIGHT LEAK (exit 101 instead
+of 42).** The literal desugars to `Map.create()` plus one `Map.upsert(map, key, value:)` per pair —
+an ORDINARY call, whose arguments the ordinary machinery transfers or co-owns (`applyCallerConsume`),
+and nothing else. A second, move-in protocol on the same value (`moveColumnValueIntoTable`, which drains
+the value from the statement's pending drops) would let the map take its reference while the statement
+skipped releasing its own.
 
-⚠ **ONLY AN AGGREGATE COLUMN SHOWED IT, WHICH IS WHY THE SUITE WAS GREEN OVER IT.** The two
-protocols AGREE for every column the suite had a literal for: an `int` column owns no record and
-moves nothing, and a `String` column is `typeArgIsOwned` TRUE, so the ordinary machinery MOVES it —
-exactly what the literal had already done. An all-scalar struct is the one class the call site
-BORROWS, and there the drained temporary is a reference nobody releases.
+⚠ **ONLY AN AGGREGATE COLUMN SHOWS IT.** The two protocols AGREE for the other columns: an `int` column
+owns no record and moves nothing, and a `String` column is `typeArgIsOwned` TRUE, so the ordinary
+machinery MOVES it — exactly what a move-in does. An all-scalar struct is the one class the call site
+BORROWS, and there a drained temporary is a reference nobody releases.
 
 <!-- test: literal.aggregate-value-column -->
 ```maxon
@@ -1057,25 +1042,19 @@ total 42 count 2
 42
 ```
 
-### A MANAGED column pair through a literal — the regression pin the two fixes must not move
+### A MANAGED column pair through a literal — the control for the aggregate column
 
-⚠ **THE COLUMNS THAT WERE ALREADY RIGHT, PINNED SO THAT MAKING THE AGGREGATE ONE RIGHT CANNOT BREAK
-THEM.** A `String` key and a `String` value are `typeArgIsOwned` TRUE and therefore CONSUMED at the
-call, which is the arm where the literal's own move-in and the ordinary call machinery happened to
-agree — so this program was green before either fix and its whole job is to still be green after.
-Read back and printed rather than merely counted: a lost reference here is a use-after-free, not a
-missing entry, and `count()` cannot see one.
+⚠ **THE COLUMNS WHERE A MOVE-IN AND THE ORDINARY CALL AGREE, PINNED SO THAT THE AGGREGATE RULE CANNOT
+BREAK THEM.** A `String` key and a `String` value are `typeArgIsOwned` TRUE and therefore CONSUMED at the
+call, which is the arm where a move-in and the ordinary call machinery agree. Read back and printed
+rather than merely counted: a lost reference here is a use-after-free, not a missing entry, and
+`count()` cannot see one.
 
-⚠ **ITS GOLDEN IS THE ONE FRAGMENT IN THE WHOLE SUITE THAT MOVED, and the movement is ORDER and not
-content.** Measured against the merge base built the same way: 1014 fragments drift before, 1015
-after, and the set difference is exactly this case. The emitted call sequence is identical —
-`Map.create`, three `Map.upsert`, the same six `__mm_alloc` + `__str_copy` literal promotions, the
-same `__destruct_Map_String_String` — because the promotion of a borrowed `.rdata` String is the same
-act wherever it is emitted. What moved is WHEN: it used to happen inside the literal parse and now
-happens inside `emitCall`, which runs after `Map.create` rather than before it. More values are
-therefore live across that call and the allocator spills four more slots (`prologue 152` → `184`).
-That is the price of the literal and the written `upsert` sharing ONE ownership protocol, and it is
-paid only on this path.
+⚠ **THE PROMOTION OF EACH BORROWED `.rdata` String HAPPENS INSIDE `emitCall`,** which runs after
+`Map.create` rather than before it — the emitted call sequence is `Map.create`, three `Map.upsert`, six
+`__mm_alloc` + `__str_copy` literal promotions and `__destruct_Map_String_String`. More values are
+therefore live across that call and the allocator spills more slots. That is the price of the literal
+and the written `upsert` sharing ONE ownership protocol, and it is paid only on this path.
 
 <!-- test: literal.managed-column-pair -->
 ```maxon
@@ -1096,10 +1075,10 @@ one/three count 3
 
 ### A literal key that conforms to NEITHER is still refused, at the literal
 
-⛔ **THE REFUSAL THE GATE FIX MUST NOT LOSE.** A literal is the one door a map can be born through
-with no `with (K, V)` annotation to anchor an E3017 on, so dropping the builtin's roster without
-putting anything in its place would admit a key nothing can hash. It is `Map`'s OWN declared
-`where Key is Hashable and Equatable` that refuses it now — the same sentence, code and shape a
+⛔ **THE REFUSAL THE GATE HALF MUST NOT LOSE.** A literal is the one door a map can be born through
+with no `with (K, V)` annotation to anchor an E3017 on, so a literal with no key rule at all would admit
+a key nothing can hash. It is `Map`'s OWN declared
+`where Key is Hashable and Equatable` that refuses it — the same sentence, code and shape a
 written `typealias OpaqueMap = Map with (Opaque, Val)` gets (`array-conditional-conformance-withheld`'s
 `error.a-key-type-nothing-conforms-for-still-reads-as-a-later-slice`) — anchored on the literal's
 first key, which is the only position the program offers.
@@ -1126,36 +1105,12 @@ error E3017: <fragment>:13:11: Type 'Opaque' does not satisfy constraint 'Hashab
 error E3017: <fragment>:13:11: Type 'Opaque' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
 ```
 
-### The corpus declaration is what serves a `Map` — pinned by members the synthesized record never had
+### The corpus declaration is what serves a `Map` — pinned by members outside a builtin roster
 
-⭐⭐ **THE SYNTHESIZED `Map` IS RETIRED, AND THESE ARE THE CASES THAT CAN ONLY PASS IF IT IS.** Every
-case above this section passes under EITHER regime — `count`, `contains`, `get`, `upsert`, `insert`,
-`remove` and `map` are the seven names `Parser.mapSurfaceMemberNames` served, so a green suite over
-them says nothing about which `Map` answered. `stdlib/Map.maxon` declares two members that roster
-never had — `getCapacity()` and `createIterator()` — and a program calling one is refused outright
-(`E2015 … that list IS the surface`) the moment the builtin is the thing serving the type.
-
-⚠ **MEASURED RED — by the A/B available at the time, removing `stdlib/Map.maxon`'s
-`listWhitelistedModule` line from the loader's then-whitelist and rebuilding** (that method is gone with
-the filter; the reading stands): all
-three cases in this section fail to COMPILE against the synthesized record and pass against the
-declaration —
-
-```
-error E2015: Unsupported: `Map` member 'getCapacity' — the compiler provides count/contains/get/upsert/insert/remove/map
-error E2015: Unsupported: `Map` member 'createIterator' — the compiler provides count/contains/get/upsert/insert/remove/map
-error E4016: 'MapError' is the error enum the Map runtime (MapError) throws, and this compile declares no enum of that name
-```
-
-— which is the control this file owed and did not have. `ProgramSignatures.isMapBaseName` answered
-FALSE once a `Map` was declared, so the whole retirement was ONE predicate — and a predicate with no case
-behind it is a switch nothing would notice being flipped back, which is exactly why **W105 deleted it
-along with the `__map_*` runtime its true arm selected.** The refusal above is now unconditional.
-
-⚠⚠ **AND THE THIRD LINE IS THE ONE WORTH READING: THE SYNTHESIZED RECORD IS NOT A WORKING FALLBACK.**
-It throws `MapError`, whose ordinals it can only get from a *declared* enum of that name — and the
-only file that declares one is `stdlib/Map.maxon` itself. So the regime selected by that module's
-absence cannot survive its absence: it is unreachable in every shipped compile, not merely unused.
+⭐⭐ **THESE ARE THE CASES THAT CAN ONLY PASS IF THE DECLARATION SERVES `Map`.** Every case above this
+section uses only `count`, `contains`, `get`, `upsert`, `insert`, `remove` and `map`, so a green suite over
+them says nothing about which members `Map` has beyond those. `stdlib/Map.maxon` declares
+`getCapacity()` and `createIterator()` as well, and the three cases in this section call them.
 
 <!-- test: corpus.get-capacity -->
 ```maxon
@@ -1231,7 +1186,7 @@ protocol itself: the `(Key, Value)` tuple `current()` returns, and `advance()`'s
 
 ### An empty map iterates ZERO times, however it became empty
 
-⚠ **THE EDGE THE CURSOR FORM MAKES NON-OBVIOUS, AND THE FILE HAD NO CASE FOR IT.** `for … in` over a
+⚠ **THE EDGE THE CURSOR FORM MAKES NON-OBVIOUS.** `for … in` over a
 cursor is a DO-WHILE — its first test is licensed by the protocol's invariant that a live cursor is
 already positioned on an element — so an empty source has to be refused by the FACTORY rather than by
 the loop, and `Map.createIterator()` is the throwing factory that does it
@@ -1284,9 +1239,9 @@ to them.
 ⛔⛔ **BOTH HALVES OF EVERY PAIR ARE KEPT BY THE TABLE, AND `__module_init` MUST THEREFORE RELEASE
 NEITHER.** `Map.upsert` pushes its `key` and its `value` into `Array with Key` / `Array with Value`, which
 is a type-parameter FEED and not a consume bit — so the synthesis' ordinary "the callee only borrowed it,
-drop it after the call" rule is a use-after-free here. MEASURED with that rule applied: the first case
-below printed `0 0` (both lookups missing, the keys having been freed the instant they were stored) and
-then **segfaulted**, against the reference compiler's `1 2`. A body's call site takes a real reference at
+drop it after the call" rule is a use-after-free here. With that rule applied the first case below prints
+`0 0` (both lookups missing, the keys having been freed the instant they were stored) and then
+**segfaults**, instead of printing `1 2`. A body's call site takes a real reference at
 the same position and drops the temp at statement end; `__module_init` has no statement, so the two net to
 the same one reference by this frame taking none and releasing none.
 
@@ -1368,7 +1323,7 @@ folds to a `named`-tagged scalar carrying its enum's name as BYTES — the const
 parser, so an id minted during the fold names nothing where it is read — and a `Map with (K, V)` needs a
 type argument the whole program can name. Admitting it either drops the name (and `m.get(…)` then hands
 back a bare `int` for a program whose every arm is the enum) or keeps this index's id (and
-`SemanticCheck.aggregateNameFor` panics on it). The same literal inside a function is correct today, which
+`SemanticCheck.aggregateNameFor` panics on it). The same literal inside a function is correct, which
 is what the message points at.
 ```maxon
 enum Kind

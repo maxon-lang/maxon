@@ -27,14 +27,12 @@
 // `paramTypes` besides; nothing on a pool reads any other column — the value columns, the parameter masks,
 // the guard and inline-site tables are all read by passes on either side of the fan-outs, and they stay on
 // the REAL function, which is mutated in place at the splice. Carrying a column nothing reads would be a
-// second home for it. The unit's `blockSourceInfo` is empty for the same reason: no fanned-out pass reads
-// it, and the real module's column stays parallel to its `blocks` through the splice.
+// second home for it.
 //
 // ⭐ **THE SPLICE PUTS THE FUNCTION'S OPS INTO ITS OWN SLOTS FIRST (`IrModule.placeOp`) and its blocks
 // back into their own slots by id**, so a spliced module is the serial run's up to the INDEX of an op or
 // a block that was newly minted — and nothing reads those indices: every consumer walks `blockRefs →
-// opRefs → ops`, `blockSourceInfo` stays parallel to `blocks` because a reused slot keeps its entry and a
-// new block pushes an empty one, and the span column rides the placement. The emitted code and the IR
+// opRefs → ops`, and the span column rides the placement. The emitted code and the IR
 // dump are byte-identical to a serial run (`tests/parallel-compile/byte-identical`).
 
 // The one function a unit module holds.
@@ -92,7 +90,7 @@ export function extractUnitModule(module StdModule, func IrFunction) returns Std
 
 	// The return type is a union box and the parameter list an array: both are copied, since the real
 	// function keeps its own and the unit must own everything it reaches.
-	var unitFunc = IrFunction.createFromStd(func.name.clone(), returnType: func.returnType.clone(), paramCount: func.paramCount, paramTypes: func.paramTypes.clone(), returnLine: func.returnLine)
+	var unitFunc = IrFunction.createFromStd(func.name.clone(), returnType: func.returnType.clone(), paramCount: func.paramCount, paramTypes: func.paramTypes.clone())
 	unitFunc.stackSize = func.stackSize
 	unitFunc.nextBlockId = func.nextBlockId
 	unitFunc.blockRefs.reserve(func.blockRefs.count())
@@ -152,10 +150,9 @@ end 'copiedOp'
 //
 // The unit's live ops go into this function's own op slots first and the tail of `module.ops` after
 // (`IrModule.placeOp`), with their spans; a block whose id the function already had goes back into that
-// block's slot, so its `blockSourceInfo` entry stays parallel to it, and a block the passes minted is
-// pushed with an empty entry, exactly as `addBlock` would have pushed it on the main thread. A block the
-// passes dropped is simply not in the unit's `blockRefs` any more, and its slot becomes an orphan — as
-// `dropUnreachableBlocks` leaves it on the real module.
+// block's slot, and a block the passes minted is pushed, exactly as `addBlock` would have pushed it
+// on the main thread. A block the passes dropped is simply not in the unit's `blockRefs` any more,
+// and its slot becomes an orphan — as `dropUnreachableBlocks` leaves it on the real module.
 //
 // The unit's block records themselves move in: their opRefs are renumbered in place and the records are
 // set into the module's array, so the phi model the passes rebuilt on them comes across without a copy.

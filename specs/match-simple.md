@@ -620,18 +620,16 @@ error E2026: specs/fragments/match-simple/error.match-not-exhaustive.test:7:2: m
 
 <!-- test: error.match-duplicate-bool-pattern -->
 
-⚠ **compiler-authored — not a `/specs` case.** Added with sub-byte bit-packing, which widened the
-duplicate-pattern recorder to bools as a side effect: a repeated `true` arm was **silently dead code**
-before and is now refused, which is the existing overlap rule finally reaching the one pattern kind it
-had been skipping.
+A repeated `true` arm would be **silently dead code**, so
+it is refused by the same overlap rule every other pattern kind meets.
 
 ⭐ **The point of the case is the SPELLING, not the refusal.** A bool arm folds to `BoolTrueValue`/
-`BoolFalseValue`, so the first version of this diagnostic named `'1'` for a pattern the source writes as
-`true` — a message quoting a number that appears nowhere in the program. Its siblings do not do that
+`BoolFalseValue`, so a diagnostic built from the folded value would name `'1'` for a pattern the source
+writes as `true` — a message quoting a number that appears nowhere in the program. Its siblings do not do that
 (`enum-match-exhaustive` pins *"overlapping pattern in match: `'medium'` is already covered"*), and this
-case is what stops it regressing to the folded value. Keyed on the TOKEN rather than the value's type,
+case is what keeps it off the folded value. Keyed on the TOKEN rather than the value's type,
 because the question is about spelling: `-1` is two tokens, so a token-text rule has to leave every other
-pattern kind on the folded constant, and this case pins only the arm that changed.
+pattern kind on the folded constant, and this case pins only the bool arm.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

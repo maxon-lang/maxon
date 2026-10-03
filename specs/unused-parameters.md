@@ -117,20 +117,12 @@ end 'main'
 
 
 <!-- test: void-function-unused -->
-⚠ **THE PORTED EXPECTATION CARRIED A SECOND LINE, AND THE COMPILER CANNOT PRODUCE IT FOR THIS PROGRAM.** v1 and the
-bootstrap report BOTH `E3005 … Second and subsequent arguments must be named` and
-`E3012 … unused variable: 'x'`, ordered by source position. The compiler reports only the first, as `E2053`, and
-the difference is the STAGE rather than the rule: the compiler's argument-labelling refusal is a PARSE error, so
-the parse of the file unwinds and the unused check — which runs at each function's `end` — never reports,
-even though `doNothing` is parsed before `main` and its diagnostic had already been recorded. The
-bootstrap catches the same rule semantically and keeps going.
-
-The PROGRAM is left exactly as `/specs` wrote it and only the expectation is retracted: rewriting the call
-to `doNothing(1, y: 2)` would make the compiler look fully conformant on a program the spec never asked about, and
-would hide the divergence rather than record it. **The unused-parameter behaviour this case is named for is
-pinned by the other cases in this file** — `single-unused`, `multiple-unused` and
-`method-on-non-conforming-type-still-errors` — so what is lost here is the interleaving of the two
-diagnostics, not the check.
+⚠ **AN ARGUMENT-LABELLING REFUSAL IS A PARSE ERROR, SO THE UNUSED CHECK NEVER REPORTS ON THIS PROGRAM.** The
+unnamed second argument is `E2053`, the parse of the file unwinds, and the unused check — which runs at each
+function's `end` — reports nothing, not even for `doNothing`, which is parsed before `main`. **The
+unused-parameter behaviour this case is named for is pinned by the other cases in this file** —
+`single-unused`, `multiple-unused` and `method-on-non-conforming-type-still-errors` — so this case pins only
+that the parse error is the one diagnostic.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

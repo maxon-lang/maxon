@@ -602,9 +602,8 @@ end 'main'
 
 ### the compiler regression cases
 
-The cases above are the canonical `/specs/associated-types.md` corpus, byte-identical. The four below are
-the compiler's own, found by probing the substitution rung (R5) for false rejects and false accepts. Each names the
-mechanism it pins.
+The cases below probe the substitution of associated types for false rejects and false accepts. Each names
+the mechanism it pins.
 
 ### A conformance may bind an associated type to the CONFORMER'S OWN type parameter
 
@@ -612,12 +611,11 @@ mechanism it pins.
 container in `stdlib/` declares its conformance (`Array.maxon:484`, `List.maxon:158`, `Map.maxon:343`,
 `Set.maxon:356`), so this is the shape the feature exists for and not a corner.
 
-It was a wrong REJECTION until R5, on the IMPL side rather than the interface side: an interface requirement
-already spelled a type parameter by its declared name, but the impl method's types went through
-`maxonTypeName`, whose fallback for a `typeParameter` is the bare tag word — so the comparison read
-`held() returns type parameter` against `held() returns T` and could never agree, whatever the program said.
-Measured before the fix: `E3016 … held() returns type parameter (expected held() returns T)`, on a
-program that must compile and run (exit 42).
+The hazard is a wrong REJECTION on the IMPL side rather than the interface side: an interface requirement
+spells a type parameter by its declared name, so an impl method's types rendered through `maxonTypeName`,
+whose fallback for a `typeParameter` is the bare tag word, would read `held() returns type parameter`
+against `held() returns T` and never agree — `E3016 … held() returns type parameter (expected held()
+returns T)` on a program that must compile and run (exit 42).
 
 <!-- test: conformance-argument-is-the-conformers-own-type-parameter -->
 ```maxon
@@ -654,7 +652,7 @@ end 'main'
 
 ### …and the WRONG type parameter is still a mismatch, named
 
-The other half of the same rendering fix, and the reason it is a fix and not a relaxation: with every
+The other half of the same rendering rule, and the reason it is a rule and not a relaxation: with every
 parameter rendered as one string, a diagnostic could not tell `T` from `U`. Here the conformance binds
 `Element := T` and the method returns `U`.
 
@@ -695,7 +693,7 @@ error E3016: <fragment>:9:6: Partial interface implementation: type 'Pair' has 1
 
 ### An `implements` list mixes bound and unbound interfaces, and the comma belongs to whichever takes it
 
-R5 made an unparenthesized `with` read as many arguments as the interface has `uses` names, so the comma
+An unparenthesized `with` reads as many arguments as the interface has `uses` names, so the comma
 after an argument is ambiguous between "another argument" and "another interface" and the ARITY is what
 settles it. `Alpha` takes one, so the comma after `Integer` opens a sibling conformance;
 `stdlib/List.maxon:12` is written in exactly this shape. A greedy reader eats `Beta` as an argument.
@@ -750,13 +748,12 @@ end 'main'
 
 ### The arity is a WHOLE-PROGRAM fact, so an interface declared BELOW its conformance still supplies it
 
-R5 read the arity off the file's own `artifact.interfaces`, which the linear parse fills as it REACHES each
-declaration — so an interface written below the type that conforms to it was invisible, the arity defaulted
-to 1, and `implements Duo with Score, Weight` truncated after `Score`. MEASURED before R7:
-`E3016 … type 'Both' does not define required associated type 'Q'` plus
-`E3015 … implements unknown interface 'Weight'`, on a program that must compile and run (exit 42).
-The arity now comes from the whole-program declaration sweep, which visits every file's `interface`
-declarations before any file is parsed — the same guarantee `type` and `enum` have had since P1.1.
+The file's own `artifact.interfaces` is filled by the linear parse as it REACHES each declaration, so read
+from there an interface written below the type that conforms to it is invisible, the arity defaults to 1,
+and `implements Duo with Score, Weight` truncates after `Score`: `E3016 … type 'Both' does not define
+required associated type 'Q'` plus `E3015 … implements unknown interface 'Weight'`, on a program that must
+compile and run (exit 42). The arity comes from the whole-program declaration sweep, which visits every
+file's `interface` declarations before any file is parsed — the same guarantee `type` and `enum` have.
 
 <!-- test: interface-declared-below-its-conformance -->
 ```maxon
@@ -798,10 +795,10 @@ end 'main'
 
 ### …and in ANOTHER file, which is the half a same-file rule could never reach
 
-The cross-file case is the one the old per-file lookup could not answer even in principle: a file's parse
-sees only its own declarations. It is the same defect and the same fix, and it is spelled separately
-because "declared lower in this file" and "declared in a file swept later" are two different reasons the
-old lookup missed, and only one of them a re-ordering of declarations could have hidden.
+The cross-file case is the one a per-file lookup cannot answer even in principle: a file's parse
+sees only its own declarations. It is the same hazard and the same sweep, and it is spelled separately
+because "declared lower in this file" and "declared in a file swept later" are two different reasons a
+per-file lookup misses, and only one of them a re-ordering of declarations could hide.
 
 <!-- test: interface-declared-in-a-later-file -->
 ```maxon
@@ -845,10 +842,10 @@ end 'Duo'
 ### ⚠ THE OVER-FIX GUARD: a FORWARD interface's arity must STOP the comma loop, not merely start it
 
 `mixed-bound-and-unbound-interfaces` with every interface moved BELOW the type. `Alpha` takes ONE
-associated type, so the comma after `Integer` opens a SIBLING conformance — and now that the arity is
+associated type, so the comma after `Integer` opens a SIBLING conformance — and since the arity is
 resolvable for a forward interface, a reader that consulted it and then over-consumed would eat `Beta` as
-`Alpha`'s second argument. This case was green before R7 for the wrong reason (the unresolvable default
-happened to be 1) and must stay green for the right one.
+`Alpha`'s second argument. An unresolvable default of 1 would also keep this case green, for the wrong
+reason; it must stay green for the right one.
 
 <!-- test: forward-interface-comma-still-opens-a-sibling-conformance -->
 ```maxon
@@ -903,16 +900,16 @@ end 'main'
 `Plain` declares no associated type, so its surplus `with Score` binds nothing (the rule the case below
 states) and the comma after it opens the SIBLING `Duo` — whose own two `uses` names then take BOTH of the
 remaining arguments. Every interface here is declared below the type, so the arity of each comes from the
-whole-program sweep. It fails before R7 the way the two cases above do — `Duo` truncates at `Score` and
-`Weight` is read as an interface — so what it pins is that a FORWARD `Plain` still stops its own comma
-loop while a FORWARD `Duo` continues one, in a single `implements` list.
+whole-program sweep. Without that sweep it fails the way the two cases above would — `Duo` truncates at
+`Score` and `Weight` is read as an interface — so what it pins is that a FORWARD `Plain` still stops its own
+comma loop while a FORWARD `Duo` continues one, in a single `implements` list.
 
-⚠ **IT DOES NOT PIN ARITY 0 AS DISTINCT FROM THE UNRESOLVABLE DEFAULT OF 1, AND NO CASE CAN — MEASURED
-(R7 review).** `parseConformanceWithArgs` consults the arity only once a first argument is already read
+⚠ **IT DOES NOT PIN ARITY 0 AS DISTINCT FROM THE UNRESOLVABLE DEFAULT OF 1, AND NO CASE CAN.**
+`parseConformanceWithArgs` consults the arity only once a first argument is already read
 and its loop is `while args.count() < arity`, so 0 and 1 stop at exactly the same token through the sole
-reader that exists. Collapsing `DeclaredInterfaceArity.declared(0)` into that default and rebuilding
-leaves the WHOLE suite green at 2812/0 — so the 0-vs-undeclared split in `SignatureIndex.maxon` is
-correct modelling that today's corpus cannot exercise, and a future edit that breaks it will be caught by
+reader that exists. Collapsing `DeclaredInterfaceArity.declared(0)` into that default leaves every case
+green — so the 0-vs-undeclared split in `SignatureIndex.maxon` is
+correct modelling that the corpus cannot exercise, and an edit that breaks it will be caught by
 nothing here. Do not read this case as its guard.
 
 <!-- test: forward-interface-with-no-uses-clause -->
@@ -968,7 +965,7 @@ The clause binds `min(names, args)` and drops the rest, *for this spelling*. See
 parentheses the list's LENGTH is not something the author asserted — it is decided by the interface's `uses`
 arity, and a trailing comma legitimately belongs to the outer `implements` list.
 
-⚖ The PARENTHESIZED spelling of the same surplus is refused (R6) — see the case below, which is this exact
+⚖ The PARENTHESIZED spelling of the same surplus is refused — see the case below, which is this exact
 program with two characters added.
 
 <!-- test: surplus-conformance-argument-is-ignored -->
@@ -1004,11 +1001,11 @@ end 'main'
 
 ### A requirement typed by a GENERIC INSTANCE is checked by the instance's identity, not by its kind
 
-The third arm of the shared renderer (`IrInterface.renderDeclaredTypeName`), and the one that was a false
-ACCEPT rather than a false reject. `maxonTypeName` spells a `genericInstance` with the bare kind word
-`struct`, so `Array with Integer` and `Array with String` rendered to the same string and satisfied each
-other. MEASURED before the fix: The compiler COMPILED AND RAN this program (exit 42) where it must report
-E3016. Its identity is `ProgramSignatures.canonicalInstanceName` — the compiler's own answer to
+The third arm of the shared renderer (`IrInterface.renderDeclaredTypeName`), and the one whose hazard is a
+false ACCEPT rather than a false reject. `maxonTypeName` spells a `genericInstance` with the bare kind word
+`struct`, so compared by that spelling `Array with Integer` and `Array with String` render to the same
+string, satisfy each other, and this program compiles and runs where it must report E3016. Its identity is
+`ProgramSignatures.canonicalInstanceName` — the compiler's own answer to
 "are these two the same type?", which every other comparison site already asks.
 
 <!-- test: conformance-requirement-typed-by-a-generic-instance -->
@@ -1127,38 +1124,34 @@ end 'main'
 ```
 
 
-### ⚖ …but a surplus INSIDE PARENTHESES is REFUSED, and the asymmetry is the whole rule (R6)
+### ⚖ …but a surplus INSIDE PARENTHESES is REFUSED, and the asymmetry is the whole rule
 
 The two spellings are not the same claim. **Parentheses make the list explicit, so its LENGTH is
 something the author asserted and can be wrong about.** Without them the length is decided by the
 interface's `uses` arity and a trailing comma legitimately belongs to the outer `implements` list —
-which is why both references consume exactly `arity` items there, and why the case above pins the
+which is why the parser consumes exactly `arity` items there, and why the case above pins the
 unparenthesized surplus as ignored. So this refusal diverges from nothing that case pinned.
 
-Before it, `implements One with (Integer, Float)` against `interface One uses A` bound `A := Integer`,
-dropped `Float` and COMPILED (measured, exit 42): a typo nothing reported.
+Without it, `implements One with (Integer, Float)` against `interface One uses A` would bind
+`A := Integer`, drop `Float` and compile: a typo nothing reported.
 
-### ⭐⭐ AT ARITY ONE THE REFUSAL IS GONE, AND `with (A, B)` IS A TUPLE ARGUMENT (W43)
+### ⭐⭐ AT ARITY ONE THERE IS NO REFUSAL, AND `with (A, B)` IS A TUPLE ARGUMENT
 
-R6's own text below named the day this would come: *"It is also the spelling
-`stdlib/helpers/itertools/withIterator.maxon` needs the day it is loadable: that file writes
-`implements Iterator with (Source, Element)` against a one-`uses` `Iterator`, which under the compiler's settled
-LIST reading is exactly the surplus this rule refuses."* That file also declares
-`current() returns (Source, Element)`, so **no list reading can make it conform** — the LIST reading was
-not a stricter the compiler rule here, it was a rejection of a program the corpus writes. **The reading
+`stdlib/helpers/itertools/withIterator.maxon` writes `implements Iterator with (Source, Element)` against
+a one-`uses` `Iterator`, and also declares `current() returns (Source, Element)`, so **no list reading can
+make it conform** — a LIST reading would reject a program the corpus writes. **The reading
 arity-discriminates**: against a single-`uses` interface a parenthesized multi-arg list is a TUPLE TYPE
 rather than two separate type arguments, collapsed into one `__TupleN`.
 
-⚠ **THE TUPLE READING NEEDS A TOP-LEVEL COMMA, WHICH IS WHAT KEEPS THE TWO SPELLINGS R6 PINNED ALIVE** —
+⚠ **THE TUPLE READING NEEDS A TOP-LEVEL COMMA, WHICH IS WHAT KEEPS THE TWO SPELLINGS PINNED BELOW** —
 `with (T)` holds none and stays one ordinary binding (the case further down pins it), and `with ((A, B))`
 holds its comma one level DOWN and stays one binding whose single item is the tuple (pinned too). Only
-`with (A, B)` moves, and only at arity one. **E2066 still fires at every other arity** — the three cases
-below it are unchanged and green.
+`with (A, B)` moves, and only at arity one. **E2066 fires at every other arity** — the three cases
+below it pin that.
 
-⚠ **AND THE TYPO R6 EXISTED TO CATCH IS STILL CAUGHT**, by the check that was always going to have the
-last word about it: `A` is now the tuple, so a `get()` that returns `Integer` disagrees with the
-requirement. The verdict is unchanged and the sentence is better — it names both types rather than a
-count.
+⚠ **AND THE SURPLUS TYPO IS STILL CAUGHT AT ARITY ONE**, by the check that has the last word about it:
+`A` is the tuple, so a `get()` that returns `Integer` disagrees with the requirement — and the sentence
+names both types rather than a count.
 
 <!-- test: error.surplus-parenthesized-conformance-argument -->
 ```maxon
@@ -1409,7 +1402,7 @@ end 'main'
 
 `conformance-argument-is-the-conformers-own-type-parameter`, written with parentheses. It is spelled
 separately because the two arms read their arguments through the same `readConformanceWithArg` but only
-one of them now COUNTS them, and a rejection rule's false rejects hide one nesting level below where it
+one of them COUNTS them, and a rejection rule's false rejects hide one nesting level below where it
 was tested — a bare `Integer` inside the parentheses exercises the count against a concrete type, and a
 `T` exercises it against a name that only exists inside this declaration's own `uses` list.
 
@@ -1498,21 +1491,17 @@ end 'main'
 ### ⚖ An `extends`-INHERITED `uses` name does NOT count toward the arity, and the sentence changes here
 
 `conformanceUsesArity` counts the interface's OWN `uses` names and not its `extends`-inherited ones.
-That used to be an incrementality constraint as well as a scope one — `associatedTypeNames.count()` rides
-the signature index's hash while `extendsInterfaces` did not, so walking the chain would have made a
-parse's answer depend on an unhashed fact. **R10c made `extendsInterfaces` ride that hash** (a witness
-dispatch now numbers its slot against the interface's transitive requirement list), so the incrementality
-half is discharged and what is left is that the compiler does not inherit associated-type BINDINGS at all:
+`extendsInterfaces` rides the signature index's hash (a witness dispatch numbers its slot against the
+interface's transitive requirement list), so incrementality does not bind this; what does is that the
+compiler does not inherit associated-type BINDINGS at all:
 widening the count without also inheriting the binding would accept an argument nothing then substitutes
 (the function's header carries the argument in full).
 
-⚠ **This case is here to record that R6 changed the SENTENCE and not the VERDICT, so that the day
-inherited bindings land it turns red and forces the decision rather than quietly widening.** The compiler does
-not inherit the binding either, so `interface Sub extends Base` — where `Base uses Element` — rejects
-`implements Sub with (Integer)` both before and after R6, and the control below is the same program
-without the parentheses, still reported by `ConformanceCheck` as a wrong SIGNATURE. Measured: the
-bootstrap refuses the parenthesized spelling too (`E2003 Single-element parenthesised type is not
-allowed`, its TUPLE reading of `(…)`), and agrees with the control character for character.
+⚠ **This case pins that the parentheses change the SENTENCE and not the VERDICT, so that inheriting bindings
+turns it red and forces the decision rather than quietly widening.** The compiler does not inherit the
+binding, so `interface Sub extends Base` — where `Base uses Element` — rejects `implements Sub with
+(Integer)`, and the control below is the same program without the parentheses, reported by `ConformanceCheck`
+as a wrong SIGNATURE.
 
 <!-- test: error.surplus-parenthesized-argument-against-an-inherited-uses-name -->
 ```maxon
@@ -1553,11 +1542,10 @@ error E2066: specs/fragments/associated-types/error.surplus-parenthesized-argume
 ```
 
 
-### …and the control: unparenthesized, the same program is still the SIGNATURE error it always was
+### …and the control: unparenthesized, the same program is a SIGNATURE error
 
-The case above with two characters removed. It is what proves R6 turned an existing rejection into a
-different rejection rather than an acceptance into a rejection — this sentence is what the compiler said for
-BOTH spellings before the rung.
+The case above with two characters removed. It is what proves the parenthesized refusal is a different
+rejection of a program already rejected, rather than a rejection of one otherwise accepted.
 
 <!-- test: error.inherited-uses-name-unparenthesized-is-still-a-signature-error -->
 ```maxon
@@ -1604,9 +1592,9 @@ error E3016: specs/fragments/associated-types/error.inherited-uses-name-unparent
 `interface Taker uses ExitCode` is a legal program in which `ExitCode` is a TYPE PARAMETER denoting
 whatever each conformer binds, here `Integer`. A witness call's argument ABI must therefore ask
 "is this an associated type?" BEFORE it asks "is this a builtin type name?".
-**MEASURED RED: asking the builtin table first read the formal as the `u32` builtin and declared the
-argument a wasm i32 against an i64 callee — x64 answered 31 and wasm trapped `indirect call type
-mismatch`.** `TypeResolution.builtinTypeNameTag`'s own header states the rule that violated: it is
+**Asking the builtin table first reads the formal as the `u32` builtin and declares the argument a wasm
+i32 against an i64 callee — x64 answers 31 and wasm traps `indirect call type mismatch`.**
+`TypeResolution.builtinTypeNameTag`'s own header states the rule that violates: it is
 valid only at a door holding a RENDERED type name, never at one asking what a `named` reference
 DENOTES. Returns `31`.
 ```maxon
@@ -1645,7 +1633,7 @@ An associated type bound to `ExitCode` — the one narrow (`u32`) type a Maxon s
 requirement's PARAMETER, dispatched through a constrained type parameter. The formal's own spelling
 (`Element`) says nothing about its width; `implements Taker with ExitCode` is what makes the argument a
 wasm `i32`, so the call site has to resolve the BINDING to declare the same functype the impl does.
-**MEASURED RED: `wasm trap: indirect call type mismatch`, x64 `31`.** Returns `31`.
+**Unresolved: `wasm trap: indirect call type mismatch`, x64 `31`.** Returns `31`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1689,7 +1677,7 @@ end 'main'
 
 <!-- test: associated-types.assoc-bound-to-exitcode-through-existential -->
 The EXISTENTIAL twin of the case above: one dispatch mechanism, two receiver kinds, and the binding has
-to be resolved on both. **MEASURED RED: wasm trapped, x64 `31`.** Returns `31`.
+to be resolved on both. **Unresolved: wasm traps, x64 `31`.** Returns `31`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1725,9 +1713,9 @@ end 'main'
 An associated type bound to `float`, given an INTEGER actual. The requirement spells `Element`, so the
 parser's own float widening — which keys on a formal SPELLED `float` — cannot see that this argument
 must become an f64; the lowering resolves the binding and widens there, through the same
-`widenIntArgsToFloatParams` a function-value call uses. **MEASURED RED, and note WHICH half was worse:
-x64-windows compiled clean and answered `20` where the program computes `40` — a SILENT WRONG ANSWER,
-the integer `20` handed to a callee that compares `e > 19.0` — while wasm trapped.** Returns `40`.
+`widenIntArgsToFloatParams` a function-value call uses. **Unwidened, note WHICH half is worse:
+x64-windows compiles clean and answers `20` where the program computes `40` — a SILENT WRONG ANSWER,
+the integer `20` handed to a callee that compares `e > 19.0` — while wasm traps.** Returns `40`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1855,17 +1843,16 @@ typealias Real = float(f64.min to f64.max)
 ```
 
 <!-- test: error.two-conformers-binding-one-associated-type-differently -->
-⭐⭐ **THIS CASE WAS PINNED AS LEGAL ONE ROUND AGO, AND IT IS A LIVE WRONG ANSWER.** It was the
-false-reject control for a rule that compared the ABI CLASS: `Integer` and `Score` are different ranged
-aliases and the same machine word, so the two conformers were held to agree. They do not.
-**MEASURED with `t.take(5000)` at a call site both conformers reach: `A` answers 5000 and `B`
-RANGE-PANICS at run time**, because `Score`'s `int(0 to 100)` is `B`'s declared parameter and the shared
-body was compiled against `A`'s. Its sibling is worse — `String` beside `Integer`, also one ABI class,
-SEGFAULTED on x64 (exit 139) and silently answered 20 on wasm.
+⭐⭐ **ONE ABI CLASS IS NOT AGREEMENT.** `Integer` and `Score` are different ranged aliases and the same
+machine word, so a rule comparing the ABI CLASS would hold the two conformers to agree. They do not:
+**with `t.take(5000)` at a call site both conformers reach, `A` answers 5000 and `B` RANGE-PANICS at run
+time**, because `Score`'s `int(0 to 100)` is `B`'s declared parameter and the shared body is compiled
+against `A`'s. Its sibling is worse — `String` beside `Integer`, also one ABI class, SEGFAULTS on x64
+(exit 139) and silently answers 20 on wasm.
 ⇒ The line is "two conformers bind a dispatched associated type to different TYPES", not "to different
 ABI classes". Under dictionary passing there is no per-conformer specialization at all: the body is
-compiled ONCE, against one binding, and every other conformer reinterprets those bits. The narrower
-rule was strictly inside where the wrong answers fall.
+compiled ONCE, against one binding, and every other conformer reinterprets those bits. An ABI-class
+rule is strictly inside where the wrong answers fall.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Score = int(0 to 100)
@@ -1911,7 +1898,7 @@ error E3119: specs/fragments/associated-types/error.two-conformers-binding-one-a
 ```
 
 <!-- test: associated-types.two-conformers-binding-the-same-type-still-compile -->
-The FALSE-REJECT CONTROL for E3119, re-cut after the rule moved: TWO conformers binding one associated
+The FALSE-REJECT CONTROL for E3119: TWO conformers binding one associated
 type to the SAME type is exactly what the refusal above must NOT take with it, and it is the only
 two-conformer shape a shared body can be compiled for. `(5 + 10) + (6 + 10)`.
 ```maxon
@@ -1961,8 +1948,8 @@ end 'main'
 ⭐⭐ **THE DISPATCH GATE, AND WITHOUT IT E3119 REFUSES A CORRECT PROGRAM.** Two conformers bind
 `Element` to `float` and to `Integer` — the disagreement the case two above refuses — but every call
 here is statically resolved, so no shared body is compiled against both and no witness table exists to
-be wrong about. **MEASURED: this program builds and answers 51 correctly on both targets, and a rule
-keyed only on "a requirement WRITES the name in an ABI position" refused it.** The compiler is whole-program,
+be wrong about. **This program builds and answers 51 correctly on both targets, and a rule keyed only
+on "a requirement WRITES the name in an ABI position" would refuse it.** The compiler is whole-program,
 so which interfaces are actually dispatched is knowable exactly, and the check reads it off the
 `witnessDispatch` ops the parser emitted. `(0 + 20) + (11 + 20)`.
 ```maxon
@@ -2006,12 +1993,12 @@ typealias Real = float(f64.min to f64.max)
 ```
 
 <!-- test: error.dispatched-associated-type-bound-to-a-string-beside-an-int -->
-⭐⭐ **E3119's SECOND RECORDED FAILURE, PINNED BY A CASE RATHER THAN BY ITS OWN HEADER.** `String`
+⭐⭐ **E3119's STRING-BESIDE-INT FAILURE, PINNED BY A CASE RATHER THAN BY ITS OWN HEADER.** `String`
 beside `Integer` is the pair the entry calls the worst of the three: both are one ABI class and one machine
 word, so no width rule and no register-file rule can separate them, and the shared body compiled against
-`Integer` hands `TextRunner.take` the literal `20` to read as a String pointer. **RE-MEASURED with the
-refusal lifted, x64-windows: SEGFAULT, exit 139.** The refusal is the only thing between this program and
-that fault, and the case that would have caught the refusal being lifted did not exist.
+`Integer` hands `TextRunner.take` the literal `20` to read as a String pointer. **With the refusal lifted,
+x64-windows: SEGFAULT, exit 139.** The refusal is the only thing between this program and that fault,
+and this case is what catches the refusal being lifted.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2056,13 +2043,12 @@ error E3119: specs/fragments/associated-types/error.dispatched-associated-type-b
 ```
 
 <!-- test: error.dispatched-associated-type-bound-to-a-float-beside-an-int -->
-⭐⭐ **E3119's FIRST RECORDED FAILURE, IN THE PLAIN SHAPE THE ENTRY DESCRIBES.** The `float`-beside-
-`Integer` pair was pinned only through an `extends` projection, which is a case about the TRANSITIVE slot
-list; the direct disagreement it was measured on had no case at all. **RE-MEASURED with the refusal lifted,
-x64-windows: the program compiles clean and answers 31 where it computes 51** — `FloatRunner.take` reads
-its `e` out of xmm0 while the shared body, compiled against `Integer`, passed it in a general-purpose
-register. It is the twin of `associated-types.conformers-disagree-but-nothing-dispatches` two cases up,
-differing in exactly the fact that gates the rule: there every call is direct, here one is a dispatch.
+⭐⭐ **E3119's FLOAT-BESIDE-INT FAILURE, IN THE PLAIN SHAPE THE ENTRY DESCRIBES.** The `extends` projection case
+is about the TRANSITIVE slot list; this is the direct disagreement. **With the refusal lifted, x64-windows:
+the program compiles clean and answers 31 where it computes 51** — `FloatRunner.take` reads its `e` out of
+xmm0 while the shared body, compiled against `Integer`, passes it in a general-purpose register. It is the
+twin of `associated-types.conformers-disagree-but-nothing-dispatches` two cases up, differing in exactly the
+fact that gates the rule: there every call is direct, here one is a dispatch.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2113,7 +2099,7 @@ requirements: `take`, which writes `Element` in a parameter, and `label`, which 
 The only dispatch in the program jumps through `label`. There is therefore no shared body compiled against
 either binding of `Element` — the two `take`s are reached by DIRECT calls, each against its own conformer's
 declared parameter type — and the E3119 hazard has no site to occur at. Read off the interface NAME the rule
-refused this program anyway, for a requirement no witness call reaches. **MEASURED: it runs and answers 51**
+would refuse this program anyway, for a requirement no witness call reaches. **It runs and answers 51**
 (`20 + 11 + 20`). Both consumers of the whole-program fold are keyed on `(interfaceDeclIndex, methodIndex)` —
 `LowerMaxonToStd.witnessFormalType` resolves the formals of the requirement a `witnessCall` names, and the
 parser types that same requirement's result — so a slot nothing dispatches has no consumer to be wrong.
@@ -2171,11 +2157,11 @@ end 'main'
 ```
 
 <!-- test: error.associated-return-bound-to-a-managed-type -->
-⭐⭐ **"MACHINE WORD" WAS THE WRONG PREDICATE FOR E3120, AND WHAT IT LET THROUGH LEAKED.** A `String`
-binding IS a machine word — a pointer — so the first cut of this rule admitted it. The parser types
+⭐⭐ **"MACHINE WORD" IS THE WRONG PREDICATE FOR E3120, AND WHAT IT LETS THROUGH LEAKS.** A `String`
+binding IS a machine word — a pointer — so a machine-word rule admits it. The parser types
 `m.make()` off the interface's spelling (`Element` → `named` → `int`), so nothing takes OWNERSHIP of the
 returned refcounted value and nothing releases it.
-**MEASURED: `with String` and `with Point` both ran to completion and exited 101 — the leak gate — on
+**Admitted, `with String` and `with Point` both run to completion and exit 101 — the leak gate — on
 x64-windows AND wasm32-wasi. The same interface with the return SPELLED `String` instead of associated
 is clean, which attributes the leak exactly to the associated-return path.**
 ⇒ The conjunct is an UNMANAGED machine word, and what "managed" means is
@@ -2248,17 +2234,16 @@ end 'main'
 ```
 
 <!-- test: error.extends-projected-associated-type-disagreement -->
-⭐⭐ **E3119 WAS ESCAPABLE THROUGH `extends`, AND THE ESCAPE WAS A SILENT WRONG ANSWER.** `Base` declares
+⭐⭐ **E3119 MUST NOT BE ESCAPABLE THROUGH `extends`, AND THE ESCAPE IS A SILENT WRONG ANSWER.** `Base` declares
 `take(e Element)`; `Derived extends Base` redeclares `uses Element`; two conformers of `Derived` bind it
 to `Integer` and to `float`; the dispatch goes through a `Derived` existential.
-**MEASURED before the fix: compiled clean and answered `31` on x64-windows where the program computes
-`51`, while wasm trapped.** Three owners of one fact disagreed — the check scanned only `Derived`'s OWN
-requirements (which write nothing), and the lowering resolved the formal against the DECLARING interface
-`Base`, which no conformance names (`implements Base with X` is unconstructible, E3016), so it answered
-"nothing conforms" and fell back to the machine word for every inherited requirement.
-⇒ Both now use the TRANSITIVE list a witness table actually holds (`interfaceWitnessSlots`) and key on
-the DISPATCHED interface. The same disagreement declared on the CHILD always fired, which is what
-isolated the gap to the projected requirements.
+A check that scans only `Derived`'s OWN requirements (which write nothing), with a lowering that resolves
+the formal against the DECLARING interface `Base` — which no conformance names (`implements Base with X`
+is unconstructible, E3016), so it answers "nothing conforms" and falls back to the machine word for every
+inherited requirement — **compiles clean and answers `31` on x64-windows where the program computes `51`,
+while wasm traps.**
+⇒ Both use the TRANSITIVE list a witness table actually holds (`interfaceWitnessSlots`) and key on
+the DISPATCHED interface. The same disagreement declared on the CHILD fires by its own requirements.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2316,13 +2301,12 @@ error E3119: specs/fragments/associated-types/error.extends-projected-associated
 ```
 
 <!-- test: associated-types.extends-projected-associated-type-single-conformer -->
-The FALSE-REJECT CONTROL for the case above, and it is also the second half of a REGRESSION this rung
-introduced and then closed. ONE conformer, binding `Derived`'s `Element` to `float`, with `Base`'s
-`take` projected in through `extends`.
-**MEASURED: the control compiles and answers 31; this rung's previous commit PANICKED the x64 emitter —
-`a register-to-register move from xmm0 to rdx crosses register files`, with no source position, on all
-three targets** — because resolving the formal against the DECLARING interface found no conformance and
-fell back to the machine word while the impl declares an f64. Resolving against the DISPATCHED interface
+The FALSE-REJECT CONTROL for the case above. ONE conformer, binding `Derived`'s `Element` to `float`,
+with `Base`'s `take` projected in through `extends`.
+**The control compiles and answers 31. Resolving the formal against the DECLARING interface instead finds
+no conformance and falls back to the machine word while the impl declares an f64, and PANICS the x64
+emitter — `a register-to-register move from xmm0 to rdx crosses register files`, with no source
+position.** Resolving against the DISPATCHED interface
 is what makes the single-conformer case right and the two-conformer case refusable. `(0 + 20) + 11`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2712,21 +2696,19 @@ end 'main'
 ```
 
 <!-- test: error.associated-return-bound-to-a-generic-instance -->
-⭐⭐ **E3120 ADMITTED A GENERIC INSTANCE AND THE PROGRAM LEAKED.** A `Box with Integer` IS a machine word
-— a pointer — and it is managed. The predicate asked `declaredNameIsManaged`, which answered `false`,
-and the reason is a rendering: a conformance's `with` argument is recorded as the compiler's own
+⭐⭐ **E3120 MUST NOT ADMIT A GENERIC INSTANCE, OR THE PROGRAM LEAKS.** A `Box with Integer` IS a machine
+word — a pointer — and it is managed. A conformance's `with` argument is recorded as the compiler's own
 CANONICAL name (`Box_Integer`), while `genericAliases` is keyed by the ALIAS (`IntBox`) — so
-`declaredFormOf` matched no registry at all and the walk fell through its `otherwise return false`.
-**MEASURED: `with IntBox` and `with IntArr` (an `Array with Integer`) both ran to completion and exited
-101, the leak gate, on x64 and wasm alike.**
-⇒ That door answers for canonical instance names now. It also falsified the claim that an undeclared
-name is safe here because E3011 would have fired — `Box_Integer` is the compiler's own spelling of a
-declared type and no diagnostic fires on it.
+`declaredNameIsManaged` has to answer for canonical instance names; a `declaredFormOf` that matched no
+registry would fall through its `otherwise return false`, and **`with IntBox` and `with IntArr` (an
+`Array with Integer`) would both run to completion and exit 101, the leak gate, on x64 and wasm alike.**
+Nor is an undeclared name safe here on the grounds that E3011 would fire — `Box_Integer` is the compiler's
+own spelling of a declared type and no diagnostic fires on it.
 
-⚠ **THE SENTENCE ITSELF USED TO SHOW `Box_Integer`, AND A DIAGNOSTIC NAMES A TYPE THE WAY THE AUTHOR WROTE
-IT (W58).** The canonical mint is the right key for the ownership question above and is not a type name: the
-author wrote `IntBox`, and no source line in this program holds the other spelling. Every message in
-`ConformanceCheck` that prints a conformance's recorded binding now goes through
+⚠ **A DIAGNOSTIC NAMES A TYPE THE WAY THE AUTHOR WROTE IT.** The canonical mint is the right key for the
+ownership question above and is not a type name: the author wrote `IntBox`, and no source line in this
+program holds the other spelling. Every message in `ConformanceCheck` that prints a conformance's recorded
+binding goes through
 `displaySpellingOfDeclaredName`, the name-keyed twin of `instanceDisplayName`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2770,17 +2752,14 @@ error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a
 ```
 
 <!-- test: error.associated-type-bound-to-an-interface -->
-⭐⭐ **AN ASSOCIATED TYPE BOUND TO AN INTERFACE NAME SEGFAULTED.** A value held at an interface is a
+⭐⭐ **AN ASSOCIATED TYPE BOUND TO AN INTERFACE NAME SEGFAULTS.** A value held at an interface is a
 two-word fat pointer `(value, witness)`, and a witness call carries ONE machine word per argument — so
-the second word is dropped and the impl reads a witness that was never passed.
-**MEASURED: exit 139 on x64-windows, and a trap on wasm.** It reached the ABI because the width question
-was being read off the OWNERSHIP door: `declaredNameIsManaged`'s `interfaceType` arm answers `false`,
-which is true (an existential owns no record) and is not the question. That arm's own comment said
-*"existentials are unbuilt. When they land, a fat pointer's ownership is that rung's answer to give, and
-this arm is where it says it"* — this is that rung, and the arm had been silently promoted to
-load-bearing by giving it this caller.
+the second word is dropped and the impl reads a witness that was never passed: exit 139 on x64-windows,
+and a trap on wasm. The width question must not be read off the OWNERSHIP door:
+`declaredNameIsManaged`'s `interfaceType` arm answers `false`, which is true (an existential owns no
+record) and is not the question.
 ⚠ Refused wherever the associated type reaches the calling convention, PARAMETER as well as return —
-this case's `Element` is a parameter, and the return-only rule could not see it.
+this case's `Element` is a parameter, which a return-only rule cannot see.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2828,17 +2807,16 @@ end 'main'
 error E3120: specs/fragments/associated-types/error.associated-type-bound-to-an-interface.test:24:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Shape', and 'Element' reaches the calling convention of a requirement this program DISPATCHES through a receiver that does not say which binding it holds — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type
 ```
 
-### ⭐⭐ A PARAMETERIZED EXISTENTIAL CARRIES ITS ARGUMENTS INTO THE SIGNATURE, AND THE WIDENING DISCHARGES THE CLAIM (W58)
+### ⭐⭐ A PARAMETERIZED EXISTENTIAL CARRIES ITS ARGUMENTS INTO THE SIGNATURE, AND THE WIDENING DISCHARGES THE CLAIM
 
 `ProgramSignatures.instanceDenotedType` collapses `Base with Args` to a bare `interfaceRef(Base)`, so the
-arguments a use site wrote stopped existing on the type and E3125 was the whole of their enforcement — a
-WHOLE-PROGRAM comparison against the one binding the conformances settled. That is exactly right while the
-written argument is a CONCRETE type, and it is wrong when the argument is the enclosing generic's own
-TYPE PARAMETER: `typealias TakerOfT = Taker with T` inside `type Box uses T` states nothing about the
-program, it states something about each INSTANTIATION, and comparing `T` against `Integer` refused a
-correct program.
+arguments a use site wrote do not exist on the type. E3125's WHOLE-PROGRAM comparison against the one
+binding the conformances settled is exactly right while the written argument is a CONCRETE type, and it is
+wrong when the argument is the enclosing generic's own TYPE PARAMETER: `typealias TakerOfT = Taker with T`
+inside `type Box uses T` states nothing about the program, it states something about each INSTANTIATION,
+and comparing `T` against `Integer` would refuse a correct program.
 
-So the arguments now ride the SIGNATURE (`FuncSignature.paramExistentialSites` / `returnExistentialSite`),
+So the arguments ride the SIGNATURE (`FuncSignature.paramExistentialSites` / `returnExistentialSite`),
 are substituted through the call's own instance, and the claim is discharged where a concrete value
 actually becomes an existential — the WIDENING, which is the one door both positions already share
 (`SemanticCheck.existentialWideningVerdict`). E3125 keeps every concrete claim; only an OPAQUE one is
@@ -2850,11 +2828,11 @@ substitute it through — so an opaque claim there has no answer and E3127 says 
 an associated RETURN whose binding the parser cannot resolve and points at the parameter position instead.
 
 <!-- test: associated-types.existential-parameter-bound-to-the-enclosing-generics-own-parameter -->
-⭐⭐ **THE CASE E3125 REFUSED AND THE PROGRAM COMPUTES.** A shared generic body binds an existential's
-associated position to its OWN type parameter and dispatches through it. `Box with Integer` makes the
-claim `Taker with Integer`, which is what `Runner` binds — so the widening is sound and the dispatch is
-the ordinary one. **MEASURED RED: `E3125 … binds its associated type 'Element' to 'T', but 'Runner' binds
-it to 'Integer'`.** Returns `31`.
+⭐⭐ **THE CASE A WHOLE-PROGRAM E3125 WOULD REFUSE, AND THE PROGRAM COMPUTES.** A shared generic body binds an
+existential's associated position to its OWN type parameter and dispatches through it. `Box with Integer`
+makes the claim `Taker with Integer`, which is what `Runner` binds — so the widening is sound and the dispatch
+is the ordinary one. **Compared whole-program: `E3125 … binds its associated type 'Element' to 'T', but
+'Runner' binds it to 'Integer'`.** Returns `31`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2900,9 +2878,9 @@ end 'main'
 
 <!-- test: error.existential-parameter-claim-disagrees-with-the-widened-conformer -->
 ⭐⭐ **THE SAFETY CONDITION THE DEFERRAL OWES, AND WITHOUT IT THE PROGRAM IS E3119's FIRST RECORDED FAILURE
-ONE INDIRECTION LATER.** The same shared body, instantiated at `String`: the site's claim is now
+ONE INDIRECTION LATER.** The same shared body, instantiated at `String`: the site's claim is
 `Taker with String` and the value widened into it is a `Runner`, which binds `Element` to `Integer`. Under
-the per-site rule the conformances no longer settle the question, so the WIDENING is the only place the two
+the per-site rule the conformances do not settle the question, so the WIDENING is the only place the two
 bindings meet, and it refuses. Nothing here is a whole-program disagreement — there is exactly one
 conformer — so neither E3119 nor E3125 can see it.
 ```maxon
@@ -3371,7 +3349,7 @@ end 'main'
 
 <!-- test: error.a-generic-conformers-resolved-binding-still-has-to-match -->
 ⭐ **AND THE CONTROL THAT KEEPS THE REDUCTION HONEST.** The identical program at `Box with String`: the site
-now claims `Taker with String` and `IntHolder`'s `E` still resolves to `Integer`. A reduction that had quietly
+claims `Taker with String` and `IntHolder`'s `E` resolves to `Integer`. A reduction that quietly
 answered "agrees" for every generic conformer would pass this, so the two cases are a pair — one proves the
 resolution happens, the other that it still compares.
 ```maxon
@@ -3424,14 +3402,13 @@ end 'main'
 error E3127: specs/fragments/associated-types/error.a-generic-conformers-resolved-binding-still-has-to-match.test:44:27: cannot widen 'IntHolder' into 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'IntHolder' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'
 ```
 <!-- test: error.a-deferred-claim-cannot-be-filled-from-a-value-already-held-at-the-interface -->
-⛔⛔ **THE HOLE THE DEFERRAL OPENED, FOUND BY RUNNING IT, AND THE REASON E3127 IS NOT ONLY ABOUT CONCRETE
-CONFORMERS.** Every check above asks what the ARRIVING TYPE binds. A value already held at `Taker` answers
+⛔⛔ **THE HOLE A DEFERRED CLAIM OPENS, AND THE REASON E3127 IS NOT ONLY ABOUT CONCRETE CONFORMERS.** Every
+check above asks what the ARRIVING TYPE binds. A value already held at `Taker` answers
 nothing — which conformer is inside a fat pointer is exactly what it exists to not say — so forwarding a bare
-`Taker` into a `Box with String`'s `Taker with T` slipped past the widening check entirely.
-**MEASURED on this tree with the deferral landed and this refusal not yet written: it COMPILED**, `Runner.take`
-read a `String` pointer as its `Integer` argument, and the program died
-`panic … Range check failed: value outside typealias 'ExitCode'`. That is E3119's own recorded failure class
-one indirection later, which is precisely what E3127 exists to stop.
+`Taker` into a `Box with String`'s `Taker with T` passes a widening check that asks only that.
+**Without this refusal it COMPILES**, `Runner.take` reads a `String` pointer as its `Integer` argument, and
+the program dies `panic … Range check failed: value outside typealias 'ExitCode'`. That is E3119's own
+recorded failure class one indirection later, which is precisely what E3127 exists to stop.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3577,12 +3554,12 @@ error E3127: specs/fragments/associated-types/error.a-deferred-claim-cannot-be-l
 ```
 
 <!-- test: associated-types.two-conformers-disagree-but-every-dispatch-site-names-its-binding -->
-⭐⭐ **THE PER-SITE RULE, AND IT IS THE EXACT PROGRAM E3119's SECOND RECORDED FAILURE REFUSES, ONE `with`
-CLAUSE APART (W59).** `String` beside `Integer` is the pair that SEGFAULTED when a single shared body was
-compiled against one of them — and the body is only shared because the receiver was written at the bare
+⭐⭐ **THE PER-SITE RULE, AND IT IS THE EXACT STRING-BESIDE-INT PROGRAM E3119 REFUSES, ONE `with`
+CLAUSE APART.** `String` beside `Integer` is the pair that SEGFAULTS when a single shared body is
+compiled against one of them — and the body is only shared when the receiver is written at the bare
 interface. Here each dispatch is reached through a receiver that names its own binding, so there are TWO
 bodies and each is compiled against the binding only its own conformers can arrive at (E3127 refuses the
-rest). **Measured: refused E3119 by the compiler this rung started from; compiles and answers 61 now.**
+rest). **It compiles and answers 61.**
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntTaker = Taker with Integer
@@ -3637,7 +3614,7 @@ end 'main'
 `stdlib/Array.maxon` is made of.** `Bag with (Integer, Cursor with Integer)` says `Iter` is held at `Cursor`
 AND that whatever cursor arrives yields `Integer`, so `b.cursor().item()` is typed from the site rather than
 from a fold over every `Cursor` conformer — and `TextCur`, which binds `Item` to `String`, is beside it in the
-same program. **Measured: refused E3119 before W59; answers 11 now** (7 from the bag, 4 from `"nope"`'s
+same program. **It answers 11** (7 from the bag, 4 from `"nope"`'s
 length through a DIRECT call on the other cursor, which is what keeps both conformers live).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3713,13 +3690,12 @@ end 'main'
 ```
 
 <!-- test: error.held-position-nested-binding-disagreement -->
-⭐⭐ **THE OTHER HALF OF THE CASE ABOVE, AND WITHOUT IT W59 WOULD BE A SILENT WRONG ANSWER.** The site claims
-`Cursor with Integer` at a HELD position; `BadBag` binds `Iter` to a cursor yielding `String`. E3125 DEFERS a
-nested claim (it is opaque inside a generic declaration) and E3127's held-position exemption used to skip it,
-so nothing checked it — which cost nothing only while E3119 forbade `IntCur` and `TextCur` from coexisting.
-**MEASURED with the claim unchecked: the program compiled, `item()` handed back a `String` pointer through a
-slot typed `Integer`, and the leak gate reported exit 101.** The refusal names the level the fault is at:
-'Cursor', not 'Bag', and 'TextCur', not 'BadBag'.
+⭐⭐ **THE OTHER HALF OF THE CASE ABOVE, AND WITHOUT IT THE PER-SITE RULE IS A SILENT WRONG ANSWER.** The site
+claims `Cursor with Integer` at a HELD position; `BadBag` binds `Iter` to a cursor yielding `String`. E3125
+DEFERS a nested claim (it is opaque inside a generic declaration), so E3127 must check it at the held
+position — `IntCur` and `TextCur` may coexist. **With the claim unchecked the program compiles, `item()`
+hands back a `String` pointer through a slot typed `Integer`, and the leak gate reports exit 101.** The
+refusal names the level the fault is at: 'Cursor', not 'Bag', and 'TextCur', not 'BadBag'.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntCursor = Cursor with Integer
@@ -3794,15 +3770,14 @@ error E3127: specs/fragments/associated-types/error.held-position-nested-binding
 ```
 
 
-### An INHERITED requirement is substituted by the conformance to the interface that DECLARED it (W60)
+### An INHERITED requirement is substituted by the conformance to the interface that DECLARED it
 
 ⭐⭐ **CONFORMING TO A DESCENDANT MUST NOT DESTROY THE ANCESTOR'S BINDING.** `Element` is *Cursor's*
 `uses` name, so a requirement that mentions it means whatever this type's conformance to **Cursor**
 bound it to — including when the requirement arrives in `BiCursor`'s slot list through `extends`.
-It did not: `collectInterfaceMethods` substituted every slot under the ROOT entry's bindings, and
-`BiCursor` declares no `uses` of its own, so the inherited `current() returns Element` was compared
-raw. MEASURED before the fix: `E3016 … current() returns Pos (expected current() returns Element)` —
-against a program that must compile and run.
+`BiCursor` declares no `uses` of its own, so a `collectInterfaceMethods` that substituted every slot under
+the ROOT entry's bindings would compare the inherited `current() returns Element` raw — `E3016 …
+current() returns Pos (expected current() returns Element)` against a program that must compile and run.
 
 <!-- test: associated-types.extends.inherited-requirement-substituted-by-a-sibling-conformance -->
 ```maxon
@@ -3850,8 +3825,7 @@ end 'main'
 ### …and the clause may be written in either order
 
 The lookup is a SEARCH of the whole `implements` clause and not a look-behind, because an author may
-write the descendant first. The bootstrap accepts this spelling too (measured: exit 0, `7`), so an
-order-dependent answer here would be the compiler's alone.
+write the descendant first, so an order-dependent answer here would be a defect.
 
 <!-- test: associated-types.extends.the-sibling-conformance-may-be-written-after-the-descendant -->
 ```maxon
@@ -3896,11 +3870,12 @@ end 'main'
 ```
 
 
-### …and the NEGATIVE CONTROL: the ancestor conformance alone, which already worked
+### …and the NEGATIVE CONTROL: the ancestor conformance alone
 
 The case above with `, BiCursor` struck — the `BiCursor` interface still declared and `retreat()` still
-present, so the only thing removed is a CONFORMANCE. It passed before W60 and passes after, which is what
-attributes a future regression to the `extends` half rather than to conformance generally.
+present, so the only thing removed is a CONFORMANCE. It does not depend on the inherited-requirement
+substitution, which is what attributes a future regression to the `extends` half rather than to conformance
+generally.
 
 <!-- test: associated-types.extends.the-ancestor-conformance-alone-still-answers -->
 ```maxon
@@ -4003,10 +3978,9 @@ would leave this program rejected — correctly — while telling its author the
 `returns Element`, a name their program cannot satisfy and no positive test can see. So the assertion here
 is the SENTENCE, not the code.
 
-⚠ **BOTH LINES ARE THE MEASURED OUTPUT AND THE DUPLICATION IS PRE-EXISTING.** `Cursor`'s slot is reached
-by two entries of one clause, and each entry reports its own verdict — before W60 it reported the same
-defect twice with two DIFFERENT expected types (`Pos` from the `Cursor` entry, `Element` from the
-`BiCursor` one). What this rung changes is that the two now agree; de-duplicating a rejection the way
+⚠ **BOTH LINES ARE THE COMPILER'S OUTPUT, AND THE DUPLICATION IS KNOWN.** `Cursor`'s slot is reached
+by two entries of one clause, and each entry reports its own verdict; what this case pins is that the two
+agree, both naming the substituted `Pos`. De-duplicating a rejection the way
 `recordWitnessSlotImpl` de-duplicates an ACCEPTANCE is a separate question, and it needs a home on
 `Project` beside that map.
 
@@ -4048,34 +4022,30 @@ end 'main'
 ```maxoncstderr
 error E3016: <fragment>:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
   - current() returns String (expected current() returns Pos)
-error E3016: <fragment>:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
-  - current() returns String (expected current() returns Pos)
 ```
 
 
-### An interface-scoped `typealias` in a requirement is EXPANDED, not name-matched (W61)
+### An interface-scoped `typealias` in a requirement is EXPANDED, not name-matched
 
 ⭐⭐ **AN INTERFACE'S `typealias` IS LOCAL SHORTHAND, NOT PART OF ITS REQUIREMENT SURFACE.**
 `interface Holder uses Element` declaring `typealias ElementArray = Array with Element` requires, of
 `absorb`, a parameter of the type that alias's RIGHT-HAND SIDE names under this conformance's bindings —
-`Array with <whatever Element was bound to>` — and NOT a parameter spelled `ElementArray`. Before W61 the
-requirement rendered the unresolved name `Holder.ElementArray` while every conformer's own alias rendered a
-resolved instance, so the two sides of one requirement were compared as a name against a type and EVERY
-conformer was refused:
+`Array with <whatever Element was bound to>` — and NOT a parameter spelled `ElementArray`. A requirement
+rendered as the unresolved name `Holder.ElementArray`, against a conformer's own alias rendered as a
+resolved instance, compares a name against a type and refuses EVERY conformer:
 
 ```
 E3016 … - absorb(value Array_T779624e88745be2b) returns void (expected absorb(value Holder.ElementArray) returns void)
 ```
 
-⛔ **CANONICAL `/specs` HAS NO CASE FOR THE SHAPE AT ALL**, and name-matching the alias instead would make
-the spelling load-bearing: `stdlib/Set.maxon` and `stdlib/List.maxon` conform through
-`InitableFromArrayLiteral` only because two files independently wrote the member name `ElementArray`. And a
-conformer cannot avoid inventing a name: `value Array with Element` in a parameter list is **E2010**, and
-`var items as Array with Element` in a field is **E3005 … Define a typealias first** — so name-matching
-would force every conformer to guess the interface's private spelling, and refuse it with a diagnostic
-naming a type its program never wrote.
+⛔ **NAME-MATCHING THE ALIAS WOULD MAKE THE SPELLING LOAD-BEARING**: `stdlib/Set.maxon` and `stdlib/List.maxon`
+conform through `InitableFromArrayLiteral` only because two files independently wrote the member name
+`ElementArray`. And a conformer cannot avoid inventing a name: `value Array with Element` in a parameter list
+is **E2010**, and `var items as Array with Element` in a field is **E3005 … Define a typealias first** — so
+name-matching would force every conformer to guess the interface's private spelling, and refuse it with a
+diagnostic naming a type its program never wrote.
 
-⚖ **USER RULING (BATCH36): conformance is decided on the UNDERLYING TYPE.**
+⚖ **USER RULING: conformance is decided on the UNDERLYING TYPE.**
 
 <!-- test: w61.interface-scoped-alias-in-a-requirement -->
 ```maxon
@@ -4121,8 +4091,8 @@ end 'main'
 ⭐⭐ **`stdlib/Set.maxon`'s SHAPE WITH THE COINCIDENCE REMOVED.** The conformer writes
 `typealias NumStore = Array with Num` and binds `Holder with Num`; nothing but the underlying type is
 shared with the interface's own `ElementArray`. This is the ONE program that separates name-matching from
-right-hand-side expansion — it is what both references refuse and what the ruling requires — so it is also
-the case a future regression toward the reference behaviour would land on first.
+right-hand-side expansion — it is what the ruling requires — so it is also
+the case a regression toward name-matching would land on first.
 
 <!-- test: w61.conformer-names-the-alias-differently -->
 ```maxon
@@ -4279,11 +4249,11 @@ end 'main'
 
 ### …and an alias naming ANOTHER alias of the same interface is still refused, at the parse
 
-⚖ **MEASURED, and it is why this rung needed no fixpoint.** An interface alias's arguments are read by the
+⚖ **WHY THE EXPANSION NEEDS NO FIXPOINT.** An interface alias's arguments are read by the
 same `readGenericInstanceAlias` a file-scope one is, and a bare member name is not resolvable there — so the
 expansion can only ever descend into instances spelled INLINE, which are strictly smaller than their parent.
-The refusal below is pre-existing and unchanged by W61; it is committed so that a later rung which makes
-this shape legal has to decide the fixpoint deliberately rather than discover it as a hang.
+The refusal below is committed so that a change which makes this shape legal has to decide the fixpoint
+deliberately rather than discover it as a hang.
 
 <!-- test: error.w61.interface-alias-naming-another-interface-alias -->
 ```maxon
@@ -4316,11 +4286,11 @@ error E3011: specs/fragments/associated-types/error.w61.interface-alias-naming-a
 
 ### …and a genuinely wrong signature under an EXPANDED alias names the EXPANDED type
 
-⛔ **W61's twin of the W60 message case, and it pins the same hazard.** The expansion arrives at the ONE
-substitution site (`collectInterfaceMethods`), so the string the verdict compares and the string the
-diagnostic prints are one string. A fix that expanded for the comparison and not for the message would
-leave this program correctly rejected while telling its author the requirement is `Holder.ElementArray` — a
-type their program cannot write, and one no positive case can see.
+⛔ **The expanded-alias twin of the inherited-binding message case, and it pins the same hazard.** The
+expansion arrives at the ONE substitution site (`collectInterfaceMethods`), so the string the verdict compares
+and the string the diagnostic prints are one string. A rule that expanded for the comparison and not for the
+message would leave this program correctly rejected while telling its author the requirement is
+`Holder.ElementArray` — a type their program cannot write, and one no positive case can see.
 
 <!-- test: error.w61.wrong-signature-under-an-expanded-alias-names-the-expanded-type -->
 ```maxon

@@ -11,8 +11,6 @@ let DbgCallFormRegister = 1
 let DbgCallFormMemory = 2
 let DbgCallFormPcRelative = 3
 
-let NoFixupWord = 0 as DebugAddress
-
 function callFormCode(form DecodedCallForm) returns DebugAddress
 	return match form 'form'
 		register gives DbgCallFormRegister as DebugAddress
@@ -54,7 +52,7 @@ export union DecodedCallOperand
 	register(number DecodedRegisterNumber)
 	memory(base DecodedRegisterLookup, index DecodedRegisterLookup, scale DecodedScale, displacement DecodedDisplacement)
 	programCounterRelative(address DecodedAddress)
-	addressOverridden(form DecodedCallForm, referent DebugAddress)
+	addressOverridden(form DecodedCallForm, referent DecodedTarget)
 
 	export function callForm() returns DecodedCallForm
 		match self 'operand'
@@ -78,14 +76,14 @@ export union DecodedCallOperand
 		end 'operand'
 	end 'spelled'
 
-	export function rebasedReferent() returns DebugAddress
+	export function rebasedReferent() returns DecodedTarget
 		match self 'operand'
 			none then panic("DecodedCallOperand.rebasedReferent: only an indirect call is asked for its operand, and every indirect call decodes the operand it calls through")
 
 			register or
-				memory then return NoFixupWord
+				memory then return DecodedTarget.none
 
-			programCounterRelative(address) then return address as DebugAddress
+			programCounterRelative(address) then return DecodedTarget.at(address)
 			addressOverridden(_, referent) then return referent
 		end 'operand'
 	end 'rebasedReferent'
@@ -112,13 +110,14 @@ export union DecodedTarget
 
 	export function spelled() returns String
 		return match self 'target'
-			none gives "0x{NoFixupWord:x}"
+			none gives NoTargetSpelling
 			at(address) gives "0x{address:x}"
 		end 'target'
 	end 'spelled'
 end 'DecodedTarget'
 
 let NoRegisterSpelling = "none"
+let NoTargetSpelling = "0x0"
 
 export typealias DecodedOffsetArray = Array with DecodedOffset
 

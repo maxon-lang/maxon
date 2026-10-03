@@ -227,16 +227,12 @@ DECLARATION, and `min` has no declaration, so there is no parameter for `b:` to 
 and nothing downstream that could ever check it.
 
 ⚠ This case, `min.error-first-arg-named` below it, and `abs.error-arg-named` in
-`specs/abs.md` are the three compiler-authored cases pinning E2067 — none of them is in
-`/specs`, and all three are ADDITIVE coverage rather than a changed expectation. (The
+`specs/abs.md` pin E2067 for the math builtins. (The
 third lives in `abs.md` because the rule is the whole MATH-BUILTIN family's, not `min`'s:
-`abs` has no declaration either, so its one argument has no parameter to name.) The bootstrap does
-not report E2067 at all: measured, it answers this exact program with
-`E2004: Undefined variable 'b'`, because its builtin path parses arguments with a bare
-expression parser and reads the label as a variable reference. That names the wrong
+`abs` has no declaration either, so its one argument has no parameter to name.) Reading the
+label as a variable reference (`E2004: Undefined variable 'b'`) would name the wrong
 thing entirely — the defect is the label, not a missing binding — which is why the compiler
-registers its own code. `parameter-labels.md` records the same kind of divergence for
-the E2052 pair.
+registers its own code.
 ```maxon
 function main() returns ExitCode
 	let x = min(3.0, b: 5.0)

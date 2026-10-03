@@ -47,8 +47,7 @@ function upload(port NetworkPort) returns String
 	return statusCodeOf(answer)
 end 'upload'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async acceptedAs(server)
 	let status = upload(server.port())
 	let accepted = await peer
@@ -57,6 +56,11 @@ function main() returns ExitCode
 	print("status={status} accept={accepted}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ---
 ExitCode: 0
@@ -293,7 +297,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc equal, __il_body#4
   tryerr#2:
     x64.movRegImm32 r8, 1
     x64.epilogue 232
@@ -304,7 +308,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#1:
+  __il_body#4:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
     x64.movRegReg r12, r8
@@ -316,9 +320,9 @@ func @main {
     x64.storeBaseDispReg.word64 [r8 + 176], rax
     x64.movRegReg rcx, r8
     x64.callDirect __gt_ready
-  __il_body#5:
+  __il_body#7:
     x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
-  __il_body#9:
+  __il_body#11:
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -329,13 +333,13 @@ func @main {
     x64.callDirect TcpClient.connect
     x64.storeSlotReg slot7, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body#20
-  tryerr#11:
+    x64.jcc equal, __il_body#22
+  tryerr#13:
     x64.leaRegRdata rcx, [rip + __str_rec_165]  ; "connect-failed"
     x64.callDirect __str_retain
     x64.movRegReg r12, r8
-    x64.jmp __il_cont#8
-  __il_body#20:
+    x64.jmp __il_cont#10
+  __il_body#22:
     x64.leaRegRdata rax, [rip + __str_rec_161]  ; "POST /upload HTTP/1.1\x0d\x0aHost: 127.0.0.1\x0d\x0aContent-Length: "
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -398,13 +402,13 @@ func @main {
   whilehdr:
     x64.cmpRegImm32 r12, 3200
     x64.jcc less, fill
-  __il_cont#19:
+  __il_cont#21:
     x64.loadRegSlot rcx, slot7
     x64.movRegReg rdx, r14
     x64.callDirect TcpClient.send
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#12
-  tryerr#13:
+    x64.jcc equal, tryok#14
+  tryerr#15:
     x64.leaRegRegImm32 rax, r10, -1
     x64.leaRegRdata rcx, [rip + __str_rec_166]  ; "send "
     x64.loadRegBaseDisp.word64 r12, [rcx + 0]
@@ -486,8 +490,8 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot7
     x64.callDirect __destruct_TcpClient
-    x64.jmp __il_cont#8
-  tryok#12:
+    x64.jmp __il_cont#10
+  tryok#14:
     x64.loadRegSlot rcx, slot11
     x64.callDirect __str_decref
     x64.movRegImm32 rdx, 4096
@@ -495,8 +499,8 @@ func @main {
     x64.callDirect TcpClient.recv
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#14
-  tryerr#15:
+    x64.jcc equal, tryok#16
+  tryerr#17:
     x64.leaRegRegImm32 rax, r10, -1
     x64.leaRegRdata rcx, [rip + __str_rec_172]  ; "recv "
     x64.loadRegBaseDisp.word64 r12, [rcx + 0]
@@ -576,11 +580,11 @@ func @main {
     x64.storeBaseDispReg.word64 [r12 + 24], rax
     x64.loadRegSlot rcx, slot7
     x64.callDirect __destruct_TcpClient
-    x64.jmp __il_cont#8
-  tryok#14:
+    x64.jmp __il_cont#10
+  tryok#16:
     x64.loadRegSlot rcx, slot7
     x64.callDirect TcpClient.close
-  __il_body#25:
+  __il_body#27:
     x64.leaRegRdata rdx, [rip + __str_rec_157]  ; "\x0d\x0a"
     x64.movRegReg rcx, r12
     x64.callDirect String.split
@@ -588,65 +592,65 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#32
-  __im_load#33:
+    x64.jcc belowEqual, __im_slow#34
+  __im_load#35:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rsi, [r13 + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#42
-  __im_empty#34:
+    x64.jcc equal, critsplit#44
+  __im_empty#36:
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_slow#32
-  critsplit#43:
+    x64.jcc equal, __im_slow#34
+  critsplit#45:
     x64.movRegReg r10, rax
-    x64.jmp __im_cont#31
-  critsplit#42:
+    x64.jmp __im_cont#33
+  critsplit#44:
     x64.movRegReg r10, rax
-  __im_cont#31:
+  __im_cont#33:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#26
-  tryerr#27:
+    x64.jcc equal, tryok#28
+  tryerr#29:
     x64.leaRegRdata rcx, [rip + __str_rec_159]  ; "no-status-line"
     x64.callDirect __str_retain
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-    x64.jmp __il_cont#24
-  tryok#26:
+    x64.jmp __il_cont#26
+  tryok#28:
     x64.leaRegRdata rdx, [rip + __str_rec_158]  ; " "
     x64.callDirect String.split
     x64.movRegReg r14, r8
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc belowEqual, __im_slow#36
-  __im_load#37:
+    x64.jcc belowEqual, __im_slow#38
+  __im_load#39:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.leaRegRegImm32 rax, rax, 8
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [r14 + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#44
-  __im_empty#38:
+    x64.jcc equal, critsplit#46
+  __im_empty#40:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#36
-  critsplit#45:
+    x64.jcc equal, __im_slow#38
+  critsplit#47:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
-    x64.jmp __im_cont#35
-  critsplit#44:
+    x64.jmp __im_cont#37
+  critsplit#46:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
-  __im_cont#35:
+  __im_cont#37:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#28
-  tryerr#29:
+    x64.jcc equal, tryok#30
+  tryerr#31:
     x64.leaRegRdata rcx, [rip + __str_rec_160]  ; "no-status-code"
     x64.jmp trycont
-  tryok#28:
+  tryok#30:
     x64.movRegReg rcx, r8
   trycont:
     x64.callDirect __str_retain
@@ -656,27 +660,27 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
     x64.movRegReg r14, r15
-  __il_cont#24:
+  __il_cont#26:
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot7
     x64.callDirect __destruct_TcpClient
     x64.movRegReg r12, r14
-  __il_cont#8:
+  __il_cont#10:
     x64.storeSlotReg slot1, r12
     x64.loadRegSlot rcx, slot5
     x64.callDirect __gt_await
     x64.movRegReg r13, r8
     x64.storeSlotReg slot2, r13
-  __il_body#39:
+  __il_body#41:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.byte [rax + 0], rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#41:
+  __il_body#43:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __ms_close
-  __il_cont#7:
+  __il_cont#9:
     x64.leaRegRdata rax, [rip + __str_rec_173]  ; "status="
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
@@ -741,10 +745,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 16], rcx
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.word64 [rax + 24], rcx
-  __il_body#6:
+  __il_body#8:
     x64.loadRegSlot rcx, slot4
     x64.callDirect __write_stdout
-  __il_cont#3:
+  __il_cont#5:
     x64.loadRegSlot rcx, slot4
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -752,6 +756,7 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
+  __il_cont#3:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_HttpServer
     x64.movRegReg r8, rbx
@@ -775,13 +780,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#32:
+  __im_slow#34:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_get
     x64.movRegReg rcx, r8
-    x64.jmp __im_cont#31
-  __im_slow#36:
+    x64.jmp __im_cont#33
+  __im_slow#38:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_get
-    x64.jmp __im_cont#35
+    x64.jmp __im_cont#37
 }

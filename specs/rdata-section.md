@@ -91,11 +91,11 @@ fragment shows which label a `lea` names; only this block shows what is IN it.
 <!-- test: layout-descriptor-payload -->
 `Sizer with bool`'s layout descriptor is the program's whole read-only image: nine
 machine words — size, alignment, elementSize, four zero slots, elementLogicalSize, and the
-`retainFunc@64` a `bool` argument leaves 0 (W41-opaque).
+`retainFunc@64` a `bool` argument leaves 0.
 
 ⚠ The ninth word is pinned deliberately. This block is checked as a PREFIX of the image, so a
 descriptor that grew a slot would go on passing an eight-word pin while the prose above described
-a blob that no longer existed — which is how it read for exactly as long as it took to notice.
+a blob that does not exist.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

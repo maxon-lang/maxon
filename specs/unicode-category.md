@@ -9,7 +9,7 @@ category: types
 
 ## Documentation
 
-CharacterSet predefined sets now use Unicode General Categories for character classification instead of ASCII-only ranges. This means `CharacterSet.letters()` includes all Unicode letters (Cyrillic, CJK, Arabic, etc.), `CharacterSet.decimalDigits()` includes all Unicode decimal digits, and so on.
+CharacterSet predefined sets use Unicode General Categories for character classification rather than ASCII-only ranges. This means `CharacterSet.letters()` includes all Unicode letters (Cyrillic, CJK, Arabic, etc.), `CharacterSet.decimalDigits()` includes all Unicode decimal digits, and so on.
 
 The `unicodeGeneralCategory(cp)` function returns the Unicode General Category for any codepoint, using a page-based dispatch lookup table generated from the Unicode Character Database (DerivedGeneralCategory-16.0.0.txt).
 

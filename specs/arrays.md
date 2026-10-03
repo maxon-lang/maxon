@@ -490,30 +490,17 @@ end 'main'
 error E3062: specs/fragments/arrays/error.unused-array-typealias.test:3:11: unused typealias: 'IntArray'
 ```
 
-### A generic-instance typealias is USED by the file that spells it, across a file boundary
+### A generic-instance typealias is unreachable from another file unless it is exported
 
 `error.unused-array-typealias` above states what counts as a use of an `Array with T` alias, and
-`X.create()` is the first spelling it names. A call needs a receiver, so a program that writes
-`ThingArray.create()` has spelled the alias for the only reason the alias exists — there is no other
-way to mint the instance it names.
+`X.create()` is the first spelling it names. A non-exported typealias of any form is unreachable from
+another file, exactly as `specs/export-keyword.md`'s `error.non-exported-typealias-cross-file` states
+for a ranged one: the far spelling is refused at the name, it credits no declaration, and the
+declaration nothing in its own file spells is unused. Both ends agree.
 
-The boundary does not change that answer, because a generic-instance alias is **reachable across
-it**. `specs/export-keyword.md`'s `error.non-exported-typealias-cross-file` is the shape where E3062
-is right: a RANGED alias named from another file is refused at BOTH ends — the declaration is unused
-and the use site is told `E2003: Expected type name after 'as'`, so the name genuinely reached
-nothing. A generic-instance alias is answered from the whole-program instance index instead, so the
-other file's `ThingArray.create()` and `returns ThingArray` both resolve and no diagnostic lands at
-the use site at all. One question therefore has two answers in one program: the use site is served
-and the declaration is called dead. Delete the declaration and the program stops compiling, which is
-the only thing E3062 asks.
-
-Either end may hold the rule — refuse the far use, as the ranged alias does, or count it — but the
-two ends must agree, and the pair below pins the direction the reachable name commits the compiler
-to.
-
-<!-- test: generic-instance-consumer-alias-as-a-static-call-receiver -->
+<!-- test: error.generic-instance-consumer-alias-as-a-static-call-receiver -->
 The alias appears exactly once at the use site, as the base of a static call, in a file that did not
-declare it. That is a use, so the program compiles and runs.
+declare it.
 ```maxon
 // --- file: probe.maxon
 export union Thing
@@ -529,18 +516,14 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E3062: <fragment>:7:11: unused typealias: 'ThingArray'
+error E3008: <fragment>:11:11: typealias 'ThingArray' is not exported
 ```
 
-<!-- test: generic-instance-consumer-alias-as-a-receiver-and-a-return-type -->
-⭐ Same two files, same alias, same declaration — the use site additionally names `ThingArray` in a
-TYPE position, as a return type, which is the spelling E3062's answer is read from
-(`specs/unused-export.md`'s `cross-file-alias-in-a-signature-is-a-reference`). It does not save the
-declaration either, so the receiver spelling is not what E3062 is failing to see: the file boundary
-is. Both spellings resolve from the other file and neither is counted, which is why the two ends
-disagreeing is the defect and not the receiver. A fix that teaches E3062 only about `X.create()`
-leaves this program refused.
+<!-- test: error.generic-instance-consumer-alias-as-a-receiver-and-a-return-type -->
+Same two files, same alias, same declaration — the use site additionally names `ThingArray` in a
+TYPE position, as a return type. Each spelling is refused.
 ```maxon
 // --- file: probe.maxon
 export union Thing
@@ -560,8 +543,10 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E3062: <fragment>:7:11: unused typealias: 'ThingArray'
+error E3008: <fragment>:10:31: typealias 'ThingArray' is not exported
+error E3008: <fragment>:11:9: typealias 'ThingArray' is not exported
 ```
 
 <!-- test: error.generic-instance-consumer-a-second-file-declares-the-alias -->
@@ -862,7 +847,7 @@ error E3005: <fragment>:4:6: Value -1 is outside the range of 'ElementIndex' (in
 A value the compiler cannot see is refused by a runtime guard instead, and that refusal is a range
 violation rather than an error the type declares — so it PANICS, uncatchably, and the `otherwise` written
 around the call is never entered. The three cases below are the three shapes that matter: a READ, a WRITE
-whose `otherwise` used to be the refusal, and `insert`, which used to return normally having clamped.
+with an `otherwise` around it, and `insert`.
 
 ⚠ **THE THREE DO NOT ALL PANIC IN THE SAME PLACE, AND THE DIFFERENCE IS WHERE THE MEMBER'S BODY IS.**
 `insert` is served from `stdlib/Array.maxon`, so its guard stands at that function's ENTRY and the panic
@@ -1166,10 +1151,10 @@ error E2004: <fragment>:5:12: Function 'appendMemory' does not return a value
 ```
 
 <!-- test: error.insert-on-a-let-array -->
-### `insert` owes the same two answers, and nothing asked it for either
-`appendMemory`'s twins above exist because the omission would have been a silent write. `insert` is on
-the same `arrayMethodMutatesReceiver` answer and had neither case — which is coverage, not agreement,
-and ARR3c hit exactly that gap one door over (see `ranged-typealias.error.array-insert-out-of-range`).
+### `insert` owes the same two answers
+`appendMemory`'s twins above exist because the omission would be a silent write. `insert` is on the
+same `arrayMethodMutatesReceiver` answer, so it owes the same two cases (and see
+`ranged-typealias.error.array-insert-out-of-range` for the same gap one door over).
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3]
@@ -1196,13 +1181,10 @@ error E3070: <fragment>:5:6: cannot mutate 'arr' via 'insert' while it is borrow
 ```
 
 <!-- test: error.set-on-a-let-array -->
-### … and `set` is the THIRD member of that pair, which nothing asked either
-⚠ ARR3c added `insert`'s two because *"coverage is not agreement"*, and left `set` — the member on the
-same `arrayMethodMutatesReceiver` answer, reached through the same `parseArraySet`, with the same
-two omissions. ARR1 tried to retire `set` and put it back for reasons that have nothing to do with these
-two answers, so they are pinned HERE first: whichever rung reaches `set` next inherits a guard rather than
-a green suite. Both were verified by measuring the arm before the strike, not by writing down what it
-ought to say.
+### … and `set` is the THIRD member of that pair
+⚠ `set` is on the same `arrayMethodMutatesReceiver` answer as `insert`, reached through the same
+`parseArraySet`, so it owes the same two answers, and they are pinned here: a change to how `set` is served
+inherits a guard rather than a green suite.
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3]
@@ -1233,14 +1215,10 @@ error E3070: <fragment>:5:10: cannot mutate 'arr' via 'set' while it is borrowed
 ```
 
 <!-- test: error.reserve-on-a-let-array -->
-### … and `reserve` is the FOURTH, pinned before the strike rather than after it
-⚠ ARR2 retired `reserve` from the synthesized roster, and the three members above are the standing record
-of what a retirement can lose in silence: `reserve` was on the same `arrayMethodMutatesReceiver` answer and
-had NEITHER of these two cases. Both codes and both COLUMNS were written down from `insert`'s already-moved
-pair BEFORE the strike was run, so the run could disagree with them; it did not, which is what says the
-corpus declaration's own write mask carries the rule the deleted arm used to. `reserve` allocates capacity
-and rewrites `buffer@0`/`capacity@16`, so an immutable binding must refuse it exactly as `push` and `set`
-do.
+### … and `reserve` is the FOURTH
+⚠ `reserve` is served by the corpus declaration, whose own write mask carries the rule. `reserve` allocates
+capacity and rewrites `buffer@0`/`capacity@16`, so an immutable binding must refuse it exactly as `push`
+and `set` do.
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3]
@@ -1269,16 +1247,14 @@ error E3070: <fragment>:5:6: cannot mutate 'arr' via 'reserve' while it is borro
 ```
 
 <!-- test: error.clear-on-a-let-array -->
-### … and `clear` is the FIFTH, retired at ARR4 with its five borrow cases fixed rather than accepted
+### … and `clear` is the FIFTH
 ⚠ `clear` shortens the array and RELEASES every element on the way out, so an immutable binding must refuse
-it exactly as `push` and `set` do. Both codes and both COLUMNS were written down from `reserve`'s pair
-BEFORE the strike was run, so the run could disagree with them; it did not.
+it exactly as `push` and `set` do.
 
-⛔ **THE MEMBER IS ALSO THE ONE WHOSE RETIREMENT FOUND A USE-AFTER-FREE**, and the direct pair below is not
-what found it: `clear` carried a rule about a write reaching a CALLER through a method's own field, which
-`borrow-liveness.receiver-method-writing-its-own-field-through-a-corpus-member` now pins on a member that
-was never rostered. These two are the local half, and they are the half the corpus declaration's own write
-mask carries.
+⛔ **A WRITE REACHING A CALLER THROUGH A METHOD'S OWN FIELD IS A USE-AFTER-FREE WHEN IT IS MISSED**, and
+`borrow-liveness.receiver-method-writing-its-own-field-through-a-corpus-member` pins that rule on another
+corpus member. These two are the local half, and they are the half the corpus declaration's own write mask
+carries.
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3]
@@ -1315,9 +1291,7 @@ idiom — `count()` is its whole contract — so forwarding straight through wou
 reach.
 
 For a MANAGED element that is not merely invisible, it is a LEAK: the record lands outside `[0, count)`,
-which is exactly the range the element-destroy walk covers, so nothing ever releases it. Measured before
-the guard existed: `push` one string, `reserve(8)`, `set(2, …)` — the store SUCCEEDED,
-`count()` still read 1, and the second string was never freed.
+which is exactly the range the element-destroy walk covers, so nothing ever releases it.
 
 <!-- test: set-past-the-live-length-is-refused -->
 ```maxon
@@ -1402,15 +1376,13 @@ end 'main'
 ### Zero-copy slices
 
 `.slice()` and `.clone()` are **O(1)**: the result shares the source's element buffer until either side
-writes, at which point that side copies out. The sharing is invisible — every case below is valued against
-the reference compiler, which eagerly copies and therefore answers what a correct copy-on-write must too.
+writes, at which point that side copies out. The sharing is invisible — every case below answers what an
+eager copy would.
 
 <!-- test: slice-capacity-is-a-view-until-written -->
 A slice reports a negative capacity — its buffer is not its own — until a write gives it a private one
 sized to its live elements. This is the one place the sharing is directly observable, and it is what says
 no buffer was allocated: an eager copy would report a grown positive capacity from the moment it was made.
-Observable does not mean divergent: the reference compiler answers `-1` here too (verified), because it
-also flags a not-yet-owned buffer rather than reporting a capacity it does not have.
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
@@ -1677,7 +1649,7 @@ end 'main'
 ```
 
 <!-- test: empty-slice-outlives-the-array-it-grew -->
-⛔⛔ **AN EMPTY SLICE MUST OWE THE SOURCE NOTHING, AND W157 BRIEFLY MADE IT OWE THE RECORD** — the
+⛔⛔ **AN EMPTY SLICE MUST OWE THE SOURCE NOTHING, NOT EVEN THE RECORD** — the
 sibling above pushes into the SLICE, which is the polarity that cannot fail; this one pushes into the
 SOURCE and then lets the source die FIRST. The view counts whatever `emitBufferHostAllocation` names, and
 an array with no buffer yet must answer "nothing hosts these bytes": naming the RECORD instead leaves the
@@ -1732,22 +1704,15 @@ end 'main'
 <!-- test: both-sides-detach-parent-first -->
 Both sides write. The parent copies out first and gives up the shared buffer, leaving the slice as its
 sole owner; the slice then copies out and reclaims it. This case reaches the path where a detach's release
-frees the bytes it just copied — but it does NOT *catch* a detach that released BEFORE copying, and the
-reason is no longer the one this note used to give.
+frees the bytes it just copied — but it does NOT *catch* a detach that released BEFORE copying.
 
-⛔⛔ **THE OLD PREMISE WAS *"`__mm_free` RECLAIMS NOTHING UNDER THE BUMP ALLOCATOR, SO FREED BYTES STILL
-READ BACK INTACT"*, AND IT IS FALSE TWICE OVER.** There is no bump allocator (`__mm_free` hands the box to
-`__slab_free`, which puts the slot back on its span's free list for the next allocation to take), and the
-payload is POISONED with `0x3F` on the way out whether or not anything reuses it. Both halves have been
-true for a while; the note was not re-measured when they became true, which is exactly the failure this
-project keeps naming.
+⛔⛔ **FREED BYTES DO NOT READ BACK INTACT.** `__mm_free` hands the box to `__slab_free`, which puts the
+slot back on its span's free list for the next allocation to take, and the payload is POISONED with `0x3F`
+on the way out whether or not anything reuses it.
 
-⭐ **RE-MEASURED AT S4, WITH THE BOX LAYER ON THE REAL SLAB.** With the release emitted AHEAD of
-`__mm_cow_detach`'s copy, `--filter=arrays` still read **151 passed / 0 failed**, this case among them —
-against a compiler whose output genuinely differed (the same program compiled to a byte-different image, so
-the instrument was live and not inert). The ordering therefore remains a rule `__managed_cow_detach` keeps
-on its OWN rather than one this case gates. **Why it survives a recycling, poisoning allocator is an OPEN
-QUESTION, not a prediction** — do not re-derive the old answer, it was measured wrong.
+⭐ **YET WITH THE RELEASE EMITTED AHEAD OF `__mm_cow_detach`'s COPY THIS CASE STAYS GREEN**, so the ordering
+is a rule `__managed_cow_detach` keeps on its OWN rather than one this case gates. **Why the case survives a
+recycling, poisoning allocator is an OPEN QUESTION.**
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30, 40, 50]
@@ -1948,9 +1913,7 @@ end 'main'
 
 A `[…]` literal may be written across several lines — after the `[`, after an element, and after a
 separating `,`. A newline in those positions is LAYOUT, not the end of the expression, exactly as it is
-inside a `{…}` struct literal. compiler-authored: the corpus writes multi-line literals only in cases blocked
-on other slices (`array-realloc-dangling-ref`'s E3070 borrow-liveness pass, `map`'s P1.8 map literal), so
-it has no runnable case for the rule itself.
+inside a `{…}` struct literal.
 
 <!-- test: multi-line-literal-break-after-comma -->
 ```maxon
@@ -2042,7 +2005,7 @@ error E2015: specs/fragments/arrays/multi-line-literal-empty-still-rejected.test
 
 The literal's element type comes from what the first element IS, not from the token it starts with. An
 `as`-cast to a ranged alias starts with an int literal and is not an `int`, and reading the token alone
-reported "mixed element types" against a literal with ONE element. compiler-authored: the corpus's own case
+would report "mixed element types" against a literal with ONE element. The corpus's own case
 (`short-circuit-evaluation`'s `guard-protects-right-side`) covers the multi-element spelling, and these
 pin the one-element and formatting-independence halves it cannot.
 
@@ -2230,9 +2193,8 @@ error E3009: <fragment>:7:6: cannot implicitly convert 'float' to 'int': the con
 
 <!-- test: error.push-struct-into-string-array -->
 ### A struct pushed into a String-element array is refused
-Both halves name a TYPE. The `got` side used to read `'struct'` — the tag's class word — while the
-sibling `push-wrong-struct-into-struct-array` below, the SAME door one arm along, already read
-`got 'Other'`. The bootstrap names it too (`expected 'String', got 'Item'`).
+Both halves name a TYPE: the `got` side names the struct (`got 'Item'`) rather than the tag's class
+word, as the sibling `push-wrong-struct-into-struct-array` below, the SAME door one arm along, does.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2423,19 +2385,19 @@ copy cannot have one, so the question is settled at compile time or the append i
 
 The REPRESENTATION question (same managedness, same element width — what makes the byte copy
 legal at all) and the VALUE-DOMAIN question are separate, and both are asked. Keeping only the
-first is how a `Small` walked into a `Bytes`; replacing it with instance identity would refuse
+first would let a `Small` into a `Bytes`; replacing it with instance identity would refuse
 `[1, 2, 3]` appended to an `Array with Integer`, which the four cases above require.
 
 <!-- test: error.append-narrower-element-array -->
 ### An array of a WIDER element is refused where a narrower one is declared
-`Small` and `Byte` are both byte-packed, so the shape test alone admitted this — and a `150`
-pushed as a `Small` then read back through an accessor typed `int(0 to 100)` was a silent wrong
+`Small` and `Byte` are both byte-packed, so the shape test alone admits this — and a `150`
+pushed as a `Small` then read back through an accessor typed `int(0 to 100)` would be a silent wrong
 answer with no diagnostic anywhere.
 
 The refusal names the two arrays by the `typealias`es this file declares for them — `Bytes` and
 `Smalls` — rather than by the instances' compiled names, because a diagnostic quotes back the spelling
-the author wrote (user ruling, 2026-08-04; `ProgramSignatures.instanceDisplayName`). The elements behind
-them are still `Byte$0_100` and `Small`: `stdlib/` declares `Byte` over a different range, which makes
+the author wrote (`ProgramSignatures.instanceDisplayName`). The elements behind
+them are `Byte$0_100` and `Small`: `stdlib/` declares `Byte` over a different range, which makes
 the name range-CONTESTED and gives each distinct range its own mint
 (`RangedAliasRegistry.settleRangeContests`). That mint is the identity the two are compared on; it is not
 what the sentence says, and `bytearray-element-size.md` carries the case where it still has to be.
@@ -2460,12 +2422,11 @@ error E3005: <fragment>:11:4: argument type mismatch for 'other': expected 'Byte
 <!-- test: error.append-narrower-element-array-through-the-buffer-surface -->
 ### The BUFFER surface's `append` is the same door and answers the same way
 One record, two surfaces: `b.managed.append(s)` reaches `__ManagedMemory`'s `append`, whose rule
-used to be a second spelling of the `Array` one. It returned the identical `150`.
+is the `Array` one.
 
-⚠ The two programs are now spelled identically bar the `.managed` hop, which they were not: this one wrote
-`try … otherwise panic(…)` while its sibling above wrote a bare call. That `try` was vestigial after the
-2026-08-07 ruling made the buffer's `append` non-throwing, and it survived only because the argument
-refusal is raised first — a spelling the language rejects, kept alive by never being reached.
+⚠ The two programs are spelled identically bar the `.managed` hop. The buffer's `append` is non-throwing,
+so neither wraps the call in `try` — a `try` here would be a spelling the language rejects, hidden only
+because the argument refusal is raised first.
 ```maxon
 typealias Byte = int(0 to 100)
 typealias Small = int(0 to 200)
@@ -2746,8 +2707,7 @@ value that had been NUMERICALLY converted on its way into the slot rather than r
 three distinguish the two: `-0.0`'s entire content is its sign bit, `0.1` has no integer domain to
 convert through, and `f64.max` overflows one. The write half (`containerElementWord`) and the read
 half (`containerSlotValueType`'s float arm) are the two ends of one round trip, and this is the case
-that says so — for the LITERAL element today, and for the same element through
-`ArrayIterator.current()`'s opaque 8-byte word the day `stdlib/Array.maxon` is listed.
+that says so for the LITERAL element.
 ```maxon
 function main() returns ExitCode
 	var a = [0.1, 2.5]
@@ -2866,8 +2826,8 @@ end 'main'
 E3118 admits raw bytes into an element only when the element's own value set covers every bit
 pattern of its slot. A `float`'s bounds are IEEE-754 patterns that order nothing like integers, so
 there is no comparison to make and the honest answer is refusal — the same one an element with no
-integer value set gets everywhere else. Now that the element is nameable this rule is reachable
-from source rather than only from a literal.
+integer value set gets everywhere else. The element is nameable, so this rule is reachable from
+source as well as from a literal.
 ```maxon
 function main() returns ExitCode
 	var a = [1.5, 2.5]
@@ -2897,4 +2857,239 @@ end 'main'
 ```
 ```maxoncstderr
 error E3118: <fragment>:8:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'Real' (float(-1.7976931348623157E+308 to 1.7976931348623157E+308)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+```
+
+<!-- test: an-array-literal-returned-builds-the-declared-instance -->
+```maxon
+typealias Measure = int(0 to 100)
+typealias Items = Array with Measure
+
+function make() returns Items
+	return [1, 2]
+end 'make'
+
+function main() returns ExitCode
+	return try make().get(1) otherwise 0
+end 'main'
+```
+```exitcode
+2
+```
+
+
+<!-- test: an-array-literal-in-a-struct-literal-field-builds-the-fields-instance -->
+```maxon
+typealias Measure = int(0 to 100)
+typealias Items = Array with Measure
+
+type Bag
+	export var items as Items
+
+	static function create() returns Self
+		return Self{items: [3, 4]}
+	end 'create'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Bag.create()
+	return try b.items.get(1) otherwise 0
+end 'main'
+```
+```exitcode
+4
+```
+
+
+<!-- test: an-array-literal-stored-into-a-field-builds-the-fields-instance -->
+```maxon
+typealias Measure = int(0 to 100)
+typealias Items = Array with Measure
+
+type Bag
+	export var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items = [5, 6]
+	return try b.items.get(1) otherwise 0
+end 'main'
+```
+```exitcode
+6
+```
+
+
+<!-- test: an-array-literal-field-default-builds-the-fields-instance -->
+```maxon
+typealias Measure = int(0 to 100)
+typealias Items = Array with Measure
+
+type Bag
+	export var items as Items = [11, 12]
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Bag.create()
+	return try b.items.get(1) otherwise 0
+end 'main'
+```
+```exitcode
+12
+```
+
+
+<!-- test: an-array-literal-reassigned-to-a-local-builds-the-locals-instance -->
+```maxon
+typealias Measure = int(0 to 100)
+typealias Items = Array with Measure
+
+function fresh() returns Items
+	return Items.create()
+end 'fresh'
+
+function main() returns ExitCode
+	var xs = fresh()
+	xs = [13, 14]
+	return try xs.get(1) otherwise 0
+end 'main'
+```
+```exitcode
+14
+```
+
+
+<!-- test: an-array-literal-union-payload-builds-the-payloads-instance -->
+```maxon
+typealias Measure = int(0 to 100)
+typealias Items = Array with Measure
+
+union Held
+	some(items Items)
+	none
+end 'Held'
+
+function main() returns ExitCode
+	let h = Held.some([15, 16])
+
+	match h 'h'
+		some(items) then return try items.get(1) otherwise 0
+		none then return 0
+	end 'h'
+end 'main'
+```
+```exitcode
+16
+```
+
+
+<!-- test: an-array-literal-otherwise-fallback-builds-the-success-values-instance -->
+```maxon
+typealias Measure = int(0 to 100)
+typealias Items = Array with Measure
+
+enum Nope implements Error
+	no
+end 'Nope'
+
+function risky() returns Items throws Nope
+	throw Nope.no
+end 'risky'
+
+function main() returns ExitCode
+	let xs = try risky() otherwise [17, 18]
+	return try xs.get(1) otherwise 0
+end 'main'
+```
+```exitcode
+18
+```
+
+
+<!-- test: an-array-literal-match-arm-at-a-return-builds-the-declared-instance -->
+```maxon
+typealias Measure = int(0 to 100)
+typealias Items = Array with Measure
+
+function pick(flag bool) returns Items
+	return match flag 'f'
+		true gives [19, 20]
+		default gives Items.create()
+	end 'f'
+end 'pick'
+
+function main() returns ExitCode
+	return try pick(true).get(1) otherwise 0
+end 'main'
+```
+```exitcode
+20
+```
+
+
+<!-- test: an-array-literal-ternary-arm-at-a-return-builds-the-declared-instance -->
+```maxon
+typealias Measure = int(0 to 100)
+typealias Items = Array with Measure
+
+function pick(flag bool) returns Items
+	return [21, 22] if flag else Items.create()
+end 'pick'
+
+function main() returns ExitCode
+	return try pick(true).get(1) otherwise 0
+end 'main'
+```
+```exitcode
+22
+```
+
+
+<!-- test: an-array-literal-pushed-into-a-container-of-arrays-builds-the-element-instance -->
+```maxon
+typealias Measure = int(0 to 100)
+typealias Items = Array with Measure
+typealias Grid = Array with Items
+
+function main() returns ExitCode
+	var g = Grid.create()
+	g.push([23, 24])
+	let row = try g.get(0) otherwise Items.create()
+	return try row.get(1) otherwise 0
+end 'main'
+```
+```exitcode
+24
+```
+
+<!-- test: error.an-array-from-head-another-file-keeps-private-is-refused -->
+The head of `<alias> from […]` names a type, so a file-private alias declared in another file is refused there
+as it is in every other type position.
+```maxon
+// --- file: probe.maxon
+typealias Smalls = Array with ExitCode
+
+export function probeSmalls() returns ExitCode
+	let xs = Smalls from [7, 8]
+	print("{xs.count()}")
+	return 0
+end 'probeSmalls'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let xs = Smalls from [1, 2]
+	print("{xs.count()}")
+	return probeSmalls()
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:13:11: typealias 'Smalls' is not exported
 ```

@@ -27,7 +27,7 @@ synthesized `String.hash`/`String.equals`. The witness receiver (`self.item`) an
 BORROWED: the container owns the `String` and drops it exactly once at scope exit, so hashing or comparing a
 boxed `String` neither double-frees nor leaks it.
 
-The witness dispatch rides the rdata function-pointer relocation, which EVERY target now fills — the
+The witness dispatch rides the rdata function-pointer relocation, which EVERY target fills — the
 fixed-base writers bake a `.text` VA, wasm a funcref-table index, and arm64-macOS a dyld chained-fixup
 rebase — so these cases run everywhere and carry no target marker (as the `primitive-conformance` and
 `where-clauses` witness cases do).
@@ -35,16 +35,16 @@ rebase — so these cases run everywhere and carry no target marker (as the `pri
 Direct `s.hash()` / `s.equals(t)` on a concrete `String` value ship too, and reach the SAME two symbols: the
 call names `String.hash`, the witness slot holds a relocation to `String.hash`. There is one body per method
 and no thunk between the two spellings, which is what the `direct-hash-agrees-with-the-witness` case below
-asserts. `Set with String` keys probe through those same two witness slots and ship in P1.7b, covered by
-`set-string`; direct dispatch on a `Character` VALUE is a separate future slice and is not covered here
-(a `Character` receiver is routed to its own method table, which has no conformance fall-through yet).
+asserts. `Set with String` keys probe through those same two witness slots, covered by
+`set-string`; direct dispatch on a `Character` VALUE is not covered here
+(a `Character` receiver is routed to its own method table, which has no conformance fall-through).
 
 ⚠ **THE `String.hash` / `String.equals` SYMBOLS ARE THE COMPILER'S, AND THAT IS ENFORCED RATHER THAN
 ASSUMED.** A user declaration binding the name `String` — or `Character`, whose two impls are built from the
 same builders — is refused (`TypeResolution.isCompilerOwnedTypeName`), because such a declaration's own
 `hash()` mints the identical symbol and the installer declines to build an impl for a name the module
-already defines. The two error cases at the end of this file pin both refusals and record the wrong answers
-measured before they existed.
+already defines. The two error cases at the end of this file pin both refusals and name the wrong answers
+each one prevents.
 
 ## Tests
 
@@ -360,15 +360,14 @@ error E3005: <fragment>:4:7: 'equals' requires a String, but its argument is int
 witness-table reloc has a real `.text` target (which is why it carries no `__` prefix at all), and the
 ordinary static spelling of the `hash()` `stdlib/String.maxon` declares at `:351`. Naming an instance
 method statically is legal — `Adder.bump(a)` IS `a.bump()`, which `Parser.parseQualifiedCall`'s header
-settles and the oracle runs — so this program is one of those.
+settles — so this program is one of those.
 
-⛔ **IT WAS REFUSED, AND THE REFUSAL WAS A WRONG ANSWER (W55).** `MmRuntime.isCompilerInternalCallee`
-declares every `<conformer>.<method>` to be the compiler's own, and `requireCalleeIsNotReservedName` acted
-on that OR unconditionally. MEASURED on W55's base: *"E3004 call to undefined function 'String.hash': the
-`__` prefix names a compiler intrinsic, and no intrinsic of that name exists"* — the wrong sentence AND
-the wrong verdict, about a method the corpus declares, against a program the runnable oracle compiles and
-runs (177670, the same value the two lines below print). The clause is conjoined with `declaresCallee`
-now, exactly as the four exemptions beside it are.
+⛔ **A REFUSAL HERE WOULD BE A WRONG ANSWER.** `MmRuntime.isCompilerInternalCallee` declares every
+`<conformer>.<method>` to be the compiler's own, so `requireCalleeIsNotReservedName` conjoins that clause
+with `declaresCallee`, exactly as the four exemptions beside it are. Acting on it unconditionally would
+answer *"E3004 call to undefined function 'String.hash': the `__` prefix names a compiler intrinsic, and no
+intrinsic of that name exists"* — the wrong sentence AND the wrong verdict, about a method the corpus
+declares, in a program whose two lines print the same value.
 ```maxon
 function main() returns ExitCode
 	let s = "a"
@@ -389,10 +388,10 @@ end 'main'
 `type String` is otherwise inert — `parseTypeReference` settles the name syntactically, so it can never be
 named at a parameter, `String{…}` is E3076 and `String.create(…)` is refused as an unknown builtin static —
 but its `hash()` method registers the symbol `String.hash`, and the conformance installer builds an impl only
-for a name the module does not already define. MEASURED before this refusal existed, with no diagnostic
-anywhere: `Box with String`'s `itemHash()` of `""` returned **7** (the user's body) instead of **5381**, and
-`Set with String` counted **3** for `insert("alice"); insert("bob"); insert("alice")` against a control's
-**2** — a duplicate key stored twice, because the user's `equals` answered `false`.
+for a name the module does not already define. Unrefused, with no diagnostic anywhere,
+`Box with String`'s `itemHash()` of `""` returns **7** (the user's body) instead of **5381**, and
+`Set with String` counts **3** for `insert("alice"); insert("bob"); insert("alice")` against a control's
+**2** — a duplicate key stored twice, because the user's `equals` answers `false`.
 ```maxon
 type String
 	export var value as ExitCode

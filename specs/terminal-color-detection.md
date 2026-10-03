@@ -33,13 +33,11 @@ The rule:
 
 Dropping any one of them is a wrong answer of a different kind, which is why none is optional.
 
-### ⛔⛔ IT CLOSES A FLAG THAT WAS A DOCUMENTED LIE
+### ⛔⛔ `--color=auto` RESOLVES THROUGH THIS INTRINSIC
 
-`docs/CLI_REFERENCE.md` and the compiler's own usage text both said *"auto means only when stdout is
-a terminal"* while `TestRender.reportColorEnabled` answered `false` for `auto` unconditionally, with
-a comment saying so: *"there is no terminal-detection primitive in this compiler or its stdlib"*.
-That was true, and it made the flag say one thing and do another. `--color=auto` now resolves through
-this intrinsic.
+`docs/CLI_REFERENCE.md` and the compiler's own usage text say *"auto means only when stdout is a
+terminal"*, and `TestRender.reportColorEnabled` answers `auto` through this intrinsic, so the flag does
+what it says.
 
 ### ⚠ THE ANSWER IS A PREDICATE, WHICH IS WHY IT IS A `bool` AND NOT AN `int`
 
@@ -65,14 +63,12 @@ row to choose the BODY: the three conditions where the host can answer, and a bo
 `return 0` where it cannot. So on every other lane the predicate is `false`, `--color=auto` resolves to
 `never`, and nothing is refused.
 
-⛔⛔ **IT WAS AN E3104 REFUSAL FOR ONE DAY, AND THAT MADE THE COMPILER UNBUILDABLE FOR arm64-macOS.**
+⛔⛔ **AN E3104 REFUSAL HERE WOULD MAKE THE COMPILER UNBUILDABLE FOR A LANE WITHOUT THE FACILITY.**
 `maxon-bin/Testing/TestRender.reportColorEnabled` asks the question unconditionally, `Testing/` is
-ordinary user code, and the E3104 gate is reachability-blind for user code by design — so the compiler stopped
-cross-compiling for a lane that had built the day before. ⇒ **E3104 is right for a facility whose
-absence leaves a program with NO ANSWER** (there is no honest `read stdin` on a lane with no stdin);
-it is wrong for one whose absence IS an answer. "This is not a terminal" is exactly that, it is the
-conservative half, and it is what `--color=auto` resolved to on every lane before this intrinsic
-existed. `HostFacility.terminalDetection` is the one row in that table carrying this shape, and it says
+ordinary user code, and the E3104 gate is reachability-blind for user code by design. ⇒ **E3104 is
+right for a facility whose absence leaves a program with NO ANSWER** (there is no honest `read stdin`
+on a lane with no stdin); it is wrong for one whose absence IS an answer. "This is not a terminal" is
+exactly that: it is the conservative half. `HostFacility.terminalDetection` is the one row in that table carrying this shape, and it says
 so at the declaration.
 
 ⛔ **THE FALLBACK MAY NEVER BECOME `true`.** The whole point of the question is that a REDIRECTED
@@ -107,14 +103,14 @@ half that keeps escape sequences out of goldens, transcripts and pipes.
 
 ⛔ **AND THE TRUE CASE CANNOT BE PINNED FROM HERE AT ALL.** It needs stdout attached to a character
 device, which is the one thing a runner that reads stdout cannot provide — the same structural limit
-`process-background-priority` records for its own set, one facility over. It was MEASURED by hand on
-every lane instead. On Windows: a program returning the predicate as its exit
-code, with stdout redirected to the NUL device (a character device that discards), answered **true**
+`process-background-priority` records for its own set, one facility over. It is checked by hand on
+every lane instead. On Windows, a program returning the predicate as its exit
+code, with stdout redirected to the NUL device (a character device that discards), answers **true**
 with `NO_COLOR` and `TERM` unset, **false** with `NO_COLOR` set to any value including a non-empty
 one, **false** for `TERM` in `dumb`/`DUMB`/`DuMb`, and **true** for `xterm`, `dumber` and `dum` —
-which is the length test and the case-fold test each shown to discriminate. On arm64-macos, arm64-linux and x64-linux the
-same program was run with stdout on a REAL terminal (a pty): **true** there with `NO_COLOR` and `TERM`
-unset, **false** through a pipe, **false** on that terminal with `NO_COLOR` set to `1` or to `hello`,
+which is the length test and the case-fold test each shown to discriminate. On arm64-macos, arm64-linux
+and x64-linux the same program, run with stdout on a REAL terminal (a pty), answers **true** there with
+`NO_COLOR` and `TERM` unset, **false** through a pipe, **false** on that terminal with `NO_COLOR` set to `1` or to `hello`,
 **false** for `TERM` in `dumb`/`DuMb`, and **true** for `xterm`, `dumber` and `dum`. ⚠ On the Linux
 lanes `/dev/null` answers **false** where the NUL device answers **true** on Windows, and that is not a
 disagreement: `ioctl(TCGETS)` asks whether a TERMINAL is there, where `GetFileType` answers the coarser

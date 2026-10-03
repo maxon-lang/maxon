@@ -1,0 +1,36 @@
+let MovedInterfaceDirName = "diagnostics-project-moved-interface"
+let MovedInterfaceFirstFileName = "a.maxon"
+let MovedInterfaceWideDirName = "wide"
+let MovedInterfaceSecondFileName = "b.maxon"
+let MovedInterfaceBufferFileName = "c.maxon"
+let MovedInterfaceNarrowItem = "module typealias Item = int(0 to 3)\n"
+let MovedInterfaceWideItem = "module typealias Item = int(0 to 100)\n"
+let MovedInterfaceDeclaration = "\nmodule interface Store\n\tfunction put(item Item) returns Item\nend 'Store'\n"
+let MovedInterfaceBufferSource = "function stock(store Store)\n\t_ = store.put(50)\nend 'stock'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let MovedInterfaceCode = "E3005"
+let MovedInterfaceMessage = "Value 50 is outside the range of 'Item' (int(0 to 3))"
+let MovedInterfaceLine = 1
+
+test 'moving an interface to a file whose formal is wider clears the range error in a caller whose bytes did not change'
+	let root = stagedProjectDiagnosticsRoot(MovedInterfaceDirName)
+	let wide = createdStagingDirectory(MovedInterfaceWideDirName, under: root)
+	writeCorpusFile(root, fileName: MovedInterfaceFirstFileName, content: "{MovedInterfaceNarrowItem}{MovedInterfaceDeclaration}")
+	writeCorpusFile(wide, fileName: MovedInterfaceSecondFileName, content: MovedInterfaceWideItem)
+	writeCorpusFile(wide, fileName: MovedInterfaceBufferFileName, content: MovedInterfaceBufferSource)
+
+	var move = CorpusDiskEditArray.create()
+	move.push(CorpusDiskEdit.wrote(root, fileName: MovedInterfaceFirstFileName, content: MovedInterfaceNarrowItem))
+	move.push(CorpusDiskEdit.wrote(wide, fileName: MovedInterfaceSecondFileName, content: "{MovedInterfaceWideItem}{MovedInterfaceDeclaration}"))
+
+	let probes = probeProjectCheckAcrossDiskEdits(root, fileName: "{MovedInterfaceWideDirName}/{MovedInterfaceBufferFileName}", content: MovedInterfaceBufferSource, diskEdits: move)
+
+	discardOutsideCheckoutDir(root)
+
+	let beforeTheMove = try onlyProjectDiagnostic(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "`Store` is declared in `{MovedInterfaceFirstFileName}`, whose own `Item` is `int(0 to 3)`, so the buffer's `store.put(50)` is out of range: a `maxon build` of the staged project reports exactly one `{MovedInterfaceCode}` at that call.")
+
+	try Expect.equal(beforeTheMove.code.describe(), expected: MovedInterfaceCode, message: "the one error a build of the project before the move reports is {MovedInterfaceCode}; the server published {beforeTheMove.code.describe()}: {beforeTheMove.message}")
+	try Expect.equal(beforeTheMove.message, expected: MovedInterfaceMessage, message: "the formal is read as the interface's own file reads it, so the range quoted is `{MovedInterfaceFirstFileName}`'s.")
+	try Expect.equal(beforeTheMove.range.startLine, expected: MovedInterfaceLine, message: "the build anchors the error at the `store.put(50)` call on line 2.")
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "`Store` moved, byte for byte, from `{MovedInterfaceFirstFileName}` to `{MovedInterfaceSecondFileName}`, whose own `Item` is `int(0 to 100)`, and the buffer re-sent its unchanged text. A `maxon build` of the moved project reports nothing. Every declaration the signature index hashes is unchanged except the interface's declaring file, so a warm check that still reports the old range reused the buffer's parse against the file `Store` no longer lives in.")
+end 'moving an interface to a file whose formal is wider clears the range error in a caller whose bytes did not change'

@@ -53,9 +53,11 @@ let PRIMES = [2, 3, 5, 7, 11]
 
 ### Restrictions
 
-- Function calls are not allowed in constant expressions
+- A call is not a constant expression: an initializer that calls a static factory or a free function
+  returning a record runs in `__module_init` before `main`, and any other call is **E2045**
 - Map literals are supported, but require runtime initialization
-- Only immutable `let` is supported at top level (no `var`)
+- A top-level `var` is module state rather than a constant: its initializer runs before `main`, and any
+  function in the file may reassign it (`docs/LANGUAGE_REFERENCE.md`, *Top-Level Variables*)
 
 ---
 
@@ -228,7 +230,7 @@ end 'main'
 
 <!-- test: float-arithmetic-in-constant -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-Top-level float constants fold `+`, `*`, and `/` with the host's f64 (oracle-verified: X=3.0, Y=6.0, Z=2.5). x64-windows only: the exit code 362 exceeds the 8-bit process exit-status range, and only Windows preserves a full 32-bit exit code. Every POSIX target (macOS, Linux) AND WASI mask the status to its low 8 bits (362 mod 256 = 106) — a bare-integer `return 362` wraps identically on all of them. The three sibling tests below (codes <= 255) exercise float const folding on every other target.
+Top-level float constants fold `+`, `*`, and `/` with the host's f64 (X=3.0, Y=6.0, Z=2.5). x64-windows only: the exit code 362 exceeds the 8-bit process exit-status range, and only Windows preserves a full 32-bit exit code. Every POSIX target (macOS, Linux) AND WASI mask the status to its low 8 bits (362 mod 256 = 106) — a bare-integer `return 362` wraps identically on all of them. The three sibling tests below (codes <= 255) exercise float const folding on every other target.
 ```maxon
 let X = 1.0 + 2.0
 let Y = X * 2.0
@@ -243,7 +245,7 @@ end 'main'
 ```
 
 <!-- test: float-mixed-int-promotion-in-constant -->
-A mixed int/float constant promotes the int operand to f64 before folding, exactly as the runtime path does (oracle-verified: M=3.0, N=7.5).
+A mixed int/float constant promotes the int operand to f64 before folding, exactly as the runtime path does (M=3.0, N=7.5).
 ```maxon
 let M = 1 + 2.0
 let N = 5 * 1.5
@@ -257,7 +259,7 @@ end 'main'
 ```
 
 <!-- test: float-subtraction-and-negation-in-constant -->
-Float subtraction and a negated float literal fold (oracle-verified: A=6.5, B=-2.0, C=4.5).
+Float subtraction and a negated float literal fold (A=6.5, B=-2.0, C=4.5).
 ```maxon
 let A = 10.0 - 3.5
 let B = -2.0
@@ -272,7 +274,7 @@ end 'main'
 ```
 
 <!-- test: float-comparison-in-constant -->
-Float comparisons fold with a real f64 compare, so a negative operand orders correctly where an integer compare over the raw bit patterns would answer backwards (oracle-verified: both true).
+Float comparisons fold with a real f64 compare, so a negative operand orders correctly where an integer compare over the raw bit patterns would answer backwards (both true).
 ```maxon
 let LT = -1.0 > -2.0
 let GE = 2.5 >= 2.5
@@ -437,10 +439,10 @@ export let ROOT = 10
 A cycle among top-level constants is reported as a circular dependency even when the cycle spans
 files.
 
-⚠ **ONE LINE PER CYCLE, WHERE THE BOOTSTRAP GIVES ONE PER PARTICIPATING FILE**, and the difference is
-architectural rather than chosen: The compiler folds every top-level constant ONCE, whole-program, before any file
+⚠ **ONE LINE PER CYCLE, NOT ONE PER PARTICIPATING FILE**, and that is
+architectural rather than chosen: the compiler folds every top-level constant ONCE, whole-program, before any file
 is parsed (`ProgramSignatures.evaluateInitializers`), so there is one walk to find the cycle and one place
-to report it. A per-file folder finds the same cycle once per file it participates in.
+to report it. A per-file folder would find the same cycle once per file it participates in.
 ```maxon
 // --- file: app/main.maxon
 export let A = B + 1
@@ -585,9 +587,9 @@ export let BVAL = SECRET + 1
 ### Error: A runtime-initialized global must consume everything up to the end of its line
 
 A global whose initializer is not constant-foldable is re-parsed later, out of the token region the
-declaration scan marked off, and whatever the expression did not reach was abandoned — so
-`var g = Box.create() zzz` compiled, ran, and ignored `zzz`. The same rule the interpolation body and
-the captured parameter default now follow.
+declaration scan marked off, so whatever the expression does not reach must be refused rather than
+abandoned — otherwise `var g = Box.create() zzz` would compile, run, and ignore `zzz`. The
+interpolation body and the captured parameter default follow the same rule.
 
 <!-- test: error.runtime-init-trailing-tokens -->
 ```maxon

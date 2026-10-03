@@ -283,7 +283,7 @@ let addX = function(n Score) gives n + x     // single expression body
 let double = function(n Score) gives n * 2
 ```
 
-Closures capture variables from the enclosing scope **by reference**. Changes to a captured variable after the closure is created are visible inside the closure when it runs.
+A closure owns what it captures. A captured scalar is copied when the closure is created; a captured local holding a record, `String`, array or promise is **moved** into the closure, so reading it afterwards is E3102 (clone it first if you still need it); a captured parameter, `self` or field is shared. A closure can be returned, stored anywhere, and passed to `async`; storing one into a record it captures is E3183.
 
 Closure parameters are checked for unused (E3012). Use `_` to discard: `function(_ Integer) gives 42`
 
@@ -350,7 +350,7 @@ export var sharedCounter = 0                    // visible everywhere
 module var featureState = 0                     // visible to this directory subtree
 ```
 
-When two directories both expose the same bare name, a third file's unqualified reference is ambiguous: **E3095** for functions, **E3063** for typealiases in every form, function aliases included. Qualify with the directory namespace (`api.format(...)`, `lib.fmt.Score`) to disambiguate. Same-file duplicate typealiases remain **E3061**.
+When two directories both expose the same bare name, a third file's unqualified reference is ambiguous: **E3095** for functions, **E3063** for a type name of any kind (typealias, type, enum, union, interface). A type name the standard library also declares is ambiguous the same way, unless the reading file declares it itself. Qualify to disambiguate: `api.format(...)`, `lib.fmt.Score`, `export.Score` for the project root, `stdlib.Score` for the library. Two nameable type declarations of one name in one directory are refused at the declaration (**E3061** for two typealiases, **E3006** otherwise). A directory that cannot be written as a qualifier is **E3182**. A type that is not visible hides its members too: reaching a field or method through a value of it is **E3008**.
 
 ## Conditional Compilation
 ```maxon
@@ -956,6 +956,7 @@ end 'each'
 - Growable stacks, `main` included (2KB initial, 8KB on x64-Windows; doubles until the frame fits, up to 1GB)
 - Throwing async functions require `try await` (not plain `await`), except inside a `try` block or a `test` body
 - `async` target must yield (contain I/O or `await` points)
+- `async` arguments MOVE into the coroutine: a local `let` or `var` passed to `async` is consumed (a later read is E3102); a parameter or a `self` field is shared instead, which is how a socket or server handle reaches a coroutine
 - An unawaited promise is DROPPED at scope exit — an unstarted coroutine never runs and a parked one's wait is cancelled
 
 ## Arrays

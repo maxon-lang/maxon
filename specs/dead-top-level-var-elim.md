@@ -115,9 +115,8 @@ i64 7
 ```
 
 <!-- test: dead-global-dropped-beside-a-live-managed-one -->
-⭐ **THE PRUNE IS PER-GLOBAL.** v1 prunes all-or-nothing per `__module_init_<n>` and gets away with
-it by having one init function per FILE; The compiler has ONE `__module_init` for the whole program, so
-all-or-nothing would mean never dropping anything. Here `deadArr` and `liveArr` share that one
+⭐ **THE PRUNE IS PER-GLOBAL.** The compiler has ONE `__module_init` for the whole program, so an
+all-or-nothing prune of that function would mean never dropping anything. Here `deadArr` and `liveArr` share that one
 function: the dead one's build must go while the live one's stays, and `liveArr.get(1)` still
 answering 20 is what proves the surviving record was built correctly rather than merely allocated.
 
@@ -164,4 +163,30 @@ end 'main'
 ```RequiredData
 i64 0
 i64 5
+```
+
+
+<!-- test: dead-function-value-global-leaves-no-data-slot -->
+A global whose initializer only names a function runs no code before `main`, so a dead one keeps no slot. The dead
+global is declared FIRST, for the prefix compare's reason.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function countdown() returns Integer
+	return 3
+end 'countdown'
+
+var deadStep = countdown
+var live = 7
+
+function main() returns ExitCode
+	return live
+end 'main'
+```
+```exitcode
+7
+```
+```RequiredData
+i64 7
 ```

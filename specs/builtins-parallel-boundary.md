@@ -11,7 +11,7 @@ category: system
 
 `__Builtins` is the compiler's builtin TYPE, whose static methods are INTRINSICS rather than
 functions any file declares (see `builtins-clock.md` for the three clock members and
-`builtins-sleep.md` for the fourth). `parallelBoundary` takes NOTHING, returns VOID, and — today —
+`builtins-sleep.md` for the fourth). `parallelBoundary` takes NOTHING, returns VOID, and
 DOES NOTHING at run time.
 
 That is not a placeholder. Its whole job is to be a MARKER a hand-written CPU-BOUND function can put
@@ -37,20 +37,19 @@ body is `__Raw.ownFrame()` — and the emitted program pays one call and one ret
 what keeps that true: a body this small is otherwise spliced into each of its call sites and swept, and
 a checkpoint with no frame is not a checkpoint (`specs/runtime-source-tier.md`).
 
-⚠⚠ **AND SINCE EC10 THE MARKER BUYS NO PARALLELISM WHATEVER, WHICH IS WORTH SAYING OUT LOUD BECAUSE THE
+⚠⚠ **AND THE MARKER BUYS NO PARALLELISM WHATEVER, WHICH IS WORTH SAYING OUT LOUD BECAUSE THE
 NAME SUGGESTS OTHERWISE.** ⚖ An `async` call creates a COROUTINE of the calling green thread (user
-ruling, 2026-08-27), so a CPU-bound function marked with this and spawned with `async` runs to
+ruling), so a CPU-bound function marked with this and spawned with `async` runs to
 completion on the machine running the caller's strand, when the strand reaches it — sequentially, exactly as
 a direct call would, plus a coroutine's stack and switch. What the marker does is satisfy E3073 for a
 function that neither waits nor yields, and that is ALL it does. ⇒ **its natural future is as the marker
 on a `spawn` target** (`specs/services.md`), where a CPU-bound body really would run on another M and
 the intent it spells becomes load-bearing. It is kept for that, and because `scripts/multicore-stress`'s
-torture programs need it today to make their CPU-bound tasks spawnable at all.
+torture programs need it to make their CPU-bound tasks spawnable at all.
 
 ⚠ **IT IS A CHECKPOINT, NOT A YIELD.** It does not reschedule, it does not park, and it does not hand
 the processor to anybody — `Scheduler.yield()` is the intrinsic that does (`__Builtins.yield`, see
-`builtins-sleep.md`'s neighbours). A future scheduler could hang a cooperative-yield check here; today
-the body is a prologue and an epilogue.
+`builtins-sleep.md`'s neighbours). The body is a prologue and an epilogue.
 
 ### the compiler satisfies E3073 through PROVENANCE, not through a roster
 
@@ -68,11 +67,6 @@ verdict.
 That is why the two cases below are stated as a PAIR: the marker case alone would pass against a compiler
 that had stopped checking, and the control is what says the check is still live.
 
-⚠ The bootstrap arrives at the same verdict by the opposite construction — an explicit
-`YieldingRuntimeEntries` roster naming `maxon_parallel_boundary` (`SemanticCheckPass.cs`), because its
-walk does NOT fall open on an unknown callee. Same answer for every program; only the derivation
-differs.
-
 ## Tests
 
 <!-- test: builtins-parallel-boundary.marks-a-cpu-bound-spawn -->
@@ -86,13 +80,12 @@ lowering is the SPAWN: `StdToWasm` has no `__gt_trampoline`, and there is no tar
 CONSTRUCT — the refusal is reached only INDIRECTLY, when the spawned callee happens to touch an
 x64-only runtime entry (`async-await.basic` earns `E3104` on `File.exists` and is skipped for it).
 
-⚠ **A CALLEE THAT YIELDS ONLY BY `calleeYields`' FALL-OPEN REACHES THE BACKEND AND PANICS, AND THAT IS
-PRE-EXISTING RATHER THAN THIS RUNG'S.** MEASURED on a program naming no intrinsic of this file —
-`async` over a function whose whole body is `print("value {n}")` — `panic at StdToWasm.maxon:2172:
-emitFuncAddr: no wasm function index for function value '__gt_trampoline'`, no file and no line. The
-honest cure is to refuse the SPAWN on a target with no green-thread substrate rather than to refuse
-whatever the callee happened to call, and that moves the skip reason of every running `async` case;
-it is its own rung. Until then this case names the lane it can run on.
+⚠ **A CALLEE THAT YIELDS ONLY BY `calleeYields`' FALL-OPEN REACHES THE WASM BACKEND AND PANICS.** A
+program naming no intrinsic of this file — `async` over a function whose whole body is
+`print("value {n}")` — panics with `emitFuncAddr: no wasm function index for function value
+'__gt_trampoline'`, no file and no line. The cure is to refuse the SPAWN on a target with no
+green-thread substrate rather than to refuse whatever the callee happened to call, and that moves the
+skip reason of every running `async` case. This case names the lane it can run on.
 ```maxon
 function work(n ExitCode) returns ExitCode
 	__Builtins.parallelBoundary()

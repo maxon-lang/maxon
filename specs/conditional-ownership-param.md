@@ -29,7 +29,7 @@ first thing to make `q` own a droppable value — and it would enrol `q` as owne
 depth. `q`'s fresh box would then drop at the inner block's `end`, while `q` (declared OUTER) lives
 on and is read past the block: a use-after-free.
 
-The fix makes `q` a CO-OWNER of the borrowed box from its DECLARATION, via a refcount retain
+So `q` is a CO-OWNER of the borrowed box from its DECLARATION, via a refcount retain
 (`__mm_retain`), so it is enrolled as owned at ITS OWN scope and the reassignment is a uniform
 owned→owned transition — never the wrong-depth enrolment. This mirrors the mutable-`String`
 promotion exactly, with an incref in place of a copy (a struct is reference semantics, a String is
@@ -43,16 +43,16 @@ value semantics). The retain balances on every path:
 `q` gets a FRESH SSA value distinct from `p` (the retain RETURNS the pointer), so a later re-borrow
 of `p` (`let r = p`) cannot poison `q`, and moving `q` (`let r = q`) poisons `q` and not `p`.
 
-These are all USE-AFTER-FREE regressions under poison-on-free (`__mm_free` overwrites a freed box
-with `0x3F`): before the fix the RED cases return `0x3F3F3F3F` (1061109567) or fault (`0xC0000005`).
+These cases guard USE-AFTER-FREE under poison-on-free (`__mm_free` overwrites a freed box with
+`0x3F`): a wrong-depth enrolment makes them return `0x3F3F3F3F` (1061109567) or fault (`0xC0000005`).
 
 ## Tests
 
 ### Conditional Reassign in a Nested Block, Then Read (Struct)
 
 `q` aliases the borrowed struct param, is reassigned an owned box on the taken branch, and read past
-the block. Before the fix `q`'s fresh box dropped at the inner `end` and `return q.x` read poison
-(1061109567). With the retain-promotion `q` owns from declaration, so the reassignment drops the
+the block. Enrolled at the inner depth, `q`'s fresh box would drop at the inner `end` and
+`return q.x` would read poison (1061109567). With the retain-promotion `q` owns from declaration, so the reassignment drops the
 retained box and `q` owns `Point.create(9)` to scope exit.
 
 <!-- test: struct-cond-reassign-then -->
@@ -125,8 +125,8 @@ end 'main'
 
 ### Same-Depth Reassign Is Unaffected (Struct)
 
-The reassignment is at the SAME block depth as the declaration, so even the pre-fix code enrolled
-`q` at the right scope. It stays correct: `q` owns `Point.create(9)` at function scope and reads 9.
+The reassignment is at the SAME block depth as the declaration, so even an enrolment at the
+reassignment's depth puts `q` at the right scope. It is correct: `q` owns `Point.create(9)` at function scope and reads 9.
 
 <!-- test: struct-same-depth-reassign -->
 ```maxon
@@ -202,7 +202,7 @@ end 'main'
 ### Reassign to Another Borrowed Param Retains It (Union)
 
 The union twin: `q` retains borrowed `u`, then is reassigned another borrowed union parameter `u2` on
-the taken branch. Before the fix the boxed union was string-promoted and the match faulted
+the taken branch. A string-promoted boxed union would make the match fault
 (`0xC0000005`); the retain co-owns `u2`'s box and the match reads its payload. Sums the taken branch
 (`u2`, 8) and the untaken one (`u`, 5) to exercise both the reassign-and-retain and the
 retained-box-only exit in one program: 13.
@@ -242,8 +242,8 @@ end 'main'
 ### Conditional Reassign in a Nested Block, Then Match (Union)
 
 The union twin of the struct then-path: `q` aliases a borrowed union param, is reassigned
-`Num.val(7)` on the taken branch, and matched past the block. Before the fix the boxed union dropped
-at the inner `end` and the match read freed memory — a fault (`0xC0000005`). The retain keeps `q`
+`Num.val(7)` on the taken branch, and matched past the block. Enrolled at the inner depth, the boxed
+union would drop at the inner `end` and the match would read freed memory — a fault (`0xC0000005`). The retain keeps `q`
 owning from declaration.
 
 <!-- test: union-cond-reassign-then -->
@@ -316,7 +316,7 @@ end 'main'
 ### Reassign Then Return Out of the Block (Struct)
 
 The reassignment and the read are BOTH inside the block, and the block leaves via `return` — so the
-value is read before the scope-exit drop and even the pre-fix code returns the right value. With the
+value is read before the scope-exit drop and even a wrong-depth enrolment returns the right value. With the
 retain the ownership is uniform and the drops still balance on both the `return`-out and the
 fall-through path.
 
@@ -355,8 +355,8 @@ end 'main'
 ### Reassign Inside a Loop, Break, Then Read After the Loop (Struct)
 
 `q` is reassigned an owned box inside the loop body and the loop `break`s; the final value is read
-after the loop. Before the fix the fresh box dropped at the loop-body `end` and the post-loop read
-hit poison. The retain-promotion makes `q` a loop-carried owned var, reassigned owned→owned.
+after the loop. Enrolled at the loop body's depth, the fresh box would drop at the loop-body `end`
+and the post-loop read would hit poison. The retain-promotion makes `q` a loop-carried owned var, reassigned owned→owned.
 
 <!-- test: struct-break-after-reassign -->
 ```maxon
@@ -395,8 +395,8 @@ end 'main'
 ### Reassign in a Nested If Then Continue, Read After the Loop (Struct)
 
 `q` is reassigned inside a nested `if` in the loop body, which then `continue`s; the value is read
-after the loop. Before the fix the box dropped at the inner block's `end` and the post-loop read hit
-poison. The retain keeps `q` owned across every iteration.
+after the loop. Enrolled at the inner depth, the box would drop at the inner block's `end` and the
+post-loop read would hit poison. The retain keeps `q` owned across every iteration.
 
 <!-- test: struct-continue-after-reassign -->
 ```maxon
@@ -591,8 +591,8 @@ end 'main'
 ### Using the Retained Var After Moving It Is Use-After-Move (Struct)
 
 Because the retain made `q` an owner, `let r = q` moves it — so reading `q` afterward is a genuine
-use-after-move (E3102), poisoning `q` and not `p`. Before the fix `q` was a borrowed alias and
-`let r = q` re-borrowed it, so `return q.x` returned 5; the retain makes the move real. (The
+use-after-move (E3102), poisoning `q` and not `p`. Were `q` a borrowed alias, `let r = q` would
+re-borrow it and `return q.x` would return 5; the retain makes the move real. (The
 `<fragment>` line/column are into the compiled fragment, whose one-line header shifts the source
 down by one.)
 

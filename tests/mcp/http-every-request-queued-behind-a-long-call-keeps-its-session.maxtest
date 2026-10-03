@@ -1,4 +1,4 @@
-let OkStatus = 200 as HttpStatusNumber
+let OkStatus = 200 as HttpAnswerStatus
 let IdleTimeoutSeconds = 1
 let QueuedStagingDir = "temp/mcp-http-every-queued-request"
 let FirstQueueLeadMs = 400
@@ -10,6 +10,20 @@ function postedToolsList(server StreamingHttpMcpServer, sessionId McpSession, id
 	return server.post(toolsListRequest(id), sessionId: sessionId)
 end 'postedToolsList'
 
+function everyQueuedBehindALongCall(listening StreamingHttpMcpServer, program FilePath, longSession McpSession, firstQueuedSession McpSession, secondQueuedSession McpSession) returns (JsonDoc, HttpAnswer, HttpAnswer) throws TestFailure
+	let longCall = async httpToolCall(listening, sessionId: longSession, id: 2, name: ExecuteTool, argumentsJson: pathArgument(program))
+	sleep(FirstQueueLeadMs)
+
+	let firstQueued = async postedToolsList(listening, sessionId: firstQueuedSession, id: 3)
+	sleep(SecondQueueLeadMs)
+
+	let secondQueued = listening.post(toolsListRequest(4), sessionId: secondQueuedSession)
+	let first = await firstQueued
+	let ran = await longCall
+	try listening.stop()
+	return (ran, first, secondQueued)
+end 'everyQueuedBehindALongCall'
+
 test 'every request that waits behind another session s long call keeps its own session, not only the first one served'
 	let program = stagedProgram(QueuedStagingDir, fileName: "main.maxon", source: sleepingProgramSource(EveryQueuedSleepMs))
 
@@ -17,17 +31,7 @@ test 'every request that waits behind another session s long call keeps its own 
 	let (_, longSession) = server.initializeSession()
 	let (_, firstQueuedSession) = server.initializeSession()
 	let (_, secondQueuedSession) = server.initializeSession()
-
-	let longCall = async httpToolCall(server, sessionId: longSession, id: 2, name: ExecuteTool, argumentsJson: pathArgument(program))
-	sleep(FirstQueueLeadMs)
-
-	let firstQueued = async postedToolsList(server, sessionId: firstQueuedSession, id: 3)
-	sleep(SecondQueueLeadMs)
-
-	let secondQueued = server.post(toolsListRequest(4), sessionId: secondQueuedSession)
-	let first = await firstQueued
-	let ran = await longCall
-	try server.stop()
+	let (ran, first, secondQueued) = try everyQueuedBehindALongCall(server, program: program, longSession: longSession, firstQueuedSession: firstQueuedSession, secondQueuedSession: secondQueuedSession)
 
 	try Expect.isFalse(toolCallIsError(ran), message: "the control: `{ExecuteTool}` must run the sleeping program, or no request waited behind it: {toolCallText(ran)}")
 	try Expect.equal(first.statusCode, expected: OkStatus, message: "the first request queued behind the long call keeps its session; it answered {first.statusCode} with {first.body}")

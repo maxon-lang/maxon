@@ -27,7 +27,7 @@ differs between the Windows lane and the Mac lane. A case that baked one in woul
 fails on the other host for a reason that has nothing to do with the mechanism. So the four
 properties asserted below are all the machine cannot vary:
 
-- it is NON-EMPTY (the canonical `/specs/command-line-args.md:executable-path` case);
+- it is NON-EMPTY (the `specs/command-line-args.md:executable-path` case);
 - it is ABSOLUTE rather than relative — DRIVE-qualified on Windows, ROOT-qualified under POSIX, which
   is one property with two spellings and therefore two cases rather than one widened one;
 - it NAMES A FILE THAT EXISTS — `File.exists` on the answer is true, which is the strongest of the
@@ -44,7 +44,7 @@ lane neither does:
 - neither lane's primitive can fail for the CURRENT image — `GetModuleFileNameA(NULL, …)`'s only
   documented failure is a buffer too small, and `_NSGetExecutablePath`'s is the same, which
   `__proc_exe_path` answers by doubling and retrying rather than by giving up.
-  `/specs/builtins-type.md` describes the intrinsic's failure answer as an *"empty buffer"*;
+  `specs/builtins-type.md` describes the intrinsic's failure answer as an *"empty buffer"*;
 - and `FilePath.from("")` does not throw. `FilePath.create` refuses only invalid CHARACTERS
   (`FilePathError.invalidCharacter`), and the empty string has none.
 
@@ -52,8 +52,7 @@ So the arm is unreachable from a program on either lane rather than merely untes
 that faked it — by shadowing `Process` or by hand-building an empty path — would pin the fake and
 not the mechanism. It is stated here instead. ⚠ It is worth knowing that this makes the stdlib's
 `pathUnavailable` DEAD: an empty buffer flows through as an empty `FilePath` rather than as the
-error `/specs/builtins-type.md` says it becomes. That is a `stdlib/` fact and not this rung's to
-change.
+error `specs/builtins-type.md` says it becomes. That is a `stdlib/` fact.
 
 ### TWO lanes serve it, and the three platforms really do disagree about the API's shape
 
@@ -65,7 +64,7 @@ it on a target that does not is refused with `E3104` at the call's own span, by 
 PREFIX, so an entry added to the band later is gated by construction rather than by memory.
 
 The three platforms genuinely differ (`GetModuleFileNameA`, `_NSGetExecutablePath`,
-`/proc/self/exe`), which is why serving another one was a rung rather than a lowering — the same
+`/proc/self/exe`), which is why serving another one is more than a lowering — the same
 argument `Runtime/CommandLineRuntime.maxon`'s header makes for argv. Windows FILLS the caller's
 buffer and answers a count; macOS takes an IN-OUT size, signals "too small" with `-1` plus a
 rewritten size, and leaves that size UNCHANGED on success, so the length comes from a `strlen` walk;
@@ -77,7 +76,7 @@ unchanged when the link did not fit, so the loop doubles and asks again.
 
 ⚠ **macOS answers *"a path"*, not *"the real path"*, so its lowering CANONICALIZES.** Darwin's own
 SDK warns that `_NSGetExecutablePath` returns whatever path the image was exec'd through and *"may
-be a symbolic link and not the real file"*. MEASURED with a C probe on an arm64-macOS host: a
+be a symbolic link and not the real file"*. A
 relative or `PATH`-resolved launch is absolutized by the kernel, but a launch through a symlinked
 directory (`/tmp`, which IS a symlink on macOS) answers the un-resolved `/tmp/…`, and a launch
 through a symlink to the binary answers the symlink's own name. `GetModuleFileNameA` answers a
@@ -92,8 +91,7 @@ lowering there could only be a plausible wrong answer.
 ## Tests
 
 <!-- test: process-executable-path.is-not-empty -->
-The canonical property, in the canonical spec's own shape
-(`/specs/command-line-args.md:executable-path`): the call succeeds and answers something.
+The property `specs/command-line-args.md:executable-path` pins, in that case's own shape: the call succeeds and answers something.
 ```maxon
 function main() returns ExitCode
 	let exe = try Process.executablePath() otherwise return 2

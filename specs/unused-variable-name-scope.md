@@ -15,10 +15,10 @@ variable name mint two distinct bindings, and a mention in the SECOND loop excus
 the FIRST: the author did name the variable, and the diagnostic's job is to find
 names nothing in the body refers to.
 
-### Why this file is AUTHORED rather than ported
+### Why this file exists
 
-The rule is not pinned by any case in `/specs`. It is pinned only INCIDENTALLY, by
-two programs that were written to test something else and happen to depend on it:
+Outside this file the rule is pinned only INCIDENTALLY, by two programs that test
+something else and happen to depend on it:
 
 - `specs/array-sort.md`'s `driftsort-large-sqrt-cross-check` — a
   `for i in 0 upto 5000 'fill'` whose body never reads `i`, legal only because a
@@ -26,9 +26,9 @@ two programs that were written to test something else and happen to depend on it
 - `specs/generic-module-merge-pattern.md`'s `dual-specialize-inner-array` — the
   same shape.
 
-Neither file is ported to `specs`. Without the case below, a PER-BINDING
-implementation of the check passes the whole suite and then refuses real corpus
-programs the reference compilers accept. The second case is the negative control:
+Without the case below, a PER-BINDING implementation of the check would turn those
+two cases red with an E3012 their subjects say nothing about. The second case is the
+negative control:
 it holds the check alive, so the first case cannot pass by the diagnostic being
 dead.
 
@@ -100,8 +100,7 @@ end 'main'
 <!-- test: error.a-closure-parameter-of-that-name-does-not-excuse-it -->
 The negative control for the case above, and the reason the closure's list is CLEARED
 rather than shared: `i` here is the closure's OWN parameter, a name the enclosing
-function never mentions, so the loop binding is still unused. Measured on the oracle,
-which reports the same line and column.
+function never mentions, so the loop binding is still unused.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode

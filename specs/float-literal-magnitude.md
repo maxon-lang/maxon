@@ -38,13 +38,13 @@ number — it is the exact worst case. A rounding boundary for a double is a mid
 takes 752 digits, but `m` runs up to `2^54 - 1` and adds 16 more: the widest boundary,
 `(2^54 - 1) * 2^-1075`, takes exactly **768**. A 768-digit prefix therefore either sits exactly on a
 midpoint — where the remembered bit decides — or is a whole unit-in-the-last-kept-place away from
-one, which is further than the dropped tail can reach. At 767 that would no longer hold.
+one, which is further than the dropped tail can reach. At 767 that does not hold.
 
 The corpus otherwise never leaves `e3` — `specs/literals.md`'s largest exponent is `1.0E3` — so
-nothing before this file reached the scaling at all. What it was hiding: the scaling ran in an
-i64, and `10^k` carries the factor `2^k`, so `10^19` wrapped, `10^63` landed on `i64.min`
-(negative, which sent the normalization loop doubling a negative value forever and **hung the
-compiler**), and `10^64` was exactly zero. `1.0e300 / 1.0e299` evaluated to `0`.
+nothing outside this file reaches the scaling at all. The scaling cannot run in an i64: `10^k`
+carries the factor `2^k`, so `10^19` wraps, `10^63` lands on `i64.min` (negative, which would send
+the normalization loop doubling a negative value forever and **hang the compiler**), and `10^64` is
+exactly zero.
 
 **Every expected value in this file came from a correctly-rounded `strtod`**; none of these numbers
 were derived by hand.
@@ -52,7 +52,7 @@ were derived by hand.
 ## Tests
 
 <!-- test: ratio-of-adjacent-decades-e20 -->
-`10^20` needs 67 bits. In an i64 the numerator wrapped, and the quotient came out `2966733824`.
+`10^20` needs 67 bits. In an i64 the numerator wraps, and the quotient comes out `2966733824`.
 ```maxon
 function main() returns ExitCode
 	let a = 1.0e20
@@ -65,8 +65,8 @@ end 'main'
 ```
 
 <!-- test: ratio-of-adjacent-decades-e63 -->
-`10^63` is the pathological one: in an i64 it is exactly `i64.min`, and a NEGATIVE numerator made
-the normalization loop double a negative value with no fixed point to reach — the compiler spun
+`10^63` is the pathological one: in an i64 it is exactly `i64.min`, and a NEGATIVE numerator makes
+the normalization loop double a negative value with no fixed point to reach — the compiler would spin
 forever on this literal.
 ```maxon
 function main() returns ExitCode
@@ -80,7 +80,7 @@ end 'main'
 ```
 
 <!-- test: ratio-of-adjacent-decades-e64 -->
-`10^64` is exactly zero in an i64 — `1.0e64` silently became `0.0`.
+`10^64` is exactly zero in an i64 — `1.0e64` would silently become `0.0`.
 ```maxon
 function main() returns ExitCode
 	let a = 1.0e64
@@ -155,8 +155,8 @@ end 'main'
 ```
 
 <!-- test: underflow-to-zero-is-not-an-error -->
-`1.0e-400` is under half the least subnormal, so round-to-nearest gives `+0`. The bootstrap accepts
-it silently — an underflow is a representable answer, unlike an overflow.
+`1.0e-400` is under half the least subnormal, so round-to-nearest gives `+0`. It is accepted
+silently — an underflow is a representable answer, unlike an overflow.
 ```maxon
 function main() returns ExitCode
 	if 1.0e-400 == 0.0 'roundsToZero'
@@ -272,8 +272,8 @@ correctly-rounded double — the same one its shortest round-trip spelling names
 puts a long literal against a <=17-digit form of the same value, so the short side was always exact
 and only the long side is under test.
 
-Regression for a real wrong answer: while the converter kept just 18 significant digits and dropped
-the rest, the first three of these landed a full ULP off and this returned 24 instead of 31.
+A converter that keeps just 18 significant digits and drops the rest lands the first three of these
+a full ULP off, and this returns 24 instead of 31.
 ```maxon
 function main() returns ExitCode
 	var r = 0
@@ -383,15 +383,14 @@ error E2011: specs/fragments/float-literal-magnitude/error.clamped-exponent-cann
 ```
 
 MALFORMED LITERAL TEXT. The cases above are about a magnitude that will not FIT. These are about text that names no number
-at all, and both shapes below used to get through: one silently, one as a compiler crash.
+at all.
 
 <!-- test: error.exponent-marker-with-no-digits -->
-`1.5e` is not a number. `Lexer.scanNumber` used to take the `e` and then run an exponent-digit loop
-that was allowed to match ZERO digits, and `__float_bitsFromText` reads a missing exponent as
-`sciExp = 0` — so this SILENTLY COMPILED AS `1.5`, along with `1.5E`, `1.5e+` and `1.5e-`. The
-bootstrap does not accept any of the four. The `e` now joins the number only if a digit actually
-follows it (optionally past a sign), so an `e` that is not an exponent is an ordinary identifier and
-the error lands ON it.
+`1.5e` is not a number. `__float_bitsFromText` reads a missing exponent as `sciExp = 0`, so an
+exponent-digit loop allowed to match ZERO digits would SILENTLY COMPILE this AS `1.5`, along with
+`1.5E`, `1.5e+` and `1.5e-`. None of the four is accepted. The `e` joins the
+number only if a digit actually follows it (optionally past a sign), so an `e` that is not an
+exponent is an ordinary identifier and the error lands ON it.
 ```maxon
 function main() returns ExitCode
 	let x = 1.5e
@@ -403,11 +402,9 @@ error E2001: specs/fragments/float-literal-magnitude/error.exponent-marker-with-
 ```
 
 <!-- test: error.two-decimal-points -->
-`1.5.3` CRASHED the compiler. The lexer's trailing-byte rule appended the second `.` to a token that
-already carried a fraction and then declared end-of-input, so the parser was handed the text `1.5.`
-with the `3` dropped; the number reader answered `malformed`, and `Parser.literalDecodeError`
-PANICKED on that arm — on the stated premise that the lexer could never emit such a token. Both
-layers are fixed: a float token now ends at its fraction, and the panic is a diagnostic (E2068).
+`1.5.3` is not a number. A float token ends at its fraction, so a second `.` never joins a token
+that already carries one and the error lands on the `3`. A literal the number reader answers
+`malformed` for is a diagnostic (E2068), never a panic.
 ```maxon
 function main() returns ExitCode
 	let x = 1.5.3

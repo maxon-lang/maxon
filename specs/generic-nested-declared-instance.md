@@ -21,33 +21,32 @@ the caller's own parameters, so one base address lines the caller's blocks up wi
 the four words a shared body ever reads (`copyFunc@32`, `destroyFunc@40`, `elementLogicalSize@56`,
 `retainFunc@64`) are facts about the type ARGUMENT, which the run makes identical on both sides.
 
-### The two halves, and why the STATIC one was the hole
+### The two halves, and why the STATIC one needs the forward too
 
-The forward existed for a receiver — `chain.count()` — and not for a static constructor's RESULT, so
-`EChain.create()` reached the mint and **aborted the compiler**. Nothing in the argument-run reasoning is
+The forward serves a receiver — `chain.count()` — and a static constructor's RESULT alike; without it
+`EChain.create()` would reach the mint and **abort the compiler**. Nothing in the argument-run reasoning is
 receiver-specific: both spellings hold a value typed at the instance and both need the caller's blocks. They
-are one decision now (`LowerMaxonToStd.emitInstanceDescriptorAddr`).
+are one decision (`LowerMaxonToStd.emitInstanceDescriptorAddr`).
 
 The supply half is only half the answer: the caller has to CARRY a descriptor to forward. The descriptor-need
-fixpoint follows self-calls, so nothing reached across the `Bag`/`Inner` boundary. It draws a cross-type EDGE
-now, from a call whose receiver RESOLVES to such an instance — an inner alias (`EChain.create()`), a field
+fixpoint follows self-calls, and across the `Bag`/`Inner` boundary it draws a cross-type EDGE, from a call
+whose receiver RESOLVES to such an instance — an inner alias (`EChain.create()`), a field
 declared at one (`chain.count()`), or a local bound from either. It is an EDGE and not a seed deliberately:
 whether `Inner.create` needs a descriptor stays the fixpoint's own answer about `Inner.create`, so a holder
 whose calls need nothing pays nothing. Seeded instead, `Holder.create(cell Cell)` — a body that is only
-`Self{cell: cell}` — gained a hidden parameter and every call site gained a `lea` for a blob it never reads,
-which moved 13 committed goldens.
+`Self{cell: cell}` — would gain a hidden parameter and every call site a `lea` for a blob it never reads.
 
 ### What is deliberately NOT covered
 
 The containers this compiler serves itself — `Array`, `Vector` and every declared array-literal conformer —
-keep the receiver-blind edge tuned to them (`Parser.corpusServesArrayMember`), which withholds statics for a
-measured reason. This edge is for a DECLARED generic standing where a compiler-owned one used to.
+keep the receiver-blind edge tuned to them (`Parser.corpusServesArrayMember`), which withholds statics.
+This edge is for a DECLARED generic.
 
 ## Tests
 
 ### A static constructor builds the enclosing type's own nested instance
 
-The program the panic stood in front of. `Bag.create` is a `Self`-returning static, so it can carry a
+`Bag.create` is a `Self`-returning static, so it can carry a
 descriptor its caller sources from the instance it builds, and it forwards block 0 into `Inner.create` —
 whose `Array with T` reads `destroyFunc@40` out of it at run time.
 
@@ -245,12 +244,11 @@ end 'main'
 
 ### A PARAMETER declared at the inner alias is a receiver too
 
-Found at review. The edge resolves a receiver through three name doors — an inner alias, a field of the
-enclosing type, a local bound by `var <n> = <name>`. A parameter is none of them: the alias appears as the
-declaration's TYPE rather than as a value, so `c.slotSize()` drew no edge, `probeVia` reserved nothing, and
-the call reached the mint for an instance that can never have a blob — `panic at LayoutDescriptor.maxon:566`
-on this tip and on the merge base alike. `var x as EChain` is the same shape with `as` between the two
-tokens.
+The edge resolves a receiver through name doors — an inner alias, a field of the enclosing type, a local
+bound by `var <n> = <name>` — and a parameter is none of them: the alias appears as the declaration's TYPE
+rather than as a value. Without a door of its own, `c.slotSize()` would draw no edge, `probeVia` would
+reserve nothing, and the call would reach the mint for an instance that can never have a blob — a
+`LayoutDescriptor` panic. `var x as EChain` is the same shape with `as` between the two tokens.
 
 <!-- test: a-parameter-declared-at-the-inner-alias -->
 ```maxon
@@ -298,15 +296,13 @@ end 'main'
 
 ### A `for … in self` whose cursor is built through the inner alias
 
-Found at review, and it is where this row meets W159's. The loop's `createIterator()` / `current()` /
-`advance()` are emitted by the parser and appear in NO token — W159 read that fact to SEED the per-trip
-drop and stopped there, but it hides the CALL EDGES just as completely. While no cursor entry point ever
-needed a descriptor the omission was inert; this row ends that, because `BIter.create()` inside
-`createIterator` now reserves one. Before the edges existed the program was
-`panic at LowerMaxonToStd.maxon:2199: forwardCallerLayout: caller 'Bag.walk' has no layout descriptor to
-forward to 'Bag.createIterator'`.
+The loop's `createIterator()` / `current()` /
+`advance()` are emitted by the parser and appear in NO token — the per-trip drop's SEED reads that fact,
+and it hides the CALL EDGES just as completely. `BIter.create()` inside `createIterator` reserves a
+descriptor, so without edges from the emitted calls `forwardCallerLayout` would find that caller
+`Bag.walk` has no layout descriptor to forward to `Bag.createIterator`.
 
-The element is a concrete `Int`, deliberately: that keeps W159's own seed OFF (its gate asks whether the
+The element is a concrete `Int`, deliberately: that keeps the per-trip drop's own seed OFF (its gate asks whether the
 cursor yields a bare type parameter), so the reservation under test can only have arrived through the
 emitted-call edges.
 

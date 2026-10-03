@@ -90,8 +90,7 @@
 	type ProfileRequest
 		export var json as bool
 		export var folded as bool
-		export var exePath as String
-		export var exeGiven as bool
+		export var executable as StatedText
 		export var rateHz as ProfileRate
 		export var minPercent as ProfileShare
 		export var timeoutSeconds as ProfileSeconds
@@ -103,8 +102,12 @@
 		export var targetEnv as EnvMap
 
 		static function create() returns ProfileRequest
-			return Self{json: false, folded: false, exePath: "", exeGiven: false, rateHz: DefaultRateHz, minPercent: DefaultMinPercent, timeoutSeconds: DefaultTimeoutSeconds, targetArgs: StringArray.create(), targetEnv: EnvMap.create()}
+			return Self{json: false, folded: false, executable: StatedText.unstated, rateHz: DefaultRateHz, minPercent: DefaultMinPercent, timeoutSeconds: DefaultTimeoutSeconds, targetArgs: StringArray.create(), targetEnv: EnvMap.create()}
 		end 'create'
+
+		function exePath() returns String
+			return try self.executable.text() otherwise panic("ProfileRequest.exePath: the profile command refuses a command line that names no executable before anything reads it")
+		end 'exePath'
 	end 'ProfileRequest'
 
 	/// `maxon profile run <exe> [--json|--folded] [--rate=<hz>] [--min-percent=<share>]
@@ -131,42 +134,41 @@
 			end 'jsonFlag' else if arg == FoldedFlag 'foldedFlag'
 				request.folded = true
 			end 'foldedFlag' else if arg.startsWith(TargetEnvFlag) 'targetEnvFlag'
-				let raw = try CommandLine.optionValue(arg) otherwise ""
+				let raw = optionValueOf(arg)
 
 				if not recordProfileTargetEnv(request, raw: raw) 'notAnAssignment'
 					return refuseProfileUsage("'{TargetEnvFlag}<NAME>=<VALUE>' needs a non-empty variable name, got '{raw}'")
 				end 'notAnAssignment'
 			end 'targetEnvFlag' else if arg.startsWith(TimeoutFlag) 'timeoutFlag'
-				let raw = try CommandLine.optionValue(arg) otherwise ""
+				let raw = optionValueOf(arg)
 
 				if not recordProfileTimeout(request, raw: raw) 'notADeadline'
 					return refuseProfileUsage("'{TimeoutFlag}' {PositiveSecondsRequirement}, got '{raw}'")
 				end 'notADeadline'
 			end 'timeoutFlag' else if arg.startsWith(RateFlag) 'rateFlag'
-				let raw = try CommandLine.optionValue(arg) otherwise ""
-				let problem = recordProfileRate(request, raw: raw)
+				let raw = optionValueOf(arg)
 
-				if not problem.isEmpty() 'notARate'
-					return refuseProfileUsage(problem)
+				match recordProfileRate(request, raw: raw) 'notARate'
+					accepted then break 'notARate'
+					refused(problem) then return refuseProfileUsage(problem)
 				end 'notARate'
 			end 'rateFlag' else if arg.startsWith(MinPercentFlag) 'minPercentFlag'
-				let raw = try CommandLine.optionValue(arg) otherwise ""
-				let problem = recordProfileMinPercent(request, raw: raw)
+				let raw = optionValueOf(arg)
 
-				if not problem.isEmpty() 'notAShare'
-					return refuseProfileUsage(problem)
+				match recordProfileMinPercent(request, raw: raw) 'notAShare'
+					accepted then break 'notAShare'
+					refused(problem) then return refuseProfileUsage(problem)
 				end 'notAShare'
-			end 'minPercentFlag' else if not request.exeGiven and not arg.startsWith(OptionPrefix) 'theExecutable'
-				request.exePath = arg
-				request.exeGiven = true
-			end 'theExecutable' else if request.exeGiven 'aTargetArgument'
+			end 'minPercentFlag' else if not request.executable.isStated() and not arg.startsWith(OptionPrefix) 'theExecutable'
+				request.executable = StatedText.stated(arg)
+			end 'theExecutable' else if request.executable.isStated() 'aTargetArgument'
 				request.targetArgs.push(arg)
 			end 'aTargetArgument' else 'unknownOption'
 				return refuseProfileUsage("unknown option '{arg}'")
 			end 'unknownOption'
 		end 'eachArgument'
 
-		if not request.exeGiven 'noExecutable'
+		if not request.executable.isStated() 'noExecutable'
 			return refuseProfileUsage("expected an executable")
 		end 'noExecutable'
 
@@ -185,43 +187,47 @@
 
 	// ⭐ Each numeric flag is PARSED here and judged by the rule that OWNS its meaning, so the two cannot come
 	// to refuse differently — and each refusal is worded by the rule, which knows why the bound exists,
-	// rather than by the parser, which does not. An empty answer means the value was accepted.
-	//
+	// rather than by the parser, which does not.
+	union ProfileFlagVerdict
+		accepted
+		refused(problem String)
+	end 'ProfileFlagVerdict'
+
 	// A door onto the request rather than a returned value: The compiler cannot lower a union carrying a float
 	// payload (E2015), and a struct whose second field means nothing without its first is the sentinel that
 	// shape exists to avoid.
-	function recordProfileRate(request ProfileRequest, raw String) returns String
+	function recordProfileRate(request ProfileRequest, raw String) returns ProfileFlagVerdict
 		let rate = try float.fromString(raw) otherwise 'notANumber'
-			return "'{RateFlag}' needs a number, got '{raw}'"
+			return ProfileFlagVerdict.refused("'{RateFlag}' needs a number, got '{raw}'")
 		end 'notANumber'
 
 		if not (rate >= MinProfileRateHz) 'tooSlow'
-			return "'{RateFlag}' needs at least {reportWholeNumberText(MinProfileRateHz as ReportNumber)} sample per CPU-second, got '{raw}'"
+			return ProfileFlagVerdict.refused("'{RateFlag}' needs at least {reportWholeNumberText(MinProfileRateHz as ReportNumber)} sample per CPU-second, got '{raw}'")
 		end 'tooSlow'
 
 		if rate > MaxRateHz 'pastTheCeiling'
-			return "'{RateFlag}' cannot exceed {reportWholeNumberText(MaxRateHz as ReportNumber)} samples per second. Note that asking for anything near it is already an over-ask: the loop ticks on an OS waitable timer whose granularity caps it near 1750 Hz on a typical host, and the report states the rate it ACHIEVED beside the one requested so you can see what you got, got '{raw}'"
+			return ProfileFlagVerdict.refused("'{RateFlag}' cannot exceed {reportWholeNumberText(MaxRateHz as ReportNumber)} samples per second. Note that asking for anything near it is already an over-ask: the loop ticks on an OS waitable timer whose granularity caps it near 1750 Hz on a typical host, and the report states the rate it ACHIEVED beside the one requested so you can see what you got, got '{raw}'")
 		end 'pastTheCeiling'
 
 		request.rateHz = rate as ProfileRate
 
-		return ""
+		return ProfileFlagVerdict.accepted
 	end 'recordProfileRate'
 
-	function recordProfileMinPercent(request ProfileRequest, raw String) returns String
+	function recordProfileMinPercent(request ProfileRequest, raw String) returns ProfileFlagVerdict
 		let share = try float.fromString(raw) otherwise 'notANumber'
-			return "'{MinPercentFlag}' needs a number, got '{raw}'"
+			return ProfileFlagVerdict.refused("'{MinPercentFlag}' needs a number, got '{raw}'")
 		end 'notANumber'
 
 		// 100% would hide everything including the root, which is a report that has measured something and
 		// shows none of it.
 		if not (share >= 0.0 and share < MaxMinPercent) 'outsideTheRange'
-			return "'{MinPercentFlag}' needs a share in [0, 100) — it is the percentage below which a row is summarized rather than listed, got '{raw}'"
+			return ProfileFlagVerdict.refused("'{MinPercentFlag}' needs a share in [0, 100) — it is the percentage below which a row is summarized rather than listed, got '{raw}'")
 		end 'outsideTheRange'
 
 		request.minPercent = share as ProfileShare
 
-		return ""
+		return ProfileFlagVerdict.accepted
 	end 'recordProfileMinPercent'
 
 	// A caller-spelled decimal number of seconds, held to the one rule: finite and strictly positive. A
@@ -302,14 +308,14 @@
 	end 'profileSubjectWithSidecar'
 
 	function measureProfile(request ProfileRequest) returns ExitCode
-		return match profileSubjectOf(request.exePath) 'subject'
+		return match profileSubjectOf(request.exePath()) 'subject'
 			refused(reason) gives refuseProfile(reason)
 			ready(placement, sidecar) gives launchAndSample(request, placement: placement, sidecar: sidecar)
 		end 'subject'
 	end 'measureProfile'
 
 	function launchAndSample(request ProfileRequest, placement ProfilePlacement, sidecar MxdbgReader) returns ExitCode
-		let target = try FilePath.from(request.exePath) otherwise return refuseProfile("'{request.exePath}' is not a spellable path")
+		let target = try FilePath.from(request.exePath()) otherwise return refuseProfile("'{request.exePath()}' is not a spellable path")
 
 		return match measureProfileCyclesPerTick(request.rateHz) 'calibration'
 			counterStood gives refuseProfile("this host's per-thread cycle counter did not advance while the sampler's own thread spun, so no thread's CPU can be measured here — a virtual machine or emulator that does not virtualize it")
@@ -322,7 +328,7 @@
 		// working directory, so `dir/prog.exe` would be reported missing by the OS moments after this
 		// file found it.
 		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(target.anchoredAt(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDirectory(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
-			return refuseProfile("could not run {reportPathDisplay(request.exePath)}: {e.displayReason()}")
+			return refuseProfile("could not run {reportPathDisplay(request.exePath())}: {e.displayReason()}")
 		end 'didNotStart'
 
 		let outcome = sampleUntilItEnds(request, placement: placement, sidecar: sidecar, child: child, cyclesPerTick: cyclesPerTick)
@@ -351,7 +357,7 @@
 		let process = __Builtins.profileOpenTarget(pid)
 
 		if process == 0 'noSuchProcess'
-			return refuseProfileAfterKilling(child, reason: "{reportPathDisplay(request.exePath)} could not be sampled: it ended before the sampler attached. Profile a program that runs long enough to be measured.")
+			return refuseProfileAfterKilling(child, reason: "{reportPathDisplay(request.exePath())} could not be sampled: it ended before the sampler attached. Profile a program that runs long enough to be measured.")
 		end 'noSuchProcess'
 
 		let timer = __Builtins.profileTimerCreate()
@@ -429,7 +435,7 @@
 
 		_ = forwardChildTail(child, routing: ChildOutputRouting.allToStandardError)
 
-		return emitProfileReport(request, report: accumulator.finish(reportPathDisplay(request.exePath), targetStatus: status, runCompleted: completed, requestedRateHz: request.rateHz, ticks: session.ticks, durationSeconds: seconds, minPercent: request.minPercent))
+		return emitProfileReport(request, report: accumulator.finish(reportPathDisplay(request.exePath()), targetStatus: status, runCompleted: completed, requestedRateHz: request.rateHz, ticks: session.ticks, durationSeconds: seconds, minPercent: request.minPercent))
 	end 'runProfileTicks'
 
 	// What `pollExit` found, in the report's own vocabulary. A child still running has no status to report,

@@ -34,7 +34,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: Codepoint U+0100 exceeds the byte range 0-255 in byte string literal; use a \xNN hex escape to embed a raw byte
+error E1004: <fragment>:3:14: Codepoint U+0100 exceeds the byte range 0-255 in byte string literal; use a \xNN hex escape to embed a raw byte
 ```
 
 <!-- test: error.byte-string-literal.codepoint-uni-escape -->
@@ -45,7 +45,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: Codepoint U+0100 exceeds the byte range 0-255 in byte string literal; use a \xNN hex escape to embed a raw byte
+error E1004: <fragment>:3:14: Codepoint U+0100 exceeds the byte range 0-255 in byte string literal; use a \xNN hex escape to embed a raw byte
 ```
 
 <!-- test: error.byte-string-literal.codepoint-emoji -->
@@ -56,5 +56,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: Codepoint U+1f600 exceeds the byte range 0-255 in byte string literal; use a \xNN hex escape to embed a raw byte
+error E1004: <fragment>:3:14: Codepoint U+1f600 exceeds the byte range 0-255 in byte string literal; use a \xNN hex escape to embed a raw byte
 ```

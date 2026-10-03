@@ -1,80 +1,131 @@
-// Runtime/FnRefThunk.maxon — the `__fnref_<name>` environment thunks that make a PLAIN named function
-// usable as a first-class value under the uniform `(userargs, env)` calling convention (P1.5-A2b-2).
+// Runtime/FnRefThunk.maxon — a function VALUE's record, and the `__fnref_<name>` thunks that let a
+// PLAIN named function be one.
 //
-// ⭐ **WHY A WRAPPER, AND WHY ONLY FOR PLAIN FUNCTIONS.** A function VALUE is called through ONE uniform
-// indirect signature `(userargs, env) -> R`: a value passed DOWN to a generic `apply(f, x)` is called
-// `f(x, env)` with no static knowledge of whether it captures, so every callable value must accept the
-// trailing env. A LIFTED CLOSURE already carries that shape (its `__env` parameter — see
-// `Parser.parseClosureExpression`). A plain named function `triple(n)` does NOT, and it cannot simply gain
-// the parameter: its DIRECT calls `triple(10)` must stay `(userargs) -> R` (unchurned — and on wasm a
-// direct `call`'s arity is checked too). So `functionRef(triple)` materializes the address of a thunk
-// `__fnref_triple(n, __env)` whose signature IS `(userargs, env) -> R` — it ignores `__env` and forwards to
-// `triple`. On wasm the `call_indirect` functype is SIGNATURE-derived (P1.5 #78: per-argument register
-// file), so the table element's own ARITY must match exactly; on register targets the extra arg would be
-// harmless, but ONE thunk keeps a single cross-target lowering. The thunk is synthesized once per
-// referenced plain function, not per reference.
+// ⭐ **A FUNCTION VALUE IS A RECORD WHOSE FIRST WORD IS CODE.** An indirect call loads the code word
+// (`FunctionRecordCodeOffset`) and calls it with the user arguments followed by the record itself,
+// with no static knowledge of whether the value captures, so every callable value takes that one
+// trailing word. A LIFTED CLOSURE reads its captures out of the record (`envSlotOffset`); a plain
+// function's value is an immortal `.rdata` record with no captures (`registerFunctionRecord`).
 //
-// ⚠ **A TARGET'S HIDDEN COMPANION BLOCK IS THE THUNK'S TO FILL, AND ONLY ONE KIND OF IT CAN BE.** A
-// function that ITSELF takes a function parameter (`let g = runner`) carries one hidden environment
-// parameter per such parameter, and the thunk supplies a null for each — the whole of what a function
-// value handed across a `callIndirect` carries (see `appendNullCompanionEnvArgs`). An INTERFACE-typed
-// parameter's companion is a WITNESS, for which there is no null: the uniform ABI drops the witness half
-// at the call site, so no value reaches the thunk to forward. That target is refused where the address is
-// taken (`SemanticCheck.requireFunctionValueTargetTakesNoWitness`), which is why this file fills the env
-// block and no other.
+// ⭐ **WHY A WRAPPER, AND WHY ONLY FOR PLAIN FUNCTIONS.** A plain named function `triple(n)` does
+// not take the trailing record, and it cannot simply gain the parameter: its DIRECT calls
+// `triple(10)` must stay `(userargs) -> R` (on wasm a direct `call`'s arity is checked too). So its
+// record's code word names a thunk `__fnref_triple(n, record)` that ignores the record and forwards
+// to `triple`. On wasm the `call_indirect` functype is SIGNATURE-derived, so the table element's
+// own ARITY must match exactly; on register targets the extra arg would be harmless, but ONE thunk
+// keeps a single cross-target lowering. The thunk is synthesized once per referenced plain
+// function, not per reference.
+//
+// ⚠ **AN INTERFACE-TYPED PARAMETER CANNOT CROSS THE THUNK.** Its WITNESS word has no slot in an
+// indirect call, which carries one word per argument, so the thunk would have nothing to forward.
+// Such a target is refused where the value is taken
+// (`SemanticCheck.requireFunctionValueTargetTakesNoWitness`).
 
 // A set of symbol names, for O(1) dedup while collecting thunk targets in source order.
 export typealias FnRefThunkSet = Set with ByteArray
 
 // True iff `name` is a lifted closure's synthesized name — `<enclosing>$closure_<k>` (see
-// `Parser.parseClosureExpression`), which is what tells a closure (already `(userargs, __env)`-shaped) from
-// a plain function (whose value use needs a thunk).
+// `Parser.parseClosureExpression`), which is what tells a closure (already
+// `(userargs, record)`-shaped) from a plain function (whose value use needs a thunk).
 //
 // ⛔ **THE TEST IS THE MARKER, NOT A BARE `$`.** `ProgramSignatures.assignDataLabels` disambiguates a
 // colliding `.data` label as `__data_counter$1`, so the byte has a second meaning and a name carrying one
 // such label is not a closure. `$closure_` is what `parseClosureExpression` mints, it survives nesting
 // (`f$closure_0$closure_1` still contains it), and no label disambiguator can produce it.
-function isLiftedClosureName(name ByteArray) returns bool
+export function isLiftedClosureName(name ByteArray) returns bool
 	return bytesContainRun(name, run: LiftedClosureMarker)
 end 'isLiftedClosureName'
 
 // The join + tag `Parser.parseClosureExpression` mints between an enclosing function and its lifted closure.
 let LiftedClosureMarker = b"$closure_"
 
-// The name of the env-thunk for plain function `funcName`. ONE builder, shared by the reference lowering
-// (`LowerMaxonToStd.lowerFunctionRef`, which emits `funcAddr(__fnref_<name>)`) and the synthesis below, so
-// the two spellings of the name cannot drift.
+let FnRefThunkPrefix = "__fnref_"
+
+// The name of the thunk for plain function `funcName`. ONE builder, shared by the record's code
+// word (`registerFunctionRecord`) and the synthesis below, so the two spellings of the name cannot
+// drift.
 export function fnRefThunkName(funcName ByteArray) returns ByteArray
-	return "__fnref_{String.from(funcName)}".toByteArray()
+	return "{FnRefThunkPrefix}{String.from(funcName)}".toByteArray()
 end 'fnRefThunkName'
 
-// ⭐⭐ **DOES A VALUE USE OF `funcName` NEED THE UNIFORM-ABI ENV THUNK?** ONE fact, read by the two sites that
-// must not disagree about it: `LowerMaxonToStd.lowerFunctionRef`, which NAMES the address a `funcAddr`
-// materializes, and `noteFnRefTarget` below, which decides whether anything is there to name.
+export function fnRefThunkTarget(thunkName ByteArray) returns ByteArray throws AbsentError
+	if not String.from(thunkName).startsWith(FnRefThunkPrefix) 'notAThunk'
+		throw AbsentError.absent
+	end 'notAThunk'
+
+	return try thunkName.slice(FnRefThunkPrefix.byteLength(), endIndex: thunkName.count()) otherwise panic("fnRefThunkTarget: '{String.from(thunkName)}' begins with the thunk prefix, so it is at least that long")
+end 'fnRefThunkTarget'
+
+export let FunctionRecordCodeOffset = 0 as ByteOffset
+
+// The trailing record argument every callable value takes. `Parser.parseIndirectCall` appends the callee
+// value itself as the LAST argument of an `indirectCall`, so a consumer pairing `args` with the function
+// type's DECLARED parameters drops this many from the end (`SemanticCheck.checkIndirectCallArgs`) or passes
+// the trailing one through (`LowerMaxonToStd.crossFloatDomainArgs`).
+export let FunctionRecordArgCount = 1 as ParamCount
+
+export let FunctionRecordCaptureBase = 8 as ByteOffset
+
+let EnvSlotBytes = 8 as ByteOffset
+
+export function envSlotOffset(slot ElementIndex) returns ByteOffset
+	return FunctionRecordCaptureBase + (slot * EnvSlotBytes) as ByteOffset
+end 'envSlotOffset'
+
+let FunctionRecordLabelPrefix = "__fnrec_"
+
+export function functionRecordLabel(funcName ByteArray) returns String
+	return "{FunctionRecordLabelPrefix}{String.from(funcName)}"
+end 'functionRecordLabel'
+
+export function isFunctionRecordLabel(label String) returns bool
+	return label.startsWith(FunctionRecordLabelPrefix)
+end 'isFunctionRecordLabel'
+
+// Registered under its own label, never the byte-deduped door: every function record's bytes are
+// the same zero seed and its code word is a relocation, so deduping by bytes would hand every
+// function value one record.
+export function registerFunctionRecord(globalData GlobalDataTable, funcName ByteArray, funcSignatures FuncSignatureMap, debugStream bool) returns String
+	let label = registerImmortalRecordLabeled(globalData, label: functionRecordLabel(funcName), record: functionRecordSeedBytes(), kind: RdataPayloadKind.functionRecord, debugStream: debugStream)
+	let code = fnRefThunkName(funcName) if functionValueNeedsFnRefThunk(funcName, funcSignatures: funcSignatures) else funcName
+	globalData.recordFuncAbs64InRdata(code, rdataLabel: label, offsetInLabel: FunctionRecordCodeOffset)
+	return label
+end 'registerFunctionRecord'
+
+function functionRecordSeedBytes() returns ByteArray
+	var record = ByteArray.create()
+	record.growFilled(FunctionRecordCaptureBase as ElementIndex, value: 0)
+	return record
+end 'functionRecordSeedBytes'
+
+// ⭐⭐ **DOES A VALUE USE OF `funcName` NEED THE UNIFORM-ABI THUNK?** ONE fact, read by the sites that must
+// not disagree about it: `registerFunctionRecord`, which NAMES the code word a function value's
+// record holds, `LowerMaxonToStd.argsTheTargetTakes`, which drops the trailing record from a direct
+// call to the target, and `noteFnRefTarget` below, which decides whether anything is there to name.
 //
-// ⚠ **A DISAGREEMENT IS A COMPILE ERROR AT NEITHER SITE**, which is why the test cannot be written out twice
-// (it was, and it is how the A1r review's wasm trap survived a green suite): say-no here and say-yes there
-// and the program holds a `funcAddr` of a thunk nobody synthesized; the other way round it holds the bare
-// address of an `(args) -> R` function that every caller invokes as `(args, env) -> R`. The first is a link
-// failure, the second is a wrong-shaped call that a register target answers CORRECTLY BY ACCIDENT — the
-// extra `env` word lands in a register the callee never reads — and only a wasm `call_indirect`, which
-// type-checks the funcref against the table slot's functype, reports it at all.
+// ⚠ **A DISAGREEMENT IS A COMPILE ERROR AT NO SITE**, which is why the test cannot be written out twice:
+// say-no here and say-yes there and the program holds a code word naming a thunk nobody
+// synthesized; the other way round it holds the bare address of an `(args) -> R` function that
+// every caller invokes as `(args, record) -> R`. The first is a link failure, the second is a
+// wrong-shaped call that a register target answers CORRECTLY BY ACCIDENT — the extra record word
+// lands in a register the callee never reads — and only a wasm `call_indirect`, which type-checks
+// the funcref against the table slot's functype, reports it at all.
 //
-// A LIFTED CLOSURE already carries its own trailing `__env`, so it IS the uniform shape and needs no bridge.
+// A LIFTED CLOSURE already takes its own trailing record, so it IS the uniform shape and needs no bridge.
 // A COMPILER-EMITTED symbol is invoked through a bare `callIndirect(ptr)` in the drop walk rather than the
-// closure ABI (an array element destructor stamped into `element_destroy@40`, P1.7 slice 3), so it needs none
-// either — and "compiler-emitted" is the REGISTRY's answer, never the `__` prefix, because since D6/A1r
+// closure ABI (an array element destructor stamped into `element_destroy@40`), so it needs none
+// either — and "compiler-emitted" is the REGISTRY's answer, never the `__` prefix, because
 // `stdlib/Builtins.maxon` may declare a `__` name and a value use of THAT is an ordinary user function value.
-export function functionValueNeedsEnvThunk(funcName ByteArray, funcSignatures FuncSignatureMap) returns bool
-	if isLiftedClosureName(funcName) 'alreadyEnvShaped'
+export function functionValueNeedsFnRefThunk(funcName ByteArray, funcSignatures FuncSignatureMap) returns bool
+	if isLiftedClosureName(funcName) 'alreadyRecordShaped'
 		return false
-	end 'alreadyEnvShaped'
+	end 'alreadyRecordShaped'
 
 	return not isSignaturelessCompilerCallee(funcName, funcSignatures: funcSignatures)
-end 'functionValueNeedsEnvThunk'
+end 'functionValueNeedsFnRefThunk'
 
-// Collect every function referenced as a value (`functionRef`) that needs the env thunk, in first-seen source
-// order, deduped — WHICH ones is `functionValueNeedsEnvThunk`'s answer above and is not restated here. Read
+// Collect every function referenced as a value (`functionRef`) that needs a `__fnref_` thunk, in first-seen source
+// order, deduped — WHICH ones is `functionValueNeedsFnRefThunk`'s answer above and is not restated here. Read
 // post-pipeline by `installFnRefThunks`; the walk mirrors `StringRuntime.scanRuntimeUsage`'s — one linear pass
 // over the Maxon ops. `funcSignatures` rides along for that one predicate.
 export function collectFnRefThunkTargets(module MaxonModule, funcSignatures FuncSignatureMap) returns ByteArrayArray
@@ -117,11 +168,11 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 			throwError or
 			propagateError or
 			panicAbort then break 'op'
-		functionRef(_, funcName) then noteFnRefTarget(funcName, seen: seen, targets: targets, funcSignatures: funcSignatures)
+		functionRef(_, funcName, form) then noteFnRefTarget(funcName, form: form, seen: seen, targets: targets, funcSignatures: funcSignatures)
 		indirectCall then break 'op'
 
-		// P1.5-B1a/B2b: an async spawn takes the DIRECT function's address in lowering (not a `functionRef`
-		// through the uniform `(userargs, env)` ABI — the trampoline calls it with user args only), so it
+		// An async spawn takes the DIRECT function's address in lowering (not a function value through
+		// the uniform `(userargs, record)` ABI — the trampoline calls it with user args only), so it
 		// names no thunk target; `await`/`try await` reference no function value.
 		asyncCall or
 			await or
@@ -133,7 +184,7 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 		switch then break 'op'
 
 		// A witness dispatch names no function value — it dispatches through a runtime witness table, not a
-		// `funcAddr` thunk target (P1.7a slice 2a); nor does its throwing form.
+		// `funcAddr` thunk target; nor does its throwing form.
 		witnessDispatch or
 			witnessTryDispatch then break 'op'
 
@@ -146,7 +197,7 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 		// No service op names a function VALUE. The two addresses a `serviceSpawn` lowers to (`<T>.__loop`,
 		// `<T>.__abandon`) and the one a `serviceReplyCell` lowers to (`__gt_reply_release_<message>`) are
 		// `StdOp.funcAddr`s the LOWERING mints, and every one is called through the uniform runtime ABI rather
-		// than through a function value's `(args, env)` one.
+		// than through a function value's `(args, record)` one.
 		serviceSpawn or
 			serviceSend or
 			serviceReplyCell then break 'op'
@@ -160,11 +211,16 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 	end 'op'
 end 'noteIfFunctionRef'
 
-// A target that needs the env thunk (`functionValueNeedsEnvThunk` — the one place that rule lives) joins the
+// A target that needs the thunk (`functionValueNeedsFnRefThunk` — the one place that rule lives) joins the
 // ordered thunk list the first time it is seen. A `__` name that IS in `funcSignatures` reaches
 // `synthesizeFnRefThunk` from here and finds the signature that routine panics without.
-function noteFnRefTarget(funcName ByteArray, seen FnRefThunkSet, targets ByteArrayArray, funcSignatures FuncSignatureMap)
-	if not functionValueNeedsEnvThunk(funcName, funcSignatures: funcSignatures) 'noThunk'
+function noteFnRefTarget(funcName ByteArray, form FunctionRefForm, seen FnRefThunkSet, targets ByteArrayArray, funcSignatures FuncSignatureMap)
+	match form 'form'
+		codeAddress then return
+		functionValue then break 'form'
+	end 'form'
+
+	if not functionValueNeedsFnRefThunk(funcName, funcSignatures: funcSignatures) 'noThunk'
 		return
 	end 'noThunk'
 
@@ -176,23 +232,23 @@ function noteFnRefTarget(funcName ByteArray, seen FnRefThunkSet, targets ByteArr
 	targets.push(funcName)
 end 'noteFnRefTarget'
 
-// Synthesize the `__fnref_<name>` env-thunk for every plain function used as a value. Appended
+// Synthesize the `__fnref_<name>` thunk for every plain function used as a value. Appended
 // already-lowered AFTER the pipeline (like the destructor cascades — what runs over that appended band is
 // stated once, in `Compiler.compileToCodeResult`'s install block), and they still flow through the whole
 // backend (ISel, register allocation, frames) — and on wasm get a funcref-table
-// slot at their funcIdx, which is what `funcAddr(__fnref_<name>)` materializes.
+// slot at their funcIdx, which is what a function record's code word names.
 export function installFnRefThunks(module StdModule, project Project, targets ByteArrayArray)
 	for target in targets 'each'
 		synthesizeFnRefThunk(module, project: project, targetName: target)
 	end 'each'
 end 'installFnRefThunks'
 
-// Emit `__fnref_<name>(userargs..., __env) -> R`:
+// Emit `__fnref_<name>(userargs..., record) -> R`:
 //
-//   entry: materialize each parameter (the trailing `__env` is discarded),
-//          `call <name>(userargs..., nulls for the target's companion env block)`, `ret` the result.
+//   entry: materialize each parameter (the trailing record is discarded),
+//          `call <name>(userargs...)`, `ret` the result.
 //
-// ⭐ EACH USER PARAMETER TAKES THE TARGET'S REAL TYPE, the trailing `__env` an i64 (P1.5 #78). A FLOAT
+// ⭐ EACH USER PARAMETER TAKES THE TARGET'S REAL TYPE, the trailing record an i64. A FLOAT
 // parameter is an f64: the thunk must capture it from a float argument register and forward it to the
 // target — which reads it from a float register too — so a float user param typed i64 here would forward
 // a GPR value into the target's XMM parameter (a cross-register-file move). Everything else — int, String,
@@ -206,7 +262,7 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	let sig = try project.funcSignatures.get(targetName) otherwise panic("synthesizeFnRefThunk: no signature for '{String.from(targetName)}' — a functionRef must name a registered function")
 	let ret = try project.funcReturnTypes.get(targetName) otherwise panic("synthesizeFnRefThunk: no return type for '{String.from(targetName)}'")
 	let userParamCount = sig.paramCount()
-	let thunkParamCount = (userParamCount + 1) as ParamCount
+	let thunkParamCount = (userParamCount + FunctionRecordArgCount) as ParamCount
 	let targetReturn = maxonReturnTypeToStdReturnType(ret)
 
 	// ⭐⭐ **EACH FORWARDED USER PARAMETER IS DECLARED THROUGH `maxonTypeToStdType` — THE SAME COLLAPSE THE CALL
@@ -217,36 +273,34 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	// functype against the funcref's own EXACTLY — is the only thing that would ever report the drift, at RUN
 	// time.
 	//
-	// ⚠⚠ **WIDTH IS NOT PART OF THAT AGREEMENT, AND TWO ATTEMPTS TO MAKE IT ONE EACH COST A TRAP (WASM3).**
-	// Widening a `bool` parameter to an i64 HERE trapped while the callee kept its declared `i1`; declaring it
-	// `i1` here and giving the call site a matching per-argument width mask trapped the moment the call site
-	// sat in a SHARED GENERIC BODY, where the declared type is an opaque `Element`. Neither is repairable,
-	// because the two ends do not read one declaration. What is: every wasm signature — this thunk's, a lifted
-	// CLOSURE's (which has no thunk at all), and every `call_indirect`'s — is emitted at the MACHINE WORD by
-	// `StdToWasm.wasmMachineValTypeOf`, so there is no width for them to disagree about. The `i1` declared here
-	// is therefore a STD-tier fact the wasm ABI does not carry, and the register targets never did.
-	// (`maxonTypeToStdType` is total over every type a RESOLVED signature can hold — a
-	// struct/String/function/type-parameter is an i64 pointer or opaque word by its own arm there — and panics
-	// only on the `named`/`unresolved` residues TypeResolution is required to have eliminated.)
+	// ⚠⚠ **WIDTH IS NOT PART OF THAT AGREEMENT.** Widening a `bool` parameter to an i64 HERE traps
+	// while the callee keeps its declared `i1`; declaring it `i1` here with a matching per-argument
+	// width mask at the call site traps where the call site sits in a SHARED GENERIC BODY, whose
+	// declared type is an opaque `Element`. The two ends do not read one declaration. What agrees
+	// instead: every wasm signature — this thunk's, a lifted CLOSURE's (which has no thunk at all),
+	// and every `call_indirect`'s — is emitted at the MACHINE WORD by
+	// `StdToWasm.wasmMachineValTypeOf`, so there is no width for them to disagree about. The `i1`
+	// declared here is therefore a STD-tier fact the wasm ABI does not carry, and the register targets
+	// never did. (`maxonTypeToStdType` is total over every type a RESOLVED signature can hold — a
+	// struct/String/function/type-parameter is an i64 pointer or opaque word by its own arm there —
+	// and panics only on the `named`/`unresolved` residues TypeResolution is required to have
+	// eliminated.)
 	var paramTypes = StdTypeArray.create()
 
 	for i in 0 upto userParamCount 'eachUserParamType'
 		paramTypes.push(maxonTypeToStdType(try sig.paramTypes.get(i) otherwise panic("synthesizeFnRefThunk: sig.paramTypes.get OOB at {i} for '{String.from(targetName)}'")))
 	end 'eachUserParamType'
 
-	// The trailing companion `__env` pointer is always an i64 machine word.
 	paramTypes.push(StdType.i64)
 
-	// ⭐ THE UNIFORM `(userargs, env) -> R` INDIRECT ABI ALWAYS YIELDS ONE MACHINE WORD (P1.5 #68). A
+	// ⭐ THE UNIFORM `(userargs, record) -> R` INDIRECT ABI ALWAYS YIELDS ONE MACHINE WORD. A
 	// value-returning target forwards its result; a VOID target's word is a DUMMY the caller discards —
 	// mirroring a void DIRECT call, whose return register holds a garbage integer nobody reads
 	// (StdLoweringShared.calleeResultClass). The single result slot is not optional: on wasm the
 	// `call_indirect` type check demands the funcref present exactly the one result the caller declares
 	// (`emitCallIndirect` always `local.set`s it), and `LowerMaxonToStd.indirectResultType` declares that
-	// result an i64 for a void function value — so the thunk must return an i64 to match. This is what makes
-	// `let cb = doIt; cb()` callable, where a `panic` stood while statement-position indirect calls were
-	// unsupported.
-	var func = IrFunction.createFromStd(fnRefThunkName(targetName), returnType: fnRefThunkReturnType(targetReturn), paramCount: thunkParamCount, paramTypes: paramTypes, returnLine: 0)
+	// result an i64 for a void function value — so the thunk must return an i64 to match.
+	var func = IrFunction.createFromStd(fnRefThunkName(targetName), returnType: fnRefThunkReturnType(targetReturn), paramCount: thunkParamCount, paramTypes: paramTypes)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitTypedParams(module, block: entry, paramTypes: paramTypes)
 
@@ -257,44 +311,12 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 		forwardArgs.push(valueIdAtParamPosition(i))
 	end 'eachArg'
 
-	appendNullCompanionEnvArgs(module, block: entry, sig: sig, values: values, forwardArgs: forwardArgs)
-
 	let callResult = values.mint()
 	module.appendOp(entry, op: StdOp.call(callResult, callee: targetName, args: forwardArgs))
 	emitFnRefThunkReturn(module, block: entry, targetReturn: targetReturn, callResult: callResult, values: values)
 
 	module.functions.push(func)
 end 'synthesizeFnRefThunk'
-
-// ⭐⭐ **THE TARGET'S HIDDEN COMPANION ENVIRONMENT, ONE PER FUNCTION-TYPED PARAMETER, AND A NULL IS THE
-// ONLY VALUE THERE IS TO SUPPLY.** `Parser.bindClosureEnvParams` appends one env parameter per function-typed
-// user parameter, past the user block, and the target's body threads it as the environment of the indirect
-// call it makes THROUGH that parameter. A direct call site fills the block from the argument's own
-// environment (`LowerMaxonToStd.appendCalleeEnvArgs`); this thunk is entered from a `callIndirect`, which
-// carries one machine word per argument and so hands a function-typed argument across as a bare code
-// pointer. That pointer is a `__fnref_` thunk or a lifted closure — a capturing closure as an indirect
-// call's argument is refused (E3099) — and neither reads an environment, so the null is the whole of what
-// such an argument carries rather than a filler for a slot nobody looks at.
-//
-// ⚠ One `const 0` serves every companion: they are the same absence, and the backend copies the value into
-// each argument register.
-//
-// The count comes from `countParamsWithTag` because the parser's RESERVATION side does — a second body for
-// it would be two answers to one ABI question.
-function appendNullCompanionEnvArgs(module StdModule, block IrBlock, sig FuncSignature, values ValueMinter, forwardArgs ValueIdArray)
-	let companionCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.function)
-
-	if companionCount == 0 'targetTakesNoFunctionParameter'
-		return
-	end 'targetTakesNoFunctionParameter'
-
-	let nullEnv = values.mint()
-	module.appendOp(block, op: StdOp.const(nullEnv, value: 0, valueType: StdType.i64))
-
-	for _ in 0 upto companionCount 'eachCompanion'
-		forwardArgs.push(nullEnv)
-	end 'eachCompanion'
-end 'appendNullCompanionEnvArgs'
 
 // The thunk's OWN Std return type: a value-returning target's is forwarded unchanged; a VOID target's is
 // `value(i64)`, because the uniform indirect ABI presents exactly one result and `void` would present none
@@ -317,8 +339,8 @@ function emitFnRefThunkReturn(module StdModule, block IrBlock, targetReturn StdR
 end 'emitFnRefThunkReturn'
 
 // A VOID target's thunk returns a garbage i64 the caller discards — a fresh `const 0` supplies the one
-// machine word the uniform `(userargs, env) -> R` indirect ABI must present, since the forwarded void
-// `call`'s own result slot names no readable value (see `synthesizeFnRefThunk`).
+// machine word the uniform `(userargs, record) -> R` indirect ABI must present, since the forwarded
+// void `call`'s own result slot names no readable value (see `synthesizeFnRefThunk`).
 function emitVoidThunkReturn(module StdModule, block IrBlock, dummy ValueId)
 	module.appendOp(block, op: StdOp.const(dummy, value: 0, valueType: StdType.i64))
 	module.setTerminator(block, op: StdOp.ret(dummy))

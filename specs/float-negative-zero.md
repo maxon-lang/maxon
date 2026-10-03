@@ -18,9 +18,9 @@ different answers: `0.0 - 0.0` is `+0.0`, while negation is a SIGN-BIT FLIP and 
 Maxon's `-` is the flip, everywhere it can appear. A leading `-` on a float literal is folded INTO
 the literal (`Parser.parseNegatedFloatLiteral`, via `negatedFloatBits`); `-x` over a variable, a
 parameter or a top-level constant is a genuine negation (`MaxonUnaryOp.fneg` — arm64 `fneg`, wasm
-`f64.neg`, and on x64 an `xorpd` against a sign mask, `TargetOp.negF64RegReg`). Until 2026-08-30 the
-variable form was compiled as `0.0 - x`, so `let z = 0.0; print("{-z}")` printed `0.0` and
-`Json.parse("-0")` answered `+0.0`; the cases below pin the flip at every entrance.
+`f64.neg`, and on x64 an `xorpd` against a sign mask, `TargetOp.negF64RegReg`). So
+`let z = 0.0; print("{-z}")` prints `-0.0` and `Json.parse("-0")` answers `-0.0`; the cases below pin
+the flip at every entrance.
 
 ## Tests
 
@@ -40,8 +40,8 @@ signed-zero argument combinations, the three with a zero RESULT through that bui
 ### Negating a float VARIABLE flips its sign bit
 
 `-x` over a value the compiler cannot see is a genuine negation, not `0.0 - x`. For every input
-but a zero the two agree, which is why the ordinary case below was green under both spellings;
-the zero cases after it are the ones that tell them apart, and they are what `0.0 - x` failed.
+but a zero the two agree, so the ordinary case below passes under both spellings;
+the zero cases after it are the ones that tell them apart.
 
 <!-- test: negating-a-float-variable -->
 ```maxon

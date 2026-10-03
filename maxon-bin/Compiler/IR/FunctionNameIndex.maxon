@@ -37,9 +37,9 @@
 //   * `IR/PassPipeline.run` — Maxon tier, ONCE for the whole pipeline, over the array `resolveTypes`,
 //     `semanticCheck` and `lowerMaxonToStd` all walk, and the FIRST site downstream of
 //     `installManagedGlobalInit`. It can see a declaration of `__module_init` / `__maxon_global_cleanup`
-//     against the compiler's own. `SemanticCheck.buildParamMutationSummary` and the two other name-keyed
-//     maps that pass builds take this index as an argument rather than building their own, which would make
-//     them right by ORDERING alone and unable to say so.
+//     against the compiler's own. `SemanticCheck.buildParamMutationSummary` and the other
+//     name-keyed map that pass builds (`buildThrowsMap`) take this index as an argument rather than
+//     building their own, which would make them right by ORDERING alone and unable to say so.
 //   * `IR/Std/DeadFunctionElimination` — Std tier, after every `install*Runtime`, and TWICE: once over the
 //     array it prunes (the walk resolves its call-graph edges through it) and once over the array it leaves
 //     behind, which is the one every backend then resolves a callee through. It can see the above plus a
@@ -150,6 +150,10 @@ export type FunctionNameIndex
 		let index = try self.byName.get(name)
 		return try self.functions.get(index) otherwise panic("FunctionNameIndex.funcNamed: '{String.from(name)}' maps to position {index}, which is outside the array the index was built over")
 	end 'funcNamed'
+
+	export function byReferenceParamsOf(callee ByteArray) returns ParamPositionMask
+		return (try self.funcNamed(callee) otherwise panic("FunctionNameIndex.byReferenceParamsOf: '{String.from(callee)}' is called but no function of the module carries the name")).reassignedParamMask
+	end 'byReferenceParamsOf'
 end 'FunctionNameIndex'
 
 // ⭐⭐ **THREE CAUSES SHARE ONE SYMPTOM, AND PROVENANCE IS WHAT TELLS THEM APART.** Two of them are
@@ -190,15 +194,15 @@ function refuseDuplicateFunctionName(functions IrFunctionArray, project Project,
 	let earlier = earlierFunctionNamed(functions, name: later.name, before: laterIndex)
 	let name = String.from(later.name)
 
-	if earlier.sourceFilePath.isEmpty() != later.sourceFilePath.isEmpty() 'oneOfEachProvenance'
+	if earlier.isCompilerBuilt() != later.isCompilerBuilt() 'oneOfEachProvenance'
 		// The parsed side carries the author's position; the synthesized side's is blank by construction,
 		// and an unpositioned diagnostic is barely better than the panic it replaces.
-		let declared = later if earlier.sourceFilePath.isEmpty() else earlier
+		let declared = later if earlier.isCompilerBuilt() else earlier
 		reportAtFunctionName(project, func: declared, code: ErrorCode.declarationTakesCompilerOwnedName, message: "declaration of '{name}' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it")
 		throw CompileError.compileError
 	end 'oneOfEachProvenance'
 
-	if later.sourceFilePath.isEmpty() 'bothSynthesized'
+	if later.isCompilerBuilt() 'bothSynthesized'
 		panic("refuseDuplicateFunctionName: two SYNTHESIZED functions are named '{name}' — every runtime symbol is installed at exactly one site, so this is an installer that ran twice (or a compile driven twice over one memoized module), and the name index can only keep one of them")
 	end 'bothSynthesized'
 

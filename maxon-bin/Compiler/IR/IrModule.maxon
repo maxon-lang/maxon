@@ -28,28 +28,20 @@ export type IrModule uses Op
 	export var blocks as IrBlockArray = IrBlockArray.create()
 	export var ops as OpArray = OpArray.create()
 
-	// Parallel to `blocks`: entry at index i describes the source footprint
-	// of blocks[i]. Populated by the parser at every block-creation site,
-	// preserved through lowerMaxonToStd, and consumed by the coverage
-	// instrumentation pass to map each block to the source lines it covers.
-	// Blocks created outside the parser (e.g. by later passes) keep the
-	// BlockSourceInfo.empty() sentinel.
-	export var blockSourceInfo as BlockSourceInfoArray = BlockSourceInfoArray.create()
-
 	// Parallel to `ops`: entry i is the SOURCE SPAN of ops[i], as an id into `Project.debugSpanTable`.
 	// Filled through the cursor on the column rather than at each append site — see `DebugSpanColumn`.
 	// Empty and untouched unless the build asked for debug info, which is what keeps the emitted code
 	// byte-identical either way.
 	export var spans as DebugSpanColumn = DebugSpanColumn.create()
 
-	// ⭐⭐ **WHETHER THE CODE THIS MODULE EMITS CARRIES THE DEBUGSTREAM PRODUCER (`--debugstream`,
-	// Workstream O3), AND IT IS A FIELD RATHER THAN A PARAMETER FOR ONE REASON: A BUILDER THAT FORGETS TO
-	// THREAD IT EMITS A SILENTLY INCOMPLETE TRACE.** Every runtime builder that allocates or refcounts must
-	// know it — the MM family, the String, array, list, file and directory runtimes, the synthesized
-	// destructor and cloner cascades — which is some forty functions across seven files. Threaded as an
-	// argument, the failure mode of a NEW one that does not pass it along is not a compile error: it is an
-	// allocation that never appears in the trace, which is exactly the lie this whole instrument exists to
-	// prevent. Asked of the module, there is nothing to forget.
+	// ⭐⭐ **WHETHER THE CODE THIS MODULE EMITS CARRIES THE DEBUGSTREAM PRODUCER (`--debugstream`), AND
+	// IT IS A FIELD RATHER THAN A PARAMETER FOR ONE REASON: A BUILDER THAT FORGETS TO THREAD IT EMITS
+	// A SILENTLY INCOMPLETE TRACE.** Every runtime builder that allocates or refcounts must know it —
+	// the MM family, the String, array, list, file and directory runtimes, the synthesized destructor
+	// and cloner cascades — which is some forty functions across seven files. Threaded as an argument,
+	// the failure mode of a NEW one that does not pass it along is not a compile error: it is an
+	// allocation that never appears in the trace, which is exactly the lie this whole instrument
+	// exists to prevent. Asked of the module, there is nothing to forget.
 	//
 	// It is also the honest place for it. This is not per-call-site information: it is a property of the
 	// WHOLE emitted module, set once by the driver from `buildCarriesDebugStream` before any runtime is
@@ -86,6 +78,10 @@ export type IrModule uses Op
 	export var usesBackgroundPriority as bool = false
 
 	export var usesProcessLiveness as bool = false
+
+	export var usesProcessNamespace as bool = false
+
+	export var usesEntropy as bool = false
 
 	// ⭐ **DOES THIS IMAGE ASK WHETHER STDOUT IS A TERMINAL?** Set from `RuntimeUsage.usesTerminalDetection`,
 	// and read in exactly one place — the PE writer's OPTIONAL trailing import band, which is where
@@ -176,15 +172,15 @@ export type IrModule uses Op
 	//
 	// Set once by `installGtRuntime` from the tags it registered, before it builds anything.
 	//
-	// ⚠ It defaults to the UNTRACED table, whose empty operation list is what `GtTraceTags.ioTag` reads as
-	// "no suffix" — so every `IrModule.create()` site is unchanged, the park keeps its zero arity and an
-	// ordinary build is byte-identical. The Maxon and Target modules carry the field and neither reads it,
-	// which is the price of one generic container that `debugStream` already records.
-	export var asyncTraceTags as GtTraceTags = GtTraceTags.none()
+	// ⚠ It defaults to `GtTracing.untraced`, which carries no tags and so means "no suffix" — so every
+	// `IrModule.create()` site is unchanged, the park keeps its zero arity and an ordinary build is
+	// byte-identical. The Maxon and Target modules carry the field and neither reads it, which is the
+	// price of one generic container that `debugStream` already records.
+	export var asyncTracing as GtTracing = GtTracing.untraced
 
 	// ⭐⭐ **DOES A BLOCKING KERNEL CALL YIELD ON THIS TARGET?** True wherever `targetProvidesFacility` grants
 	// `greenThreads`; false on a lane that has no scheduler at all. `emitIoPark`'s call sites ask it here for
-	// `asyncTraceTags`' reason one field up: none of them is handed the target, and threading it would make a builder that forgot to pass it emit a park
+	// `asyncTracing`' reason one field up: none of them is handed the target, and threading it would make a builder that forgot to pass it emit a park
 	// into a program with nothing to park on.
 	//
 	// ⚠ **A FALSE HERE IS NOT AN OPTIMIZATION, IT IS THE ONLY CORRECT ANSWER ON SUCH A LANE.** The park exists
@@ -399,8 +395,7 @@ export type IrModule uses Op
 		end 'noOrphans'
 
 		// The span column is parallel to `ops` only on a build that asked for debug info; on every other
-		// one it is empty and there is nothing to compact. Guarded exactly as `compactBlocks` guards
-		// `blockSourceInfo`, and for the same reason.
+		// one it is empty and there is nothing to compact.
 		//
 		// ⚠ **THE COUNT IS ASKED, NOT USED AS THE CONDITION.** A capturing module whose column had gone
 		// short would fail a `count == oldCount` test and be quietly left uncompacted — desynced from the
@@ -452,8 +447,7 @@ export type IrModule uses Op
 		rewriteBlockOpRefs(self.functions, blocks: self.blocks, plan: plan)
 	end 'compactOps'
 
-	// Reclaim orphaned blocks from `self.blocks` (and the parallel
-	// `self.blockSourceInfo`) in place.
+	// Reclaim orphaned blocks from `self.blocks` in place.
 	//
 	// A pass that drops a function (`eliminateDeadFunctions`) or a block leaves
 	// the blocks it dropped resident in the shared `self.blocks` array — they
@@ -469,7 +463,7 @@ export type IrModule uses Op
 	// (see DeadFunctionElimination's header).
 	//
 	// In-place, mirroring `compactOps`: live blocks are swapped leftward within
-	// the existing `self.blocks` / `self.blockSourceInfo` arrays and the tails
+	// the existing `self.blocks` array and the tail
 	// truncated, so no second blocks-sized array is ever allocated. The only
 	// extra allocations are the two `blockCount`-sized maps (live flags +
 	// forwarding).
@@ -491,17 +485,7 @@ export type IrModule uses Op
 			return
 		end 'noOrphans'
 
-		// `blockSourceInfo` is parallel to `blocks` only while the parser-built
-		// table is still live (the Maxon and Std tiers): the Std→Target skeleton
-		// clone (`StdToX64Lowering.prepareSkeleton`) rebuilds `blocks` 1:1 but
-		// leaves `blockSourceInfo` empty, since coverage instrumentation — its
-		// only consumer — already ran in the Std tier. Compact the source-info
-		// table in lockstep only when it is actually parallel; in the Target tier
-		// it is empty and there is nothing (and nobody) to compact.
-		let compactSourceInfo = self.blockSourceInfo.count() == oldCount
-
-		// Swap each live block (and its parallel source-info entry, when present)
-		// leftward into its compacted slot. `forward[old] <= old` (dense ascending
+		// Swap each live block leftward into its compacted slot. `forward[old] <= old` (dense ascending
 		// assignment), so the slot at `old` still holds original block `old` when
 		// we reach it — the same clobber-free property `compactOps` relies on. Swap
 		// (not set) so the displaced orphan is parked at `old` for truncation
@@ -515,23 +499,15 @@ export type IrModule uses Op
 
 			if newIdx != oldIdx 'needsSwap'
 				self.blocks.swap(newIdx, j: oldIdx as ElementIndex)
-
-				if compactSourceInfo 'swapInfo'
-					self.blockSourceInfo.swap(newIdx, j: oldIdx as ElementIndex)
-				end 'swapInfo'
 			end 'needsSwap'
 		end 'move'
 
 		// Every orphan now sits in the contiguous tail `[liveCount, oldCount)`.
-		// Pop each off `blocks` (and `blockSourceInfo` when parallel) and drop it
+		// Pop each off `blocks` and drop it
 		// (releasing the orphan block's `opRefs`/`blockArgs`/`branchEdges` array
 		// payloads).
 		for _ in plan.liveCount upto oldCount 'dropOrphan'
 			_ = try self.blocks.pop() otherwise panic("compactBlocks: blocks.pop on non-empty tail failed")
-
-			if compactSourceInfo 'popInfo'
-				_ = try self.blockSourceInfo.pop() otherwise panic("compactBlocks: blockSourceInfo.pop on non-empty tail failed")
-			end 'popInfo'
 		end 'dropOrphan'
 
 		rewriteFuncBlockRefs(self.functions, plan: plan)
@@ -570,7 +546,6 @@ export type IrModule uses Op
 
 	export function pushBlock(block IrBlock)
 		self.blocks.push(block)
-		self.blockSourceInfo.push(BlockSourceInfo.empty())
 	end 'pushBlock'
 
 	export function funcCount() returns ElementIndex
@@ -672,25 +647,11 @@ export type IrModule uses Op
 		let id = func.nextBlockId
 		func.nextBlockId = func.nextBlockId + 1
 		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label, heat: heat, inlineSite: inlineSite)
-		self.blockSourceInfo.push(BlockSourceInfo.empty())
 		return block
 	end 'addBlock'
 
 	// There is no mid-list block insertion: a continuation block's ref cannot be spliced between
 	// existing ones, because that needs a `NodeIndex` list-position type this module does not have.
-
-	// Parser-facing variant of addBlock that records the block's source
-	// footprint (file path + opening line) in the parallel blockSourceInfo
-	// table. `firstLine` is the line of the token that triggered the block's
-	// creation — the condition/while keyword, the entry token of a function
-	// body, etc. A parsed block is `normal` until the parser knows otherwise (a panic-form `tryerr`).
-	export function addBlockAt(func IrFunction, label ByteArray, filePath String, firstLine LineNumber) returns IrBlock
-		let id = func.nextBlockId
-		func.nextBlockId = func.nextBlockId + 1
-		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label, heat: BlockHeat.normal, inlineSite: InlineSiteRef.none)
-		self.blockSourceInfo.push(BlockSourceInfo.create(filePath, firstLine: firstLine))
-		return block
-	end 'addBlockAt'
 
 	// Create a new IrBlock, append it to the blocks array, and register its
 	// index in the function's blockRefs. The caller must bump func.nextBlockId
@@ -747,8 +708,6 @@ export type IrModule uses Op
 		for i in 0 upto source.blocks.count() 'eachBlock'
 			let srcBlock = try source.blocks.get(i) otherwise panic("merge: blocks.get out of bounds")
 			self.blocks.push(relocateIrBlock(srcBlock, opOffset: opOffset))
-			let srcInfo = try source.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
-			self.blockSourceInfo.push(srcInfo)
 		end 'eachBlock'
 
 		for srcFunc in source.functions 'eachFunc'
@@ -761,7 +720,6 @@ export type IrModule uses Op
 	export function releaseBody()
 		self.ops = OpArray.create()
 		self.blocks = IrBlockArray.create()
-		self.blockSourceInfo = BlockSourceInfoArray.create()
 		self.spans.releaseRows()
 	end 'releaseBody'
 

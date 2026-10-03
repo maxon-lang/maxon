@@ -57,8 +57,8 @@ counter would be unknown — the refinement is the whole of what proves a loop c
 failed. The evidence is the committed fragments of the shape cases (no `__rc_panic` block where a check
 was proven) and the CONTROLS, each a program that must still panic because its value is NOT proven:
 a counter walked below zero, an increment that wraps past `i64.max`, a value refined on one edge and
-used on the other, a two-sided alias whose upper bound a runtime limit can exceed. Measured under
-sabotage — `add` saturating its corners instead of going to the whole range — exactly one case moves:
+used on the other, a two-sided alias whose upper bound a runtime limit can exceed. With `add`
+saturating its corners instead of going to the whole range, exactly one case moves:
 `an-increment-that-wraps-still-panics` exits 3 through its `otherwise` where the panic is right.
 
 ## Tests

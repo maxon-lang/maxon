@@ -19,7 +19,7 @@ End-to-end tests for the `__ManagedMemory` builtin struct and its method dispatc
 `__ManagedMemory.create(4, elementSize: 8)` allocates a struct with capacity at
 least 4 and length 0. We verify both fields read back through the `length()` and
 `capacity()` getters (which lower to inline `loadIndirect` ops). Small requests
-now hold their elements inline in the record's own slab slot and report ALL the
+hold their elements inline in the record's own slab slot and report ALL the
 size-class slack as spare capacity, so `capacity()` may exceed the requested
 count — the invariant is `capacity >= requested`, not exact equality.
 ```maxon
@@ -97,7 +97,7 @@ end 'main'
 ```
 
 <!-- test: grow -->
-`grow(8)` raises capacity from 2 to 8. Previously written values must still be
+`grow(8)` raises capacity from 2 to 8. Values written before the grow must still be
 readable through the (potentially relocated) buffer.
 ```maxon
 function main() returns ExitCode

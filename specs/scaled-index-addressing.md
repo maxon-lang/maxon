@@ -10,9 +10,9 @@ category: codegen
 
 Every element access in the language is spelled by `ManagedMemoryRuntime.emitSlotAddr` as
 `index * element_size` feeding `buffer + offset` feeding a `loadIndirect`/`storeIndirect`, and
-`InlineManagedPrimitives` (EC1) puts that inline at every array read and write in every program. Until
-EC16 the x64 dialect could express exactly `[base + disp]` and `[base + index]` at **scale 1**, so the
-scaling was a separate instruction:
+`InlineManagedPrimitives` puts that inline at every array read and write in every program. Without a
+scaled-index form, `[base + disp]` and `[base + index]` at **scale 1** are all an address can say, so the
+scaling is a separate instruction:
 
 ```
 imul rcx, r13, 8      ; scale the index
@@ -36,15 +36,15 @@ matches that chain at instruction selection and hands the whole address to the m
 - **The chain must be in ONE BLOCK.** SSA makes a cross-block fold *correct* — the add's def dominates
   the memory op, so its own operands do too — but the live ranges of `base` and `index` would then
   stretch across a block boundary in place of a single value's, and the compiler REFUSES rather than spills
-  (`RegisterPressureDiagnostic`; EC13 measured exactly that as an `E5001`). Inside one block the
+  (`RegisterPressureDiagnostic`, an `E5001`). Inside one block the
   extension is bounded by the window between the add and its reader, which for the shape above is
   empty.
 
 ### The `lea` fires even where the memory fold does not, and it is pressure-neutral
 
 `base + i * 8` with no memory op at all is still ONE `lea` rather than an `imul` plus a `lea`, and it
-costs no register: before, `index` was live to the `imul` and the multiply's RESULT live from there to
-the `add`; after, `index` is live to the `lea` and there is no intermediate at all. Same count of
+costs no register: unfolded, `index` is live to the `imul` and the multiply's RESULT live from there to
+the `add`; folded, `index` is live to the `lea` and there is no intermediate at all. Same count of
 simultaneously-live values at every point, one fewer instruction.
 `a-scaled-address-with-no-memory-reader-is-still-one-lea` is that reading.
 
@@ -64,8 +64,8 @@ the pin: a fold that "helpfully" rewrote it would be changing code that was alre
 ### arm64 takes both halves, and its memory half is NARROWER
 
 `ADD Xd, Xn, Xm, LSL #k` is exactly `lea [base + index*2^k]`, and arm64 gains MORE from it than x64
-does — AArch64 has no multiply-immediate at all, so the scaling was a `movz` into the IP scratch plus a
-register `MUL`, three instructions where this is one.
+does — AArch64 has no multiply-immediate at all, so the unfolded scaling is a `movz` into the IP scratch
+plus a register `MUL`, three instructions where this is one.
 
 Its `LDR Xt, [Xn, Xm, LSL #k]` then carries the whole address, but on **strictly narrower terms** than
 x64's SIB byte, and both narrowings are the encoding's rather than a conservatism:
@@ -84,9 +84,9 @@ do. A chain outside those terms keeps its own `arm64AddLsl` and the access reads
 ## Tests
 
 <!-- test: an-indexed-element-read-is-one-instruction -->
-The shape the row was opened for. `for v in a` over an `Array with` an 8-byte element reads each
-element through `loadRegBaseIndexScale.word64 rax, [rax + <i>*8 + 0]` — one instruction where the
-committed fragment used to show `imul` / `lea` / `mov`. The sum is checked so a wrong address is a
+The canonical shape. `for v in a` over an `Array with` an 8-byte element reads each
+element through `loadRegBaseIndexScale.word64 rax, [rax + <i>*8 + 0]` — one instruction rather than
+`imul` / `lea` / `mov`. The sum is checked so a wrong address is a
 wrong exit code rather than a silent pass.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -204,19 +204,19 @@ end 'main'
 ```
 
 <!-- test: a-byte-strided-element-keeps-its-scale-1-address -->
-The stride-1 arm, which has no multiply to absorb: `index * 1` was folded to `index` by
+The stride-1 arm, which has no multiply to absorb: `index * 1` is folded to `index` by
 `foldConstOperands` long before this pass, so the address stays a scale-1 `leaRegRegReg` and the read
 stays a `loadRegBaseDisp.byte`. A fold that rewrote this would be changing code that was already one
 instruction shorter than the scaled form.
 
 ⚠ The fragment shows BOTH arms, and that is the point of reading it here rather than in the integer
-case: `emitStrideDispatch` emits the word arm (now one `loadRegBaseIndexScale`) and the byte arm (still
-`leaRegRegReg` + `loadRegBaseDisp.byte`) side by side even for a ByteArray. ⚠ **EC15 landed and did NOT
-remove the arm this program never takes, deliberately** — a byte-stamped container's record is stride 1
+case: `emitStrideDispatch` emits the word arm (one `loadRegBaseIndexScale`) and the byte arm
+(`leaRegRegReg` + `loadRegBaseDisp.byte`) side by side even for a ByteArray. ⚠ **Static stride
+specialization deliberately does NOT remove the arm this program never takes** — a byte-stamped container's record is stride 1
 or the machine word (a shared generic body creates its `Array with Element` at the word slot and hands
 it back under a substituted concrete type), so the fork is exactly the question that distinguishes them.
-`specs/static-stride-specialization.md` carries the measurement and the case that fails without it.
-The INTEGER cases above are where EC15 does fire, and their fragments no longer show a fork at all.
+`specs/static-stride-specialization.md` carries the case that fails without it.
+The INTEGER cases above are where it does fire, and their fragments show no fork at all.
 ```maxon
 typealias Byte = int(0 to 255)
 typealias Total = int(0 to u64.max)

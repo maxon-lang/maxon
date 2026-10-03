@@ -30,19 +30,17 @@ value takes a register the allocator picks, and an argument register that an ear
 is not a *value* — nothing marks it live from that move to the call — so nothing about SSA stops a store
 from silently overwriting one.
 
-⭐⭐ **TWO INDEPENDENT CURES ANSWER THAT, AND EACH ONE ALONE IS SUFFICIENT — MEASURED, 2026-08-06
-(BATCH29/X3), BY REMOVING THEM ONE AT A TIME AND THEN TOGETHER.** They are
+⭐⭐ **TWO INDEPENDENT CURES ANSWER THAT, AND EACH ONE ALONE IS SUFFICIENT.** They are
 `emitArgMovesByFloatMask`'s two-phase order (every stack store emitted before every register move, so no
 argument register exists yet while the stores run) and `sweepEstablishedRegisters`'s `establishedAtDef`
 forbid (a value defined while an argument register is pending may not be coloured onto it).
 
-- **Two-phase order removed, forbid intact** — source-order emission, the pre-fix shape. The emitted code
+- **Two-phase order removed, forbid intact** — source-order emission. The emitted code
   CHANGES (`movRegImm32 rax, 0` becomes `rcx, 0` in both `x64-stack-arg-disp32` cases) and every answer in
-  this file and that one stays RIGHT. The forbid caught it.
+  this file and that one stays RIGHT. The forbid catches it.
 - **Forbid removed, two-phase order intact** — the emitted code is BYTE-IDENTICAL, in both files. With the
-  stores first the forbid never had anything to forbid.
-- **BOTH removed** — three cases go red at once, with the exact historical symptom the routine's header
-  records: `x64-stack-arg-disp32/twenty-second-param-at-rbp-128` returns **400 instead of 200**,
+  stores first the forbid has nothing to forbid.
+- **BOTH removed** — three cases go red at once: `x64-stack-arg-disp32/twenty-second-param-at-rbp-128` returns **400 instead of 200**,
   `params-straddling-rbp-128-boundary` 210 instead of 150, and `every-argument-of-a-wide-call-is-distinct`
   below 272 instead of 253.
 
@@ -70,7 +68,7 @@ inconvenience: the capacity the shared rule is asked against is **six** per file
 seven- and eight-argument cases overflow on x64 and still fit in registers on arm64, while the
 twenty-two-argument one overflows everywhere. `wasm32-wasi`'s parameters are plain locals with no
 register file at all, so it covers the front-end half — the ABI slot count, the diagnostics — and
-nothing about slots. Each target's golden pins where ITS boundary landed, which is exactly the
+nothing about slots. Each target's golden pins where ITS boundary falls, which is exactly the
 cross-target agreement worth pinning: the same source, the same answer, three different placements.
 
 ## Tests
@@ -135,7 +133,7 @@ end 'main'
 
 <!-- test: seven-float-parameters -->
 The float file overflows on its own counter: seven floats need one stack slot even though no integer
-argument exists. Both reference compilers refuse this case outright.
+argument exists.
 ```maxon
 function sumf7(a Real, b Real, c Real, d Real, e Real, f Real, g Real) returns Real
 	return a + b + c + d + e + f + g
@@ -284,13 +282,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/stack-arguments/argument-slots-are-capped-and-the-cap-is-stated.test:4:10: Unsupported: a function with 65 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a companion environment per function-typed parameter, a layout descriptor for a generic that reads `sizeof`, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
+error E2015: specs/fragments/stack-arguments/argument-slots-are-capped-and-the-cap-is-stated.test:4:10: Unsupported: a function with 65 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a witness per interface-typed parameter, a layout descriptor for a generic that reads `sizeof`, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
 ```
 
 <!-- test: a-spawn-keeps-the-lower-async-argument-ceiling -->
 An `async` call's arguments do not travel in the calling convention at all — they ride the green
 thread's inline argument region, which the hand-assembled trampoline reads back into the argument
-registers — so a spawn has no stack-argument path even now that an ordinary call does. The lower
+registers — so a spawn has no stack-argument path although an ordinary call does. The lower
 ceiling is diagnosed rather than overrunning the region.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -312,7 +310,7 @@ error E2015: specs/fragments/stack-arguments/a-spawn-keeps-the-lower-async-argum
 ```
 
 <!-- test: every-argument-of-a-wide-call-is-distinct -->
-Twenty-two arguments, every one a DIFFERENT value, summed. The ported `x64-stack-arg-disp32` cases
+Twenty-two arguments, every one a DIFFERENT value, summed. The `x64-stack-arg-disp32` cases
 pass zeros everywhere but the boundary, so they catch a wrong displacement at one slot; this one
 catches a wrong slot ANYWHERE, because no two arguments can be swapped, duplicated or dropped without
 moving the total.

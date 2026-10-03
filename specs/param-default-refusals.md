@@ -24,16 +24,15 @@ for the declaration that wrote it — each is refused where the `=` is written, 
   to be filled from. The same refusal catches a name DECLARED TWICE by accident, whose duplicate-definition
   diagnostic (E3006) is only reported once every file has parsed — after the losing declaration's own
   helper is built.
-✅ **A `static` MEMBER BESIDE AN INSTANCE MEMBER OF ONE NAME WAS A FOURTH, AND IS NOT ANY MORE (W75).** That
+✅ **A `static` MEMBER BESIDE AN INSTANCE MEMBER OF ONE NAME IS NOT REFUSED.** That
 pair is not an overload set: the two are told apart by the KEY each is registered under (`m` and
-`m#__static`), and the sweep used to file parameter defaults under the one name the source wrote — so a
-`Type.m()` call asked the defaults registry for the static key, missed, and filled nothing, leaving the
-default inert and the call refused for an arity it never had. The sweep's by-name folds now key by the
-MEMBER each entry belongs to, and the synthesized helper is renamed with it, so each half of a pair carries
+`m#__static`). Filed under the one name the source wrote, a `Type.m()` call would ask the defaults
+registry for the static key, miss, and fill nothing, leaving the default inert and the call refused for an
+arity it never had. The sweep's by-name folds key by the MEMBER each entry belongs to, and the synthesized helper is renamed with it, so each half of a pair carries
 its own defaults. `same-name-methods.md` carries the pair's own rules; the cases below pin both halves and
 both declaration orders.
 
-⚠ **AN OVERLOAD SET WHOSE MEMBERS AGREE ON THAT SHAPE IS NOT REFUSED, AND USED TO BE (W74).** Members that
+⚠ **AN OVERLOAD SET WHOSE MEMBERS AGREE ON THAT SHAPE IS NOT REFUSED.** Members that
 declare the same parameters and default the same positions are filled identically whichever one a call
 resolves to, so there is nothing for a call to be told apart by — and each member's own default EXPRESSION
 is supplied once the member is known. `function-overloads.md` carries that half.
@@ -132,14 +131,12 @@ error E2015: <fragment>:4:22: Unsupported: a default value on parameter 'a' of '
 ```
 
 <!-- test: a-default-on-the-static-half-of-a-same-name-pair -->
-✅ **REFUSED UNTIL W75 (`error-default-on-the-static-half-of-a-same-name-pair`), AND THE REFUSAL'S OWN
-SENTENCE NAMED THE CURE.** A `static m` and an instance `m` are two members told apart by their registration
-KEY, and the defaults registry had ONE key for the two of them: `T.m()` asked it for `T.m#__static`, found
-nothing to fill, and the program was refused `E3036: 'T.m#__static' expects 1 argument(s) but 0 were
-provided` — a symbol no source wrote, blamed on a call the author got right. The by-name folds now key by the
-member each entry belongs to, and the synthesized helper is renamed with it, so the static's default is the
-static's. `T.m()` fills 7 and `t.m(2)` answers 3. ⚠ The oracle refuses this program on `E3007` — its rule
-about what a pair IS, not about the default.
+✅ **THE STATIC HALF OF A SAME-NAME PAIR CARRIES ITS OWN DEFAULT.** A `static m` and an instance `m` are
+two members told apart by their registration KEY. With ONE defaults key for the two of them, `T.m()` would
+ask for `T.m#__static`, find nothing to fill, and be refused `E3036: 'T.m#__static' expects 1 argument(s)
+but 0 were provided` — a symbol no source wrote, blamed on a call the author got right. The by-name folds
+key by the member each entry belongs to, and the synthesized helper is renamed with it, so the static's
+default is the static's. `T.m()` fills 7 and `t.m(2)` answers 3.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -169,12 +166,10 @@ end 'main'
 ```
 
 <!-- test: a-default-on-the-instance-half-of-a-same-name-pair -->
-✅ **THE SAME TWO MEMBERS DECLARED IN THE OTHER ORDER, AND THE POINT IS THAT THE ANSWER IS THE SAME.** It
-was not, twice over: before W74 the pair's two counts were tallied under different keys and this order was
-refused by the count comparison while the other compiled; before W75 both orders were refused outright. The
-sweep now files each member's defaults — and the tallies that judge them — under that member's own
+✅ **THE SAME TWO MEMBERS DECLARED IN THE OTHER ORDER, AND THE POINT IS THAT THE ANSWER IS THE SAME.** The
+sweep files each member's defaults — and the tallies that judge them — under that member's own
 registration key, which is settled by the second member to fold whichever one that is. `T.m(2)` answers 2
-and `t.m()` fills 4 onto a `v` of 1. ⚠ The oracle refuses on `E3007`, its own rule about pairs.
+and `t.m()` fills 4 onto a `v` of 1.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -204,16 +199,15 @@ end 'main'
 ```
 
 <!-- test: error-default-on-an-overloaded-name-a-second-directory-contests -->
-⛔⛔ **THE REFUSAL ABOVE, WITH ONE MORE DIRECTORY IN THE PROGRAM — AND UNTIL W78 THAT WAS ENOUGH TO TURN IT
+⛔⛔ **THE REFUSAL ABOVE, WITH ONE MORE DIRECTORY IN THE PROGRAM — WHICH MUST NOT TURN IT
 INTO A WRONG ANSWER.** These are the same two declarations `error-default-on-overloaded-name` refuses:
 `pick(a Num)` beside `pick(a Num, b Num = 5)`, called with one argument. `beta/` declares a `pick` of its
 own, which makes the bare name contested — so the sweep registers `alpha/`'s two declarations under
-`alpha.pick` while leaving the disagreement verdict and both declaration tallies on the bare `pick`. Every
-gate keyed on the registration name then read maps nothing had written for that key, answered "these
-declarations agree", and the short call was filled from the DEFAULTED member. MEASURED on `main`:
-**The compiler answered 210** (`2*100 + 5 + 5`) where the oracle answers **2**, silently, with no diagnostic and a
-green suite. ⚠ **Still narrower than the language**: the oracle compiles this program and selects the
-one-parameter member. The compiler refuses it for the same reason it refuses the root-level shape one case above —
+`alpha.pick`. A gate keyed on the registration name that found the disagreement verdict and the declaration
+tallies still on the bare `pick` would read maps nothing had written for that key, answer "these
+declarations agree", and fill the short call from the DEFAULTED member: **210** (`2*100 + 5 + 5`) where the
+program means **2**, silently, with no diagnostic. ⚠ **Still narrower than the language**: the program is
+legal and selects the one-parameter member. The compiler refuses it for the same reason it refuses the root-level shape one case above —
 the fill happens while the call is parsed, a pass before the overload is resolved.
 ```maxon
 // --- file: alpha/a.maxon
@@ -246,9 +240,8 @@ error E2015: alpha/specs/fragments/param-default-refusals/error-default-on-an-ov
 <!-- test: error-default-on-an-overloaded-name-a-second-directory-contests-defaulted-first -->
 ⭐ **THE SAME TWO DECLARATIONS IN THE OTHER ORDER.** Last-wins keying means only the reversal can tell a
 correct verdict from a lucky one: the by-name registries keep whichever declaration folded last, so a gate
-that happens to read the defaulted member's entry answers correctly in one order and not in the other.
-MEASURED before W78: **210 here too**, so the defect was not order-dependent — but a fix that only worked
-in one order would have looked identical from the case above.
+that happens to read the defaulted member's entry answers correctly in one order and not in the other,
+and a cure that only worked in one order would look identical from the case above.
 ```maxon
 // --- file: alpha/a.maxon
 export typealias Num = int(-1000 to 1000)
@@ -282,8 +275,7 @@ error E2015: alpha/specs/fragments/param-default-refusals/error-default-on-an-ov
 single-declaration contestant is in `alpha/` and the overload set is in `beta/`, so the contest is already
 known by the time the set's own file is folded — the opposite arrangement from the two cases above, where
 the set folded first and had to be moved off the bare key afterwards. The sweep reaches the tally through
-two different paths in the two arrangements, and only running both says whether they agree. MEASURED
-before W78: **210** here as well.
+two different paths in the two arrangements, and only running both says whether they agree.
 ```maxon
 // --- file: alpha/a.maxon
 export typealias Small = int(-1000 to 1000)
@@ -313,20 +305,19 @@ error E2015: beta/specs/fragments/param-default-refusals/error-default-on-an-ove
 ```
 
 <!-- test: error-default-on-a-contested-name-whose-declarations-disagree-about-parameter-names -->
-⛔⛔ **THE OTHER HALF OF W78's TALLY MOVE, AND NOTHING RAN IT UNTIL THIS CASE (found at review).** The
+⛔⛔ **THE OTHER HALF OF THE TALLY MOVE.** The
 three cases above all disagree by a MISSING default — one member publishes a shape and the other publishes
 nothing — which the sweep sees as two COUNTS that differ. This one disagrees the other way: both members
 publish a default, so the counts match and the only thing that can refuse it is the disagreement VERDICT
 `recordParamDefaults` files when two published shapes differ. `alpha/`'s members name their parameters
 `(a, b)` and `(x, y)`, so a short call cannot be told which pair of labels it is filling.
 
-⛔ **THE VERDICT HAS TO TRAVEL WITH THE ENTRIES, AND THAT MOVE HAD NO GATE.** `alpha/` folds first, so its
-verdict is filed under the bare `pick` and only `ProgramSignatures.moveDeclarationTallies` carries it onto
-`alpha.pick`. MEASURED by deleting that one line: this program **compiles and answers 65** while the
-identical program with the two directories folded in the other order still refuses, and the uncontested
-twin (`beta/` removed) still refuses — a silent, order-dependent accept that every committed case was
-green over. ⚠ **Still narrower than the language**: the oracle carries defaults per declaration and
-answers **67**.
+⛔ **THE VERDICT HAS TO TRAVEL WITH THE ENTRIES, AND THIS CASE IS THAT MOVE'S GATE.** `alpha/` folds first,
+so its verdict is filed under the bare `pick` and only `ProgramSignatures.moveDeclarationTallies` carries it
+onto `alpha.pick`. Without that one line this program would **compile and answer 65** while the identical
+program with the two directories folded in the other order still refuses, and the uncontested twin
+(`beta/` removed) still refuses — a silent, order-dependent accept. ⚠ **Still narrower than the
+language**: carrying defaults per declaration, the program answers **67**.
 ```maxon
 // --- file: alpha/a.maxon
 export typealias Num = int(-1000 to 1000)
@@ -356,16 +347,16 @@ error E2015: alpha/<fragment>:5:35: Unsupported: a default value on parameter 'b
 ```
 
 <!-- test: two-files-agreeing-on-their-defaults-report-ONE-duplicate -->
-Two files declaring one `f` with the SAME default shape are no longer refused at the `=` (W74) — they fall
-through to the duplicate-definition diagnostic the program always deserved. ⚠ **AND THEY MUST EARN EXACTLY
+Two files declaring one `f` with the SAME default shape are not refused at the `=` — they fall
+through to the duplicate-definition diagnostic the program deserves. ⚠ **AND THEY MUST EARN EXACTLY
 ONE OF IT.** A default is compiled as a synthesized function named after the declaration that owns it, so
 the duplicate `f` drags a duplicate `__paramDefault#f#0` behind it; reported, that second E3006 explains a
-symbol absent from the source in a sentence about parameter-type spellings the author never used. MEASURED
-before `FuncSignatureEntry.synthesized` existed, and again with the flag forced false: both E3006s printed.
+symbol absent from the source in a sentence about parameter-type spellings the author never used.
+`FuncSignatureEntry.synthesized` is what keeps the second one out.
 
-⚠ **BOTH FILES SPELL THE PARAMETER `Integer`, AND THAT IS LOAD-BEARING NOW THAT TWO FILES OF ONE
+⚠ **BOTH FILES SPELL THE PARAMETER `Integer`, AND THAT IS LOAD-BEARING BECAUSE TWO FILES OF ONE
 DIRECTORY ARE AN OVERLOAD SET** (`cross-file-overload-set.md`). Written with two SPELLINGS of one underlying
-type — `Integer` here and `Count` there, which is how this case read until then — the two declarations mint
+type — `Integer` here and `Count` there — the two declarations mint
 two registration names, are two live overloads, and the program is `E3007` at the CALL instead: a real
 verdict, and one that tests nothing about a synthesized helper's duplicate. It is pinned in its own right by
 `cross-file-overload-set.md`'s `error.two-spellings-of-one-type-are-ambiguous-at-the-call`.
@@ -378,8 +369,6 @@ export function f(a Integer = 1) returns Integer
 end 'f'
 
 // --- file: b.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export function f(a Integer = 1) returns Integer
 	return a + 1
 end 'f'
@@ -390,13 +379,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:12:17: duplicate definition of function 'f#Integer' — 'f' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: <fragment>:10:17: duplicate definition of function 'f#Integer' — 'f' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 <!-- test: error-param-default-trailing-tokens -->
 The capture walks to the `,` or `)` that ends the default, and the expression the drain parses out of
 that region has to reach it. Anything left over is text the author wrote and the compiler was about to
-ignore — `b Integer = 7 zzz` silently defaulted to 7. The bootstrap dropped it too, and now neither does.
+ignore — dropped, `b Integer = 7 zzz` would silently default to 7.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

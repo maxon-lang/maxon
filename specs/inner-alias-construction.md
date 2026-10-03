@@ -137,18 +137,17 @@ end 'main'
 0
 ```
 
-### An inner `Set` alias's `{}` is E3076 — because `Set` is a DECLARED generic now
+### An inner `Set` alias's `{}` is E3076 — because `Set` is a DECLARED generic
 
-⭐⭐ **THIS CASE ASSERTED `exitcode 8` UNTIL W90, AND THE MOVE IS THE RETIREMENT AND NOT A LOST CAPABILITY.**
-Its prose read *"every builtin container answers `{}` the same way … a `Set` inner alias is that roster's
-second member"* — and with `stdlib/Set.maxon` listed, `Set` has left that roster. It is an ordinary declared
-generic whose fields are unexported, so `Nums{}` from another type's body takes the ordinary refusal, which is
-**exactly** `user-generic-inner-alias-keeps-e3076` below with `Pair` replaced by `Set`.
+⭐⭐ **`Set` IS NOT A BUILTIN CONTAINER, SO IT DOES NOT ANSWER `{}` THE WAY ONE DOES.** `stdlib/Set.maxon`
+declares it as an ordinary generic whose fields are unexported, so `Nums{}` from another type's body takes
+the ordinary refusal, which is **exactly** `user-generic-inner-alias-keeps-e3076` below with `Pair`
+replaced by `Set`.
 
-⭐ **AND THE CURE THAT DIAGNOSTIC PRESCRIBES IS ALREADY PINNED GREEN, ONE CASE DOWN**
+⭐ **AND THE CURE THAT DIAGNOSTIC PRESCRIBES IS PINNED GREEN, ONE CASE DOWN**
 (`inner-set-alias-create`, `exitcode 8`) — which is this file's own standing rule that *"a diagnostic that
-names a cure owes a case that takes it"*. So the surface is not lost: it moved one spelling over, to the one
-the message tells the author to write.
+names a cure owes a case that takes it"*. So the surface is one spelling over, the one the message tells
+the author to write.
 
 <!-- test: error.inner-set-alias-literal-keeps-e3076 -->
 ```maxon
@@ -286,8 +285,7 @@ end 'main'
 
 ### A TOP-LEVEL alias is still restricted
 
-The half both reference compilers already agree on. A top-level `typealias` is declared in no body, so no
-body is its own — E3076 stands.
+A top-level `typealias` is declared in no body, so no body is its own — E3076 stands.
 
 <!-- test: top-level-alias-is-still-restricted -->
 ```maxon
@@ -415,18 +413,14 @@ end 'main'
 error E3076: <fragment>:16:19: type 'IntPair' can only be constructed from within its own methods; use a static factory method instead
 ```
 
-### ⭐ …and the CURE THAT DIAGNOSTIC PRESCRIBES ACTUALLY WORKS — the half that was missing (W7)
+### ⭐ …and the CURE THAT DIAGNOSTIC PRESCRIBES ACTUALLY WORKS
 
 The SAME program as `user-generic-inner-alias-keeps-e3076`, written the way its message tells the author to
-write it. Until W7 this answered `E2015 … a field access on 'p', which is declared 'unknown'` — the cure
-E3076 names produced a value of no type, so the refusal above sent every author into a second refusal. The
-bootstrap compiles and runs it (**exit 9**, measured), so the divergence was the compiler's alone.
+write it. The cure E3076 names must produce a value of the alias's type — a value of no type would answer
+`E2015 … a field access on 'p', which is declared 'unknown'` and send every author into a second refusal.
 
-⚠ **A DIAGNOSTIC THAT NAMES A CURE OWES A CASE THAT TAKES IT.** The refusal above was specced and the cure
-was not, which is precisely why a defect this reachable survived: `Parser.parseInnerAliasLiteral`'s own
-comment recorded it in prose (*"whose cure (`{alias}.create()`) fails one door over with a value of type
-`unknown`"*) two arms above another comment calling the cure *"real"*. Two sentences in one function
-disagreeing, with nothing running either.
+⚠ **A DIAGNOSTIC THAT NAMES A CURE OWES A CASE THAT TAKES IT.** A refusal specced without its cure leaves
+the cure free to fail one door over with nothing running it.
 
 <!-- test: user-generic-inner-alias-create-is-the-cure -->
 ```maxon
@@ -459,11 +453,9 @@ end 'main'
 
 ### …and the alias's argument may be the ENCLOSING TYPE'S OWN PARAMETER
 
-The shape v1 resolves in `TypeResolution.resolveGenericAliasArgName` — the alias's argument is a name in the
-declaring type's `uses` list, so `Wrap.ItemHolder` is `Holder with typeParameter(0)` and the instantiation
-`Wrap with ExitCode` decides what that is. The declaration sweep already resolved the argument that way (it
-is what makes `Array with T` work); what was missing was the STATIC CALL door reading the alias back under
-its whole-program key. Bootstrap: **exit 7**, measured.
+The alias's argument is a name in the declaring type's `uses` list, so `Wrap.ItemHolder` is `Holder with typeParameter(0)` and the instantiation
+`Wrap with ExitCode` decides what that is. The declaration sweep resolves the argument that way (it is what
+makes `Array with T` work), and the STATIC CALL door reads the alias back under its whole-program key.
 
 <!-- test: generic-body-user-generic-inner-alias-create -->
 ```maxon
@@ -508,14 +500,14 @@ end 'main'
 
 ### …and an `extension` body's inner alias over a USER type reaches its static too
 
-`extension-body-inner-alias-builds-the-container` pinned the BUILTIN half of this; a user type's generic
-instance took the same fall-through as `IntPair` did, because the arm that recognises an inner alias here
-served only the containers this compiler owns. It is one door, so it is one fix.
+`extension-body-inner-alias-builds-the-container` pins the BUILTIN half of this; a user type's generic
+instance goes through the same arm that recognises an inner alias, which serves user types and the
+containers this compiler owns alike. It is one door, so it is one rule.
 
 ⚠ **THE STDLIB ALREADY DEPENDS ON THIS SHAPE.** `stdlib/Interfaces.maxon` declares
 `typealias WithIterSelf = WithIterIterator with Iter, Element` inside `extension Iterable` and returns
 `WithIterSelf.create(iter)` from `:223` — over `WithIterIterator`, a user `type` — and a program driving
-it runs (`arr.withIterator()`, measured: `0:10 1:20 2:30`). The stdlib is the witness for what the
+it runs (`arr.withIterator()` prints `0:10 1:20 2:30`). The stdlib is the witness for what the
 language means here, and the compiler answers it uniformly at every declaration site.
 
 <!-- test: extension-body-user-generic-inner-alias-create -->
@@ -573,7 +565,7 @@ The composition risk in reading an inner alias under its base-qualified key: `re
 records that key as the value's instance-alias provenance, and `Pair.Idx` results are re-qualified against it
 (`retypeInstanceMethodResult`). `splitQualifiedName` cuts at the LAST separator, so `Plain.IntPair.Idx`
 splits to the prefix `Plain.IntPair` — a real `genericAliases` key — whose base is `Pair`, and the inner
-alias `Pair.Idx` is found. Both compilers answer **4**.
+alias `Pair.Idx` is found. The program answers **4**.
 
 <!-- test: user-generic-inner-alias-create-carries-per-instance-identity -->
 ```maxon
@@ -615,19 +607,19 @@ end 'main'
 4
 ```
 
-### ⚖ An inner alias SHADOWING ANOTHER type's name wins at the STATIC door too, as it already did at the TYPE door
+### ⚖ An inner alias SHADOWING ANOTHER type's name wins at the STATIC door too, as at the TYPE door
 
-The precedence W7 moved, and it moved to remove a disagreement rather than to introduce one.
+One precedence at every door, so that the doors cannot disagree.
 `namesInnerAliasHere`'s header states the rule the three doors share: the enclosing type's own name and its
-type parameters outrank an inner alias, and nothing else does. `parseTypeReference` has always obeyed it —
-MEASURED on this program's parameter form, `p Other` inside `Plain` is `Plain.Other` and a bare `Pair`
-argument is refused *"expected 'Plain.Other', got 'Pair'"*. The STATIC door alone read the bare member, found
-no alias registration under it, and silently fell through to the unrelated top-level `type Other`'s
-`create`, so one written name meant two types in one body — which is exactly what that header forbids.
+type parameters outrank an inner alias, and nothing else does. At the TYPE door, on this program's
+parameter form, `p Other` inside `Plain` is `Plain.Other` and a bare `Pair` argument is refused
+*"expected 'Plain.Other', got 'Pair'"*. A STATIC door that read the bare member and fell through to the
+unrelated top-level `type Other`'s `create` would make one written name mean two types in one body —
+which is exactly what that header forbids.
 
-⚠ **THE ORACLE IS MEASURABLY BROKEN ON THIS PROGRAM AND IS NOT THE MODEL HERE**: it lets `Plain`'s inner
-alias shadow the top-level `type Other` GLOBALLY, refusing `type Other`'s own constructor with
-`E3018: Type 'Other' has no field 'b'` at `:15`, inside the declaration the alias is not even in scope for.
+⚠ **THE SHADOW IS LOCAL TO `Plain`.** Letting `Plain`'s inner alias shadow the top-level `type Other`
+GLOBALLY would refuse `type Other`'s own constructor with `E3018: Type 'Other' has no field 'b'`, inside the
+declaration the alias is not even in scope for.
 
 <!-- test: inner-alias-shadowing-another-type-wins-at-the-static-door -->
 ```maxon
@@ -893,16 +885,13 @@ end 'main'
 
 ### An `extension` body's inner alias builds its container, keyed under the CONFORMER
 
-⭐ **W3 BUILT THE MECHANISM THIS CASE USED TO RECORD AS ABSENT, AND THE CASE MOVED FROM A REFUSAL TO AN
-ANSWER.** It read: *"an `extension`'s members are consumed whole by the declaration sweep, so a `typealias`
-declared in one is never keyed whole-program … the oracle compiles this program; The compiler refuses it by name."*
-The sweep now reads an extension body's nested typealiases and keys each one under the CONFORMER it is
-expanded onto (`Parser.foldExtensionDeclarationInto`), so `TagArray` inside `extension Tagged` is
-`Box.TagArray` and the literal has an interned instance to build. Both compilers answer **6**.
+⭐ **AN EXTENSION'S INNER ALIAS IS KEYED WHOLE-PROGRAM.** The sweep reads an extension body's nested
+typealiases and keys each one under the CONFORMER it is expanded onto
+(`Parser.foldExtensionDeclarationInto`), so `TagArray` inside `extension Tagged` is `Box.TagArray` and the
+literal has an interned instance to build. The program answers **6**.
 
-⚠ It is the same measurement in the other direction: the refusal was pinned because the compiler diverged from the
-runnable oracle, and the pin is what makes the divergence's END observable. `stdlib/Interfaces.maxon`'s
-`extension Iterable` is the program that forced it — `map`/`filter` open with `var result = ElementArray{}`.
+⚠ `stdlib/Interfaces.maxon`'s `extension Iterable` depends on it — `map`/`filter` open with
+`var result = ElementArray{}`.
 
 <!-- test: extension-body-inner-alias-builds-the-container -->
 ```maxon

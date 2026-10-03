@@ -9,7 +9,8 @@ function verdictOf(executable Executable, workingDirectory FilePath) returns Str
 			spawnFailed then verdict = "spawnFailed"
 			timeout or
 				ioFailed or
-				inputTooLarge then verdict = "other"
+				inputTooLarge or
+				endOfStream then verdict = "other"
 		end 'kind'
 	end 'handler'
 	return verdict
@@ -316,7 +317,7 @@ func @verdictOf {
   matchnext#8:
     x64.cmpRegImm32 rax, 2
     x64.setccReg greaterEqual, rcx
-    x64.cmpRegImm32 rax, 4
+    x64.cmpRegImm32 rax, 5
     x64.setccReg lessEqual, rax
     x64.andRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
@@ -365,7 +366,7 @@ func @verdictOf {
     x64.popReg rbp
     x64.ret
   tryerr#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_176]  ; "panic at Subprocess.maxon:435: Configuration.create: empty path is the sentinel for 'inherit cwd'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_176]  ; "panic at Subprocess.maxon:450: Configuration.create: empty path is the sentinel for 'inherit cwd'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -401,7 +402,7 @@ func @placeTool {
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_66]  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:24: the tool's directory is writable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_66]  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:25: the tool's directory is writable\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 40
     x64.popReg rbx
@@ -492,7 +493,7 @@ func @pathTo {
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_68]  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:37: a dot-relative file name is a well-formed path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_68]  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:38: a dot-relative file name is a well-formed path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -851,7 +852,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_79]  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:44: a bare directory name is a well-formed path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_79]  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:45: a bare directory name is a well-formed path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 376
@@ -863,7 +864,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#4:
-    x64.leaRegRdata rcx, [rip + __str_blob_80]  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:61: the parent-side tool can be removed\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_80]  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:62: the parent-side tool can be removed\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 376
@@ -875,7 +876,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#6:
-    x64.leaRegRdata rcx, [rip + __str_blob_81]  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:62: the child-side tool can be removed\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_81]  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:63: the child-side tool can be removed\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 376

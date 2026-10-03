@@ -485,13 +485,13 @@ error E3126: <fragment>:25:6: 'OddBag' binds 'Bag's associated type 'Iter' to 'T
 ```
 
 <!-- test: error.a-non-conforming-binding-that-is-never-dispatched -->
-⚠⚠ **THE HOLDING'S OBLIGATION IS TRIGGERED BY A WIDENING, NOT BY A DISPATCH, AND GETTING THAT WRONG WAS A
+⚠⚠ **THE HOLDING'S OBLIGATION IS TRIGGERED BY A WIDENING, NOT BY A DISPATCH, AND GETTING THAT WRONG IS A
 COMPILER PANIC.** E3119/E3120 are gated on the interface being DISPATCHED, because their subject is a shared
 BODY and only a dispatch compiles one. A holding's subject is the nested TABLE, and a table is minted the
 moment a conformer is WIDENED — so this program, which passes an `OddBag` at a held existential and never
-calls anything on it, reached `ensureWitnessTable` and panicked with
-`witnessSlotImpl: no conformance selected a member for slot 'Tally.Cursor.current'`. The same E3126 the
-dispatched case gets, from a check that shares neither of the other two's gates.
+calls anything on it, reaches `ensureWitnessTable`, which without the check panics with
+`witnessSlotImpl: no conformance selected a member for slot 'Tally.Cursor.current'`. It gets the same E3126
+the dispatched case gets, from a check that shares neither of the other two's gates.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -599,14 +599,14 @@ error E3120: <fragment>:24:6: 'WeirdBag' binds 'Bag's associated type 'Iter' to 
 ```
 
 <!-- test: held.the-element-is-the-enclosing-types-own-parameter -->
-⭐⭐ **THE PROGRAM `stdlib/Array.maxon:135` STANDS AT, AND THE ONE `Array.from` IS.** A generic type walking a
+⭐⭐ **THE PROGRAM `stdlib/Array.maxon`'s `Array.from` IS.** A generic type walking a
 value held at a parameterized interface over its OWN parameter — `Bag with (Element, Cursor with Element)`
 inside `type Collector uses Element` — and storing each element into its `Array with Element`.
 
 The element is `current()`'s result, and typing it is the whole of this case. An interface's requirement
 returns the interface's own associated-type NAME, so the shared body reads `Element`; the receiver's
 instantiation is what says WHICH type that is, and for a shared generic body the answer is the enclosing
-type's own parameter. Read as a concrete `named("Element")` instead, the store was refused as
+type's own parameter. Read as a concrete `named("Element")` instead, the store would be refused as
 *"storing a borrowed value of a CONCRETE type into an `Array with <type parameter>`"* — a refusal whose own
 sentence lists *"a `for` element"* among the things it permits.
 
@@ -662,18 +662,14 @@ end 'main'
 ```
 
 <!-- test: a-use-site-binding-a-type-parameter-is-a-claim-about-each-instantiation -->
-⭐⭐ **THIS CASE PINNED A REFUSAL, AND W58 INVERTED IT — the program below is CORRECT and now compiles.** It
-was `error.a-use-site-binding-a-type-parameter-names-it`, and its subject was the SPELLING in E3125's sentence:
-a TYPE-PARAMETER argument was rendered by `mangleTypeArg` as the W14 digest `'Td0c4d4635e31e169'`, so the
-refusal rested on a hash not matching a source name rather than on two types differing. Fixing the rendering
-left the refusal standing on `'Element'` vs `'Integer'` — and THAT comparison is the thing W58 found to be
-meaningless. `typealias ElementCursor = Cursor with Element` inside `type Counter uses Element` states nothing
+⭐⭐ **THE PROGRAM BELOW IS CORRECT AND COMPILES.** A comparison of `'Element'` against `'Integer'` at the
+declaration is meaningless. `typealias ElementCursor = Cursor with Element` inside `type Counter uses Element` states nothing
 about the program; it states something different at every `Counter with X`, and E3125 has no instantiation in
 hand to substitute. So the claim is DEFERRED to the widening (E3127), and here there is no widening to make:
 nothing instantiates `Counter` and nothing calls `Counter.of`.
-⚠ The rendering fact this case was written for did NOT go with the refusal — `associated-types.md`'s
-`error.existential-return-claim-cannot-be-resolved-in-the-declaration-view` pins an E3127 sentence reading
-`bound to 'T'`, the author's own spelling, which is the same guarantee against the same digest.
+⚠ A TYPE-PARAMETER argument is named in the author's own spelling, never as a `mangleTypeArg` digest:
+`associated-types.md`'s `error.existential-return-claim-cannot-be-resolved-in-the-declaration-view` pins an
+E3127 sentence reading `bound to 'T'`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -736,20 +732,20 @@ ok
 BASE DECLARATION.** A conformance’s `with` argument is recorded by `renderDeclaredTypeName` as the compiler’s
 own CANONICAL name (`UpCursor_Integer`), and no `implements` clause is filed under one — the registry is keyed
 by the DECLARED struct name. Asking whether `UpCursor_Integer` implements `Cursor` therefore asks about a name
-that is not a declaration at all, and the answer can only be no: the refusal read *"'UpCursor_Integer' does
-not implement 'Cursor'"* on a program whose `type UpCursor uses Slot implements Cursor` says otherwise on its
+that is not a declaration at all, and the answer can only be no: the refusal would read *"'UpCursor_Integer'
+does not implement 'Cursor'"* on a program whose `type UpCursor uses Slot implements Cursor` says otherwise on its
 own line.
 
 ⚠ Under dictionary-passing the conformance is a property of the DECLARATION — `UpCursor.current` is compiled
 once over an opaque layout and one `__witness_UpCursor.Cursor` answers for every instantiation — which is why
-the base is the right thing to ask, and it is the reduction `conformerNameOfDeclaredName` already owned for
+the base is the right thing to ask, and it is the reduction `conformerNameOfDeclaredName` owns for
 every other conformance door. The arguments are not lost by it: the base’s own `where` clause is checked at
 the INSTANTIATION site by E3017, which is where a conditional conformance lives.
 
 ⚠ The same reduction is owed by the LOWERING, and asking it in only one of the two places is worse than
-asking it in neither. `stampAssociatedWitnessSlots` named `__witness_UpCursor_Integer.Cursor` and
-`witnessSlotImpl` panicked; `existentialDestroyCallee` reached a drop router with no arm for a canonical
-mint, on a name `declaredNameIsManaged` had already called managed. This program exercises the accept, the
+asking it in neither: unreduced, `stampAssociatedWitnessSlots` would name `__witness_UpCursor_Integer.Cursor`
+and `witnessSlotImpl` would panic, and `existentialDestroyCallee` would reach a drop router with no arm for a
+canonical mint, on a name `declaredNameIsManaged` calls managed. This program exercises the accept, the
 table and the drop.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -914,7 +910,7 @@ end 'main'
 
 <!-- test: held.a-conformer-reaching-the-holding-through-extends -->
 The FALSE-REJECT CONTROL that separates the two facts of the case above: a CONCRETE conformer whose
-conformance reaches the holding only through `extends`. It was already accepted — `typeDeclaresInterface`
+conformance reaches the holding only through `extends`. It is accepted — `typeDeclaresInterface`
 walks `extendsInterfaces` for every conformance question in the compiler — so a red here attributes a
 regression to the `extends` walk rather than to the instance-name reduction.
 ```maxon

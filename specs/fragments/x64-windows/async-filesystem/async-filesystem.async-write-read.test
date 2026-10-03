@@ -8,7 +8,7 @@ function main() returns ExitCode
 		end 'werr'
 
 		// Read asynchronously
-		let p = async File.readText(path)
+		let p = async File.readText(FilePath from "async_test_file.txt")
 		let content = try await p otherwise 'rerr'
 				try File.delete(path) otherwise ignore
 				return 2
@@ -109,15 +109,11 @@ func @main {
     x64.pushReg r15
     x64.prologue 40
     x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "async_test_file.txt"
-  __il_body#15:
-    x64.callDirect FilePath.create
+    x64.callDirect FilePath.init
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#17
-  __il_cont#14:
     x64.leaRegRdata rdx, [rip + __str_rec_32]  ; "AsyncTest"
-  __il_body#18:
+  __il_body#14:
     x64.movRegImm32 rax, 0
   __il_cont#13:
     x64.movRegReg rcx, rbx
@@ -138,8 +134,8 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok#1:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_own
+    x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "async_test_file.txt"
+    x64.callDirect FilePath.init
     x64.movRegReg r12, r8
     x64.leaRegFunc rcx, [rip + File.readText]
     x64.callDirect __gt_spawn
@@ -216,10 +212,10 @@ func @main {
     x64.storeBaseDispReg.word64 [r14 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
-  __il_body#20:
+  __il_body#16:
     x64.movRegReg rcx, r14
     x64.callDirect __write_stdout
-  __il_cont#19:
+  __il_cont#15:
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 42
@@ -228,18 +224,6 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_FilePath
     x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at FilePath.maxon:46: FilePath: invalid path\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

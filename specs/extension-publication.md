@@ -11,7 +11,7 @@ category: type-system
 
 An `extension` publishes its methods onto a conformer, and from that moment they are **the conformer's
 methods** — indistinguishable, at every call site, from the ones the conformer's own body declares. Two
-readers used to disagree with that sentence, in opposite directions.
+readers have to honour that sentence, and each is described below.
 
 ### A bare call inside an extension body
 
@@ -355,9 +355,9 @@ end 'main'
 ```
 
 <!-- test: error.a-corpus-receiver-member-no-declaration-carries-still-meets-the-roster -->
-⛔ **THE OTHER HALF OF WIDENING THAT DOOR.** The fall-through now admits any declaration rather than only
-the type's own, so the case that says it did not become *"admit everything"* is a member no declaration
-anywhere carries: the roster refusal is still what a program gets, naming the list it was measured
+⛔ **THE OTHER HALF OF THAT DOOR.** The fall-through admits any declaration rather than only
+the type's own, so the case that shows it is not *"admit everything"* is a member no declaration
+anywhere carries: the roster refusal is what a program gets, naming the list it checks
 against.
 ```maxon
 function main() returns ExitCode
@@ -372,9 +372,9 @@ error E2015: <fragment>:4:11: Unsupported: `String` member 'reticulate' — the 
 ### A conformance an extension adds
 
 <!-- test: an-extension-conformance-joins-the-conformers-own-rather-than-replacing-it -->
-⛔ **THE UNION WAS A REPLACE, AND THE LAST DECLARATION WON.** `Thing` declares `Shower` on its own body
-and `Sizer` on an extension; the declared-conformance index filed a fresh set per declaration, so the
-extension's entry overwrote the type's and `display(t)` was refused with
+⛔ **THE UNION IS NOT A REPLACE, AND THE LAST DECLARATION DOES NOT WIN.** `Thing` declares `Shower` on its
+own body and `Sizer` on an extension; the declared-conformance index joins them into one set. A fresh set
+per declaration would let the extension's entry overwrite the type's and refuse `display(t)` with
 **`E3005 … type 'Thing' does not implement interface 'Shower'`** — about the clause written three lines
 above it.
 ```maxon

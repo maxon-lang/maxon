@@ -478,7 +478,9 @@ typealias HeaderMap = Map with (String, String)
 
 // Not `StatusCode`: parsing a status line into that enum throws on a code it does not name, and a
 // transport case must be able to read back any code the server sends.
-export typealias HttpStatusNumber = int(0 to 999)
+export typealias HttpAnswerStatus = int(100 to 599)
+let LowestHttpAnswerStatus = 100 as HttpAnswerStatus
+let HighestHttpAnswerStatus = 599 as HttpAnswerStatus
 
 export typealias SourceLine = int(1 to u32.max)
 
@@ -501,15 +503,15 @@ let TerminateWaitMs = 1
 let AnchorMarker = "// anchor: "
 let LineFeed = "\n"
 let ContentLengthHeaderName = "content-length"
-let NoContentStatus = 204 as HttpStatusNumber
-let NotModifiedStatus = 304 as HttpStatusNumber
+let NoContentStatus = 204 as HttpAnswerStatus
+let NotModifiedStatus = 304 as HttpAnswerStatus
 
 export type HttpAnswer
-	export var statusCode as HttpStatusNumber
+	export var statusCode as HttpAnswerStatus
 	export var headers as HeaderMap
 	export var body as String
 
-	export static function create(statusCode HttpStatusNumber, headers HeaderMap, body String) returns HttpAnswer
+	export static function create(statusCode HttpAnswerStatus, headers HeaderMap, body String) returns HttpAnswer
 		return HttpAnswer{statusCode: statusCode, headers: headers, body: body}
 	end 'create'
 
@@ -618,26 +620,30 @@ function parseHttpAnswer(raw String) returns HttpAnswer
 		sectionIndex = sectionIndex + 1
 	end 'rejoin'
 
+	let lines = head.split(HeaderSeparator)
+	let statusLine = try lines.get(0) otherwise panic("McpHarness: an HTTP answer has no status line: {raw}")
+	let field = try statusLine.split(StatusLineFieldSeparator).get(1) otherwise panic("McpHarness: an HTTP answer has no status code: {statusLine}")
+	let parsed = try int.fromString(field) otherwise panic("McpHarness: an HTTP answer's status code is not a number: {statusLine}")
+
+	if parsed < LowestHttpAnswerStatus or parsed > HighestHttpAnswerStatus 'outsideTheStatusRange'
+		panic("McpHarness: an HTTP answer's status code is outside {LowestHttpAnswerStatus}-{HighestHttpAnswerStatus}: {statusLine}")
+	end 'outsideTheStatusRange'
+
+	let statusCode = parsed as HttpAnswerStatus
 	var headers = HeaderMap.create()
-	var statusCode = 0 as HttpStatusNumber
-	var lineIndex = 0
 
-	for line in head.split(HeaderSeparator) 'eachLine'
-		if lineIndex == 0 'statusLine'
-			let field = try line.split(StatusLineFieldSeparator).get(1) otherwise panic("McpHarness: an HTTP answer has no status code: {line}")
-			let parsed = try int.fromString(field) otherwise panic("McpHarness: an HTTP answer's status code is not a number: {line}")
-			statusCode = parsed as HttpStatusNumber
-		end 'statusLine' else 'headerLine'
-			let parts = line.split(HeaderNameSeparator)
+	for (iter, line) in lines.withIterator() 'eachLine'
+		if iter.index() == 0 'statusLine'
+			continue
+		end 'statusLine'
 
-			if parts.count() >= 2 'named'
-				let name = (try parts.get(0) otherwise "").toLower()
-				let value = try parts.get(1) otherwise ""
-				headers.upsert(name, value: value)
-			end 'named'
-		end 'headerLine'
+		let parts = line.split(HeaderNameSeparator)
 
-		lineIndex = lineIndex + 1
+		if parts.count() >= 2 'named'
+			let name = (try parts.get(0) otherwise "").toLower()
+			let value = try parts.get(1) otherwise ""
+			headers.upsert(name, value: value)
+		end 'named'
 	end 'eachLine'
 
 	if statusCode == NoContentStatus or statusCode == NotModifiedStatus 'contentless'
@@ -1017,7 +1023,7 @@ export let BoundStoppedMarker = "stopped waiting"
 export let DebuggableProgramAnchor = "hot"
 export let DebugStoppedState = "stopped"
 export let DebugStopEventName = "stop"
-let HttpOkStatus = 200 as HttpStatusNumber
+let HttpOkStatus = 200 as HttpAnswerStatus
 
 let ArgumentMemberSeparator = ","
 

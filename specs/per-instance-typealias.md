@@ -435,9 +435,9 @@ in one file may spell a member `type Foo` — or another `extension Foo` — dec
 exactly as it may call a method declared somewhere else.
 
 `stdlib/helpers/sort/` is the case this exists for. Six files each write `public extension Array`;
-`insertionSort.maxon:14-15` declares `SortIndex` and `SortComparator`, `mergeSort.maxon:8`
-declares `MergeScratchArray`, and every one of the six spells BARE from its own body whichever of the
-three it needs, without regard to which file wrote the declaration.
+`insertionSort.maxon` declares `SortComparator` and `mergeSort.maxon` declares `MergeScratchArray`, and the
+others spell BARE from their own bodies whichever of the two they need, without regard to which file
+wrote the declaration.
 
 ⛔ **A FLAT, PROGRAM-WIDE NAME CANNOT DIAGNOSE TWO TYPES DECLARING ONE MEMBER NAME, AND the compiler
 DELIBERATELY DOES NOT USE ONE.** Here the widening is the ENCLOSING TYPE's
@@ -637,17 +637,16 @@ Everything above is about which bodies may SPELL a member. This is the other hal
 MEANS. A nested `typealias` of a generic type is per-instance — `WrapperA.Idx` and `WrapperB.Idx` are
 distinct types, which is what `wrong-instance-error` pins for a member declared in the `type` body.
 
-⚠ **AN `extension` BODY'S MEMBER WAS NOT, AND THAT WAS TRUE OF THE SAME-FILE FORM BEFORE IT WAS TRUE OF
-THE CROSS-FILE ONE.** The per-instance argument check reads `ProgramSignatures.methodInnerAliasParams`,
-recorded by `recordScannedSignature` — which asked the BODY WALK's live alias set both for whether to
-look at all and for whether a given parameter names a member. The same-file case therefore recorded
-nothing whenever the method sat in an `extension` body other than the one that declared the alias, and
-the cross-file case recorded nothing at all. Both doors now ask `namesInnerAliasHere`, the one home of
-"does this written name denote an inner alias here", so the check and the DENOTATION cannot disagree.
+⚠ **AN `extension` BODY'S MEMBER IS CHECKED THE SAME WAY, IN THE SAME FILE AND ACROSS FILES.** The
+per-instance argument check reads `ProgramSignatures.methodInnerAliasParams`, recorded by
+`recordScannedSignature`. Asking the BODY WALK's live alias set whether to look at all and whether a given
+parameter names a member would record nothing for a method in an `extension` body other than the one
+that declared the alias, and nothing at all across files. Both doors ask `namesInnerAliasHere`, the one
+home of "does this written name denote an inner alias here", so the check and the DENOTATION cannot
+disagree.
 
 <!-- test: error.an-extension-bodys-inner-alias-is-per-instance -->
-The alias and its user are in ONE file, in two `extension` bodies. This program compiled and returned
-1 before the two doors were made one.
+The alias and its user are in ONE file, in two `extension` bodies.
 ```maxon
 // --- file: a.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -745,25 +744,22 @@ Everything above is about which BODY may spell a member — the declaring type's
 over it. This is the third reader, and it is the one with no enclosing type open at all: **file scope**.
 
 A `type` that takes no parameters has exactly one instance, so a `typealias` written in its body
-denotes one type for the whole program. Until that name can be written from outside, the member is
-unspellable and so is every signature built on it: `stdlib/Directory.maxon:12` declares
-`typealias FilePathArray = Array with FilePath` inside `type Directory`, and `Directory.list()` returns
-it — so no other file could declare a variable, a parameter or a return of the type that function
-hands back. A GENERIC type's member is the opposite case: `Bag = Array with T` means a different type
+denotes one type for the whole program. Without a name that can be written from outside, the member
+would be unspellable and so would every signature built on it: no other file could declare a variable, a
+parameter or a return of a type a method of that type hands back. A GENERIC type's member is the opposite case: `Bag = Array with T` means a different type
 per instantiation (`wrong-instance-error`), so it has no single meaning a file-scope name could carry,
 and it keeps only its `<Type>.<member>` key.
 
-⚠ **Of the four nested forms only the FUNCTION one had a file-scope name, and that asymmetry was not a
-rule anybody had written down.** A nested `typealias Fn = function(…)` has been filed under BOTH its bare
-name and `<Type>.<member>` since W49b — the bare key being *"the file-scope reading this form has always
-had"* — while a nested `typealias Bag = Array with Num` was filed under the qualified name ALONE. So
-`Bag.create()` at file scope typed its result `unknown` and the program was refused one door later for a
-member access on it, and `returns Bag` was `E3011`.
+⚠ **The FUNCTION form and the generic-instance form both have a file-scope name.** A nested
+`typealias Fn = function(…)` and a nested `typealias Bag = Array with Num` are each filed under BOTH its
+bare name and `<Type>.<member>`. Filed under the qualified name ALONE, `Bag.create()` at file scope would
+type its result `unknown` and the program would be refused one door later for a member access on it,
+and `returns Bag` would be `E3011`.
 
-⚠ **The RANGED and TUPLE forms still have no file-scope name, and that is a boundary rather than an
+⚠ **The RANGED and TUPLE forms have no file-scope name, and that is a boundary rather than an
 oversight.** A ranged `typealias` is FILE-SCOPED by its declaration form (`type-name-collision.md`'s
 table of the three registries), so "a bare whole-program key" is not the shape its answer takes at all
-and handing it one would settle a different question than this rule does. Nothing measured needs it:
+and handing it one would settle a different question than this rule does. Nothing needs it:
 what `Directory.list` returns is a generic instance, and so is every member the compiler's own harness
 names.
 
@@ -877,12 +873,11 @@ end 'main'
 0
 ```
 
-### `stdlib`'s own case — `Directory`'s member alias, named bare
+### `stdlib`'s own case — `Directory.list`'s return, named bare
 
 <!-- test: stdlib-directory-member-alias-at-file-scope -->
-The declaration this rule was found on. `type Directory` is not generic, so `FilePathArray` is one
-type for the whole program and `Directory.list`'s return is writable. The compiler's own spec harness
-spells it exactly this way.
+`FilePathArray` is `stdlib/Directory.maxon`'s `public` alias for `Directory.list`'s return, one type for the
+whole program, so a user file writes it bare. The compiler's own spec harness spells it exactly this way.
 ```maxon
 function main() returns ExitCode
 	var paths = FilePathArray.create()
@@ -904,7 +899,7 @@ compilers do. `Bag = Array with T` is a different array for every `Holder with �
 type for the bare name to denote and it stays refused.
 ```maxon
 // --- file: a.maxon
-typealias Num = int(0 to 200)
+export typealias Num = int(0 to 200)
 
 export type Holder uses T
 	export typealias Bag = Array with T
@@ -942,9 +937,8 @@ error E3011: <fragment>:25:15: Unknown type 'Bag'
 
 <!-- test: crossfile-plain-type-member-aliases-of-one-name-stay-file-scoped -->
 `crossfile-generic-alias-same-name-still-legal`'s rule, reached through the nested form: the bare key a
-member now files is the same registry a file-scope `typealias` files, so a name two files disagree
-about is settled the same way — each file reads its own declaration. `stdlib/Build.maxon` alone
-declares `StringArray` inside two different types.
+member files is the same registry a file-scope `typealias` files, so a name two files disagree
+about is settled the same way — each file reads its own declaration.
 ```maxon
 // --- file: a.maxon
 export typealias Num = int(0 to 200)
@@ -966,8 +960,6 @@ export function fromA() returns Num
 end 'fromA'
 
 // --- file: b.maxon
-export typealias Num = int(0 to 200)
-
 export type HolderB
 	typealias Bag = Array with String
 

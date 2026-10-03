@@ -30,11 +30,9 @@ var a = 1024.0
 var b = Math.log2(a)     // 10.0 (2^10 = 1024)
 ```
 **Notes:**
-- Input must be positive. ⚠ **RETRACTED — this line said "returns 0 for non-positive values in current
-  implementation".** That hedge was honest and it was also the whole problem: the sentinel `0` is what
-  `log2(1.0)` returns too, so it could not be distinguished from a real answer. By user ruling the
-  implementation no longer needs the hedge — it answers as IEEE 754 defines it: `log2(+0.0)` and
-  `log2(-0.0)` are both `-inf`, and `log2(x)` for `x < 0` is `nan`.
+- Non-positive input answers as IEEE 754 defines it (user ruling): `log2(+0.0)` and
+  `log2(-0.0)` are both `-inf`, and `log2(x)` for `x < 0` is `nan`. There is no sentinel `0`: that is
+  what `log2(1.0)` returns, so it could not be distinguished from a real answer.
 - `log2(1.0)` returns `0.0` (exact)
 - `log2(2.0)` returns `1.0` (exact)
 - Powers of 2 return exact integer results
@@ -44,13 +42,9 @@ var b = Math.log2(a)     // 10.0 (2^10 = 1024)
 
 ## Tests
 
-⚠ **EVERY `stdout` BLOCK IN THIS FILE IS RETRACTED TO SHORTEST ROUND-TRIP, for the reason
-`specs/sin.md` sets out at length.** `/specs` renders floats in a fixed-6-decimal
-format; The compiler prints the shortest round-trip representation by user ruling. It changes the rendering, not
-the numbers — each old value is exactly the 6-decimal rendering of the double replacing it
-(`1.5849625007211563` → `1.584963`, `19.931568569324174` → `19.931569`, and so on). ⭐ Note
-`log2.powers-of-two` needs **no** retraction: those results are exact, so their shortest form already
-*is* what six decimals rendered.
+⚠ **Every `stdout` block in this file is the SHORTEST ROUND-TRIP representation of its double** —
+the fewest digits that parse back to the same bit pattern, by user ruling (`specs/sin.md` sets out why). ⭐ The
+`log2.powers-of-two` results are exact, so they print as whole numbers.
 
 <!-- test: log2.powers-of-two -->
 ```maxon
@@ -198,10 +192,10 @@ end 'main'
 3.584962500721156
 ```
 
-⭐ **compiler-authored, and it is the pin on the ruling the Notes above retract to.** `log2` does not
+⭐ **The pin on the ruling the Notes above state.** `log2` does not
 delegate to `log` — it normalizes by exact halvings so that every power of two comes back an exact
 integer — so its non-positive answer is a SECOND site that had to be made IEEE-correct, and this case
-is what keeps the two from drifting apart the way the file's two spellings of ln 2 once did.
+is what keeps the two from drifting apart.
 
 <!-- test: log2.non-positive-is-ieee -->
 ```maxon
@@ -222,10 +216,10 @@ end 'main'
 nan
 ```
 
-⭐ **compiler-authored, and the SECOND site of the same hang.** IEEE 754 gives `log2(+inf)` as `+inf`, and
-because `log2` does not delegate it needed its own guard: its `normalize_down` halves x until it drops
-under 2.0, and `inf / 2.0` is `inf`. MEASURED by removing that guard — this program does not print a
-wrong number, it runs until it is killed, exactly as `log`'s does. Two functions, one failure mode, and
+⭐ **The SECOND site of the same hang.** IEEE 754 gives `log2(+inf)` as `+inf`, and
+because `log2` does not delegate it needs its own guard: its `normalize_down` halves x until it drops
+under 2.0, and `inf / 2.0` is `inf`. Without that guard this program does not print a
+wrong number, it runs until it is killed, exactly as `log`'s would. Two functions, one failure mode, and
 `stdlib/Math.maxon` says so at both.
 
 <!-- test: log2.positive-infinity -->

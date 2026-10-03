@@ -23,11 +23,9 @@ module typealias ServiceAwaitSiteArray = Array with ServiceAwaitSite
 // makes "the earliest offending access" a scan rather than a sort.
 typealias ModuleVarAccessSiteArray = Array with ModuleVarAccessSite
 
-// ⭐ **"NO SUCH ROW" AS A VALUE** — `ServiceCallCycleCheck.NoServiceNode`'s rule, one column over: row 0 is a
-// real row, so the absence sits above every key the roster can mint.
-// Its bound, `i64.max`, is that rule's too — `CsrIndex` is a checked quantity and `u64.max` rides as a
-// signed-negative.
-module let NoAwaitRow = i64.max as CsrIndex
+module enum AwaitRowLookup implements Error
+	awaitsOnlyThroughAHelper
+end 'AwaitRowLookup'
 
 // ⭐⭐⭐ **EVERY (FUNCTION, AWAITED SERVICE) PAIR IN THE PROGRAM — ONE ROW PER `await`, NOT ONE PER
 // FUNCTION.** A message that awaits replies from TWO services owes an edge to BOTH, and a single site
@@ -99,16 +97,15 @@ module type ServiceAwaitRoster
 		end 'eachRow'
 	end 'seedFunctionsAwaiting'
 
-	// The FIRST row in which `funcIndex` itself awaits `awaitedName`, or `NoAwaitRow` when it blocks on that
-	// service only through a helper.
-	module function rowWhere(funcIndex ElementIndex, awaitedName ByteArray) returns CsrIndex
+	// The FIRST row in which `funcIndex` itself awaits `awaitedName`.
+	module function rowWhere(funcIndex ElementIndex, awaitedName ByteArray) returns CsrIndex throws AwaitRowLookup
 		for row in 0 upto self.rowCount() 'eachRow'
 			if self.funcIndexAt(row) == funcIndex and self.siteAt(row).serviceTypeName.equals(awaitedName) 'awaitsItHere'
 				return row
 			end 'awaitsItHere'
 		end 'eachRow'
 
-		return NoAwaitRow
+		throw AwaitRowLookup.awaitsOnlyThroughAHelper
 	end 'rowWhere'
 
 	// The first row ANYWHERE that awaits `awaitedName` — the anchor for a message that blocks only through a
@@ -178,6 +175,13 @@ module type SlotRoster
 	end 'subjectAt'
 end 'SlotRoster'
 
+union MessageOwner
+	none
+	service(name ByteArray)
+end 'MessageOwner'
+
+typealias MessageOwnerArray = Array with MessageOwner
+
 // ⭐⭐ **EVERY WHOLE-PROGRAM FACT THE SERVICE RULES NEED, OUT OF ONE PASS OVER EVERY FUNCTION'S EVERY OP.**
 module type ServiceProgramSurvey
 	// Call edges in the shared `(callee, caller)` shape every summary closes over. E3139 rows them with
@@ -188,12 +192,9 @@ module type ServiceProgramSurvey
 	// Built once the sweep is done (`settleCallGraph`).
 	export var calleeGraph as CsrGraph
 
-	// funcIndex ⇒ the service this function is a message of, or EMPTY. Asked once per FUNCTION rather than
+	// funcIndex ⇒ the service this function is a message of. Asked once per FUNCTION rather than
 	// once per (function, service): `messageOwnerNameOf` already walks every service's every variant.
-	var ownerPerFunc as ByteArrayArray
-
-	// funcIndex ⇒ is it a message? The same fact as `ownerPerFunc`, in the shape a seed column takes.
-	export var messageSeeds as BoolArray
+	var ownerPerFunc as MessageOwnerArray
 
 	// E3139's column: every (function, awaited service) pair.
 	export var awaits as ServiceAwaitRoster
@@ -227,19 +228,35 @@ module type ServiceProgramSurvey
 	export var spawns as OpRoster
 
 	static function create() returns ServiceProgramSurvey
-		return Self{edges: CallGraphEdges.create(), ownerPerFunc: ByteArrayArray.create(), messageSeeds: BoolArray.create(), awaits: ServiceAwaitRoster.create(), callsAClosure: BoolArray.create(), dispatchesThroughAWitness: BoolArray.create(), witnessDispatchFuncs: FuncIndexArray.create(), witnessDispatchRequirements: ByteArrayArray.create(), witnessDispatchStarts: EntryIndexArray.create(), calleeGraph: buildCsr(CsrColumn.create(), to: CsrColumn.create(), nodeCount: 0), addressTaken: CsrColumn.create(), accessFuncs: FuncIndexArray.create(), accessSites: ModuleVarAccessSiteArray.create(), globalUses: SlotRoster.create(), spawns: OpRoster.create()}
+		return Self{edges: CallGraphEdges.create(), ownerPerFunc: MessageOwnerArray.create(), awaits: ServiceAwaitRoster.create(), callsAClosure: BoolArray.create(), dispatchesThroughAWitness: BoolArray.create(), witnessDispatchFuncs: FuncIndexArray.create(), witnessDispatchRequirements: ByteArrayArray.create(), witnessDispatchStarts: EntryIndexArray.create(), calleeGraph: buildCsr(CsrColumn.create(), to: CsrColumn.create(), nodeCount: 0), addressTaken: CsrColumn.create(), accessFuncs: FuncIndexArray.create(), accessSites: ModuleVarAccessSiteArray.create(), globalUses: SlotRoster.create(), spawns: OpRoster.create()}
 	end 'create'
 
 	module function funcCount() returns CsrIndex
-		return self.messageSeeds.count()
+		return self.ownerPerFunc.count()
 	end 'funcCount'
 
 	module function isAMessage(funcIndex ElementIndex) returns bool
-		return try self.messageSeeds.get(funcIndex) otherwise panic("ServiceProgramSurvey.isAMessage: messageSeeds.get OOB at {funcIndex} below count {self.funcCount()}")
+		return match try self.ownerPerFunc.get(funcIndex) otherwise panic("ServiceProgramSurvey.isAMessage: ownerPerFunc.get OOB at {funcIndex} below count {self.funcCount()}") 'owner'
+			none gives false
+			service gives true
+		end 'owner'
 	end 'isAMessage'
 
-	module function serviceOf(funcIndex ElementIndex) returns ByteArray
-		return try self.ownerPerFunc.get(funcIndex) otherwise panic("ServiceProgramSurvey.serviceOf: ownerPerFunc.get OOB at {funcIndex} below count {self.funcCount()}")
+	module function messageSeeds() returns BoolArray
+		var seeds = BoolArray.create()
+
+		for funcIndex in 0 upto self.funcCount() 'eachFunction'
+			seeds.push(self.isAMessage(funcIndex))
+		end 'eachFunction'
+
+		return seeds
+	end 'messageSeeds'
+
+	module function serviceOf(funcIndex ElementIndex) returns ByteArray throws AbsentError
+		match try self.ownerPerFunc.get(funcIndex) otherwise panic("ServiceProgramSurvey.serviceOf: ownerPerFunc.get OOB at {funcIndex} below count {self.funcCount()}") 'owner'
+			none then throw AbsentError.absent
+			service(name) then return name
+		end 'owner'
 	end 'serviceOf'
 
 	module function accessRowCount() returns CsrIndex
@@ -319,9 +336,12 @@ module type ServiceProgramSurvey
 	// ACCESSES — ALL OUT OF THE SAME OP SWEEP.** Five facts about one body; five walks of it would be five
 	// chances to disagree about which ops that body has, which is this file's whole reason for existing.
 	function noteFunction(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndexByName FuncIndexByName, funcIndex ElementIndex, dispatch WitnessDispatchTargets, globalsByLabel SlotSubjectByLabel)
-		let owner = messageOwnerNameOf(signatures, callee: func.name)
-		self.messageSeeds.push(not owner.isEmpty())
-		self.ownerPerFunc.push(owner)
+		if let owner = try messageOwnerNameOf(signatures, callee: func.name) 'aMessage'
+			self.ownerPerFunc.push(MessageOwner.service(owner))
+		end 'aMessage' else 'notAMessage'
+			self.ownerPerFunc.push(MessageOwner.none)
+		end 'notAMessage'
+
 		self.witnessDispatchStarts.push(self.witnessDispatchFuncs.count())
 
 		var bodyCallsAClosure = false
@@ -435,7 +455,7 @@ export function checkServiceRules(project Project, module MaxonModule, signature
 	end 'e3139'
 
 	if globalRuleApplies or letRuleApplies 'aMessageMayReachModuleStorage'
-		let reached = functionsSeedsCanRun(funcNames, survey: survey, seeds: survey.messageSeeds, dispatch: dispatch)
+		let reached = functionsSeedsCanRun(funcNames, survey: survey, seeds: survey.messageSeeds(), dispatch: dispatch)
 
 		if globalRuleApplies 'e3143'
 			checkServiceGlobalAccesses(project, signatures: signatures, funcNames: funcNames, survey: survey, reached: reached)

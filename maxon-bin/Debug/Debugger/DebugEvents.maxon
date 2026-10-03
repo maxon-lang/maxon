@@ -93,14 +93,16 @@ function renderedObject(doc JsonDoc, node JsonNodeId) returns String
 	return Json.stringify(doc)
 end 'renderedObject'
 
+let UnarmedBreakpointOffsetWireWord = 0 as DebugAddress
+
 function breakpointObject(doc JsonDoc, answer DebugBreakpointAnswer) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addString(doc, key: DebugEventKey, value: BreakpointEventKind)
 	object.addString(doc, key: ActionKey, value: answer.action)
 	addFunctionName(object, doc: doc, name: answer.functionName)
-	object.addString(doc, key: FileKey, value: answer.file)
-	object.addNumber(doc, key: LineKey, value: answer.line as JsonFloat)
-	object.addString(doc, key: OffsetKey, value: hexWord(answer.offset))
+	object.addString(doc, key: FileKey, value: answer.file.wireName())
+	object.addNumber(doc, key: LineKey, value: answer.line.wireNumber() as JsonFloat)
+	object.addString(doc, key: OffsetKey, value: hexWord(try answer.offsets.get(0) otherwise UnarmedBreakpointOffsetWireWord))
 
 	if answer.offsets.count() > 1 'severalSites'
 		object.addNode(OffsetsKey, node: hexArray(doc, offsets: answer.offsets))
@@ -110,16 +112,16 @@ function breakpointObject(doc JsonDoc, answer DebugBreakpointAnswer) returns Jso
 		object.addNode(CandidatesKey, node: stringArray(doc, values: answer.candidates))
 	end 'moreThanOneName'
 
-	if not answer.suggestion.isEmpty() 'somethingClose'
-		object.addString(doc, key: SuggestionKey, value: answer.suggestion)
+	if let suggestion = try answer.suggestion.text() 'somethingClose'
+		object.addString(doc, key: SuggestionKey, value: suggestion)
 	end 'somethingClose'
 
-	if not answer.reason.isEmpty() 'aRefusal'
-		object.addString(doc, key: ReasonKey, value: answer.reason)
+	if let reason = try answer.reason.text() 'aRefusal'
+		object.addString(doc, key: ReasonKey, value: reason)
 	end 'aRefusal'
 
-	if not answer.condition.isEmpty() 'aCondition'
-		object.addString(doc, key: ConditionKey, value: answer.condition)
+	if let condition = try answer.condition.text() 'aCondition'
+		object.addString(doc, key: ConditionKey, value: condition)
 	end 'aCondition'
 
 	return object.build(doc)
@@ -128,7 +130,7 @@ end 'breakpointObject'
 function threadsObject(doc JsonDoc, roster DebugThreadRoster) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addString(doc, key: DebugEventKey, value: ThreadsEventKind)
-	addListOrAbsence(object, doc: doc, key: ThreadsKey, node: threadArray(doc, rows: roster.rows), present: roster.unavailable.isEmpty(), reason: roster.unavailable)
+	addListOrAbsence(object, doc: doc, key: ThreadsKey, node: threadArray(doc, rows: roster.rows), availability: roster.availability)
 	object.addBool(doc, key: TruncatedKey, value: roster.truncated)
 
 	return object.build(doc)
@@ -149,8 +151,8 @@ function threadRowObject(doc JsonDoc, row DebugThreadRow) returns JsonNodeId
 	object.addNumber(doc, key: IdKey, value: row.id as JsonFloat)
 	object.addString(doc, key: StatusKey, value: row.status)
 	addFunctionName(object, doc: doc, name: row.functionName)
-	object.addString(doc, key: FileKey, value: row.file)
-	object.addNumber(doc, key: LineKey, value: row.line as JsonFloat)
+	object.addString(doc, key: FileKey, value: row.file.wireName())
+	object.addNumber(doc, key: LineKey, value: row.line.wireNumber() as JsonFloat)
 	object.addString(doc, key: HandleKey, value: hexWord(row.handle))
 
 	return object.build(doc)
@@ -160,7 +162,7 @@ function threadWalkObject(doc JsonDoc, walk DebugThreadWalk) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addString(doc, key: DebugEventKey, value: GreenBacktraceEventKind)
 	addThreadId(object, doc: doc, key: IdKey, thread: walk.thread)
-	addListOrAbsence(object, doc: doc, key: FramesKey, node: frameArray(doc, frames: walk.frames), present: walk.unavailable.isEmpty(), reason: walk.unavailable)
+	addListOrAbsence(object, doc: doc, key: FramesKey, node: frameArray(doc, frames: walk.frames), availability: walk.availability)
 
 	return object.build(doc)
 end 'threadWalkObject'
@@ -171,8 +173,8 @@ function threadOutcomeObject(doc JsonDoc, outcome DebugThreadOutcome) returns Js
 	addThreadId(object, doc: doc, key: IdKey, thread: outcome.thread)
 	object.addString(doc, key: ResultKey, value: outcome.result)
 
-	if not outcome.reason.isEmpty() 'aRefusal'
-		object.addString(doc, key: ReasonKey, value: outcome.reason)
+	if let reason = try outcome.reason.text() 'aRefusal'
+		object.addString(doc, key: ReasonKey, value: reason)
 	end 'aRefusal'
 
 	return object.build(doc)
@@ -188,7 +190,7 @@ end 'addThreadId'
 function traceObject(doc JsonDoc, slice DebugTraceSlice) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addString(doc, key: DebugEventKey, value: TraceEventKind)
-	addListOrAbsence(object, doc: doc, key: EventsKey, node: traceEventArray(doc, events: slice.events), present: slice.unavailable.isEmpty(), reason: slice.unavailable)
+	addListOrAbsence(object, doc: doc, key: EventsKey, node: traceEventArray(doc, events: slice.events), availability: slice.availability)
 
 	match slice.since 'previously'
 		none then break 'previously'
@@ -222,19 +224,19 @@ function stopObject(doc JsonDoc, stop DebugStop) returns JsonNodeId
 	object.addString(doc, key: DebugEventKey, value: StopEventKind)
 	object.addString(doc, key: ReasonKey, value: stop.reason)
 
-	if not stop.fault.isEmpty() 'aFault'
-		object.addString(doc, key: FaultKey, value: stop.fault)
+	if let fault = try stop.fault.text() 'aFault'
+		object.addString(doc, key: FaultKey, value: fault)
 	end 'aFault'
 
 	addFunctionName(object, doc: doc, name: stop.functionName)
-	object.addString(doc, key: FileKey, value: stop.file)
-	object.addNumber(doc, key: LineKey, value: stop.line as JsonFloat)
-	object.addNumber(doc, key: ColumnKey, value: stop.column as JsonFloat)
+	object.addString(doc, key: FileKey, value: stop.file.wireName())
+	object.addNumber(doc, key: LineKey, value: stop.spot.wireLine() as JsonFloat)
+	object.addNumber(doc, key: ColumnKey, value: stop.spot.wireColumn() as JsonFloat)
 	object.addString(doc, key: OffsetKey, value: hexWord(stop.offset))
 	object.addNumber(doc, key: MachineKey, value: stop.machine as JsonFloat)
 	addThreadId(object, doc: doc, key: ThreadKey, thread: stop.thread)
-	addListOrAbsence(object, doc: doc, key: SourceKey, node: sourceArray(doc, lines: stop.source), present: stop.source.count() > 0, reason: NoSourceReason)
-	addListOrAbsence(object, doc: doc, key: BacktraceKey, node: frameArray(doc, frames: stop.frames), present: stop.frames.count() > 0, reason: NoBacktraceReason)
+	addListOrAbsence(object, doc: doc, key: SourceKey, node: sourceArray(doc, lines: stop.source), availability: availableWhen(stop.source.count() > 0, reason: NoSourceReason))
+	addListOrAbsence(object, doc: doc, key: BacktraceKey, node: frameArray(doc, frames: stop.frames), availability: availableWhen(stop.frames.count() > 0, reason: NoBacktraceReason))
 
 	return object.build(doc)
 end 'stopObject'
@@ -242,7 +244,7 @@ end 'stopObject'
 function backtraceObject(doc JsonDoc, frames DebugFrameArray) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addString(doc, key: DebugEventKey, value: BacktraceEventKind)
-	addListOrAbsence(object, doc: doc, key: FramesKey, node: frameArray(doc, frames: frames), present: frames.count() > 0, reason: NoBacktraceReason)
+	addListOrAbsence(object, doc: doc, key: FramesKey, node: frameArray(doc, frames: frames), availability: availableWhen(frames.count() > 0, reason: NoBacktraceReason))
 
 	return object.build(doc)
 end 'backtraceObject'
@@ -295,13 +297,13 @@ function timeoutObject(doc JsonDoc, waitingFor String) returns JsonNodeId
 	return object.build(doc)
 end 'timeoutObject'
 
-function errorObject(doc JsonDoc, message String, suggestion String) returns JsonNodeId
+function errorObject(doc JsonDoc, message String, suggestion StatedText) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addString(doc, key: DebugEventKey, value: ErrorEventKind)
 	object.addString(doc, key: MessageKey, value: message)
 
-	if not suggestion.isEmpty() 'somethingClose'
-		object.addString(doc, key: SuggestionKey, value: suggestion)
+	if let name = try suggestion.text() 'somethingClose'
+		object.addString(doc, key: SuggestionKey, value: name)
 	end 'somethingClose'
 
 	return object.build(doc)
@@ -315,8 +317,8 @@ function valueObject(doc JsonDoc, tree DebugValueTree, index ElementIndex) retur
 	object.addString(doc, key: KindKey, value: value.kind)
 	object.addString(doc, key: DisplayKey, value: value.display)
 
-	if not value.unavailable.isEmpty() 'nothingToShow'
-		object.addString(doc, key: UnavailableKey, value: value.unavailable)
+	if let reason = try value.availability.reason() 'nothingToShow'
+		object.addString(doc, key: UnavailableKey, value: reason)
 	end 'nothingToShow'
 
 	if value.children.count() > 0 'aTree'
@@ -330,9 +332,9 @@ function frameObject(doc JsonDoc, frame DebugFrame) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
 	object.addNumber(doc, key: FrameKey, value: frame.number as JsonFloat)
 	object.addString(doc, key: FunctionKey, value: frame.functionName)
-	object.addString(doc, key: FileKey, value: frame.file)
-	object.addNumber(doc, key: LineKey, value: frame.line as JsonFloat)
-	object.addNumber(doc, key: ColumnKey, value: frame.column as JsonFloat)
+	object.addString(doc, key: FileKey, value: frame.path.fileName().wireName())
+	object.addNumber(doc, key: LineKey, value: frame.spot.wireLine() as JsonFloat)
+	object.addNumber(doc, key: ColumnKey, value: frame.spot.wireColumn() as JsonFloat)
 	object.addString(doc, key: OffsetKey, value: hexWord(frame.offset))
 
 	if frame.inlined 'aSplicedBody'
@@ -353,8 +355,12 @@ end 'sourceLineObject'
 
 // An absent list is `null` beside a `<key>Unavailable` reason, never `[]`: a reader must not have to tell
 // "the debugger could not answer" from "the answer is nothing".
-function addListOrAbsence(object JsonObjectBuilder, doc JsonDoc, key String, node JsonNodeId, present bool, reason String)
-	if present 'thereIsAList'
+function availableWhen(present bool, reason String) returns DebugAvailability
+	return DebugAvailability.available if present else DebugAvailability.unavailable(reason)
+end 'availableWhen'
+
+function addListOrAbsence(object JsonObjectBuilder, doc JsonDoc, key String, node JsonNodeId, availability DebugAvailability)
+	let reason = try availability.reason() otherwise 'thereIsAList'
 		object.addNode(key, node: node)
 
 		return

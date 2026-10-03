@@ -136,7 +136,7 @@ let CachedProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'ma
 
 // A case that must stage outside the checkout goes under the host's temp area. The variable naming
 // that area is `HostTempVariable`, which the driver's cache reads too.
-let OutsideCheckoutStagingDirNamePrefix = "maxon-tests-cli"
+let OutsideCheckoutStagingDirNamePrefix = "maxon_tests_cli"
 let VendorDirName = "vendor"
 
 // A path component that climbs out of the directory it is joined under.
@@ -429,7 +429,7 @@ end 'writeStagedFile'
 function freshOutsideCheckoutDir(caseDirName String) returns FilePath
 	requireOneCaseDirName(caseDirName)
 
-	let dir = createdStagedDirectory(hostTempDir().join("{OutsideCheckoutStagingDirNamePrefix}-{__Builtins.currentProcessId()}-{caseDirName}"))
+	let dir = createdStagedDirectory(hostTempDir().join("{OutsideCheckoutStagingDirNamePrefix}{CaseDirectoryWordSeparator}{__Builtins.currentProcessId()}{CaseDirectoryWordSeparator}{caseDirectoryName(caseDirName)}"))
 
 	clearStagedFiles(dir)
 	requireNoVendorAbove(dir)
@@ -820,9 +820,16 @@ end 'requireOneCaseDirName'
 
 // A case's staging directory, or a directory under it, spelled from the checkout root.
 function caseRelative(caseDirName String, relative String) returns String
-	let caseDir = "{StagingRootDirName}{PathSeparator}{caseDirName}"
+	let caseDir = "{StagingRootDirName}{PathSeparator}{caseDirectoryName(caseDirName)}"
 	return caseDir if relative.isEmpty() else "{caseDir}{PathSeparator}{relative}"
 end 'caseRelative'
+
+let CaseNameWordSeparator = "-"
+let CaseDirectoryWordSeparator = "_"
+
+function caseDirectoryName(caseDirName String) returns String
+	return caseDirName.replace(CaseNameWordSeparator, with: CaseDirectoryWordSeparator)
+end 'caseDirectoryName'
 
 // A directory this run writes into, created with its missing ancestors so a fresh checkout without `temp/`
 // is not a failure, and absolute because what is staged in it is spawned.

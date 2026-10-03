@@ -14,10 +14,17 @@ The stdlib loader loads every module under `stdlib/` into EVERY compile
 `ParseError`, `Promise`, `Parsable` — so the question "what happens when a user program declares one of
 them too?" is not hypothetical for any of them.
 
-**THE RULING (user, 2026-07-31): a USER declaration wins over a stdlib module's.** It is load-bearing
-rather than cosmetic: `parsable-interface.md`'s
-cases declare their own `enum ParseError` while implementing the stdlib's `interface Parsable`, so a rule
-that refused the pair would refuse the specs that stdlib module exists to unblock.
+**THE RULE: a user declaration and a stdlib module's of one TYPE name coexist, and each file's own
+declaration wins in that file.** The user's file means the user's declaration; a library file never sees
+an author declaration and keeps its own; any OTHER author file that declares neither sees both and must
+qualify (E3063 lists `dir.Name` — `export.Name` at the project root — and `stdlib.Name`). Coexisting is
+load-bearing rather than cosmetic: `parsable-interface.md`'s cases declare their own `enum ParseError`
+while implementing the stdlib's `interface Parsable`, so a rule that refused the pair would refuse the
+specs that stdlib module exists to unblock. Every case below declares the name and reads it in ONE file,
+so the own-file rule is what decides it.
+
+A FREE FUNCTION follows a different rule: a user free function outranks a stdlib module's of the same name
+for user code (see the bullet under *What the rule must NOT do*).
 
 ### What the rule actually requires
 
@@ -30,8 +37,8 @@ The rule's SHAPE is not what "the user wins" suggests at first reading:
 
 The second row is the whole story. `int.fromString` is rewritten to `stdlib/Builtins.maxon`'s
 `__int_fromString`, whose body throws `ParseError.invalidFormat` — a case the user's `ParseError` does not
-have. Both work at once, so the rule is not resolving one name to one declaration program-wide: **user
-code sees the user's declaration and stdlib code keeps its own.** Parse ORDER would give that scoping for
+have. Both work at once, so the rule is not resolving one name to one declaration program-wide: **the
+user's declaring file sees the user's declaration and stdlib code keeps its own.** Parse ORDER would give that scoping for
 free — parse all of `stdlib/` first and every reference inside a stdlib body is bound before the user's
 declaration overwrites the registry entry.
 
@@ -44,14 +51,14 @@ body to have been parsed into, so reordering the files changes nothing. That is 
 working exactly as designed, and it is what makes this rule a SCOPING mechanism in the compiler rather than a
 tie-break.
 
-MEASURED, on a compiler built with the obvious rule — "a user declaration displaces a stdlib one" in every
-declaration registry:
+The obvious rule — "a user declaration displaces a stdlib one" in every declaration registry — gets
+one half right and the other wrong:
 
 - a user `type Clock`, `enum CursorError`, `interface Parsable` or ranged `typealias DurationMs` shadowing
-  a stdlib module's — **all compiled and ran, the user's declaration answering**;
+  a stdlib module's — **compiles and runs, the user's declaration answering**;
 - a user `enum ParseError { Invalid = 1 }` — **`error E3034: stdlib/Builtins.maxon:222:11: unknown enum
   case: 'invalidFormat'`**, twice, inside a file the author never opened. `Builtins.maxon` REFERENCES the
-  name it declares, so displacing its declaration retargeted its own body at the user's enum.
+  name it declares, so displacing its declaration retargets its own body at the user's enum.
 
 So two declarations of one name have to coexist, and the compiler identifies aggregates by NAME all the way down —
 `structRef(name)`, `aggregateNameFor`, `__destruct_<name>`, `__layout_<name>`, both enum registries, the
@@ -62,8 +69,7 @@ interface registry. Coexisting therefore means one of them is RENAMED.
 identical reason: `__` is a prefix no declaration may take, so the moved name contests nothing and no user
 program can reach it. `stdlib/Clock.maxon`'s `type Clock` becomes `__Clock` — declaration, `Self`, methods
 (`__Clock.nowMs`) and cross-module references alike — and a user program's own `Clock` keeps the bare name.
-It happens ON CONTEST ONLY: a program that shadows nothing renames nothing and compiles to the bytes it did
-before the mechanism existed.
+It happens ON CONTEST ONLY: a program that shadows nothing renames nothing.
 
 The rename is applied to the stdlib file's IDENTIFIER TOKENS, once, at `Parser.create`. That is the whole
 design rather than an implementation note: a rename that reached the declaration and missed one of the
@@ -87,25 +93,25 @@ The soundness argument above is about NAMES — *"only the cross-file reachabili
 and a name is not the only thing that crosses that file boundary. A **VALUE** does too. A stdlib module
 whose signature mentions the contested type keeps handing user code values of it: `stdlib/Directory.maxon`'s
 `Directory.currentPath()` returns a `FilePath`, and under a user `type FilePath` that result is a
-`__FilePath`. The value is fine; what broke was every operation on it whose callee the compiler spells out
-of the value's own TYPE.
+`__FilePath`. The value is fine; what needs care is every operation on it whose callee the compiler spells
+out of the value's own TYPE.
 
 **A method call is exactly that.** `p.toString()` is dispatched by joining the receiver's resolved type name
-to the member — `__FilePath.toString` — and the reserved-CALL door then read the `__` as *"the author reached
-for a compiler intrinsic"* and refused with **E3004**, about a callee no author wrote and about a function
+to the member — `__FilePath.toString` — and a reserved-CALL door that read the `__` as *"the author reached
+for a compiler intrinsic"* would refuse it with **E3004**, about a callee no author wrote and about a function
 the program plainly declares. Those are two different meanings sharing one spelling: the `__` of
 `__mm_alloc` is a PREFIX THE COMPILER RESERVED, and the `__` of `__FilePath` is a NAME THIS COMPILE MINTED.
 
-⚠ **A FIELD read never had the problem, and the difference is what pins the diagnosis.** `info.isDirectory`
-on a `__FileInfo` reads the value's own layout and names nothing — MEASURED working throughout, and pinned
-below beside the method case. So the defect was never *"a renamed declaration is broken"*; it was precisely
-*"a callee the compiler mints out of a renamed type is refused"*.
+⚠ **A FIELD read has no such callee, and the difference is what pins the rule.** `info.isDirectory`
+on a `__FileInfo` reads the value's own layout and names nothing — pinned below beside the method case.
+So the hazard is not *"a renamed declaration is broken"*; it is precisely *"a callee the compiler mints
+out of a renamed type"*.
 
 ⇒ The exemption keys on the **MINT**, which is the fact the name's shape cannot carry
 (`Parser.requireCalleeIsNotReservedName`, `CalleeMint.resolvedTypeQualifier`). It is deliberately NOT a
 widening of the reserved space: the head must be one THIS COMPILE minted, some file must DECLARE the
 callee, and the head must not be bytes a user file's author typed — which is why
-`error.the-mint-is-not-reachable-from-user-code` below is unchanged. `__Clock.nowMs()` written out in a user
+`error.the-mint-is-not-reachable-from-user-code` below holds. `__Clock.nowMs()` written out in a user
 file is still refused; `c.nowMs()` on a value of the moved declaration is not.
 
 ### What the rule must NOT do
@@ -116,54 +122,56 @@ file is still refused; `c.nowMs()` on a value of the moved declaration is not.
   so it is stated here and enforced by that check.
 - **A collision between two USER declarations stays a collision**, exactly as `type-name-collision.md`
   pins it. Shadowing is about PROVENANCE, not about tolerating duplicates.
-- ⛔ **A FREE-FUNCTION-name collision is NOT a collision, and this bullet said the opposite.** It read
-  *"A user program declaring its own `function sleep` is `E3006` naming `stdlib/Sleep.maxon` — MEASURED"*,
-  and no program ever ran it: a user `function sleep` compiles clean and the USER's body is what its own
-  call sites reach, which is the ruling above applied to a free function rather than an exception to it.
+- ⛔ **A FREE-FUNCTION-name collision is NOT a collision.** A user `function sleep` compiles clean —
+  not an `E3006` naming `stdlib/Sleep.maxon` — and the USER's body is what its own
+  call sites reach, which is the rule above applied to a free function rather than an exception to it.
   `stdlib-loading.md`'s `a-user-free-function-outranks-the-stdlib-modules` and
   `a-value-returning-user-free-function-outranks-a-void-stdlib-one` are the pair that RUN it — the second
-  is the negative control, and it is the one that failed. Where a genuine stdlib-path diagnostic does
+  is the negative control. Where a genuine stdlib-path diagnostic does
   arise it is documented rather than pinned as a golden, because the path is machine-dependent — the same
   reason `stdlib-loading.md`'s collision rule gives.
 - ⚠ **A METHOD is NOT a free function, and the shadow reaches it — deliberately.** A user `Clock.nowMs`
   requires a user `type Clock`, which IS a shadow, so the stdlib method has already moved to
   `__Clock.nowMs` by the time the duplicate-function check runs and there is nothing to collide with.
-  MEASURED: a user `type Clock` declaring `static function nowMs()` compiles, and the call resolves to the
+  A user `type Clock` declaring `static function nowMs()` compiles, and the call resolves to the
   USER's. That is the rule working, not an exception to it — the whole point is that the user's
   declaration answers user code — and it is why this bullet is about FREE functions: they have no type to
   shadow, so nothing moves.
 
 ### The kind that needs no rename: a `typealias`, in ANY form
 
-A non-exported `typealias` is FILE-LOCAL, and a file-local declaration cannot collide with anything: a
-stdlib module's alias and a user file's declaration of that name are never both in scope anywhere. So
-the shadow contest does not move an alias, and it does not need to — **precedence settles it instead of
-a rename.** A user's own ranged `typealias DurationMs` coexists with `stdlib/Clock.maxon`'s and answers
-for the user's file, including for its RANGE, which is what
-`user-ranged-typealias-wins-over-a-listed-module` below observes.
+A typealias is resolved per reading file, so a stdlib module's alias and a user's declaration of that
+name never need to share one spelling: the shadow contest does not move an alias, and it does not need
+to — **the reading file settles it instead of a rename.** In the user's declaring file the user's own
+declaration wins; a library file never sees it; and a third author file that sees both qualifies. A
+user's own ranged `typealias DurationMs` coexists with `stdlib/Clock.maxon`'s `public` one and answers
+for the user's file, including for its RANGE, which is what `user-ranged-typealias-wins-over-a-listed-module`
+below observes.
 
-⚠ **This used to hold ONLY for a ranged alias meeting another ranged alias, and the gap was a wrong
-answer inside `stdlib/` itself.** The registry's carve-out asked whether the two declarations were the
-same alias FORM, which is a proxy for "neither can see the other" that fails in two directions:
+⚠ **This holds whatever FORM either declaration takes, and a wrong answer inside `stdlib/` itself is
+what that prevents.** Asking whether the two declarations are the same alias FORM is a proxy for
+"neither can see the other" that fails in two directions:
 
-- **A user NOMINAL declaration against a stdlib module's alias.** `type ParsedInt` against
-  `stdlib/Builtins.maxon:229`'s `typealias ParsedInt` was `E3006` — blamed on the STDLIB line, because
-  stdlib merges last and is therefore the "newcomer" — plus `E3009` at `stdlib/Builtins.maxon:427`,
-  where the module's own `i64.min as ParsedInt` resolved to the USER's struct. Both diagnostics named a
-  file the author never opened. The four nominal keywords all reach it, and `enum`/`union` reach only
-  the first: they resolve to `integer` as an alias does, so the module's own uses still type-check.
-- **Two aliases in different FORMS.** A user `typealias DecimalDigit = function(…)` against the stdlib
-  ranged one was `E3061`, though neither file can name the other's declaration either.
+- **A user NOMINAL declaration against a stdlib module's alias.** Under that proxy `type ParsedInt`
+  against `stdlib/Builtins.maxon`'s `typealias ParsedInt` is `E3006` — blamed on the STDLIB line,
+  because stdlib merges last and is therefore the "newcomer" — plus `E3009` at
+  `stdlib/Builtins.maxon`'s `__FloatSignBit`, where the module's own `i64.min as ParsedInt` resolves to the USER's
+  struct. Both diagnostics name a file the author never opened. The four nominal keywords all reach it,
+  and `enum`/`union` reach only the first: they resolve to `integer` as an alias does, so the module's
+  own uses still type-check.
+- **Two aliases in different FORMS.** Under that proxy a user `typealias DecimalDigit = function(…)`
+  against the stdlib ranged one is `E3061`, though neither file can name the other's declaration either.
 
-**The property that makes a pair legal is that neither declaration can SEE the other** — visibility and
-provenance — and the form they are written in is not a proxy for it. Two declarations that genuinely do
-meet still collide: `type-name-collision.md`'s `error.crossfile-type-and-exported-typealias` pins the
-`export`ed pair, and `two-user-declarations-still-collide` below pins the same-file one.
+**The property that makes a pair legal is that each declaration can be NAMED apart from the other** —
+by its file, its directory, or its layer (`stdlib.Name`) — and the form they are written in is not a proxy
+for it. Two declarations that no spelling tells apart still collide: `type-name-collision.md`'s
+`error.crossfile-type-and-exported-typealias` pins a nameable pair in one directory, and
+`two-user-declarations-still-collide` below pins the same-file one.
 
 ## Tests
 
 <!-- test: stdlib-user-shadows.user-ranged-typealias-wins-over-a-listed-module -->
-`stdlib/Clock.maxon` declares `typealias DurationMs = int(0 to i64.max)` and is loaded into this compile.
+`stdlib/Clock.maxon` declares `typealias DurationMs = int(0 to u64.max)` and is loaded into this compile.
 A user file declaring its own `DurationMs` over a NARROWER range is legal, and the range in force in that
 file is the USER's: `50` is outside `int(0 to 10)` and is refused against it, where the stdlib module's
 range would have accepted it. The rejection is the observation — a program that merely compiled would not
@@ -254,9 +262,8 @@ end 'main'
 <!-- test: stdlib-user-shadows.user-method-shadows-a-listed-modules-method -->
 A METHOD moves with its type. `stdlib/Clock.maxon` declares `Clock.nowMs`, and a user `type Clock` that
 declares its own is NOT `E3006` against it: by the time the duplicate-function check runs the stdlib method
-is `__Clock.nowMs`, and the call resolves to the user's. This is the observation that separates a METHOD
-from a FREE function — a user `function sleep` is still `E3006` against `stdlib/Sleep.maxon`, because a
-free function has no type to shadow.
+is `__Clock.nowMs`, and the call resolves to the user's. A FREE function has no type to move; a user
+`function sleep` outranks `stdlib/Sleep.maxon`'s by the free-function rule instead (`stdlib-loading.md`).
 ```maxon
 type Clock
 	export var x as Integer
@@ -278,7 +285,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: stdlib-user-shadows.a-method-on-a-value-of-the-moved-declaration -->
 ⭐ **THE VALUE CROSSES THE FILE BOUNDARY THE NAME DOES NOT.** `Directory.currentPath()` hands user code a
 `FilePath` — a `__FilePath` under this shadow — and `join`/`filename` are ordinary declared methods of that
-moved declaration. Before this they were `E3004 … call to undefined function '__FilePath.join': the '__'
+moved declaration, so neither is refused as `E3004 … call to undefined function '__FilePath.join': the '__'
 prefix names a compiler intrinsic`, about a callee the author never wrote. `"alpha.txt"` is 9 bytes, and
 the user's own `FilePath` supplies the other 4.
 ```maxon
@@ -330,9 +337,9 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: stdlib-user-shadows.a-field-of-a-value-of-the-moved-declaration -->
-⚠ **THE CONTRAST THAT PINS THE DIAGNOSIS.** A FIELD read on a value of the moved declaration reads the
-value's own layout and names nothing, so it worked while the method call did not — MEASURED before the fix,
-and pinned here so a future cure that reaches the method by disturbing the value's layout is caught. The cwd
+⚠ **THE CONTRAST THAT PINS THE RULE.** A FIELD read on a value of the moved declaration reads the
+value's own layout and names nothing, so it has no minted callee for the reserved door to judge — pinned
+here so a cure for the method case that disturbs the value's layout is caught. The cwd
 is a directory, so `isDirectory` adds 1 to the user's own 5.
 ```maxon
 type FileInfo
@@ -362,8 +369,8 @@ FOR MOVING THE STDLIB DECLARATION INTO THE RESERVED SPACE.** `stdlib/Clock.maxon
 COMPILER put those bytes there — so the exemption is scoped to the head's PROVENANCE rather than to the
 name: a stdlib file (whose identifier tokens the contest rewrote) or a `CalleeMint.resolvedTypeQualifier`
 dispatch (whose head is a resolved type). This program is neither — the author typed `__Clock` — and it
-stays refused. MEASURED before any such scoping: it COMPILED AND RAN, returning the stdlib monotonic clock,
-while the identical call in a program with no shadow was correctly refused. The diagnostic below is,
+stays refused. Unscoped, it would COMPILE AND RUN, returning the stdlib monotonic clock, while the
+identical call in a program with no shadow is refused. The diagnostic below is,
 position aside, the very one a program with no shadow gets, which is the point: whether a user may WRITE
 `__Clock.nowMs` must not depend on an unrelated declaration elsewhere in the program.
 ⚠ The sibling cases above reach that same function through a VALUE, which is not this — see
@@ -386,7 +393,7 @@ error E3004: <fragment>:7:17: call to undefined function '__Clock.nowMs': the '_
 ⚠ **A USER `__` DECLARATION IS E2051 WHETHER OR NOT IT COLLIDES WITH A MINT, AND THE DIAGNOSTIC POINTS AT
 THE USER'S OWN LINE.** This case is the TYPE half, and what guards it is that the mint re-probes past every
 name a user declaration already holds — even an ILLEGAL one — so `Clock` moves past this declaration
-instead of landing on it. MEASURED without that: the E2051 was suppressed and the program was refused with
+instead of landing on it. Without that, the E2051 would be suppressed and the program refused with
 `E3006: stdlib/Clock.maxon:10:13: duplicate definition of '__Clock'` — the mint's own collision, reported
 inside a file the author never opened. The case below is the other half.
 ```maxon
@@ -416,10 +423,9 @@ error E2051: <fragment>:2:6: identifier '__Clock' is reserved: declarations star
 DECLARATION KINDS AND THE CONTEST KNOWS ONLY TYPE NAMES.** A `function`/`let`/`var`/field/parameter/enum-case
 named `__Clock` is invisible to `userDeclaredTypeNames`, so the mint for a shadowed `Clock` IS `__Clock` and
 the reservation door has to be the one that says no — which it can, because a mint is only ever WRITTEN into
-stdlib tokens, so a `__` name reaching that door from a user file was typed by the author. MEASURED with the
-door unscoped and the re-probe in place: this program COMPILED and ran, exit 9 — a user declaration in the
-reserved space accepted silently, which is the exact hole `requireUnreservedName`'s own header calls the
-class of defect its rung exists to close.
+stdlib tokens, so a `__` name reaching that door from a user file was typed by the author. With the
+door unscoped and the re-probe in place, this program would COMPILE and run, exit 9 — a user declaration
+in the reserved space accepted silently, the exact hole `requireUnreservedName` exists to close.
 ```maxon
 type Clock
 	export var y as Integer
@@ -462,16 +468,16 @@ error E3006: <fragment>:6:6: duplicate definition of 'Clock' — already declare
 ```
 
 <!-- test: stdlib-user-shadows.user-type-coexists-with-a-listed-modules-typealias -->
-`stdlib/Builtins.maxon:229` declares a NON-EXPORTED `typealias ParsedInt`, and a user program declaring
-its own `type ParsedInt` used to be refused TWICE, both times inside a file the author never opened:
-`E3006` blamed the stdlib declaration as the duplicate — stdlib merges after the user's files, so the
-stdlib line is the "newcomer" — and `E3009: Cannot cast from int to struct` at
-`stdlib/Builtins.maxon:427`, where the module's own `i64.min as ParsedInt` resolved to the USER's struct
-because the struct registry is bare and whole-program and is consulted first.
+`stdlib/Builtins.maxon` declares `public typealias ParsedInt`, and a user program declaring its own
+`type ParsedInt` compiles. Two refusals are what it must avoid, both inside a file the author never
+opened: `E3006` blaming the stdlib declaration as the duplicate — stdlib merges after the user's files, so
+the stdlib line is the "newcomer" — and `E3009: Cannot cast from int to struct` at `stdlib/Builtins.maxon`'s
+`__FloatSignBit`, where the module's own `i64.min as ParsedInt` would resolve to the USER's struct if the
+bare, whole-program struct registry were consulted first.
 
-Neither declaration is reachable from the other's file, so neither is a duplicate of anything: a
-non-exported alias is file-local, and provenance settles the rest. Renaming the type to `UserParsedInt`
-compiled and returned 7 all along — the name was the ONLY difference.
+The two declarations sit in two layers, so neither is a duplicate of the other: the user's file means its
+own `type`, and the library file never sees it. The same program with the type named `UserParsedInt`
+compiles and returns 7 — the name is the ONLY difference.
 ```maxon
 typealias Value = int(0 to 200)
 
@@ -493,10 +499,11 @@ end 'main'
 ```
 
 <!-- test: stdlib-user-shadows.user-enum-coexists-with-a-listed-modules-typealias -->
-The same pair with an `enum`, and it is the half that shows the two defects were SEPARATE. An enum
-resolves to `integer` exactly as a ranged alias does, so `stdlib/Builtins.maxon`'s own uses of
-`RepeatCount` (`:1699`) still type-checked and no `E3009` was ever raised — the program was refused by
-the duplicate check ALONE. A fix to resolution that left the registry alone would still refuse this.
+The same pair with an `enum` against `stdlib/Builtins.maxon`'s file-private `typealias RepeatCount`, and it
+is the half that shows the two refusals are SEPARATE. An enum resolves to `integer` exactly as a ranged
+alias does, so `stdlib/Builtins.maxon`'s own uses of `RepeatCount` type-check and no `E3009` can arise —
+only the duplicate check could refuse it.
+Correct resolution with a registry that treats the pair as duplicates would still refuse this.
 ```maxon
 enum RepeatCount
 	first = 1
@@ -512,7 +519,7 @@ end 'main'
 ```
 
 <!-- test: stdlib-user-shadows.user-union-coexists-with-a-listed-modules-typealias -->
-A `union` against `stdlib/Builtins.maxon:1831`'s `typealias PadWidth`. Listed for the same reason the
+A `union` against `stdlib/Builtins.maxon`'s `public typealias PadWidth`. Listed for the same reason the
 `enum` case is: the rule is about the KEYWORD-INDEPENDENT namespace, so every declaration kind that
 files a name has to be observed, not inferred from the one that was.
 ```maxon
@@ -535,9 +542,9 @@ end 'main'
 ```
 
 <!-- test: stdlib-user-shadows.user-interface-coexists-with-a-listed-modules-typealias -->
-An `interface` against a stdlib module that is NOT `Builtins.maxon`: `stdlib/Testing.maxon:72` declares
-`typealias Tolerance = float(0.0 to f64.max)`. The rule is a property of provenance and visibility, not
-of one module, and a case anchored only in `Builtins.maxon` could not tell the two apart.
+An `interface` against a stdlib module that is NOT `Builtins.maxon`: `stdlib/Testing.maxon` declares
+`public typealias Tolerance = float(0.0 to f64.max)`. The rule is a property of provenance and the reading
+file, not of one module, and a case anchored only in `Builtins.maxon` could not tell the two apart.
 ```maxon
 interface Tolerance
 	function score() returns ExitCode
@@ -564,9 +571,9 @@ end 'main'
 
 <!-- test: stdlib-user-shadows.user-function-alias-coexists-with-a-listed-modules-ranged-typealias -->
 Two `typealias` declarations of one name in two files, in DIFFERENT forms — a user function alias
-against `stdlib/Builtins.maxon:375`'s ranged `DecimalDigit`. The same-form carve-out did not cover it,
-so it was `E3061`, again blamed on the stdlib line. A file-private alias is file-local whatever its
-form, so the two coexist and each answers for its own file.
+against `stdlib/Builtins.maxon`'s ranged `DecimalDigit`. A same-form test would refuse it with `E3061`,
+again blamed on the stdlib line. Both aliases are file-private, and a file-private alias is file-local
+whatever its form, so the two coexist and each answers for its own file.
 ```maxon
 typealias DecimalDigit = function(value ExitCode) returns ExitCode
 
@@ -587,10 +594,10 @@ end 'main'
 ```
 
 <!-- test: stdlib-user-shadows.the-listed-module-keeps-its-own-alias -->
-⭐ **The discriminating case: it is not enough that the diagnostics stopped.** Every case above would
-also pass if the fix had made `stdlib/Builtins.maxon`'s `ParsedInt` mean the user's struct and simply
-stopped complaining about it. Here the user owns the name AND the program runs stdlib code that depends
-on the module's own meaning of it — `stdlib/Builtins.maxon:427`'s `let __FloatSignBit = i64.min as
+⭐ **The discriminating case: it is not enough that no diagnostic is raised.** Every case above would
+also pass if `stdlib/Builtins.maxon`'s `ParsedInt` meant the user's struct and the compiler simply
+did not complain about it. Here the user owns the name AND the program runs stdlib code that depends
+on the module's own meaning of it — `stdlib/Builtins.maxon`'s `let __FloatSignBit = i64.min as
 ParsedInt` is the sign bit float printing reads, and it is a CONST INITIALIZER, evaluated in every
 compile. A wrong answer inside the module shows up as the negative sign, not as an error.
 ```maxon
@@ -623,9 +630,9 @@ end 'main'
 ⭐⭐ **The case that witnesses the MEMORY-SAFETY half, and it is the one the case above can only reach by
 accident.** A container's ELEMENT is classified by a tier that has no reading file — `typeIsManaged`, and
 the drop and clone routers behind it — so for a name that is a `type` in one file and a `typealias` in
-another, an element left as the bare name makes them GUESS. **MEASURED before the element mint:**
-`stdlib/Builtins.maxon`'s own `typealias ParsedIntArray = Array with ParsedInt` had its element read as a
-user program's struct, so printing a float dropped an array of INTEGERS through `__destruct_ParsedInt` —
+another, an element left as the bare name makes them GUESS. **Without the element mint,**
+`stdlib/Builtins.maxon`'s own `typealias ParsedIntArray = Array with ParsedInt` has its element read as a
+user program's struct, so printing a float drops an array of INTEGERS through `__destruct_ParsedInt` —
 **exit 0xC0000005, no diagnostic and no output.**
 
 Here BOTH containers are live at once and each must keep its own element: the user's `ValueBoxes` holds
@@ -674,8 +681,8 @@ printing enters `stdlib/Builtins.maxon` through `__float_toString`; an INTEGER f
 `"{n:b}"`, `"{n:o}"`, `"{n:d}"` and their padded forms — enters somewhere else entirely, at
 `__int_toStringFormatted(value ParsedInt, …)`, whose FIRST PARAMETER is the contested name. Nothing about
 a working float path constrains it: a compiler that resolved `ParsedInt` correctly for the module's
-arrays and still let its meaning slip in this signature passes every case above and faults here, which is
-what was MEASURED — **exit 0xC0000005 with no diagnostic and no output at all**, the plain integer
+arrays and still let its meaning slip in this signature passes every case above and faults here —
+**exit 0xC0000005 with no diagnostic and no output at all**, the plain integer
 argument arriving at a parameter typed as the user's STRUCT.
 
 One case covers all four bases deliberately: they are not four features but one entry point, reached
@@ -718,8 +725,8 @@ beef|BEEF|137357|1011111011101111|00beef|48879
 <!-- test: stdlib-user-shadows.the-format-spec-path-control-under-an-uncontested-name -->
 The CONTROL for the case above, and the reason its failure can be attributed to the name rather than to
 the format specs. Byte for byte the same program with the type renamed to `UserParsedInt`, so nothing in
-`stdlib/Builtins.maxon` is contested — same six spellings, same expected text. It passed while its twin
-faulted, which is what makes the pair a measurement of the SHADOW and not of `"{n:x}"`.
+`stdlib/Builtins.maxon` is contested — same six spellings, same expected text. A fault in the case above
+that this one does not share is therefore a fault of the SHADOW and not of `"{n:x}"`.
 ```maxon
 typealias Value = int(0 to 200)
 typealias Bits = int(0 to u64.max)
@@ -751,4 +758,203 @@ end 'main'
 ```
 ```stdout
 beef|BEEF|137357|1011111011101111|00beef|48879
+```
+
+<!-- test: stdlib-user-shadows.a-library-file-is-unaffected-by-an-authors-same-named-export -->
+A user EXPORTS `Byte` over `float`; `stdlib/String.maxon`, whose own `Byte` is `int(0 to u8.max)`, still
+compiles and serves `toByteArray`, because a library file never sees an author declaration (105 + 1).
+```maxon
+// --- file: wide.maxon
+export typealias Byte = float(0.0 to 1.0)
+
+export function half(b Byte) returns Byte
+	return b / 2.0
+end 'half'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let bytes = "hi".toByteArray()
+	let quarter = half(0.5)
+	return ((try bytes.get(1) otherwise 0) + (1 if quarter < 0.5 else 0)) as ExitCode
+end 'main'
+```
+```exitcode
+106
+```
+
+<!-- test: stdlib-user-shadows.a-library-file-is-unaffected-by-an-authors-same-named-type -->
+A user EXPORTS `type FilePath` in another file; `stdlib/Directory.maxon`'s own `FilePath` still answers its
+return value, and the user's is named through its directory (4 + 9).
+```maxon
+// --- file: lib/path.maxon
+export type FilePath
+	export var tag as ExitCode
+
+	export static function make() returns FilePath
+		return FilePath{tag: 4}
+	end 'make'
+end 'FilePath'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let child = Directory.currentPath().join("alpha.txt")
+	let name = child.filename()
+	return lib.FilePath.make().tag + (name.byteLength() as ExitCode)
+end 'main'
+```
+```exitcode
+13
+```
+
+<!-- test: stdlib-user-shadows.error.an-unthrown-clause-names-the-library-type-as-written -->
+A diagnostic names a moved library type as the author writes it, `stdlib.ParseError`, never by the
+`__ParseError` the shadow moved it to.
+```maxon
+
+enum ParseError implements Error
+	bad
+end 'ParseError'
+
+function parse() returns ExitCode throws stdlib.ParseError
+	return 0
+end 'parse'
+
+function check() throws ParseError
+	throw ParseError.bad
+end 'check'
+
+function main() returns ExitCode
+	try check() otherwise ignore
+	return try parse() otherwise 1
+end 'main'
+```
+```maxoncstderr
+error E3168: <fragment>:7:10: 'throws stdlib.ParseError' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause
+```
+
+<!-- test: stdlib-user-shadows.error.an-argument-at-the-moved-library-type-is-named-as-written -->
+The same respelling in an argument mismatch: the parameter's type is quoted `stdlib.FileInfo` and the user's
+own `FileInfo` bare. A message keeps an author-written `__Clock` as written — the respelling skips any mint
+the reporting file's own tokens spell, which is why `error.the-mint-is-not-reachable-from-user-code` and
+`error.a-user-reserved-function-beside-a-shadow` quote it.
+```maxon
+
+type FileInfo
+	var size = 0
+
+	static function make() returns Self
+		return Self{}
+	end 'make'
+end 'FileInfo'
+
+typealias Num = int(0 to 9)
+
+function measure(info stdlib.FileInfo) returns Num
+	return 1
+end 'measure'
+
+function main() returns ExitCode
+	return measure(FileInfo.make())
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:18:9: argument type mismatch for 'info': expected 'stdlib.FileInfo', got 'FileInfo'
+```
+
+<!-- test: stdlib-user-shadows.a-member-typealias-after-a-method-named-like-its-type-stays-a-member -->
+A method may be named like its type, so its own `end 'Holder'` is not where the type's body ends. The member
+typealias after it is the type's `Holder.Range`, and the program's bare `Range` is still the library's.
+```maxon
+typealias Small = int(0 to 50)
+
+type Holder
+	let n as Small
+
+	static function make() returns Holder
+		return Holder{n: 3}
+	end 'make'
+
+	function Holder() returns Small
+		return self.n
+	end 'Holder'
+
+	typealias Range = int(0 to 9)
+
+	function widened() returns Range
+		return self.n
+	end 'widened'
+end 'Holder'
+
+function main() returns ExitCode
+	let span = Range.create(1, finish: 4)
+	var total = 0 as ExitCode
+
+	for v in span 'each'
+		total = total + (v as ExitCode)
+	end 'each'
+
+	return total + (Holder.make().widened() as ExitCode) + (Holder.make().Holder() as ExitCode)
+end 'main'
+```
+```exitcode
+16
+```
+
+<!-- test: stdlib-user-shadows.a-moved-library-frame-is-named-as-written-in-a-backtrace -->
+A backtrace through a method of a library type the program shadows names the frame as the author would write
+it, `stdlib.Range.map`, on every lane.
+```maxon
+type Range
+	let n as ExitCode
+
+	static function make() returns Range
+		return Range{n: 1}
+	end 'make'
+
+	function value() returns ExitCode
+		return self.n
+	end 'value'
+end 'Range'
+
+typealias Small = int(0 to 100)
+
+function main() returns ExitCode
+	let bound = stdlib.Range.create(1, finish: 4)
+	let doubled = bound.map(function(x) gives x + (((x * 1000) as Small) as RangeBound))
+	return Range.make().value() + (doubled.count() as ExitCode)
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at stdlib-user-shadows.a-moved-library-frame-is-named-as-written-in-a-backtrace.test:18: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in main$closure_0
+  in stdlib.Range.map
+  in main
+  in mrt_start
+```
+
+<!-- test: stdlib-user-shadows.error.a-type-the-library-keeps-private-is-hidden-bare-and-qualified -->
+`stdlib/FilePath.maxon`'s `ParentComponentRule` carries no `public`, so no author file can name it — bare or
+qualified, one rule for both spellings.
+```maxon
+function bare(r ParentComponentRule) returns ExitCode
+	_ = r
+	return 1
+end 'bare'
+
+function qualified(r stdlib.ParentComponentRule) returns ExitCode
+	_ = r
+	return 2
+end 'qualified'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:2:17: type 'ParentComponentRule' is not exported
+error E3008: <fragment>:7:22: type 'stdlib.ParentComponentRule' is not exported
 ```

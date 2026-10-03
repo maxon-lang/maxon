@@ -11,7 +11,7 @@ category: type-system
 
 ### Overview
 
-`__ManagedFile` is a compiler builtin type that wraps a Windows file HANDLE with automatic cleanup via a destructor when the last reference goes out of scope. It replaces the raw `__Builtins` file functions with a managed, RAII-based API.
+`__ManagedFile` is a compiler builtin type that wraps a Windows file HANDLE with automatic cleanup via a destructor when the last reference goes out of scope: a managed, RAII-based file API.
 
 ### Type Structure
 
@@ -23,12 +23,20 @@ category: type-system
 - `__ManagedFile.openRead(managed)` — Opens a file for reading. Throws `__ManagedFileError` on failure (notFound / accessDenied / openFailed).
 - `__ManagedFile.openWrite(managed)` — Opens a file for writing (creates or overwrites). Throws `__ManagedFileError` on failure.
 - `__ManagedFile.openWriteExecutable(managed)` — As openWrite, with 0755 on Unix. Throws on failure.
+- `__ManagedFile.openCreateNew(managed)` — Creates a file and opens it for writing, refusing a path that already exists. Throws `__ManagedFileError` on failure: `alreadyExists` for an existing path.
 - `__ManagedFile.exists(managed)` — Returns 1 if the file exists (and is not a directory), 0 otherwise. Does not throw.
 - `__ManagedFile.delete(managed)` — Deletes a file. Throws `__ManagedFileError` on failure.
-- `__ManagedFile.rename(oldPath, newPath)` — Atomically renames a file, replacing an existing destination. Throws `__ManagedFileError` on failure (`deleteFailed` is the catch-all — the enum has no `renameFailed`, in either reference).
+- `__ManagedFile.rename(oldPath, newPath)` — Atomically renames a file, replacing an existing destination. Throws `__ManagedFileError` on failure (`deleteFailed` is the catch-all — the enum has no `renameFailed`).
 - `__ManagedFile.stat(managed)` — Returns a raw stat buffer pointer. Throws on failure. **The caller OWNS that buffer and must hand it back to `statFree`**: it is a raw allocation the ownership model cannot see, so a `stat` whose buffer is never freed is a leak the exit-101 gate reports.
 - `__ManagedFile.statField(buffer, index)` — Reads field `index` of a stat buffer: `0` size, `1` modified, `2` created, `3` accessed (all three Unix SECONDS), `4` isDirectory, `5` isReadOnly. The two attribute fields are **0 or 1**, never a raw attribute mask. Does not throw — a null buffer or an index outside `[0, 6)` (a negative one included) is a caller invariant violation and ABORTS.
 - `__ManagedFile.statFree(buffer)` — Releases a stat buffer. Does not throw; aborts on a null buffer. Void and non-throwing, so it is written as a bare STATEMENT (`__ManagedFile.statFree(st)`), which is the only position it has.
+
+### Errors
+
+`__ManagedFileError` has the cases `notFound`, `accessDenied`, `openFailed`, `readFailed`, `writeFailed`,
+`sizeFailed`, `deleteFailed`, `statFailed`, `invalidStatBuffer`, `invalidStatIndex`, `closed`,
+`alreadyExists` and `busy`. `alreadyExists` is `openCreateNew`'s refusal of an existing path; `busy` is a
+file another process holds in a way that blocks the operation.
 
 ### Instance Methods
 
@@ -36,6 +44,7 @@ Instance methods are called on variables declared with type `__ManagedFile`:
 
 - `size()` — Returns the file size in bytes. Throws on failure.
 - `read(managed, size)` — Reads up to `size` bytes from the file into managed memory. Throws `readFailed` if `size > managed.capacity` or on I/O error.
+- `readAppending(managed, size)` — Reads up to `size` bytes from the file into managed memory after its live length, and grows the length by the bytes read. Returns bytes read. Throws `readFailed` if `length + size > managed.capacity` or on I/O error.
 - `write(managed)` — Writes managed memory buffer contents to the file. Returns bytes written. Throws on failure.
 - `close()` — Explicitly closes the file handle. Idempotent. Also called automatically via destructor. Does not throw.
 
@@ -352,18 +361,16 @@ error E3072: specs/fragments/managed-file/managed-file.error-direct-construction
 ```
 
 <!-- test: managed-file.unknown-instance-method-is-refused-by-name -->
-compiler-authored, and it pins the DISPATCHER rather than a behaviour the oracle defines.
+This case pins the instance-method DISPATCHER.
 
-The instance surface is exactly four methods (`size`/`read`/`write`/`close`), so anything else is refused
+The instance surface is exactly five methods (`size`/`read`/`readAppending`/`write`/`close`), so anything else is refused
 BY NAME. Left to fall through it would mangle into a callee no file declares and surface as `E3004`
 against a method the author did write — the same argument `parseStringStaticCall` makes for `String`'s
 statics.
 
-⚠ The probe is `seek`, and that choice is the point rather than an arbitrary misspelling: v1 has an
-`lseek` primitive, but it belongs to a different v1 abstraction and NEITHER reference's `__ManagedFile`
-method list carries one, so `seek` is a name the language genuinely does not have and will not acquire by
-a later rung finishing this surface. (This case used to probe `size`, which R4.2 delivers — a marker that
-went stale the moment the rung it was written against landed.)
+⚠ The probe is `seek`, and that choice is the point rather than an arbitrary misspelling: it is the
+name an author reaching for a file offset would write, and `__ManagedFile`'s method list carries no
+such method, so `seek` is a name a file genuinely does not have.
 
 ⚠ It is a COMPILE-TIME case on purpose: it needs no file to exist in the runner's working directory. The
 RUNTIME half of instance dispatch is pinned by `managed-file.write-and-read` and `managed-file.auto-close`,
@@ -379,19 +386,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:12: Unsupported: `__ManagedFile` method 'seek' — the type has exactly these four: `size()`, `read(managed, size)`, `write(managed)` and `close()`
+error E2015: <fragment>:6:12: Unsupported: `__ManagedFile` method 'seek' — the type has exactly these five: `size()`, `read(managed, size)`, `readAppending(managed, size)`, `write(managed)` and `close()`
 ```
 
 <!-- test: managed-file.rename-round-trip -->
-compiler-authored, like the dispatcher case above, and for a reason of the same kind: `rename` is the ONLY one
-of the thirteen methods that NO canonical case reaches. Every `/specs` exercise of it goes through
-`File.rename`, whose signature takes a `FilePath` — and `stdlib/FilePath.maxon` did not then load for the compiler
-(it stopped at `E2015 String method 'byteAtOrPanic'`, `:56`), so there was no ported case to enable. Shipping
-the method untested is worse than authoring one.
-
-⚠ **THAT REASON'S FIRST HALF HAS EXPIRED: all of `stdlib/` loads now.** Whether a canonical `File.rename`
-exercise is portable today is a question for whoever ports it; the compiler-authored case below is unaffected
-and stays, because what it pins is the builtin-level round trip and nothing about `FilePath`.
+`rename` is the ONLY one of the thirteen methods that no other case reaches SUCCESSFULLY at the builtin
+level: `specs/file-io.md` goes through `File.rename`, whose signature takes a `FilePath`, and
+`specs/void-call-result.md` calls it only on a missing file. This case pins the builtin-level round trip
+and nothing about `FilePath`.
 
 What it pins is the ROUND TRIP, at the builtin level: a file written and closed, renamed, and then observed
 to have moved — `exists(old) == 0` AND `exists(new) == 1`. Either half alone would pass against a `rename`
@@ -432,25 +434,207 @@ end 'main'
 42
 ```
 
-<!-- test: managed-file.stat-round-trip -->
-compiler-authored, and it is the case whose ABSENCE was the R4.2 review's first blocker: not one committed
-case reached a SUCCESSFUL `stat`. Every canonical `stat` exercise goes through `File.info`, and
-`stdlib/FilePath.maxon` did not then load for the compiler (all of `stdlib/` loads now), so
-`stat-not-found-variant` — which throws before a
-buffer exists — was the whole of the coverage. `statField` and `statFree` had none at all.
+<!-- test: managed-file.open-create-new-refuses-an-existing-path -->
+`openCreateNew` creates a file that does not exist, and a second `openCreateNew` of the same path throws and
+leaves the first file's bytes in place.
+```maxon
+function createsNew(path String) returns bool
+	var file = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise return false
+	file.close()
+	return true
+end 'createsNew'
 
-What that hid was total: `__ManagedFile.statFree(buffer)` is VOID and NON-THROWING, so a bare statement is
-the only position it can be written in, and the statement parser did not route a compiler-owned static
-there. The canonical spelling (`stdlib/File.maxon:186`, verbatim) died as
-`E2015: Unsupported: identifier statement`, which made the only release for `stat`'s raw `__mm_alloc` block
-UNREACHABLE — so every successful `stat` leaked 48 bytes and the program exited **101**. A rung that
-delivers `stat` and cannot free its result has not delivered `stat`.
+function main() returns ExitCode
+	let path = "test_managed_create_new.txt"
+	var first = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise 'firstFail'
+		return 1
+	end 'firstFail'
+	try first.write("first".toByteArray().managed) otherwise 'writeFail'
+		first.close()
+		return 2
+	end 'writeFail'
+	first.close()
+
+	let refused = not createsNew(path)
+
+	var reader = try __ManagedFile.openRead(path.toByteArray().managed) otherwise 'readFail'
+		return 3
+	end 'readFail'
+	let size = try reader.size() otherwise 'sizeFail'
+		return 4
+	end 'sizeFail'
+	reader.close()
+
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise 'deleteFail'
+		return 5
+	end 'deleteFail'
+
+	if refused and size == 5 'createdOnce'
+		return 42
+	end 'createdOnce'
+
+	return 6
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: managed-file.open-create-new-of-an-existing-path-throws-already-exists -->
+The refusal of an existing path is the `alreadyExists` case, not the catch-all `openFailed`.
+```maxon
+function main() returns ExitCode
+	let path = "test_managed_create_new_exists.txt"
+	var first = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise 'firstFail'
+		return 1
+	end 'firstFail'
+	first.close()
+
+	var answer = 2 as ExitCode
+
+	var second = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise (e) 'refused'
+		answer = 42 if e == __ManagedFileError.alreadyExists else 3
+		try __ManagedFile.delete(path.toByteArray().managed) otherwise return 4
+		return answer
+	end 'refused'
+
+	second.close()
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise return 5
+	return answer
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: managed-file.read-appending-continues-after-the-live-length -->
+Two `readAppending` calls fill one buffer end to end: the second lands after the bytes the first left, and
+each grows the buffer's length by what it read.
+```maxon
+function main() returns ExitCode
+	let path = "test_managed_read_appending.txt"
+	var w = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
+	try w.write("hello world".toByteArray().managed) otherwise return 2
+	w.close()
+
+	var r = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
+	var buffer = try __ManagedMemory.create(32, 1) otherwise return 4
+	let first = try r.readAppending(buffer, 5) otherwise return 5
+	let second = try r.readAppending(buffer, 20) otherwise return 6
+	let third = try r.readAppending(buffer, 20) otherwise return 7
+	r.close()
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise return 8
+
+	let head = try buffer.byteAt(0) otherwise return 9
+	let joint = try buffer.byteAt(5) otherwise return 10
+	let tail = try buffer.byteAt(10) otherwise return 11
+	print("{first} {second} {third} {buffer.length()} {head} {joint} {tail}\n")
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+5 6 0 11 104 32 100
+```
+
+<!-- test: managed-file.read-appending-past-the-capacity-is-refused -->
+A `readAppending` whose bytes would run past the buffer's capacity is `readFailed`, and reads nothing.
+```maxon
+function main() returns ExitCode
+	let path = "test_managed_read_appending_over.txt"
+	var w = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
+	try w.write("abcdef".toByteArray().managed) otherwise return 2
+	w.close()
+
+	var r = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
+	var buffer = try __ManagedMemory.create(4, 1) otherwise return 4
+	let first = try r.readAppending(buffer, 3) otherwise return 5
+	var answer = 6 as ExitCode
+
+	if let over = try r.readAppending(buffer, 2) 'read'
+		answer = (10 + over) as ExitCode
+	end 'read' else (e) 'refused'
+		answer = 42 if e == __ManagedFileError.readFailed and buffer.length() == first else 7
+	end 'refused'
+
+	r.close()
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise return 8
+	return answer
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.managed-file.read-appending-into-a-buffer-of-wider-elements-is-refused -->
+`readAppending` grows the buffer's length by the bytes it read, and a length counts elements, so only a byte
+buffer is accepted: a buffer of wider elements is refused where it is passed.
+```maxon
+function main() returns ExitCode
+	var r = try __ManagedFile.openRead("test_managed_read_appending_wide.txt".toByteArray().managed) otherwise return 1
+	var buffer = try __ManagedMemory.create(4, 8) otherwise return 2
+	let got = try r.readAppending(buffer, 8) otherwise return 3
+	r.close()
+	return got as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:5:18: argument type mismatch for 'managed': expected '__ManagedMemory', got 'Array_int'
+```
+
+<!-- test: managed-file.a-file-held-open-for-reading-can-be-rewritten-and-deleted -->
+A read handle shares the file with every other open: while one is held, the same path can be opened for
+writing, written, and deleted.
+```maxon
+function main() returns ExitCode
+	let path = "test_managed_held_open_for_reading.txt"
+	var first = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
+	try first.write("held".toByteArray().managed) otherwise return 2
+	first.close()
+
+	var held = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
+	var answer = 42 as ExitCode
+
+	if let rewrite = try __ManagedFile.openWrite(path.toByteArray().managed) 'rewritten'
+		var w = rewrite
+		try w.write("rewritten".toByteArray().managed) otherwise 'unwritten'
+			answer = 4
+		end 'unwritten'
+
+		w.close()
+	end 'rewritten' else (e) 'refused'
+		answer = (10 + e.ordinal) as ExitCode
+	end 'refused'
+
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise (e) 'undeleted'
+		answer = (30 + e.ordinal) as ExitCode
+	end 'undeleted'
+
+	held.close()
+	return answer
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: managed-file.stat-round-trip -->
+This is the case that reaches a SUCCESSFUL `stat` at the builtin level. Every other successful
+`stat` goes through `File.info`, and `stat-not-found-variant` throws before a buffer exists.
+
+`__ManagedFile.statFree(buffer)` is VOID and NON-THROWING, so a bare statement is the only position it can be
+written in, and the statement parser routes a compiler-owned static there. `stdlib/File.maxon`'s
+`info` spells it exactly so, and it is the only release for `stat`'s raw `__mm_alloc` block — without it every
+successful `stat` leaks 48 bytes and the program exits **101**. A `stat` whose result cannot be freed is not
+a delivered `stat`.
 
 What the case pins, and why each half is here rather than one of them:
-- **the buffer is FREED** — this runs under the leak gate, so the fix is checked by the exit code, not by
+- **the buffer is FREED** — this runs under the leak gate, so the release is checked by the exit code, not by
   reading the parser;
 - **the six FIELDS carry the packing** — `[0]` is the size (5, from a 5-byte write), `[32]`/`[40]` are the
-  two attribute bits published as **0/1** and never as the raw mask (`stdlib/File.maxon:183` compares
+  two attribute bits published as **0/1** and never as the raw mask (`stdlib/File.maxon`'s `info` compares
   `attrs == 1`, so a leaked `0x10` would be a silent wrong answer), and `[8]`/`[16]`/`[24]` are Unix
   SECONDS. A plausibility WINDOW is the strongest stable assertion available for a clock, and it is a real
   one: a FILETIME that skipped the epoch subtraction reads ~1.3e10 s, and one that skipped the ÷10,000,000
@@ -527,18 +711,11 @@ error E3057: specs/fragments/managed-file/managed-file.open-read-without-try.tes
 <!-- test: managed-file.open-write-executable-without-try -->
 <!-- unsupported-targets: wasm32-wasi -->
 
-⭐⭐ **THE CALLEE NAMES THE METHOD THAT WAS WRITTEN, AND THIS CASE RECORDED IN ADVANCE THE DAY IT WOULD
-BECOME ABLE TO.** It used to read *"`openWriteExecutable` and `openWrite` are ONE call here … the callee is
-therefore a LOSSY KEY and no map over it can be injective"*, and it closed with the exact condition for its
-own change: *"This case is the one that would go quiet if a POSIX lane ever splits the two entry points — at
-which point the callee stops being lossy, `ManagedFileRuntime.managedFileSourceMethod`'s open-write arm
-collapses to an ordinary `found`, and THIS wording must change with it."*
-
-MAC4 is that day. A POSIX lane makes the 0755 bit OBSERVABLE — an executable written without it exists,
-holds the right bytes and cannot be run — so `openWriteExecutable` has an entry point of its own
-(`__mf_open_write_exec`, and `StdOp.osFileOpenWriteExecutable` behind it), the map is injective again, and
-the diagnostic names exactly the method the program contains. What the case still pins is that E3057 quotes
-a SOURCE METHOD and never a runtime callee.
+⭐⭐ **THE CALLEE NAMES THE METHOD THAT WAS WRITTEN.** A POSIX lane makes the 0755 bit OBSERVABLE — an
+executable written without it exists, holds the right bytes and cannot be run — so `openWriteExecutable` has
+an entry point of its own (`__mf_open_write_exec`, and `StdOp.osFileOpenWriteExecutable` behind it), the map
+from callee to source method is injective, and the diagnostic names exactly the method the program contains.
+What the case pins is that E3057 quotes a SOURCE METHOD and never a runtime callee.
 ```maxon
 function main() returns ExitCode
 	_ = __ManagedFile.openWriteExecutable("nonexistent_open_write_exec_without_try_xyz.txt".toByteArray().managed)
@@ -557,11 +734,11 @@ stamp a NEGATIVE sentinel in `capacity@16`, and `managed.capacity()` hands that 
 so the documented bound *"throws `readFailed` if `size > managed.capacity`"* already refuses every
 `size >= 0` for such a record, `0` included.
 
-⚠ **THE EMITTED GUARD DID NOT DO THAT, AND THE `size` BOUND STRUCTURALLY COULD NOT.** The runtime compared
-`size` against a BYTE EXTENT derived through a logical shift right, which turns `capacity = -1` into
-`0x1FFFFFFFFFFFFFFF` — enormous and positive. MEASURED before the fix: this program answered `within=2
-over=24 parent=90,90`, i.e. `ReadFile` wrote 24 bytes through a 4-byte window into an `Array` somebody else
-owns, corrupting its live elements and 20 bytes past the end of its allocation.
+⚠ **THE `size` BOUND STRUCTURALLY CANNOT DO THAT.** A guard comparing `size` against a BYTE EXTENT derived
+through a logical shift right turns `capacity = -1` into `0x1FFFFFFFFFFFFFFF` — enormous and positive. Behind
+such a guard this program answers `within=2 over=24 parent=90,90`, i.e. `ReadFile` writes 24 bytes through a
+4-byte window into an `Array` somebody else owns, corrupting its live elements and 20 bytes past the end of
+its allocation.
 
 ⭐ **THE 2-BYTE READ IS WHAT MAKES THE CASE DISCRIMINATE.** Two bytes FIT the four-byte window, so no size
 bound of any kind can refuse it and only the OWNERSHIP test can — a case that asked for 24 bytes alone would

@@ -57,7 +57,7 @@ needs a second witness table travelling with the first, which is the wall `stdli
 ## Tests
 
 <!-- test: existential.cursor-protocol -->
-⭐ **THE WHOLE RUNG IN ONE PROGRAM, with no generics and no `Array` anywhere.** `Seq` requires the cursor
+⭐ **THE WHOLE FEATURE IN ONE PROGRAM, with no generics and no `Array` anywhere.** `Seq` requires the cursor
 protocol, `Upto` conforms, and `total` takes the EXISTENTIAL. Both protocol calls are witness dispatches.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -633,8 +633,7 @@ end 'main'
 <!-- test: existential.constrained-type-parameter -->
 The OTHER witness-dispatched receiver. `self.item` is a `T` under `where T is Seq`, so the concrete conformer
 is unknown in the shared body and the two protocol calls jump through the constraint's hidden witness
-parameter. MEASURED before this rung: `E2015 … over a 'type parameter' value — … any type declaring the cursor
-protocol`, the same wrong sentence the existential got.
+parameter.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

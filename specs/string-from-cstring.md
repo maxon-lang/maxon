@@ -24,24 +24,15 @@ blitted into a buffer the returned `String` owns. ⇒ The caller may free, mutat
 the moment this returns and the `String` is unaffected — which is the whole reason to convert rather than
 to keep the pointer.
 
-The conversion itself is not new code: `emitCStringToManaged` has done exactly this since R4.3, for
-`__ManagedDirectory.filename()` and `currentPath()`. What this feature adds is a **name a Maxon program
-can reach it by**; `__mm_from_cstring` is a third caller of that builder, not a third copy of the loop.
+The conversion is `emitCStringToManaged`'s, the builder `__ManagedDirectory.filename()` and
+`currentPath()` also use. This feature is a **name a Maxon program can reach it by**; `__mm_from_cstring`
+is a third caller of that builder, not a third copy of the loop.
 
 ### ⛔ IT STOPS AT THE FIRST `\0`, BECAUSE THAT IS WHAT NUL-TERMINATED MEANS
 
 A cstring cannot carry an embedded zero. `"a\0b"` is three bytes as a `String`, and one byte after a
 round trip through a pointer. That is not a defect to route around — it is the representation, and it is
 why bytes that may hold a zero travel as a `ByteArray` through `String.from(bytes)` instead.
-
-### ⚠ THE BLOCKER THIS FEATURE CARRIED FOR THREE RUNGS WAS STALE, IN BOTH HALVES
-
-`Parser.parseManagedMemoryStaticCall` refused the name with *"`fromCString` and `createCursor` are not
-built: each needs a `cstring` / cursor type the compiler has no producer for"*, and `SignatureIndex` repeated it.
-Both halves were false when written: `parseTypeReference` resolves `cstring`, the lexer has carried the
-keyword since P1.2, and `String.cstr()` **produces** one. `createCursor` was separately built as what it
-actually is, an instance method. ⇒ **The gap was never a missing type — it was a conversion the runtime
-already performed with no Maxon-reachable name on it.** Re-measure a blocker before repeating it.
 
 ## Tests
 

@@ -216,12 +216,10 @@ end 'main'
 
 <!-- test: error.negative-index-is-refused-at-the-door -->
 ### A NEGATIVE index never reaches the distinction at all
-The third answer the same distinction once owed, and the one nothing asked for. `get`'s failure is decided
-from the live range, and "below the length" is true of `-1` on every signed comparison, so a negative index
-was reported as a slot that was never filled — sending the reader to look for a slot that was never
-addressable. Naming it `indexOutOfBounds` was the repair then. It is not the answer now, because the
-question no longer gets asked: `ElementIndex` stops at `i64.max`, so a negative is refused at `get`'s door
-and no `ArrayError` of either name is ever minted. A literal is refused at compile time.
+`get`'s failure is decided from the live range, and "below the length" is true of `-1` on every signed
+comparison, so a negative index that reached it would be reported as a slot that was never filled. It
+never reaches it: `ElementIndex` stops at `i64.max`, so a negative is refused at `get`'s door and no
+`ArrayError` of either name is ever minted. A literal is refused at compile time.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -346,13 +344,12 @@ end 'main'
 <!-- test: error.declare-array-error-enum -->
 ### `ArrayError` is a declaration the compiler owns
 The two cases above discriminate `ArrayError`, which means the compiler must SEED that enum — and it seeds
-it under the BARE name, because user source already spells `throws ArrayError` (four committed cases do).
+it under the BARE name, because user source spells `throws ArrayError`.
 A bare seed with no reservation is half a name: The compiler has no namespace, so a user `enum ArrayError` would
 land in the same registry bucket and the later write would win, while the array runtime went on returning
-the builtin's ordinals. MEASURED before the reservation existed: this program compiled, and
-`try arr.get(5)` routed `indexOutOfBounds` (ordinal 0) into the user's first case with no diagnostic
-anywhere. Refused now, exactly as `Ordering` and `CharacterSet` are — a REFERENCE to the name in a `throws`
-clause stays legal, which is the whole reason the name is bare.
+the builtin's ordinals — `try arr.get(5)` would route `indexOutOfBounds` (ordinal 0) into the user's first
+case with no diagnostic anywhere. It is refused, exactly as `Ordering` and `CharacterSet` are — a REFERENCE
+to the name in a `throws` clause stays legal, which is the whole reason the name is bare.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer

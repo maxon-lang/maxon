@@ -1,0 +1,51 @@
+/// Random integers from the operating system's cryptographic random source, on every target.
+/// @category System
+
+/// Why `Random` could not draw.
+public enum RandomError implements Error
+	unavailable  // the operating system refused to supply random bytes
+end 'RandomError'
+
+public typealias RandomDraw = int(0 to i64.max)
+public typealias RandomBound = int(1 to i64.max) implements RandomDraw
+
+let RandomWordBytes = 8
+let RandomFillSucceeded = 0
+let RandomByteRadix = 256
+let RandomTopByteMask = 0x7F
+let HighestRandomDraw = 9223372036854775807 as RandomDraw
+
+public type Random
+	/// A uniformly distributed integer from 0 to `i64.max`.
+	public static function draw() returns RandomDraw throws RandomError
+		var bytes = ByteArray.create()
+		bytes.resize(RandomWordBytes)
+
+		if __Builtins.fillRandom(bytes.managed) != RandomFillSucceeded 'refused'
+			throw RandomError.unavailable
+		end 'refused'
+
+		var value = 0 as RandomDraw
+
+		for (iter, byte) in bytes.withIterator() 'eachByte'
+			let bits = byte and RandomTopByteMask if iter.index() == 0 else byte
+			value = value * RandomByteRadix + bits
+		end 'eachByte'
+
+		return value
+	end 'draw'
+
+	/// A uniformly distributed integer from 0 to `bound - 1`.
+	public static function below(bound RandomBound) returns RandomDraw throws RandomError
+		// The top `biasedTail` draws would make the low remainders likelier, so they are drawn again.
+		let biasedTail = ((HighestRandomDraw mod bound + 1) mod bound) as RandomDraw
+
+		var candidate = try draw()
+
+		while biasedTail != 0 and candidate > HighestRandomDraw - biasedTail 'inTheBiasedTail'
+			candidate = try draw()
+		end 'inTheBiasedTail'
+
+		return (candidate mod bound) as RandomDraw
+	end 'below'
+end 'Random'

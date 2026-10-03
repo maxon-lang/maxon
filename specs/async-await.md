@@ -9,7 +9,7 @@ category: concurrency
 
 ## Documentation
 
-Maxon supports cooperative concurrency via `async` and `await`. ⚖ **An `async` call does NOT create a new green thread** (user ruling, 2026-08-27): it starts the callee as a **coroutine of the green thread that called it**, with a growable stack (starting at 2KB). The coroutine runs until it reaches a blocking operation, at which point it yields the green thread and that green thread's other coroutines run; `await` resumes the caller and collects the result. So "parallel work" below is overlapped **waiting**, not parallel execution, and a coroutine never leaves the green thread that made it — it changes OS thread only when that green thread does. Creating a separately scheduled green thread is `spawn`, which starts a SERVICE (`specs/services.md`).
+Maxon supports cooperative concurrency via `async` and `await`. ⚖ **An `async` call does NOT create a new green thread** (user ruling): it starts the callee as a **coroutine of the green thread that called it**, with a growable stack (starting at 2KB). The coroutine runs until it reaches a blocking operation, at which point it yields the green thread and that green thread's other coroutines run; `await` resumes the caller and collects the result. So "parallel work" below is overlapped **waiting**, not parallel execution, and a coroutine never leaves the green thread that made it — it changes OS thread only when that green thread does. Creating a separately scheduled green thread is `spawn`, which starts a SERVICE (`specs/services.md`).
 
 ```text
 // Start a coroutine of this green thread
@@ -50,6 +50,16 @@ var r2 = await p2
 - Throwing async functions require `try await` to extract the result
 - `promise.cancel()` cancels the associated green thread
 - **`await` is LINEAR**: a promise is awaited exactly once, and a second await is a compile error (E3100)
+
+**Arguments move.**
+An `async` call's arguments MOVE into the coroutine, for `let` and `var` bindings alike: the reference
+transfers, the caller's binding is consumed (a later read is E3102), and a scalar is copied. Handing one
+binding twice in one call is E3102. A parameter the callee reassigns gets storage the coroutine owns;
+nothing is written back to the caller, and a coroutine may write a moved `let`. A function PARAMETER or a
+`self` FIELD passed to `async` is co-owned instead — it cannot be consumed — which is how a handle (an
+`HttpServer`, a socket) is shared with a coroutine. A module-level `let` stays shared. E3138 at an `async`
+call refuses only a reference held without a count. A closure handed to `async` moves into the coroutine
+like any other managed value.
 
 **Await is linear.**
 The thunk owns its result and hands it over at the `await`. A second await of the same promise
@@ -353,8 +363,7 @@ end 'main'
 `otherwise (e)` on a `try await` binds the error the awaited thunk THREW,
 at the thunk's declared `throws` type — exactly as it does on a `try` call.
 The promise carries its callee's error type, so `e` here is a `TaskError`
-and can be matched. (It used to be handed back as the raw error flag typed
-`int`, so any use of `e` failed with "Primitive type 'int' has no method".)
+and can be matched.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -547,10 +556,8 @@ error E3073: specs/fragments/async-await/async-await.error.no-yield.test:9:11: '
 
 <!-- test: async-await.storage.bind-error-through-storage -->
 The error type SURVIVES storage, so an `otherwise (e)` binding on a promise pulled back out of
-an array binds the error the thunk actually throws — a `TaskError`, matched case by case. This
-is the bug that started all of this: `e` used to come back typed `int` (it was the raw promise
-handle), so any use of it failed with "no method named ...". Then it was refused outright, because
-`Promise with T` had nowhere to keep the error type. Now the type names it, and it just works.
+an array binds the error the thunk actually throws — a `TaskError`, matched case by case. The
+storage type `Promise with (T, E)` names the error type, so `e` is typed exactly as for a direct await.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias TaskPromise = Promise with (Integer, TaskError)
@@ -585,10 +592,10 @@ end 'main'
 
 <!-- test: async-await.storage.release-union-payload-through-storage -->
 The error carried back out of storage is an associated-value union, so its flag IS a heap pointer
-to the payload. The binding takes ownership and scope-end releases it exactly once. This is the
-in-tree leak that a green suite could never show: the path only runs when a worker DIES, and when
-it did, the box said "not a heap pointer" (a bit that could not distinguish one error type from
-another), the conditional decref never fired, and every dead worker leaked its error.
+to the payload. The binding takes ownership and scope-end releases it exactly once. Only a worker that DIES
+runs this path, so nothing else in the suite shows a leak here: a flag reading "not a heap pointer" (a
+bit that cannot distinguish one error type from another) would skip the conditional decref, and every
+dead worker would leak its error.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias WorkPromise = Promise with (Integer, WorkError)
@@ -693,8 +700,8 @@ error E3098: specs/fragments/async-await/async-await.error.storage-names-wrong-e
 Bare `try await p` re-throws the awaited thunk's error through the enclosing
 function's error-return ABI. If the two error types differ, the caller decodes
 one enum's ordinals as another's tags — a silent miscompile. The `try` CALL
-form has always rejected this; the `try await` form used to skip the check
-entirely, because it had no error type to compare. Now it has one.
+form rejects this, and so does the `try await` form: the promise carries the
+error type to compare.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -728,11 +735,11 @@ error E3059: specs/fragments/async-await/async-await.error.propagate-type-mismat
 ```
 
 <!-- test: async-await.error.propagate-type-mismatch-through-storage -->
-The propagation type check needs an error type to check, and now it has one even when the promise
-came out of storage. This is the case that used to be a SILENT MISCOMPILE and then an outright
-refusal: `mayFail` throws `TaskError`, `viaStorage` throws `WrapError`, and re-throwing one
-through the other's error-return ABI made the caller decode `TaskError`'s ordinals as `WrapError`'s
-tags — and since `WrapError` has associated values, mm_decref an ordinal as a pointer and die. The
+The propagation type check needs an error type to check, and it has one even when the promise
+came out of storage. Unchecked, this program is a SILENT MISCOMPILE: `mayFail` throws `TaskError`,
+`viaStorage` throws `WrapError`, and re-throwing one through the other's error-return ABI makes the
+caller decode `TaskError`'s ordinals as `WrapError`'s tags — and since `WrapError` has associated
+values, mm_decref an ordinal as a pointer and die. The
 storage type names `TaskError`, so the check simply fires, exactly as it does for a direct await.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -775,13 +782,6 @@ error E3059: specs/fragments/async-await/async-await.error.propagate-type-mismat
 at the await, so a second await takes a second reference to a payload the thunk only owned once —
 the two releases underflow the refcount and free it twice ("mm_decref: refcount underflow").
 The double-free is made unrepresentable rather than fixed.
-
-⚠ This case and the five `double-await-*` cases after it once kept a NARROW `x64-windows` marker while the
-rest of this file ran on arm64-macOS too, and the reason was never the subject: each reaches `File.exists`
-to give its thunk a yield point, and the FILE surface had no arm64-macOS implementation — so on that lane
-the program was refused with `E3104` naming `__mf_exists` before the linearity check ever ran, and the case
-would have pinned the wrong diagnostic. The note ended *"They widen when `managedFile` does"*; MAC4 is when
-it did, and all six now carry the same marker as the rest of the file.
 
 Note the thunk does not throw. This is an OWNERSHIP bug, not an error-handling one: a plain
 `async` returning a managed `String` double-frees identically.
@@ -860,9 +860,8 @@ end 'main'
 <!-- test: async-await.error.double-await-through-alias -->
 Linearity is a property of the GREEN THREAD, not of the identifier text. `let q = p` gives one
 green thread a second name; awaiting through both names awaits it twice, and the payload the
-thunk handed over once is released twice. This compiled clean and double-freed at runtime
-("mm_decref: refcount underflow") for as long as the check keyed on the NAME — one extra line
-defeated the whole thing.
+thunk handed over once is released twice ("mm_decref: refcount underflow"). A check keyed on the
+NAME would compile this clean — one extra line would defeat the whole thing.
 ```maxon
 function makeText() returns String
 		_ = File.exists(FilePath from "noyield.txt")
@@ -1006,10 +1005,9 @@ t0 t1 t2
 <!-- test: async-await.linear.await-in-ternary-arms -->
 The two arms of a ternary are MUTUALLY EXCLUSIVE — only the selected arm is evaluated — so an
 `await` in each is the only await on its own path, exactly as in an `if`/`else`. This is pinned
-because the ternary's arms are a *recent* pair of blocks: they used to be hoisted into the entry
-block with only the store made conditional, and a linearity check that ran against the hoisted
-shape would have seen two awaits in ONE block and rejected a valid program. It reads the arms as
-the branches they now are.
+because the ternary's arms are a pair of blocks: a linearity check that ran against a shape with
+both arms hoisted into the entry block and only the store made conditional would see two awaits in
+ONE block and reject a valid program. It reads the arms as the branches they are.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1085,8 +1083,7 @@ A throwing thunk hands the awaiting frame an OWNED error on its error path. A
 plain `await` has nowhere to put it: the value it yields is the undefined success
 slot, and an associated-value payload is released by nobody — the run below ends
 101 (leak) if it is allowed to compile. `try await` is the only form that can
-receive the error, which is what this spec has said since the top of the file;
-now the compiler enforces it.
+receive the error, as the top of this spec says, and the compiler enforces it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1189,8 +1186,7 @@ end 'main'
 `work` throws, so the storage type names what it throws: `Promise with (Integer, WorkError)`.
 Throws-ness is a property of the TYPE and survives the box, so a stored non-throwing promise
 still takes a plain `await` (see `async-await.promise-array`) and only a genuinely throwing one
-demands `try await`. It used to be that EVERY stored promise was treated as throwing, because
-the box could not say which it was.
+demands `try await`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with (Integer, WorkError)
@@ -1230,10 +1226,8 @@ must be released on the `otherwise` path, or the third element's `WorkError.fail
 leaks. The storage type names `WorkError`, so the release is a straight-line decref emitted from
 the static type — the same code a direct await emits.
 
-This is the spec that used to justify the `errorIsHeapPtr` bit. With the error type erased by
-storage, the compiler could not know whether the error flag was a heap pointer or a plain ordinal,
-so the box carried a runtime bit and the otherwise path BRANCHED on it. The bit is gone: naming
-the error type answers the question statically, and there is nothing left to approximate.
+Whether the error flag is a heap pointer or a plain ordinal is answered statically by the named
+error type, so the box carries no runtime bit and the `otherwise` path does not branch on one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with (Integer, WorkError)
@@ -1312,13 +1306,13 @@ end 'main'
 
 <!-- test: async-await.nested -->
 `async` NESTS: a green thread may itself spawn and await another. This is the
-minimal shape — one `async` inside one `async`, where the inner one does I/O —
-and it deadlocked the whole process at N=1 for as long as the feature existed,
-because the flag that says "this green thread has finished switching off its
-stack" was published by the scheduler loop that DISPATCHED a thread rather than
-by the switch itself. One level deep those are the same thread; nested they are
-not, so the inner thread's completion spun for ever inside `__netpoll_claim_done`
-and pinned a core. Nothing in this file exercised the shape.
+minimal shape — one `async` inside one `async`, where the inner one does I/O.
+The flag that says "this green thread has finished switching off its stack" must
+be published by the switch itself, not by the scheduler loop that DISPATCHED a
+thread. One level deep those are the same thread; nested they are not, so a
+loop-published flag would leave the inner thread's completion spinning for ever
+inside `__netpoll_claim_done`, deadlocking the whole process at N=1 and pinning
+a core.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1529,9 +1523,8 @@ is that the `try` road waits on that same deadline and not on some longer bound.
 
 The assertion is RELATIVE and its control is IN THE SAME PROCESS, so it states the
 invariant directly ("`try await` costs what `await` costs") and is immune to how
-fast the host is. The 200 ms slack is a wide band over six rounds: the defect this
-pins cost ~55 ms per round (measured 328 ms vs 656 ms for six 10 ms sleeps), so a
-regression clears the threshold by 100+ ms while a healthy run sits ~0 ms above its
+fast the host is. The 200 ms slack is a wide band over six rounds: a road that waits on a
+longer bound costs tens of milliseconds per round, so a regression clears the threshold by 100+ ms while a healthy run sits ~0 ms above its
 own control. The absolute bound on the control is the anchor that keeps the
 relation from passing because BOTH halves regressed.
 ```maxon
@@ -1593,15 +1586,13 @@ plain=6 thrown=6 score=2
 `returns StringArray` is a GENERIC-ALIAS return, and the whole-program sweep records it as a bare
 `named("StringArray")` because it runs before the aliases are known (`parseTypeReference`'s
 generic-alias arm is gated on `allFilesFolded`). An ordinary call's result is repaired at the READ
-door (`repairSweptType`, at `mintOwnedCallResult`); the AWAIT road read the same registry entry and
-did not, so `await`ing the spawn bound a value tagged `named` under a name no reader could resolve —
+door (`repairSweptType`, at `mintOwnedCallResult`); an AWAIT road that read the same registry entry
+unrepaired would bind a value tagged `named` under a name no reader can resolve —
 `E3011: Unknown type 'StringArray'` at the first member call on it.
 
-⚠ **THE RANGED-ALIAS HALF OF THIS LOSS WAS ALREADY FIXED AND THE GENERIC-INSTANCE HALF WAS NOT.**
-`awaitedPromiseFacts` was changed from answering a bare TAG to answering a TYPE for exactly this
-class (measured then as `Cannot return 'FilePath' from function declared to return 'int'`), which is
-why a ranged-alias result — the control this case is paired with — compiled the whole time. The
-repair now happens at `calleeReturnType`, the ONE registry read both async result questions are
+⚠ **THE REPAIR COVERS BOTH HALVES: A RANGED ALIAS AND A GENERIC INSTANCE.** `awaitedPromiseFacts`
+answers a TYPE rather than a bare TAG, which is what a ranged-alias result — the control this case
+is paired with — needs. The repair happens at `calleeReturnType`, the ONE registry read both async result questions are
 answered from, so the await's result type, the spawn's carried result tag and the promise-STORAGE
 agreement check cannot come to disagree about what the callee returns.
 
@@ -1643,9 +1634,9 @@ end 'main'
 `SpecWorkerPool`'s own spelling: `typealias DrainPromise = Promise with (StringArray, SubprocessError)`,
 stored in an array so the spawn is BOXED and the await is described by the storage type rather than by
 a reachable `asyncCall`. The agreement check between the storage's claimed result and the callee's
-declared one compared a REPAIRED `claimed` (through `resolvedSlotType`) against an UNREPAIRED
-`returned`, so it reported the storage naming `StringArray` while "this promise's function returns
-'int'" — a sentence naming a type the program does not contain. Both sides are repaired now.
+declared one compares a REPAIRED `claimed` (through `resolvedSlotType`) against a REPAIRED
+`returned`. With `returned` unrepaired it would report the storage naming `StringArray` while "this
+promise's function returns 'int'" — a sentence naming a type the program does not contain.
 
 <!-- test: async-await.managed-generic-result-through-promise-storage -->
 ```maxon
@@ -1690,11 +1681,11 @@ typealias Integer = int(i64.min to i64.max)
 4
 ```
 
-### A Ranged-Alias Result Is the Control, and It Compiled the Whole Time
+### A Ranged-Alias Result Is the Control
 
-The same program with a ranged-int result. It is here because it is what proves the defect above was
-the GENERIC-INSTANCE half of the swept-type loss and not `async` losing its result type generally —
-this spelling has always worked, and a fix that broke it would be repairing the wrong thing. A ranged
+The same program with a ranged-int result. It is here because it is what proves the cases above pin
+the GENERIC-INSTANCE half of the swept-type repair and not `async` losing its result type generally —
+a repair that broke this spelling would be repairing the wrong thing. A ranged
 alias deliberately keeps its `named` tag through the repair (`repairSweptType` resolves a struct, a
 float alias, a function alias, a generic alias and a tuple alias — never a ranged int), which is what
 keeps the alias name available to every downstream range check.
@@ -1998,4 +1989,1132 @@ end 'main'
 ```
 ```exitcode
 9
+```
+
+<!-- test: async-await.a-string-read-after-an-async-spawn-is-use-after-move -->
+A managed `var` handed to `async` is moved into the coroutine.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return 1
+end 'shout'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {1}"
+	let p = async shout(word)
+	print("{word}\n")
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:10: use of moved value 'word': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-await.a-let-read-after-an-async-spawn-is-use-after-move -->
+A managed `let` handed to `async` is moved into the coroutine exactly as a `var` is.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return 1
+end 'shout'
+
+function main() returns ExitCode
+	let word = "hello padded out long enough to heap allocate {1}"
+	let p = async shout(word)
+	print("{word}\n")
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:10: use of moved value 'word': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-await.a-let-moved-into-async-is-freed-once-by-the-coroutine -->
+The coroutine owns the moved `let` and releases it once, after the caller's frame has moved on.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return text.byteLength() as Integer
+end 'shout'
+
+function spawnIt() returns IntPromise
+	let word = "hello padded out long enough to heap allocate {1}"
+	return async shout(word)
+end 'spawnIt'
+
+function main() returns ExitCode
+	let p = spawnIt()
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello padded out long enough to heap allocate 1!
+47
+```
+
+<!-- test: async-await.a-let-moved-into-async-may-be-written-by-the-coroutine -->
+The coroutine owns a `let` moved into it, so a target that writes its parameter is handed it as it would be a
+`var`: the caller's binding is gone and nothing else sees the record.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+function poke(p Box) returns Integer
+	Scheduler.yield()
+	p.n = p.n + 41
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	let b = Box.create()
+	let pending = async poke(b)
+	return await pending as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: async-await.a-cell-resident-var-handed-to-async-is-moved -->
+`word` lives in a cell because `fill` reassigns its parameter; the coroutine takes the cell's contents.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return text.byteLength() as Integer
+end 'shout'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {1}"
+	fill(word, n: 2)
+	let p = async shout(word)
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+filled 2 padded out long enough to heap allocate!
+48
+```
+
+<!-- test: async-await.a-cell-resident-var-read-after-an-async-spawn-is-use-after-move -->
+The same cell-resident `var`, read after the spawn.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return text.byteLength() as Integer
+end 'shout'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {1}"
+	fill(word, n: 2)
+	let p = async shout(word)
+	print("{word}\n")
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:18:10: use of moved value 'word': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-await.a-var-reassigned-after-a-closure-captured-it-is-moved-into-async -->
+The closure owns the value it captured, so the `var` reassigned afterwards holds a new value of its own, and that
+value moves into the coroutine while the closure goes on reading the first.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return 1
+end 'shout'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {0}"
+	let peek = function() gives word.byteLength()
+	word = "second padded out long enough to heap allocate {1}"
+	let p = async shout(word)
+	print("{await p} {peek()}\n")
+	return 0
+end 'main'
+```
+```stdout
+second padded out long enough to heap allocate 1!
+1 47
+```
+
+<!-- test: async-await.error.a-cell-resident-var-a-closure-only-reads-cannot-be-moved-into-async -->
+A closure that only READS a cell-resident `var` takes the cell's occupant, so handing the `var` to the
+coroutine afterwards is a use after move.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return text.byteLength() as Integer
+end 'shout'
+
+function opening() returns (String, Integer)
+	return ("hello padded out long enough to heap allocate {1}", 1)
+end 'opening'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var (word, _) = opening()
+	fill(word, n: 2)
+	let peek = function() gives word.byteLength()
+	let p = async shout(word)
+	print("{await p} {peek()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:22:22: use of moved value 'word': its ownership moved to the closure that captures it
+```
+
+<!-- test: async-await.error.a-cell-resident-var-read-after-a-nested-closure-cannot-be-moved-into-async -->
+The outer closure reads `word` after a nested closure has ended, so it still captures `word`, and handing the
+`var` to the coroutine afterwards is a use after move.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function run(thunk Thunk) returns Integer
+	return thunk()
+end 'run'
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return text.byteLength() as Integer
+end 'shout'
+
+function opening() returns (String, Integer)
+	return ("hello padded out long enough to heap allocate {1}", 1)
+end 'opening'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var (word, _) = opening()
+	fill(word, n: 2)
+	let peek = function() gives run(function() gives 0) + (word.byteLength() as Integer)
+	let p = async shout(word)
+	print("{await p} {peek()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:27:22: use of moved value 'word': its ownership moved to the closure that captures it
+```
+
+<!-- test: async-await.error.a-cell-resident-var-read-after-a-nested-closure-across-lines-cannot-be-moved-into-async -->
+The nested closure's body ends at its own line break, and the outer closure's body goes on past it to read
+`word`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Thunk = function() returns Integer
+
+function run(thunk Thunk) returns Integer
+	return thunk()
+end 'run'
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return text.byteLength() as Integer
+end 'shout'
+
+function opening() returns (String, Integer)
+	return ("hello padded out long enough to heap allocate {1}", 1)
+end 'opening'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var (word, _) = opening()
+	fill(word, n: 2)
+	let peek = function() gives [
+		run(function() gives 0),
+		word.byteLength() as Integer
+	]
+	let p = async shout(word)
+	print("{await p} {peek().count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:30:22: use of moved value 'word': its ownership moved to the closure that captures it
+```
+
+<!-- test: async-await.a-let-whose-clone-a-closure-captured-is-moved-into-async -->
+The closure owns the clone it captured, so `b` moves into the coroutine and `peek` still reads its own record.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function readIt(b Box) returns Integer
+	Scheduler.yield()
+	return b.n
+end 'readIt'
+
+function main() returns ExitCode
+	let b = Box.create()
+	let kept = b.clone()
+	let peek = function() gives kept.n
+	let p = async readIt(b)
+	let r = await p
+	return (r + peek()) as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: async-await.a-var-whose-clone-a-closure-captured-is-moved-into-async -->
+The same capture of a clone of a `var` that stays out of a cell.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function readIt(b Box) returns Integer
+	Scheduler.yield()
+	return b.n
+end 'readIt'
+
+function boxed() returns (Box, Integer)
+	return (Box.create(), 1)
+end 'boxed'
+
+function main() returns ExitCode
+	var (b, _) = boxed()
+	let kept = b.clone()
+	let peek = function() gives kept.n
+	let p = async readIt(b)
+	let r = await p
+	return (r + peek()) as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: async-await.error.one-let-handed-twice-to-one-async-call-is-use-after-move -->
+The first argument moves `b` into the coroutine, so the second reads a moved value.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function pair(a Box, other Box) returns Integer
+	Scheduler.yield()
+	return a.n + other.n
+end 'pair'
+
+function main() returns ExitCode
+	let b = Box.create()
+	let p = async pair(b, other: b)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:31: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-await.error.a-let-and-its-alias-handed-to-one-async-call-are-refused -->
+`c` names the record `b` holds, so moving `b` into the coroutine leaves `c` a second owner of it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function pair(a Box, other Box) returns Integer
+	Scheduler.yield()
+	return a.n + other.n
+end 'pair'
+
+function main() returns ExitCode
+	let b = Box.create()
+	let c = b
+	let p = async pair(b, other: c)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:20:31: the value handed to `async pair(…)` is also read through a name that holds no reference of its own (`b`): a second name for the same record. An `async` call moves this value: the coroutine takes over the reference this frame held and releases it when it ends, so a reader holding no reference of its own would go on reading a record the coroutine may already have released. Pass a `.clone()`, or build the value at the call: an INTERPOLATION over it is a record nothing else can name
+```
+
+<!-- test: async-await.error.a-match-payload-of-a-let-union-cannot-be-written-by-a-coroutine -->
+<!-- unsupported-targets: wasm32-wasi -->
+`b` is bound out of `w`, which is a `let`, and nothing proves `b` is the record's only owner, so a coroutine
+that writes its parameter may not be handed it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+union Wrap
+	held(box Box)
+	empty
+end 'Wrap'
+
+function poke(p Box) returns Integer
+	Scheduler.yield()
+	p.n = 99
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	let w = Wrap.held(Box.create())
+
+	match w 'w'
+		held(b) then print("{await async poke(b)}\n")
+		empty then print("empty\n")
+	end 'w'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:27:36: cannot pass 'b' to function that mutates parameter 'p' (in main)
+```
+
+<!-- test: async-await.error.an-element-the-array-still-holds-cannot-be-written-by-a-coroutine -->
+<!-- unsupported-targets: wasm32-wasi -->
+`a` reads an element `items` still holds, so a coroutine that writes its parameter may not be handed it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Boxes = Array with Box
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function poke(p Box) returns Integer
+	Scheduler.yield()
+	p.n = 99
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	var items = Boxes.create()
+	items.push(Box.create())
+	let a = try items.get(0) otherwise panic("no box")
+	print("{await async poke(a)}\n")
+	print("{items.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:23:22: cannot pass 'a' to function that mutates parameter 'p' (in main)
+```
+
+<!-- test: async-await.a-counted-co-owner-bound-to-a-let-moves-into-async -->
+`first` hands back an element `items` still holds, so `a` holds its own reference to it: the coroutine takes
+that reference over and the array keeps its own.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Boxes = Array with Box
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function first(items Boxes) returns Box
+	return try items.get(0) otherwise panic("no box")
+end 'first'
+
+function show(p Box) returns Integer
+	Scheduler.yield()
+	return p.n
+end 'show'
+
+function main() returns ExitCode
+	var items = Boxes.create()
+	items.push(Box.create())
+	let a = first(items)
+	print("{await async show(a)}\n")
+	let kept = try items.get(0) otherwise panic("no box")
+	print("{items.count()} {kept.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+1 7
+```
+
+<!-- test: async-await.error.a-counted-co-owner-moved-into-async-is-used-after-move -->
+The same `a`, read after the spawn took its reference.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Boxes = Array with Box
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function first(items Boxes) returns Box
+	return try items.get(0) otherwise panic("no box")
+end 'first'
+
+function show(p Box) returns Integer
+	Scheduler.yield()
+	return p.n
+end 'show'
+
+function main() returns ExitCode
+	var items = Boxes.create()
+	items.push(Box.create())
+	let a = first(items)
+	print("{await async show(a)}\n")
+	print("{a.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:27:10: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-await.a-match-payload-the-union-still-holds-moves-into-a-reading-coroutine -->
+`w` is a `var`, so matching it leaves its payload in place and `b` holds its own reference to the record the
+union still holds: a coroutine that only reads it may take that reference over.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+union Wrap
+	held(box Box)
+	empty
+end 'Wrap'
+
+function show(p Box) returns Integer
+	Scheduler.yield()
+	return p.n
+end 'show'
+
+function main() returns ExitCode
+	var w = Wrap.empty
+	w = Wrap.held(Box.create())
+
+	match w 'first'
+		held(b) then print("{await async show(b)}\n")
+		empty then print("empty\n")
+	end 'first'
+
+	match w 'second'
+		held(b) then print("{b.n}\n")
+		empty then print("empty\n")
+	end 'second'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+7
+```
+
+<!-- test: async-await.error.an-immutable-global-returned-by-a-call-cannot-be-written-by-a-coroutine -->
+<!-- unsupported-targets: wasm32-wasi -->
+`Box.get()` hands back the record the module-level `let G` holds, so a coroutine that writes its parameter may
+not be handed it, exactly as the direct call `poke(Box.get())` may not.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function get() returns Box
+		return G
+	end 'get'
+end 'Box'
+
+let G = Box.create()
+
+function poke(p Box) returns Integer
+	Scheduler.yield()
+	p.n = 99
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	print("{await async poke(Box.get())}\n")
+	print("{G.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:25:22: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'p' (in main)
+```
+
+<!-- test: async-await.error.an-immutable-global-in-a-cell-cannot-be-written-by-a-coroutine -->
+<!-- unsupported-targets: wasm32-wasi -->
+`b` is a cell-resident `var` holding the record the module-level `let G` holds, and after `bump` nothing proves
+which record it holds, so neither `bump` nor a coroutine that writes its parameter may be handed it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+let G = Box.create()
+
+function bump(p Box) returns Integer
+	if p.n > 100 'tooBig'
+		p = Box.create()
+	end 'tooBig'
+
+	return p.n
+end 'bump'
+
+function poke(p Box) returns Integer
+	Scheduler.yield()
+	p.n = 99
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	var b = G
+	_ = bump(b)
+	print("{await async poke(b)}\n")
+	print("{G.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:30:6: cannot pass 'b' to function that mutates parameter 'p' (in main)
+error E3019: <fragment>:31:22: cannot pass 'b' to function that mutates parameter 'p' (in main)
+```
+
+<!-- test: async-await.a-cell-resident-co-owner-moves-into-a-reading-coroutine -->
+A cell-resident `b` holding its own reference to an element `items` still holds is moved into a coroutine that
+only reads it, and the array keeps its own.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Boxes = Array with Box
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function first(items Boxes) returns Box
+	return try items.get(0) otherwise panic("no box")
+end 'first'
+
+function bump(p Box) returns Integer
+	if p.n > 100 'tooBig'
+		p = Box.create()
+	end 'tooBig'
+
+	return p.n
+end 'bump'
+
+function show(p Box) returns Integer
+	Scheduler.yield()
+	return p.n
+end 'show'
+
+function main() returns ExitCode
+	var items = Boxes.create()
+	items.push(Box.create())
+	var b = Box.create()
+	print("{bump(b)}\n")
+	b = first(items)
+	print("{await async show(b)}\n")
+	print("{items.count()} {first(items).n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+7
+1 7
+```
+
+<!-- test: async-await.error.a-closure-body-spanning-lines-takes-a-cell-resident-string -->
+The closure's body continues onto a second line inside an array literal, and still captures `word`, so handing
+`word` to the coroutine afterwards is a use after move.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Integers = Array with Integer
+
+function shout(text String) returns Integer
+	Scheduler.yield()
+	print("{text}!\n")
+	return text.byteLength() as Integer
+end 'shout'
+
+function total(values Integers) returns Integer
+	var sum = 0
+
+	for v in values 'each'
+		sum = sum + v
+	end 'each'
+
+	return sum
+end 'total'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {1}"
+	fill(word, n: 2)
+	let peek = function() gives total([1,
+		word.byteLength() as Integer])
+	let p = async shout(word)
+	print("{await p} {peek()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:30:22: use of moved value 'word': its ownership moved to the closure that captures it
+```
+
+<!-- test: async-await.error.a-closure-body-spanning-lines-takes-a-cell-resident-box -->
+The same multi-line closure body over a cell-resident `Box`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Integers = Array with Integer
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function total(values Integers) returns Integer
+	var sum = 0
+
+	for v in values 'each'
+		sum = sum + v
+	end 'each'
+
+	return sum
+end 'total'
+
+function touch(b Box)
+	if b.n > 100 'big'
+		b = Box.create()
+	end 'big'
+end 'touch'
+
+function readIt(b Box) returns Integer
+	Scheduler.yield()
+	return b.n
+end 'readIt'
+
+function main() returns ExitCode
+	var b = Box.create()
+	touch(b)
+	let peek = function() gives total([1,
+		b.n])
+	let p = async readIt(b)
+	print("{await p} {peek()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:39:23: use of moved value 'b': its ownership moved to the closure that captures it
+```
+
+<!-- test: async-await.error.a-var-the-loop-iterates-cannot-be-moved-into-async-inside-the-loop -->
+<!-- unsupported-targets: wasm32-wasi -->
+The spawn would move `items` into the coroutine while the loop still walks it and `x` still borrows one of
+its elements.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Words = Array with String
+
+function measure(words Words) returns Integer
+	Scheduler.yield()
+	var total = 0
+
+	for word in words 'each'
+		total = total + (word.byteLength() as Integer)
+	end 'each'
+
+	return total
+end 'measure'
+
+function main() returns ExitCode
+	var items = Words.create()
+	items.push("first padded out long enough to heap allocate {1}")
+	items.push("second padded out long enough to heap allocate {2}")
+
+	for x in items 'each'
+		let p = async measure(items)
+		print("{await p} {x}\n")
+		break
+	end 'each'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:22:25: cannot move 'items' into `async measure(…)` while it is borrowed by 'x' (borrowed at line 21)
+```
+
+<!-- test: async-await.a-value-a-closure-holds-a-field-of-is-moved-into-async -->
+<!-- unsupported-targets: wasm32-wasi -->
+`inner` is a field of `b`; the closure holds a reference of its own to it, so `b` moves into the coroutine.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create()}
+	end 'create'
+end 'Outer'
+
+function consume(b Outer) returns Integer
+	Scheduler.yield()
+	return b.inner.n
+end 'consume'
+
+function main() returns ExitCode
+	let b = Outer.create()
+	let inner = b.inner
+	let peek = function() gives inner.n
+	let p = async consume(b)
+	let r = await p
+	return (r + peek()) as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: async-await.error.a-value-whose-field-is-read-after-the-call-cannot-be-moved-into-async -->
+<!-- unsupported-targets: wasm32-wasi -->
+`inner` borrows a field of `b` and is read after the coroutine has taken `b`, so the move is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create()}
+	end 'create'
+end 'Outer'
+
+function consume(b Outer) returns Integer
+	Scheduler.yield()
+	return b.inner.n
+end 'consume'
+
+function main() returns ExitCode
+	let b = Outer.create()
+	let inner = b.inner
+	let p = async consume(b)
+	let r = await p
+	return (r + inner.n) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:28:24: cannot move 'b' into `async consume(…)` while it is borrowed by 'inner' (borrowed at line 27)
+```
+
+<!-- test: async-await.a-coroutine-that-reassigns-an-interface-parameter -->
+The coroutine reassigns a parameter held at an interface type, which lives in a cell the coroutine owns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function squareShape(side Integer) returns Shape
+	return Square.create(side)
+end 'squareShape'
+
+function grow(s Shape) returns Integer
+	Scheduler.yield()
+
+	if s.area() < 5 'small'
+		s = squareShape(4)
+	end 'small'
+
+	return s.area()
+end 'grow'
+
+function main() returns ExitCode
+	let p = async grow(Square.create(1))
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+16
+```
+
+<!-- test: async-await.a-callee-that-keeps-its-argument-is-spawned-and-awaited -->
+`Holder.create` moves its `String` parameter into the record it returns. The spawn hands the coroutine the
+argument, the callee takes it when it runs, and the awaited record owns it from then on.
+```maxon
+type Holder
+	export var s as String
+
+	static function create(s String) returns Self
+		Scheduler.yield()
+		return Self{s: s}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let p = async Holder.create("hello {3}")
+	let h = await p
+	print("{h.s}\n")
+	return 0
+end 'main'
+```
+```stdout
+hello 3
+```
+```exitcode
+0
+```
+
+<!-- test: async-await.a-callee-that-keeps-its-argument-is-spawned-and-dropped-before-it-runs -->
+The same spawn dropped before the coroutine ever runs: the callee never took the argument, so the drop
+releases it.
+```maxon
+type Holder
+	export var s as String
+
+	static function create(s String) returns Self
+		Scheduler.yield()
+		return Self{s: s}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	_ = async Holder.create("hello {3}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: async-await.a-callee-that-keeps-its-argument-completes-and-is-then-dropped -->
+The same spawn left to complete while `main` awaits a sibling, then dropped: the callee took the argument when
+it ran, so the drop releases only the record it returned, which owns the argument.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder
+	export var s as String
+
+	static function create(s String) returns Self
+		Scheduler.yield()
+		return Self{s: s}
+	end 'create'
+end 'Holder'
+
+function ten() returns Integer
+	Scheduler.yield()
+	return 10
+end 'ten'
+
+function main() returns ExitCode
+	let a = async Holder.create("hello {3}")
+	let b = async ten()
+	let n = await b
+	print("{n} {__Builtins.gtIsComplete(a.inner)}\n")
+	return 0
+end 'main'
+```
+```stdout
+10 1
+```
+```exitcode
+0
+```
+
+<!-- test: async-await.error.a-cell-read-then-handed-by-reference-in-one-spawn -->
+`word` is read for the first argument and then handed by reference to `fill` for the second, which may
+replace and release what was read.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shout(text String, n Integer) returns Integer
+	Scheduler.yield()
+	print("{text} {n}\n")
+	return n
+end 'shout'
+
+function fill(dest String) returns Integer
+	dest = "refilled padded out long enough to heap allocate"
+	return 7
+end 'fill'
+
+function main() returns ExitCode
+	var word = "hello padded out long enough to heap allocate {1}"
+	let p = async shout(word, n: fill(word))
+	print("{await p}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:17:22: the value of 'word' handed to `async shout(…)` was read before a later argument handed 'word' by reference to a function that may replace it, so it may no longer be what 'word' holds. Read 'word' into a `let` first and pass that
 ```

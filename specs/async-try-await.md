@@ -5,7 +5,7 @@ keywords: [async, await, try, otherwise, throws, green-threads, promise, E3057, 
 category: concurrency
 ---
 
-# Async / Await — error-carrying `try await` (P1.5-B2b)
+# Async / Await — error-carrying `try await`
 
 ## Documentation
 
@@ -29,7 +29,7 @@ wrong answer. The error type the promise carries also lets the propagate form ch
 `try await p` re-throws a type the enclosing function actually declares (**E3059** on a mismatch), and lets
 `try await` on a NON-throwing promise be refused (**E3055**) exactly as `try` on a non-throwing call is.
 
-This slice is **scalar-only** (like B1a): the awaited result and the async arguments are integer/bool
+The cases here are **scalar-only**: the awaited result and the async arguments are integer/bool
 values, and the thrown error is a scalar enum or a union whose payload is scalar.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one

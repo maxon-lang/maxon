@@ -15,18 +15,8 @@ by name or by filter. This spec deliberately does not restate what `stdlib/` CON
 nothing would keep a prose copy of that inventory agreeing with the directory, and the same argument
 is made below about the bare-builtin roster, where both prose copies had already drifted.
 
-⭐ **THIS FILE ONCE DOCUMENTED A TEMPORARY WHITELIST, AND ITS OWN PREDICTION ABOUT THE REMOVAL HAS
-NOW BEEN CASHED.** While stdlib support was growing one module at a time, the loader carried a filter
-naming which of the enumerated files were actually loaded, each entry gated on the language features
-its module needed. This section argued that the filter was scaffolding rather than a feature — a
-filter INSIDE the real loader rather than a list the loader walks — and predicted that *"removing it
-is a deletion rather than a rewrite … so no pass has to be rewritten on the day the filter goes"*.
-**MEASURED on the day it went: it was exactly that.** Everything downstream of the loader deals in
-the two durable facts the filter never touched — "is this function stdlib source or user source?" and
-"is it reachable from `main`?" — so every mechanism, control and case documented below survived the
-deletion unchanged, and only the prose moved. ⇒ What follows is written about a STDLIB MODULE, never
-about a list entry; the filter is named only where it was the instrument of a measurement that still
-stands.
+Everything downstream of the loader deals in two facts — "is this function stdlib source or user
+source?" and "is it reachable from `main`?" ⇒ What follows is written about a STDLIB MODULE.
 
 A stdlib module is registered into the query database exactly like a user source, so it flows
 through the same tokenize → signature-index → parse → merge spine. Its declarations therefore
@@ -49,7 +39,7 @@ always lives inside the checkout. A missing `stdlib/` is a loud, hard error — 
 ### An unused stdlib module changes NOTHING
 
 Every stdlib module reaches EVERY compile, so a program that never reads a clock must compile to the
-exact bytes it did before `stdlib/Clock.maxon` existed — same x64 goldens, same wasm/arm64 output.
+exact bytes it would without `stdlib/Clock.maxon` — same x64 goldens, same wasm/arm64 output.
 Two mechanisms compose to guarantee that:
 
 1. Dead-function elimination drops every stdlib function no reachable code calls, before the
@@ -65,14 +55,11 @@ Two mechanisms compose to guarantee that:
    nothing. User functions are never skipped — an unreached user body still speaks for the program —
    so nothing about a program that touches no stdlib changes.
 
-⭐ **THIS PROPERTY IS MORE LOAD-BEARING NOW, NOT LESS.** While the loader filtered, it was what made
-the list growable one entry at a time: each addition had to cost the corpus nothing, and the entry was
-refused if it did. With the filter gone it is what keeps the WHOLE of `stdlib/` free — a program that
-reaches none of it pays for none of it, and every module still to be written is admitted on exactly
-those terms rather than on a maintainer's judgement.
+⭐ **THIS PROPERTY IS WHAT KEEPS THE WHOLE OF `stdlib/` FREE** — a program that reaches none of it pays
+for none of it, and every module still to be written is admitted on exactly those terms rather than on a
+maintainer's judgement.
 
-The whole existing `specs` corpus — every program that never touches Clock — is the standing
-proof of this: not one committed fragment moved when Clock was first loaded.
+The whole `specs` corpus — every program that never touches Clock — is the standing proof of this.
 `no-clock-is-byte-neutral` below is the same guard stated directly.
 
 #### A stdlib module's own LITERALS must not renumber the program's `.rdata`
@@ -85,13 +72,12 @@ every one of those payloads outlives the function that asked for it.
 
 That matters because the synthetic `.rdata` labels are minted from ONE counter shared by every prefix.
 A single surviving blob therefore renumbers `__str_blob_` AND `__jumptable_` labels program-wide — in a
-program that mentions no string at all. Measured when the first stdlib module containing literals
-reached the compile: **317 committed fragments moved**, for declarations no user program reaches.
+program that mentions no string at all.
 
-⚠ **`__fconst_` USED TO BE ON THAT LIST AND NO LONGER IS.** A float island is named by its VALUE
+⚠ **`__fconst_` IS NOT ON THAT LIST.** A float island is named by its VALUE
 (`__fconst_-5.5`, `GlobalDataTable.registerFloatConstant`) and registered through the LABELLED door, which does not touch the
-shared counter — so a float label cannot move for a reason outside its own value. That removes one prefix
-from the blast radius; it does not shrink the detection, because the two remaining prefixes still renumber
+shared counter — so a float label cannot move for a reason outside its own value. That keeps one prefix
+out of the blast radius; it does not shrink the detection, because the two remaining prefixes still renumber
 together and the case below names both.
 
 So a pre-elimination pass may not let an unreachable stdlib body register anything either, and
@@ -111,8 +97,7 @@ label a fragment prints. The lowering skip covers it; no fragment golden can see
 ### The collision rule
 
 A stdlib module must declare no name a user program declares and no builtin type/name. These are
-rules about ADDING OR CHANGING a stdlib module, and the deletion of the filter did not touch one of
-them — every route they describe is the route a stdlib source has always taken.
+rules about ADDING OR CHANGING a stdlib module.
 
 - FUNCTION-name collisions — a user `Clock.nowMs` against the stdlib one, or two stdlib
   modules against each other — are caught loudly by the whole-program duplicate-function check,
@@ -128,46 +113,38 @@ them — every route they describe is the route a stdlib source has always taken
   runner only rewrites the fragment's own path to `<fragment>`.)
 
 - TYPE-name-vs-builtin collisions are the maintainer's responsibility, with **exactly two
-  exceptions**. `String` and `Character` are now REFUSED as user type names (`E2015`, via
-  `isCompilerOwnedTypeName`) — BATCH2 slice 2, because those two are the only builtins that mint
+  exceptions**. `String` and `Character` are REFUSED as user type names (`E2015`, via
+  `isCompilerOwnedTypeName`), because those two are the only builtins that mint
   CONFORMANCE IMPL SYMBOLS (`String.hash`, `Character.hash`, …) which a user declaration of the same
-  name does not collide with but silently **REPLACES**: `undefinedImplNames` then declines to install
-  the builtin. Measured before the fix, both silent and undiagnosed: a `Box with String` whose
-  `.itemHash()` of `""` answered the user's body instead of djb2's `5381`, and a `Set with String`
-  that stored `"alice"` **twice** because the user's `equals` answered `false`.
-  ⚠ **For every OTHER builtin the original statement still holds** — the compiler has no general
+  name would not collide with but silently **REPLACE**: `undefinedImplNames` would then decline to install
+  the builtin. Unrefused, both would be silent and undiagnosed: a `Box with String` whose
+  `.itemHash()` of `""` answers the user's body instead of djb2's `5381`, and a `Set with String`
+  that stores `"alice"` **twice** because the user's `equals` answers `false`.
+  ⚠ **For every OTHER builtin it is the maintainer's responsibility** — the compiler has no general
   builtin-type-redeclaration diagnostic, and enforcing one is a language matter rather than a loader
   one. Clock declares `Clock`/`WallClock` and time typealiases, none of them builtin, so it
   cannot hit this. Do not add a stdlib module that redeclares a builtin.
 
-- FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT, so the builtin is RETIRED FIRST — which is
-  what made `stdlib/Sleep.maxon` the second module to reach user code. The parser recognizes a set of
-  BARE names — `print` and `trunc` among them — before any registry is consulted, so while
-  one of them claims a name, a CALL to that name never reaches a declaration of it: loading
+- FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT, so the builtin is RETIRED FIRST. The parser
+  recognizes a set of BARE names — `print` and `trunc` among them — before any registry is consulted,
+  so while one of them claims a name, a CALL to that name never reaches a declaration of it: loading
   such a module would compile code no ordinary call site can reach while charging the per-compile
-  load cost for zero delivered capability, and the name would have two routes — `let f = sleep` is not
-  a call site, so it took the address of the declaration the call sites could not see.
+  load cost for zero delivered capability, and the name would have two routes — `let f = name` is not
+  a call site, so it takes the address of the declaration the call sites cannot see.
 
-  That shadowing was not the loader's doing and predated the filter entirely: a user file declaring
-  its own `function sleep` compiled with the declaration silently unlinked, no diagnostic, and
-  `sleep(1)` still reached the builtin — a wrong answer. Deleting the bare-name `sleep` builtin and
-  letting the module load repaired both, and it is the pattern for every builtin still standing in
-  for a stdlib module. **The rule: do not add a stdlib module whose function name a bare builtin
+  The same shadowing hides a user declaration: while a bare builtin claims a name, a user file
+  declaring its own function of that name compiles with the declaration silently unlinked, no
+  diagnostic, and its calls still reach the builtin — a wrong answer. Retiring the builtin and letting
+  the module load repairs both, and it is the pattern for every builtin still standing in for a stdlib
+  module. **The rule: do not add a stdlib module whose function name a bare builtin
   claims. Retire the builtin first — and check the roster at its SOURCE, `parseCallNamed`'s bare-name
   `if` chain, never against a list written in prose.** This spec does not restate the roster,
-  deliberately: nothing makes a prose copy agree with the chain, and both copies that existed had
-  already drifted, naming four of the fifteen names standing after `sleep` left and omitting
-  `spawnReadLine` and all seven `subp*`. A maintainer who checked a module against the list rather
-  than the chain would have been told a claimed name was free.
+  deliberately: nothing makes a prose copy agree with the chain, and a maintainer who checks a module
+  against a list rather than the chain can be told a claimed name is free.
 
-  ⚠ **WHAT THE MODULE THEN OWNS, IT DOES *NOT* OWN AGAINST THE USER — AND THIS PARAGRAPH SAID THE
-  OPPOSITE.** It read *"a user program that declares its own `function sleep` is now the ordinary
-  duplicate, `E3006`, naming `stdlib/Sleep.maxon` — loud where it was silent"*, and *"shadowing a
-  stdlib declaration with a user one needs namespaces, which the compiler does not have"*. Both are FALSE and
-  nothing ever ran them: N1's namespaces landed, a user `function sleep` compiles clean, and the
-  USER's body is what its own call sites reach. The
-  cases that established it are *A user's own declaration outranks a stdlib module's free function*
-  below, and they are why that claim is now stated by a running program rather than by prose.
+  ⚠ **WHAT THE MODULE THEN OWNS, IT DOES *NOT* OWN AGAINST THE USER.** Under namespaces a user
+  `function sleep` compiles clean, and the USER's body is what its own call sites reach. The cases
+  that establish it are *A user's own declaration outranks a stdlib module's free function* below.
 
 ### A diagnostic raised inside stdlib source is attributed to the crossing call
 
@@ -179,7 +156,7 @@ That is not a quirk of one module: it fires wherever a stdlib body bottoms out i
 target-gated, which is exactly what a stdlib leaf is FOR — Clock and every module behind it ends
 in a `__Builtins.*` intrinsic — and it gets more common, not less, as stdlib grows.
 
-The refusal that reaches this today is the TARGET gate, `E3104`. It is reported at the FIRST call
+The refusal that reaches this is the TARGET gate, `E3104`. It is reported at the FIRST call
 crossing from user code INTO stdlib, and it names the stdlib function the user actually wrote:
 
 ```text
@@ -196,11 +173,10 @@ The gate is therefore reachability-BLIND for user code and reachability-AWARE fo
 `__Builtins.sleep(1)` in a function `main` never calls is still refused for wasm
 (`builtins-sleep.rejected-on-wasm-when-unreached`), while a `Clock.nowMs()` in one is not.
 
-Retiring the bare-name `sleep` builtin moved a program from the first case to the second, and that was
-decided rather than discovered: `sleep(1)` used to BE a `__gt_sleep` in user code, and is now a call into
-stdlib, so an unreached one compiles for wasm where it was refused
+A retired bare-name builtin puts a program in the second case rather than the first: `sleep(1)` is a
+call into stdlib rather than a `__gt_sleep` in user code, so an unreached one compiles for wasm
 (`async-sleep.unreached-compiles-on-wasm`). Every builtin retired the same way moves the same way, and it
-is the correct direction — the entry genuinely is stdlib's now, and a program that cannot reach it does
+is the correct direction — the entry genuinely is stdlib's, and a program that cannot reach it does
 not contain it.
 
 ## Tests
@@ -291,15 +267,13 @@ shared counter — `__jumptable_1` and `__str_blob_0`, the last being the range-
 id 0. A stdlib module that registers ANY `.rdata` for code no path from `main` reaches moves both.
 
 ⚠ The float constant is still in the program and is still worth having — it is what makes the jump table
-share a compile with an island of another kind — but its `__fconst_12.5` label is NO LONGER a counter
-reading: float islands are named by their value and take the labelled door. This paragraph said
-`__fconst_1` for as long as they did.
+share a compile with an island of another kind — but its `__fconst_12.5` label is not a counter
+reading: float islands are named by their value and take the labelled door.
 
-⛔⛔ **BUT IT DETECTS THAT THROUGH ITS GOLDEN, SO IT CANNOT FAIL — IT IS A READING, NOT A GATE (W69
-review).** A fragment mismatch prints a `note:`, counts as no failure and leaves the exit code at 0 (user
-ruling 2026-08-02). MEASURED: with `registerProgramLiteralBlobs`' unreachable-stdlib gate neutralised and
-the compiler rebuilt — an orphan blob at `.rdata` byte 0 of every program in the suite — this case
-reported **PASS**. Keep it: the drift it prints names the moved labels, which no other case does. But the
+⛔⛔ **BUT IT DETECTS THAT THROUGH ITS GOLDEN, SO IT CANNOT FAIL — IT IS A READING, NOT A GATE.** A
+fragment mismatch prints a `note:`, counts as no failure and leaves the exit code at 0. With
+`registerProgramLiteralBlobs`' unreachable-stdlib gate neutralised — an orphan blob at `.rdata` byte 0
+of every program in the suite — this case still PASSES. Keep it: the drift it prints names the moved labels, which no other case does. But the
 enforcement lives in `a-stdlib-modules-literals-cannot-reach-the-rdata-image` below, which pins the linked
 image and goes red.
 ```maxon
@@ -337,36 +311,33 @@ end 'main'
 ```
 
 <!-- test: stdlib-loading.a-stdlib-modules-literals-cannot-reach-the-rdata-image -->
-⛔⛔ **THE BYTE-NEUTRALITY CLAIM'S ONLY GATE. ITS TWO SIBLINGS ABOVE CANNOT FAIL, AND ONE OF THEM WAS
-CREDITED WITH CATCHING THIS RUNG'S DEFECT (W69 review).** `a-stdlib-modules-literals-are-byte-neutral`
-detects a displaced `.rdata` payload through its golden FRAGMENT — and a fragment mismatch is REFERENCE, NOT
-A GATE (user ruling 2026-08-02): it prints a `note:`, counts as no failure and leaves the exit code at 0.
-MEASURED by neutralising `LowerMaxonToStd.registerProgramLiteralBlobs`' unreachable-stdlib gate and
-rebuilding, which puts an orphan blob from `stdlib/Json.maxon` at `.rdata` byte 0 of every program in the
-suite: that case reported **PASS**. It is a real reading and a useful one, but nothing in the battery turns
-it red, so the invariant this whole file rests on had no enforcement at all.
+⛔⛔ **THE BYTE-NEUTRALITY CLAIM'S ONLY GATE. ITS TWO SIBLINGS ABOVE CANNOT FAIL.**
+`a-stdlib-modules-literals-are-byte-neutral` detects a displaced `.rdata` payload through its golden
+FRAGMENT — and a fragment mismatch is REFERENCE, NOT A GATE: it prints a `note:`, counts as no failure
+and leaves the exit code at 0. Neutralising `LowerMaxonToStd.registerProgramLiteralBlobs`'
+unreachable-stdlib gate puts an orphan blob from `stdlib/Json.maxon` at `.rdata` byte 0 of every program
+in the suite, and that case still PASSES. It is a real reading and a useful one, but nothing in the
+battery turns it red.
 
 ⭐ **A ```RequiredRdata BLOCK IS THAT ENFORCEMENT, AND THE FIT IS EXACT.** The block is compared as a run
 FROM BYTE 0, read back out of the LINKED IMAGE rather than out of the compiler's opinion of it — so it
 answers precisely "did anything get in front of this program's read-only data?". This program's whole
 `.rdata` is its two float constants, 16 bytes, every one of them pinned; a stdlib module that registers ANY
 `.rdata` for code no path from `main` reaches lands ahead of them, because `registerProgramLiteralBlobs`
-runs before the target tier mints a float. Re-measured with the gate neutralised:
+runs before the target tier mints a float. With the gate neutralised it reports
 `.rdata mismatch at byte 6: expected 0x29, got 0x00` — eight zero bytes of orphan where `12.5` belongs.
 
 ⚠ **IT MUST HOLD NO STRING LITERAL OF ITS OWN, and that is not a stylistic choice.** The user's `main` is
 walked before stdlib's functions, so a program literal in `main` keeps byte 0 whatever an orphan does and
-the pin goes green on the broken compiler — MEASURED, on a first draft of this case that pinned its own
-`"MAXONPIN"` blob and passed with the gate neutralised. The payload a displacement is visible against has to
+the pin goes green on the broken compiler. The payload a displacement is visible against has to
 be one the COMPILER composes.
 
-⛔⛔ **AND THE LOOP IS LOAD-BEARING: WITHOUT IT THIS PROGRAM HAS NO `.rdata` AT ALL.** The case used to read
-`let scale = 12.5` / `let floor = 1.5` / `if scale > floor`, and on 2026-08-31 `foldConstants` learned to
-fold FLOATS — so the comparison folded to a constant, `foldConstantBranches` took the arm, and both float
-`const`s were retired unread. The program still returned 8; it simply stopped materialising either float,
-the linked image lost its `.rdata` section outright, and this gate could no longer read the thing it
-gates. **MEASURED, and it is the failure that found this**: `could not read the .rdata section … has no
-.rdata section`.
+⛔⛔ **AND THE LOOP IS LOAD-BEARING: WITHOUT IT THIS PROGRAM HAS NO `.rdata` AT ALL.** Straight-line
+`let scale = 12.5` / `let floor = 1.5` / `if scale > floor` is folded by `foldConstants`, which folds
+FLOATS — the comparison becomes a constant, `foldConstantBranches` takes the arm, and both float
+`const`s are retired unread. The program still returns 8, but materialises neither float, the linked
+image has no `.rdata` section, and this gate cannot read the thing it gates: `could not read the .rdata
+section … has no .rdata section`.
 
 ⇒ The loop makes `scale` a HEADER PHI, which this pass reads as unknown by construction — *"it is not a
 constant propagator; a value that is constant on every path into a phi is not constant to this pass"*. So
@@ -422,21 +393,17 @@ The attribution is a property of the CROSSING and not of one runtime entry: a se
 reaching a second entry is refused at the same user span, naming what the author wrote and the entry that
 has no lowering.
 
-⚠⚠ **THE SUBJECT IS THE ATTRIBUTION, AND THE CROSSING IT USES HAS MOVED TWICE — EACH TIME BECAUSE A
-FACILITY LANDED.** It was written over `Clock.nowMs` → `__gt_now_ns` on arm64-macOS, and that lane's
-monotonic clock landed; it was rewritten over `TcpClient.connect` → `__ms_tcp_connect` on the same lane,
-and the socket band landed there too. **There is no third crossing to move it to on any NATIVE lane**, and
-that is a fact about the table rather than about this case: `TargetFacilities.targetProvidesFacility` now
-answers `true` for every `HostFacility` on arm64-macOS and on arm64-linux, so
+⚠⚠ **THE SUBJECT IS THE ATTRIBUTION, AND NO NATIVE LANE HAS A CROSSING TO SHOW IT ON**, which is a
+fact about the table rather than about this case: `TargetFacilities.targetProvidesFacility` answers
+`true` for every `HostFacility` on arm64-macOS and on arm64-linux, so
 `targetProvidesEveryFacility` short-circuits `checkCalls` there and NO `E3104` can be raised on either.
 The one native gap left is x64-linux's `processPriority`, whose only door is a `__Builtins` intrinsic
 rather than a stdlib function — so it cannot show a stdlib CROSSING at all.
 
-⇒ Both cases now run on wasm32-wasi, and what the pair still shows is the half that has a subject: two
+⇒ Both cases run on wasm32-wasi, and what the pair shows is the half that has a subject: two
 different stdlib functions reaching two different entries produce the same attribution. ⚠ **The half it
-can no longer show is "not of one backend"** — which is worth recording rather than papering over, because
-it is the shape a completed lane leaves behind, and the day a native lane grows a new facility this case
-should move back to it.
+cannot show is "not of one backend"** — the shape a completed lane leaves behind; a native lane that
+grows a new facility is where this case belongs.
 ```maxon
 function main() returns ExitCode
 	let c = try TcpClient.connect("127.0.0.1", port: 9) otherwise return 4
@@ -510,14 +477,11 @@ typealias Integer = int(i64.min to i64.max)
 ### A user's own declaration outranks a stdlib module's free function
 
 A stdlib module's free functions are stdlib's; a user program's are the user's. Where the two spell
-the same name the USER's declaration is what its own call sites reach, which is what N1's namespaces
-made true here.
+the same name the USER's declaration is what its own call sites reach, which is what namespaces make
+true here.
 
-⚠ **THE TWO CASES BELOW ARE THE FIRST TO RUN THAT CLAIM**, and running it is what showed the prose
-this section replaced was FALSE. It read *"a user program that declares its own `function sleep` is
-now the ordinary duplicate, `E3006`, naming `stdlib/Sleep.maxon` — loud where it was silent"*, and
-nothing ever compiled such a program: `sleep` is a stdlib module's free function, a user `function
-sleep` compiles clean, and the user's body is what runs. A refusal nothing runs is a claim.
+⚠ **THE TWO CASES BELOW RUN THAT CLAIM**: `sleep` is a stdlib module's free function, a user `function
+sleep` compiles clean — not an `E3006` duplicate — and the user's body is what runs.
 
 <!-- test: stdlib-loading.a-user-free-function-outranks-the-stdlib-modules -->
 ```maxon
@@ -539,15 +503,14 @@ end 'main'
 mine 41
 ```
 
-⚠⚠ **THE CASE ABOVE IS A POSITIVE CONTROL AND ONE ON ITS OWN IS WORTH NOTHING — IT AGREES WITH
-THE STALE ANSWER.** Its user `sleep` returns nothing and so does `stdlib/Sleep.maxon`'s, so it
-cannot tell "the call reached the user's declaration" from "the call read whichever declaration
-folded last". The case below is the NEGATIVE control, and it is the one that failed: a user `sleep`
-that RETURNS a value against the stdlib module's VOID one. Selection already picked the user's (its
-`Ms` is what a range refusal named), while the RETURN TYPE came from a bare key the stdlib's fold
-had overwritten, so a legal program was refused `E2004: Function 'sleep' does not return a value` —
-contradicting a signature two lines above it. The rule is the PAIR; see `namespaces.md`'s
-`root-declaration-owns-the-bare-key` cases for the same defect with no stdlib in it at all.
+⚠⚠ **THE CASE ABOVE IS A POSITIVE CONTROL AND ONE ON ITS OWN IS WORTH NOTHING.** Its user `sleep`
+returns nothing and so does `stdlib/Sleep.maxon`'s, so it cannot tell "the call reached the user's
+declaration" from "the call read whichever declaration folded last". The case below is the NEGATIVE
+control: a user `sleep` that RETURNS a value against the stdlib module's VOID one. Selection picking
+the user's while the RETURN TYPE comes from a bare key the stdlib's fold overwrote refuses a legal
+program with `E2004: Function 'sleep' does not return a value` — contradicting a signature two lines
+above it. The rule is the PAIR; see `namespaces.md`'s `root-declaration-owns-the-bare-key` cases for
+the same property with no stdlib in it at all.
 
 <!-- test: stdlib-loading.a-value-returning-user-free-function-outranks-a-void-stdlib-one -->
 ```maxon
@@ -570,12 +533,10 @@ end 'main'
 r=8
 ```
 
-The two UAX #29 classifiers are the case that made this a DEFECT rather than a documentation gap.
-They were BARE-NAME BUILTINS in `parseCallNamed`, recognized before any registry is consulted, so a
-user's own `graphemeBreakProperty` compiled and was silently unreachable — measured, the compiler
-printed `p=0 e=false` from the very same source. Retiring the two
-builtins, leaving `stdlib/helpers/string/grapheme.maxon` to declare them, is what makes the declaration the call
-site reaches the one the program contains.
+The two UAX #29 classifiers are declared by `stdlib/helpers/string/grapheme.maxon` rather than
+recognized as BARE-NAME BUILTINS in `parseCallNamed`, which is what makes the declaration the call
+site reaches the one the program contains: a bare builtin is matched before any registry is consulted,
+so a user's own `graphemeBreakProperty` would compile and be silently unreachable.
 
 <!-- test: stdlib-loading.a-user-grapheme-classifier-is-the-one-that-runs -->
 ```maxon
@@ -607,7 +568,7 @@ p=164 e=true
 
 `helpers/string/utf8.maxon`, `helpers/string/hash.maxon` and `helpers/string/grapheme.maxon` are one
 job in three files — every one of them walks a String's bytes through `String.byteAt`, the
-throwing primitive this rung built, and `grapheme.maxon` calls the other two. `Unicode.maxon` and
+throwing primitive, and `grapheme.maxon` calls the other two. `Unicode.maxon` and
 `Build.maxon` need nothing new at all.
 
 A module's real content is its CALL SITES and not its own parse: `maxon build <module>` answering
@@ -704,8 +665,6 @@ end 'main'
 ```stdout
 {
   "output": ".maxon/demo",
-  "directory": "",
-  "target": "",
   "sources": ["src"],
   "debug_info": true,
   "version": "",
@@ -730,8 +689,6 @@ end 'main'
 ```stdout
 {
   "output": ".maxon/a\"b",
-  "directory": "",
-  "target": "",
   "sources": ["src\\app"],
   "debug_info": true,
   "version": "",
@@ -752,8 +709,6 @@ end 'main'
 ```stdout
 {
   "output": "",
-  "directory": "",
-  "target": "",
   "sources": ["."],
   "debug_info": true,
   "version": "",
@@ -763,12 +718,10 @@ end 'main'
 ```
 
 <!-- test: stdlib-loading.ascii-classifiers-from-stdlib -->
-`stdlib/Ascii.maxon`'s six classifiers. It is the first stdlib module to reach user code whose bodies are `match` arms
-over **`Character` RANGE patterns** (`'0' to '9'`, `'a' to 'z' or 'A' to 'Z'`), which is the construct
-BATCH23 built — before it, this module was `E2028` at `:10:4` because the pattern typed `int` against
-a `Character` scrutinee. So what this pins is not only that the module reaches user code, but that the
-character rung holds when the `match` is compiled from a STDLIB source rather than from the spec that
-built it.
+`stdlib/Ascii.maxon`'s six classifiers. Its bodies are `match` arms over **`Character` RANGE
+patterns** (`'0' to '9'`, `'a' to 'z' or 'A' to 'Z'`), so what this pins is not only that the module
+reaches user code, but that `Character` range patterns hold when the `match` is compiled from a STDLIB
+source rather than from a spec.
 
 ⚠ The last three conditions are the ones worth having, and they are NEGATIVE: `isDigit('x')` and
 `isUpper('k')` pin that the range arms have a lower bound as well as an upper one, and
@@ -821,7 +774,7 @@ lower
 
 ### The corpus segmenter and the synthesized one, side by side
 
-⭐ **TWO IMPLEMENTATIONS OF ONE TABLE NOW EXIST, AND THIS IS THE ONLY PLACE THEY ANSWER THE SAME
+⭐ **TWO IMPLEMENTATIONS OF ONE TABLE EXIST, AND THIS IS THE ONLY PLACE THEY ANSWER THE SAME
 QUESTION.** `countGraphemes(s)` is `stdlib/helpers/string/grapheme.maxon`'s own UAX #29 walk, written
 in Maxon over `String.byteAt`; `s.count()` is the segmenter the compiler SYNTHESIZES
 (`GraphemeRuntime`), which reads no stdlib at all. Nothing else in the tree makes them disagree
@@ -862,7 +815,7 @@ end 'main'
 ```
 
 ⚠⚠ **`hasSingleByteGraphemes()` IS ANSWERED A CONSTANT `false`, AND THREE CORPUS FUNCTIONS READ IT —
-THE CASE ABOVE DRIVES ONE OF THEM (slice-8 review).** The compiler's String record carries `isAscii@40`, the
+THE CASE ABOVE DRIVES ONE OF THEM.** The compiler's String record carries `isAscii@40`, the
 WEAKER fact, so serving it would count `"\r\n"` as two clusters; `false` declines the shortcut and hands
 every input to the walk, which is the definition. That is only sound if it is sound at EVERY reading
 site, and `countGraphemes` is one of three — `byteIndexToGraphemeIndex` and `graphemeOffsetToBytePos`
@@ -893,24 +846,17 @@ end 'main'
 6 6
 ```
 
-### `print` and `printError` — the third bare-name retirement (W35)
+### `print` and `printError` — a bare-name retirement
 
-`stdlib/Print.maxon` and `stdlib/PrintError.maxon` are the third pair to reach user code by retiring a
-builtin first, after `sleep` and the two UAX #29 classifiers. Until W35, `print` was a compiler-recognized
-BARE NAME matched in `parseCallNamed` before any registry is consulted, which made the module
-unusable by this file's own rule: a call to the name could never
-reach a declaration of it.
+`stdlib/Print.maxon` and `stdlib/PrintError.maxon` reach user code because `print` is not a
+compiler-recognized BARE NAME: one matched in `parseCallNamed` before any registry is consulted would
+make the module unusable by this file's own rule, since a call to the name could never reach a
+declaration of it. That harm is not a refusal: with the bare name live, `print("hi\n")` compiles clean
+and never reaches `Print.maxon`, so loading the pair would deliver nothing.
 
-⚠ **The harm was NOT a refusal, which is what the rung that filed this predicted.** MEASURED with both
-modules loaded and the builtin still live: `print("hi\n")` compiled clean and `Print.maxon` was never
-reached, while its twin one file over raised `E3004` for `__Builtins.writeStderr` — proving the module
-WOULD have been analyzed. So loading the pair would have been a no-op that delivered nothing.
-
-The four cases below are what the retirement bought, each measured on this tree.
-
-The first is the differing-declarations control this file demands: a user's own `print` that does
-something the stdlib module's cannot be mistaken for — writing to the OTHER stream. While the builtin
-stood, the call site could not see this declaration at all and the text went to stdout.
+The first case below is the differing-declarations control this file demands: a user's own `print` that
+does something the stdlib module's cannot be mistaken for — writing to the OTHER stream. A bare builtin
+would hide this declaration from the call site and send the text to stdout.
 
 <!-- test: stdlib-loading.a-user-print-outranks-the-stdlib-module -->
 ```maxon
@@ -932,12 +878,8 @@ end 'main'
 mine: x
 ```
 
-The ARITY refusal, which no spec anywhere pinned before this rung — and it is the one message the
-retirement CHANGED. The builtin raised its own `'print' takes exactly 1 argument, but 0 were given`
-from a transcribed arity constant; the ordinary check reads `stdlib/Print.maxon`'s signature and says
-so in the voice every other call gets. Same code, same position, same verdict, different producer:
-this is the `sleep` precedent's "one golden holding the builtin's bespoke argument rejection,
-replaced by the ordinary one" in its diagnostic form.
+The ARITY refusal comes from the ordinary check, which reads `stdlib/Print.maxon`'s signature and says
+so in the voice every other call gets.
 
 <!-- test: stdlib-loading.error.print-arity-comes-from-the-stdlib-declaration -->
 ```maxon
@@ -950,11 +892,8 @@ end 'main'
 error E3036: specs/fragments/stdlib-loading/stdlib-loading.error.print-arity-comes-from-the-stdlib-declaration.test:3:2: 'print' expects 1 argument(s) but 0 were provided
 ```
 
-The VOID-RESULT refusal, also pinned by nothing before this rung (`void-call-result.md` covers
-`noop`/`push`/`insert`/`append`/`reserve` and never `print`). This one is UNCHANGED by the
-retirement — the builtin raised the identical sentence — which is worth a case precisely because it
-is the half that did not move: a reader comparing it against the arity case above can see which of
-the two the change touched.
+The VOID-RESULT refusal (`void-call-result.md` covers `noop`/`push`/`insert`/`append`/`reserve` and
+never `print`).
 
 <!-- test: stdlib-loading.error.print-void-result-comes-from-the-stdlib-declaration -->
 ```maxon
@@ -999,22 +938,18 @@ SET's BASE name until `SemanticCheck.resolveOverloadedCalls` rebinds it to a mem
 
 For most overload sets that costs nothing, because the first declaration KEEPS the bare spelling and
 the base therefore IS a function name (`String.contains` is exactly this). For a **contested**
-extension method it costs the whole answer: D7's rule is that when a `<Conformer>.<method>` is
+extension method it costs the whole answer: when a `<Conformer>.<method>` is
 declared by extensions in more than one file, **nobody keeps the bare spelling** — `Array.contains`
 is declared by `stdlib/Array.maxon`'s `where Element is Equatable` extension AND published onto
 `Array` by `stdlib/Interfaces.maxon`'s `extension Iterable`, so its members register as
 `Array.contains#type parameter` and `Array.contains#struct` and NOTHING is named `Array.contains`.
-The scan therefore missed a real edge, every stdlib name was filed `unreachable`, `lowerMaxonToStd`
-lowered no body — and `DeadFunctionElimination` then reached the resolved member from its own root
-set and PANICKED (`requireUnreachableLibraryStayedDead`, which is the guard doing its job: without it
-the program would have linked and called an EMPTY function).
+A scan by bare name misses that real edge, files every stdlib name `unreachable`, and `lowerMaxonToStd`
+lowers no body — and `DeadFunctionElimination` then reaches the resolved member from its own root
+set and PANICS (`requireUnreachableLibraryStayedDead`, which is the guard doing its job: without it
+the program would link and call an EMPTY function).
 
-⭐ The cure is the one this file's own header argues for everywhere else: **the widening is written
-ONCE**. `markReachable` already widened a callee through `project.overloadSets`; this scan did not,
-which is one fact with two readers and the narrower one deciding. Both now ask
-`nameReachesStdlib`. MEASURED red before it: both cases below panicked in
-`DeadFunctionElimination`, and adding a single non-overloaded stdlib call (`"a".isAscii()`) to
-either one made it compile — which is what identified the short-circuit rather than the walk.
+⭐ **The widening is written ONCE**: `markReachable` and this scan both ask `nameReachesStdlib`, which
+widens a callee through `project.overloadSets`, so the one fact has one reader.
 
 <!-- test: stdlib-loading.a-contested-extension-method-is-the-only-edge-into-stdlib -->
 ```maxon
@@ -1053,37 +988,34 @@ end 'main'
 cross into stdlib at all and would PASS without touching the rule they exist for. Without the widening,
 both panic in `DeadFunctionElimination`, naming `Array.contains#struct` and `Array.contains#type parameter`.
 
-⚠ **`Array.contains` IS STILL THE ONLY CONTESTED `<Conformer>.<method>` THE CORPUS HAS**
+⚠ **`Array.contains` IS THE ONLY CONTESTED `<Conformer>.<method>` THE CORPUS HAS**
 (`stdlib/Interfaces.maxon`'s `extension Iterable` and `stdlib/Array.maxon`'s `where Element is Equatable`
 extension are the two files; every other method either of them declares is unique to one), and a user file
-still cannot manufacture a second: RE-MEASURED at `ARR3b`, a user `extension Array` declaring
+cannot manufacture a second: a user `extension Array` declaring
 `filter(element Element)` beside `Iterable`'s `filter(keep ElementPredicate)` does not resolve by argument
 type — `nums.filter(10)` reports `E3005 'if' requires a bool condition, got 'struct'`, i.e. it binds the
 stdlib member. That is a separate finding about overload resolution across a contested set, not a vehicle
 for these two.
 
-## `stdlib/Range.maxon` — what W62 unblocked, and the two things that make it real
+## `stdlib/Range.maxon` — and the two things that make it real
 
-**Reached user code 2026-08-12 (BATCH36), when the loader still filtered.** Its one blocker was `W60`: `RangeIterator implements Iterator with
-RangeBound, BidirectionalIterator`, where `BidirectionalIterator extends Iterator`, had the inherited
-`current()` checked with NO binding, so the module read `expected current() returns Element` against its
-own `returns RangeBound`. With that cured it probes `E3001` and nothing else.
+`RangeIterator implements Iterator with RangeBound, BidirectionalIterator`, where
+`BidirectionalIterator extends Iterator`, has its inherited `current()` checked under the `RangeBound`
+binding, so the module agrees with its own `returns RangeBound` and probes `E3001` and nothing else.
 
 ⚠ **A GREEN `E3001` IS EVIDENCE ONLY FOR THE DECLARATIONS THE COMPILER ACTUALLY ANALYZED**, so the
-module was checked the two ways this file's siblings demand rather than on the probe alone:
+module is checked the two ways this file's siblings demand rather than on the probe alone:
 
 - **The injection control FIRES.** `let bogus = NoSuchType.definitelyUndefined(1)` placed in
   `RangeIterator.current()`'s body answers `E3001` **+ `E3004`** — the control the six `helpers/sort/*`
   files fail, so this module's readiness is not the vacuous kind.
-- **The module is BYTE-NEUTRAL, measured both ways on one tree** rather than against a constant remembered
-  from another rung: `function main() returns ExitCode / return 7` compiles to **1,592 bytes of code with
-  the module and 1,592 without**, from two full compiler builds differing only in the loader line that
-  then admitted it — a method the deletion of the filter has since retired, though the reading stands.
-  *(The executable-level `cmp` that `S2k` also ran was NOT repeated here; this is the codeBytes match.)*
+- **The module is BYTE-NEUTRAL**: `function main() returns ExitCode / return 7` compiles to the same
+  code bytes with the module loaded as without it.
 
 ⭐ **AND THE MODULE IS REACHED THROUGH THE PROTOCOL, NOT MERELY LOADED.** `Range implements Iterable with
 (RangeBound, RangeIterator)`, so the case below drives `createIterator()` -> `current()` -> `advance()`
-across the witness edge — which is `W60`'s cure doing work in a real program rather than in a reduction.
+across the witness edge — the inherited requirement's binding doing work in a real program rather than
+in a reduction.
 
 <!-- test: stdlib-loading.range-iterates-through-its-iterable-conformance -->
 ```maxon
@@ -1126,20 +1058,15 @@ end 'main'
 25
 ```
 
-## `stdlib/Json.maxon` — what W69 unblocked, and the control that proves it is not inert
+## `stdlib/Json.maxon` — and the control that proves it is not inert
 
-**Reached user code 2026-08-12 (W69), when the loader still filtered.** At 1,080 lines it is the largest
-pure-corpus module `stdlib/` carries and
-the first that is a whole SUBSYSTEM rather than a handful of leaf functions: a recursive-descent parser
-(`JsonParser`), an arena of nodes (`JsonDoc` over `JsonNodeArray`), and 22 free emitter functions. Its
-last diagnostic blocker was `W66`'s field access through a struct-typed field (`Json.maxon:281`) and,
-past it, an `E2015` at `:400:21` that upstream's *a durable store CO-OWNS* cure cleared; it now probes
-`E3001` and nothing else.
+At 1,080 lines it is the largest pure-corpus module `stdlib/` carries and a whole SUBSYSTEM rather than
+a handful of leaf functions: a recursive-descent parser (`JsonParser`), an arena of nodes (`JsonDoc` over
+`JsonNodeArray`), and 22 free emitter functions. It probes `E3001` and nothing else.
 
 ⚠ **A GREEN `E3001` IS EVIDENCE ONLY FOR THE DECLARATIONS THE COMPILER ACTUALLY ANALYZED**, and for a
-module whose name the compiler might SYNTHESIZE it is not evidence at all — that is the trap that left
-`Set`, `Vector` and `unicodeCategory` inert when they were first admitted. Both were checked rather than
-assumed:
+module whose name the compiler might SYNTHESIZE it is not evidence at all — a synthesized twin out-votes
+the declaration and leaves the module inert. Both are checked rather than assumed:
 
 - **The injection control FIRES.** `let bogus = NoSuchType.definitelyUndefined(1)` placed in
   `findKeyInNode`'s body answers `E3001` **+ `E3004`**, the control the six `helpers/sort/*` files fail.
@@ -1148,18 +1075,14 @@ assumed:
   `*BuiltinBaseName` roots (`Set`, `Map`, `List`, `Vector` and the three `__Managed*`), and the whole
   compiler mentions the name only in prose. So the stdlib declaration is the only one there is.
 
-⛔ **AND `Json.maxon` WAS NOT BYTE-NEUTRAL WHEN IT WAS FIRST ADMITTED.** The fault was not this module's:
-a STRING field default mints a nullary helper, and `LowerMaxonToStd.registerProgramLiteralBlobs` walked it
-with no unreachable-stdlib gate — a THIRD pre-elimination door onto `GlobalDataTable.nextStringId` where
-`InsertRangeChecks`'s header claims the class is shut at two. The cure is that pass's unreachable-stdlib
-gate, which the two `.rdata` cases above are written against; what belongs here is only that it was found
-and not papered over by a re-mint.
+⛔ **`Json.maxon` IS BYTE-NEUTRAL ONLY BECAUSE OF `registerProgramLiteralBlobs`' UNREACHABLE-STDLIB
+GATE.** A STRING field default mints a nullary helper, and `LowerMaxonToStd.registerProgramLiteralBlobs`
+walks it — a pre-elimination door onto `GlobalDataTable.nextStringId` of its own. The two `.rdata`
+cases above are written against that gate.
 
-⚠ **WHAT FOUND IT WAS THE DRIFT COUNT, NOT A FAILING CASE, AND THIS SECTION SAID OTHERWISE FOR ONE
-COMMIT.** `a-stdlib-modules-literals-are-byte-neutral` shifted by a label and reported **PASS** — measured
-directly at the W69 review, on a rebuilt compiler with the gate neutralised. A golden is REFERENCE, not a
-gate. The case that turns this invariant red is
-`a-stdlib-modules-literals-cannot-reach-the-rdata-image`, added by that review.
+⚠ **A DISPLACED LABEL SHOWS AS DRIFT, NOT AS A FAILING CASE.** `a-stdlib-modules-literals-are-byte-neutral`
+shifts by a label and still PASSES — a golden is REFERENCE, not a gate. The case that turns this
+invariant red is `a-stdlib-modules-literals-cannot-reach-the-rdata-image`.
 
 ⭐ **AND THE TWO CASES BELOW ARE THE DIFFERING-DECLARATIONS CONTROL IN SPEC FORM.** Neither can pass
 against an inert entry and neither can pass by merely NAMING the type: each drives the module's own
@@ -1263,8 +1186,8 @@ a"b 2
 
 <!-- test: stdlib-loading.json-negative-zero-round-trips -->
 `-0` is a legal JSON number (`[ minus ] int`) and a distinct double from `0`, so it must survive a
-round trip in BOTH directions. The parse half is `numberFromBytes`'s `result = -result`, which until
-2026-08-30 compiled as `0.0 - result` and answered `+0.0`; the serialize half is `writeNumber`'s
+round trip in BOTH directions. The parse half is `numberFromBytes`'s `result = -result`, which
+must not compile as `0.0 - result` (that answers `+0.0`); the serialize half is `writeNumber`'s
 integral shortcut, which cannot see the sign through `==` and has to ask `Math.hasNegativeSignBit`.
 `0` and `-0.5` ride along as the controls on either side of the shortcut.
 ```maxon

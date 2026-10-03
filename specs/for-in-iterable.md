@@ -19,7 +19,7 @@ The source is replaced by its cursor and the loop is the cursor loop, unchanged
 Two rules decide what happens:
 
 - **A source that already IS a cursor is left alone.** An iterator may itself declare `createIterator`
-  (the identity passthrough both reference compilers implement), and `for x in iter` over a
+  (the identity passthrough), and `for x in iter` over a
   half-consumed iterator must resume from where it stands rather than restarting. So the cursor
   protocol is tested first and wins.
 - **A THROWING `createIterator()` reports EMPTINESS by throwing**, which is exactly what the protocol

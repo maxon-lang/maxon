@@ -392,7 +392,7 @@ end 'main'
 <!-- test: error.instance-sibling-bare-called-in-static -->
 A bare call to an INSTANCE sibling from a STATIC method has no `self` to prepend,
 so it resolves receiver-less and fails the arity check on the hidden `self`
-parameter (`E3036`), the same code the oracle reports.
+parameter (`E3036`).
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

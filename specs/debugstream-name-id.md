@@ -56,7 +56,7 @@ build and a plain one differ in the events they emit and in nothing else.
 
 <!-- test: debugstream-name-id.dense-deduped-and-one-based -->
 Two distinct names take 1 and 2 in the order they are written, and the second mention of the first
-answers 1 again. This is the whole observable contract (measured: `a=1 b=2 c=1`).
+answers 1 again. This is the whole observable contract.
 ```maxon
 function main() returns ExitCode
 	let a = __DebugStream.nameId("alpha")
@@ -106,12 +106,9 @@ end 'main'
 ```
 
 <!-- test: debugstream-name-id.the-empty-name-is-no-name -->
-⚠ **A DELIBERATE DIVERGENCE FROM THE ORACLE, ON A DEGENERATE INPUT, AND IT IS PINNED SO IT STAYS
-DELIBERATE.** Index 0 is the monitor's *"no name"*, and the seed that reserves it is INDEXED — so
-`nameId("")` answers the reservation rather than minting a second entry that means the same thing. The
-bootstrap's map starts empty, so it mints 1 there and then renders it as `name=1` anyway, because its own
-resolver rejects an empty entry (`DebugStreamDecode.ResolveInternedName`). Both compilers agree the name is
-unresolvable; they disagree only about the number, and an empty name IS no name.
+⚠ **THE EMPTY NAME IS INDEX 0, ON PURPOSE.** Index 0 is the monitor's *"no name"*, and the seed that
+reserves it is INDEXED — so `nameId("")` answers the reservation rather than minting a second entry that
+means the same thing. An empty name IS no name.
 ```maxon
 function main() returns ExitCode
 	print("{__DebugStream.nameId("")} {__DebugStream.nameId("real")}")
@@ -141,8 +138,7 @@ error E3005: <fragment>:4:32: '__DebugStream.nameId' requires a string literal, 
 
 <!-- test: debugstream-name-id.error.interpolated-argument -->
 A hole cannot be known while the call is parsed, so an interpolated literal is refused at the `)` the
-call did not have — the same answer `__Builtins.ucdByteAt`'s label gets for the same shape, and the
-bootstrap's.
+call did not have — the same answer `__Builtins.ucdByteAt`'s label gets for the same shape.
 ```maxon
 function main() returns ExitCode
 	let n = 1

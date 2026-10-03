@@ -95,7 +95,7 @@
 
 // A machine word, for the COMPILE-TIME size arithmetic below — the mspan record's width, the mcache row's
 // stride, and where the state region's second array starts. The EMITTED `base + index · 8` is not spelled
-// here at all: it is `MmRuntime.emitWordSlotAddr`, exported at S2 precisely so a third copy of that
+// here at all: it is `MmRuntime.emitWordSlotAddr`, exported so a third copy of that
 // arithmetic did not get written. What stays private is the LAYOUT constant, because a shared "8" is not a
 // shared fact — these are strides of tables this file owns.
 let WordBytes = 8
@@ -183,12 +183,9 @@ let MspanStateFull = -3
 
 // --- Sharding ---
 //
-// ⭐⭐ **THE mcache WAS BUILT AT FULL SHARD WIDTH BEFORE ANY ROW BUT ONE WAS USED, AND S5 IS THE RUNG THAT
-// COLLECTED ON IT.** The STRUCTURE was real from S2 — 256 rows of one span pointer per class — while the
-// SELECTOR was degenerate, so turning the selector on is a change to FUNCTION BODIES and not to the layout
-// every address in this file is computed from. The rows cost 256 × 68 × 8 = 139,264 bytes of an arena that
-// is committed in whole 2 MiB units either way (`SlabArena.maxon`), so the width is paid for out of chunks
-// the process already owns.
+// ⭐⭐ **THE mcache IS 256 ROWS OF ONE SPAN POINTER PER CLASS.** The rows cost 256 × 68 × 8 = 139,264
+// bytes of an arena that is committed in whole 2 MiB units either way (`SlabArena.maxon`), so the
+// width is paid for out of chunks the process already owns.
 let SlabMaxShards = 256
 
 // ⭐⭐ **ROW 255 IS THE RAW-THREAD ROW, AND A NEGATIVE ID MAPS TO IT — NOT TO 0.** A raw OS thread sharing
@@ -204,11 +201,11 @@ let SlabMaxShards = 256
 // ⚠⚠ **THE TWO HALVES OF THAT RULE HAVE VERY DIFFERENT COVERAGE, AND CONFLATING THEM WOULD BE CLAIMING A
 // GATE NOBODY HAS WATCHED MOVE.**
 //   * **A THREAD THAT IS NOT YET AN M IS EXERCISED CONSTANTLY.** `emitSchedStartM` publishes its TLS slot
-//     LAST, so its own `__slab_alloc` runs with the slot still 0 and lands here. ⚠ **W213-C2 narrowed which
-//     allocation that is**: a worker's M struct is now built by its CREATOR (`emitSchedAllocM`, because a
-//     thread cannot learn its own joinable handle) and so comes from that machine's shard, while the main
-//     thread's bring-up still lands here. Every green-thread program in the suite drives it, and it is the
-//     arm that keeps the ROW itself honest.
+//     LAST, so its own `__slab_alloc` runs with the slot still 0 and lands here. ⚠ **That is the
+//     main thread's bring-up**: a worker's M struct is built by its CREATOR (`emitSchedAllocM`,
+//     because a thread cannot learn its own joinable handle) and so comes from that machine's
+//     shard. Every green-thread program in the suite drives it, and it is the arm that keeps the
+//     ROW itself honest.
 //   * **AN M HOLDING NO P IS EXERCISED.** The poller releases its processor before it waits and, back from
 //     the wait with `M->currentP == 0`, runs `__gt_timer_check` — **allocating, through this arm, with no
 //     processor to key a shard by.** Every green-thread program with a timer or a child drives it, and the
@@ -638,10 +635,9 @@ function checkSlabRuntimeGeometry(signatures ProgramSignatures, tierPath FilePat
 
 	// The mspan record must fit its metadata slot, or successive headers overlap.
 	//
-	// ⚠ **THIS READ `MspanCachedShardOffset + WordBytes` UNTIL S5, AND THAT HAD BEEN THE WRONG FIELD SINCE
-	// S6.** The check was measuring a 56-byte record against a 64-byte slot while the record was already 64:
-	// it would have gone on passing for a 72-byte one. `MspanRecordBytes` is stated at the layout, beside
-	// the field that determines it, so appending a field moves it.
+	// ⚠ `MspanRecordBytes` is stated at the layout, beside the field that determines it, so appending
+	// a field moves it; a check reading one field's offset instead goes on passing for a record
+	// outgrowing its slot.
 	if MspanRecordBytes > MspanSlotBytes 'recordOverflowsSlot'
 		panic("slab runtime: an mspan record is {MspanRecordBytes} bytes and its metadata slot is {MspanSlotBytes}")
 	end 'recordOverflowsSlot'
@@ -1632,7 +1628,7 @@ end 'emitSlabRemotePush'
 // --- The bodies ---
 
 // ⭐⭐ **THE STATE REGION'S BASE WITHOUT A FRAME: the `.data` word, tested, with the COMMIT left as the call
-// it already is** (EC8). It answers in `stateId`, the merge block's single argument.
+// it already is**. It answers in `stateId`, the merge block's single argument.
 //
 // ⭐ **THE HOT ARM IS FOUR OPS AND THE COLD ONE IS A CALL, WHICH IS THE WHOLE OF WHY THIS IS NOT A SECOND
 // COPY OF THE BODY.** The region is committed by the FIRST allocation a process makes and never released,
@@ -1697,7 +1693,7 @@ end 'emitSlabStateCommitted'
 // language. Go answers the same question with TWO reverse tables and one indexed byte load, which is what
 // this emits.
 //
-// ⭐⭐ **IT WAS A FUNCTION (`__slab_class_index_for`) UNTIL EC8, AND A NINE-OP LEAF IS NOT WORTH A FRAME.**
+// ⭐⭐ **IT IS EMITTED INLINE, BECAUSE A NINE-OP LEAF IS NOT WORTH A FRAME.**
 // The whole body is two compares, four ALU ops, an `.rdata` address and a byte load — LESS than the
 // prologue, the argument move, the `call`, the `ret` and the epilogue that reached it, and it sits on the
 // path of every allocation in the language. Emitting it inline is what makes `__slab_alloc`'s hit path one
@@ -1763,7 +1759,7 @@ end 'emitReverseTableLookup'
 // nothing emitted, and the reason it is here rather than absent is the shared emitters above — they are what
 // makes the sizing answer and the allocator's routing one fact rather than two that must be kept in step.
 function buildSlabRoundedSize(module StdModule)
-	var func = IrFunction.createFromStd(SlabRoundedSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SlabRoundedSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1822,7 +1818,7 @@ end 'emitMcentralLink'
 // disagreed the span would be stamped for one P and installed in another's row, which is precisely the
 // corruption the ownership gate exists to catch. One derivation, in `__slab_alloc`, passed down.
 function buildSlabRefill(module StdModule, model MachineModel)
-	var func = IrFunction.createFromStd(SlabRefillName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SlabRefillName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2002,9 +1998,8 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 	// ⚠ **INV-1 TRAPS LOUDLY.** Handing out a slot past the span's end writes into whatever the arena placed
 	// in the next chunk, and the corruption surfaces somewhere else, much later, as a slot handed out twice.
 	//
-	// ⭐ **IT IS ALSO THE TRAP THAT NAMED S5's BUG.** `alloc-torture` at `MAXON_MAX_PROCS=2` died HERE, exit
-	// 86, because two OS threads shared one mcache row and popped the same span's cursor — an allocator that
-	// reports its own broken invariant instead of leaving a fault somewhere downstream.
+	// ⭐ **IT IS ALSO WHERE TWO OS THREADS SHARING ONE mcache ROW SURFACE**: both pop the same span's
+	// cursor and one runs past the end — exit 86 here rather than a fault somewhere downstream.
 	let exhausted = emitCmp(module, block: virgin, a: bumpNext, b: bumpEnd, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(virgin, op: StdOp.condBranch(exhausted, thenBlockId: pastEnd.id, elseBlockId: handOut.id))
 
@@ -2135,7 +2130,7 @@ end 'emitSlabProbe'
 // for both halves of the question. That is the honest form of it: *"did I take it"* and *"whose depth word"*
 // are one fact about this call, and a flag beside the address would be two values across the pop for it.
 function buildSlabAllocEntry(module StdModule, name ByteArray, zeroed bool, model MachineModel)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2267,7 +2262,7 @@ end 'emitSlabLockedDoorEntry'
 // a free of a span at the moment it is taken apart. Keeping the destroy off this path is what lets every
 // other free stay lock-free.
 function buildSlabFreeToFull(module StdModule)
-	var func = IrFunction.createFromStd(SlabFreeToFullName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SlabFreeToFullName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2304,7 +2299,7 @@ end 'buildSlabFreeToFull'
 // mcentral list and in no row, which no refill finds and no scavenge walk reaches — a span leaked for the
 // life of the process once that slot is the last one outstanding.
 function buildSlabFreeToRaw(module StdModule)
-	var func = IrFunction.createFromStd(SlabFreeToRawName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SlabFreeToRawName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2338,7 +2333,7 @@ end 'buildSlabFreeToRaw'
 // `slabOsDirectPointerNotOurs`: a named abort instead of silent heap corruption. `__slab_arena_map_set` with
 // `ArenaMapNoSpan` is the clear, because "no span owns this page" is exactly what a fresh slot says.
 function buildSlabSpanDestroy(module StdModule)
-	var func = IrFunction.createFromStd(SlabSpanDestroyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SlabSpanDestroyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2410,7 +2405,7 @@ end 'buildSlabSpanDestroy'
 // written by every claim and every chunk release, each of which already runs inside this lock, so an
 // unlocked walk would read a granule mid-transition and decommit one a claim had just taken.
 function buildSlabScavenge(module StdModule, model MachineModel)
-	var func = IrFunction.createFromStd(SlabScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(SlabScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2529,7 +2524,7 @@ function buildSlabCensusEntry(module StdModule, name ByteArray, callee ByteArray
 		forwarded gives oneI64Param()
 	end 'paramTypes'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2565,7 +2560,7 @@ end 'buildSlabCensusEntry'
 // raw row, `__slab_free_to_full`'s push, and the remote-queue replay in `__slab_collect_remote`; spelling
 // the sequence at each would be four copies of one push.
 //
-// ⭐ **THE HOT CALLER EMITS IT INLINE AND THE COLD ONES STILL CALL `__slab_free_to_span` (EC8).** A local
+// ⭐ **THE HOT CALLER EMITS IT INLINE AND THE COLD ONES STILL CALL `__slab_free_to_span`.** A local
 // push is ~12 ops — less than the frame that reached it — and it is the arm every free of a program with
 // one thread takes. The cold arms all run under `__slab_lock` and keep the call, so the function still
 // exists and this is one spelling emitted twice, not two spellings.
@@ -2595,7 +2590,7 @@ end 'emitSlabFreeToSpan'
 // so the frame costs them nothing they would notice and saves the push being written into the emitted image
 // three more times.
 function buildSlabFreeToSpan(module StdModule)
-	var func = IrFunction.createFromStd(SlabFreeToSpanName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SlabFreeToSpanName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2628,7 +2623,7 @@ end 'buildSlabFreeToSpan'
 // The emptiness test precedes the CAS: on a program with no cross-processor traffic the queue is empty
 // every time, and a CAS of zero for zero would put an uncontended atomic on every refill.
 function buildSlabCollectRemote(module StdModule)
-	var func = IrFunction.createFromStd(SlabCollectRemoteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SlabCollectRemoteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2720,7 +2715,7 @@ end 'buildSlabCollectRemote'
 // slot base. Every caller passes back exactly what `__slab_alloc` answered (`__mm_free` passes the box
 // HEADER base, which is that pointer).
 function buildSlabFree(module StdModule, model MachineModel)
-	var func = IrFunction.createFromStd(SlabFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SlabFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

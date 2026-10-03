@@ -1,0 +1,8 @@
+test 'a manifest build takes over a tree lock another host stopped refreshing, and says so'
+	let staged = stagedProject("tree-lock-abandoned-on-another-host-is-taken-over", fixture: DefaultFixtureName)
+	plantTreeLockOfAnotherHostsHolder(staged)
+	ageTreeLock(staged, seconds: PastTheAbandonmentWindowSeconds)
+
+	let build = spawnManifestBuild(staged, options: StringArray.create())
+	requireBuiltPastTheLock(staged, build: build, wordings: [TreeLockAbandonedWording, TreeLockUnprobedHolderWording], what: "was taken on another host and refreshed nothing past the abandonment window")
+end 'a manifest build takes over a tree lock another host stopped refreshing, and says so'

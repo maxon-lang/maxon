@@ -595,8 +595,9 @@ checked against that type. Every integer and float type, every alias of one, `St
 and a record that implements `Comparable` is ordered by `<`, `>`, `<=` and `>=` through its `compare`.
 
 A copy may call its argument type's `where` requirements — `compare`, `equals`, any method of the
-constraining interface — whatever their visibility, because the caller granted the conformance by passing
-the type. Every other method of the type needs ordinary visibility from the declaring file. A generic
+constraining interface, and a method an extension of that interface declares — whatever their visibility,
+because the caller granted the conformance by passing the type. The grant reaches a closure written inside
+the copy too. Every other member of the type needs ordinary visibility from the declaring file. A generic
 function is itself visible like any function: a private one called from another file is **E3008**.
 
 A non-generic declaration of the same name is chosen when its parameter types are exactly the argument
@@ -604,9 +605,8 @@ types. Two generic declarations that both infer a type for one call are **E3007*
 
 A generic function may reassign a parameter declared `T`, and the argument is then passed by reference, as
 for any function (see [Parameter Passing](/docs/language/functions/#parameter-passing)). When a call's name reaches more than one
-declaration visible here — generic or not — and one of them reassigns a parameter, the call is **E2015**:
-the declaration is chosen from the arguments' types after they are read, while a by-reference parameter
-decides how an argument is read. Give the declaration that reassigns its parameter a name of its own.
+declaration — generic or not — and they disagree about which parameters they reassign, each call passes
+its arguments the way the declaration it resolves to takes them.
 
 ### Associated Types
 
@@ -716,7 +716,8 @@ extension Shape
 end 'Shape'
 ```
 
-- `self` is the conforming value; the extension may call any requirement of the interface.
+- `self` is the conforming value; the extension may call any requirement of the interface, including one a
+  conformer implements with a file-private function.
 - Associated types resolve to each conformer's binding.
 - Extensions of a parent interface apply to types conforming to a derived one.
 
@@ -828,6 +829,9 @@ end 'main'
 - Elements are read and written by position: `t.0`, `t.1`, `t.2`.
 - A tuple type in a signature is a parenthesized type list: `(Amount, String)`. It can also be named:
   `typealias Span = (Amount, Amount)`.
+- A tuple literal written where a tuple type is declared — a parameter, a field, a variable, a return, an
+  element of a typed array literal, a `match` or ternary arm, or an element of an enclosing tuple — takes
+  that type's element types, so a closure literal as an element takes the declared function type.
 
 ### Destructuring Declarations
 

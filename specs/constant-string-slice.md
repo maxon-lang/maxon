@@ -21,7 +21,7 @@ HEAP record per evaluation whose `buffer@0` points into the literal's immortal b
 allocation all the same, and one paid on every trip of a loop.
 
 When the compiler can see BOTH ends of that — the receiver is a value it minted from a string literal,
-and the bounds are compile-time known byte positions — it now emits the sliced bytes as a string
+and the bounds are compile-time known byte positions — it emits the sliced bytes as a string
 literal of their own instead of the call. The result is an ordinary `.rdata` record, indistinguishable
 from one a source `"…"` produced, and it costs **no allocation at all**.
 
@@ -137,7 +137,7 @@ end 'main'
 
 <!-- test: a-folded-slice-in-a-loop-allocates-nothing -->
 ⭐ **THE MOTIVATION, and the shape no single-evaluation case can show.** The cost the fold removes is
-paid PER EVALUATION, so a loop is where it was actually being spent: 500 trips used to mean 500 view
+paid PER EVALUATION, so a loop is where it is actually spent: 500 unfolded trips mean 500 view
 records plus their index boxes. A fold that fired once and then fell back would pass the three cases
 above and fail this one.
 ```maxon

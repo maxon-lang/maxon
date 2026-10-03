@@ -22,23 +22,22 @@ than once:
 - **Pre-loop borrow + loop consume.** A function that borrows the parameter
   once before a loop (e.g. `collectFuncsNeedingRegalloc(regTarget)`) and then
   CONSUMES it inside the loop (e.g. `allocateRegistersForFunc(.., regTarget)` per
-  function) had its owned `+1` released at the *entry borrow's* last use — the
-  analysis attributed the param's death to that one load and never saw the later
-  loop loads (separate SSA values). The premature `lastUseDecref` frees the
-  object; the loop's re-load then `incref`s freed memory
+  function) would have its owned `+1` released at the *entry borrow's* last use
+  by an analysis that attributes the param's death to that one load and never
+  sees the later loop loads (separate SSA values). The premature `lastUseDecref`
+  frees the object; the loop's re-load then `incref`s freed memory
   (`rc-sanitize: INCREF of freed object … lastUseDecref @ … → INCREF @ …`), or,
-  unsanitized, reads a dangling pointer. This is the shape that blocked the
-  self-hosted bootstrap fixpoint (`allocateRegistersWithTarget`).
+  unsanitized, reads a dangling pointer.
 
 - **Straight-line multiple consume.** A function that consumes the parameter at
-  two separate call sites (two loads, each moved into a container) transferred
+  two separate call sites (two loads, each moved into a container) would transfer
   the same single `+1` twice — an over-release / double-free at the second
   destructor.
 
 - **No borrow, single loop consume.** Symmetrically, when nothing releases the
   moved-in `+1` at all, it LEAKS once per call.
 
-The fix treats a consumed interface parameter's value-half slot as SLOT-OWNED
+The compiler treats a consumed interface parameter's value-half slot as SLOT-OWNED
 (the same discipline a local interface value gets): the entry param→slot store
 is a MOVE, every load is a borrow that `incref`s a fresh reference when it feeds
 a consuming call, and the slot's single `+1` is dropped exactly once at each

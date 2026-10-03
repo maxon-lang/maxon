@@ -53,8 +53,8 @@ A `try` opens exactly ONE error edge, so exactly one call in its chain may throw
 — the outermost one. A chain with a throwing call *before* the tail
 (`try a.slice(…).get(…)`) is rejected with **E3057** against that inner call: its
 error flag has nowhere to go, and reading its null result is a use of memory the
-throw never produced. (The reference compiler accepts that program and
-segfaults on the inner throw, dereferencing the null record `slice` left behind.)
+throw never produced. (Accepted, that program would segfault on the inner throw,
+dereferencing the null record `slice` left behind.)
 
 ## Tests
 
@@ -158,8 +158,8 @@ end 'main'
 <!-- test: chained-on-string-literal -->
 A STRING literal receiver, which the array-literal case's own argument always covered and the parser did
 not: a `String` has three throwing methods a program can reach on one (`findFirst`, `findLast`,
-`indexAfter`), and until this case `try "abc".findFirst("b")` was `E2015 … (got 'string literal')` — a
-legal program refused, while the reference compiles it and answers 1.
+`indexAfter`), and `try "abc".findFirst("b")` is a legal program that answers 1; refusing it would be
+`E2015 … (got 'string literal')`.
 ```maxon
 function main() returns ExitCode
 	let idx = try "abcb".findFirst("b") otherwise return 9
@@ -242,16 +242,16 @@ end 'main'
 ### ⚠⚠ THE THIRD RECEIVER SPELLING — `try self.m()`, WHICH THE CASE ABOVE IS ONE WORD AWAY FROM
 
 **The case above runs a void throwing method through a STATIC (`Gate.check`) and a NAMED receiver
-(`g.bump`), and both were always right. `self` — the same method, the same position — was refused
-`E2004: Function 'Gate.bump' does not return a value`, about a call whose value nobody asked for.**
+(`g.bump`). `self` — the same method, the same position — must compile too, not be refused
+`E2004: Function 'Gate.bump' does not return a value` about a call whose value nobody asked for.**
 
-The cause is the rule `void-call-result.md` states in bold: *a `try` target is parsed with
+The rule is the one `void-call-result.md` states in bold: *a `try` target is parsed with
 `resultUsed: false` BY DESIGN*, because the `try` decides value-ness at its OWN position from the TAG
-of the result the target minted. Every arm of `parseTryCallReceiver` threaded that `false` through —
-except the `self` arm, which reached `parseSelfPrimary`, a routine shared with VALUE position
-(`parsePrimary`) that hardcoded `resultUsed: true`. So the guard that cannot see a `try` target fired
-inside one anyway, and only for the one receiver spelling that shares a parse routine with an
-expression. It is now the caller's flag at both call sites.
+of the result the target minted. Every arm of `parseTryCallReceiver` threads that `false` through,
+the `self` arm included: it reaches `parseSelfPrimary`, a routine shared with VALUE position
+(`parsePrimary`), and the flag is the caller's at both call sites. A hardcoded `resultUsed: true` there
+would fire the guard that cannot see a `try` target inside one anyway, and only for the one receiver
+spelling that shares a parse routine with an expression.
 
 ⚠ **BOTH EDGES ARE IN THE ONE CASE, because a threading bug and a deleted check are told apart by the
 error edge.** `driveTwice` runs two `try self.bump(…)` statements for their effect (`n` becomes 5), then
@@ -311,12 +311,11 @@ end 'main'
 throwing method under a `try` in VALUE position is still refused — by the TAG, at the `try`'s own
 position (`parseTry`'s `voidInValue`, E3059).
 
-⚠⚠ **AND IT PINS MORE THAN "STILL REFUSED": IT PINS *WHICH* REFUSAL, BECAUSE THE `self` SPELLING WAS
-REACHING THE WRONG ONE.** MEASURED on the unfixed compiler, this program was `E2004` at column **15**
-— the receiver-arm guard, quoting a construct the `try` had already taken responsibility for — where
-every other receiver spelling gave `E3059` at column **11**. So the hardcoded flag cost the `self`
-spelling BOTH answers: the statement form was refused outright, and the value form was refused by the
-wrong check at the wrong anchor. The message names the same method a named receiver's does; the two are
+⚠⚠ **AND IT PINS MORE THAN "STILL REFUSED": IT PINS *WHICH* REFUSAL.** A hardcoded flag in the `self`
+arm would make this program `E2004` at column **15** — the receiver-arm guard, quoting a construct the
+`try` has already taken responsibility for — where every other receiver spelling gives `E3059` at column
+**11**. So a hardcoded flag costs the `self` spelling BOTH answers: the statement form refused outright,
+and the value form refused by the wrong check at the wrong anchor. The message names the same method a named receiver's does; the two are
 told apart by their programs, not their text.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -415,10 +414,10 @@ error E3055: specs/fragments/try-postfix-target/error.non-throwing-array-accesso
 <!-- test: error.non-throwing-builtin-static-constructor -->
 
 `Array.create()` cannot fail, so `try` on it is E3055 exactly as `try arr.count()`
-is. ⚠ The reference compiler ACCEPTS this program and gets it WRONG: it emits a
-`tryCall` on a callee that never writes an error flag, reads whatever the ABI
-left in the flag register, and takes the ERROR path — returning 9 where the only
-correct answer is 0. Its own E3055 check misses it because a synthesized
+is. ⚠ Accepted, this program would be WRONG: a `tryCall` on a callee that never
+writes an error flag reads whatever the ABI left in the flag register, and takes
+the ERROR path — returning 9 where the only correct answer is 0. An E3055 check
+can miss it because a synthesized
 constructor is absent from the function registry, which is the very blind spot
 this rule closes. The compiler rejecting it is the deliberate divergence.
 
@@ -437,22 +436,18 @@ error E3055: specs/fragments/try-postfix-target/error.non-throwing-builtin-stati
 
 <!-- test: error.non-throwing-stdlib-print -->
 
-⚠ **THIS CASE CHANGED PRODUCER AT W35, AND THE SENTENCE IT PINS CHANGED WITH IT.** It used to be
-`error.non-throwing-builtin-print` and pinned *"this builtin call cannot fail"*, because `print` was a
-compiler-recognized BARE NAME with no declaration behind it. W35 retired that builtin — `print` is an
-ordinary call to `stdlib/Print.maxon`'s `print(value String)` — so the very same program now meets the
-ORDINARY non-throwing rule and is told which function does not throw. The rejection is unchanged in code
-(E3055), position and verdict; only the voice moved, and it moved to the better one, which is why the case
-is re-pinned rather than deleted. It is now the direct pin on the retirement: a compiler that still carried
-a bare-name `print` would fail here.
+⚠ **THE PRODUCER IS THE ORDINARY NON-THROWING RULE.** `print` is an ordinary call to
+`stdlib/Print.maxon`'s `print(value String)`, not a compiler-recognized BARE NAME, so the program meets the
+ORDINARY non-throwing rule (E3055) and is told which function does not throw. A compiler that carried a
+bare-name `print` would answer *"this builtin call cannot fail"* and fail here.
 
-⚠⚠ **THE BARE/QUALIFIED CALLEE SPELLING IS HALF SPLIT, WHICH IS WHY THIS FILE PINS BOTH SPELLINGS.** W81 taught the compiler
-to name a callee it has RESOLVED by its module — `error.two-throwing-calls-in-one-chain` above expects
-`'stdlib.Array.slice'` — because `specs/testing-assertions.md`'s `error.forgotten-try` demands it. It was
-wired to **E3057 alone**, so this E3055 case still expects the bare `'print'`. The same rule puts E3055,
-E3008, E3088 and E3036 on the qualified side and moving them rewrites ~50 committed expectations, so it is
-a naming-policy rung of its own; `ProgramSignatures.diagnosticCalleeSpelling` carries the argument. Read the
-two cases together: the pair is the current state of the divergence, not an inconsistency nobody noticed.
+⚠⚠ **THE BARE/QUALIFIED CALLEE SPELLING IS HALF SPLIT, WHICH IS WHY THIS FILE PINS BOTH SPELLINGS.** The
+compiler names a callee it has RESOLVED by its module — `error.two-throwing-calls-in-one-chain` above
+expects `'stdlib.Array.slice'` — because `specs/testing-assertions.md`'s `error.forgotten-try` demands it.
+That is wired to **E3057 alone**, so this E3055 case expects the bare `'print'`. The same rule puts E3055,
+E3008, E3088 and E3036 on the qualified side, and moving them rewrites ~50 committed expectations;
+`ProgramSignatures.diagnosticCalleeSpelling` carries the argument. Read the two cases together: the pair is
+the current state of the divergence, not an inconsistency nobody noticed.
 ```maxon
 function main() returns ExitCode
 	try print("x\n") otherwise ignore

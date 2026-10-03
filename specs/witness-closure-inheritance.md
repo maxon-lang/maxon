@@ -16,8 +16,8 @@ the enclosing method holds.
 
 The table reaches the lifted body as an ordinary CAPTURE. It cannot reach it any other way: a closure is
 called through the uniform `(userargs, env)` indirect shape, which has exactly one hidden slot and it is
-the environment, and the call site (`cmp(a, b)`, deep inside a sort helper) knows nothing of the closure's
-origin, let alone its constraints. So the witness occupies one environment slot — one machine word,
+the closure record itself, and the call site (`cmp(a, b)`, deep inside a sort helper) knows nothing of the closure's
+origin, let alone its constraints. So the witness occupies one capture slot of the record — one machine word,
 stored where the closure is BUILT, inside the constrained method that holds the table — and each dispatch
 in the body reads it back with the same single `loadIndirect` every other capture is read with.
 
@@ -26,9 +26,8 @@ two `Array with …` (or `Box with …`) alias of one generic type call the same
 supplies its own table.
 
 Closures NEST by chaining, one hop per level: a closure inside a closure captures the witness from its own
-immediate enclosing closure's environment, which in turn captured it from the declaring function. This is
-why a nested closure may inherit a witness even though it may not capture an ordinary variable from a
-non-immediate frame — every hop here is an immediate one.
+immediate enclosing closure's record, which in turn captured it from the declaring function — the same
+chaining an ordinary variable captured from a frame further out takes.
 
 A `static function` (and a synthesized field-default helper) reserves no witness parameters, so there is
 no table anywhere in the chain for a closure written inside one to inherit. That is refused with a
@@ -255,7 +254,7 @@ a=93 b=6
 <!-- test: witness-closure-inheritance.nested-closure-inherits-through-two-hops -->
 ⭐ A closure inside a closure. The inner lift captures the witness from the OUTER lift's environment, and
 the outer captured it from the method's hidden parameter — two hops, each of them a capture from the
-immediate enclosing frame, which is the only kind the environment machinery builds.
+immediate enclosing frame.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -407,7 +406,7 @@ r=10093
 ```
 
 <!-- test: witness-closure-inheritance.witness-and-ordinary-capture-share-one-environment -->
-The inherited witnesses sit in the SAME environment block as ordinary captures — here two constraint
+The inherited witnesses sit in the SAME closure record as ordinary captures — here two constraint
 tables and the enclosing method's `bias` parameter, four reads in one body over three slots. `10098` is
 the case above plus the captured `5`.
 ```maxon

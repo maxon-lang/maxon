@@ -3,6 +3,7 @@ export typealias NameByteCount = int(0 to u32.max)
 export typealias NameTableRegrowthCount = int(0 to u64.max)
 
 typealias NameIdArray = Array with NameId
+typealias NameViewColumn = Array with NameView
 typealias NameSpanArray = Array with NameSpan
 typealias NameDigestArray = Array with HashDigest
 
@@ -20,6 +21,11 @@ export enum NameTableError implements Error
 	unknownId
 	unknownName
 end 'NameTableError'
+
+union NameView
+	unmaterialized
+	materialized(text ByteArray)
+end 'NameView'
 
 // An all-`let` record of two narrow fields: one inline machine word where the compiler packs such a
 // record, a heap box where it does not. Nothing here takes a `NameSpan` apart with `is`, `sizeof`, `==`
@@ -39,8 +45,7 @@ export type NameTable
 	var hashes as NameDigestArray
 	var slotIds as NameIdArray
 	var slotStates as SlotStateArray
-	var views as ByteArrayArray
-	var viewCached as BoolArray
+	var views as NameViewColumn
 	var tombstones as NameId
 	var reservedNames as NameId
 	var reservedBytes as NameByteCount
@@ -50,7 +55,7 @@ export type NameTable
 	export static function create(nameHint NameId, byteHint NameByteCount) returns NameTable
 		let names = NameTableMinimumReservedNames if nameHint < NameTableMinimumReservedNames else nameHint
 		let arena = NameTableMinimumReservedBytes if byteHint < NameTableMinimumReservedBytes else byteHint
-		var table = Self{bytes: ByteArray.create(), spans: NameSpanArray.create(), hashes: NameDigestArray.create(), slotIds: NameIdArray.create(), slotStates: SlotStateArray.create(), views: ByteArrayArray.create(), viewCached: BoolArray.create(), tombstones: 0, reservedNames: names, reservedBytes: arena, regrown: 0, rehashed: 0}
+		var table = Self{bytes: ByteArray.create(), spans: NameSpanArray.create(), hashes: NameDigestArray.create(), slotIds: NameIdArray.create(), slotStates: SlotStateArray.create(), views: NameViewColumn.create(), tombstones: 0, reservedNames: names, reservedBytes: arena, regrown: 0, rehashed: 0}
 		table.bytes.reserve(arena as ElementIndex)
 		table.reserveColumns(names)
 		table.rebuildIndex(slotsForNames(names))
@@ -60,12 +65,11 @@ export type NameTable
 	// A table nothing else holds, with `source`'s names under `source`'s ids: five array clones whatever
 	// the name count. The view cache is not carried — a copy materializes only what it is itself asked for.
 	export static function copyOf(source NameTable) returns NameTable
-		return Self{bytes: source.bytes.clone(), spans: source.spans.clone(), hashes: source.hashes.clone(), slotIds: source.slotIds.clone(), slotStates: source.slotStates.clone(), views: ByteArrayArray.create(), viewCached: BoolArray.create(), tombstones: source.tombstones, reservedNames: source.reservedNames, reservedBytes: source.reservedBytes, regrown: source.regrown, rehashed: source.rehashed}
+		return Self{bytes: source.bytes.clone(), spans: source.spans.clone(), hashes: source.hashes.clone(), slotIds: source.slotIds.clone(), slotStates: source.slotStates.clone(), views: NameViewColumn.create(), tombstones: source.tombstones, reservedNames: source.reservedNames, reservedBytes: source.reservedBytes, regrown: source.regrown, rehashed: source.rehashed}
 	end 'copyOf'
 
 	export function releaseViewCache()
 		self.views.clear()
-		self.viewCached.clear()
 	end 'releaseViewCache'
 
 	export function count() returns NameId
@@ -122,23 +126,21 @@ export type NameTable
 
 	// The cache holds owned copies, never views. A view would share the arena's buffer, and the next
 	// `intern`'s reserve detaches a shared buffer by copying the whole arena — so interleaved interning and
-	// reading would be quadratic in the arena. A name nothing ever asks for costs nothing.
+	// reading would be quadratic in the arena. A name nothing ever asks for is never copied.
 	export function nameOf(id NameId) returns ByteArray throws NameTableError
 		if id >= self.spans.count() as NameId 'noSuchName'
 			throw NameTableError.unknownId
 		end 'noSuchName'
 
-		self.growViewColumns()
+		self.growViewColumn()
 
-		let alreadyMaterialized = try self.viewCached.get(id) otherwise panic("NameTable.nameOf: viewCached.get OOB at {id} of {self.viewCached.count()}")
-
-		if alreadyMaterialized 'cached'
-			return try self.views.get(id) otherwise panic("NameTable.nameOf: views.get OOB at {id} of {self.views.count()}")
-		end 'cached'
+		match try self.views.get(id) otherwise panic("NameTable.nameOf: views.get OOB at {id} of {self.views.count()}") 'view'
+			materialized(text) then return text
+			unmaterialized then break 'view'
+		end 'view'
 
 		let materialized = self.ownedCopyOf(id)
-		try self.views.set(id, value: materialized) otherwise panic("NameTable.nameOf: views.set OOB at {id} of {self.views.count()}")
-		try self.viewCached.set(id, value: true) otherwise panic("NameTable.nameOf: viewCached.set OOB at {id} of {self.viewCached.count()}")
+		try self.views.set(id, value: NameView.materialized(materialized)) otherwise panic("NameTable.nameOf: views.set OOB at {id} of {self.views.count()}")
 		return materialized
 	end 'nameOf'
 
@@ -171,7 +173,7 @@ export type NameTable
 		return self.windowMatches(span.offset, other: prefix, start: 0, size: prefix.count() as NameByteCount)
 	end 'startsWith'
 
-	// The view columns go first, so no cached record outlives the span that describes it. The index keeps
+	// The view cache goes first, so no cached record outlives the span that describes it. The index keeps
 	// tombstones rather than being rebuilt: a restore runs after every parse band, and a rebuild would be
 	// O(baseline) each time.
 	export function truncateTo(keep NameId)
@@ -179,7 +181,7 @@ export type NameTable
 			return
 		end 'nothingAbove'
 
-		self.truncateViewColumns(keep)
+		self.views.truncate(keep)
 
 		for id in keep upto self.spans.count() as NameId 'eachDropped'
 			self.tombstoneSlotOf(id)
@@ -435,25 +437,13 @@ export type NameTable
 		return true
 	end 'windowMatches'
 
-	function growViewColumns()
-		let wanted = self.spans.count()
-
-		if self.viewCached.count() >= wanted 'longEnough'
+	function growViewColumn()
+		if self.views.count() >= self.spans.count() 'longEnough'
 			return
 		end 'longEnough'
 
-		self.views.growFilled(wanted, value: EmptySourceText)
-		self.viewCached.growFilled(wanted, value: false)
-	end 'growViewColumns'
-
-	function truncateViewColumns(keep NameId)
-		if self.viewCached.count() as NameId <= keep 'shorterAlready'
-			return
-		end 'shorterAlready'
-
-		self.views.truncate(keep)
-		self.viewCached.truncate(keep)
-	end 'truncateViewColumns'
+		self.views.growFilled(self.spans.count(), value: NameView.unmaterialized)
+	end 'growViewColumn'
 end 'NameTable'
 
 function slotsForNames(names NameId) returns TableCapacity

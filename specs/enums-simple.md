@@ -433,8 +433,8 @@ end 'main'
 
 <!-- test: float-backed-arithmetic-between-two-cases -->
 A float-backed enum's tag IS the f64's IEEE-754 bit pattern, so an ARITHMETIC operand must be decoded
-before the operator runs. Before A4o this printed `-9217742537320562688` — the two bit patterns added as
-integers. The oracle prints `6.5`, and `Weight.light * 2` `5.0`: an integer operand promotes against the
+before the operator runs; adding the two bit patterns as integers would print `-9217742537320562688`.
+The answer is `6.5`, and `Weight.light * 2` `5.0`: an integer operand promotes against the
 DECODED double, not against its encoding.
 ```maxon
 enum Weight
@@ -457,9 +457,9 @@ end 'main'
 <!-- test: float-backed-ordering-two-negative-cases -->
 ⭐ THE CASE A POSITIVE-ONLY ENUM CANNOT MAKE. IEEE-754 bit patterns of POSITIVE doubles are monotonically
 ordered as integers, so `low < high` passes under both readings and pins neither — which is why
-`enum-full`'s and `enum-match-exhaustive`'s float cases were green over this bug for their whole lives.
-Two NEGATIVE cases invert: `bits(-2.2)` is the LARGER signed i64, so before A4o this answered `ge` where
-the oracle answers `lt`.
+`enum-full`'s and `enum-match-exhaustive`'s float cases cannot catch an undecoded compare.
+Two NEGATIVE cases invert: `bits(-2.2)` is the LARGER signed i64, so an undecoded compare answers `ge`
+where the correct answer is `lt`.
 ```maxon
 enum FloatSigned
 	below = -2.2
@@ -487,8 +487,8 @@ lt
 <!-- test: float-backed-comparison-against-a-float -->
 An ORDERING comparison against a genuine `float`, both ways round — the shape `specs/constants.md`'s
 `float-comparison` pins — plus an EQUALITY against a float literal, which names no case and so is also a
-question about the number. All three were `E3005 cannot compare float with int` before A4o, because the
-enum's `named` tag reads as integral and a comparison is domain-strict.
+question about the number. The enum's `named` tag reads as integral and a comparison is domain-strict,
+so without the decode all three would be `E3005 cannot compare float with int`.
 ```maxon
 enum Threshold
 	low = 0.1
@@ -510,7 +510,7 @@ end 'main'
 ```
 
 <!-- test: float-backed-equality-is-the-tag-compare -->
-⭐ THE ONE COMPARISON A4o DELIBERATELY LEFT ALONE, and the negative control on the decode above. `==`
+⭐ THE ONE COMPARISON THAT DELIBERATELY DOES NOT DECODE, and the negative control on the decode above. `==`
 between two values of ONE enum asks WHICH CASE, so it stays the i64 tag compare `match` dispatch uses —
 `-0.0` and `+0.0` are distinct raw values here (`float-backed-signed-zero`), and a `ucomisd` would report
 them EQUAL while `match` still selected `negz`. One equality, two operators, one answer.
@@ -538,8 +538,7 @@ end 'main'
 <!-- test: float-backed-enum-into-a-float-parameter -->
 The one decode site the PARSER cannot own: the conversion is forced by the CALLEE's declared parameter
 type, a whole-program fact a file's parse may not hold, so it is paid in `LowerMaxonToStd.floatWidenedArg`
-instead. Before A4o the argument was WIDENED rather than reinterpreted and this printed
-`4612811918334231000.0`.
+instead. An argument WIDENED rather than reinterpreted would print `4612811918334231000.0`.
 ```maxon
 typealias Real = float(f64.min to f64.max)
 
@@ -564,9 +563,9 @@ end 'main'
 ```
 
 <!-- test: error.float-backed-enum-cast -->
-A cast whose SOURCE is an enum has no conversion — the oracle's rule, word for word. Before A4o this was
-a representational no-op that handed back the raw i64 wearing the target's type, so `Weight.light as Real`
-printed `4612811918334231000.0`: a silent wrong answer where the `as` is supposed to BE the type check.
+A cast whose SOURCE is an enum has no conversion. As a representational no-op it would hand back the raw
+i64 wearing the target's type, so `Weight.light as Real` would print `4612811918334231000.0`: a silent
+wrong answer where the `as` is supposed to BE the type check.
 ```maxon
 typealias Real = float(f64.min to f64.max)
 
@@ -585,9 +584,8 @@ error E3009: <fragment>:9:23: Cannot cast from enum to float
 ```
 
 <!-- test: error.int-backed-enum-cast -->
-ONE rule, BOTH backings — the oracle refuses `Code.ok as Whole` too. An int-backed enum's no-op returned
-the right NUMBER, so refusing it looks like a loss; what that spelling provided was `.rawValue` under
-another name, an accessor this compiler does not have and the oracle does not reach this way either.
+ONE rule, BOTH backings. An int-backed enum's no-op would return the right NUMBER, so refusing it looks
+like a loss; what that spelling would provide is `.rawValue` under another name.
 ```maxon
 typealias Whole = int(i64.min to i64.max)
 
@@ -607,8 +605,7 @@ error E3009: <fragment>:9:18: Cannot cast from enum to int
 
 <!-- test: error.float-backed-enum-shift -->
 A shift on a float-backed enum is refused in the SHIFT's own words, because the decode makes the operand
-a float and a double's bits are a sign/exponent/mantissa triple rather than a magnitude. Before A4o it
-compiled and shifted the mantissa.
+a float and a double's bits are a sign/exponent/mantissa triple rather than a magnitude.
 ```maxon
 enum Weight
 	light = 2.5
@@ -627,9 +624,9 @@ error E3005: <fragment>:7:23: operator 'shl' requires integer operands, but this
 <!-- test: float-backed-negation -->
 ⭐ THE SIXTH READ SITE. A prefix `-` is arithmetic, so it is a question about the NUMBER — but `parseUnary`
 reads the operand's raw tag rather than the number's, and a float-backed enum's `named` tag is not
-`tagIsFloat`, so before this case `-Weight.light` emitted an INTEGER negate over the IEEE-754 bits and
-printed `-4612811918334230528`. The int-backed arm beside it is the negative control: its `-` must stay
-the integer negate it always was.
+`tagIsFloat`, so an undecoded `-Weight.light` would emit an INTEGER negate over the IEEE-754 bits and
+print `-4612811918334230528`. The int-backed arm beside it is the negative control: its `-` must stay
+the integer negate.
 ```maxon
 enum Weight
 	light = 2.5
@@ -653,8 +650,9 @@ end 'main'
 
 <!-- test: error.float-backed-enum-not -->
 `not` is the shift's twin — a bitwise operator with no reading of a sign/exponent/mantissa triple — so it
-is refused in its own words, exactly as `error.float-backed-enum-shift` is. Before this case `parseUnary`
-complemented the encoding and printed `-4612811918334230529`; the oracle refuses.
+is refused in its own words, exactly as `error.float-backed-enum-shift` is. Complementing the encoding would
+print
+`-4612811918334230529`.
 ```maxon
 enum Weight
 	light = 2.5
@@ -671,11 +669,10 @@ error E3005: <fragment>:7:10: operator 'not' requires integer operands, but this
 ```
 
 <!-- test: float-backed-enum-as-a-parameter-default -->
-A float-backed enum reaching a parameter DEFAULT is the seam between two rungs that landed an hour
-apart in one lane: `A4q` made a default expression consume the whole token region the capture skipped,
-and `A4o` made every read of a float-backed enum DECODE its i64 rather than read it as a magnitude. The
-default is parsed from a lifted token region rather than from a statement, so it reaches the decode by a
-path no other case here takes — and neither rung's own cases cross it. Both spellings are pinned
+A float-backed enum reaching a parameter DEFAULT is the seam between two rules: a default expression
+consumes the whole token region the capture skipped, and every read of a float-backed enum DECODEs its
+i64 rather than reading it as a magnitude. The default is parsed from a lifted token region rather than
+from a statement, so it reaches the decode by a path no other case here takes. Both spellings are pinned
 together: the default the caller omits and the argument the caller supplies must give the same answer
 for the same case.
 ```maxon

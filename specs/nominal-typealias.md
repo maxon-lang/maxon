@@ -60,7 +60,7 @@ because the result is outside the alias's own range — `-x` for an unsigned `x`
 number.
 
 An arithmetic result carries its alias as a NAME, not as a PROOF: `a + a2` over `Score` is `Score`-typed
-but may lie outside `Score`'s range, so every range guard that fires today still fires.
+but may lie outside `Score`'s range, so every range guard on it still fires.
 
 **`ExitCode` is an alias like any other.** `x as ExitCode` is legal for any alias-typed `x` and, where the
 alias provably fits, emits no guard and is not E3010; `main`'s `return` converts the same way without it.
@@ -962,6 +962,33 @@ end 'main'
 4
 ```
 
+<!-- test: a-qualified-implements-parent-beside-a-same-named-type-is-the-parameters-alias -->
+The parent `stdlib.ElementIndex` shares its name with an author's enum, and the subtype edge is filed under the
+identity the parameter type `stdlib.ElementIndex` carries, so a `Kid` is accepted there.
+```maxon
+// --- file: a/e.maxon
+export enum ElementIndex
+	below = -5
+	above = 7
+end 'ElementIndex'
+
+// --- file: main.maxon
+typealias Kid = int(0 to 10) implements stdlib.ElementIndex
+
+function take(b stdlib.ElementIndex) returns stdlib.ElementIndex
+	return b
+end 'take'
+
+function main() returns ExitCode
+	let k = 4 as Kid
+	print("{take(k)} {a.ElementIndex.above.rawValue}")
+	return 0
+end 'main'
+```
+```stdout
+4 7
+```
+
 <!-- test: error.an-expression-no-operand-of-which-satisfies-the-target -->
 ```maxon
 typealias BlockId = int(0 to u64.max) implements ElementIndex
@@ -1294,7 +1321,7 @@ error E3005: <fragment>:17:17: argument type mismatch for 'v': expected 'Integer
 ```
 
 <!-- test: error.a-user-struct-sharing-a-stdlib-alias-name-is-still-a-record -->
-`stdlib/Builtins.maxon` declares `typealias ParsedInt`, and a user `type ParsedInt` stands beside it
+`stdlib/Builtins.maxon` declares `public typealias ParsedInt`, and a user `type ParsedInt` stands beside it
 (`stdlib-user-shadows.md`). The struct's identity is the bare name and the alias's is a compiler mint, so
 the struct does not decay: an `int` at a `Box with ParsedInt`'s `T` is refused rather than stored in the
 box and freed as a record.
@@ -1839,14 +1866,14 @@ end 'main'
 Three files each declare `MyInt = int(0 to 1000)`; a value made under one declaration passes through the
 other two with no cast.
 ```maxon
-// --- file: a.maxon
+// --- file: alpha/a.maxon
 export typealias MyInt = int(0 to 1000)
 
 export function doubleIt(x MyInt) returns MyInt
 	return x + x
 end 'doubleIt'
 
-// --- file: b.maxon
+// --- file: beta/b.maxon
 export typealias MyInt = int(0 to 1000)
 
 export function tripleIt(x MyInt) returns MyInt
@@ -2086,4 +2113,70 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: error.an-implements-parent-another-file-keeps-private-is-refused -->
+A file-private parent is nameable from its own file alone, so another file's `implements` clause naming it is
+refused at the parent's name, exactly as a cast to it is.
+```maxon
+// --- file: base.maxon
+typealias Base = int(0 to 100)
+
+export function widest() returns ExitCode
+	let b = 9 as Base
+	return b
+end 'widest'
+
+// --- file: main.maxon
+typealias Kid = int(0 to 10) implements Base
+
+function main() returns ExitCode
+	let k = 4 as Kid
+	print("{k}")
+	return widest()
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:11:41: typealias 'Base' is not exported
+```
+
+<!-- test: error.an-implements-parent-two-directories-export-is-ambiguous -->
+Two directories export `Base`, so a bare `implements Base` from a third file could mean either and must be
+qualified.
+```maxon
+// --- file: api/base.maxon
+export typealias Base = int(0 to 100)
+
+// --- file: legacy/base.maxon
+export typealias Base = int(0 to 200)
+
+// --- file: main.maxon
+typealias Kid = int(0 to 10) implements Base
+
+function main() returns ExitCode
+	let k = 4 as Kid
+	return k
+end 'main'
+```
+```maxoncstderr
+error E3063: <fragment>:9:41: Ambiguous type name 'Base': more than one visible declaration matches it. Qualify it as one of: api.Base, legacy.Base
+```
+
+<!-- test: error.a-qualified-implements-parent-the-reader-cannot-see-is-refused -->
+A qualified parent is held to the declaration's tier like every other qualified type name: a `module` alias is
+not nameable from outside its directory.
+```maxon
+// --- file: feature/types.maxon
+module typealias Base = int(0 to 100)
+
+// --- file: other/main.maxon
+typealias Kid = int(0 to 10) implements feature.Base
+
+function main() returns ExitCode
+	let k = 4 as Kid
+	return k
+end 'main'
+```
+```maxoncstderr
+error E3088: other/<fragment>:6:41: typealias 'feature.Base' is module-scoped and not visible from this directory
 ```

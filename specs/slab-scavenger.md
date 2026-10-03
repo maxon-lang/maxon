@@ -39,10 +39,9 @@ between two scavenges never reaches step 3, so a workload that cycles a populati
 syscall nor the re-commit after it. **The first call after a population is dropped therefore returns
 exactly 0** — that is the grace working, not a failure — and the second returns the bytes.
 
-⚠ **THE GRACE IS ASKED OF THE GRANULE AND NOT OF THE SPAN, AND THAT IS WHERE IT MOVED.** It used to be a
-two-pass idleness test on each parked span, which a sweep that destroys every idle span in step 1 has
-nothing left to measure. The question *"has this memory stayed unused?"* belongs to the unit that can still
-answer it — the committed granule — and the cases below did not change.
+⚠ **THE GRACE IS ASKED OF THE GRANULE AND NOT OF THE SPAN.** A sweep that destroys every idle span in
+step 1 leaves no parked span for a two-pass idleness test to measure. The question *"has this memory stayed
+unused?"* belongs to the unit that can still answer it — the committed granule.
 
 ⭐ **THE DECOMMIT IS AT THE ARENA'S GRANULE, NOT AT THE SPAN.** A span's chunk run is 8 KiB-granular and
 `madvise` REFUSES an address that is not page-aligned — on arm64-macOS a page is **16 KiB**, twice a
@@ -63,55 +62,47 @@ the arena geometry, and the arena is 64 MiB where a reservation is free and 512 
 
 ### What makes a case here DISCRIMINATING rather than regression-only
 
-`slab-allocator.md` says of its own cases that every one of them would also pass against the bump
-allocator they replaced. **That is not true of the cases below**, and it is worth saying which way each
-one cuts, because a spec that would pass against the previous allocator proves nothing about this rung:
+`slab-allocator.md` says of its own cases that every one of them would also pass against a bump
+allocator. **That is not true of the cases below**, and it is worth saying which way each
+one cuts, because a spec that would pass against an allocator that never releases proves nothing about release:
 
-- **DISCRIMINATING, WITH A MEASURED BREAK** — `two-passes-before-a-byte-goes-back`,
+- **DISCRIMINATING, WITH A BREAK THAT REDDENS IT** — `two-passes-before-a-byte-goes-back`,
   `released-chunks-come-back-zeroed`, `a-released-chunk-serves-a-different-class`,
   `an-idle-heap-releases-nothing`. Each one goes RED, with its own exit code, against a scavenger with one
-  piece broken; the table below records which break produced which code.
+  piece broken; the table below names which break produces which code.
 - **REGRESSION-ONLY** — `an-os-direct-mapping-is-not-a-span`, which states a boundary the scavenger must
-  not cross rather than a behaviour it must have; and — **MEASURED, against the reading this file first
-  shipped** — `a-live-population-survives-two-scavenges`.
+  not cross rather than a behaviour it must have; and `a-live-population-survives-two-scavenges`.
 
-⛔ **THAT SECOND RECLASSIFICATION IS A MEASUREMENT, NOT A HEDGE, AND IT IS WORTH THE PARAGRAPH.** The
-liveness case was written to catch a scavenger that reaches a span still holding live slots. The break that
+⛔ **THAT SECOND CLASSIFICATION IS NOT A HEDGE, AND IT IS WORTH THE PARAGRAPH.** The
+liveness case would catch a scavenger that reaches a span still holding live slots. The break that
 would cause that is a span reaching an mcentral list while it is NOT fully free — and with exactly that
-break in place, **all six cases stayed GREEN**. The reason is the allocator's own shape: `__slab_refill`
+break in place, **all six cases stay GREEN**. The reason is the allocator's own shape: `__slab_refill`
 takes the HEAD of an mcentral list, and the wrongly-listed live span is the head, so the very next
 allocation pulls it straight back and the sweep never sees it. ⇒ the property "only fully-free spans are
 destroyed" is enforced by the `free_count == total_slots` test in `__slab_scavenge`'s own walk and by
-nothing this file can observe, and saying the case catches it would have been a claim with a measurement
-against it.
+nothing this file can observe.
 
-⚠ **All six fail against a compiler with no scavenger at all** — `E3004`, the builtin does not exist —
-which is the RED this file was written against before a line of the mechanism was in the tree.
+⚠ **All six fail against a compiler with no scavenger at all** — `E3004`, the builtin does not exist.
 
 ### ⚠ Those claims are SABOTAGE-MEASURED, not asserted
 
 **A gate that cannot fail is not evidence**, and `slab-allocator.md` beside this file says the same of its
-own cases. Each row below is ONE token changed on an otherwise pristine tree, rebuilt, with all six cases
-run and the sources restored and re-hashed against their pristine copies between rows. **x64-windows.**
+own cases. Each row below is ONE token changed in the compiler, and the second column is every case that
+goes RED against it on **x64-windows**.
 
-| The break | What went RED |
+| The break | What goes RED |
 |---|---|
 | `__slab_arena_free_chunks` fills the released run with `0x3F` instead of 0 — **INV-4 gone** | `released-chunks-come-back-zeroed` **139 (segfault)**, `a-released-chunk-serves-a-different-class` **101 (the leak gate)** |
 | the grace test inverted, so a run is released the FIRST time it is seen idle | `two-passes-…` **1 = `graceSkipped`**; both reuse cases 1, having nothing left to reuse |
 | `__slab_arena_free_chunks` RE-CLAIMS the run instead of releasing it | `two-passes-…` **2 = `nothingReleased`**; both reuse cases 1 |
 | the decommit leaves the granule's COMMIT bit SET, so a later claim never re-backs it | both reuse cases **139** — the access violation the commit bitmap exists to prevent |
 | the "is every chunk of this granule free?" test inverted, so a granule is decommitted while it is IN USE | **all six 139** — the first one starts by decommitting the granule holding the arena's own bitmap |
-| a span reaches an mcentral list while it is NOT fully free | **nothing** — see the reclassification above; this is the row that changed what this file claims |
-
-⚠ **THE GRACE ROWS WERE MEASURED WHILE THE GRACE WAS A TWO-PASS IDLENESS TEST ON A PARKED SPAN.** It is a
-two-pass test on a COMMIT GRANULE now, and the sighting is unchanged in both directions — the same
-inversion releases on the first call and reddens `two-passes-…` at `graceSkipped`, and the same case
-asserts it. What moved is which bitmap the test reads, not what it decides.
+| a span reaches an mcentral list while it is NOT fully free | **nothing** — see the classification above; this is the row behind it |
 
 ⭐ **The breaks are told apart by WHICH case goes red and WITH WHAT CODE**, which is the property that makes
 them a net rather than one alarm: a single red case would say the scavenger is broken, and these say *where*.
 
-⭐⭐ **AND THE GEOMETRY BOUND IS SABOTAGE-VERIFIED TOO, at COMPILE time rather than run time — which is the
+⭐⭐ **AND THE GEOMETRY BOUND IS CHECKED TOO, at COMPILE time rather than run time — which is the
 whole point of it.** `checkSlabRuntimeGeometry` asserts that the two chunk runs this allocator asks for —
 its state region and the widest class's span — fit an arena on BOTH lanes. Raising `SlabMaxShards` from
 256 to 1024 takes the state region to 69 chunks against the non-reserving arena's 63, and the compiler
@@ -122,10 +113,6 @@ panic at SlabRuntime.maxon:387: slab runtime: the allocator's state region needs
 arena on the non-reserving lane has 63 after its metadata, so `__slab_arena_alloc_chunks` would abort at
 run time
 ```
-
-Before S6 that change compiled clean and aborted **at run time, on wasm only**, with
-`slabChunkRunUnsatisfiable` — a true statement about the arena and a baffling one about the edit that
-caused it.
 
 ## Tests
 
@@ -258,7 +245,7 @@ end 'main'
 ```
 
 <!-- test: slab-scavenger.released-chunks-come-back-zeroed -->
-**THE ZEROING CASE — the one this rung is most likely to break, and it breaks silently.** A population is
+**THE ZEROING CASE — the one the release path is most likely to break, and it breaks silently.** A population is
 allocated, dropped and scavenged twice, so its chunks go back to the arena's bitmap and its granules
 are decommitted. A SECOND population of the SAME size class is then allocated out of those very chunks
 — the arena's scan is first-fit, so the freed low chunks are reused ahead of any virgin high one — and

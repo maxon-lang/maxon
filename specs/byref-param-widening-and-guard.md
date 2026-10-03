@@ -27,11 +27,11 @@ token sweep can read: whether a receiver was written in front of the name.
   call names that one type's `f` and no other's.
 
 Without the second half, any user program declaring a free function whose name a `stdlib` method
-also wears — and reassigning one of its parameters — made that method by-reference, and the
-by-reference-ness then travelled up every caller of it. Where it reached an OVERLOADED name it was
-not a wasted cell but a hard refusal: `Array.swap` inherited a user `swap`, carried it through
-`compareAndSwap` and `smallSortRange`, and E2015 refused *"overloading 'Array.sort'"* in a program
-that never mentioned sorting.
+also wears — and reassigning one of its parameters — would make that method by-reference, and the
+by-reference-ness would then travel up every caller of it. Where it reached an OVERLOADED name it would
+be not a wasted cell but a hard refusal: `Array.swap` would inherit a user `swap`, carry it through
+`compareAndSwap` and `smallSortRange`, and E2015 would refuse *"overloading 'Array.sort'"* in a program
+that never mentions sorting.
 
 The narrowing is not total, and the boundary is exactly the receiver a call writes. A user METHOD
 whose name a `stdlib` method reaches through a NON-`self` dotted call still shares its node — the
@@ -220,6 +220,25 @@ Stack trace:
   in bump
   in main
   in mrt_start
+```
+
+<!-- test: error.an-out-of-range-literal-at-a-byref-param-is-a-compile-error -->
+A literal handed to a by-reference parameter is range-checked where it is written, exactly as at a by-value
+parameter: 2000 does not fit `Count`, so the program never builds.
+```maxon
+typealias Count = int(0 to 1000)
+
+function setOnce(dest Count)
+	dest = 7
+end 'setOnce'
+
+function main() returns ExitCode
+	setOnce(2000)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: Value 2000 is outside the range of 'Count' (int(0 to 1000))
 ```
 
 <!-- test: narrow-ranged-float-byref-param-guards-the-pointee -->

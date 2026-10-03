@@ -115,9 +115,7 @@ function debugStubCandidates() returns CandidatePathArray
 
 	pushFrameworkCandidates(candidates, framework: DebugServerCommandLineToolsDirectory)
 
-	let developer = developerDirectory()
-
-	if not developer.isEmpty() 'thereIsADeveloperDirectory'
+	if let developer = try developerDirectory() 'thereIsADeveloperDirectory'
 		pushFrameworkCandidates(candidates, framework: "{developer}{DebugServerXcodeRelativeDirectory}")
 	end 'thereIsADeveloperDirectory'
 
@@ -133,13 +131,20 @@ end 'pushFrameworkCandidates'
 
 // ⚠ `xcrun -f debugserver` is NOT the road to it: `debugserver` is not an SDK tool, so `xcrun`
 // answers "unable to find utility" on a host whose framework holds one.
-function developerDirectory() returns String
+enum DeveloperDirectoryError implements Error
+	unavailable
+end 'DeveloperDirectoryError'
+
+function developerDirectory() returns String throws DeveloperDirectoryError
 	var arguments = StringArray.create()
 	arguments.push(DeveloperDirectoryOption)
 
-	let asked = try Subprocess.run(Executable.name(DeveloperDirectoryCommand), arguments: arguments, workingDirectory: Directory.currentPath(), timeoutMs: DeveloperDirectoryProbeMs) otherwise 'noDeveloperDirectory'
-		return ""
-	end 'noDeveloperDirectory'
+	let asked = try Subprocess.run(Executable.name(DeveloperDirectoryCommand), arguments: arguments, workingDirectory: Directory.currentPath(), timeoutMs: DeveloperDirectoryProbeMs) otherwise throw DeveloperDirectoryError.unavailable
+	let directory = asked.stdout.trim()
 
-	return asked.stdout.trim()
+	if directory.isEmpty() 'printedNoDirectory'
+		throw DeveloperDirectoryError.unavailable
+	end 'printedNoDirectory'
+
+	return directory
 end 'developerDirectory'

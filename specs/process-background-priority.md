@@ -54,20 +54,12 @@ A `void` "set" would be untestable — nothing a case could name would change, w
 `scavengeMemory`'s header makes for answering a byte count. So the op sets the priority and then
 READS IT BACK from the OS, and the value it answers is the read, never the value it just wrote.
 
-### ⛔⛔ NO CASE BELOW CAN SEE WHETHER THE *SET* HAPPENED, AND THAT WAS MEASURED RATHER THAN ARGUED
+### ⛔⛔ NO CASE BELOW CAN SEE WHETHER THE *SET* HAPPENED
 
 **The suite runs these cases inside a process tree that is ALREADY at below-normal priority**, because
 `Main.runSpecTest` calls this very intrinsic before it spawns the worker pool, and a child inherits the
 priority class. So a test binary is at 16384 *before its first instruction*, and `GetPriorityClass`
 answers 16384 whether the lowering sets anything or not.
-
-⚠ **MEASURED 2026-08-30, both halves, with the `SetPriorityClass` emit deleted from
-`StdToX64Conversion.lowerOsEnterBackgroundPriority`:**
-
-| where the program ran | answer |
-|---|---|
-| under this suite (parent already below-normal) | 16384 — **2 passed, 0 failed, the sabotage invisible** |
-| from a normal-priority shell, same binary | **32** — the sabotage plainly visible |
 
 ⇒ **The cases below assert a real POSTCONDITION — after this call the process is at below-normal, and
 the value is a live reading rather than 0 or garbage — but they do NOT discriminate a working SET from
@@ -84,9 +76,7 @@ look like proof and be none.
 ⚠ **THE arm64-macOS LANE HAS THE IDENTICAL BLIND SPOT AND THE IDENTICAL PROCEDURE**, one unit over:
 the suite's own harness is already at nice **10** and a test binary inherits it, so `getpriority`
 answers 10 there whether or not the set ran. The hand check is the same program from a shell at nice
-**0** — it must print **10**, and a lowering that called nothing would print **0**. MEASURED
-2026-08-31 on this host: a C probe reported the launching shell at nice 0 and the compiled Maxon
-program answered 10 twice, which is both halves at once (the write happened, and it did not drift).
+**0** — it must print **10**, and a lowering that called nothing would print **0**.
 
 ### `setpriority`, NEVER `nice` — and the POSIX lane's thread question
 

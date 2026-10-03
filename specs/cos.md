@@ -36,23 +36,12 @@ var z = Math.cos(pi)      // -1.0 (approximately)
 ## Tests
 
 <!-- test: cos.basic -->
-⚠ **THE `stdout` BLOCK IS RETRACTED, FOR THE REASON `specs/sin.md` SETS OUT AT LENGTH — see that
-file rather than a second copy here.** In short: `/specs` rendered floats in a fixed-6-decimal format,
-whose carry never reaches the integer part; The compiler prints the **shortest round-trip** representation by user
-ruling, which makes that whole class of defect unreachable. Every `/specs` file that prints a float needs
-this same retraction, and it is one decision, not a per-file judgement.
-
-Verified for these four values specifically, because a shortest-round-trip digit string is only correct
-for the exact double it came from: `Math.cos` here returns the doubles
-(`4607182418800017408`, `4606079780542709072`, `4603041830072026763`, `-4697588500269686311`), so only
-the rendering differs. ⚠ Note `cos(1.0)` prints `0.5403023058681397` and **not** the more familiar
+Floats print in the **shortest round-trip** representation (⚖ user ruling; `specs/sin.md` sets out
+why). A shortest digit string is only correct for the exact double it came from, so these four are
+verified against the doubles `Math.cos` returns here
+(`4607182418800017408`, `4606079780542709072`, `4603041830072026763`, `-4697588500269686311`). ⚠ Note `cos(1.0)` prints `0.5403023058681397` and **not** the more familiar
 `0.5403023058681398` — those are two DIFFERENT doubles, one ulp apart (`…398` parses to
 `4603041830072026764`), and `…397` is the shortest form of the one this platform's `cos` actually returns.
-
-⭐ **This retraction changes the RENDERING, not the numbers, and you can check that without running
-anything:** each `/specs` value is exactly the fixed-6-decimal rendering of the double printed below it —
-`0.8775825618903728` → `0.877583`, `0.5403023058681397` → `0.540302`, `-0.0000036732051033919804` →
-`-0.000004`, `1.0` → `1.0`. The two blocks describe the same four doubles; only the formatter differs.
 ```maxon
 function main() returns ExitCode
 	let x1 = Math.cos(0.0)

@@ -133,21 +133,18 @@ export let MboxHandleCloneBoxName = b"__mbox_handle_clone_box"
 // scope exit, an array element drop and a struct-field cascade all shut a service down.
 export let MboxHandleDropBoxName = b"__mbox_handle_drop_box"
 
-// ⭐⭐⭐ **`__mbox_handle_retain_box(handleBox)` — THE EXACT MIRROR OF THE DROP, AND ITS ABSENCE WAS A
-// DOUBLE FREE (W232).** A `<T>.handle` value owns THREE things — a share of the mailbox's `handles` count,
-// a share of its `refs` count, and a reference to the little box that names it — and
-// `__mbox_handle_drop_box` releases all three. Until this entry existed the RETAIN released... sorry,
-// ACQUIRED only the third: `Parser.emitIncref` emitted a bare `__mm_incref` of the box, because a handle box
-// is an ordinary managed record and every generic co-own path treats it as one.
+// ⭐⭐⭐ **`__mbox_handle_retain_box(handleBox)` — THE EXACT MIRROR OF THE DROP.** A `<T>.handle`
+// value owns THREE things — a share of the mailbox's `handles` count, a share of its `refs` count,
+// and a reference to the little box that names it — and `__mbox_handle_drop_box` releases all
+// three, so a retain acquires all three. A bare `__mm_incref` of the box, which a generic co-own
+// path emits for an ordinary managed record, acquires only the third.
 //
-// ⇒ **TWO OWNERS, ONE SHARE, TWO RELEASES.** `let w = spawn T.create()` then `arr.push(w)` increfs the box
-// to 2, and each of the two eventual drops steps `handles` and `refs` DOWN — so the mailbox is closed and
-// **FREED while the array's handle still names it**, and the second drop frees it again.
-// **MEASURED:** that program is exit **89 (`RuntimeAbort.slabFreeOfParkedSpan`)** from three services up,
-// exit **101** at one or two, and a SEGFAULT at `MAXON_MAX_PROCS >= 7` — while `arr.push(spawn T.create())`
-// is clean at every count, because a temporary's one reference is MOVED and never increfed. The corpus stood
-// entirely on the clean side of that line (`services.handles-in-an-array` pushes the `spawn` directly), which
-// is why 6,800 green cases never saw it.
+// ⇒ **TWO OWNERS, ONE SHARE, TWO RELEASES.** Under a bare incref, `let w = spawn T.create()` then
+// `arr.push(w)` increfs the box to 2, and each of the two eventual drops steps `handles` and `refs`
+// DOWN — so the mailbox is closed and **FREED while the array's handle still names it**, and the
+// second drop frees it again: exit 89 (`RuntimeAbort.slabFreeOfParkedSpan`), 101 or a segfault,
+// depending on the processor count. `arr.push(spawn T.create())` cannot show it, because a
+// temporary's one reference is MOVED and never increfed.
 //
 // ⚠ **SO THE INVARIANT IS: EVERY REFERENCE TO A HANDLE BOX OWNS ONE SHARE OF EACH COUNT.** A clone takes a
 // FRESH box and one share of each (`__mbox_handle_clone_box`); a retain takes a SECOND REFERENCE to an
@@ -159,13 +156,13 @@ export let MboxHandleRetainBoxName = b"__mbox_handle_retain_box"
 // tail of every synthesized `<T>.__loop`.
 export let MboxServiceExitName = b"__mbox_service_exit"
 
-// ⭐⭐ **`__mbox_abandon(mbox, box)` — GIVE ONE UNDELIVERED REQUEST TO THIS MAILBOX'S OWN ABANDON FUNCTION
-// (SV2).** Both roads to an abandoned message reach `<T>.__abandon`, and they reach it from opposite tiers:
-// `__mbox_send`'s closed arm has the mailbox in a register, and the loop's DRAIN is Maxon-tier code that
-// cannot NAME the symbol — `<T>.__abandon` is synthesized, so a call to it by name is `E3004: call to
-// undefined function` from the very pass that walks the synthesized body (MEASURED, on all 23 running
-// service cases at once). Asking the mailbox is what both can do, and it also means the drain and the send
-// cannot come to abandon through two different functions.
+// ⭐⭐ **`__mbox_abandon(mbox, box)` — GIVE ONE UNDELIVERED REQUEST TO THIS MAILBOX'S OWN ABANDON
+// FUNCTION.** Both roads to an abandoned message reach `<T>.__abandon`, and they reach it from
+// opposite tiers: `__mbox_send`'s closed arm has the mailbox in a register, and the loop's DRAIN is
+// Maxon-tier code that cannot NAME the symbol — `<T>.__abandon` is synthesized, so a call to it by
+// name is `E3004: call to undefined function` from the very pass that walks the synthesized body.
+// Asking the mailbox is what both can do, and it also means the drain and the send cannot come to
+// abandon through two different functions.
 export let MboxAbandonName = b"__mbox_abandon"
 
 // ⭐⭐ **INSTALL THE MAILBOX RUNTIME — behind `usesGt`, at its CALL SITE, exactly as `installSchedRuntime`
@@ -223,7 +220,7 @@ export function interfaceSendSlotOffset(slot CaseIndex) returns ParsedInt
 end 'interfaceSendSlotOffset'
 
 function buildMboxInterfaceCloneBox(module StdModule)
-	var func = IrFunction.createFromStd(MboxInterfaceCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxInterfaceCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -257,7 +254,7 @@ module function emitInterfaceHandleBoxHolding(module StdModule, block IrBlock, m
 end 'emitInterfaceHandleBoxHolding'
 
 function buildMboxInterfaceSend(module StdModule)
-	var func = IrFunction.createFromStd(MboxInterfaceSendName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxInterfaceSendName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -314,7 +311,7 @@ function buildInterfaceHandleConversion(module StdModule, globalData GlobalDataT
 		globalData.recordFuncAbs64InRdata(stubName, rdataLabel: label, offsetInLabel: interfaceSendSlotOffset(slot) as ByteOffset)
 	end 'eachSlot'
 
-	var func = IrFunction.createFromStd(interfaceHandleConversionName(serviceTypeName, interfaceName: interfaceName), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(interfaceHandleConversionName(serviceTypeName, interfaceName: interfaceName), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
@@ -328,7 +325,7 @@ function buildInterfaceHandleConversion(module StdModule, globalData GlobalDataT
 end 'buildInterfaceHandleConversion'
 
 function buildInterfaceSendStub(module StdModule, name ByteArray, serviceTag ParsedInt)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
@@ -405,7 +402,7 @@ end 'emitMboxWasLastOwner'
 
 // `__svc_spawn(loopPtr, state, abandonPtr) -> mbox`. See `SvcSpawnName`.
 function buildSvcSpawn(module StdModule)
-	var func = IrFunction.createFromStd(SvcSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SvcSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -440,7 +437,7 @@ end 'buildSvcSpawn'
 
 // `__mbox_send(mbox, box)`. See `MboxSendName`.
 function buildMboxSend(module StdModule)
-	var func = IrFunction.createFromStd(MboxSendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxSendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -505,7 +502,7 @@ end 'buildMboxSend'
 
 // `__mbox_recv(mbox) -> box | 0`. See `MboxRecvName`.
 function buildMboxRecv(module StdModule)
-	var func = IrFunction.createFromStd(MboxRecvName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxRecvName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -570,7 +567,7 @@ end 'buildMboxRecv'
 // loop can observe that. Idempotent: both roads to it (the last handle drop, and the loop's own exit after a
 // `__shutdown` pill) may run, in either order.
 function buildMboxClose(module StdModule)
-	var func = IrFunction.createFromStd(MboxCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -591,7 +588,7 @@ end 'buildMboxClose'
 // `refs` when it is FREED; a clone adds a namer of the mailbox and therefore one of each. Stepping only
 // `handles` would let the drop of the original free a record its clone still points at.
 function buildMboxHandleCloneBox(module StdModule)
-	var func = IrFunction.createFromStd(MboxHandleCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxHandleCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -637,7 +634,7 @@ end 'buildMboxHandleCloneBox'
 // written down twice. A caller that wants no name ignores the result, exactly as it ignores `__mm_alloc`'s
 // when it is emitting for effect.
 function buildMboxHandleRetainBox(module StdModule)
-	var func = IrFunction.createFromStd(MboxHandleRetainBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxHandleRetainBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -660,7 +657,7 @@ end 'buildMboxHandleRetainBox'
 // counts. So: step `handles` and close if this was the last namer; only THEN step `refs` and free if this
 // was the last owner.
 function buildMboxHandleDropBox(module StdModule)
-	var func = IrFunction.createFromStd(MboxHandleDropBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxHandleDropBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -715,7 +712,7 @@ end 'buildMboxHandleDropBox'
 // ⚠ `emitLoadCurrentGt`'s precondition — the scheduler is initialized — is satisfied by construction and not
 // by convention: this function's only caller is a body RUNNING on a green thread the scheduler created.
 function buildMboxServiceExit(module StdModule)
-	var func = IrFunction.createFromStd(MboxServiceExitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxServiceExitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -728,7 +725,7 @@ function buildMboxServiceExit(module StdModule)
 	let mbox = 0 as ValueId
 	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
 
-	// ⭐⭐ **THE PILL'S REPLY IS READ BEFORE THE MAILBOX CAN BE FREED, AND ANSWERED AFTER (SV2).** The load has
+	// ⭐⭐ **THE PILL'S REPLY IS READ BEFORE THE MAILBOX CAN BE FREED, AND ANSWERED AFTER.** The load has
 	// to precede the release below — this thread may be the mailbox's last owner — while the completion has
 	// to follow the state drop the loop performed one call earlier, which is the whole point of parking the
 	// cell on the mailbox rather than completing it in the pill's arm.
@@ -757,7 +754,7 @@ end 'buildMboxServiceExit'
 
 // `__mbox_abandon(mbox, box)`. See `MboxAbandonName`.
 function buildMboxAbandon(module StdModule)
-	var func = IrFunction.createFromStd(MboxAbandonName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(MboxAbandonName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -773,7 +770,7 @@ function buildMboxAbandon(module StdModule)
 end 'buildMboxAbandon'
 
 // ⭐⭐ **WHAT `__gt_register_park`'s MAILBOX ARM DOES — emitted HERE because the mailbox's fields are this
-// file's, and the arm is one act over them (W218's second half).** The caller holds `__sched_lock` and has
+// file's, and the arm is one act over them.** The caller holds `__sched_lock` and has
 // just handed this function a green thread that WANTS to park on `arg`. Two answers, and the RE-CHECK is
 // what makes the first one possible at all:
 //
@@ -784,25 +781,17 @@ end 'buildMboxAbandon'
 //   • **NEITHER.** The thread registers itself as the mailbox's `parkedGt` and goes `waiting`, which is what
 //     the next `__mbox_send` or `__mbox_close` will find.
 //
-// ⚠⚠ **THE RE-CHECK IS CORRECT AND IT HAS NOT BEEN SEEN RED — SAID PLAINLY, BECAUSE THE SENTENCE THAT
-// STOOD HERE CLAIMED OTHERWISE.** It read: *"without it a send that lands in the window is lost, and the
-// service hangs holding a message — reachable at `MAXON_MAX_PROCS >= 2`"*. **MEASURED at SV1 wave 3 and
-// FALSE for anything SV1 can express**: the re-check disabled (both comparisons forced true, so the park is
-// always registered), `multicore-stress/service-torture` — 12 services, 4,800 sends — read exit 42 on 49 runs across
-// N = 1/2/7/12, with no hang and no leak.
+// ⚠⚠ **THE RE-CHECK IS CORRECT, AND A FIRE-AND-FORGET SERVICE CANNOT SHOW IT MISSING.** With it
+// disabled (both comparisons forced true, so the park is always registered)
+// `multicore-stress/service-torture` neither hangs nor leaks, because there are TWO WAKE SOURCES
+// and the second is UNCONDITIONAL: a lost wake strands a message only until the NEXT event on that
+// mailbox, and the last handle's drop calls `__mbox_close`, which takes this same lock and wakes
+// whoever is parked. So a missed send costs LATENCY, and the close repairs it before the process
+// can exit.
 //
-// ⇒ **WHY, AND IT IS THE SHAPE OF SV1 RATHER THAN LUCK: THERE ARE TWO WAKE SOURCES AND THE SECOND IS
-// UNCONDITIONAL.** A lost wake strands a message only until the NEXT event on that mailbox, and every
-// mailbox gets one: the last handle's drop calls `__mbox_close`, which takes this same lock and wakes
-// whoever is parked. So a missed send costs LATENCY, and the close repairs it before the process can exit.
-// A permanent stall needs the CLOSE's own wake to be lost in the same few-dozen-instruction window, which
-// 49 runs did not hit.
-//
-// ⛔ **THAT IS AN ARGUMENT ABOUT SV1's OBSERVABILITY, NOT ABOUT THE WINDOW, AND THE WINDOW IS REAL.** SV1
-// has no reply, so nothing in the language BLOCKS on a service making progress — which is exactly what
-// SV2 adds: an awaiter parked on a reply cell has no `__mbox_close` to rescue it, and there the lost wake is
-// a hang with no second source. The re-check stays because it is right and costs two loads under a lock the
-// caller already holds; what may not stay is a claim that it has been measured to matter.
+// ⛔ **THAT IS AN ARGUMENT ABOUT OBSERVABILITY, NOT ABOUT THE WINDOW, AND THE WINDOW IS REAL.** An awaiter
+// parked on a reply cell has no `__mbox_close` to rescue it, and there the lost wake is a hang with
+// no second source. The re-check costs two loads under a lock the caller already holds.
 //
 // It terminates `cur` into `cont`, handing it the wake debt as `cont`'s one block argument: the caller owns the
 // release and pays the debt after it, as `__gt_register_park` does for every arm that takes the lock.

@@ -13,19 +13,16 @@ Reserved keywords such as `type`, `enum`, `union`, and `interface` may be
 used as function parameter names. Parameter lists are always enclosed in
 parentheses, so they cannot be confused with top-level type declarations.
 
-Historically the compiler's cross-file name pre-scanner walked tokens
-linearly without tracking parenthesis nesting, so a parameter pair like
-`type StdType` inside a function signature was misread as a top-level
-`type StdType` declaration. That created a phantom non-exported type that
-shadowed the real `StdType` across every other file in the project.
-These tests lock in the fix — using `type`/`enum`/`union`/`interface`
-as a parameter name must not shadow a real exported type declared in a
+The compiler's cross-file name pre-scanner tracks parenthesis nesting, so
+a parameter pair like `type StdType` inside a function signature is not
+read as a top-level `type StdType` declaration — a phantom non-exported
+type that would shadow the real `StdType` across every other file in the
+project. These tests pin that using `type`/`enum`/`union`/`interface`
+as a parameter name does not shadow a real exported type declared in a
 different file.
 
 `array` and `of` are a different claim, and the last case below is its
-home: they are not keywords at all. Both lexers reserved them for an
-`array of int` type syntax that no parser ever implemented, so the words
-cost every program two identifiers and bought nothing. They are ordinary
+home: they are not keywords at all. They are ordinary
 identifiers, usable as a parameter name, an argument label and a local
 binding like any other word.
 

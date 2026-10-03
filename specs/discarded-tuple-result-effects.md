@@ -29,10 +29,10 @@ refused any of them would refuse code that should compile.
 
 ## Tests
 
-⚠ **EVERY CASE BELOW WAS `error E3064` BEFORE `IrFunction.assignsIntoAnExistingAggregate` EXISTED.** The
-summary seeded off E3070's parameter masks, which their own doors narrow to ARRAY-instance fields, so an
-int field write set nothing and every one of these was refused. They are the red-gate control for that
-fix; `refuses-a-callee-with-no-effect` is the control in the other direction, and must stay red.
+⚠ **EVERY CASE BELOW RESTS ON `IrFunction.assignsIntoAnExistingAggregate`.** E3070's parameter masks are
+narrowed by their own doors to ARRAY-instance fields, so a summary seeded off them alone sees no effect in
+an int field write and refuses every one of these with E3064.
+`refuses-a-callee-with-no-effect` is the control in the other direction, and must stay red.
 
 <!-- test: bare-self-field-store-is-an-effect -->
 The canonical spelling — a bare field name inside a method. `bump` mutates the receiver, so the call is
@@ -162,7 +162,7 @@ end 'main'
 ```
 
 <!-- test: refuses-a-callee-with-no-effect -->
-⭐ **THE CONTROL, AND IT MUST STAY RED.** The four cases above prove the rule stopped refusing things it
+⭐ **THE CONTROL, AND IT MUST STAY RED.** The four cases above prove the rule does not refuse things it
 should not; this one proves it still refuses what it should. A callee that only builds and returns a
 value has no reason to run when nothing takes the result.
 ```maxon

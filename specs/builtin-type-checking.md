@@ -121,35 +121,31 @@ Callers convert via `mm.toCString()`, which hands the buffer straight back
 only when it can PROVE `buffer[length]` is already `\0` — a record with
 spare capacity, or bytes in the immutable image — and copies otherwise,
 including for the exactly-full record described above. The type check is
-what makes the conversion mandatory at the source level — it is the gap
-that hid the original Subprocess `cwd` NUL-termination bug.
+what makes the conversion mandatory at the source level.
 
-⚠ **THIS PARAGRAPH USED TO SAY THE CONVERSION "checks `buffer[length] == 0`
-and COWs if not", AND THAT WAS THE DEFECT WRITTEN DOWN AS THE RULE.**
-`buffer[length]` is one PAST the content, and the exactly-full record this
-very section is about does not own it — nor does a VIEW. Both compilers read
-it anyway until 2026-09-02, when `Directory.exists` answered **false** for a
-directory that was plainly there: the allocator had handed the byte after the
-path to the next request, so the probe accepted somebody else's zero and
-`GetFileAttributesA` read on past the path's own end.
+⚠ **THE CONVERSION DOES NOT PROBE `buffer[length]` ON A RECORD THAT DOES
+NOT OWN IT.** `buffer[length]` is one PAST the content, and the exactly-full
+record this very section is about does not own it — nor does a VIEW. The
+allocator may have handed that byte to the next request, so a probe would
+accept somebody else's zero and an OS call such as `GetFileAttributesA`
+would read on past the string's own end.
 
 For a `String` the conversion has a name of its own: `s.cstr()`. It is the
-whole of `mm.toCString()` with the buffer already in hand, and since Stage 4c
-of the SSO plan it is also the spelling to reach for: `String` no longer
-exports its raw-buffer field, so reaching through that field to call
-`toCString()` on it no longer compiles.
+whole of `mm.toCString()` with the buffer already in hand, and it is also the
+spelling to reach for: `String` does not export its raw-buffer field, so
+`toCString()` cannot be reached through that field.
 Code that genuinely needs the bytes as a `__ManagedMemory` asks for
 `s.toByteArray().managed`, which hands back an INDEPENDENT view — writing
 through it cannot alter the string.
 
 <!-- test: builtin-type-checking.error-subprocess-resolve-on-path-managed -->
-⚠ **The compiler KEEPS ITS OWN SENTENCE (ruling, 2026-09-04)**: one
+⚠ **ONE SENTENCE FOR EVERY OPERAND REFUSAL**: one
 wording for every `__Builtins.*` operand refusal, naming the callee and the two SOURCE types and anchoring on
 the callee.
 
 The TYPE RULE is the whole reason `cstring` is a `ValueTypeTag` rather than a
 spelling of `integer`: a `cstring` parameter refuses an `int`, and an `i64` one refuses a `cstring`. Erased,
-each door accepted the other's argument — an address made of an arbitrary number handed to a `strlen`.
+each door would accept the other's argument — an address made of an arbitrary number handed to a `strlen`.
 ```maxon
 function main() returns ExitCode
 	let s = "ls"

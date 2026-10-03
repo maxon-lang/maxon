@@ -75,13 +75,13 @@ export enum TypeClass
 	structRef
 	text
 
-	// The class of a non-capturing FUNCTION VALUE. Like `structRef`/`text`, it converts to
-	// nothing and nothing converts to it — a function value is a code pointer, not a number and not a
-	// bool, so `f + 1`, `return f` from an `ExitCode` function and `if f` are all one error. It AGREES
-	// with another `function` and nothing else, which is exactly the type rule the spec states: "a
-	// function value is only usable where a function type declared with 'typealias' is expected." Two
-	// function types agreeing at the class level is assignability at the TAG level and not structurally —
-	// the arity/param-type identity a function-to-function mismatch would need is not carried by a tag.
+	// The class of a FUNCTION VALUE. Like `structRef`/`text`, it converts to nothing and nothing
+	// converts to it — a function value is a record pointer, not a number and not a bool, so `f + 1`,
+	// `return f` from an `ExitCode` function and `if f` are all one error. It AGREES with another
+	// `function` and nothing else, which is exactly the type rule the spec states: "a function value
+	// is only usable where a function type declared with 'typealias' is expected." Two function types
+	// agreeing at the class level is assignability at the TAG level and not structurally — the
+	// arity/param-type identity a function-to-function mismatch would need is not carried by a tag.
 	function
 
 	// The class of a TYPE-PARAMETER value — `T` inside a generic type. It is OPAQUE: at this
@@ -449,7 +449,7 @@ export function checkDeclaredType(value ValueTypeTag, declared ValueTypeTag) ret
 	// an ordinary class `mismatch`, which is why the guard is one-sided.
 	//
 	// ⭐ **AN OPAQUE TYPE-PARAMETER PLACE IS NOT "A NON-FUNCTION PLACE" — IT IS A PLACE WHOSE TYPE IS
-	// DECIDED SOMEWHERE ELSE.** `T` is one machine word and a function code pointer is one machine
+	// DECIDED SOMEWHERE ELSE.** `T` is one machine word and a function value is one machine
 	// word (`ProgramSignatures.slotTypeFitsOneWord` admits "a function alias" by name), so whether a
 	// function value belongs there is settled by the INSTANTIATION — `Map with (String, UnaryOp)` binds
 	// `Value` to a function alias and `Map with (String, int)` does not — and `checkTypeParameterArgsAt`
@@ -775,7 +775,7 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		// to a String, so `false` here is the statement "a String is not an integer".
 		string gives false
 
-		// A function value is a code pointer, not a number the language will convert anything INTO.
+		// A function value is a record pointer, not a number the language will convert anything INTO.
 		// Nothing narrows to a function, so `false` here is the statement "a function is not an integer".
 		function gives false
 
@@ -1078,16 +1078,19 @@ end 'tagOwnsNoHeapValue'
 // `argRegisterAt(k)` and stores R8 alone into `gt.result` (`X64GtRuntime.buildGtTrampolineChunk`). Admitting
 // a float here would hand the callee an XMM register nobody filled and read a result nobody captured — a
 // silent wrong answer, not a leak. Building the second channel is a change to the hand-assembled trampoline
-// and to `__gt_await`'s single i64 exit, which is a different slice; no spec case in the tree spawns or
-// awaits a float.
+// and to `__gt_await`'s single i64 exit; no spec case in the tree spawns or awaits a float.
 //
-// ⛔ **AN EXISTENTIAL AND AN OPAQUE TYPE PARAMETER ARE REFUSED FOR A THIRD REASON: THEY ARE ONE WORD TOO
-// NARROW.** Each is released through a TWO-argument entry whose first argument is a companion the GT struct
-// does not carry — `__drop_existential(witness, value)` off the fat pointer's witness half,
-// `__drop_type_param(descriptor, value)` off the enclosing instance's layout descriptor. The inline argument
-// region holds the value half only, so a releaser could name no drop for them (`managedFieldDropCallee`
-// PANICS on `interfaceRef` for exactly this reason). Carrying the companion is a second word per slot and a
-// later slice.
+// ⛔ **A BY-VALUE EXISTENTIAL AND OPAQUE TYPE PARAMETER ARE REFUSED FOR A THIRD REASON: A SLOT IS ONE WORD
+// AND EACH NEEDS A COMPANION.** Each is released through a TWO-argument entry whose first argument is a
+// companion the GT struct does not carry — `__drop_existential(witness, value)` off the fat pointer's witness
+// half, `__drop_type_param(descriptor, value)` off the enclosing instance's layout descriptor. The inline
+// argument region holds the value half only, so a releaser could name no drop for them
+// (`managedFieldDropCallee` PANICS on `interfaceRef` for exactly this reason).
+//
+// This predicate is the BY-VALUE door only. An argument at a parameter the callee REASSIGNS crosses as the
+// one-word address of a parameter cell the coroutine owns, and that cell holds an existential's witness
+// beside its value, so an interface value (and a `float`) crosses that way; an opaque type parameter does
+// not cross even in a cell (`ParameterCell.parameterCellCrossesASpawn`).
 //
 // ⚠ Written as an exhaustive `match` and not as `tag != float`: the negative form FAILS OPEN — a tag
 // appended to `ValueTypeTag` (four have been, each "APPENDED AT THE END") would be admitted to a channel
@@ -1114,7 +1117,7 @@ export function tagRidesAsyncGprChannel(tag ValueTypeTag) returns bool
 		structRef gives true
 		string gives true
 
-		// A function value is a bare `.text` address — one word, and it owns nothing.
+		// A function value is the address of its record — one word.
 		function gives true
 		typeParameter gives false
 		genericInstance gives true
@@ -1598,7 +1601,7 @@ export function aliasAdmitsEveryValue(alias RangedTypeAlias) returns bool
 		return rangeIsFull(alias.low, high: alias.high, isFloat: true)
 	end 'aFloat'
 
-	if alias.rawBitWidth == FullWordBitWidth 'aWholeWordPattern'
+	if alias.domain.isFullWordPattern() 'aWholeWordPattern'
 		return true
 	end 'aWholeWordPattern'
 
@@ -2149,7 +2152,7 @@ end 'rangeCoversDenotedRange'
 
 // The E3005 a literal out-of-range NARROWING reports — `Value N is outside the range of 'Alias'
 // (int(lo to hi))` — worded ONCE, for BOTH the body-cast/return pass (`InsertRangeChecks`) and
-// the top-level const-cast path (`Parser.applyConstCast`, via the re-raised ParseError). The two
+// the top-level const-cast path (`Parser.applyConstCast`, via the re-raised SourceParseError). The two
 // report the same defect from different tiers and must not phrase it two ways; the alias and its
 // bounds spell through `rangedAliasValueSetDisplay`, the one place that pair renders.
 //
@@ -2158,8 +2161,8 @@ end 'rangeCoversDenotedRange'
 // tier, so neither can quote a declaration the program does not contain — MEASURED as
 // `outside the range of 'Byte$0_1000' (int(0 to 1000))`, which names no line the author wrote and prints
 // the real bounds beside the suffix that was supposed to carry them.
-export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, rawBitWidth BitWidth = NotARawPattern) returns String
-	return "Value {scalarConstantText(value, isFloat: isFloat)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth)}"
+export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
+	return "Value {scalarConstantText(value, isFloat: isFloat)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat, domain: domain)}"
 end 'literalOutOfRangeMessage'
 
 // The E3005 an out-of-range `otherwise` DEFAULT reports — the sentence above with its own subject, since
@@ -2178,8 +2181,8 @@ end 'literalOutOfRangeMessage'
 // ⚠ The VALUE is spelled plainly and deliberately NOT through `scalarConstantText`: an `otherwise`
 // default is an integer LITERAL the author wrote, never the wrapped `u64.max` sentinel that helper exists
 // to un-wrap, and the oracle prints it plainly too.
-export function otherwiseOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, rawBitWidth BitWidth = NotARawPattern) returns String
-	return "otherwise value {value} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: false, rawBitWidth: rawBitWidth)}"
+export function otherwiseOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
+	return "otherwise value {value} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: false, domain: domain)}"
 end 'otherwiseOutOfRangeMessage'
 
 // ⭐ **THE E3005 A `b"…"` BYTE-STRING LITERAL'S OWN BYTE REPORTS** — the third subject of the one
@@ -2195,8 +2198,8 @@ end 'otherwiseOutOfRangeMessage'
 // ⚠ The VALUE is a byte and is spelled plainly — it is never the wrapped `u64.max` pattern
 // `scalarConstantText` exists to un-wrap. The RANGE is not: an element alias's bounds may be a float's bit
 // patterns, so it keeps the alias's own domain rather than assuming the byte's.
-export function byteStringByteOutOfRangeMessage(value ParsedInt, offset ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, rawBitWidth BitWidth = NotARawPattern) returns String
-	return "byte {value} at offset {offset} of a `b\"…\"` byte-string literal is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat, rawBitWidth: rawBitWidth)}"
+export function byteStringByteOutOfRangeMessage(value ParsedInt, offset ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
+	return "byte {value} at offset {offset} of a `b\"…\"` byte-string literal is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat, domain: domain)}"
 end 'byteStringByteOutOfRangeMessage'
 
 // ⭐ **THE E3117 A RAW-BYTE FILL REPORTS** — the fourth subject of the one range fact, and the only
@@ -2236,7 +2239,7 @@ end 'rawByteFillNarrowElementMessage'
 //
 // ⚠ **THE ELEMENT ARRIVES ALREADY RENDERED, which the sibling's structured payload does not need and this one
 // cannot do without.** `bool`, an enum's ordinal and an opaque `T` are refused here as readily as a ranged
-// alias, so there is no `low`/`high` pair every subject has — see `ParseError.rawByteWriteSlotDomain`.
+// alias, so there is no `low`/`high` pair every subject has — see `SourceParseError.rawByteWriteSlotDomain`.
 //
 // ⚠ **IT NAMES TWO CURES AND THE SECOND IS THE ONE MOST AUTHORS WANT**: `set` is the ARRAY surface's writer
 // and range-checks the value against the element, so a program staging bytes into a container that is not a
@@ -2277,15 +2280,14 @@ end 'rawByteWriteSlotDomainMessage'
 // The sentence around the pair is each site's own; only the pair is shared. And E3118 cannot pass a
 // `low`/`high` at all for a `bool` or an enum ordinal, which is why its parser picks the shape and calls
 // this for the one shape that has bounds (`Parser.slotElementDisplay`).
-export function rangedAliasValueSetDisplay(aliasName String, low ParsedInt, high ParsedInt, isFloat bool, rawBitWidth BitWidth = NotARawPattern) returns String
+export function rangedAliasValueSetDisplay(aliasName String, low ParsedInt, high ParsedInt, isFloat bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
 	// ⚠ A RAW-PATTERN ALIAS SPELLS ITS WIDTH, because its bounds are not what the author wrote:
 	// `bits(64)`'s value set renders as `int(0 to 18446744073709551615)`, a declaration nobody typed —
 	// the same reason the name is spelled as SOURCE spells it.
-	if rawBitWidth != NotARawPattern 'aRawPattern'
-		return "'{sourceSpelledAliasText(aliasName.toByteArray())}' (bits({rawBitWidth}))"
-	end 'aRawPattern'
-
-	return "'{sourceSpelledAliasText(aliasName.toByteArray())}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
+	return match domain 'domain'
+		pattern(width) gives "'{sourceSpelledAliasText(aliasName.toByteArray())}' (bits({width}))"
+		quantity gives "'{sourceSpelledAliasText(aliasName.toByteArray())}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
+	end 'domain'
 end 'rangedAliasValueSetDisplay'
 
 // ⚠⚠ **THE `u64.max` SENTINEL IS SPELLED HERE AND NOWHERE BELOW.** Rendering ANY `-1` as
@@ -2980,8 +2982,8 @@ end 'tagIsByteRecord'
 //   • `named` — an ENUM's value IS its i64 tag, so that half is a value again. **But a `union`'s value is
 //     a one-word pointer to an `__mm_alloc` box, and it is refused for a DIFFERENT reason**: no spec
 //     pins an identity reading for a union, so admitting it would be inventing a semantics.
-//   • `function` — likewise a genuine one-word address (a `.text` entry), and likewise unpinned. It has
-//     the extra wrinkle that two spellings of one non-capturing function legitimately share an address
+//   • `function` — likewise a genuine one-word address (its record's), and likewise unpinned. It
+//     has the extra wrinkle that two spellings of one named function legitimately share an address
 //     while two closures over one body do not, so "the same object" is not even settled for it.
 //   • `interfaceRef` — a FAT pointer, so a one-word compare would answer about its value half alone and
 //     silently ignore the witness. The same half-an-answer `emitCompare` already refuses an existential
@@ -3373,8 +3375,8 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// and the integer domain, and on nothing else. Complementing a byte pointer is not a question.
 		string gives NotOperator.nonIntegralOperand
 
-		// A FUNCTION value — rejected for the struct/String arm's reason: `not` has no reading on a code
-		// pointer. Complementing a `.text` address is not a question.
+		// A FUNCTION value — rejected for the struct/String arm's reason: `not` has no reading on a
+		// function value. Complementing a record's address is not a question.
 		function gives NotOperator.nonIntegralOperand
 
 		// A TYPE PARAMETER / GENERIC INSTANCE — `not` has no reading on an opaque `T` or a struct
@@ -3420,13 +3422,13 @@ end 'notOperatorFor'
 // in two files and nothing but this paragraph holds them together; widen one and come here.
 function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) returns bool
 	// ⭐ **THE COLUMN TAGS THAT AGREE WITH THEMSELVES AND WITH NOTHING ELSE — one arm, because they differ in
-	// no other way.** A `Character`, a `bool` and a FUNCTION are each one machine word dropped by nothing,
+	// no other way.** A `Character`, a `bool` and a FUNCTION each fill one machine word,
 	// which is `slotTypeFitsOneWord`'s whole question — but each is its own TYPE, so the integral
 	// fall-through below is a wrong answer for all three: it would make `m.upsert("d", value: 7)` on a
-	// `Map with (String, UnaryOp)` (`/specs/map.md:function-valued.dispatch`) a code pointer of 7, and
-	// `value: 1` on a bool column a `true` nobody wrote. ⚠ The function spelling is reachable only because
-	// the caller RESOLVES the column type first (`Parser.parseHashTableColumnArg`): the alias arrives as
-	// `named`, which reads integral.
+	// `Map with (String, UnaryOp)` (`/specs/map.md:function-valued.dispatch`) a function value of 7,
+	// and `value: 1` on a bool column a `true` nobody wrote. ⚠ The function spelling is reachable only
+	// because the caller RESOLVES the column type first (`Parser.parseHashTableColumnArg`): the alias
+	// arrives as `named`, which reads integral.
 	if declared == ValueTypeTag.character or declared == ValueTypeTag.boolean or declared == ValueTypeTag.function 'agreesOnlyWithItself'
 		return valueTag == declared
 	end 'agreesOnlyWithItself'

@@ -1,0 +1,2055 @@
+// E3183: a closure, or a value holding one, stored into a record it captures or that record reaches
+// forms a refcount cycle nothing releases. The store and the capture can sit in different
+// functions, so every body is summarized by what it stores through its parameters and module
+// globals, and the summaries settle to a fixed point before any body is judged.
+
+typealias OriginIndex = int(0 to u64.max) implements ElementIndex
+typealias OriginList = Array with OriginIndex
+typealias OriginListArray = Array with OriginList
+typealias OriginKindArray = Array with OriginKind
+typealias OriginDepth = int(0 to 4)
+typealias OriginDepthArray = Array with OriginDepth
+
+// A range bound admits only a literal, so the bound above restates this; typed `OriginDepth`, a narrower
+// range is a build failure here.
+let MaxOriginDepth = 4 as OriginDepth
+
+typealias OriginKey = int(0 to u64.max)
+typealias OriginByKey = Map with (OriginKey, OriginIndex)
+typealias HandleByKey = Map with (OriginKey, ElementIndex)
+typealias OriginNameMap = Map with (OriginIndex, ByteArray)
+typealias OriginByLabel = Map with (ByteArray, OriginIndex)
+typealias ListMembership = Set with OriginKey
+typealias FunctionHoldingMemo = Map with (TypeNameId, bool)
+typealias InstanceHoldingMemo = Map with (GenericInstanceId, bool)
+typealias ReportedPositionSet = Set with String
+typealias GlobalLabelSet = Set with ByteArray
+typealias HeldGlobalsByLabel = Map with (ByteArray, GlobalLabelSet)
+typealias GlobalEffectArray = Array with GlobalEffect
+typealias GlobalEffectColumn = Array with GlobalEffectArray
+typealias StoreSiteByValue = Map with (ValueId, ElementIndex)
+typealias ForwardedLoads = Map with (ValueId, ValueId)
+typealias OpPositionMap = Map with (ElementIndex, OriginKey)
+typealias ReachMemo = Map with (ElementIndex, BoolArray)
+typealias KnownStoresByBlock = Map with (ElementIndex, KnownFieldStores)
+
+enum OriginKind
+	parameter
+	fresh
+	field
+	element
+	holdings
+	global
+end 'OriginKind'
+
+// What E3183 calls the record a cycle closes on: a name the source wrote for it, or — where no name reaches
+// it — who holds it.
+union CycleHolder
+	named(name String)
+	heldHere
+	heldBy(parameter String)
+end 'CycleHolder'
+
+enum CycleTraceMode
+	propagate
+	summarize
+	judge
+end 'CycleTraceMode'
+
+let WildOffset = u32.max as ByteOffset
+let KeyHalfShift = 32 as OriginKey
+let SyntheticSlotShift = 8 as OriginKey
+let SyntheticKindsPerPosition = 2 as OriginKey
+let SyntheticHeldKind = 0 as OriginKey
+let SyntheticCapturedKind = 1 as OriginKey
+let LastInTheBody = u64.max as OriginKey
+
+function keyOf(high ElementIndex, low ElementIndex) returns OriginKey
+	return ((high as OriginKey) shl KeyHalfShift) or (low as OriginKey)
+end 'keyOf'
+
+function highHalfOf(key OriginKey) returns ElementIndex
+	return (key shr KeyHalfShift) as ElementIndex
+end 'highHalfOf'
+
+function lowHalfOf(key OriginKey) returns ElementIndex
+	return (key and (u32.max as OriginKey)) as ElementIndex
+end 'lowHalfOf'
+
+type GlobalEffect
+	export let label as ByteArray
+	export var storedRecords as ParamPositionMask
+	export var storedHeld as ParamPositionMask
+	export var storedCaptured as ParamPositionMask
+	export var readInto as ParamPositionMask
+	export var resultReads as bool
+
+	static function create(label ByteArray) returns GlobalEffect
+		return Self{label: label, storedRecords: NoParamPositions, storedHeld: NoParamPositions, storedCaptured: NoParamPositions, readInto: NoParamPositions, resultReads: false}
+	end 'create'
+
+	function widen(other GlobalEffect) returns bool
+		let records = self.storedRecords or other.storedRecords
+		let held = self.storedHeld or other.storedHeld
+		let captured = self.storedCaptured or other.storedCaptured
+		let grownReadInto = self.readInto or other.readInto
+		let reads = self.resultReads or other.resultReads
+		let grew = records != self.storedRecords or held != self.storedHeld or captured != self.storedCaptured or grownReadInto != self.readInto or reads != self.resultReads
+		self.storedRecords = records
+		self.storedHeld = held
+		self.storedCaptured = captured
+		self.readInto = grownReadInto
+		self.resultReads = reads
+		return grew
+	end 'widen'
+end 'GlobalEffect'
+
+function effectFor(effects GlobalEffectArray, label ByteArray) returns GlobalEffect
+	for effect in effects 'eachEffect'
+		if effect.label.equals(label) 'thisGlobal'
+			return effect
+		end 'thisGlobal'
+	end 'eachEffect'
+
+	let effect = GlobalEffect.create(label)
+	effects.push(effect)
+	return effect
+end 'effectFor'
+
+type TracedCycleRow
+	export var resultIs as ParamPositionMask
+	export var resultWithin as ParamPositionMask
+	export var resultHolds as ParamPositionMask
+	export var resultCaptures as ParamPositionMask
+	export var resultCapturesWithin as ParamPositionMask
+	export var storesHeld as ParamPositionMaskArray
+	export var storesRecord as ParamPositionMaskArray
+	export var storesCaptured as ParamPositionMaskArray
+	export var globals as GlobalEffectArray
+
+	static function create(paramCount ParamCount) returns TracedCycleRow
+		var row = Self{resultIs: NoParamPositions, resultWithin: NoParamPositions, resultHolds: NoParamPositions, resultCaptures: NoParamPositions, resultCapturesWithin: NoParamPositions, storesHeld: ParamPositionMaskArray.create(), storesRecord: ParamPositionMaskArray.create(), storesCaptured: ParamPositionMaskArray.create(), globals: GlobalEffectArray.create()}
+		row.storesHeld.refill(paramCount, value: NoParamPositions)
+		row.storesRecord.refill(paramCount, value: NoParamPositions)
+		row.storesCaptured.refill(paramCount, value: NoParamPositions)
+		return row
+	end 'create'
+end 'TracedCycleRow'
+
+type CycleSummary
+	var noStores as ParamPositionMaskArray
+	export var resultIs as ParamPositionMaskArray
+	export var resultWithin as ParamPositionMaskArray
+	export var resultHolds as ParamPositionMaskArray
+	export var resultCaptures as ParamPositionMaskArray
+	export var resultCapturesWithin as ParamPositionMaskArray
+	export var storesHeld as ParamMaskRows
+	export var storesRecord as ParamMaskRows
+	export var storesCaptured as ParamMaskRows
+	export var globals as GlobalEffectColumn
+
+	static function create(funcCount ElementIndex) returns CycleSummary
+		let noStores = ParamPositionMaskArray.create()
+		var globals = GlobalEffectColumn.create()
+
+		while globals.count() < funcCount 'eachFunction'
+			globals.push(GlobalEffectArray.create())
+		end 'eachFunction'
+
+		return Self{noStores: noStores, resultIs: emptySummaryColumn(funcCount), resultWithin: emptySummaryColumn(funcCount), resultHolds: emptySummaryColumn(funcCount), resultCaptures: emptySummaryColumn(funcCount), resultCapturesWithin: emptySummaryColumn(funcCount), storesHeld: emptyStoreRows(funcCount, sharedEmptyRow: noStores), storesRecord: emptyStoreRows(funcCount, sharedEmptyRow: noStores), storesCaptured: emptyStoreRows(funcCount, sharedEmptyRow: noStores), globals: globals}
+	end 'create'
+
+	function widen(index ElementIndex, row TracedCycleRow) returns bool
+		var grew = widenSummaryColumn(self.resultIs, index: index, by: row.resultIs)
+		grew = widenSummaryColumn(self.resultWithin, index: index, by: row.resultWithin) or grew
+		grew = widenSummaryColumn(self.resultHolds, index: index, by: row.resultHolds) or grew
+		grew = widenSummaryColumn(self.resultCaptures, index: index, by: row.resultCaptures) or grew
+		grew = widenSummaryColumn(self.resultCapturesWithin, index: index, by: row.resultCapturesWithin) or grew
+		grew = widenStoreRow(self.storesHeld, index: index, by: row.storesHeld, sharedEmptyRow: self.noStores) or grew
+		grew = widenStoreRow(self.storesRecord, index: index, by: row.storesRecord, sharedEmptyRow: self.noStores) or grew
+		grew = widenStoreRow(self.storesCaptured, index: index, by: row.storesCaptured, sharedEmptyRow: self.noStores) or grew
+		var effects = self.globalsAt(index)
+
+		for traced in row.globals 'eachTracedGlobal'
+			grew = effectFor(effects, label: traced.label).widen(traced) or grew
+		end 'eachTracedGlobal'
+
+		return grew
+	end 'widen'
+
+	function globalsAt(index ElementIndex) returns GlobalEffectArray
+		return try self.globals.get(index) otherwise panic("CycleSummary.globalsAt: function index {index} is past the summaries — they are built over `funcNames.functions`")
+	end 'globalsAt'
+end 'CycleSummary'
+
+module function checkClosureCycles(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, provenance ProvenanceTracer) throws CompileError
+	if not anyClosureCaptures(module) 'noClosureHoldsAnything'
+		return
+	end 'noClosureHoldsAnything'
+
+	var checker = ClosureCycleChecker.create(project, module: module, signatures: signatures, funcNames: funcNames, resolution: provenance.calls.resolution)
+	try checker.settle()
+	checker.judgeEveryBody()
+end 'checkClosureCycles'
+
+function anyClosureCaptures(module MaxonModule) returns bool
+	for func in module.functions 'eachFunction'
+		if func.closureEnvFields.count() > 0 and isLiftedClosureName(func.name) 'aCapturingClosure'
+			return true
+		end 'aCapturingClosure'
+	end 'eachFunction'
+
+	return false
+end 'anyClosureCaptures'
+
+// The aggregate memo is keyed by type-name id, so one instance is asked with one `from` interner
+// for its whole life: an id from another interner names another type.
+module type FunctionHoldingAnswers
+	var aggregates as FunctionHoldingMemo
+	var instances as InstanceHoldingMemo
+	var settledFree as ClonerSet
+
+	module static function create() returns FunctionHoldingAnswers
+		return Self{aggregates: FunctionHoldingMemo.create(), instances: InstanceHoldingMemo.create(), settledFree: ClonerSet.create()}
+	end 'create'
+
+	module function mayHoldAFunction(tag ValueTypeTag, nameId TypeNameId, signatures ProgramSignatures, from TypeNameInterner) returns bool
+		if tag == ValueTypeTag.function or tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef 'opaqueOrAFunction'
+			return true
+		end 'opaqueOrAFunction'
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.instanceMayHoldAFunction(nameId as GenericInstanceId, signatures: signatures, from: from)
+		end 'anInstance'
+
+		if tagIsByteRecord(tag) or not signatures.tagMayNameAggregate(tag) 'noRecordOfItsOwn'
+			return false
+		end 'noRecordOfItsOwn'
+
+		return self.aggregateMayHoldAFunction(tag, nameId: nameId, signatures: signatures, from: from)
+	end 'mayHoldAFunction'
+
+	function instanceMayHoldAFunction(id GenericInstanceId, signatures ProgramSignatures, from TypeNameInterner) returns bool
+		if let memoized = try self.instances.get(id) 'asked'
+			return memoized
+		end 'asked'
+
+		let holds = signatures.typeMayHoldAFunction(MaxonType.genericInstance(id), from: from, settledFree: self.settledFree)
+		self.instances.upsert(id, value: holds)
+		return holds
+	end 'instanceMayHoldAFunction'
+
+	function aggregateMayHoldAFunction(tag ValueTypeTag, nameId TypeNameId, signatures ProgramSignatures, from TypeNameInterner) returns bool
+		if let memoized = try self.aggregates.get(nameId) 'asked'
+			return memoized
+		end 'asked'
+
+		let holds = signatures.typeMayHoldAFunction(maxonTypeOfTag(tag, nameId: nameId), from: from, settledFree: self.settledFree)
+		self.aggregates.upsert(nameId, value: holds)
+		return holds
+	end 'aggregateMayHoldAFunction'
+end 'FunctionHoldingAnswers'
+
+type ClosureCycleChecker implements SummarizedBodies
+	export var project as Project
+	export var module as MaxonModule
+	var signatures as ProgramSignatures
+	export var funcNames as FunctionNameIndex
+	export var calls as CallSiteCursor
+	export var summary as CycleSummary
+	var relevant as BoolArray
+	var holdings as FunctionHoldingAnswers
+	export var heldGlobals as HeldGlobalsByLabel
+	export var globalsGrew as bool
+	var reported as ReportedPositionSet
+	export var noSites as ProvenanceSites
+
+	// Every trace's origin lists, kept across traces: a trace's lists are dead once it settles, so the next
+	// trace reuses their storage rather than allocating its own.
+	export var listPool as OriginListArray
+	export var bodyIndexes as CycleBodyIndexByFunction
+	export let noOrigins as OriginList
+
+	static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, resolution CallSummaryIndex) returns ClosureCycleChecker
+		let funcCount = funcNames.functions.count()
+		var relevant = BoolArray.create()
+		relevant.refill(funcCount, value: false)
+		return Self{project: project, module: module, signatures: signatures, funcNames: funcNames, calls: CallSiteCursor.create(resolution), summary: CycleSummary.create(funcCount), relevant: relevant, holdings: FunctionHoldingAnswers.create(), heldGlobals: HeldGlobalsByLabel.create(), globalsGrew: false, reported: ReportedPositionSet.create(), noSites: ProvenanceSites.create(ProvenanceColumns.create()), listPool: OriginListArray.create(), bodyIndexes: CycleBodyIndexByFunction.create(), noOrigins: OriginList.create()}
+	end 'create'
+
+	function settle() throws CompileError
+		for (iter, func) in self.funcNames.functions.withIterator() 'eachFunction'
+			try self.relevant.set(iter.index(), value: not bodyIsUnreadable(func) and self.bodyHoldsAFunctionValue(func)) otherwise panic("ClosureCycleChecker.settle: relevant.set OOB at {iter.index()}")
+		end 'eachFunction'
+
+		self.globalsGrew = true
+		let order = calleesFirstOrder(self.module, funcNames: self.funcNames)
+
+		// `seedHeldGlobals` reads `heldGlobals` while a body is traced, so a body summarized before a
+		// holding was noted is stale: every summary settles again until no global holds more.
+		while self.globalsGrew 'untilNoGlobalHoldsMore'
+			self.globalsGrew = false
+			self.calls.dependencies = CallDependencies.create()
+			try settleSummaries(self.project, order: order, bodies: self, dependencies: self.calls.dependencies)
+		end 'untilNoGlobalHoldsMore'
+	end 'settle'
+
+	function tracesFirst(index ElementIndex) returns bool
+		return self.isRelevant(index)
+	end 'tracesFirst'
+
+	function traceAndWiden(index ElementIndex) returns bool
+		let traced = self.trace(index, mode: CycleTraceMode.summarize)
+		return self.summary.widen(index, row: traced.row)
+	end 'traceAndWiden'
+
+	function judgeEveryBody()
+		for index in 0 upto self.funcNames.functions.count() 'eachFunction'
+			if self.isRelevant(index) 'aBodyToJudge'
+				_ = self.trace(index, mode: CycleTraceMode.judge)
+			end 'aBodyToJudge'
+		end 'eachFunction'
+	end 'judgeEveryBody'
+
+	function trace(index ElementIndex, mode CycleTraceMode) returns CycleTrace
+		var trace = CycleTrace.begin(self, func: self.functionAt(index), index: index)
+		trace.settle(mode)
+		return trace
+	end 'trace'
+
+	function functionAt(index ElementIndex) returns IrFunction
+		return try self.funcNames.functions.get(index) otherwise panic("ClosureCycleChecker.functionAt: functions.get OOB at {index}")
+	end 'functionAt'
+
+	function isRelevant(index ElementIndex) returns bool
+		return try self.relevant.get(index) otherwise panic("ClosureCycleChecker.isRelevant: relevant.get OOB at {index}")
+	end 'isRelevant'
+
+	function bodyHoldsAFunctionValue(func IrFunction) returns bool
+		if isLiftedClosureName(func.name) 'carriesItsRecord'
+			return true
+		end 'carriesItsRecord'
+
+		for v in 0 upto func.valueTags.count() 'eachValue'
+			if self.valueMayHoldAFunction(func, value: v as ValueId) 'holdsOne'
+				return true
+			end 'holdsOne'
+		end 'eachValue'
+
+		return false
+	end 'bodyHoldsAFunctionValue'
+
+	function valueMayHoldAFunction(func IrFunction, value ValueId) returns bool
+		return self.holdings.mayHoldAFunction(valueTagOf(func, value: value), nameId: try func.valueNameIds.get(value) otherwise panic("ClosureCycleChecker.valueMayHoldAFunction: v{value} of '{String.from(func.name)}' has no type name"), signatures: self.signatures, from: self.project.typeNames)
+	end 'valueMayHoldAFunction'
+
+	function heldGlobalsOf(label ByteArray) returns GlobalLabelSet throws MapError
+		return try self.heldGlobals.get(label)
+	end 'heldGlobalsOf'
+
+	function noteHeldGlobal(label ByteArray, held ByteArray)
+		if not self.heldGlobals.contains(label) 'firstForThisGlobal'
+			self.heldGlobals.upsert(label, value: GlobalLabelSet.create())
+		end 'firstForThisGlobal'
+
+		var labels = try self.heldGlobals.get(label) otherwise panic("ClosureCycleChecker.noteHeldGlobal: '{String.from(label)}' left the table after its insert")
+
+		if not labels.contains(held) 'aNewHolding'
+			labels.insert(held)
+			self.globalsGrew = true
+		end 'aNewHolding'
+	end 'noteHeldGlobal'
+
+	function captureNameAt(closureName ByteArray, offset ByteOffset) returns ByteArray
+		let lifted = self.functionAt(self.calls.resolution.functionIndexOf(closureName))
+
+		for field in lifted.closureEnvFields 'eachCapture'
+			if envSlotOffset(field.slot) == offset 'thisSlot'
+				return displayParamName(field.name).toByteArray()
+			end 'thisSlot'
+		end 'eachCapture'
+
+		panic("ClosureCycleChecker.captureNameAt: '{String.from(closureName)}' stores a record that may hold a closure at offset {offset}, where it declares no capture")
+	end 'captureNameAt'
+
+	function globalNameOf(label ByteArray) returns String
+		for global in self.project.managedGlobals 'eachGlobal'
+			if global.label.equals(label) 'thisGlobal'
+				return String.from(global.declName)
+			end 'thisGlobal'
+		end 'eachGlobal'
+
+		panic("ClosureCycleChecker.globalNameOf: '{String.from(label)}' is no managed global's label — only a managed global's storage holds a record a closure can capture")
+	end 'globalNameOf'
+
+	function refuse(func IrFunction, line LineNumber, column ColumnNumber, holder CycleHolder, storesAClosure bool)
+		let key = "{func.sourceFilePath}:{line}:{column}"
+
+		if self.reported.contains(key) 'alreadySaid'
+			return
+		end 'alreadySaid'
+
+		self.reported.insert(key)
+		reportPositioned(self.project, code: ErrorCode.closureStoredIntoWhatItCaptures, message: closureCycleMessage(holder, storesAClosure: storesAClosure), line: line, column: column, filePath: func.sourceFilePath)
+	end 'refuse'
+end 'ClosureCycleChecker'
+
+type KnownFieldStores
+	var addrs as ValueIdArray
+	var offsets as ByteOffsetArray
+	var values as ValueIdArray
+
+	static function create() returns KnownFieldStores
+		return Self{addrs: ValueIdArray.create(), offsets: ByteOffsetArray.create(), values: ValueIdArray.create()}
+	end 'create'
+
+	function copy() returns KnownFieldStores
+		return Self{addrs: self.addrs.clone(), offsets: self.offsets.clone(), values: self.values.clone()}
+	end 'copy'
+
+	function forget()
+		self.addrs.clear()
+		self.offsets.clear()
+		self.values.clear()
+	end 'forget'
+
+	// Two addresses may name one record, so a store forgets what any address stored at its offset.
+	function stored(addr ValueId, offset ByteOffset, value ValueId)
+		var kept = 0 as ElementIndex
+		var at = 0 as ElementIndex
+
+		while at < self.offsets.count() 'eachKnown'
+			let knownOffset = try self.offsets.get(at) otherwise panic("KnownFieldStores.stored: offsets.get OOB at {at}")
+
+			if knownOffset != offset 'anotherField'
+				let knownAddr = try self.addrs.get(at) otherwise panic("KnownFieldStores.stored: addrs.get OOB at {at}")
+				let knownValue = try self.values.get(at) otherwise panic("KnownFieldStores.stored: values.get OOB at {at}")
+				try self.addrs.set(kept, value: knownAddr) otherwise panic("KnownFieldStores.stored: addrs.set OOB at {kept}")
+				try self.offsets.set(kept, value: knownOffset) otherwise panic("KnownFieldStores.stored: offsets.set OOB at {kept}")
+				try self.values.set(kept, value: knownValue) otherwise panic("KnownFieldStores.stored: values.set OOB at {kept}")
+				kept = kept + 1
+			end 'anotherField'
+
+			at = at + 1
+		end 'eachKnown'
+
+		self.addrs.truncate(kept)
+		self.offsets.truncate(kept)
+		self.values.truncate(kept)
+		self.addrs.push(addr)
+		self.offsets.push(offset)
+		self.values.push(value)
+	end 'stored'
+
+	function valueAt(addr ValueId, offset ByteOffset) returns ValueId throws AbsentError
+		for (iter, at) in self.offsets.withIterator() 'eachKnown'
+			if at == offset and (try self.addrs.get(iter.index()) otherwise panic("KnownFieldStores.valueAt: addrs.get OOB at {iter.index()}")) == addr 'thisField'
+				return try self.values.get(iter.index()) otherwise panic("KnownFieldStores.valueAt: values.get OOB at {iter.index()}")
+			end 'thisField'
+		end 'eachKnown'
+
+		throw AbsentError.absent
+	end 'valueAt'
+end 'KnownFieldStores'
+
+// What a trace derives from its body alone — which values may hold a function, the block graph, where each
+// op sits and which loads a store forwards. A body is traced once per pass, so this is built once per body
+// and kept.
+type CycleBodyIndex
+	export let tracked as BoolArray
+	export let blockIndex as BlockIndexById
+	export let successors as OriginListArray
+	export let opPositions as OpPositionMap
+	export let forwarded as ForwardedLoads
+	export let fieldStoreOps as HandleByKey
+	export let fieldStoreOpsByLine as HandleByKey
+	export let elementSites as StoreSiteByValue
+	export let reachFrom as ReachMemo
+
+	static function create() returns CycleBodyIndex
+		return Self{tracked: BoolArray.create(), blockIndex: BlockIndexById.create(), successors: OriginListArray.create(), opPositions: OpPositionMap.create(), forwarded: ForwardedLoads.create(), fieldStoreOps: HandleByKey.create(), fieldStoreOpsByLine: HandleByKey.create(), elementSites: StoreSiteByValue.create(), reachFrom: ReachMemo.create()}
+	end 'create'
+
+	static function of(tracked BoolArray, blockIndex BlockIndexById, successors OriginListArray, opPositions OpPositionMap, forwarded ForwardedLoads, fieldStoreOps HandleByKey, fieldStoreOpsByLine HandleByKey, elementSites StoreSiteByValue, reachFrom ReachMemo) returns CycleBodyIndex
+		return Self{tracked: tracked, blockIndex: blockIndex, successors: successors, opPositions: opPositions, forwarded: forwarded, fieldStoreOps: fieldStoreOps, fieldStoreOpsByLine: fieldStoreOpsByLine, elementSites: elementSites, reachFrom: reachFrom}
+	end 'of'
+end 'CycleBodyIndex'
+
+typealias CycleBodyIndexByFunction = Map with (ElementIndex, CycleBodyIndex)
+
+type CycleTrace implements SummaryCallWalker
+	var checker as ClosureCycleChecker
+	var traced as IrFunction
+	var tracedIndex as ElementIndex
+	var tracked as BoolArray
+	var blockIndex as BlockIndexById
+	var kinds as OriginKindArray
+	var parents as OriginList
+	var depths as OriginDepthArray
+	var rootParams as ParamCountArray
+	var rootedInAParameter as BoolArray
+	var childOrigins as OriginByKey
+	var syntheticOrigins as OriginByKey
+	var freshOrigins as OptionalElementIndexColumn
+	var holdingsOrigins as OptionalElementIndexColumn
+	var globalOrigins as OriginByLabel
+	var globalLabels as OriginNameMap
+	var closureBodies as OriginNameMap
+	var originNames as OriginNameMap
+	var lists as OriginListArray
+	var listsInUse as ElementIndex
+	let noOrigins as OriginList
+	var membership as ListMembership
+	var baseHandles as OptionalElementIndexColumn
+	var heldHandles as OptionalElementIndexColumn
+	var containerHandles as OptionalElementIndexColumn
+	var edgeHolders as OriginList
+	var edgeOps as EntryIndexArray
+	var fieldStoreOps as HandleByKey
+	var fieldStoreOpsByLine as HandleByKey
+	var originEvents as OptionalElementIndexColumn
+	var fieldEvents as HandleByKey
+	var eventOps as EntryIndexArray
+	var eventRecords as EntryIndexArray
+	var forwarded as ForwardedLoads
+	var opPositions as OpPositionMap
+	var successors as OriginListArray
+	var reachFrom as ReachMemo
+	var elementSites as StoreSiteByValue
+	var operands as ValueIdArray
+	var returned as ValueIdArray
+	var scratch as BoolArray
+	var cycles as ClosureCycles
+	var changed as bool
+	var mode as CycleTraceMode
+	export var row as TracedCycleRow
+
+	static function begin(checker ClosureCycleChecker, func IrFunction, index ElementIndex) returns CycleTrace
+		if let body = try checker.bodyIndexes.get(index) 'indexedBefore'
+			var trace = CycleTrace.over(checker, func: func, index: index, body: body)
+			trace.seedParameters()
+			return trace
+		end 'indexedBefore'
+
+		var trace = CycleTrace.over(checker, func: func, index: index, body: CycleBodyIndex.create())
+		trace.trackValues()
+		trace.indexBody()
+		checker.bodyIndexes.upsert(index, value: trace.bodyIndex())
+		trace.seedParameters()
+		return trace
+	end 'begin'
+
+	static function over(checker ClosureCycleChecker, func IrFunction, index ElementIndex, body CycleBodyIndex) returns CycleTrace
+		let valueCount = func.valueTags.count()
+		return Self{checker: checker, traced: func, tracedIndex: index, tracked: body.tracked, blockIndex: body.blockIndex, kinds: OriginKindArray.create(), parents: OriginList.create(), depths: OriginDepthArray.create(), rootParams: ParamCountArray.create(), rootedInAParameter: BoolArray.create(), childOrigins: OriginByKey.create(), syntheticOrigins: OriginByKey.create(), freshOrigins: OptionalElementIndexColumn.absent(valueCount), holdingsOrigins: OptionalElementIndexColumn.absent(func.paramCount), globalOrigins: OriginByLabel.create(), globalLabels: OriginNameMap.create(), closureBodies: OriginNameMap.create(), originNames: OriginNameMap.create(), lists: checker.listPool, listsInUse: 0, noOrigins: checker.noOrigins, membership: ListMembership.create(), baseHandles: OptionalElementIndexColumn.absent(valueCount), heldHandles: OptionalElementIndexColumn.create(), containerHandles: OptionalElementIndexColumn.create(), edgeHolders: OriginList.create(), edgeOps: EntryIndexArray.create(), fieldStoreOps: body.fieldStoreOps, fieldStoreOpsByLine: body.fieldStoreOpsByLine, originEvents: OptionalElementIndexColumn.create(), fieldEvents: HandleByKey.create(), eventOps: EntryIndexArray.create(), eventRecords: EntryIndexArray.create(), forwarded: body.forwarded, opPositions: body.opPositions, successors: body.successors, reachFrom: body.reachFrom, elementSites: body.elementSites, operands: ValueIdArray.create(), returned: ValueIdArray.create(), scratch: BoolArray.create(), cycles: ClosureCycles.create(), changed: true, mode: CycleTraceMode.propagate, row: TracedCycleRow.create(func.paramCount)}
+	end 'over'
+
+	function bodyIndex() returns CycleBodyIndex
+		return CycleBodyIndex.of(self.tracked, blockIndex: self.blockIndex, successors: self.successors, opPositions: self.opPositions, forwarded: self.forwarded, fieldStoreOps: self.fieldStoreOps, fieldStoreOpsByLine: self.fieldStoreOpsByLine, elementSites: self.elementSites, reachFrom: self.reachFrom)
+	end 'bodyIndex'
+
+	function trackValues()
+		for v in 0 upto self.traced.valueTags.count() 'eachValue'
+			self.tracked.push(self.checker.valueMayHoldAFunction(self.traced, value: v as ValueId))
+		end 'eachValue'
+
+		if isLiftedClosureName(self.traced.name) and self.traced.paramCount > 0 'itsOwnRecord'
+			try self.tracked.set(valueIdAtParamPosition(self.traced.paramCount - FunctionRecordArgCount), value: true) otherwise panic("CycleTrace.trackValues: '{String.from(self.traced.name)}' has fewer values than parameters")
+		end 'itsOwnRecord'
+
+		for (iter, site) in self.traced.closureStoreSites.withIterator() 'eachSite'
+			match site.destination 'destination'
+				element then self.elementSites.upsert(site.value, value: iter.index())
+				field then continue
+			end 'destination'
+		end 'eachSite'
+	end 'trackValues'
+
+	function indexBody()
+		let module = self.checker.module
+		module.refillBlockIndexById(self.traced, into: self.blockIndex)
+		var targets = BlockIdArray.create()
+		var predecessorCounts = EntryIndexArray.create()
+		var lastPredecessor = EntryIndexArray.create()
+		predecessorCounts.refill(self.traced.blockRefs.count(), value: 0)
+		lastPredecessor.refill(self.traced.blockRefs.count(), value: 0)
+
+		for (blockIter, blockRef) in self.traced.blockRefs.withIterator() 'eachBlock'
+			let block = self.blockAt(blockRef)
+			var blockSuccessors = OriginList.create()
+			targets.clear()
+			collectMaxonBlockSuccessors(module, block: block, into: targets)
+
+			for target in targets 'eachSuccessor'
+				let position = self.positionOfBlock(target)
+				blockSuccessors.push(position)
+				try predecessorCounts.set(position, value: (try predecessorCounts.get(position) otherwise panic("CycleTrace.indexBody: predecessorCounts.get OOB at {position}")) + 1) otherwise panic("CycleTrace.indexBody: predecessorCounts.set OOB at {position}")
+				try lastPredecessor.set(position, value: blockIter.index()) otherwise panic("CycleTrace.indexBody: lastPredecessor.set OOB at {position}")
+			end 'eachSuccessor'
+
+			self.successors.push(blockSuccessors)
+
+			for (opIter, opIdx) in block.opRefs.withIterator() 'eachOp'
+				self.opPositions.upsert(opIdx, value: keyOf(blockIter.index(), low: opIter.index()))
+			end 'eachOp'
+		end 'eachBlock'
+
+		self.indexForwardedLoads(predecessorCounts, lastPredecessor: lastPredecessor)
+	end 'indexBody'
+
+	function indexForwardedLoads(predecessorCounts EntryIndexArray, lastPredecessor EntryIndexArray)
+		let module = self.checker.module
+		var exits = KnownStoresByBlock.create()
+
+		for (blockIter, blockRef) in self.traced.blockRefs.withIterator() 'eachBlock'
+			var known = self.knownStoresEntering(blockIter.index(), predecessorCounts: predecessorCounts, lastPredecessor: lastPredecessor, exits: exits)
+
+			for opIdx in self.blockAt(blockRef).opRefs 'eachOp'
+				self.noteKnownStores(try module.ops.get(opIdx) otherwise panic("CycleTrace.indexForwardedLoads: opIdx {opIdx} not in module.ops"), opIdx: opIdx, known: known)
+			end 'eachOp'
+
+			exits.upsert(blockIter.index(), value: known)
+		end 'eachBlock'
+	end 'indexForwardedLoads'
+
+	function knownStoresEntering(position ElementIndex, predecessorCounts EntryIndexArray, lastPredecessor EntryIndexArray, exits KnownStoresByBlock) returns KnownFieldStores
+		if (try predecessorCounts.get(position) otherwise panic("CycleTrace.knownStoresEntering: predecessorCounts.get OOB at {position}")) != 1 'notOnePath'
+			return KnownFieldStores.create()
+		end 'notOnePath'
+
+		let predecessor = try lastPredecessor.get(position) otherwise panic("CycleTrace.knownStoresEntering: lastPredecessor.get OOB at {position}")
+		let exit = try exits.get(predecessor) otherwise return KnownFieldStores.create()
+		return exit.copy()
+	end 'knownStoresEntering'
+
+	function noteFieldStore(addr ValueId, offset ByteOffset, value ValueId, opIdx ElementIndex, known KnownFieldStores)
+		known.stored(addr, offset: offset, value: value)
+		self.fieldStoreOps.upsert(keyOf(addr, low: value), value: opIdx)
+		self.fieldStoreOpsByLine.upsert(keyOf(addr, low: self.checker.project.opRanges.get(opIdx).line as ElementIndex), value: opIdx)
+	end 'noteFieldStore'
+
+	function noteKnownStores(op MaxonOp, opIdx ElementIndex, known KnownFieldStores)
+		match op 'op'
+			loadIndirect(result, addr, offset, _) then self.noteForwardedLoad(result, addr: addr, offset: offset, known: known)
+			storeIndirect(addr, offset, value, _) then self.noteFieldStore(addr, offset: offset, value: value, opIdx: opIdx, known: known)
+			globalAddr(result, _) then try self.tracked.set(result, value: true) otherwise panic("CycleTrace.noteKnownStores: v{result} is past the value columns")
+			call(_, callee, _, _, _, _, _, _) then self.forgetAcrossACall(callee, known: known)
+			tryCall(_, _, callee, _, _, _, _, _, _) then self.forgetAcrossACall(callee, known: known)
+			asyncCall or
+				witnessDispatch or
+				witnessTryDispatch or
+				indirectCall or
+				await or
+				tryAwait or
+				serviceSpawn or
+				serviceSend or
+				serviceReplyCell then known.forget()
+			literal or
+				ret or
+				retVoid or
+				binOp or
+				unaryOp or
+				compare or
+				condBranch or
+				branch or
+				stringLiteral or
+				throwError or
+				propagateError or
+				panicAbort or
+				functionRef or
+				sizeofType or
+				constArrayLiteral or
+				switch or
+				panicAbortValue or
+				errorFlagEncode or
+				immortalStructRecord or
+				immortalStringTable or
+				covPoint or
+				rawIntrinsic or
+				existentialWitness then break 'op'
+		end 'op'
+	end 'noteKnownStores'
+
+	function noteForwardedLoad(result ValueId, addr ValueId, offset ByteOffset, known KnownFieldStores)
+		if let stored = try known.valueAt(addr, offset: offset) 'storedBeforeOnEveryPath'
+			self.forwarded.upsert(result, value: stored)
+		end 'storedBeforeOnEveryPath'
+	end 'noteForwardedLoad'
+
+	function forgetAcrossACall(callee ByteArray, known KnownFieldStores)
+		if self.checker.calls.resolution.declaresFunction(callee) 'mayWriteAField'
+			known.forget()
+		end 'mayWriteAField'
+	end 'forgetAcrossACall'
+
+	function seedParameters()
+		for p in 0 upto self.traced.paramCount 'eachParameter'
+			let param = valueIdAtParamPosition(p)
+
+			if self.isTracked(param) 'holdsAFunction'
+				let holdings = self.mintRoot(OriginKind.holdings, rootParam: p, inAParameter: true)
+				self.holdingsOrigins.set(p, value: holdings)
+				let origin = self.mintRoot(OriginKind.parameter, rootParam: p, inAParameter: true)
+				self.addToList(self.handleIn(self.baseHandles, key: param), origin: origin)
+			end 'holdsAFunction'
+		end 'eachParameter'
+	end 'seedParameters'
+
+	function settle(finalMode CycleTraceMode)
+		var cursor = self.checker.calls
+		cursor.beginWalk(self.tracedIndex)
+
+		while self.changed 'untilNothingGrows'
+			self.changed = false
+			self.walk(CycleTraceMode.propagate)
+		end 'untilNothingGrows'
+
+		if finalMode == CycleTraceMode.judge 'namedForTheJudgment'
+			self.nameStoreBases()
+		end 'namedForTheJudgment'
+
+		self.walk(finalMode)
+
+		match finalMode 'mode'
+			summarize then self.summarizeGlobals()
+			judge then self.judgeAndReport()
+			propagate then panic("CycleTrace.settle: a body settles into a summary or a judgment, never into another propagation")
+		end 'mode'
+	end 'settle'
+
+	function walk(passMode CycleTraceMode)
+		self.mode = passMode
+		self.returned.clear()
+		var cursor = self.checker.calls
+		cursor.startPass()
+
+		for blockRef in self.traced.blockRefs 'eachBlock'
+			self.walkBlock(self.blockAt(blockRef))
+		end 'eachBlock'
+
+		cursor.finishPass(self.tracedIndex)
+
+		if passMode == CycleTraceMode.summarize 'readTheResult'
+			self.summarizeResult()
+		end 'readTheResult'
+	end 'walk'
+
+	function walkBlock(block IrBlock)
+		let module = self.checker.module
+
+		for opIdx in block.opRefs 'eachOp'
+			self.walkOp(try module.ops.get(opIdx) otherwise panic("CycleTrace.walkBlock: opIdx {opIdx} not in module.ops"), opIdx: opIdx)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'terminated'
+			match try module.ops.get(block.terminatorIndex()) otherwise panic("CycleTrace.walkBlock: terminator not in module.ops") 'terminator'
+				ret(value) then self.returned.push(value)
+				retVoid or
+					branch or
+					condBranch or
+					switch or
+					throwError or
+					propagateError or
+					panicAbort or
+					panicAbortValue then break 'terminator'
+				default panic("CycleTrace.walkBlock: a block of '{String.from(self.traced.name)}' ends in an op that terminates nothing")
+			end 'terminator'
+		end 'terminated'
+
+		for edge in block.branchEdges 'eachEdge'
+			let target = self.blockAt(try self.traced.blockRefs.get(self.positionOfBlock(edge.targetBlockId)) otherwise panic("CycleTrace.walkBlock: block position past func.blockRefs"))
+
+			for (iter, incoming) in edge.argIds.withIterator() 'eachIncoming'
+				let phi = try target.blockArgs.get(iter.index()) otherwise panic("CycleTrace.walkBlock: an edge into block {edge.targetBlockId} carries more values than it has block args")
+
+				if self.isTracked(phi.valueId) and self.isTracked(incoming) 'mayBeTheIncoming'
+					self.unionValueIntoBase(phi.valueId, from: incoming)
+				end 'mayBeTheIncoming'
+			end 'eachIncoming'
+		end 'eachEdge'
+	end 'walkBlock'
+
+	function walkOp(op MaxonOp, opIdx ElementIndex)
+		match op 'op'
+			loadIndirect(result, addr, offset, _) then self.walkLoad(result, addr: addr, offset: offset, opIdx: opIdx)
+			storeIndirect(addr, offset, value, _) then self.walkFieldStore(addr, offset: offset, value: value, opIdx: opIdx)
+			call(result, callee, args, argLabels, argRanges, _, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+			tryCall(result, _, callee, args, argLabels, argRanges, _, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+			asyncCall(result, callee, args, argLabels, argRanges, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+			witnessDispatch(result, args, _, methodIndex, interfaceDeclIndex, _, _) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
+			witnessTryDispatch(result, _, args, _, methodIndex, interfaceDeclIndex, _) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
+			indirectCall then self.walkIndirectCall(op, opIdx: opIdx)
+			functionRef(result, _, _) then self.walkFresh(result)
+			globalAddr(result, label) then self.addToBase(result, origin: self.globalOriginOf(label))
+			immortalStructRecord(result, _, _) then self.walkFresh(result)
+			immortalStringTable(result, _, _, _) then self.walkFresh(result)
+			literal(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			binOp(result, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			unaryOp(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			compare(result, _, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			stringLiteral(result, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			await (result, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			tryAwait(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			sizeofType(result, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			constArrayLiteral(result, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			errorFlagEncode(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			serviceSpawn(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			serviceSend(result, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			serviceReplyCell(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			rawIntrinsic(result, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			existentialWitness(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			ret or
+				retVoid or
+				condBranch or
+				branch or
+				throwError or
+				propagateError or
+				panicAbort or
+				switch or
+				panicAbortValue or
+				covPoint then break 'op'
+		end 'op'
+	end 'walkOp'
+
+	function walkIndirectCall(op MaxonOp, opIdx ElementIndex)
+		match op 'indirect'
+			indirectCall(result, _, args) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.functionValueBodiesFor(args.count() as ParamCount))
+			default panic("CycleTrace.walkIndirectCall: handed an op that is not an indirect call")
+		end 'indirect'
+	end 'walkIndirectCall'
+
+	function callSiteCursor() returns CallSiteCursor
+		return self.checker.calls
+	end 'callSiteCursor'
+
+	function tracksValue(value ValueId) returns bool
+		return self.isTracked(value)
+	end 'tracksValue'
+
+	function resultFromOperands(func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId)
+		self.walkUnknown(op, result: result, opIdx: opIdx)
+	end 'resultFromOperands'
+
+	function resultOfRuntimeCall(func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, site ElementIndex)
+		self.walkUnknown(op, result: result, opIdx: opIdx)
+	end 'resultOfRuntimeCall'
+
+	function storeHandedValue(func IrFunction, receiver ValueId, stored ValueId, sharesItsElements bool, opIdx ElementIndex)
+		if not self.isTracked(stored) 'storesNoFunction'
+			return
+		end 'storesNoFunction'
+
+		var records = OriginList.create()
+
+		if sharesItsElements 'theSourcesElements'
+			self.collectContentsReaching(stored, opIdx: opIdx, into: records)
+		end 'theSourcesElements' else 'theValueItself'
+			self.appendDistinct(records, from: self.baseOf(stored))
+		end 'theValueItself'
+
+		let held = self.heldOfRecords(records)
+		self.store(self.baseOf(receiver), offset: WildOffset, records: records, held: held, opIdx: opIdx)
+
+		if self.mode == CycleTraceMode.judge 'judgeIt'
+			self.judgeStore(self.baseOf(receiver), held: held, deep: false, at: self.anchorOfElement(stored, opIdx: opIdx), storesAClosure: self.valueIsAFunction(stored), judged: JudgedStore.at(opIdx))
+		end 'judgeIt'
+	end 'storeHandedValue'
+
+	function applyCalleeSummary(func IrFunction, calleeIndex ElementIndex, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, argRanges SourceRangeArray)
+		if not self.checker.isRelevant(calleeIndex) 'movesNoFunction'
+			self.walkFresh(result)
+			return
+		end 'movesNoFunction'
+
+		let cursor = self.checker.calls
+		let summary = self.checker.summary
+
+		for (receiverIter, receiver) in args.withIterator() 'eachReceiver'
+			let into = try cursor.argPositionAt(receiverIter.index() as ParamCount) otherwise continue
+
+			if not self.isTracked(receiver) 'receivesNothing'
+				continue
+			end 'receivesNothing'
+
+			for (storedIter, stored) in args.withIterator() 'eachStored'
+				if storedIter.index() == receiverIter.index() or not self.isTracked(stored) 'notStoredHere'
+					continue
+				end 'notStoredHere'
+
+				let position = try cursor.argPositionAt(storedIter.index() as ParamCount) otherwise continue
+				self.applyStoreSummary(calleeIndex, into: into, position: position, receiver: receiver, stored: stored, opIdx: opIdx, at: self.anchorOfArgument(argRanges, argIndex: storedIter.index(), opIdx: opIdx))
+			end 'eachStored'
+		end 'eachReceiver'
+
+		for effect in summary.globalsAt(calleeIndex) 'eachGlobal'
+			self.applyGlobalEffect(effect, result: result, args: args, opIdx: opIdx)
+		end 'eachGlobal'
+
+		if not self.isTracked(result) 'handsBackNoFunction'
+			return
+		end 'handsBackNoFunction'
+
+		let fresh = self.freshOriginOf(result)
+		self.addToBase(result, origin: fresh)
+
+		for (iter, arg) in args.withIterator() 'eachArg'
+			let position = try cursor.argPositionAt(iter.index() as ParamCount) otherwise continue
+
+			if self.isTracked(arg) 'related'
+				self.applyResultSummary(calleeIndex, position: position, result: result, fresh: fresh, arg: arg, opIdx: opIdx)
+			end 'related'
+		end 'eachArg'
+	end 'applyCalleeSummary'
+
+	function applyStoreSummary(calleeIndex ElementIndex, into ParamCount, position ParamCount, receiver ValueId, stored ValueId, opIdx ElementIndex, at SourceRange)
+		let summary = self.checker.summary
+		let storesHeld = maskHasParam(storeRowMaskAt(summary.storesHeld, index: calleeIndex, into: into), param: position)
+		let storesRecord = maskHasParam(storeRowMaskAt(summary.storesRecord, index: calleeIndex, into: into), param: position)
+		let storesCaptured = maskHasParam(storeRowMaskAt(summary.storesCaptured, index: calleeIndex, into: into), param: position)
+
+		if not (storesHeld or storesRecord or storesCaptured) 'storesNothingOfIt'
+			return
+		end 'storesNothingOfIt'
+
+		var records = OriginList.create()
+		var held = OriginList.create()
+
+		if storesRecord 'theRecordItself'
+			self.appendDistinct(records, from: self.baseOf(stored))
+			self.appendHeldOf(held, records: self.baseOf(stored))
+		end 'theRecordItself'
+
+		if storesHeld 'whatItHolds'
+			records.push(self.recordTheCalleeStored(opIdx, position: position, kind: SyntheticHeldKind, holding: self.heldOfValue(stored)))
+			self.appendHeldOf(held, records: self.baseOf(stored))
+		end 'whatItHolds'
+
+		if storesCaptured 'aClosureHoldingIt'
+			records.push(self.recordTheCalleeStored(opIdx, position: position, kind: SyntheticCapturedKind, holding: self.baseOf(stored)))
+			self.appendDistinct(held, from: self.baseOf(stored))
+		end 'aClosureHoldingIt'
+
+		self.store(self.baseOf(receiver), offset: WildOffset, records: records, held: held, opIdx: opIdx)
+
+		if self.mode == CycleTraceMode.judge 'judgeIt'
+			self.judgeStore(self.baseOf(receiver), held: held, deep: true, at: at, storesAClosure: storesRecord and self.valueIsAFunction(stored), judged: JudgedStore.at(opIdx))
+		end 'judgeIt'
+	end 'applyStoreSummary'
+
+	function applyGlobalEffect(effect GlobalEffect, result ValueId, args ValueIdArray, opIdx ElementIndex)
+		let global = self.globalOriginOf(effect.label)
+		let globalBase = self.listOfOne(global)
+		let cursor = self.checker.calls
+
+		for (iter, arg) in args.withIterator() 'eachArg'
+			let position = try cursor.argPositionAt(iter.index() as ParamCount) otherwise continue
+
+			if not self.isTracked(arg) 'unrelated'
+				continue
+			end 'unrelated'
+
+			if maskHasParam(effect.storedRecords, param: position) 'itsRecord'
+				self.store(globalBase, offset: WildOffset, records: self.baseOf(arg), held: self.heldOfValue(arg), opIdx: opIdx)
+			end 'itsRecord'
+
+			if maskHasParam(effect.storedHeld, param: position) 'whatItHolds'
+				let holding = self.heldOfValue(arg)
+				self.store(globalBase, offset: WildOffset, records: self.listOfOne(self.recordTheCalleeStored(opIdx, position: position, kind: SyntheticHeldKind, holding: holding)), held: holding, opIdx: opIdx)
+			end 'whatItHolds'
+
+			if maskHasParam(effect.storedCaptured, param: position) 'aClosureHoldingIt'
+				let captured = self.baseOf(arg)
+				self.store(globalBase, offset: WildOffset, records: self.listOfOne(self.recordTheCalleeStored(opIdx, position: position, kind: SyntheticCapturedKind, holding: captured)), held: captured, opIdx: opIdx)
+			end 'aClosureHoldingIt'
+
+			if maskHasParam(effect.readInto, param: position) 'theGlobalsValue'
+				var records = OriginList.create()
+				self.collectGlobalContents(global, read: ContentRead.before(opIdx), into: records)
+				let held = self.heldOfRecords(records)
+				self.store(self.baseOf(arg), offset: WildOffset, records: records, held: held, opIdx: opIdx)
+
+				if self.mode == CycleTraceMode.judge 'judgeIt'
+					self.judgeStore(self.baseOf(arg), held: held, deep: true, at: self.checker.project.opRanges.get(opIdx), storesAClosure: false, judged: JudgedStore.at(opIdx))
+				end 'judgeIt'
+			end 'theGlobalsValue'
+		end 'eachArg'
+
+		if effect.resultReads and self.isTracked(result) 'handsBackTheGlobalsValue'
+			var records = OriginList.create()
+			self.collectGlobalContents(global, read: ContentRead.reaching(opIdx), into: records)
+			self.unionIntoBase(result, from: records)
+		end 'handsBackTheGlobalsValue'
+	end 'applyGlobalEffect'
+
+	function applyResultSummary(calleeIndex ElementIndex, position ParamCount, result ValueId, fresh OriginIndex, arg ValueId, opIdx ElementIndex)
+		let summary = self.checker.summary
+
+		if maskHasParam(summaryMaskAt(summary.resultIs, index: calleeIndex), param: position) 'theArgument'
+			self.unionValueIntoBase(result, from: arg)
+		end 'theArgument'
+
+		if maskHasParam(summaryMaskAt(summary.resultWithin, index: calleeIndex), param: position) 'withinTheArgument'
+			self.flowAnythingWithin(result, from: arg, opIdx: opIdx)
+		end 'withinTheArgument'
+
+		if self.mode != CycleTraceMode.propagate 'nothingGrows'
+			return
+		end 'nothingGrows'
+
+		let heldHandle = self.handleIn(self.heldHandles, key: fresh)
+
+		if maskHasParam(summaryMaskAt(summary.resultHolds, index: calleeIndex), param: position) 'holdsWhatTheArgumentHolds'
+			self.unionIntoList(heldHandle, from: self.heldOfValue(arg))
+		end 'holdsWhatTheArgumentHolds'
+
+		if maskHasParam(summaryMaskAt(summary.resultCaptures, index: calleeIndex), param: position) 'holdsTheArgument'
+			self.unionIntoList(heldHandle, from: self.baseOf(arg))
+		end 'holdsTheArgument'
+
+		if maskHasParam(summaryMaskAt(summary.resultCapturesWithin, index: calleeIndex), param: position) 'holdsWithinTheArgument'
+			for origin in self.baseOf(arg) 'eachBase'
+				self.addToList(heldHandle, origin: self.childOf(origin, offset: WildOffset))
+			end 'eachBase'
+		end 'holdsWithinTheArgument'
+	end 'applyResultSummary'
+
+	function walkFresh(result ValueId)
+		if self.isTracked(result) 'aRecordOfItsOwn'
+			self.addToBase(result, origin: self.freshOriginOf(result))
+		end 'aRecordOfItsOwn'
+	end 'walkFresh'
+
+	function walkUnknown(op MaxonOp, result ValueId, opIdx ElementIndex)
+		if not self.isTracked(result) 'holdsNoFunction'
+			return
+		end 'holdsNoFunction'
+
+		self.addToBase(result, origin: self.freshOriginOf(result))
+		maxonOpOperandValues(op, into: self.operands)
+
+		for k in 0 upto self.operands.count() 'eachOperand'
+			let operand = try self.operands.get(k) otherwise panic("CycleTrace.walkUnknown: operands.get OOB at {k}")
+
+			if self.isTracked(operand) 'mayReachIt'
+				self.flowAnythingWithin(result, from: operand, opIdx: opIdx)
+			end 'mayReachIt'
+		end 'eachOperand'
+	end 'walkUnknown'
+
+	function walkLoad(result ValueId, addr ValueId, offset ByteOffset, opIdx ElementIndex)
+		if not self.isTracked(result) 'holdsNoFunction'
+			return
+		end 'holdsNoFunction'
+
+		if let stored = try self.forwarded.get(result) 'storedBeforeOnEveryPath'
+			if self.isTracked(stored) 'aTrackedValue'
+				self.unionValueIntoBase(result, from: stored)
+				return
+			end 'aTrackedValue'
+		end 'storedBeforeOnEveryPath'
+
+		if not self.isTracked(addr) 'readOutOfUntrackedStorage'
+			self.addToBase(result, origin: self.freshOriginOf(result))
+			return
+		end 'readOutOfUntrackedStorage'
+
+		let bases = self.baseHandleOf(addr)
+
+		for k in 0 upto self.listCount(bases) 'eachBase'
+			let origin = self.listItem(bases, at: k)
+			self.addToBase(result, origin: self.childOf(origin, offset: offset))
+			self.unionFieldContents(result, origin: origin, offset: offset, opIdx: opIdx)
+			self.unionFieldContents(result, origin: origin, offset: WildOffset, opIdx: opIdx)
+		end 'eachBase'
+	end 'walkLoad'
+
+	function walkFieldStore(addr ValueId, offset ByteOffset, value ValueId, opIdx ElementIndex)
+		if not self.isTracked(value) or not self.isTracked(addr) 'storesNoFunction'
+			return
+		end 'storesNoFunction'
+
+		let records = self.baseOf(value)
+
+		if self.mode == CycleTraceMode.propagate and offset >= FunctionRecordCaptureBase 'mayBeACapture'
+			for origin in self.baseOf(addr) 'eachTarget'
+				if let closureName = try self.closureBodies.get(origin) 'aClosureRecord'
+					self.noteCapture(closureName, closure: origin, offset: offset, captured: records)
+				end 'aClosureRecord'
+			end 'eachTarget'
+		end 'mayBeACapture'
+
+		self.store(self.baseOf(addr), offset: offset, records: records, held: self.heldOfValue(value), opIdx: opIdx)
+	end 'walkFieldStore'
+
+	function noteCapture(closureName ByteArray, closure OriginIndex, offset ByteOffset, captured OriginList)
+		self.unionIntoList(self.handleIn(self.heldHandles, key: closure), from: captured)
+		let name = self.checker.captureNameAt(closureName, offset: offset)
+
+		for origin in captured 'eachCaptured'
+			if not self.originNames.contains(origin) 'firstName'
+				self.originNames.upsert(origin, value: name)
+			end 'firstName'
+		end 'eachCaptured'
+	end 'noteCapture'
+
+	function store(targets OriginList, offset ByteOffset, records OriginList, held OriginList, opIdx ElementIndex)
+		match self.mode 'mode'
+			propagate then self.storeIntoEach(targets, offset: offset, records: records, held: held, opIdx: opIdx)
+			summarize then self.summarizeStoreIntoEach(targets, records: records, held: held)
+			judge then return
+		end 'mode'
+	end 'store'
+
+	function storeIntoEach(targets OriginList, offset ByteOffset, records OriginList, held OriginList, opIdx ElementIndex)
+		for origin in targets 'eachTarget'
+			self.unionIntoList(self.eventHandle(origin, offset: offset, opIdx: opIdx), from: records)
+
+			for record in records 'eachRecord'
+				self.addContainerEdge(record, holder: origin, opIdx: opIdx)
+			end 'eachRecord'
+
+			for holder in self.chainOf(origin) 'eachHolder'
+				self.unionIntoList(self.handleIn(self.heldHandles, key: holder), from: held)
+			end 'eachHolder'
+		end 'eachTarget'
+	end 'storeIntoEach'
+
+	function summarizeStoreIntoEach(targets OriginList, records OriginList, held OriginList)
+		for target in targets 'eachTarget'
+			for holder in self.chainOf(target) 'eachHolder'
+				if self.kindOf(holder) == OriginKind.global 'intoAGlobal'
+					self.summarizeGlobalStore(self.globalLabelOf(holder), records: records, held: held)
+				end 'intoAGlobal' else if self.isRootedInAParameter(holder) 'intoTheCallers'
+					self.summarizeParameterStore(self.rootParamOf(holder), records: records, held: held)
+				end 'intoTheCallers'
+			end 'eachHolder'
+		end 'eachTarget'
+	end 'summarizeStoreIntoEach'
+
+	function summarizeParameterStore(into ParamCount, records OriginList, held OriginList)
+		for record in records 'eachRecord'
+			if self.kindOf(record) == OriginKind.parameter 'aParametersRecord'
+				widenRowAt(self.row.storesRecord, into: into, by: maskWithParam(NoParamPositions, param: self.rootParamOf(record)))
+			end 'aParametersRecord'
+
+			if let global = try self.globalRootOf(record) 'aGlobalsValue'
+				var effect = effectFor(self.row.globals, label: self.globalLabelOf(global))
+				effect.readInto = maskWithParam(effect.readInto, param: into)
+			end 'aGlobalsValue'
+		end 'eachRecord'
+
+		let (heldParams, capturedParams) = self.parametersHeld(held)
+		widenRowAt(self.row.storesHeld, into: into, by: heldParams)
+		widenRowAt(self.row.storesCaptured, into: into, by: capturedParams)
+	end 'summarizeParameterStore'
+
+	function parametersHeld(held OriginList) returns (ParamPositionMask, ParamPositionMask)
+		var heldParams = NoParamPositions
+		var capturedParams = NoParamPositions
+
+		for h in held 'eachHeld'
+			if self.kindOf(h) == OriginKind.holdings 'whatAParameterHolds'
+				heldParams = maskWithParam(heldParams, param: self.rootParamOf(h))
+			end 'whatAParameterHolds' else if self.isRootedInAParameter(h) 'aParameterItself'
+				capturedParams = maskWithParam(capturedParams, param: self.rootParamOf(h))
+			end 'aParameterItself'
+		end 'eachHeld'
+
+		return (heldParams, capturedParams)
+	end 'parametersHeld'
+
+	function summarizeGlobalStore(label ByteArray, records OriginList, held OriginList)
+		var effect = effectFor(self.row.globals, label: label)
+
+		for record in records 'eachRecord'
+			if self.kindOf(record) == OriginKind.parameter 'aParametersRecord'
+				effect.storedRecords = maskWithParam(effect.storedRecords, param: self.rootParamOf(record))
+			end 'aParametersRecord'
+		end 'eachRecord'
+
+		let (heldParams, capturedParams) = self.parametersHeld(held)
+		effect.storedHeld = effect.storedHeld or heldParams
+		effect.storedCaptured = effect.storedCaptured or capturedParams
+	end 'summarizeGlobalStore'
+
+	function summarizeResult()
+		for value in self.returned 'eachReturned'
+			if not self.isTracked(value) 'holdsNoFunction'
+				continue
+			end 'holdsNoFunction'
+
+			for origin in self.baseOf(value) 'eachRecord'
+				if self.kindOf(origin) == OriginKind.parameter 'theParameter'
+					self.row.resultIs = maskWithParam(self.row.resultIs, param: self.rootParamOf(origin))
+				end 'theParameter' else if self.isRootedInAParameter(origin) 'withinTheParameter'
+					self.row.resultWithin = maskWithParam(self.row.resultWithin, param: self.rootParamOf(origin))
+				end 'withinTheParameter'
+
+				if let global = try self.globalRootOf(origin) 'aGlobalsValue'
+					var effect = effectFor(self.row.globals, label: self.globalLabelOf(global))
+					effect.resultReads = true
+				end 'aGlobalsValue'
+			end 'eachRecord'
+
+			for held in self.heldOfValue(value) 'eachHeld'
+				match self.kindOf(held) 'kind'
+					holdings then self.row.resultHolds = maskWithParam(self.row.resultHolds, param: self.rootParamOf(held))
+					parameter then self.row.resultCaptures = maskWithParam(self.row.resultCaptures, param: self.rootParamOf(held))
+					field or
+						element then self.noteResultCapturesWithin(held)
+					fresh or
+						global then continue
+				end 'kind'
+			end 'eachHeld'
+		end 'eachReturned'
+	end 'summarizeResult'
+
+	function noteResultCapturesWithin(held OriginIndex)
+		if self.isRootedInAParameter(held) 'withinTheParameter'
+			self.row.resultCapturesWithin = maskWithParam(self.row.resultCapturesWithin, param: self.rootParamOf(held))
+		end 'withinTheParameter'
+	end 'noteResultCapturesWithin'
+
+	function summarizeGlobals()
+		var labels = ByteArrayArray.create()
+
+		for (label, _) in self.globalOrigins 'eachGlobal'
+			labels.push(label)
+		end 'eachGlobal'
+
+		for label in labels 'eachLabel'
+			var contents = OriginList.create()
+			self.collectContents(self.globalOriginOf(label), read: ContentRead.everything, into: contents)
+
+			for content in contents 'eachContent'
+				for held in self.heldList(content) 'eachHeld'
+					for global in self.globalsHoldingDirectly(held) 'eachHoldingGlobal'
+						self.checker.noteHeldGlobal(label, held: self.globalLabelOf(global))
+					end 'eachHoldingGlobal'
+				end 'eachHeld'
+			end 'eachContent'
+		end 'eachLabel'
+	end 'summarizeGlobals'
+
+	function globalsHoldingDirectly(held OriginIndex) returns OriginList
+		var globals = OriginList.create()
+
+		if self.kindOf(held) == OriginKind.global 'theGlobalItself'
+			globals.push(held)
+		end 'theGlobalItself'
+
+		if let root = try self.globalRootOf(held) 'readOutOfAGlobal'
+			globals.push(root)
+		end 'readOutOfAGlobal'
+
+		let edges = try self.containerHandles.get(held) otherwise return globals
+
+		for k in 0 upto self.listCount(edges) 'eachContainer'
+			let container = self.edgeHolderAt(self.listItem(edges, at: k))
+
+			if self.kindOf(container) == OriginKind.global 'storedIntoAGlobal'
+				globals.push(container)
+			end 'storedIntoAGlobal'
+		end 'eachContainer'
+
+		return globals
+	end 'globalsHoldingDirectly'
+
+	// A record a `var` was bound to files no binding site, so the binding a store was written through is the
+	// name the message has for it.
+	function nameStoreBases()
+		for site in self.traced.closureStoreSites 'eachSite'
+			match site.destination 'destination'
+				field(_, base) then self.nameStoreBase(base)
+				element then continue
+			end 'destination'
+		end 'eachSite'
+	end 'nameStoreBases'
+
+	function nameStoreBase(base ClosureStoreBase)
+		match base 'base'
+			spelled(record, name) then self.nameOriginsOf(record, name: displayParamName(name).toByteArray())
+			unspelled then return
+		end 'base'
+	end 'nameStoreBase'
+
+	function nameOriginsOf(value ValueId, name ByteArray)
+		if not self.isTracked(value) 'holdsNoFunction'
+			return
+		end 'holdsNoFunction'
+
+		for origin in self.baseOf(value) 'eachOrigin'
+			if not self.originNames.contains(origin) 'firstName'
+				self.originNames.upsert(origin, value: name)
+			end 'firstName'
+		end 'eachOrigin'
+	end 'nameOriginsOf'
+
+	function judgeAndReport()
+		self.judgeRecordedSites()
+
+		for cycle in self.cycles.latestOfEach() 'eachCycle'
+			self.checker.refuse(self.traced, line: cycle.at.line, column: cycle.at.column, holder: cycle.holder, storesAClosure: cycle.storesAClosure)
+		end 'eachCycle'
+	end 'judgeAndReport'
+
+	function judgeRecordedSites()
+		for index in 0 upto self.traced.closureStoreSites.count() 'eachSite'
+			let site = try self.traced.closureStoreSites.get(index) otherwise panic("CycleTrace.judgeRecordedSites: closureStoreSites.get OOB at {index}")
+			let value = site.value
+			let at = siteRange(site)
+			let box = try fieldSiteBox(site) otherwise continue
+			self.judgeFieldSite(box, value: value, at: at)
+		end 'eachSite'
+	end 'judgeRecordedSites'
+
+	function judgeFieldSite(box ValueId, value ValueId, at SourceRange)
+		if not self.isTracked(box) or not self.isTracked(value) 'storesNoFunction'
+			return
+		end 'storesNoFunction'
+
+		self.judgeStore(self.baseOf(box), held: self.heldOfValue(value), deep: false, at: at, storesAClosure: self.valueIsAFunction(value), judged: self.fieldStoreJudged(box, value: value, line: at.line))
+	end 'judgeFieldSite'
+
+	function fieldStoreJudged(box ValueId, value ValueId, line LineNumber) returns JudgedStore
+		if let opIdx = try self.fieldStoreOps.get(keyOf(box, low: value)) 'theStoreOfThisValue'
+			return JudgedStore.at(opIdx)
+		end 'theStoreOfThisValue'
+
+		if let opIdx = try self.fieldStoreOpsByLine.get(keyOf(box, low: line as ElementIndex)) 'theStoreOnThisLine'
+			return JudgedStore.at(opIdx)
+		end 'theStoreOnThisLine'
+
+		return JudgedStore.everyStore
+	end 'fieldStoreJudged'
+
+	function orderOf(judged JudgedStore) returns OriginKey
+		return match judged 'judged'
+			everyStore gives LastInTheBody
+			at(opIdx) gives self.positionOfOp(opIdx)
+		end 'judged'
+	end 'orderOf'
+
+	function judgeStore(targets OriginList, held OriginList, deep bool, at SourceRange, storesAClosure bool, judged JudgedStore)
+		var holders = OriginList.create()
+
+		for origin in targets 'eachTarget'
+			self.appendDistinct(holders, from: self.chainAt(origin, judged: judged))
+
+			if deep 'somewhereWithinIt'
+				self.appendDistinct(holders, from: self.listOfOne(self.childOf(origin, offset: WildOffset)))
+			end 'somewhereWithinIt'
+		end 'eachTarget'
+
+		for h in ascendingOrigins(held) 'eachHeld'
+			if self.kindOf(h) == OriginKind.holdings 'theCallersToJudge'
+				continue
+			end 'theCallersToJudge'
+
+			for holder in holders 'eachHolder'
+				if self.originsMeet(h, other: holder) 'aCycle'
+					self.cycles.note(keyOf(h, low: holder), order: self.orderOf(judged), at: at, holder: self.holderOf(h), storesAClosure: storesAClosure)
+					return
+				end 'aCycle'
+			end 'eachHolder'
+		end 'eachHeld'
+	end 'judgeStore'
+
+	// The elements of one container are not told apart, so an element meets every sibling; two
+	// distinct fields of one record never meet.
+	function originsMeet(origin OriginIndex, other OriginIndex) returns bool
+		if origin == other 'oneRecord'
+			return true
+		end 'oneRecord'
+
+		if not (self.isAChild(origin) and self.isAChild(other)) 'notTwoChildren'
+			return false
+		end 'notTwoChildren'
+
+		return self.parentOf(origin) == self.parentOf(other) and (self.kindOf(origin) == OriginKind.element or self.kindOf(other) == OriginKind.element)
+	end 'originsMeet'
+
+	function isAChild(origin OriginIndex) returns bool
+		let kind = self.kindOf(origin)
+		return kind == OriginKind.field or kind == OriginKind.element
+	end 'isAChild'
+
+	function holderOf(origin OriginIndex) returns CycleHolder
+		if let named = try self.originNames.get(origin) 'namedAtItsCapture'
+			return CycleHolder.named(String.from(named))
+		end 'namedAtItsCapture'
+
+		match self.kindOf(origin) 'kind'
+			parameter then return CycleHolder.named(self.parameterNameOf(self.rootParamOf(origin)))
+			field or
+				element then return self.holderOf(self.parentOf(origin))
+			global then return CycleHolder.named(self.checker.globalNameOf(self.globalLabelOf(origin)))
+			fresh then return self.freshHolderOf(origin)
+			holdings then return CycleHolder.heldBy(self.parameterNameOf(self.rootParamOf(origin)))
+		end 'kind'
+	end 'holderOf'
+
+	function parameterNameOf(position ParamCount) returns String
+		if let sig = try self.checker.project.funcSignatures.get(self.traced.name) 'declared'
+			if let name = try sig.paramNames.get(position) 'named'
+				return displayParamName(name)
+			end 'named'
+		end 'declared'
+
+		return "parameter {position + 1}"
+	end 'parameterNameOf'
+
+	function freshHolderOf(origin OriginIndex) returns CycleHolder
+		let sites = self.traced.provenanceSites(self.checker.noSites)
+
+		for site in sites.mutableBindingSites 'eachVar'
+			if self.bindsTheRecord(site.value, origin: origin) 'aVarHoldsIt'
+				return CycleHolder.named(displayParamName(site.name))
+			end 'aVarHoldsIt'
+		end 'eachVar'
+
+		for (iter, value) in sites.immutableBindings.values.withIterator() 'eachLet'
+			if self.bindsTheRecord(value, origin: origin) 'aLetHoldsIt'
+				return CycleHolder.named(displayParamName(try sites.immutableBindings.names.get(iter.index()) otherwise panic("CycleTrace.freshHolderOf: an immutable binding has no name at {iter.index()}")))
+			end 'aLetHoldsIt'
+		end 'eachLet'
+
+		return CycleHolder.heldHere
+	end 'freshHolderOf'
+
+	function bindsTheRecord(value ValueId, origin OriginIndex) returns bool
+		return self.isTracked(value) and self.baseOf(value).contains(origin)
+	end 'bindsTheRecord'
+
+	function anchorOfArgument(argRanges SourceRangeArray, argIndex ElementIndex, opIdx ElementIndex) returns SourceRange
+		return try argRanges.get(argIndex) otherwise self.checker.project.opRanges.get(opIdx)
+	end 'anchorOfArgument'
+
+	function anchorOfElement(stored ValueId, opIdx ElementIndex) returns SourceRange
+		let index = try self.elementSites.get(stored) otherwise return self.checker.project.opRanges.get(opIdx)
+		return siteRange(try self.traced.closureStoreSites.get(index) otherwise panic("CycleTrace.anchorOfElement: site {index} is past the function's store sites"))
+	end 'anchorOfElement'
+
+	function valueIsAFunction(value ValueId) returns bool
+		return valueTagOf(self.traced, value: value) == ValueTypeTag.function
+	end 'valueIsAFunction'
+
+	function flowAnythingWithin(to ValueId, from ValueId, opIdx ElementIndex)
+		if self.mode != CycleTraceMode.propagate 'nothingGrows'
+			return
+		end 'nothingGrows'
+
+		let bases = self.baseHandleOf(from)
+		let base = self.baseHandleOf(to)
+
+		for k in 0 upto self.listCount(bases) 'eachBase'
+			let origin = self.listItem(bases, at: k)
+			self.addToList(base, origin: origin)
+			self.addToList(base, origin: self.childOf(origin, offset: WildOffset))
+			let events = try self.originEvents.get(origin) otherwise continue
+
+			for e in 0 upto self.listCount(events) 'eachEvent'
+				let event = self.listItem(events, at: e)
+
+				if self.mayReach(self.eventOpAt(event), read: opIdx) 'storedBeforeTheRead'
+					self.unionHandleIntoList(base, from: self.eventRecordsAt(event))
+				end 'storedBeforeTheRead'
+			end 'eachEvent'
+		end 'eachBase'
+	end 'flowAnythingWithin'
+
+	function unionFieldContents(result ValueId, origin OriginIndex, offset ByteOffset, opIdx ElementIndex)
+		if self.mode != CycleTraceMode.propagate 'nothingGrows'
+			return
+		end 'nothingGrows'
+
+		let events = try self.fieldEvents.get(keyOf(origin, low: offset)) otherwise return
+		let base = self.baseHandleOf(result)
+
+		for k in 0 upto self.listCount(events) 'eachEvent'
+			let event = self.listItem(events, at: k)
+
+			if self.mayReach(self.eventOpAt(event), read: opIdx) 'storedBeforeTheRead'
+				self.unionHandleIntoList(base, from: self.eventRecordsAt(event))
+			end 'storedBeforeTheRead'
+		end 'eachEvent'
+	end 'unionFieldContents'
+
+	function collectContents(origin OriginIndex, read ContentRead, into OriginList)
+		let events = try self.originEvents.get(origin) otherwise return
+		self.appendEventRecords(events, read: read, into: into)
+	end 'collectContents'
+
+	function appendEventRecords(events ElementIndex, read ContentRead, into OriginList)
+		for k in 0 upto self.listCount(events) 'eachEvent'
+			let event = self.listItem(events, at: k)
+
+			if self.storedBeforeTheRead(self.eventOpAt(event), read: read) 'storedThen'
+				self.appendList(into, from: self.eventRecordsAt(event))
+			end 'storedThen'
+		end 'eachEvent'
+	end 'appendEventRecords'
+
+	function storedBeforeTheRead(stored ElementIndex, read ContentRead) returns bool
+		return match read 'read'
+			everything gives true
+			reaching(opIdx) gives self.mayReach(stored, read: opIdx)
+			before(opIdx) gives stored != opIdx and self.mayReach(stored, read: opIdx)
+		end 'read'
+	end 'storedBeforeTheRead'
+
+	function collectContentsReaching(value ValueId, opIdx ElementIndex, into OriginList)
+		for origin in self.baseOf(value) 'eachBase'
+			into.push(self.childOf(origin, offset: WildOffset))
+			self.collectContents(origin, read: ContentRead.reaching(opIdx), into: into)
+		end 'eachBase'
+	end 'collectContentsReaching'
+
+	function collectGlobalContents(global OriginIndex, read ContentRead, into OriginList)
+		into.push(self.childOf(global, offset: GlobalSlotOffset))
+		self.collectContents(global, read: read, into: into)
+	end 'collectGlobalContents'
+
+	function eventHandle(origin OriginIndex, offset ByteOffset, opIdx ElementIndex) returns ElementIndex
+		let key = keyOf(origin, low: offset)
+		let events = self.handleInMap(self.fieldEvents, key: key)
+
+		for k in 0 upto self.listCount(events) 'eachEvent'
+			let event = self.listItem(events, at: k)
+
+			if self.eventOpAt(event) == opIdx 'thisStore'
+				return self.eventRecordsAt(event)
+			end 'thisStore'
+		end 'eachEvent'
+
+		let event = self.eventOps.count() as OriginIndex
+		let records = self.newList()
+		self.eventOps.push(opIdx)
+		self.eventRecords.push(records)
+		self.addToList(events, origin: event)
+		self.addToList(self.handleIn(self.originEvents, key: origin), origin: event)
+		return records
+	end 'eventHandle'
+
+	function eventOpAt(event OriginIndex) returns ElementIndex
+		return try self.eventOps.get(event) otherwise panic("CycleTrace.eventOpAt: event {event} was never filed")
+	end 'eventOpAt'
+
+	function eventRecordsAt(event OriginIndex) returns ElementIndex
+		return try self.eventRecords.get(event) otherwise panic("CycleTrace.eventRecordsAt: event {event} was never filed")
+	end 'eventRecordsAt'
+
+	function mayReach(store ElementIndex, read ElementIndex) returns bool
+		let stored = self.positionOfOp(store)
+		let reading = self.positionOfOp(read)
+
+		if highHalfOf(stored) == highHalfOf(reading) and lowHalfOf(stored) <= lowHalfOf(reading) 'earlierInTheBlock'
+			return true
+		end 'earlierInTheBlock'
+
+		return try self.reachableFrom(highHalfOf(stored)).get(highHalfOf(reading)) otherwise panic("CycleTrace.mayReach: block {highHalfOf(reading)} is past the reach of '{String.from(self.traced.name)}'")
+	end 'mayReach'
+
+	function positionOfOp(opIdx ElementIndex) returns OriginKey
+		return try self.opPositions.get(opIdx) otherwise panic("CycleTrace.positionOfOp: op {opIdx} is no op of '{String.from(self.traced.name)}'")
+	end 'positionOfOp'
+
+	function reachableFrom(block ElementIndex) returns BoolArray
+		if let memoized = try self.reachFrom.get(block) 'asked'
+			return memoized
+		end 'asked'
+
+		var reached = BoolArray.create()
+		reached.refill(self.successors.count(), value: false)
+		var pending = OriginList.create()
+		pending.push(block)
+		var head = 0 as ElementIndex
+
+		while head < pending.count() 'eachPending'
+			let at = try pending.get(head) otherwise panic("CycleTrace.reachableFrom: pending.get OOB at {head}")
+			head = head + 1
+
+			for next in try self.successors.get(at) otherwise panic("CycleTrace.reachableFrom: block {at} has no successor row") 'eachSuccessor'
+				if not (try reached.get(next) otherwise panic("CycleTrace.reachableFrom: reached.get OOB at {next}")) 'firstVisit'
+					try reached.set(next, value: true) otherwise panic("CycleTrace.reachableFrom: reached.set OOB at {next}")
+					pending.push(next)
+				end 'firstVisit'
+			end 'eachSuccessor'
+		end 'eachPending'
+
+		self.reachFrom.upsert(block, value: reached)
+		return reached
+	end 'reachableFrom'
+
+	function blockAt(blockRef ElementIndex) returns IrBlock
+		return try self.checker.module.blocks.get(blockRef) otherwise panic("CycleTrace.blockAt: blockRef {blockRef} is not in module.blocks")
+	end 'blockAt'
+
+	function positionOfBlock(blockId BlockId) returns ElementIndex
+		return try self.blockIndex.get(blockId) otherwise panic("CycleTrace.positionOfBlock: block {blockId} is not a block of '{String.from(self.traced.name)}'")
+	end 'positionOfBlock'
+
+	function addToBase(value ValueId, origin OriginIndex)
+		if self.mode == CycleTraceMode.propagate 'growTheSets'
+			self.addToList(self.handleIn(self.baseHandles, key: value), origin: origin)
+		end 'growTheSets'
+	end 'addToBase'
+
+	function unionValueIntoBase(value ValueId, from ValueId)
+		if self.mode == CycleTraceMode.propagate 'growTheSets'
+			self.unionHandleIntoList(self.baseHandleOf(value), from: self.baseHandleOf(from))
+		end 'growTheSets'
+	end 'unionValueIntoBase'
+
+	function baseHandleOf(value ValueId) returns ElementIndex
+		return self.handleIn(self.baseHandles, key: value)
+	end 'baseHandleOf'
+
+	function unionHandleIntoList(handle ElementIndex, from ElementIndex)
+		var k = 0 as ElementIndex
+
+		while k < self.listCount(from) 'eachOrigin'
+			self.addToList(handle, origin: self.listItem(from, at: k))
+			k = k + 1
+		end 'eachOrigin'
+	end 'unionHandleIntoList'
+
+	function unionIntoBase(value ValueId, from OriginList)
+		if self.mode == CycleTraceMode.propagate 'growTheSets'
+			self.unionIntoList(self.handleIn(self.baseHandles, key: value), from: from)
+		end 'growTheSets'
+	end 'unionIntoBase'
+
+	function freshOriginOf(value ValueId) returns OriginIndex
+		if let origin = try self.freshOrigins.get(value) 'minted'
+			return origin
+		end 'minted'
+
+		let origin = self.mintRoot(OriginKind.fresh, rootParam: 0, inAParameter: false)
+		self.freshOrigins.set(value, value: origin)
+
+		if self.valueIsAFunction(value) 'aFunctionRecord'
+			let nameId = try self.traced.valueNameIds.get(value) otherwise panic("CycleTrace.freshOriginOf: v{value} has no type name")
+			let name = try self.checker.project.typeNames.nameOf(nameId) otherwise panic("CycleTrace.freshOriginOf: type name {nameId} of v{value} is not interned")
+
+			if isLiftedClosureName(name) 'aClosureRecord'
+				self.closureBodies.upsert(origin, value: name)
+			end 'aClosureRecord'
+		end 'aFunctionRecord'
+
+		return origin
+	end 'freshOriginOf'
+
+	function recordTheCalleeStored(opIdx ElementIndex, position ParamCount, kind OriginKey, holding OriginList) returns OriginIndex
+		let key = ((opIdx as OriginKey) shl SyntheticSlotShift) or ((position as OriginKey) * SyntheticKindsPerPosition + kind)
+		let origin = try self.syntheticOrigins.get(key) otherwise self.mintSynthetic(key)
+		self.unionIntoList(self.handleIn(self.heldHandles, key: origin), from: holding)
+		return origin
+	end 'recordTheCalleeStored'
+
+	function mintSynthetic(key OriginKey) returns OriginIndex
+		let origin = self.mintRoot(OriginKind.fresh, rootParam: 0, inAParameter: false)
+		self.syntheticOrigins.upsert(key, value: origin)
+		return origin
+	end 'mintSynthetic'
+
+	function globalOriginOf(label ByteArray) returns OriginIndex
+		if let origin = try self.globalOrigins.get(label) 'minted'
+			return origin
+		end 'minted'
+
+		let origin = self.mintRoot(OriginKind.global, rootParam: 0, inAParameter: false)
+		self.globalOrigins.upsert(label, value: origin)
+		self.globalLabels.upsert(origin, value: label)
+		return origin
+	end 'globalOriginOf'
+
+	function globalLabelOf(origin OriginIndex) returns ByteArray
+		return try self.globalLabels.get(origin) otherwise panic("CycleTrace.globalLabelOf: origin {origin} is no global's")
+	end 'globalLabelOf'
+
+	function globalRootOf(origin OriginIndex) returns OriginIndex throws AbsentError
+		var at = origin
+
+		while self.isAChild(at) 'eachParent'
+			at = self.parentOf(at)
+		end 'eachParent'
+
+		if self.kindOf(at) != OriginKind.global or at == origin 'notWithinAGlobal'
+			throw AbsentError.absent
+		end 'notWithinAGlobal'
+
+		return at
+	end 'globalRootOf'
+
+	// A path deeper than MaxOriginDepth folds onto its parent: merging records can only add cycles,
+	// and without the bound a walk down a recursive structure mints origins forever.
+	function childOf(parent OriginIndex, offset ByteOffset) returns OriginIndex
+		if self.depthOf(parent) >= MaxOriginDepth 'deepEnough'
+			return parent
+		end 'deepEnough'
+
+		let key = keyOf(parent, low: offset)
+
+		if let child = try self.childOrigins.get(key) 'interned'
+			return child
+		end 'interned'
+
+		let kind = OriginKind.element if offset == WildOffset else OriginKind.field
+		let child = self.mintOrigin(kind, parent: parent, depth: (self.depthOf(parent) + 1) as OriginDepth, rootParam: self.rootParamOf(parent), inAParameter: self.isRootedInAParameter(parent))
+		self.childOrigins.upsert(key, value: child)
+		self.seedHeldGlobals(child)
+		return child
+	end 'childOf'
+
+	function seedHeldGlobals(child OriginIndex)
+		let global = try self.globalRootOf(child) otherwise return
+		let labels = try self.checker.heldGlobalsOf(self.globalLabelOf(global)) otherwise return
+
+		for label in labels 'eachHeldGlobal'
+			self.addToList(self.handleIn(self.heldHandles, key: child), origin: self.globalOriginOf(label))
+		end 'eachHeldGlobal'
+	end 'seedHeldGlobals'
+
+	function mintRoot(kind OriginKind, rootParam ParamCount, inAParameter bool) returns OriginIndex
+		return self.mintOrigin(kind, parent: self.kinds.count() as OriginIndex, depth: 0, rootParam: rootParam, inAParameter: inAParameter)
+	end 'mintRoot'
+
+	function mintOrigin(kind OriginKind, parent OriginIndex, depth OriginDepth, rootParam ParamCount, inAParameter bool) returns OriginIndex
+		let origin = self.kinds.count() as OriginIndex
+		self.kinds.push(kind)
+		self.parents.push(parent)
+		self.depths.push(depth)
+		self.rootParams.push(rootParam)
+		self.rootedInAParameter.push(inAParameter)
+		self.heldHandles.pushAbsent()
+		self.containerHandles.pushAbsent()
+		self.originEvents.pushAbsent()
+		self.scratch.push(false)
+
+		if inAParameter and kind != OriginKind.holdings 'holdsWhatTheCallerGave'
+			self.addToList(self.handleIn(self.heldHandles, key: origin), origin: self.holdingsOf(rootParam))
+		end 'holdsWhatTheCallerGave'
+
+		return origin
+	end 'mintOrigin'
+
+	function holdingsOf(position ParamCount) returns OriginIndex
+		return try self.holdingsOrigins.get(position) otherwise panic("CycleTrace.holdingsOf: parameter {position} of '{String.from(self.traced.name)}' holds no function, so nothing within it is traced")
+	end 'holdingsOf'
+
+	function addContainerEdge(record OriginIndex, holder OriginIndex, opIdx ElementIndex)
+		let edges = self.handleIn(self.containerHandles, key: record)
+
+		for k in 0 upto self.listCount(edges) 'eachEdge'
+			let edge = self.listItem(edges, at: k)
+
+			if self.edgeHolderAt(edge) == holder and self.edgeOpAt(edge) == opIdx 'alreadyFiled'
+				return
+			end 'alreadyFiled'
+		end 'eachEdge'
+
+		let edge = self.edgeOps.count() as OriginIndex
+		self.edgeHolders.push(holder)
+		self.edgeOps.push(opIdx)
+		self.addToList(edges, origin: edge)
+	end 'addContainerEdge'
+
+	function edgeHolderAt(edge OriginIndex) returns OriginIndex
+		return try self.edgeHolders.get(edge) otherwise panic("CycleTrace.edgeHolderAt: edge {edge} was never filed")
+	end 'edgeHolderAt'
+
+	function edgeOpAt(edge OriginIndex) returns ElementIndex
+		return try self.edgeOps.get(edge) otherwise panic("CycleTrace.edgeOpAt: edge {edge} was never filed")
+	end 'edgeOpAt'
+
+	function chainOf(origin OriginIndex) returns OriginList
+		return self.chainAt(origin, judged: JudgedStore.everyStore)
+	end 'chainOf'
+
+	function chainAt(origin OriginIndex, judged JudgedStore) returns OriginList
+		var chain = OriginList.create()
+		self.markInto(chain, origin: origin)
+		var cursor = 0 as ElementIndex
+
+		while cursor < chain.count() 'eachHolder'
+			let at = try chain.get(cursor) otherwise panic("CycleTrace.chainOf: chain.get OOB at {cursor}")
+			cursor = cursor + 1
+
+			if self.parentOf(at) != at 'hasAParent'
+				self.markInto(chain, origin: self.parentOf(at))
+			end 'hasAParent'
+
+			let edges = try self.containerHandles.get(at) otherwise continue
+
+			for k in 0 upto self.listCount(edges) 'eachContainer'
+				let edge = self.listItem(edges, at: k)
+
+				if self.edgeHeldBy(edge, judged: judged) 'heldThen'
+					self.markInto(chain, origin: self.edgeHolderAt(edge))
+				end 'heldThen'
+			end 'eachContainer'
+		end 'eachHolder'
+
+		self.clearMarks(chain)
+		return chain
+	end 'chainAt'
+
+	function edgeHeldBy(edge OriginIndex, judged JudgedStore) returns bool
+		return match judged 'judged'
+			everyStore gives true
+			at(opIdx) gives self.edgeOpAt(edge) != opIdx and self.mayReach(self.edgeOpAt(edge), read: opIdx)
+		end 'judged'
+	end 'edgeHeldBy'
+
+	function markInto(list OriginList, origin OriginIndex)
+		if not (try self.scratch.get(origin) otherwise panic("CycleTrace.markInto: origin {origin} was never minted")) 'firstTime'
+			try self.scratch.set(origin, value: true) otherwise panic("CycleTrace.markInto: scratch.set OOB at {origin}")
+			list.push(origin)
+		end 'firstTime'
+	end 'markInto'
+
+	function clearMarks(list OriginList)
+		for origin in list 'eachMarked'
+			try self.scratch.set(origin, value: false) otherwise panic("CycleTrace.clearMarks: scratch.set OOB at {origin}")
+		end 'eachMarked'
+	end 'clearMarks'
+
+	function appendDistinct(list OriginList, from OriginList)
+		for origin in list 'eachPresent'
+			try self.scratch.set(origin, value: true) otherwise panic("CycleTrace.appendDistinct: scratch.set OOB at {origin}")
+		end 'eachPresent'
+
+		for origin in from 'eachNew'
+			self.markInto(list, origin: origin)
+		end 'eachNew'
+
+		self.clearMarks(list)
+	end 'appendDistinct'
+
+	function heldOfValue(value ValueId) returns OriginList
+		return self.heldOfRecords(self.baseOf(value))
+	end 'heldOfValue'
+
+	function heldOfRecords(records OriginList) returns OriginList
+		var held = OriginList.create()
+
+		for record in records 'eachRecord'
+			let handle = try self.heldHandles.get(record) otherwise continue
+
+			for k in 0 upto self.listCount(handle) 'eachHeld'
+				self.markInto(held, origin: self.listItem(handle, at: k))
+			end 'eachHeld'
+		end 'eachRecord'
+
+		self.clearMarks(held)
+		return held
+	end 'heldOfRecords'
+
+	function appendHeldOf(held OriginList, records OriginList)
+		self.appendDistinct(held, from: self.heldOfRecords(records))
+	end 'appendHeldOf'
+
+	function heldList(origin OriginIndex) returns OriginList
+		return self.listAt(try self.heldHandles.get(origin) otherwise return self.noOrigins)
+	end 'heldList'
+
+	function baseOf(value ValueId) returns OriginList
+		return self.listAt(try self.baseHandles.get(value) otherwise return self.noOrigins)
+	end 'baseOf'
+
+	function listOfOne(origin OriginIndex) returns OriginList
+		var list = OriginList.create()
+		list.push(origin)
+		return list
+	end 'listOfOne'
+
+	function listAt(handle ElementIndex) returns OriginList
+		return try self.lists.get(handle) otherwise panic("CycleTrace.listAt: handle {handle} is past the pool")
+	end 'listAt'
+
+	function appendList(into OriginList, from ElementIndex)
+		for k in 0 upto self.listCount(from) 'eachOrigin'
+			into.push(self.listItem(from, at: k))
+		end 'eachOrigin'
+	end 'appendList'
+
+	function newList() returns ElementIndex
+		let handle = self.listsInUse
+		self.listsInUse = handle + 1
+
+		if handle < self.lists.count() 'aPooledList'
+			var pooled = try self.lists.get(handle) otherwise panic("CycleTrace.newList: lists.get OOB at {handle}, below the pool's count")
+			pooled.clear()
+			return handle
+		end 'aPooledList'
+
+		self.lists.push(OriginList.create())
+		return handle
+	end 'newList'
+
+	function handleIn(column OptionalElementIndexColumn, key ElementIndex) returns ElementIndex
+		if let handle = try column.get(key) 'filed'
+			return handle
+		end 'filed'
+
+		let handle = self.newList()
+		column.set(key, value: handle)
+		return handle
+	end 'handleIn'
+
+	function handleInMap(map HandleByKey, key OriginKey) returns ElementIndex
+		if let handle = try map.get(key) 'filed'
+			return handle
+		end 'filed'
+
+		let handle = self.newList()
+		map.upsert(key, value: handle)
+		return handle
+	end 'handleInMap'
+
+	function listCount(handle ElementIndex) returns ElementIndex
+		return (try self.lists.get(handle) otherwise panic("CycleTrace.listCount: handle {handle} is past the pool")).count()
+	end 'listCount'
+
+	function listItem(handle ElementIndex, at ElementIndex) returns OriginIndex
+		let list = try self.lists.get(handle) otherwise panic("CycleTrace.listItem: handle {handle} is past the pool")
+		return try list.get(at) otherwise panic("CycleTrace.listItem: entry {at} is past the {list.count()} of list {handle}")
+	end 'listItem'
+
+	function addToList(handle ElementIndex, origin OriginIndex)
+		let key = keyOf(handle, low: origin)
+
+		if self.membership.contains(key) 'alreadyThere'
+			return
+		end 'alreadyThere'
+
+		self.membership.insert(key)
+		var list = try self.lists.get(handle) otherwise panic("CycleTrace.addToList: handle {handle} is past the pool")
+		list.push(origin)
+		self.changed = true
+	end 'addToList'
+
+	function unionIntoList(handle ElementIndex, from OriginList)
+		for origin in from 'eachOrigin'
+			self.addToList(handle, origin: origin)
+		end 'eachOrigin'
+	end 'unionIntoList'
+
+	function kindOf(origin OriginIndex) returns OriginKind
+		return try self.kinds.get(origin) otherwise panic("CycleTrace.kindOf: origin {origin} was never minted")
+	end 'kindOf'
+
+	function parentOf(origin OriginIndex) returns OriginIndex
+		return try self.parents.get(origin) otherwise panic("CycleTrace.parentOf: origin {origin} was never minted")
+	end 'parentOf'
+
+	function depthOf(origin OriginIndex) returns OriginDepth
+		return try self.depths.get(origin) otherwise panic("CycleTrace.depthOf: origin {origin} was never minted")
+	end 'depthOf'
+
+	function rootParamOf(origin OriginIndex) returns ParamCount
+		return try self.rootParams.get(origin) otherwise panic("CycleTrace.rootParamOf: origin {origin} was never minted")
+	end 'rootParamOf'
+
+	function isRootedInAParameter(origin OriginIndex) returns bool
+		return try self.rootedInAParameter.get(origin) otherwise panic("CycleTrace.isRootedInAParameter: origin {origin} was never minted")
+	end 'isRootedInAParameter'
+
+	function isTracked(value ValueId) returns bool
+		return try self.tracked.get(value) otherwise panic("CycleTrace.isTracked: v{value} of '{String.from(self.traced.name)}' is past its value columns")
+	end 'isTracked'
+end 'CycleTrace'
+
+union ContentRead
+	everything
+	reaching(opIdx ElementIndex)
+	before(opIdx ElementIndex)
+end 'ContentRead'
+
+union JudgedStore
+	everyStore
+	at(opIdx ElementIndex)
+end 'JudgedStore'
+
+type ClosureCycle
+	export let key as OriginKey
+	export let order as OriginKey
+	export let at as SourceRange
+	export let holder as CycleHolder
+	export let storesAClosure as bool
+
+	static function create(key OriginKey, order OriginKey, at SourceRange, holder CycleHolder, storesAClosure bool) returns ClosureCycle
+		return Self{key: key, order: order, at: at, holder: holder, storesAClosure: storesAClosure}
+	end 'create'
+end 'ClosureCycle'
+
+typealias ClosureCycleArray = Array with ClosureCycle
+
+type ClosureCycles
+	var found as ClosureCycleArray
+
+	static function create() returns ClosureCycles
+		return Self{found: ClosureCycleArray.create()}
+	end 'create'
+
+	function note(key OriginKey, order OriginKey, at SourceRange, holder CycleHolder, storesAClosure bool)
+		self.found.push(ClosureCycle.create(key, order: order, at: at, holder: holder, storesAClosure: storesAClosure))
+	end 'note'
+
+	function latestOfEach() returns ClosureCycleArray
+		var latest = ClosureCycleArray.create()
+
+		for cycle in self.found 'eachCycle'
+			if not self.laterStoreCloses(cycle) 'theStoreThatClosesIt'
+				latest.push(cycle)
+			end 'theStoreThatClosesIt'
+		end 'eachCycle'
+
+		return latest
+	end 'latestOfEach'
+
+	function laterStoreCloses(cycle ClosureCycle) returns bool
+		for other in self.found 'eachOther'
+			if other.key == cycle.key and other.order > cycle.order 'closedLater'
+				return true
+			end 'closedLater'
+		end 'eachOther'
+
+		return false
+	end 'laterStoreCloses'
+end 'ClosureCycles'
+
+function ascendingOrigins(origins OriginList) returns OriginList
+	var sorted = origins.clone()
+	sorted.sort()
+	return sorted
+end 'ascendingOrigins'
+
+function widenRowAt(row ParamPositionMaskArray, into ParamCount, by ParamPositionMask)
+	let before = try row.get(into) otherwise panic("widenRowAt: row is shorter than parameter {into}")
+	try row.set(into, value: before or by) otherwise panic("widenRowAt: row.set OOB at {into}")
+end 'widenRowAt'
+
+function siteRange(site ClosureStoreSite) returns SourceRange
+	return SourceRange.create(0, endByte: 0, line: site.line, column: site.column)
+end 'siteRange'
+
+function closureCycleMessage(holder CycleHolder, storesAClosure bool) returns String
+	let subject = "this closure captures" if storesAClosure else "this value holds a closure that captures"
+
+	return match holder 'holder'
+		named(name) gives "{subject} '{name}' and is stored into a record '{name}' holds, so '{name}' would hold the closure and the closure would hold '{name}', and neither would ever be released. Store it somewhere '{name}' does not reach, or capture what the closure needs instead of '{name}' itself"
+		heldHere gives "{subject} a record this function holds{UnnamedHolderConsequence}"
+		heldBy(parameter) gives "{subject} a record '{parameter}' holds{UnnamedHolderConsequence}"
+	end 'holder'
+end 'closureCycleMessage'
+
+let UnnamedHolderConsequence = " and is stored into a record that record holds, so the record would hold the closure and the closure would hold the record, and neither would ever be released. Store it somewhere the record does not reach, or capture what the closure needs instead of the record itself"
+
+function fieldSiteBox(site ClosureStoreSite) returns ValueId throws AbsentError
+	match site.destination 'destination'
+		field(box, _) then return box
+		element then throw AbsentError.absent
+	end 'destination'
+end 'fieldSiteBox'

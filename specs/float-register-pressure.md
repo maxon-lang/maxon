@@ -28,7 +28,7 @@ same point and the allocator must reach the REX-addressed half of the register f
 intrinsics are spread across `floor`, `ceil`, `round` (the three `roundsd` modes) and
 `sqrt` (`sqrtsd`), so the prefix is exercised on every float instruction that takes one.
 
-⭐ SINCE WAVE 2 THIS TEST CARRIES A SECOND, UNRELATED JOB: `scatter` is a LEAF that now
+⭐ THIS TEST CARRIES A SECOND, UNRELATED JOB: `scatter` is a LEAF that
 colours values into the callee-saved xmm6–15, so it must reserve a frame and save them —
 making it **the only test in the suite that exercises the leaf branch of
 `computeFrameBytes`**. That branch reserves `alignUp(stackSize + calleeSavedXmmBytes, 16)`

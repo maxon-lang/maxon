@@ -45,15 +45,11 @@ inliner's slow-arm re-run is gone, and a leaf with a store and a panic is inline
 callee or the callee's blocks; the exit codes below are the same either way, which is what makes them
 a control on the answer and not on the shape.
 
-**`wasm32-wasi` has no inline frame records, so the rule fails closed there.** A wasm panic prints the
-frames each function recorded on entry to its frame stack (`StdToWasm.appendPanicRuntime`) — there is no
-saved-frame-pointer chain and no inline frame table beside it, so a trace raised inside a spliced body
-would lose the callee's frame with no record to restore it. On a target
-whose backend emits no inline frame records (`TargetFacilities.targetEmitsInlineFrameRecords`) the
-called-once rule refuses every callee (refusal `noInlineFrameRecords`, tallied and logged like the others),
-and the leaf rule refuses any body holding a panic op or a `div`/`mod` — the shapes whose diagnostic names
-a frame — while otherwise running as before. The stderr cases here therefore print the same trace on every
-target: the call still stands where the splice would have moved its frame.
+**`wasm32-wasi` keeps the same positions in its own frame stack.** A wasm panic prints the frames each function
+recorded on entry (`StdToWasm.appendPanicRuntime`); a function holding a spliced body also records, before
+every call and every panic, which inline site that instruction sits in, and the walk prints the site's chain
+ahead of the function's own name. The stderr cases here therefore print the same trace on every target, with
+the splice made on every target.
 
 ## Tests
 
@@ -164,7 +160,7 @@ end 'main'
 <!-- test: a-panic-inside-a-spliced-body-names-the-callee -->
 ⭐ **THE TRACE GATE.** The same flip step as the shape case, but `temp` is one slot shorter than `n`,
 so the `set` in the copy loop's LAST iteration takes its `otherwise panic` arm — inside a loop body
-that now lives in `main`'s frame. The panic block carries its inline site, the range record names
+that the splice places in `main`'s frame. The panic block carries its inline site, the range record names
 `flipOnce`, and the printer reads `in flipOnce / in main` off a frame that belongs to `main`. This
 stderr is byte-identical to what the same program prints with the call left standing.
 
@@ -325,7 +321,7 @@ Stack trace:
 ⭐ **A FAULT HAS NO PANIC BLOCK TO TAG — ONLY AN ADDRESS.** `specs/safety.md`'s
 `divide-by-zero-fault-through-a-resized-array-slot`, with the dividing function given a store loop
 so it is no leaf and called exactly once, so it is spliced. The zero a `resize` exposed reaches a bare
-`idiv` that now sits in `main`'s code and raises `#DE`; the fault handler has nothing but the faulting
+`idiv` that the splice places in `main`'s code and raises `#DE`; the fault handler has nothing but the faulting
 address, and the range record covering it is what names `divide`.
 
 The arm64 lanes and wasm32-wasi are excluded for that case's reason: their divide does not raise a fault
@@ -573,4 +569,239 @@ end 'main'
 ```
 ```exitcode
 25
+```
+
+<!-- test: a-splice-keeps-a-deep-trace-under-the-frame-cap -->
+⭐ **THE SPLICE IS VISIBLE IN THE TRACE ON EVERY LANE, THROUGH THE FRAME CAP.** `innermost` is a leaf with a panic, `middle`
+and `outer` are called once, so all three are spliced into `descend`, which recursion keeps a call 97 frames deep.
+The trace prints 99 physical frames and every line of them. Were the three left standing as calls, 102 physical
+frames would pass `MaxBacktraceFrames` and the walk would print `...additional frames elided...` where `in main`
+and `in mrt_start` stand. The inline lines ride their frame and do not count against the cap.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function innermost(n Integer) returns Integer
+	if n > 0 'deep'
+		panic("innermost: reached with a positive n")
+	end 'deep'
+
+	return n
+end 'innermost'
+
+function middle(n Integer) returns Integer
+	return innermost(n) + 1
+end 'middle'
+
+function outer(n Integer) returns Integer
+	return middle(n) + 1
+end 'outer'
+
+function descend(depth Integer, n Integer) returns Integer
+	if depth == 0 'bottom'
+		return outer(n)
+	end 'bottom'
+
+	return descend(depth - 1, n: n) + 1
+end 'descend'
+
+function main() returns ExitCode
+	return descend(96, n: 1) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-splice-keeps-a-deep-trace-under-the-frame-cap.test:6: innermost: reached with a positive n
+Stack trace:
+  in innermost
+  in middle
+  in outer
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in main
+  in mrt_start
+```
+
+<!-- test: a-call-out-of-a-spliced-body-names-the-callee-under-it -->
+A call made from INSIDE a spliced body: `spliced` is called once and spliced into `main`, and the `check` it calls
+(two sites, and a `print`, so no splice) panics. Its frame is printed above a `main` frame whose position is the
+splice, so `in spliced` stands between them exactly as it would with the call left standing.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function check(n Integer) returns Integer
+	print("check {n}\n")
+
+	if n > 2 'big'
+		panic("check: n is past two")
+	end 'big'
+
+	return n
+end 'check'
+
+function spliced(n Integer) returns Integer
+	let checked = check(n)
+	return checked + 1
+end 'spliced'
+
+function main() returns ExitCode
+	let first = check(1)
+	return spliced(first + 2) as ExitCode
+end 'main'
+```
+```stdout
+check 1
+check 3
+```
+```exitcode
+1
+```
+```stderr
+panic at a-call-out-of-a-spliced-body-names-the-callee-under-it.test:8: check: n is past two
+Stack trace:
+  in check
+  in spliced
+  in main
+  in mrt_start
+```
+
+<!-- test: a-call-from-the-callers-own-text-after-a-splice-names-only-the-caller -->
+The same two functions, with the panic reached from `main`'s OWN text after the spliced body has run a call of its
+own. The trace names `main` alone: the position the spliced call left behind is not the one the later call is
+made from.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function check(n Integer) returns Integer
+	print("check {n}\n")
+
+	if n > 2 'big'
+		panic("check: n is past two")
+	end 'big'
+
+	return n
+end 'check'
+
+function spliced(n Integer) returns Integer
+	let checked = check(n)
+	return checked + 1
+end 'spliced'
+
+function main() returns ExitCode
+	let first = spliced(1)
+	return check(first + 2) as ExitCode
+end 'main'
+```
+```stdout
+check 1
+check 4
+```
+```exitcode
+1
+```
+```stderr
+panic at a-call-from-the-callers-own-text-after-a-splice-names-only-the-caller.test:8: check: n is past two
+Stack trace:
+  in check
+  in main
+  in mrt_start
 ```

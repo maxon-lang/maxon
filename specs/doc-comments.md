@@ -26,9 +26,8 @@ end 'f'
 ```
 
 The cases below pin the consequences. They are not a survey of the feature — each one is a place
-where making `///` a token could have changed the meaning of a program that already compiled, and
-several of them would have failed **silently**, with no diagnostic, if the layout rule had been
-written down twice and the copies disagreed.
+where `///` being a token could change the meaning of a program, and several of them would fail
+**silently**, with no diagnostic, if the layout rule were written down twice and the copies disagreed.
 
 ## Tests
 
@@ -52,15 +51,15 @@ emitter elides the unreachable tail after it. A doc comment written after the `p
 become the last top-level statement — nothing would be diagnosed, the exit edge would simply stop
 being elided.
 
-⚠ **`tail` is CALLED with a RUNTIME value, and neither half is incidental.** The first version of
-this case never called it, so dead-code elimination dropped the function before it was emitted and
-the golden recorded only `@main`. The second passed a literal, so the call inlined and the branch
-folded and the panic path vanished again. Both passed while exercising nothing. A case that cannot
-reach its own subject reads exactly like one that checked it, and this one took two tries to reach it.
+⚠ **`tail` is CALLED with a RUNTIME value, and neither half is incidental.** Uncalled, dead-code
+elimination drops the function before it is emitted and the golden records only `@main`. Called with
+a literal, the call inlines, the branch folds and the panic path vanishes. Either way the case would
+pass while exercising nothing: a case that cannot reach its own subject reads exactly like one that
+checked it.
 
 ⭐ **The claim is backed by a THREE-WAY CONTROL, not by the exit code.** The emitted IR for `tail` is
 BYTE-IDENTICAL whether the line after the `panic` is a `///` doc comment, an ordinary `//` comment,
-or nothing at all — measured on all three. That is the actual property: the doc comment costs no
+or nothing at all. That is the actual property: the doc comment costs no
 codegen. The exit code alone could not have shown it, because the failure this guards against is
 silent — an exit edge the emitter stops eliding, with no diagnostic anywhere. The golden below is
 what would move.
@@ -104,8 +103,8 @@ error E2015: specs/fragments/doc-comments/doc-comments.not-an-array-element.test
 ```
 
 <!-- test: doc-comments.not-a-block-body -->
-A block holding nothing but a doc comment is still an EMPTY block. `//` behaved this way before
-`///` was a token and must go on behaving this way now.
+A block holding nothing but a doc comment is still an EMPTY block, exactly as one holding only a `//`
+comment is.
 ```maxon
 function main() returns ExitCode
 	if 1 == 1 'ok'

@@ -11,24 +11,21 @@ category: control-flow
 Every `gives` arm of a match expression feeds ONE result phi, and a value's register file — general
 (int/bool) vs XMM (float) — is fixed by its type at birth. So an integer give and a float give in the
 same match hand the phi two values from different files. The register allocator cannot color a move
-across files (`X64Backend.emitRegRegMove`); before this was guarded, such a program **crashed the
-compiler** with `panic: crosses register files` — a backend panic on a user program, not a diagnostic.
+across files (`X64Backend.emitRegRegMove`), and a backend panic on a user program is never an answer.
 
 The compiler UNIFIES such arms: it promotes the integer arms to float (`cvtsi2sd`) so the result
-is uniformly float (P1.5 #31). The integer arm's promotion is emitted into that
+is uniformly float. The integer arm's promotion is emitted into that
 arm's OWN exit block — its `cvtsi2sd` on the conditional path, never hoisted before the branch — so only
 the selected arm converts, and the merged result is a float value the surrounding context consumes like
 any other (`trunc` reads it back to an int, returning it directly as an `ExitCode` would be a separate
-`E3009`). This replaces the earlier `E2015` "different register classes" refusal, which was a placeholder
-for exactly this promotion while floats were not yet a nameable type; now that they are, the refusal is
-gone.
+`E3009`).
 
 **Only INTEGER arms promote.** A float arm meeting a genuinely non-numeric arm — a `bool`, a `String`, a
 struct, a union — is not a register-class crossing to unify but a real type disagreement, and it is
 rejected as one (E3005, below), not promoted. **Same-class arms** are untouched by the promotion but must
 still AGREE IN TYPE with each other, which is the same rule (below).
 
-## Same-Class Arms Must Still Agree In Type (OPEN #54 Slice C)
+## Same-Class Arms Must Still Agree In Type
 
 The promotion above unifies a float arm with an INTEGER arm and rejects a float arm meeting a genuinely
 non-numeric one. Neither reaches two arms that share a register class but are DIFFERENT TYPES — a `String`
@@ -66,7 +63,7 @@ Both render as **E3005**, positioned at the `match` keyword. Same-type arms (`0 
 
 <!-- test: int-and-float-arms -->
 The arms cross register classes — an integer `5` and a float `7.5` — so the integer arm is promoted
-to float (`cvtsi2sd`) and the result is uniformly float (P1.5 #31). With `x` = 1 the integer arm is selected, promoted to `5.0`; `trunc` reads it back as 5.
+to float (`cvtsi2sd`) and the result is uniformly float. With `x` = 1 the integer arm is selected, promoted to `5.0`; `trunc` reads it back as 5.
 ```maxon
 function main() returns ExitCode
 	let x = 1

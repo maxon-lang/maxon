@@ -162,20 +162,20 @@ end 'main'
 <!-- test: char-literal-coerces-across-a-closure-body -->
 ### A character literal parsed before a closure still converts after it
 
-⛔⛔ **THE PER-FUNCTION COLUMN THAT WAS RESET WITHOUT BEING SAVED (BATCH23 review).** `integerizedOperand`
+⛔⛔ **THE CLOSURE-BODY CONTEXT SWAP MUST SAVE AND RESTORE A PER-FUNCTION COLUMN.** `integerizedOperand`
 rewrites a character literal's already-emitted `stringLiteral` op IN PLACE, and finds that op through
 `Parser.charLiteralOps` — a per-function map keyed by `ValueId`. `parseBinary` reads the LEFT operand's
 token span only once the RIGHT operand is in hand, so a closure in the right operand is parsed BETWEEN the
-left literal's emit and its conversion. The closure-body context swap reset that map and never restored it,
-which is two wrong answers on one line, both MEASURED:
+left literal's emit and its conversion. A swap that reset that map without restoring it gives two wrong
+answers on one line:
 
-  • `'0' + apply(function(n Integer) gives n + 1, x: 1)` found no entry and **PANICKED the compiler**.
-  • `'A' + apply(function(n Integer) gives n + '0', x: 1)` was worse, because a closure's value ids are a
-    FRESH SSA space that COLLIDES with the enclosing function's: the lookup HIT the closure's entry, rewrote
-    the CLOSURE's op, and left the outer literal a `stringLiteral`. It printed **5368717386** — the record's
-    `.rdata` ADDRESS added as a number — where 114 is correct, silently.
+  • `'0' + apply(function(n Integer) gives n + 1, x: 1)` finds no entry and **PANICS the compiler**.
+  • `'A' + apply(function(n Integer) gives n + '0', x: 1)` is worse, because a closure's value ids are a
+    FRESH SSA space that COLLIDES with the enclosing function's: the lookup HITS the closure's entry,
+    rewrites the CLOSURE's op, and leaves the outer literal a `stringLiteral`, printing the record's
+    `.rdata` ADDRESS added as a number where 114 is correct, silently.
 
-All three answers below are the oracle's own (MEASURED: `a=50 b=114 c=51`). The third case pins the other
+The three answers below are `a=50 b=114 c=51`. The third case pins the other
 direction — a literal AFTER the closure — so a fix that saved the map without restoring it would still fail.
 
 ```maxon

@@ -12,8 +12,7 @@ function acceptedHeader(server HttpServer) returns String
 	return accepted
 end 'acceptedHeader'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async acceptedHeader(server)
 
 	let client = try TcpClient.connect("127.0.0.1", port: server.port()) otherwise return 2
@@ -27,6 +26,11 @@ function main() returns ExitCode
 	print("accept={seen}\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ---
 ExitCode: 0
@@ -292,7 +296,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc equal, __il_body#4
   tryerr#2:
     x64.movRegImm32 r8, 1
     x64.epilogue 88
@@ -303,7 +307,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#1:
+  __il_body#4:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
     x64.movRegReg r12, r8
@@ -316,76 +320,46 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __gt_ready
     x64.leaRegRdata rcx, [rip + __str_rec_152]  ; "127.0.0.1"
-  __il_body#10:
+  __il_body#12:
     x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
-  __il_cont#9:
+  __il_cont#11:
     x64.callDirect TcpClient.connect
     x64.movRegReg r12, r8
     x64.storeSlotReg slot1, r12
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#3
-  tryerr#4:
-    x64.movRegImm32 r12, 2
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.movRegImm32 rbx, 2
     x64.movRegReg rcx, r13
     x64.callDirect __gt_promise_drop
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_HttpServer
-    x64.movRegReg r8, r12
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#3:
+    x64.jmp __il_cont#3
+  tryok#5:
     x64.leaRegRdata rdx, [rip + __str_rec_153]  ; "GET / HTTP/1.1\x0d\x0aHost: 127.0.0.1\x0d\x0aAccept: text/html\x0d\x0aX-Other: 1\x0d\x0aACCEPT: text/plain\x0d\x0a\x0d\x0a"
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.send
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#5
-  tryerr#6:
-    x64.movRegImm32 r14, 3
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.movRegImm32 rbx, 3
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_TcpClient
     x64.movRegReg rcx, r13
     x64.callDirect __gt_promise_drop
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_HttpServer
-    x64.movRegReg r8, r14
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#5:
+    x64.jmp __il_cont#3
+  tryok#7:
     x64.movRegImm32 rdx, 4096
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.recv
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#7
-  tryerr#8:
-    x64.movRegImm32 r14, 4
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.movRegImm32 rbx, 4
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_TcpClient
     x64.movRegReg rcx, r13
     x64.callDirect __gt_promise_drop
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_HttpServer
-    x64.movRegReg r8, r14
-    x64.epilogue 88
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#7:
+    x64.jmp __il_cont#3
+  tryok#9:
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
     x64.movRegReg rcx, r12
@@ -394,15 +368,15 @@ func @main {
     x64.callDirect __gt_await
     x64.movRegReg r12, r8
     x64.storeSlotReg slot2, r12
-  __il_body#14:
+  __il_body#16:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.byte [rax + 0], rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#16:
+  __il_body#18:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __ms_close
-  __il_cont#13:
+  __il_cont#15:
     x64.leaRegRdata rax, [rip + __str_rec_154]  ; "accept="
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -445,10 +419,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 16], rcx
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.word64 [rax + 24], rcx
-  __il_body#12:
+  __il_body#14:
     x64.loadRegSlot rcx, slot4
     x64.callDirect __write_stdout
-  __il_cont#11:
+  __il_cont#13:
     x64.loadRegSlot rcx, slot4
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -456,6 +430,7 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot1
     x64.callDirect __destruct_TcpClient
+  __il_cont#3:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_HttpServer
     x64.movRegReg r8, rbx

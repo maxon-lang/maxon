@@ -53,12 +53,10 @@ The explicit column is a cast where nothing declares the type, such as `let r = 
 destination already declares it — `takeFloat(100 as Real)` against a `Real` parameter — the cast is
 redundant and refused as unneeded (E3010); the implicit spelling is the one to write there.
 
-That agreement is the point, and it was once broken: this file used to say `float` -> `int`
-truncated implicitly while `type-casting.md` rejected the identical explicit cast — so writing
-`as` got you an error telling you to use `trunc`, and writing nothing at all got you the
-truncation the error had just forbidden. One rule stated twice, with opposite answers, and the
-silent one won whenever an argument crossed a function boundary. Fixed in P1.0d.4; E3009 is
-now emitted for both spellings.
+That agreement is the point: E3009 is emitted for both spellings. An implicit `float` -> `int`
+truncation beside `type-casting.md`'s rejection of the identical explicit cast would mean writing
+`as` gets you an error telling you to use `trunc`, and writing nothing at all gets you the
+truncation the error has just forbidden — one rule stated twice, with opposite answers.
 
 ### Where implicit conversion applies
 
@@ -151,9 +149,9 @@ error E3009: specs/fragments/implicit-type-conversion/float-to-int-param-rejecte
 ```
 
 <!-- test: float-to-int-param-explicit-trunc -->
-The half that still works, and the reason the rejection above costs nothing: say which rounding you
+The half that works, and the reason the rejection above costs nothing: say which rounding you
 meant and the same program compiles. `trunc` truncates toward zero, so `3.7` is `3` -- the very
-value the implicit form used to produce silently.
+value a silent implicit conversion would produce.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -282,10 +280,9 @@ error E3005: specs/fragments/implicit-type-conversion/no-int-to-bool.test:14:9: 
 <!-- test: int-literal-to-float-return -->
 ⭐ **THE DOC STATES THE RULE FOR THREE SITES AND EVERY CASE ABOVE EXERCISES ONE.** Each widening test
 above goes through a call ARGUMENT; the one return-direction case is the NARROWING half. So the
-`return` half of "the rule is not special to arguments" was stated and never run — and it did not
-work: the value agreed, nothing converted it, and the raw i64 reached the backend where the f64
-return register is. Measured before this case existed: `panic … a register-to-register move from rax
-to xmm0 crosses register files`.
+`return` half of "the rule is not special to arguments" is exercised here: an unconverted value
+would reach the backend as a raw i64 where the f64 return register is, a register-to-register move
+from rax to xmm0 across register files.
 
 Every case below asserts a computed VALUE and not merely that the program compiles, because that is
 the shape of the bug — `42` here is `3.0 * 14.0`, which an unconverted `3` cannot produce.
@@ -326,9 +323,9 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: int-literal-to-float-field-literal -->
-A struct LITERAL is a coercion site: the field declares the type and the value has to meet it. This
-compiled and RAN before the conversion existed, storing the integer's raw bytes in an f64 slot —
-`3` read back as 1.5e-323, so `r.raw() == 3.0` was false and the program returned 7.
+A struct LITERAL is a coercion site: the field declares the type and the value has to meet it.
+Without the conversion the integer's raw bytes would land in an f64 slot — `3` read back as
+1.5e-323, so `r.raw() == 3.0` would be false and the program would return 7.
 ```maxon
 type Reading
 	export var value as Real
@@ -456,10 +453,10 @@ end 'main'
 ```
 
 <!-- test: int-literal-to-float-local -->
-A LOCAL `var` keeps its declared type across a rebind for the same reason. Before the coercion the
-binding silently became an int — `scale == 3.0` on the very next line reported "cannot compare int
-with float" against a legal program, and the same rebind inside a loop fed an i64 and an f64 into one
-header phi (a cross-register-file panic in the x64 emitter).
+A LOCAL `var` keeps its declared type across a rebind for the same reason. Without the coercion the
+binding would silently become an int — `scale == 3.0` on the very next line would report "cannot
+compare int with float" against a legal program, and the same rebind inside a loop would feed an i64
+and an f64 into one header phi.
 ```maxon
 function main() returns ExitCode
 	var scale = 0.0

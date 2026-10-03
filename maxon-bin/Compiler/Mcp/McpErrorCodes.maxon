@@ -149,7 +149,12 @@ function readDocumentation(code String) returns String throws McpError
 end 'readDocumentation'
 
 function codeSpellingIn(reqDoc JsonDoc, args OptionalNode) returns String
-	let codeId = try reqDoc.getChild(argumentsNode(args), key: CodeArgument) otherwise panic("codeSpellingIn: the roster requires `{CodeArgument}`, so it arrived")
+	let argsId = match args 'given'
+		some(id) gives id
+		none panic("codeSpellingIn: the roster requires `{CodeArgument}`, so the call carries arguments")
+	end 'given'
+
+	let codeId = try reqDoc.getChild(argsId, key: CodeArgument) otherwise panic("codeSpellingIn: the roster requires `{CodeArgument}`, so it arrived")
 	let code = reqDoc.get(codeId)
 
 	return match code.kind 'spelling'
@@ -163,7 +168,7 @@ export function executeLookupErrorCodeTool(reqDoc JsonDoc, idNode JsonNodeId, ar
 	let raw = codeSpellingIn(reqDoc, args: args)
 
 	if raw.isEmpty() 'noCode'
-		return toolErrorText(reqDoc, idNode: idNode, message: "`code` must name a code: 3014, \"3014\", \"E3014\", or a registry case name.", repoRoot: "")
+		return toolErrorText(reqDoc, idNode: idNode, message: "`code` must name a code: 3014, \"3014\", \"E3014\", or a registry case name.", repoRoot: ActingTree.host)
 	end 'noCode'
 
 	let key = normalizeKey(raw)
@@ -173,7 +178,7 @@ export function executeLookupErrorCodeTool(reqDoc JsonDoc, idNode JsonNodeId, ar
 			caseName(text) gives "the error-code registry declares no case named `{text}`."
 		end 'k'
 
-		return toolErrorText(reqDoc, idNode: idNode, message: "lookup_error_code: {reason}", repoRoot: "")
+		return toolErrorText(reqDoc, idNode: idNode, message: "lookup_error_code: {reason}", repoRoot: ActingTree.host)
 	end 'unclaimed'
 
 	let stage = try stageForCode(entry.code) otherwise panic("executeLookupErrorCodeTool: `{entry.code}` came from the registry and must have a stage")

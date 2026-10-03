@@ -1,0 +1,23 @@
+let FoldedConstructionDirName = "diagnostics-project-folded-construction"
+let FoldedConstructionFileName = "main.maxon"
+let FoldedConstructionSource = "typealias Num = int(0 to 1000)\n\nenum Colour\n\tred\n\tgreen\nend 'Colour'\n\nunion Status\n\tidle\n\tbusy(n Num)\nend 'Status'\n\ntype Mixed\n\texport var c as Colour\n\texport var n as Num\n\n\tstatic function create(c Colour, n Num) returns Mixed\n\t\treturn Self\{c: c, n: n\}\n\tend 'create'\nend 'Mixed'\n\nlet Bad = Mixed.create(Status.idle, n: 4)\n\nfunction main() returns ExitCode\n\treturn Bad.n as ExitCode\nend 'main'\n"
+let FoldedConstructionCode = "E3005"
+let FoldedConstructionMessage = "argument type mismatch for 'c': expected 'Colour', got 'Status'"
+let FoldedConstructionLine = 21
+let FoldedConstructionCharacter = 10
+
+test 'a mismatch in a folded top-level construction is reported in the file that wrote it'
+	let root = stagedProjectDiagnosticsRoot(FoldedConstructionDirName)
+	writeCorpusFile(root, fileName: FoldedConstructionFileName, content: FoldedConstructionSource)
+
+	let session = probeProjectCheckSession(root, fileName: FoldedConstructionFileName, content: FoldedConstructionSource, edits: StringArray.create())
+
+	discardOutsideCheckoutDir(root)
+
+	let reported = try onlyProjectDiagnostic(session.diagnostics, note: "`let Bad = Mixed.create(Status.idle, n: 4)` hands a `Status` case to a `Colour` parameter. The construction folds, and a `maxon build` reports exactly one `{FoldedConstructionCode}` at the argument, in this file.")
+
+	try Expect.equal(reported.code.describe(), expected: FoldedConstructionCode, message: "the one error a build of this project reports is {FoldedConstructionCode}; the server published {reported.code.describe()}: {reported.message}")
+	try Expect.equal(reported.message, expected: FoldedConstructionMessage, message: "the server must quote the mismatch the build quotes.")
+	try Expect.equal(reported.range.startLine, expected: FoldedConstructionLine, message: "the build anchors the error on line 22, the `let Bad` declaration.")
+	try Expect.equal(reported.range.startCharacter, expected: FoldedConstructionCharacter, message: "the build anchors the error at column 11.")
+end 'a mismatch in a folded top-level construction is reported in the file that wrote it'

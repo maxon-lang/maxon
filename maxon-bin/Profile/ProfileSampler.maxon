@@ -163,14 +163,14 @@
 			return try self.starts.get(0) otherwise 0
 		end 'mainModuleBase'
 
-		export function nameAt(address ProfileWord) returns String
+		export function nameAt(address ProfileWord) returns String throws AbsentError
 			for (iter, start) in self.starts.withIterator() 'eachModule'
 				if address >= start and address < (try self.ends.get(iter.index()) otherwise start) 'inThisModule'
-					return try self.names.get(iter.index()) otherwise ""
+					return try self.names.get(iter.index()) otherwise panic("ProfileModuleMap.nameAt: module {iter.index()} has a start and no name — the three columns are pushed together")
 				end 'inThisModule'
 			end 'eachModule'
 
-			return ""
+			throw AbsentError.absent
 		end 'nameAt'
 	end 'ProfileModuleMap'
 
@@ -221,7 +221,7 @@
 		for index in 0 upto sectionCount 'eachSection'
 			let header = firstSection + (index * ProfileSectionHeaderBytes) as ByteOffset
 
-			if not spanFitsWithin(header, count: ProfileSectionHeaderBytes as BytePos, total: image.count() as BytePos) or imageNameAt(image, at: header, maxBytes: ProfileSectionNameBytes) != ProfileTextSectionName 'notTheCode'
+			if not spanFitsWithin(header, count: ProfileSectionHeaderBytes as BytePos, total: image.count() as BytePos) or not imageNameIs(image, at: header, maxBytes: ProfileSectionNameBytes, name: ProfileTextSectionName) 'notTheCode'
 				continue
 			end 'notTheCode'
 
@@ -391,9 +391,8 @@
 	// return address that might well resolve to a real function of ours and attribute the sample to a caller
 	// that never called it. One unnamed frame is the honest answer; a plausible wrong one is not.
 	function profileForeignLeafFrame(image ProfileImage, address ProfileWord) returns String
-		let name = image.modules.nameAt(address)
-
-		return ProfileOutsideTextFrame if name.isEmpty() else "[{name}]"
+		let name = try image.modules.nameAt(address) otherwise return ProfileOutsideTextFrame
+		return "[{name}]"
 	end 'profileForeignLeafFrame'
 
 	// ========================================================================================

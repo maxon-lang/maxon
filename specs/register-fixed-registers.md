@@ -3,7 +3,6 @@ feature: register-fixed-registers
 status: selfhosted
 keywords: [register-allocator, fixed-register, idiv, rax, rdx, calling-convention, argument-registers, forbidden]
 category: register-allocator
-milestone: M5.4
 ---
 
 # Fixed-register interactions: `idiv`, calls, and the argument registers
@@ -151,8 +150,8 @@ call), while argument setup still writes `RCX`, `RDX`, `RAX`, `R9`, `RSI`, `RDI`
 Same digits as above, and the tail re-encodes the same six values, so
 `846325 + 846325 = 1692650`.
 
-⚠ The three divisors are cast into `Positive` (A1). `p + 12` is a PARAMETER expression, not a
-constant, so an unguarded divide is now E3057 — and this case's whole subject is Hall's condition
+⚠ The three divisors are cast into `Positive`. `p + 12` is a PARAMETER expression, not a
+constant, so an unguarded divide is E3057 — and this case's whole subject is Hall's condition
 over the six `idiv` RESULTS, which only exists if the divides are the bare instruction. A range
 excluding 0 keeps them bare. Each cast costs one `cmp`/branch against the lower bound — an
 `int(1 to i64.max)` needs no upper check, and the bound folds into a `cmpImm`, so the COMPARE holds no
@@ -343,7 +342,7 @@ only one value would cross the divide, and the test would prove nothing.
 `135/1 = 135`, `135/2 = 67`, `135/3 = 45`, `135/4 = 33`, `135/5 = 27`; total
 `135 + 67 + 45 + 33 + 27 = 307`.
 
-⚠ The loop counter is cast into `Positive` at the divide (A1); an unguarded loop-carried divisor is
+⚠ The loop counter is cast into `Positive` at the divide; an unguarded loop-carried divisor is
 E3057, and this case needs the bare `idiv` (a `try` here would add the fork's own values to a working
 set that has exactly one register of slack). The guard's `cmp` folds its bound into an immediate and so
 holds no register; the cast's retag mint takes one (`r15` in the golden), and the eleven-value set still

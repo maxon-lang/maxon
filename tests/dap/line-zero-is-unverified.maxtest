@@ -1,0 +1,35 @@
+let LineZeroCaseLabel = "line-zero-is-unverified"
+let InnerLoopAnchor = "inner-loop"
+let LineZero = 0
+
+type LineZeroSession implements DapSession
+	let executable as FilePath
+	let source as FilePath
+	let anchored as SourceLine
+	export var answer as JsonDoc
+
+	static function create(executable FilePath, source FilePath, anchored SourceLine) returns LineZeroSession
+		return Self{executable: executable, source: source, anchored: anchored, answer: JsonDoc.create()}
+	end 'create'
+
+	function drive(client DapClient) throws DapClientError
+		_ = try client.request(InitializeCommand, argumentsJson: dapInitializeArguments())
+		_ = try client.request(LaunchCommand, argumentsJson: dapLaunchArguments(self.executable))
+		_ = try client.awaitEvent(InitializedEvent)
+
+		self.answer = try client.request(SetBreakpointsCommand, argumentsJson: "\{\"source\":\{\"path\":{Json.quote(self.source.toString())}\},\"breakpoints\":[\{\"line\":{LineZero}\},\{\"line\":{self.anchored}\}]\}")
+
+		_ = try client.request(DisconnectCommand)
+	end 'drive'
+end 'LineZeroSession'
+
+test 'a breakpoint on line 0 from a client counting from 1 is unverified and the rest of the request still arms'
+	let staged = dapStagedFixture(LineZeroCaseLabel, fixture: SteppingFixtureName)
+	var session = LineZeroSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: InnerLoopAnchor))
+	try dapRunSession(session, completing: "complete")
+
+	try Expect.isTrue(dapSuccess(session.answer), message: "one breakpoint on a line no source has must not fail the whole `setBreakpoints` request; it answered {dapDescribed(session.answer)}")
+	try Expect.isFalse(dapBreakpointVerified(session.answer, index: 0), message: "a client counting from 1 has no line 0, so that breakpoint cannot be verified; it answered {dapDescribed(session.answer)}")
+	try Expect.isTrue(dapBreakpointHasMessage(session.answer, index: 0), message: "the unverified breakpoint must say why; it answered {dapDescribed(session.answer)}")
+	try Expect.isTrue(dapBreakpointVerified(session.answer, index: 1), message: "the request's other breakpoint is on a line that emits code and must verify; it answered {dapDescribed(session.answer)}")
+end 'a breakpoint on line 0 from a client counting from 1 is unverified and the rest of the request still arms'

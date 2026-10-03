@@ -57,7 +57,7 @@ export function runTest(args MaxonArgs) returns ExitCode
 	end 'tooManyPaths'
 
 	let projectDir = try testProjectDir(args) otherwise 'badPath'
-		return refuseTestRun("'{args.solePositional()}' is not a valid path")
+		return refuseTestRun("'{try args.positionalAt(SolePositionalIndex) otherwise panic("runTest: `testProjectDir` fails only on a path the command line spelled")}' is not a valid path")
 	end 'badPath'
 
 	if not Directory.isDirectory(projectDir) 'notADirectory'
@@ -109,11 +109,7 @@ end 'runTest'
 
 // The project under test: the positional argument, or the working directory when there was none.
 function testProjectDir(args MaxonArgs) returns FilePath throws FilePathError
-	let spelled = args.solePositional()
-
-	if spelled.isEmpty() 'theWorkingDirectory'
-		return Directory.currentPath()
-	end 'theWorkingDirectory'
+	let spelled = try args.positionalAt(SolePositionalIndex) otherwise return Directory.currentPath()
 
 	return try FilePath.from(spelled)
 end 'testProjectDir'
@@ -187,7 +183,7 @@ function selectionFor(groups TestFileGroupArray, total ReportedTestCount, patter
 			if tally.filters() 'filtered'
 				let loweredName = member.test.displayName.toLower()
 
-				if not tally.admits(function(pattern) gives loweredName.contains(pattern) or loweredPath.contains(pattern)) 'filteredOut'
+				if not admitsTestNamed(tally, loweredName: loweredName, loweredPath: loweredPath) 'filteredOut'
 					continue
 				end 'filteredOut'
 
@@ -200,6 +196,10 @@ function selectionFor(groups TestFileGroupArray, total ReportedTestCount, patter
 
 	return FilteredSelection.create(selected, unmatchedPatterns: tally.unmatched())
 end 'selectionFor'
+
+function admitsTestNamed(tally FilterPatternTally, loweredName String, loweredPath String) returns bool
+	return tally.admits(function(pattern) gives loweredName.contains(pattern) or loweredPath.contains(pattern))
+end 'admitsTestNamed'
 
 // A value naming no pattern (`--filter=,`) is refused: it would otherwise add nothing to the union,
 // and as the only value it would keep every test.
@@ -294,7 +294,7 @@ end 'printTestList'
 function reportNothingToRun(reason String, args MaxonArgs, color bool) returns ExitCode
 	if args.jsonReport 'machineReadable'
 		let empty = TestRunReport.create(TestFileResultsArray.create(), compileMs: 0, runMs: 0, bailed: false)
-		let document = testRunJson(empty, showTiming: args.showTiming, emptyReason: reason)
+		let document = testRunJson(empty, showTiming: args.showTiming, emptiness: TestRunEmptiness.nothingRan(reason))
 		print("{document}\n")
 	end 'machineReadable' else 'human'
 		print(testEmptyRunNote(reason, color: color))
@@ -361,7 +361,7 @@ function buildTestBinary(projectDir FilePath, target Target, groups TestFileGrou
 	// run, and a binary living in the tree that gets walked is a file the next run would have to reason
 	// about.
 	let exePath = buildRoot.join("{TestBinaryStem}{executableExtension(target.os)}")
-	let product = try compileToProduct(staged.buildTargets, target: target, outputOverride: exePath.toString(), runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: debugInfo, entryFunction: MaxonTestEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, sourceSelection: SourceSelection.productionAndTests, stagedSourceOrigins: staged.stagedSourceOrigins) otherwise 'didNotCompile'
+	let product = try compileToProduct(staged.buildTargets, target: target, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: debugInfo, entryFunction: MaxonTestEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, sourceSelection: SourceSelection.productionAndTests, stagedSourceOrigins: staged.stagedSourceOrigins) otherwise 'didNotCompile'
 		// Silent about the cause: the pipeline already emitted every diagnostic through the one sink,
 		// and a sentence of our own here would be a second, vaguer report of the same failure.
 		printError("{TestCommandName}: the tests did not compile — the diagnostics above say why\n")
@@ -401,7 +401,7 @@ function runBuiltTests(args MaxonArgs, staged StagedTestBuild, binary FilePath, 
 	let report = TestRunReport.create(files, compileMs: compileMs, runMs: Clock.elapsedMs(runStarted), bailed: progress.bailed)
 
 	if args.jsonReport 'machineReadable'
-		let document = testRunJson(report, showTiming: args.showTiming)
+		let document = testRunJson(report, showTiming: args.showTiming, emptiness: TestRunEmptiness.hasResults)
 		print("{document}\n")
 	end 'machineReadable' else 'human'
 		print(testRunSummary(report, color: color, showTiming: args.showTiming))

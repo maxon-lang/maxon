@@ -1,32 +1,24 @@
-// MUST-NOT-COMPILE entry (SV1 wave 4) — `refcount-torture.maxon` written
-// against SERVICES, which is a COMPILE-TIME REFUSAL, and that is the point.
+// MUST-NOT-COMPILE entry — `refcount-torture.maxon`'s shape written against
+// SERVICES, which is a COMPILE-TIME REFUSAL, and that is the point.
 //
-// ⭐⭐ `refcount-torture.maxon` HANDS THE SAME HEAP `String` TO TWELVE TASKS. That
-// is what makes it a refcount race: every incref and every decref lands on one
-// word, and its header carries the 96-run table that justified making the step a
-// plain load/add/store. It stays an `async` program and `pin-matrix.sh` keeps
-// asserting `workers=1 steals=0` of it, because an `async` frame is a COROUTINE of
-// the green thread that called it and there is no second M to race from.
+// ⭐⭐ `refcount-torture.maxon` HAS TWELVE TASKS READ THE SAME MODULE-LEVEL HEAP
+// `String`. That is what makes it a refcount race: every incref and every decref
+// lands on one word, and its header carries the 96-run table that justified making
+// the step a plain load/add/store. It stays an `async` program and `pin-matrix.sh`
+// keeps asserting `workers=1 steals=0` of it, because an `async` frame is a
+// COROUTINE of the green thread that called it and there is no second M to race from.
 //
-// ⭐⭐ THE SAME PROGRAM CANNOT BE WRITTEN WITH SERVICES, AND THE COMPILER SAYS SO.
+// ⭐⭐ ONE BOX OWNED BY TWO SERVICES CANNOT BE WRITTEN, AND THE COMPILER SAYS SO.
 // A send is a MOVE: the sending frame gives up the reference it holds and the
 // service becomes the box's one owner. So the FIRST send takes `shared` away from
 // `main`, and the second one is asking `main` to give up a reference it no longer
-// has. Under the `async` shape those two hand-overs are what put twelve green
-// threads on twelve Ms stepping one plain refcount word — exactly the shape the
-// atomic used to cover and the pin now removes; under a service the shape has no
-// spelling at all.
+// has. Two services stepping one plain refcount word would be two OS threads on
+// it, which nothing pins; the shape has no spelling at all.
 //
-// ⚠⚠ **TWO SENDS, WRITTEN OUT, AND NOT A LOOP — MEASURED, BECAUSE THE FIRST CUT OF
-// THIS FILE WAS A LOOP AND `pin-matrix.sh` CAUGHT IT.** Handing a value declared
-// OUTSIDE a loop to a send INSIDE it is refused earlier and by a different rule:
-// `E2015 moving a value declared outside this loop from inside the loop body`,
-// which is about path-sensitive elaboration across a back edge and says nothing
-// whatever about transferability. A must-not-compile program that fails for the
-// wrong reason asserts nothing, which is why the driver checks the CODE and not
-// merely that the build failed — and why the mirror of "twelve tasks" here is two
-// straight-line sends. The COUNT was never the subject: twelve is what produces
-// CONTENTION, and contention cannot arise at all once the shape is refused.
+// The driver checks the CODE and not merely that the build failed, because a
+// must-not-compile program that fails for the wrong reason asserts nothing. The
+// COUNT is not the subject: twelve is what produces CONTENTION, and contention
+// cannot arise at all once the shape is refused.
 //
 // ⇒ **THE REFUSAL IS THE MEASUREMENT.** `refcount-race.sh` discriminates the
 // `async` shape by REPEATING it and tabulating exit codes, because the race is

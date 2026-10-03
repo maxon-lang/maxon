@@ -4,7 +4,6 @@ feature: register-spill
 status: selfhosted
 keywords: [register-allocator, spill, reload, cold-spill, splitter, belady, rematerialization, live-range-splitting]
 category: register-allocator
-milestone: M5.3
 ---
 
 # Cold-spill live-range splitting
@@ -13,9 +12,9 @@ milestone: M5.3
 
 The register allocator's pool is 14 GPRs. When a function needs more values in
 registers than that at some program point, the **cold-spill live-range splitter**
-(M5.3) relieves the pressure — but only where doing so is FREE, i.e. COLD. Where a
+relieves the pressure — but only where doing so is FREE, i.e. COLD. Where a
 loop genuinely needs more registers than exist, that is a hot spill, and the compiler
-refuses it (the `E5001` diagnostic, M5.7); it does not silently emit slow code.
+refuses it (the `E5001` diagnostic); it does not silently emit slow code.
 
 Three mechanisms, in order of preference:
 
@@ -136,11 +135,8 @@ value has minted its own next victim.
 
 That cascade is **quadratic**, and it is invisible in the emitted code, which grows only linearly. Two
 f64 locals read after each of N calls cost 2 splits per *call site* rather than 2 in total, each one
-re-splitting the previous reload and writing it to a **fresh** stack slot. Measured on the two tests
-below, against a compiler without the run-break: the two-call program emitted **4 stores into 4
-slots** and the four-call program **8 into 8**, both for the same two values — the bracket count
-tracking the call count instead of the value count. At N=128/256/512 the splitter's memory grew ×3.84
-then ×3.98 per doubling, against ×2.0 for the same program with the two locals declared `int`.
+re-splitting the previous reload and writing it to a **fresh** stack slot — the bracket count
+tracking the call count instead of the value count.
 
 So a run **breaks** at an op that would strand the value's file, and one split of the original then
 mints every reload the value needs — none of them able to become a victim in its turn. The test is
@@ -177,10 +173,10 @@ reload born between two pre-moves cannot be coloured into an argument register a
 already loaded. It costs nothing where no register is pending, which is every def in a program that
 does not spill a call argument.
 
-**The cure is a FORBID, not a different splice point, and the alternative was measured.** Backing a
+**The cure is a FORBID, not a different splice point.** Backing a
 defining splice out to the head of the run it would land inside makes *k* reloads serving *k*
 different arguments all live at the run's head at once, so the pressure the split was relieving RISES
-and the driver re-picks for ever (`splitLiveRanges: 'main' did not converge after 33938 splits`). A
+and the driver re-picks for ever (`splitLiveRanges: 'main' did not converge after … splits`). A
 forbid changes no live range and no pressure, so it cannot do that.
 
 ### What the RUN proves, and what the GOLDEN proves
@@ -440,7 +436,7 @@ of which alone exceeds the pool — and is read BETWEEN them (`u1 = a + s1`) and
 second (`u2 = a + s2`). So `a` must be split out around *both* peaks: stored, reloaded for
 `u1`, and (the reload) split again around the second peak, reloaded for `u2`. `s1 = s2 =
 sum(1..13) = 91`, `u1 = u2 = 191`, so `f(0) = 382`. `main` returns `0` iff `f` computes it —
-a wrong value (the historical multi-peak miscompile computed ≈ 226 here) returns `99`
+a wrong value (a multi-peak miscompile would compute ≈ 226 here) returns `99`
 instead. (The self-check avoids the exit-code's mod-256 wrap: `382 & 0xFF` is `126`, which
 would masquerade as a plausible direct exit code.)
 ```maxon
@@ -677,10 +673,10 @@ cannot be an immediate), and its ONLY use is the loop header's `i mod c`, which 
 loop body's call in layout order. But the header is re-entered around the BACK EDGE, so `c` is
 live across the body's peak all the same.
 
-Rematerializing `c` there re-emits it before each use AFTER the peak — and it has none. So the
-old splitter emitted nothing, dropped nothing, relieved nothing, and the next iteration re-picked
-the same value: it spun until the runaway bound panicked ("did not converge after 1416 splits").
-`isRematVictim` now applies the same `killsValueAtPeak` gate the spill path has, so `c` is
+Rematerializing `c` there re-emits it before each use AFTER the peak — and it has none. So a remat
+victim there emits nothing, drops nothing, relieves nothing, and the next iteration would re-pick
+the same value until the runaway bound panics ("did not converge after … splits").
+`isRematVictim` applies the same `killsValueAtPeak` gate the spill path has, so `c` is
 refused and the peak is relieved by a forced bracket on an accumulator instead.
 
 `loopDivisor(1)`: `a1..a6 = 2..7`, and the loop runs for `i = 0, 1, 2` (it exits at `i = 3`,
@@ -727,11 +723,11 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: forced-spill-with-edge-arg-before-the-peak -->
 THE STORE ANCHOR IS THE DEF, and this program is why. `t` is used once BEFORE the call's peak —
 as the branch-edge ARG the `then` arm passes to `m`'s merge phi — and once after it, in the
-return sum. The old splitter anchored a store "after the value's last before-peak use", which
-here is an EDGE arg whose anchor op is the block's TERMINATOR: a store cannot be spliced after a
-terminator, and the splitter panicked outright (`positionInBlock: op N not in block 'br' opRefs`).
+return sum. Anchoring a store "after the value's last before-peak use" would here anchor at an EDGE
+arg whose anchor op is the block's TERMINATOR: a store cannot be spliced after a terminator, and the
+splitter would panic outright (`positionInBlock: op N not in block 'br' opRefs`).
 
-Anchoring at the last before-peak use was unsound even when it did not crash: the `then` block
+Anchoring at the last before-peak use is unsound even when it does not crash: the `then` block
 does not DOMINATE the merge, so the store would never run on the `else` path and the reload after
 the call would read an unwritten slot. The def dominates every use of a value by SSA (Rule 1), so
 it is the only anchor that always dominates every reload.
@@ -885,9 +881,9 @@ live across that call — so all six are confined to the five callee-saved regis
 cannot stay in a register. But the split at the eviction point cannot cut ANY of their ranges: each
 has a before-peak use (in `pre`) that is reachable from the call around the BACK EDGE, so rewriting
 its after-peak uses would leave it live across the call regardless. `killsValueAtPeak` correctly
-refuses every one of them, and the splitter used to have nothing left to choose — it panicked
-(`noVictimAtPeak: 'f' has a CONFINED overflow ... yet none of them is forced-spillable`) on a
-program that fits the machine six times over.
+refuses every one of them, which leaves the ordinary split nothing to choose (`noVictimAtPeak: 'f'
+has a CONFINED overflow ... yet none of them is forced-spillable`) on a program that fits the machine
+six times over.
 
 It is relieved by widening the split: `a6` is stored ONCE at its def in the entry block (loop depth
 0) and **every** use of it is rewritten to a reload — one before the `pre` sum, one after the call —
@@ -983,19 +979,18 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: float-locals-read-after-each-of-two-calls -->
-Two f64 locals, each read after each of TWO calls — and since **Wave 2** neither spills at all.
+Two f64 locals, each read after each of TWO calls — and neither spills at all.
 xmm6–15 are callee-saved, so both locals stay resident in registers across every call and the only
 slot traffic in the fragment is the prologue/epilogue pair that preserves xmm6/xmm7 themselves:
 **two `storeSlotReg` at entry and two `loadRegSlot` before the `ret`, once per function**, not once
 per call.
 
-⚠ **This test used to pin the opposite**, and reading the old shape is what makes the new one legible.
-Under Wave 1 every XMM was caller-saved, so a float live across a call was forbidden its ENTIRE file,
-had no register left, and was FORCE-SPILLED: the same two stores, plus **one `loadRegSlot` per read**
-— four reloads here, eight in the four-call test below. That per-call bracket is what made
-`regalloc:splitting` superlinear in the number of cross-call floats, and removing it is what Wave 2
-is. Read this fragment against the four-call one: they are now the same shape, and doubling the
-calls no longer adds a single instruction inside the body.
+⚠ Were every XMM caller-saved, a float live across a call would be forbidden its ENTIRE file,
+have no register left, and be FORCE-SPILLED: the same two stores, plus **one `loadRegSlot` per read**
+— four reloads here, eight in the four-call test below. That per-call bracket would make
+`regalloc:splitting` superlinear in the number of cross-call floats. Read this fragment against the
+four-call one: they are the same shape, and doubling the calls adds not a single instruction inside
+the body.
 
 `work` adds 1 and each round adds `trunc(1.5) + trunc(2.5)` = 3, so `acc` runs 0 → 1 → 4 → 5 → 8.
 ```maxon
@@ -1021,11 +1016,11 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: float-locals-read-after-each-of-four-calls -->
 The same program with the call sites DOUBLED — the other half of the pair above, and the one that
-makes the property checkable rather than asserted. Since Wave 2 the two locals live in xmm6/xmm7
+makes the property checkable rather than asserted. The two locals live in xmm6/xmm7
 across every call, so doubling the calls adds NOTHING: this fragment carries the same two
 `storeSlotReg` and two `loadRegSlot` as the two-call test, and they are the callee-save pair rather
-than a spill. Under Wave 1 the reload count followed the reads (eight here, four there); under the
-pre-run-break cascade it carried eight stores and eight slots as well.
+than a spill. A per-call spill bracket would make the reload count follow the reads (eight here,
+four there).
 
 `acc` runs 0 → 1 → 4 → 5 → 8 → 9 → 12 → 13 → 16.
 ```maxon
@@ -1054,26 +1049,25 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: two-floats-multiplied-between-calls -->
-The multiply reads BOTH floats, and that is what made this a compiler CRASH rather than slow code.
+The multiply reads BOTH floats, and that is what makes this a potential compiler CRASH rather than
+slow code.
 
-A reload that spanned a later call was stranded, so it stayed confined exactly as the value it
-relieved was. A stranded reload and a stranded original then met at the `mulsd` that reads them
-both, giving a confined peak whose tight set was the peak op's OWN TWO OPERANDS — and
-`chooseVictim` excludes the values the peak op reads, because they are needed in registers there.
-Nothing was left to choose and `noVictimAtPeak` fired its splitter-bug panic on a program that fits
-the machine many times over.
+A reload that spans a later call, if left stranded, stays confined exactly as the value it relieves
+is. A stranded reload and a stranded original then meet at the `mulsd` that reads them both, giving
+a confined peak whose tight set is the peak op's OWN TWO OPERANDS — and `chooseVictim` excludes the
+values the peak op reads, because they are needed in registers there. Nothing is left to choose and
+`noVictimAtPeak` fires its splitter-bug panic on a program that fits the machine many times over.
 
 The invariant that panic asserts says candidates always remain, on the grounds that "any witness a
 clobber produces has at least the five callee-saved registers in it, so at least six values are
-confined here; an op names at most two virtual registers". That was **false for an empty witness**: a
-float across a call was confined to ∅, so a tight set of exactly two was a violation, and one op can
-read both. With reloads no longer born stranded, the only confined values left are originals, the
-call outranks the multiply, and the program compiles.
+confined here; an op names at most two virtual registers". That is **false for an empty witness**: a
+value confined to ∅ makes a tight set of exactly two a violation, and one op can read both. With no
+reload born stranded, the only confined values are originals, the call outranks the multiply, and the
+program compiles.
 
-⚠ **Wave 2 removed the ∅ itself**: a float across a call is now confined to the TEN callee-saved
-XMMs, so the counting argument holds for floats exactly as it does for ints, and neither float here
-spills at all. This test keeps its value as the record of why the run-break exists — the ∅ case is
-no longer reachable through a call, and `noVictimAtPeak` explains what could still reach it.
+⚠ A float across a call is confined to the TEN callee-saved XMMs, so the counting argument holds for
+floats exactly as it does for ints, and neither float here spills at all. The ∅ case is not reachable
+through a call, and `noVictimAtPeak` explains what could still reach it.
 
 Each round multiplies `1.5 × 2.5` = 3.75 into `s` and `work` adds 1 to `acc`, so two rounds give
 `trunc(7.5) + 2` = 9.
@@ -1101,15 +1095,14 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: two-floats-across-a-call-with-a-ranged-typealias -->
 Two f64 locals live across a call in a function whose types are a **ranged typealias**. The floats
-stay in callee-saved XMMs (xmm6–15), so nothing spills; the same program with `int` in place of
-`Num` compiled before Wave 2 and this one did not, because the range check is what made the
-splitter run at all here.
+stay in callee-saved XMMs (xmm6–15), so nothing spills; the range check is what separates this
+program from the same one with `int` in place of `Num`.
 
 Why the ranged typealias is load-bearing rather than decoration: `InsertRangeChecks` emits a
 compare whose boolean result lives only in EFLAGS, so it is a Std value that no Target *operand*
-ever names — and it is the LAST id the pass mints, hence the highest. That is what once made the
-value-class column longer than the allocator's value space, so a split's fresh reload id landed
-inside the already-filled region and kept the column's `gpr` fill (see the next test).
+ever names — and it is the LAST id the pass mints, hence the highest. That makes the
+value-class column longer than the allocator's value space, so a split's fresh reload id lands
+inside the already-filled region (see the next test).
 
 `probe(0)` = `work(0)` + `trunc(3.625 * 1.5 * 64.0)` = 1 + 348 = 349; `probe(1)` = 350. 349 + 350
 is past a byte, so the exit code is their difference plus one.
@@ -1143,12 +1136,12 @@ them genuinely spill and are reloaded, **and the function also carries a ranged 
 pair is the whole test: the range check pushes the value-class column past the allocator's value
 space, and the spill is what mints a fresh id inside the gap.
 
-Before the fix, `LivenessResult.growValueSpace` recorded a split's fresh ids by GROW-FILLING the
-class column with the victim's class — which is a silent no-op when the column is already that
-long. The reload of an f64 therefore kept the column's `gpr` fill, was coloured into a GPR, and
-reached the encoder as either a cross-file `mov xmm1, rax` (`emitRegRegMove`) or a `cvttsd2si`
-whose source is `rcx` (`requireClass`) — the same defect with two crash sites. The class of a
-split's fresh id is now WRITTEN over the minted range, not merely defaulted into it.
+The class of a split's fresh id is WRITTEN over the minted range, not merely defaulted into it.
+GROW-FILLING the class column with the victim's class (`LivenessResult.growValueSpace`) is a silent
+no-op when the column is already that long: the reload of an f64 would keep the column's `gpr` fill,
+be coloured into a GPR, and reach the encoder as either a cross-file `mov xmm1, rax`
+(`emitRegRegMove`) or a `cvttsd2si` whose source is `rcx` (`requireClass`) — one defect with two
+crash sites.
 
 `bump(0)` = 1, plus `trunc(1.0) + … + trunc(12.0)` = 78, so 79.
 ```maxon
@@ -1188,12 +1181,12 @@ end 'main'
 
 <!-- test: ten-floats-across-a-call-fit-the-callee-saved-half -->
 EXACTLY ten f64 locals live across a call — the width of the callee-saved XMM half (xmm6–15). None
-spills: this is the boundary case of Wave 2.
+spills: this is the boundary case of the callee-saved half.
 
-⚠ Its fragment still carries TEN `storeSlotReg` — the entry instruction count is literally unchanged
-by Wave 2 — but they are a different kind of store, and that distinction is the whole point of the
-case. Before Wave 2 the ten were VALUE SPILLS, one per local, each paired with a reload at every
-read because a float live across a call was forbidden its entire file. After Wave 2 the ten are the
+⚠ Its fragment carries TEN `storeSlotReg` — the same entry instruction count ten VALUE SPILLS would
+show — but they are a different kind of store, and that distinction is the whole point of the
+case. A value spill is one per local, each paired with a reload at every read, which is what a
+float live across a call would need if it were forbidden its entire file. Here the ten are the
 CALLEE-SAVE PAIR the prologue writes once and the epilogue restores once, and the values themselves
 stay resident in xmm6–15 for the whole body. Counting stores cannot tell the two apart; only their
 position can, which is why this case is read alongside the two-call and four-call siblings above —
@@ -1235,7 +1228,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: callee-saved-double-survives-a-callee -->
 A caller holding an f64 **across a call** is confined to the callee-saved half of the float file
 (xmm6–15 on x64, d8–d15 on arm64), and the callee it calls preserves exactly the ones its own
-colouring used. This case pins the FULL 64 BITS of that preserve, which nothing else did.
+colouring used. This case pins the FULL 64 BITS of that preserve, which nothing else does.
 
 The nesting is the test: `outer` keeps `42.5` live across its call to `inner`, and `inner` — which
 keeps `2.0` live across its own call to `leaf` — therefore colours into, and must save and restore,
@@ -1247,9 +1240,9 @@ CALLEE-SAVE SLOT, and a preserve that moves only half a double passes that one w
 one — the spilled value there is reloaded by the same function that stored it, so a symmetric
 half-width store/reload still round-trips whatever it truncated. Here the store and the reload are in
 `inner` while the VALUE belongs to `outer`, so a half-width preserve destroys a double the callee
-never touched. arm64 emitted `stur s8` for `stur d8` (the size field in bits 31:30 reading `10`, the
-32-bit S form, where 64-bit D is `11`) and the two spellings differ in one hex digit; `42.5` came back
-as its low word — zero — and this returned 3.
+never touched. On arm64 `stur s8` in place of `stur d8` (the size field in bits 31:30 reading `10`, the
+32-bit S form, where 64-bit D is `11`) differs in one hex digit; `42.5` would come back as its low
+word — zero — and this would return 3.
 
 `leaf(0)` = 1, plus `trunc(2.0)` = 2, plus `trunc(42.5)` = 42, so 45.
 ```maxon
@@ -1284,14 +1277,13 @@ typealias Integer = int(i64.min to i64.max)
 A RELOAD BORN BETWEEN TWO ARGUMENT PRE-MOVES. `a` is defined first and read last — as the
 FOURTH argument of `sink4` — so Belady evicts it at the `s` peak and reloads it before its one
 remaining use, which is the pre-move `mov argReg[3], a`. The pre-moves for `c0`/`c1`/`c2` run
-ahead of it and their own values die there, so the registers those three arguments now sit in
-are held by nothing the allocator can see. The reload is live across none of them, is therefore
-forbidden none of them, and took `argReg[0]` — overwriting `c0` after it had been placed.
+ahead of it and their own values die there, so the registers those three arguments sit in
+are held by nothing the allocator can see. The reload is live across none of them, so without the
+pending-register forbid it is forbidden none of them and can take `argReg[0]` — overwriting `c0`
+after it has been placed.
 
 `sink4` weighs its four arguments by powers of ten so ANY clobber or permutation shows in the
 answer rather than cancelling: `sink4(1, 2, 3, 7) = 1237`, `s = sum(1..28) = 406`, `f(0) = 1643`.
-Measured before the fix on arm64-macOS: exit 99, from `mov x0, c0 / mov x1, c1 / mov x2, c2 /
-ldr x0, [slot] / mov x3, x0 / bl sink4`.
 
 ⚠ THE WIDTH IS LOAD-BEARING, for the reason `two-pressure-humps-exhaust-a-positional-gap` gives:
 `a` must be evicted, so the straight-line peak has to exceed the pool of the WIDEST target — 26
@@ -1353,7 +1345,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: two-pressure-humps-exhaust-a-positional-gap -->
-THE RE-SPACE REGRESSION, and the one shape in the suite that reaches it.
+THE RE-SPACE, and the one shape in the suite that reaches it.
 
 The splitter indexes each block's ops by a gap-labelled SLOT rather than a position, so a
 splice takes a free slot between its neighbours and no existing entry moves. `SlotGap` is 4
@@ -1369,17 +1361,17 @@ every reload of a peak's victims lands AFTER that peak and every store at a def 
 so within one hump the two never share a gap — it is the second hump's rise that makes the
 first hump's `q` values spillable, and their stores land in the first hump's fall.
 
-WHAT IT CAUGHT. `SplitEdits` records the slot of each op it splices as that op is seated,
-and `reindexSplitValues` reads them back after the batch. A re-space MOVES those ops, and
-nothing repaired the recorded slots — `appendInsertedSlots` merely asserted in a comment
-that the re-space "re-derived" them. This program panicked the compiler outright:
+WHAT IT PINS. `SplitEdits` records the slot of each op it splices as that op is seated,
+and `reindexSplitValues` reads them back after the batch. A re-space MOVES those ops, so the
+recorded slots must be repaired after it; left unrepaired, this program panics the compiler
+outright:
 
   panic: PressureIndex.opAtSlot: slot 166 holds no op — only a slot the layout seated one in names one
     in Compiler.Targets.Shared.reindexSplitValues
 
 ⚠ THE WIDTH IS LOAD-BEARING AND ITS WINDOW IS NARROW. At TWELVE values per hump this fires
-two re-spaces. MEASURED at this size, two humps: eight splits nine values but never exhausts
-a gap, so it would pass against the broken compiler; ten fires one re-space, twelve two,
+two re-spaces. With two humps, eight splits nine values but never exhausts
+a gap, so it would pass without the repair; ten fires one re-space, twelve two,
 fourteen three, twenty five; twenty-eight is a legitimate E5001. So twelve sits in the middle
 of the window rather than on its edge — which is the point, since the pool size is what both
 edges are measured against and arm64 has a larger one. Re-check the width against any change

@@ -265,7 +265,7 @@ function reportSharedGlobalAccess(project Project, signatures ProgramSignatures,
 	let blame = blameForSharedGlobalAccess(survey, funcIndex: funcIndex)
 	let writer = functionAt(funcNames, index: funcIndex)
 	let message = functionAt(funcNames, index: blame.messageIndex)
-	let serviceName = survey.serviceOf(blame.messageIndex)
+	let serviceName = try survey.serviceOf(blame.messageIndex) otherwise panic("reportSharedGlobalAccess: the blamed function {blame.messageIndex} is no service message — `blameForSharedGlobalAccess` walks back to a message seed")
 	let spawn = serviceSpawnSiteOf(signatures, typeName: serviceName)
 	reportPositionedWithNote(project, code: ErrorCode.semanticSharedGlobalAccessFromGreenThread, message: sharedGlobalAccessRefusal(blame.route, access: site.access, writer: writer.name, message: message.name, storageName: site.storageName), line: site.line, column: site.column, filePath: site.declFilePath, note: DiagnosticNote.at(serviceSpawnNoteText(serviceName), line: spawn.line, column: spawn.column, filePath: spawn.declFilePath))
 end 'reportSharedGlobalAccess'
@@ -412,7 +412,8 @@ module function checkUnmarkableLetReads(project Project, funcNames FunctionNameI
 
 		match letGlobal.threadReach 'reach'
 			mainOnly or
-				everyThreadThrough then continue
+				everyThreadThrough or
+				packedInItsSlot then continue
 			everyThreadUnwalkable(noun) then reportUnmarkableLetRead(project, funcNames: funcNames, survey: survey, row: row, letGlobal: letGlobal, noun: noun)
 		end 'reach'
 

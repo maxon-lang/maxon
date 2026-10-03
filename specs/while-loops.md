@@ -3,7 +3,6 @@ feature: while-loops
 status: selfhosted
 keywords: [while, loop, iteration, control flow, break, continue]
 category: control-flow
-milestone: M4b
 ---
 
 # While Loops
@@ -18,7 +17,7 @@ while <condition> 'identifier'
 end 'identifier'
 ```
 
-Lowering (M4b) — the first BACKWARD-branching CFG. The current block becomes the
+Lowering — a BACKWARD-branching CFG. The current block becomes the
 PREHEADER and branches unconditionally into a fresh HEADER. The header re-evaluates
 the condition (a comparison, fused into `cmp`+`jcc` exactly as an `if` — see
 `specs/comparison-operators.md`) and takes a two-way branch to the BODY or the
@@ -101,9 +100,9 @@ both loops. Every loop-carried value here is live across a call, so it is forbid
 caller-saved registers and can only live in one of the **five callee-saved** ones — while `total`,
 which merely passes through, is not.
 
-The allocator used to die on exactly this shape (`chooseRegister: no free register`). Its biased
-coloring would honour a copy hint that handed a **callee-saved** register to a value that did not
-need one, and a value that could live *nowhere else* then found none. Five values needing the five
+An allocator whose biased coloring honours a copy hint that hands a **callee-saved** register to a
+value that does not need one dies on exactly this shape (`chooseRegister: no free register`): a value
+that can live *nowhere else* then finds none. Five values needing the five
 scarce registers is a perfect fit — it is only reachable if nothing wastes one. This is the case the
 chordal-exactness argument does NOT cover: with forbidden sets the problem is LIST colouring, which is
 NP-hard, so protecting the scarce class is a MITIGATION and not an exactness rule — the residue it
@@ -151,18 +150,18 @@ typealias Integer = int(i64.min to i64.max)
 **The false-`E5001` regression test.** Two sequential loops, each calling a function, each carrying
 SIX accumulators — and the first loop's accumulators are DEAD by the time the second loop starts.
 
-This shape used to be rejected outright: *"17 values must be held in registers at once inside this
+Unpruned, this shape is rejected outright: *"17 values must be held in registers at once inside this
 loop, but only 14 registers are available"*, with the first loop's accumulators ranked first among
-the values to delete — described as **"used 0 times in the loop"**, which is the tell. They were not
-used in that loop. They were not used anywhere. The real working set is **9**.
+the values to delete — described as **"used 0 times in the loop"**, which is the tell. They are not
+used in that loop. They are not used anywhere. The real working set is **9**.
 
-The cause was in the front end, not the allocator. On-the-fly SSA must mint a loop header's phis
+The cause is in the front end, not the allocator. On-the-fly SSA must mint a loop header's phis
 BEFORE it parses the body, so it mints one per mutable var IN SCOPE — and a phi for a var the loop
 never touches is SELF-SUSTAINING: the back edge passes it to itself, so it *has* a use, and liveness
 holds it live around the entire loop. Seven of them (six accumulators plus the first loop's counter)
-inflated `maxlive` by seven, the splitter forced-spilled them around the second loop's call — a
-store AND a reload every iteration, for values nothing reads — and past 14 the compiler raised
-`E5001` against a program that fits the machine comfortably. `pruneDeadBlockArgs` deletes them.
+inflate `maxlive` by seven, the splitter force-spills them around the second loop's call — a store AND
+a reload every iteration, for values nothing reads — and past 14 the compiler would raise `E5001`
+against a program that fits the machine comfortably. `pruneDeadBlockArgs` deletes them.
 
 **A false `E5001` is the worst bug this compiler can have** (it sends an author to restructure code
 that was fine, and can break an agent's convergence loop), so this test is a gate on the whole
@@ -410,9 +409,9 @@ A loop counter must survive a NARROW RANGED local allocated next to it.
 
 Each variable gets a stack slot, and the slot has to hold the widest access made to it. A local whose
 type is a narrow ranged int (`SlotTally` below is `int(0 to 16)`, and the arithmetic over it stays
-narrow) once got a FOUR-byte slot while the stores and loads reaching it were EIGHT bytes wide — so the
-overrun landed on whatever was allocated next to it. Here that neighbour is `pass`, the loop counter:
-every iteration reset it, `pass < 2` never went false, and the loop ran forever.
+narrow) must not get a FOUR-byte slot while the stores and loads reaching it are EIGHT bytes wide — the
+overrun would land on whatever is allocated next to it. Here that neighbour is `pass`, the loop counter:
+every iteration would reset it, `pass < 2` would never go false, and the loop would run forever.
 
 The guard turns that into a distinguishable exit code rather than a hang, so the case fails loudly
 instead of timing out. `99` means the counter was corrupted; `2` is the two passes the loop owes.

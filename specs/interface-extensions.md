@@ -380,16 +380,14 @@ end 'main'
 
 
 <!-- test: extension-with-internal-closure -->
-A closure declared inside an interface-extension body. When `t.bump()` is
-called on a concrete `Three implements Tagger`, MonomorphizeExtensions
-clones `Tagger.bump` as `Three.bump` and walks the cloned body's ops with
-the `Self → Three` substitution. The walk encounters a `closureCreate` op
-for the inline `function(x Integer) gives x + one` literal, which without
-per-substitution closure specialization panics with "closure '_$closure_N'
-referenced from a monomorphized extension body". The closure body's
-`x + one` is a plain `Integer` binop so the closure itself needs no
-type-parameter dispatch; only the outer `tag()` call exercises the
-substitution. Compiling at all confirms the panic doesn't fire.
+A closure declared inside an interface-extension body. An extension method is
+monomorphized by RE-PARSING its body once per conforming type, so `Tagger.bump`
+becomes `Three.bump`, parsed with `Three` as the enclosing type, and the inline
+`function(x Integer) gives x + one` literal lifts to a closure named after that
+per-conformer function. The closure body's `x + one` is a plain `Integer` binop
+so the closure itself needs no type-parameter dispatch; only the outer `tag()`
+call exercises the conformer. Compiling and running confirms the lifted closure
+is the conformer's own.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -488,24 +486,25 @@ end 'main'
 
 <!-- test: error.an-unconformed-extension-does-not-leak-its-associated-type-names -->
 ⛔⛔ **AN `extension <Interface>` WHOSE INTERFACE NO TYPE IMPLEMENTS MUST NOT MAKE THAT INTERFACE'S
-ASSOCIATED-TYPE NAMES SPELLABLE AT FILE SCOPE (W14 review).** `Parser.readExtensionHeader` installs the
+ASSOCIATED-TYPE NAMES SPELLABLE AT FILE SCOPE.** `Parser.readExtensionHeader` installs the
 extended declaration's parameter names in `enclosingTypeParams` so `readWhereClause` can resolve a
 constrained name against the right list. The conformer loop that follows re-enters a real declaration
 scope per conformer (`enterTypeScope`) — but an interface **nothing implements has no conformers**, so
-that loop never ran and the names stayed live for the rest of the file's parse.
+that loop never runs, and names installed for the whole header would stay live for the rest of the
+file's parse.
 
-⛔ **MEASURED on the merge base: `function f(x Element)` below COMPILED CLEAN**, `Element` resolving to
-a type parameter of a declaration `f` is not inside. It names no declared type, so the only correct
-answer is E3011 — which is what the compiler now gives, because the window is opened around the `where`
-clause read alone and closed at its end.
+⛔ **`function f(x Element)` below must not compile**: `Element` would resolve to a type parameter of a
+declaration `f` is not inside. It names no declared type, so the only correct answer is E3011 — which is
+what the compiler gives, because the window is opened around the `where` clause read alone and closed at
+its end.
 
-⚠ **THE SECOND CASE BELOW IS THE SAME BUG ONE DOOR DEEPER, AND IT WAS A COMPILER PANIC.** Since W14 a
+⚠ **THE SECOND CASE BELOW IS THE SAME LEAK ONE DOOR DEEPER, WHERE IT WOULD BE A COMPILER PANIC.** A
 `typeParameter`'s payload is a digest of `(declaring type, parameter name)` and
 `ProgramSignatures.opaqueTypeParamPosition` recovers the position from the owner ledger that
 `recordStruct` / `recordInterfaceDeclaration` fill. A token minted under an `enclosingType` that
-declared nothing has no owner, so the leak reached that door as
+declared nothing has no owner, so a leak would reach that door as
 *"type-parameter token … has no owner"* rather than as a diagnostic. The pair is kept because the two
-cases fail at two different passes: this one at type RESOLUTION, the next at `SemanticCheck`.
+cases exercise two different passes: this one type RESOLUTION, the next `SemanticCheck`.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -535,10 +534,9 @@ error E3011: Unknown type 'Element'
 <!-- test: error.an-unconformed-extension-leak-is-not-a-compiler-panic -->
 The deeper half of the case above: `f` returns a GENERIC INSTANCE, which is what routes its call through
 `SemanticCheck.checkTypeParameterArgs` — the pass that asks `opaqueTypeParamPosition` for an opaque
-formal's position in the declaring type's `uses` list. Against the W14 tip before this fix that ask
-PANICKED the compiler; against the merge base the program compiled and ran (exit 7). One refusal is the
-right answer to both, and it is the same sentence the case above pins, because the fault is the same
-undeclared name.
+formal's position in the declaring type's `uses` list, and a leaked name would PANIC the compiler there.
+The right answer is one refusal, and it is the same sentence the case above pins, because the fault is
+the same undeclared name.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -583,16 +581,16 @@ error E3011: Unknown type 'Element'
 
 <!-- test: conformance-clause-order-does-not-change-extensions -->
 ⭐⭐ **`implements Tagged with Integer, Held with Integer` AND `implements Held with Integer, Tagged
-with Integer` ARE THE SAME CLAUSE, so they must publish the same extension methods (W95).** The
-declaration sweep is what decides which types an `extension <Interface>` lands on, and it used to STOP
-its interface list at the first `with` — it could not tell `A with X, B with X` (two interfaces) from
-`Pair with X, Y` (one interface, two arguments) without an arity only the complete index holds. So the
-interface named after a `with` silently received no extensions, and moving it ahead of the `with` cured
-it: clause ORDER changed semantics.
+with Integer` ARE THE SAME CLAUSE, so they must publish the same extension methods.** The
+declaration sweep is what decides which types an `extension <Interface>` lands on, and the sweep alone
+cannot tell `A with X, B with X` (two interfaces) from `Pair with X, Y` (one interface, two arguments)
+without an arity only the complete index holds. A sweep that ends its interface list at the first
+`with` would give the interface named after a `with` no extensions, and clause ORDER would change
+semantics.
 
-⛔ **MEASURED before the fix:** `MarkerFirst` below reported
+⛔ **Read that way, `MarkerFirst` below would report**
 *"error E3004: call to undefined function 'MarkerFirst.heldPlusOne'"*, while `HeldFirst` — the identical
-clause, reordered — compiled and ran. The whole-program re-read (`Queries.foldConformanceClauses`) is
+clause, reordered — compiles and runs. The whole-program re-read (`Queries.foldConformanceClauses`) is
 what makes the two spellings one program; the golden beside this case is where both
 `MarkerFirst.heldPlusOne` and `HeldFirst.heldPlusOne` are shown emitted.
 ```maxon
@@ -658,10 +656,10 @@ end 'main'
 ⭐ **THE SAME CLAUSE, ON THE OTHER DECLARATION KIND.** An `enum` records no `with` bindings — it has no
 conditional extension to evaluate — but a LOST NAME is the same loss, and on an error enum the name that
 gets lost is the one `throws Error` is narrowed against (`EnumLayout.conformsTo`). `Slow` writes
-`implements Tagged with Code, Error`, so before the whole-program re-read the sweep recorded `Tagged`
-alone, the abstract-requirement narrowing could not see an `Error` conformance, and `Point.digest`
-throwing `Slow` was refused — while `implements Error, Tagged with Code`, the same clause reordered,
-compiled. Both edges ride one exit code, as `interface-conformance.md`'s
+`implements Tagged with Code, Error`, so without the whole-program re-read the sweep would record
+`Tagged` alone, the abstract-requirement narrowing could not see an `Error` conformance, and
+`Point.digest` throwing `Slow` would be refused — while `implements Error, Tagged with Code`, the same
+clause reordered, compiles. Both edges ride one exit code, as `interface-conformance.md`'s
 `throws-narrower-than-abstract-requirement` does: the success edge carries 20 through the witness, the
 error edge takes the handler's 55.
 ```maxon

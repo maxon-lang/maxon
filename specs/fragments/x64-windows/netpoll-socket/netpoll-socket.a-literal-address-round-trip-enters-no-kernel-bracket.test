@@ -30,9 +30,7 @@ function echoOnce(listener TcpListener, n Tally) returns Tally throws NetworkErr
 	return 0
 end 'echoOnce'
 
-function main() returns ExitCode
-	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-
+function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async echoRounds(listener)
 	_ = try echoOnce(listener, n: 0) otherwise 0
 
@@ -58,6 +56,11 @@ function main() returns ExitCode
 
 	print("ok={ok} brackets={brackets}\n")
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(listener)
 end 'main'
 ---
 ExitCode: 0
@@ -458,7 +461,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc equal, __il_body#4
   tryerr#2:
     x64.movRegImm32 r8, 1
     x64.epilogue 120
@@ -469,7 +472,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#1:
+  __il_body#4:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
     x64.movRegReg r12, r8
@@ -485,8 +488,8 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect echoOnce
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, trycont#5
-  trycont#5:
+    x64.jcc notEqual, trycont#7
+  trycont#7:
     x64.callDirect __sched_syscall_count
     x64.storeSlotReg slot8, r8
     x64.movRegImm32 r12, 1
@@ -544,43 +547,43 @@ func @main {
     x64.movRegReg rcx, r14
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#6
-  tryerr#7:
+    x64.jcc equal, tryok#8
+  tryerr#9:
     x64.movRegImm32 rbx, 0
-    x64.jmp trycont#8
-  tryok#6:
+    x64.jmp trycont#10
+  tryok#8:
     x64.movRegReg rbx, r8
-  trycont#8:
+  trycont#10:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#9
-  tryerr#10:
+    x64.jcc equal, tryok#11
+  tryerr#12:
     x64.movRegImm32 r13, 0
-    x64.jmp trycont#11
-  tryok#9:
+    x64.jmp trycont#13
+  tryok#11:
     x64.movRegReg r13, r8
-  trycont#11:
+  trycont#13:
     x64.movRegReg rcx, r15
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#12
-  tryerr#13:
+    x64.jcc equal, tryok#14
+  tryerr#15:
     x64.movRegImm32 r14, 0
-    x64.jmp trycont#14
-  tryok#12:
+    x64.jmp trycont#16
+  tryok#14:
     x64.movRegReg r14, r8
-  trycont#14:
+  trycont#16:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#15
-  tryerr#16:
+    x64.jcc equal, tryok#17
+  tryerr#18:
     x64.movRegImm32 rax, 0
-    x64.jmp trycont#17
-  tryok#15:
+    x64.jmp trycont#19
+  tryok#17:
     x64.movRegReg rax, r8
-  trycont#17:
+  trycont#19:
     x64.leaRegRegReg rcx, rbx, r13
     x64.leaRegRegReg rcx, rcx, r14
     x64.leaRegRegReg rbx, rcx, rax
@@ -594,7 +597,7 @@ func @main {
     x64.cmpRegImm32 r12, 5
     x64.jcc equal, ifcont
   peer:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at netpoll-socket.a-literal-address-round-trip-enters-no-kernel-bracket.test:56: unreachable: every round-trip that returned was answered by this peer\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at netpoll-socket.a-literal-address-round-trip-enters-no-kernel-bracket.test:54: unreachable: every round-trip that returned was answered by this peer\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 120
@@ -684,13 +687,14 @@ func @main {
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-  __il_body:
+  __il_body#23:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __write_stdout
-  __il_cont:
+  __il_cont#22:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
+  __il_cont#3:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_TcpListener
     x64.movRegReg r8, rbx

@@ -41,22 +41,17 @@ let ElementTrivialFact = 8 as ShapeFactBits
 // What a bounded writer's success proves (`managedCalleeSuccessProvesShape`).
 let WriterSuccessFacts = (BufferOwnedFact or BufferAllocatedFact or BufferUnsharedFact) as ShapeFactBits
 
-// `length@8 >u K` proved for the record; `NoLengthFloor` is nothing proved.
-typealias LengthFloor = int(-1 to i64.max)
+// `length@8 >= floor` proved for the record; `AnyLengthFloor` proves nothing: every length is.
+typealias LengthFloor = int(0 to u64.max)
 typealias LengthFloors = Array with LengthFloor
 
-let NoLengthFloor = -1 as LengthFloor
+let AnyLengthFloor = 0 as LengthFloor
+let OnePastTheIndex = 1 as LengthFloor
 
 typealias RecordSlot = int(0 to u64.max) implements ElementIndex
 typealias RecordSlotColumn = Array with RecordSlot
 
 typealias FactIndexColumn = Array with ElementIndex
-
-// One past the ordinal of a variable-index bound guard, so a column's own zero is `NoBound`.
-typealias BoundLink = int(0 to u64.max) implements ElementIndex
-typealias BoundLinkColumn = Array with BoundLink
-
-let NoBound = 0 as BoundLink
 
 // The pass's summary line, from the tally its runs over every function summed into (`StdPassPool`).
 module function foldEstablishedGuardsSummary(tally StdPassTally) returns String
@@ -132,17 +127,15 @@ type EstablishedFunction
 
 	// The variable-index bound guards, chained per index value: `boundHead` is dense over the value ids
 	// and names the first bound on that index, `boundNext` the next on the same index.
-	var boundHead as BoundLinkColumn
-	var boundNext as BoundLinkColumn
+	var boundHead as OptionalElementIndexColumn
+	var boundNext as OptionalElementIndexColumn
 	var boundRecord as ValueIdArray
 	var boundElsePosition as BlockPositionColumn
 
 	static function build(module StdModule, func IrFunction, scratch EstablishedScratch) returns EstablishedFunction
 		let tree = StdDominatorTree.build(module, func: func)
 		let reader = StdShapeReader.create(module, func: func)
-		var boundHead = BoundLinkColumn.create()
-		boundHead.resize(reader.defs.valueBound())
-		var analysis = Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, byId: module.blockIndexById(func), records: RecordIndex.sized(reader.defs.valueBound()), boundHead: boundHead, boundNext: BoundLinkColumn.create(), boundRecord: ValueIdArray.create(), boundElsePosition: BlockPositionColumn.create()}
+		var analysis = Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, byId: module.blockIndexById(func), records: RecordIndex.sized(reader.defs.valueBound()), boundHead: OptionalElementIndexColumn.absent(reader.defs.valueBound()), boundNext: OptionalElementIndexColumn.create(), boundRecord: ValueIdArray.create(), boundElsePosition: BlockPositionColumn.create()}
 		analysis.gather(module, func: func, scratch: scratch)
 		return analysis
 	end 'build'
@@ -182,15 +175,18 @@ type EstablishedFunction
 	end 'gather'
 
 	function recordBound(record ValueId, index ValueId, elsePosition ElementIndex)
+		let ordinal = self.boundRecord.count()
 		self.boundRecord.push(record)
 		self.boundElsePosition.push(elsePosition)
-		self.boundNext.push(self.firstBoundOn(index))
-		try self.boundHead.set(index, value: self.boundRecord.count()) otherwise panic("foldEstablishedGuards: index {index} is outside the column sized by valueBound")
-	end 'recordBound'
 
-	function firstBoundOn(index ValueId) returns BoundLink
-		return try self.boundHead.get(index) otherwise panic("foldEstablishedGuards: index {index} is outside the column sized by valueBound")
-	end 'firstBoundOn'
+		if let first = try self.boundHead.get(index) 'chainedAfterAnother'
+			self.boundNext.push(first)
+		end 'chainedAfterAnother' else 'theFirstOnTheIndex'
+			self.boundNext.pushAbsent()
+		end 'theFirstOnTheIndex'
+
+		self.boundHead.set(index, value: ordinal)
+	end 'recordBound'
 
 	function positionOf(blockId BlockId) returns ElementIndex
 		return try self.byId.get(blockId) otherwise panic("foldEstablishedGuards: block {blockId} is a branch target of this function but is not in its blockRefs")
@@ -200,22 +196,16 @@ type EstablishedFunction
 	// of a bound guard on that record and index: an arm that dominates the store and is entered from
 	// nowhere else, so every path to the store passes the test.
 	function storeIsBounded(position ElementIndex, record ValueId, index ValueId) returns bool
-		var link = self.firstBoundOn(index)
+		var ordinal = try self.boundHead.get(index) otherwise return false
 
-		while link != NoBound 'eachBoundOnTheIndex'
-			let ordinal = link - 1
-
-			if self.boundProceedArmAdmits(ordinal, record: record, position: position) 'found'
-				return true
-			end 'found'
-
-			link = try self.boundNext.get(ordinal as ElementIndex) otherwise panic("foldEstablishedGuards: boundNext.get OOB at {ordinal}")
+		while not self.boundProceedArmAdmits(ordinal, record: record, position: position) 'eachBoundOnTheIndex'
+			ordinal = try self.boundNext.get(ordinal) otherwise return false
 		end 'eachBoundOnTheIndex'
 
-		return false
+		return true
 	end 'storeIsBounded'
 
-	function boundProceedArmAdmits(ordinal BoundLink, record ValueId, position ElementIndex) returns bool
+	function boundProceedArmAdmits(ordinal ElementIndex, record ValueId, position ElementIndex) returns bool
 		if (try self.boundRecord.get(ordinal) otherwise panic("foldEstablishedGuards: boundRecord.get OOB at {ordinal}")) != record 'anotherRecord'
 			return false
 		end 'anotherRecord'
@@ -332,20 +322,25 @@ function transferCall(module StdModule, op StdOp, analysis EstablishedFunction, 
 	end 'mayFail'
 end 'transferCall'
 
-// The floor a bounded accessor's success proves: its constant index, when it has one, else nothing.
+// The floor a bounded accessor's success proves: one past its constant index, when it has one, else
+// nothing.
 function constantIndexFloor(module StdModule, reader StdShapeReader, call StdCallOperands, scratch EstablishedScratch) returns LengthFloor
 	if not managedCalleeSucceedsOnlyInBounds(call.callee) or call.argCount < 2 or not reader.defs.isDefinedByAnOp(call.secondArg) 'noConstantIndex'
-		return NoLengthFloor
+		return AnyLengthFloor
 	end 'noConstantIndex'
 
 	classifyFoldableDef(module.getOp(reader.defs.definingOp(call.secondArg)), def: scratch.def)
 
 	if not scratch.def.isConstDef() or not wordTyped(scratch.def.constType) or scratch.def.constant < 0 'notANonNegativeWord'
-		return NoLengthFloor
+		return AnyLengthFloor
 	end 'notANonNegativeWord'
 
-	return scratch.def.constant as LengthFloor
+	return lengthFloorPast(scratch.def.constant)
 end 'constantIndexFloor'
+
+function lengthFloorPast(index ParsedInt) returns LengthFloor
+	return (index as LengthFloor) + OnePastTheIndex
+end 'lengthFloorPast'
 
 // Whether a storing op is a plain element store that lands inside a buffer: a constant slot, or a
 // variable one whose index a dominating bound guard admitted. Every other storing op may reach a header.
@@ -371,9 +366,9 @@ function classifyEstablishingEdge(analysis EstablishedFunction, scratch Establis
 		let slot = analysis.records.slot(scratch.guard.record)
 
 		if scratch.guard.kind != ManagedGuardKind.indexOutOfRange 'aShapeGuard'
-			scratch.edge.establish(slot, proving: shapeFactOf(scratch.guard.kind), above: NoLengthFloor, onThen: false)
+			scratch.edge.establish(slot, proving: shapeFactOf(scratch.guard.kind), above: AnyLengthFloor, onThen: false)
 		end 'aShapeGuard' else if constantLengthBound(scratch.guard) 'aConstantLengthBound'
-			scratch.edge.establish(slot, proving: NoShapeFact, above: scratch.guard.constantIndex as LengthFloor, onThen: false)
+			scratch.edge.establish(slot, proving: NoShapeFact, above: lengthFloorPast(scratch.guard.constantIndex), onThen: false)
 		end 'aConstantLengthBound' else 'aBoundThatProvesNoFloor'
 			scratch.edge.establishNothing()
 		end 'aBoundThatProvesNoFloor'
@@ -409,7 +404,7 @@ function guardIsEstablished(guard ManagedGuardOperands, slot RecordSlot, state E
 		return state.rowHasFact(slot, bit: shapeFactOf(guard.kind))
 	end 'aShapeGuard'
 
-	return constantLengthBound(guard) and state.rowFloorOf(slot) >= guard.constantIndex as LengthFloor
+	return constantLengthBound(guard) and state.rowFloorOf(slot) > guard.constantIndex as LengthFloor
 end 'guardIsEstablished'
 
 function shapeFactOf(kind ManagedGuardKind) returns ShapeFactBits
@@ -518,7 +513,7 @@ end 'retireGuardOperands'
 type EdgeFacts
 	export var slot as RecordSlot = 0
 	export var bits as ShapeFactBits = NoShapeFact
-	export var floor as LengthFloor = NoLengthFloor
+	export var floor as LengthFloor = AnyLengthFloor
 	export var establishesOnThen = false
 	export var establishes = false
 
@@ -551,7 +546,7 @@ type RememberedSuccess
 	export var flag as ValueId = 0
 	export var slot as RecordSlot = 0
 	export var bits as ShapeFactBits = NoShapeFact
-	export var floor as LengthFloor = NoLengthFloor
+	export var floor as LengthFloor = AnyLengthFloor
 
 	static function create() returns RememberedSuccess
 		return Self{}
@@ -602,7 +597,7 @@ type EstablishedState
 		self.factBits.clear()
 		self.factFloor.clear()
 		self.rowShape.refill(recordCount, value: NoShapeFact)
-		self.rowFloor.refill(recordCount, value: NoLengthFloor)
+		self.rowFloor.refill(recordCount, value: AnyLengthFloor)
 		self.rowLive.clear()
 
 		// The entry is reached with no facts.
@@ -663,7 +658,7 @@ type EstablishedState
 
 	function clearRow()
 		for i in 0 upto self.rowLive.count() 'eachLive'
-			self.writeRow(self.rowLiveAt(i), bits: NoShapeFact, floor: NoLengthFloor)
+			self.writeRow(self.rowLiveAt(i), bits: NoShapeFact, floor: AnyLengthFloor)
 		end 'eachLive'
 
 		self.rowLive.clear()
@@ -759,7 +754,7 @@ type EstablishedState
 end 'EstablishedState'
 
 function factIsEmpty(bits ShapeFactBits, floor LengthFloor) returns bool
-	return bits == NoShapeFact and floor == NoLengthFloor
+	return bits == NoShapeFact and floor == AnyLengthFloor
 end 'factIsEmpty'
 
 // ══════════════════════════════════════════════════════════════════════════

@@ -475,6 +475,8 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -508,6 +510,7 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or
@@ -624,6 +627,8 @@ type ConstructorScan
 				osCommandLine or
 				osStdHandle or
 				osExecutablePath or
+				osProcessNamespace or
+				osRandomFill or
 				osWriteStderr or
 				stackRecordAddr or
 				osOpenNamedSegment or
@@ -657,6 +662,7 @@ type ConstructorScan
 				osSetEvent or
 				osEnterBackgroundPriority or
 				osFileOpenWriteExecutable or
+				osFileOpenCreateNew or
 				osEnvBlock or
 				osEnvBlockFree or
 
@@ -833,36 +839,19 @@ end 'ParamNodeSpace'
 
 // The mask of ESCAPING parameter positions, one per function index.
 //
-// ⚠⚠ **THIS IS NOT `SemanticCheck.buildEscapeSummary`, AND MERGING THE TWO WOULD MAKE ONE OF THEM WRONG.**
-// They share this project's whole escape VOCABULARY — `ParamPositionMask` with `maskWithParam`/
-// `maskHasParam`, a CSR built by `buildCsr`, the closure walked by `reverseReachabilityMark` — because that
-// is where the shared substance is. What they do not share is the QUESTION:
-//
-//   • SemanticCheck asks, at the MAXON tier, whether a `function`-TYPED parameter is PERSISTED, to refuse a
-//     capturing closure at a call site (E3099). Its conservatism must not produce a false REFUSAL, because
-//     the consequence of being wrong is a legal program rejected.
-//   • This asks, at the STD tier, whether a RECORD POINTER can outlive the frame, to decide whether an
-//     allocation may be deleted. Its conservatism must not produce a false ADMISSION, because the
-//     consequence of being wrong is a dangling pointer with no diagnostic anywhere.
-//
-// The admitted uses differ accordingly — a `loadIndirect` THROUGH the pointer is the whole point of a
-// record and is meaningless for a closure — and one predicate serving both would have to be the union of
-// their refusals, which is neither answer. The tiers differ too: this one is keyed on `__mm_alloc` /
-// `__mm_decref`, ops that do not exist until the lowering has run.
+// It asks, at the STD tier, whether a RECORD POINTER can outlive the frame, to decide whether an
+// allocation may be deleted. Its conservatism must not produce a false ADMISSION, because the
+// consequence of being wrong is a dangling pointer with no diagnostic anywhere. It is keyed on
+// `__mm_alloc` / `__mm_decref`, ops that do not exist until the lowering has run.
 //
 // ⭐ **SOUND RATHER THAN OPTIMISTIC, and that is what makes recursion safe.** "Escapes" is REACHABILITY
 // FROM A REAL ESCAPE SITE: a parameter forwarded round a recursive cycle and never actually persisted is
-// never marked, because no seed is reachable from it. That is the same least-fixpoint argument
-// `SemanticCheck.buildEscapeSummary` makes, and for the same reason — the stdlib sort cone is mutually
-// recursive, so a depth-first "ask the callee" walk would not terminate on it.
+// never marked, because no seed is reachable from it. The stdlib sort cone is mutually recursive,
+// so a depth-first "ask the callee" walk would not terminate on it.
 //
-// ⚠ **BUT IT IS NOT THE SAME ENGINE, AND SAYING SO WOULD BE A CLAIM THE CODE DOES NOT MAKE.** SemanticCheck
-// carries a whole MASK per function and closes it with `propagateParamMasks`, a mask-valued worklist over
-// per-FUNCTION nodes. This one's seeds are per-PARAMETER facts with no mask arithmetic at all, so its node
-// is a (function, parameter) PAIR and the closure is the shared `reverseReachabilityMark` — plain
-// reachability, nothing to merge. What the two genuinely share is `buildCsr` and the `ParamPositionMask`
-// vocabulary. See `SemanticCheck.buildEscapeSummary`'s header for why a second escape analysis exists at
-// all, which is the other half of this note.
+// The seeds are per-PARAMETER facts with no mask arithmetic, so a node is a (function, parameter)
+// PAIR and the closure is the shared `reverseReachabilityMark` — plain reachability, nothing to
+// merge.
 function buildParamEscapeMasks(module StdModule, byName FunctionNameIndex) returns ParamPositionMaskArray
 	let nodes = ParamNodeSpace.create(module)
 
@@ -1120,6 +1109,8 @@ function scanOneOp(module StdModule, opIdx ElementIndex, tracked BoolArray, byNa
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -1153,6 +1144,7 @@ function scanOneOp(module StdModule, opIdx ElementIndex, tracked BoolArray, byNa
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or
@@ -1371,6 +1363,8 @@ function constructorCallAt(module StdModule, opIdx ElementIndex, byName Function
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -1404,6 +1398,7 @@ function constructorCallAt(module StdModule, opIdx ElementIndex, byName Function
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or
@@ -1716,6 +1711,8 @@ function opDropsAPromotedRecord(module StdModule, opIdx ElementIndex, promoted B
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -1749,6 +1746,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx ElementIndex, promoted B
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or

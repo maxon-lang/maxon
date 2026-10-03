@@ -1098,10 +1098,9 @@ end 'main'
 <!-- test: match-string.pattern-decodes-escapes -->
 ### A string pattern is read like every other string literal
 A pattern becomes the `.rdata` literal its arm compares against, and the scrutinee's own literal was
-decoded on the way in — so both sides have to be read the SAME way. MEASURED 2026-08-26: the
-bootstrap kept the raw token slice for the pattern only, so it compared the FOUR bytes `a\nb`
-against a three-byte string, missed every arm and fell silently through to `default` — this program
-exited **2** there and **6** under the compiler. A wrong answer, not a diagnostic. `\{` is the literal brace
+decoded on the way in — so both sides have to be read the SAME way. A pattern kept as its raw token
+slice would compare the FOUR bytes `a\nb` against a three-byte string, miss every arm and fall silently
+through to `default` — a wrong answer, not a diagnostic. `\{` is the literal brace
 (see string-interpolation.md) and reads the same in a pattern as in the value matched against it.
 ```maxon
 typealias Choice = int(0 to 9)
@@ -1389,7 +1388,7 @@ end 'main'
 A `Character` pattern against an `int` scrutinee is an ordinary pattern/scrutinee type mismatch — the two
 do not compare, exactly as a `String` pattern against an `int` one does not.
 
-The pattern is a ZWJ family emoji, and that is the whole point of the case since A5m-ab: a match pattern is
+The pattern is a ZWJ family emoji, and that is the whole point of the case: a match pattern is
 an integer-expecting position, so a SINGLE-codepoint literal there converts to its codepoint (see
 `match-character-literal-pattern-is-its-codepoint` below). A cluster is a SEQUENCE of codepoints and has no
 integer reading at all, so it is the pattern that still cannot meet an `int`.
@@ -1412,8 +1411,7 @@ error E2028: specs/fragments/match-statements/error.match-character-pattern-on-i
 
 A `match` pattern is an integer-expecting position when the scrutinee is integral, so the literal converts
 exactly as `cp == '-'`'s operand does — one rule, one door (`Parser.integerizedOperand`). The multi-byte arm
-is what makes it a CODEPOINT rule rather than a byte one: `'é'` is 233, which the oracle also compares
-against.
+is what makes it a CODEPOINT rule rather than a byte one: `'é'` is 233.
 
 ```maxon
 function main() returns ExitCode
@@ -1689,8 +1687,8 @@ end 'main'
 ```
 
 Naming a MATCH's own label is never redundant-label (E2048): that diagnostic is about
-loop labels, and `break 'check'` inside `match … 'check'` is exactly how both
-reference compilers spell an explicit match exit.
+loop labels, and `break 'check'` inside `match … 'check'` is exactly how an
+explicit match exit is spelled.
 
 <!-- test: match-break.match-own-label -->
 ```maxon
@@ -1875,8 +1873,8 @@ end 'main'
 CONTROL, and the RUNTIME half of the `continue` rule the E2048 case above only
 checks as a diagnostic. An UNLABELLED `continue` inside a match arm targets the
 `for`'s STEP block, so the counter still advances — routing it at the match instead
-does not merely pick the wrong destination, it spins forever (see `LoopContext`,
-which both reference compilers carry the same warning on). This is the one shape that
+does not merely pick the wrong destination, it spins forever (see `LoopContext`).
+This is the one shape that
 fails if `resolveControlTarget` ever stops gating its match search on the keyword.
 
 <!-- test: match-break.continue-in-for-reaches-step -->
@@ -2020,9 +2018,7 @@ A match statement whose every arm terminates — some with `panic`, the rest
 with `break` — must still treat its merge block as reachable: the `break`
 arms jump to it. A parser that only counts fall-through arms marks the merge
 dead, skips the function's implicit return, and lets the merge fall through
-into whatever block the layout places next (historically the panic arm's
-body — the self-hosted `IrBlock.assertTerminated` panicked on every
-well-terminated block in self-compiled builds).
+into whatever block the layout places next.
 
 <!-- test: match-statements.break-only-arms-with-panic-arm -->
 ```maxon

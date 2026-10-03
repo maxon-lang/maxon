@@ -1,0 +1,27 @@
+let ProjectDuplicateAliasDirName = "diagnostics-project-duplicate-typealias"
+let ProjectDuplicateAliasFirstFileName = "a.maxon"
+let ProjectDuplicateAliasBufferFileName = "b.maxon"
+let ProjectDuplicateAliasFirstSource = "module typealias Item = int(0 to 9)\n\nmodule function first() returns Item\n\treturn 1\nend 'first'\n"
+let ProjectDuplicateAliasBufferSource = "module typealias Item = int(0 to 9)\n\nfunction main() returns ExitCode\n\treturn first()\nend 'main'\n"
+let ProjectDuplicateAliasCode = "E3061"
+let ProjectDuplicateAliasMessage = "Duplicate typealias 'Item'"
+let ProjectDuplicateAliasLine = 0
+let ProjectDuplicateAliasCharacter = 17
+
+test 'a typealias two project files declare is reported where the build reports it'
+	let root = stagedProjectDiagnosticsRoot(ProjectDuplicateAliasDirName)
+	writeCorpusFile(root, fileName: ProjectDuplicateAliasFirstFileName, content: ProjectDuplicateAliasFirstSource)
+	writeCorpusFile(root, fileName: ProjectDuplicateAliasBufferFileName, content: ProjectDuplicateAliasBufferSource)
+
+	let session = probeProjectCheckSession(root, fileName: ProjectDuplicateAliasBufferFileName, content: ProjectDuplicateAliasBufferSource, edits: ["{ProjectDuplicateAliasBufferSource}\n"])
+
+	discardOutsideCheckoutDir(root)
+
+	let reported = try onlyProjectDiagnostic(session.diagnostics, note: "both files declare `module typealias Item`, and a `maxon build` of this very project reports exactly one {ProjectDuplicateAliasCode}, on the buffer's declaration, and nothing else.")
+
+	try Expect.equal(reported.code.describe(), expected: ProjectDuplicateAliasCode, message: "the one error a build of this project reports is {ProjectDuplicateAliasCode}; the server published {reported.code.describe()}: {reported.message}")
+	try Expect.equal(reported.message, expected: ProjectDuplicateAliasMessage, message: "the server must say what the build says.")
+	try Expect.equal(reported.range.startLine, expected: ProjectDuplicateAliasLine, message: "the build anchors the error on the buffer's own declaration, line 1.")
+	try Expect.equal(reported.range.startCharacter, expected: ProjectDuplicateAliasCharacter, message: "the build anchors the error at column 18, the declared name.")
+	try expectOneProjectCheckOutcome(session.reports, version: InitialDocumentVersion + 1, outcome: ProjectCheckPublished, note: "the opened version is current and the project loads, so its check runs and publishes.")
+end 'a typealias two project files declare is reported where the build reports it'

@@ -10,9 +10,8 @@
 // THIN: it encodes exactly the TargetOps the lowering and the `mrt_start` entry
 // stub produce — prologue/epilogue (`sub`/`add rsp, N`),
 // ret, mov reg,imm (32- and 64-bit forms), 64- and 32-bit reg-reg moves,
-// `call rel32`, and `call [rip]` through the IAT. Later milestones GROW the
-// dispatch as the TargetOp union grows. arm64 is a separate backend at its own
-// milestone.
+// `call rel32`, and `call [rip]` through the IAT. The dispatch grows with the TargetOp
+// union. arm64 is a separate backend.
 //
 // The encoders are also EXPORTED, because the panic runtime (X64Runtime) hand-assembles
 // its functions from them rather than from TargetOps — see that file's header for why. A
@@ -1033,9 +1032,9 @@ end 'emitWord64Store'
 // to refuse it — FP pressure here is low, because every float across a call force-spills.
 //
 // THE REASON IS THE FAILURE MODE, and the two are not symmetric:
-//   • This lowering's precondition is `a != b`, and it is established THREE LINES AWAY from the
-//     only code that can violate it: `sequenceParallelCopy` calls `removeSatisfiedMoves` at the
-//     top of every iteration, so the move it then breaks a cycle with cannot have `dst == src`.
+//   • This lowering's precondition is `a != b`, and it is established by the only code that can
+//     violate it: `ParallelCopy.sequence` calls `removeSatisfiedMoves` at the top of every
+//     iteration, so the move it then breaks a cycle with cannot have `dst == src`.
 //     It is asserted below regardless, AT the emit site, where it fails LOUD.
 //   • A reserved scratch's precondition is "the allocator never colours a value into xmm15" —
 //     which lives in the ALLOCATOR's pool mask, cannot be checked here (a swap looks identical
@@ -1059,7 +1058,7 @@ end 'emitWord64Store'
 //
 // ⚠ THE SELF-SWAP GUARD IS NOT DEFENSIVE PADDING — IT IS THIS LOWERING'S ONE PRECONDITION.
 // `a xor a` is ZERO, so a triple-XOR of a register with ITSELF does not swap it, it DESTROYS
-// it — where an `xchg` would have been a harmless no-op. `sequenceParallelCopy` cannot produce
+// it — where an `xchg` would have been a harmless no-op. `ParallelCopy.sequence` cannot produce
 // one (see above), so this can only fire if that loop's shape changes; it says so here rather
 // than zeroing a live register at run time.
 function emitRegRegSwap(code ByteArray, a X64Register, b X64Register)
@@ -1070,7 +1069,7 @@ function emitRegRegSwap(code ByteArray, a X64Register, b X64Register)
 	end 'crossClass'
 
 	if a == b 'selfSwap'
-		panic("x64 emitter: a register swap of {a.name} with itself — `sequenceParallelCopy` emits a swap only to break a cycle of length >= 2, and the XMM lowering's triple-XOR would ZERO the register rather than no-op on it")
+		panic("x64 emitter: a register swap of {a.name} with itself — `ParallelCopy.sequence` emits a swap only to break a cycle of length >= 2, and the XMM lowering's triple-XOR would ZERO the register rather than no-op on it")
 	end 'selfSwap'
 
 	match aClass 'c'
@@ -2247,7 +2246,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// right. Only the opcode BYTE distinguishes them (`minMaxSdOpcode`).
 		minMaxSdRegReg(dest, _, rhs, kind) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: minMaxSdOpcode(kind), dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
 
-		// The arm64 band is encoded by the arm64 backend (`Arm64Backend`, wave 1), never here — the
+		// The arm64 band is encoded by the arm64 backend (`Arm64Backend`), never here — the
 		// x64 encoder only ever sees x64 ops (`buildBackend` dispatches on `target.cpu`). The
 		// exhaustiveness forced this arm; a panic keeps the ISA boundary loud.
 		arm64Ret or
@@ -2301,7 +2300,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 			arm64FpLoadRdata or
 			arm64ImportCall or
 			arm64Syscall or
-			arm64Fcsel then panic("emitTargetOp: an arm64 op reached the x64 encoder — the arm64 backend (wave 1) encodes the arm64 band")
+			arm64Fcsel then panic("emitTargetOp: an arm64 op reached the x64 encoder — the arm64 backend encodes the arm64 band")
 
 		// The dense-match jump table: the full cmp/jae/lea/movsxd/lea/jmp sequence, its default-edge rel32
 		// and table-address rdata reloc filed inline, its per-slot block-address relocs recorded in
@@ -3188,13 +3187,13 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
-	code.append(buildSymbolTableBytes(debugSymbols, target: project.target))
+	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, spellings: project.stdlibShadowSpellings))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in.
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
-	code.append(buildInlineFrameTableBytes(inlineFrames))
+	code.append(buildInlineFrameTableBytes(inlineFrames, spellings: project.stdlibShadowSpellings))
 
 	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 
@@ -3245,7 +3244,7 @@ function sectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataRelocation)
 	return match reloc.kind 'kind'
 		ripRelDisp32 gives globalData.rdataOffsetOf(reloc.rdataLabel)
 		dataSectionRipRelDisp32 gives globalData.dataSectionOffsetOf(reloc.rdataLabel)
-		symdataRipRelDisp32 panic("sectionOffsetOfReloc: '{reloc.rdataLabel}' is a `.symtab` reference, and the compiler's backend emits none — symdata grows back at its own milestone")
+		symdataRipRelDisp32 panic("sectionOffsetOfReloc: '{reloc.rdataLabel}' is a `.symtab` reference, and the compiler's backend emits none")
 		arm64Adr or
 			arm64LdrLiteral or
 			symdataArm64Adr or

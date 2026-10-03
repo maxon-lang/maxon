@@ -25,8 +25,7 @@ function everythingFrom(client TcpClient) returns String
 	return answer
 end 'everythingFrom'
 
-function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+function exchangeOver(server HttpServer) returns ExitCode
 	let peer = async serveOne(server)
 
 	let client = try TcpClient.connect("127.0.0.1", port: server.port()) otherwise return 2
@@ -51,6 +50,11 @@ function main() returns ExitCode
 	print("served={served} {length} body=[{body}]\n")
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	return exchangeOver(server)
 end 'main'
 ---
 ExitCode: 0
@@ -208,7 +212,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc equal, __il_body#4
   tryerr#2:
     x64.movRegImm32 r8, 1
     x64.epilogue 232
@@ -219,7 +223,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#1:
+  __il_body#4:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
     x64.movRegReg r12, r8
@@ -233,53 +237,33 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __gt_ready
     x64.leaRegRdata rcx, [rip + __str_rec_140]  ; "127.0.0.1"
-  __il_body#29:
+  __il_body#31:
     x64.loadRegBaseDisp.word64 rdx, [rbx + 24]
-  __il_cont#28:
+  __il_cont#30:
     x64.callDirect TcpClient.connect
     x64.movRegReg r12, r8
     x64.storeSlotReg slot8, r12
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#3
-  tryerr#4:
-    x64.movRegImm32 r12, 2
+    x64.jcc equal, tryok#5
+  tryerr#6:
+    x64.movRegImm32 rbx, 2
     x64.movRegReg rcx, r13
     x64.callDirect __gt_promise_drop
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_HttpServer
-    x64.movRegReg r8, r12
-    x64.epilogue 232
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#3:
+    x64.jmp __il_cont#3
+  tryok#5:
     x64.leaRegRdata rdx, [rip + __str_rec_141]  ; "HEAD /h HTTP/1.1\x0d\x0aHost: x\x0d\x0a\x0d\x0a"
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.send
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body#31
-  tryerr#6:
-    x64.movRegImm32 r14, 3
+    x64.jcc equal, __il_body#33
+  tryerr#8:
+    x64.movRegImm32 rbx, 3
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_TcpClient
     x64.movRegReg rcx, r13
     x64.callDirect __gt_promise_drop
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_HttpServer
-    x64.movRegReg r8, r14
-    x64.epilogue 232
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __il_body#31:
+    x64.jmp __il_cont#3
+  __il_body#33:
     x64.leaRegRdata rax, [rip + __str_rec_139]  ; ""
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -326,21 +310,21 @@ func @main {
   whilehdr:
     x64.cmpRegImm32 r13, 0
     x64.jcc notEqual, untilClosed
-  __il_cont#30:
+  __il_cont#32:
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.close
     x64.loadRegSlot rcx, slot19
     x64.callDirect __gt_await
     x64.storeSlotReg slot16, r8
-  __il_body#41:
+  __il_body#43:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.byte [rax + 0], rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#43:
+  __il_body#45:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect __ms_close
-  __il_cont#40:
+  __il_cont#42:
     x64.leaRegRdata rdx, [rip + __str_rec_142]  ; "\x0d\x0a\x0d\x0a"
     x64.movRegReg rcx, r14
     x64.callDirect String.split
@@ -348,62 +332,62 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.cmpRegImm32 rax, 0
-    x64.jcc belowEqual, __im_slow#20
-  __im_load#21:
+    x64.jcc belowEqual, __im_slow#22
+  __im_load#23:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [r8 + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#44
-  __im_empty#22:
+    x64.jcc equal, critsplit#46
+  __im_empty#24:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#20
-  critsplit#45:
+    x64.jcc equal, __im_slow#22
+  critsplit#47:
     x64.movRegReg r10, rcx
-    x64.jmp __im_cont#19
-  critsplit#44:
+    x64.jmp __im_cont#21
+  critsplit#46:
     x64.movRegReg r10, rcx
-  __im_cont#19:
+  __im_cont#21:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#7
-  tryerr#8:
+    x64.jcc equal, tryok#9
+  tryerr#10:
     x64.leaRegRdata rbx, [rip + __str_rec_143]  ; "no-head"
-    x64.jmp trycont#9
-  tryok#7:
+    x64.jmp trycont#11
+  tryok#9:
     x64.movRegReg rbx, rax
-  trycont#9:
+  trycont#11:
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc belowEqual, __im_slow#24
-  __im_load#25:
+    x64.jcc belowEqual, __im_slow#26
+  __im_load#27:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.leaRegRegImm32 rax, rax, 8
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.movRegImm32 rcx, 0
     x64.loadRegBaseDisp.word64 rsi, [r8 + 40]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, critsplit#46
-  __im_empty#26:
+    x64.jcc equal, critsplit#48
+  __im_empty#28:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#24
-  critsplit#47:
+    x64.jcc equal, __im_slow#26
+  critsplit#49:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
-    x64.jmp __im_cont#23
-  critsplit#46:
+    x64.jmp __im_cont#25
+  critsplit#48:
     x64.movRegReg r8, rax
     x64.movRegReg r10, rcx
-  __im_cont#23:
+  __im_cont#25:
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#10
-  tryerr#11:
+    x64.jcc equal, tryok#12
+  tryerr#13:
     x64.leaRegRdata rax, [rip + __str_rec_144]  ; "no-body"
-    x64.jmp trycont#12
-  tryok#10:
+    x64.jmp trycont#14
+  tryok#12:
     x64.movRegReg rax, r8
-  trycont#12:
+  trycont#14:
     x64.storeSlotReg slot14, rax
     x64.leaRegRdata rax, [rip + __str_rec_145]  ; "absent"
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -433,7 +417,7 @@ func @main {
   eachLine:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r12, [rcx + rax*8 + 0]
-  __im_cont#27:
+  __im_cont#29:
     x64.movRegReg rcx, r12
     x64.callDirect String.toLower
     x64.movRegReg r13, r8
@@ -444,7 +428,7 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.cmpRegImm32 r15, 0
-    x64.jcc equal, critsplit#48
+    x64.jcc equal, critsplit#50
   theLength:
     x64.loadRegBaseDisp.word64 r13, [r12 + 0]
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
@@ -469,7 +453,7 @@ func @main {
     x64.callDirect __str_decref
     x64.movRegReg rax, r13
     x64.jmp forstep
-  critsplit#48:
+  critsplit#50:
     x64.movRegReg rax, r14
   forstep:
     x64.loadRegSlot rcx, slot18
@@ -580,10 +564,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.loadRegSlot rcx, slot20
     x64.callDirect __mm_decref
-  __il_body#39:
+  __il_body#41:
     x64.loadRegSlot rcx, slot12
     x64.callDirect __write_stdout
-  __il_cont#38:
+  __il_cont#40:
     x64.loadRegSlot rcx, slot12
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -595,6 +579,7 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot8
     x64.callDirect __destruct_TcpClient
+  __il_cont#3:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_HttpServer
     x64.movRegReg r8, rbx
@@ -606,15 +591,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#20:
+  __im_slow#22:
     x64.storeSlotReg slot23, r8
     x64.movRegReg rcx, r8
     x64.callDirect __managed_get
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot23
-    x64.jmp __im_cont#19
-  __im_slow#24:
+    x64.jmp __im_cont#21
+  __im_slow#26:
     x64.movRegReg rcx, r8
     x64.callDirect __managed_get
-    x64.jmp __im_cont#23
+    x64.jmp __im_cont#25
 }

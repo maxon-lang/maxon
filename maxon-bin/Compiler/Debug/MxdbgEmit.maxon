@@ -45,6 +45,12 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	var types = MxdbgTypeTable.create()
 	types.closeDeclaredTypes(project, signatures: signatures)
 
+	for func in codeResult.targetModule.functions 'eachClosure'
+		if not func.closureEnvFields.isEmpty() 'holdsCaptures'
+			types.closeClosureEnv(project, signatures: signatures, closure: func)
+		end 'holdsCaptures'
+	end 'eachClosure'
+
 	for fn in codeResult.debugFunctions 'eachFunctionsTypes'
 		match mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name) 'itsIr'
 			none then break 'itsIr'
@@ -52,7 +58,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 		end 'itsIr'
 	end 'eachFunctionsTypes'
 
-	types.writeInto(writer)
+	types.writeInto(writer, spellings: project.stdlibShadowSpellings)
 
 	let provenance = SidecarProvenance.of(signatures)
 
@@ -143,11 +149,11 @@ function writeInlineFrames(project Project, writer MxdbgWriter, codeResult CodeR
 		let origin = provenance.originOf(project, name: site.calleeName, sourceFile: site.calleeSourceFile)
 
 		if site.callSpan == NoSpanId 'aPositionlessCall'
-			writer.addInlineSite(String.from(site.calleeName), parent: parent, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: origin)
+			writer.addInlineSite(provenance.displayNameOf(site.calleeName), parent: parent, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: origin)
 			continue
 		end 'aPositionlessCall'
 
-		writer.addInlineSite(String.from(site.calleeName), parent: parent, callFileId: sidecarFileIdOf(project.debugSpanTable.fileIdOf(site.callSpan)), callLine: project.debugSpanTable.lineOf(site.callSpan) as MxdbgIndex, callColumn: project.debugSpanTable.columnOf(site.callSpan) as MxdbgIndex, origin: origin)
+		writer.addInlineSite(provenance.displayNameOf(site.calleeName), parent: parent, callFileId: sidecarFileIdOf(project.debugSpanTable.fileIdOf(site.callSpan)), callLine: project.debugSpanTable.lineOf(site.callSpan) as MxdbgIndex, callColumn: project.debugSpanTable.columnOf(site.callSpan) as MxdbgIndex, origin: origin)
 	end 'eachSite'
 
 	for range in codeResult.inlineRanges 'eachRange'
@@ -165,11 +171,6 @@ typealias CovPointOffsetMap = Map with (CovPointId, MxdbgCodeOffset)
 
 // A source path -> the id the SIDECAR's file table gives it, which is one behind the span table's.
 typealias SidecarFileIdMap = Map with (String, MxdbgIndex)
-
-// What an eliminated point's record carries where an offset would be. Zero rather than a sentinel: the
-// flag is what says the field means nothing, and a reader that ignored the flag would be just as wrong
-// about a real offset.
-let NoCoverageCodeOffset = 0 as MxdbgCodeOffset
 
 // ⚠ **THE FIRST OFFSET FILED FOR A POINT IS THE POINT'S.** A monomorphized generic body is emitted once
 // per specialization and every copy steps the ONE counter its source text owns, so a later copy's offset
@@ -255,15 +256,13 @@ function writeCoveragePoints(project Project, writer MxdbgWriter, emitted CovPoi
 	var id = 0 as CovPointId
 
 	for point in project.covPoints.points 'eachPoint'
-		var codeOffset = NoCoverageCodeOffset
-		var flags = (point.flags as MxdbgIndex) or MxdbgCovFlagEliminated
+		var code = MxdbgCoverageCode.eliminated
 
 		if let at = try emitted.get(id) 'itsCodeSurvived'
-			codeOffset = at
-			flags = point.flags as MxdbgIndex
+			code = MxdbgCoverageCode.at(at)
 		end 'itsCodeSurvived'
 
-		writer.addCoveragePoint(codeOffset, fileId: coveragePointFileId(fileIds, point: point, id: id), line: point.line as MxdbgIndex, column: point.col as MxdbgIndex, branchLine: point.branchLine as MxdbgIndex, branchColumn: point.branchCol as MxdbgIndex, funcName: point.funcName, flags: flags)
+		writer.addCoveragePoint(code, fileId: coveragePointFileId(fileIds, point: point, id: id), line: point.line as MxdbgIndex, column: point.col as MxdbgIndex, branchLine: point.branchLine as MxdbgIndex, branchColumn: point.branchCol as MxdbgIndex, funcName: point.funcName, flags: point.flags as MxdbgIndex)
 		id = id + 1
 	end 'eachPoint'
 end 'writeCoveragePoints'
@@ -671,6 +670,7 @@ typealias SidecarTestNameMap = Map with (ByteArray, String)
 
 type SidecarProvenance
 	let tests as SidecarTestNameMap
+	let spellings as StdlibShadowSpellingArray
 
 	static function of(signatures ProgramSignatures) returns SidecarProvenance
 		var tests = SidecarTestNameMap.create()
@@ -679,7 +679,7 @@ type SidecarProvenance
 			tests.upsert(declared.symbol, value: testDisplayName(declared.displayName))
 		end 'eachTest'
 
-		return Self{tests: tests}
+		return Self{tests: tests, spellings: signatures.shadowSpellings()}
 	end 'of'
 
 	function originOf(project Project, name ByteArray, sourceFile FilePath) returns MxdbgOrigin
@@ -707,7 +707,7 @@ type SidecarProvenance
 	end 'originOf'
 
 	function displayNameOf(name ByteArray) returns String
-		return try self.tests.get(name) otherwise String.from(name)
+		return try self.tests.get(name) otherwise String.from(authorSpelledName(name, spellings: self.spellings))
 	end 'displayNameOf'
 
 	function originOfChunk(project Project, lookup MxdbgIrLookup, name ByteArray) returns MxdbgOrigin

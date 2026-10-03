@@ -15,20 +15,19 @@ refused, and it is the ACCESS: **a message handler — and anything reachable fr
 nor READ a module-level `var`. A module-level `let` stays fully legal**, and it is the whole of the escape
 hatch: a word written once before any green thread exists has no second writer for anybody to race.
 
-⚠ **THE RULE ARRIVED IN TWO RULINGS AND IS ONE RULE.** The write half was taken first, on the lost-update
-measurement below; the read half was taken after it, on the measurement below that. They share a
+⚠ **THE WRITE HALF AND THE READ HALF ARE ONE RULE.** Each rests on its own hazard below, but they share a
 reachability question, a cure and an error code — only the diagnostic's subject clause differs — because
 splitting them would be one rule written down twice.
 
-**THE MEASUREMENT THAT MOTIVATED IT, AND IT IS AN ARITHMETIC FAILURE RATHER THAN A CRASH.** A service
-whose `export` handler did `done = done + 1` on a module-level `var`, driven to a fixed total of 1200
-sends, run ten times at `MAXON_MAX_PROCS=16`:
+**THE WRITE HAZARD IS AN ARITHMETIC FAILURE RATHER THAN A CRASH.** A service whose `export` handler does
+`done = done + 1` on a module-level `var`, driven to a fixed total of 1200 sends, run ten times at
+`MAXON_MAX_PROCS=16`:
 
 | run | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `done` | 1200 | 1200 | 1199 | 1199 | 1198 | 1199 | 1199 | 1200 | 1199 | 1200 |
 
-**Five of ten runs lost an update, and every one of them exited 0.** `done = done + 1` is a load, an add
+**Five of ten runs lose an update, and every one of them exits 0.** `done = done + 1` is a load, an add
 and a store; two Ms that interleave those six steps write each other's stale value back. Nothing
 crashes, nothing leaks, no gate anywhere goes red — the program simply answers a number that is too
 small, sometimes. ⇒ **the cure cannot be a runtime check, because there is no moment at which the runtime
@@ -36,7 +35,7 @@ could notice.** It has to be a compile error, and the write is the only place th
 
 **AND THE READ IS THE HALF WITH TEETH — A USE-AFTER-FREE, NOT A LOST UPDATE.** A write to a module `var`
 RELEASES the record the slot was holding before it stores the new one, so a green thread that has already
-loaded the pointer reads on into freed memory. Twelve services spinning on `label.count()` while `main` ran
+loaded the pointer reads on into freed memory. Twelve services spinning on `label.count()` while `main` runs
 `label = "bravo-{r}"` four thousand times — **interpolated**, so every store frees a real heap record rather
 than an immortal `.rdata` one:
 
@@ -51,14 +50,10 @@ never holds the pointer across a store. The hazard needs the reader to be INSIDE
 is freeing, which is exactly what the spin and the four thousand stores buy. A rule argued from the cheap
 probe would have concluded there was nothing here.
 
-⚠ **AND THE SAME PROGRAM IS PERFECTLY CORRECT AT ONE PROCESSOR**, which is why this rule arrives beside
-the `DefaultMaxProcs` flip and not before it. Every green thread ran on the one M, so the six steps could
-not interleave; `specs/sched-runqueue.md`'s ring-overflow and index-wrap cases said so in as many
-words — *"a global counter is the only channel a service has in SV1, and it is sound here for a stated
-reason"*. **That reason expires the moment the default is more than one P.** The refusal is what makes the
-expiry visible at the source rather than in a tally that is occasionally short: all four of those cases
-now tally in `self` and report through an awaited reply, and that file's own preamble records the
-withdrawal.
+⚠ **AND THE SAME PROGRAM IS PERFECTLY CORRECT AT ONE PROCESSOR**: every green thread runs on the one M, so
+the six steps cannot interleave. **That reason expires the moment there is more than one P, and
+`DefaultMaxProcs` is more than one.** The refusal is what makes the hazard visible at the source rather
+than in a tally that is occasionally short.
 
 ### What is refused, and what is not
 
@@ -79,7 +74,7 @@ The rule is about **who writes**, not about what is written, and not about globa
 | a plain function, not reachable from any handler, touches a module-level `var` | **legal** — the program spawning a service somewhere else does not make `main`'s own bookkeeping concurrent |
 | a handler CALLS A CLOSURE VALUE, and a function whose ADDRESS IS TAKEN assigns to a module-level `var` | **refused** — the target is chosen at run time, so no edge can be followed and every function the call could land on is treated as reachable |
 | a handler reaches a WITNESS dispatch, and a function wearing the dispatched requirement's name assigns to a module-level `var` | **refused**, for the same reason — a witness table holds the members of a conformance, so every member wearing that name is treated as reachable |
-| the same, but the assigning function's address is taken nowhere and it wears no name a dispatch the handler reaches is for | **legal** — no dispatch can reach it. Marking it anyway refused `stdlib/TraceCapture.maxon` in every service program that used an interface, and a closure in `main` in every service program that keeps a `Map` |
+| the same, but the assigning function's address is taken nowhere and it wears no name a dispatch the handler reaches is for | **legal** — no dispatch can reach it. Marking it anyway would refuse `stdlib/TraceCapture.maxon` in every service program that uses an interface, and a closure in `main` in every service program that keeps a `Map` |
 
 ⛔⛔ **THAT LAST ROW IS THIS RULE'S REFUSING DIRECTION, AND IT IS THE EXACT OPPOSITE OF `services.md`'s
 DEADLOCK RULE ON THE SAME EDGES.** `ServiceCallCycleCheck`'s header says an unknown callee *"contributes no
@@ -98,12 +93,12 @@ or allocates as blind and refuse essentially every service program there is.
 ⚠ **AND EVERY REFUSAL CARRIES THE `spawn` AS A NOTE**, on `specs/services.md`'s standing requirement for a
 whole-program service rule and for its reason: whether `Counter` is a service is decided by a `spawn` that may
 be in another file entirely, so a diagnostic that named only the write would leave the reader with no way to
-find out why an ordinary-looking assignment became illegal. The primary line is the WRITE — the one place the
+find out why an ordinary-looking assignment is illegal. The primary line is the WRITE — the one place the
 program can be repaired — and the note answers the question that line raises.
 
 ⇒ the cure for a refused program is the same in both directions and is always available: **keep the value
 in `self` and hand it back through a reply.** A reply is a `Promise` the awaiter owns, so the sum is accumulated by
-one green thread from values each computed by one green thread, and the answer no longer depends on how
+one green thread from values each computed by one green thread, and the answer does not depend on how
 many processors serviced the work. `specs/sched-default-procs.md` is that shape run at three
 processor counts for exactly one answer.
 
@@ -114,8 +109,7 @@ naming the case, where a marker removes it from the run in silence.
 ⛔ **THE FOUR `error.*` CASES DO EXCLUDE wasm32-wasi, AND FOR A REASON THAT IS ABOUT THE DIAGNOSTIC AND
 NOT ABOUT THE RULE.** E3143 is target-neutral and would be reached everywhere, but on wasm the same
 program earns E3104 for `__svc_spawn` and `__mbox_send` FIRST, so the pinned stderr is not what the
-compiler emits there. MEASURED with the exclusion lifted: `actual` was the E3104 pair, `expected` the
-E3143 text. The exclusion expires the day wasm grows a service substrate — not the day the rule changes.
+compiler emits there. The exclusion expires the day wasm grows a service substrate — not the day the rule changes.
 
 ## Tests
 
@@ -127,8 +121,8 @@ runs on a green thread; `total = total + by` is the load/add/store that two Ms c
 refusal is anchored at the WRITE, which is where the program can be repaired; the `spawn` appears only as
 the NOTE, because it is what makes the type a service and yet there is nothing to change there.
 
-⚠ **THIS PROGRAM USED TO COMPILE AND EXIT 0**, which was not a passing case but the defect itself: the only
-reason it looked harmless is that `DefaultMaxProcs` was still 1.
+⚠ **WITHOUT THE REFUSAL, THIS PROGRAM EXITS 0 AT ONE PROCESSOR**, which is not a passing case but the
+defect itself: a single M is the only reason it looks harmless.
 ```maxon
 var total = 0
 
@@ -215,7 +209,7 @@ callee — so the call graph records no edge out of it and no walk can say where
 of the bodies a `Step` in this program can denote — and the indirect call in the handler's cone really could
 be the one that runs it. The widening is narrowed to exactly that set: a function whose address is taken
 nowhere and which satisfies no witness slot has no address in the image at all, so no dispatch can land on
-it, and marking it anyway was a REFUSAL OF THE STDLIB (see `an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib`).
+it, and marking it anyway would be a REFUSAL OF THE STDLIB (see `an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib`).
 
 ⚠ **AND THE SENTENCE SAYS SO RATHER THAN CLAIMING A CALL PATH.** *"the message `Counter.add` dispatches
 through a closure or a witness whose target this compiler cannot name, so it may land here"* — an author
@@ -223,8 +217,8 @@ sent looking for a call from `Counter.add` to `bookKeeping` would not find one, 
 the reachability that is unknown, not established.
 
 ⭐ **THE PAIR IS THE EVIDENCE.** This case and `a-plain-function-may-write-a-module-global` differ by one
-indirect call and by nothing else, and they answer opposite verdicts — which is what makes the widening a
-measured behaviour rather than a claim in a comment. `services.md`'s
+indirect call and by nothing else, and they answer opposite verdicts — which is what makes the widening an
+observable behaviour rather than a claim in a comment. `services.md`'s
 `a-blocking-cycle-through-an-indirect-call-aborts` is the same silence read the OTHER way one rule over: a
 cycle through a closure is ACCEPTED at compile time (and aborts at run time), because a missed refusal there
 costs a guarantee and here it costs a wrong answer nothing can notice.
@@ -552,7 +546,7 @@ scaled=42
 STEP.** A `let` no image can hold — here a factory with a loop in it — is a counted record, and a handler that
 puts it somewhere that outlives a statement takes an owner on it and gives the owner back. Eight handlers
 doing that at once on different OS threads step one refcount, so the record is marked shared once it is built,
-exactly as a lent graph is, and every count on it from then on is atomic. Unmarked, a lost increment frees the
+exactly as a published value is, and every count on it from then on is atomic. Unmarked, a lost increment frees the
 roster under a reader and a lost decrement leaks it.
 ```maxon
 type Roster
@@ -979,15 +973,15 @@ ledger=15 count=5
 ```
 
 <!-- test: an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib -->
-⭐⭐ **THE OVER-REFUSAL THAT MADE THIS RULE UNUSABLE, PINNED — one ordinary interface method in a handler's
-cone used to refuse every program that so much as MENTIONED `TraceCapture`.**
+⭐⭐ **THE OVER-REFUSAL THAT WOULD MAKE THIS RULE UNUSABLE, PINNED — one ordinary interface method in a
+handler's cone must not refuse every program that so much as MENTIONS `TraceCapture`.**
 
 A `witnessDispatch` chooses its target at run time, so it triggers the same widening the case above pins.
-The widening used to mark EVERY function in the program, and `stdlib/TraceCapture.maxon` holds a module-level `var
-capturing` that `TraceCapture.startCapture` writes — so the compiler refused this program with *"`TraceCapture.startCapture`
-writes the module-level `capturing` … make `capturing` a `let`"*. **The cure names a file the author does not
-own**, `stdlib/Testing.maxon` has the same shape, and interfaces are not exotic: essentially every service
-program that used one was refused.
+A widening that marked EVERY function in the program would refuse this one: `stdlib/TraceCapture.maxon`
+holds a module-level `var capturing` that `TraceCapture.startCapture` writes, so the refusal would read
+*"`TraceCapture.startCapture` writes the module-level `capturing` … make `capturing` a `let`"*. **That cure
+names a file the author does not own**, `stdlib/Testing.maxon` has the same shape, and interfaces are not
+exotic: essentially every service program that uses one would be refused.
 
 ⭐ **THE NARROWING, AND WHY IT IS SOUND.** A function value in this language comes from exactly two places —
 a `functionRef` (a closure literal, or a named function used as a value) and a witness slot, whose accepted
@@ -1058,7 +1052,7 @@ handler that keeps a map is a handler whose cone holds a run-time dispatch. `boo
 global and its address is taken, exactly as in `error.a-dispatch-the-compiler-cannot-follow-widens-the-rule`;
 what differs is that no closure is CALLED anywhere a message can run. A witness table holds a conformance's
 members and nothing else, so the dispatch can reach every `hash` and every `equals` the program declares, and
-cannot reach `bookKeeping`. Widened to every address-taken function, this program was refused, and so was
+cannot reach `bookKeeping`. Widened to every address-taken function, the rule would refuse this program, and
 every service a compiler's own pool runs, whose handlers index maps throughout.
 ```maxon
 var ledger = 0

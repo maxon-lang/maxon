@@ -31,17 +31,22 @@ export union DebugFunctionNameLookup
 	named(name String)
 end 'DebugFunctionNameLookup'
 
+export union DebugFunctionValueTarget
+	unknown
+	named(name String, display String)
+end 'DebugFunctionValueTarget'
+
 union DebugSourceText
 	none
 	text(content String)
 end 'DebugSourceText'
 
 export union BreakResolution
-	atLine(file String, line DebugLineNumber, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, breakpoint String)
-	noCode(file String, line DebugLineNumber)
+	atLine(file DebugFileName, line DebugLineLookup, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, breakpoint String)
+	noCode(file DebugFileName, line DebugLineLookup)
 	ambiguous(candidates StringArray)
-	noMatch(suggestion String)
-	refused(file String, line DebugLineNumber, functionName DebugFunctionNameLookup, reason String)
+	noMatch(suggestion StatedText)
+	refused(file DebugFileName, line DebugLineLookup, functionName DebugFunctionNameLookup, reason String)
 end 'BreakResolution'
 
 export union DebugBreakTarget
@@ -54,7 +59,12 @@ end 'DebugBreakTarget'
 export union DebugBreakTargetParse
 	target(target DebugBreakTarget)
 	notATarget(spelling String)
+	lineZero(spelling String)
 end 'DebugBreakTargetParse'
+
+export function debugLineZeroReason(spelling String) returns String
+	return "'{spelling}' names line 0, and source lines are numbered from 1"
+end 'debugLineZeroReason'
 
 export function debugBreakTargetOf(spelling String) returns DebugBreakTargetParse
 	let trimmed = spelling.trim()
@@ -69,6 +79,7 @@ export function debugBreakTargetOf(spelling String) returns DebugBreakTargetPars
 
 	match wholeNumberIn(trimmed) 'aBareLine'
 		none then break 'aBareLine'
+		zero then return DebugBreakTargetParse.lineZero(trimmed)
 		value(line) then return DebugBreakTargetParse.target(DebugBreakTarget.lineOfMain(line))
 	end 'aBareLine'
 
@@ -83,6 +94,7 @@ export function debugBreakTargetOf(spelling String) returns DebugBreakTargetPars
 
 	match wholeNumberIn(lineSpelling) 'aLineNumber'
 		none then return DebugBreakTargetParse.target(DebugBreakTarget.named(trimmed))
+		zero then return DebugBreakTargetParse.lineZero(trimmed)
 		value(line) then return DebugBreakTargetParse.target(DebugBreakTarget.fileLine(joinedWith(try pieces.slice(0, endIndex: last) otherwise panic("debugBreakTargetOf: the pieces before the last of {pieces.count()} are a slice of them"), separator: TargetSeparator), line: line))
 	end 'aLineNumber'
 end 'debugBreakTargetOf'
@@ -163,7 +175,7 @@ function framesPast(frames DebugFrameArray, hidden DebugTally) returns DebugFram
 			continue
 		end 'notYetEntered'
 
-		shown.push(DebugFrame.create(shown.count() as DebugFrameNumber, functionName: frame.functionName, path: frame.path, line: frame.line, column: frame.column, offset: frame.offset, inlined: frame.inlined, site: frame.site, framePointer: frame.framePointer))
+		shown.push(DebugFrame.create(shown.count() as DebugFrameNumber, functionName: frame.functionName, path: frame.path.clone(), spot: frame.spot.clone(), offset: frame.offset, inlined: frame.inlined, site: frame.site, framePointer: frame.framePointer))
 	end 'eachFrame'
 
 	return shown
@@ -356,6 +368,23 @@ export type DebugSymbols
 		end 'enclosing'
 	end 'functionNameAt'
 
+	export function functionValueTargetAt(offset DebugAddress) returns DebugFunctionValueTarget
+		return match self.reader.functionContaining(codeOffsetIn(offset)) 'code'
+			none gives DebugFunctionValueTarget.unknown
+			found(fn) gives functionValueTargetOf(fn)
+		end 'code'
+	end 'functionValueTargetAt'
+
+	export function typeIdNamed(name String) returns MxdbgIndex throws AbsentError
+		for id in 0 upto self.reader.typeCount() 'eachType'
+			if self.reader.typeRecord(id).name == name 'thisOne'
+				return id
+			end 'thisOne'
+		end 'eachType'
+
+		throw AbsentError.absent
+	end 'typeIdNamed'
+
 	export function resolveBreakTarget(target DebugBreakTarget) returns BreakResolution
 		match target 'asked'
 			lineOfMain(line) then return self.resolvedLineOfMain(line)
@@ -379,7 +408,7 @@ export type DebugSymbols
 
 	export function stopRecordFor(reason String, stop EngineStop, textBase DebugAddress, thread DebugThreadRef, hidden DebugTally, entryCaller DebugEntryCaller) returns DebugStop
 		let frames = self.frameListFor(stop, textBase: textBase, entryCaller: entryCaller)
-		let fault = debugFaultDescription(stop.fault) if reason == FaultStopReasonName else DebugNoFault
+		let fault = StatedText.stated(debugFaultDescription(stop.fault)) if reason == FaultStopReasonName else StatedText.unstated
 		let offset = stop.pc - textBase
 
 		if not self.offsetIsTheProgramsOwn(offset) 'stoppedOutsideTheProgram'
@@ -400,16 +429,16 @@ export type DebugSymbols
 		return self.stopAtFrame(reason, fault: fault, frame: presented, stop: stop, offset: offset, frames: shown, thread: thread)
 	end 'stopRecordFor'
 
-	function stopAtFrame(reason String, fault String, frame DebugFrame, stop EngineStop, offset DebugAddress, frames DebugFrameArray, thread DebugThreadRef) returns DebugStop
-		return DebugStop.create(reason, fault: fault, functionName: DebugFunctionNameLookup.named(frame.functionName), file: frame.file, line: frame.line, column: frame.column, offset: offset, source: self.sourceWindow(frame.path, line: frame.line), frames: frames, machine: stop.machine, thread: thread)
+	function stopAtFrame(reason String, fault StatedText, frame DebugFrame, stop EngineStop, offset DebugAddress, frames DebugFrameArray, thread DebugThreadRef) returns DebugStop
+		return DebugStop.create(reason, fault: fault, functionName: DebugFunctionNameLookup.named(frame.functionName), file: frame.path.fileName(), spot: frame.spot.clone(), offset: offset, source: self.sourceWindow(frame.path, line: frame.spot.lineLookup()), frames: frames, machine: stop.machine, thread: thread)
 	end 'stopAtFrame'
 
-	function positionedStop(reason String, fault String, stop EngineStop, textBase DebugAddress, thread DebugThreadRef, frames DebugFrameArray) returns DebugStop
+	function positionedStop(reason String, fault StatedText, stop EngineStop, textBase DebugAddress, thread DebugThreadRef, frames DebugFrameArray) returns DebugStop
 		let offset = stop.pc - textBase
 
 		match self.reader.pcToLine(codeOffsetIn(offset)) 'positioned'
-			none then return DebugStop.create(reason, fault: fault, functionName: self.innermostName(frames, offset: offset), file: "", line: 0, column: 0, offset: offset, source: DebugSourceLineArray.create(), frames: frames, machine: stop.machine, thread: thread)
-			found(row) then return DebugStop.create(reason, fault: fault, functionName: self.innermostName(frames, offset: offset), file: baseNameOf(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber, offset: offset, source: self.sourceWindow(self.openablePath(row.file), line: row.line as DebugLineNumber), frames: frames, machine: stop.machine, thread: thread)
+			none then return DebugStop.create(reason, fault: fault, functionName: self.innermostName(frames, offset: offset), file: DebugFileName.unknown, spot: DebugSourceSpot.unknown, offset: offset, source: DebugSourceLineArray.create(), frames: frames, machine: stop.machine, thread: thread)
+			found(row) then return DebugStop.create(reason, fault: fault, functionName: self.innermostName(frames, offset: offset), file: DebugFileName.named(baseNameOf(row.file)), spot: DebugSourceSpot.at(row.line as DebugLineNumber, column: row.column as DebugColumnNumber), offset: offset, source: self.sourceWindow(DebugSourcePath.file(self.openablePath(row.file)), line: DebugLineLookup.line(row.line as DebugLineNumber)), frames: frames, machine: stop.machine, thread: thread)
 		end 'positioned'
 	end 'positionedStop'
 
@@ -684,21 +713,21 @@ export type DebugSymbols
 			let site = self.reader.inlineSite(index)
 
 			if mxdbgOriginIsTheAuthors(site.origin) 'theAuthorsBody'
-				frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: site.name, path: position.path, line: position.line, column: position.column, offset: offset as DebugAddress, inlined: true, site: MxdbgInlineSiteLookup.site(index), framePointer: framePointer))
+				frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: site.name, path: position.path.clone(), spot: position.spot.clone(), offset: offset as DebugAddress, inlined: true, site: MxdbgInlineSiteLookup.site(index), framePointer: framePointer))
 			end 'theAuthorsBody'
 
 			position = self.callerPositionOf(site, fn: fn, offset: offset)
 		end 'eachSplicedBody'
 
 		if mxdbgOriginIsTheAuthors(fn.origin) 'theAuthorsFunction'
-			frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: fn.displayName, path: position.path, line: position.line, column: position.column, offset: offset as DebugAddress, inlined: false, site: MxdbgInlineSiteLookup.none, framePointer: framePointer))
+			frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: fn.displayName, path: position.path.clone(), spot: position.spot.clone(), offset: offset as DebugAddress, inlined: false, site: MxdbgInlineSiteLookup.none, framePointer: framePointer))
 		end 'theAuthorsFunction'
 	end 'appendKnownFrames'
 
 	function callerPositionOf(site MxdbgInlineSiteInfo, fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns DebugSourcePosition
 		return match site.call 'where'
 			none gives self.lastRowOfSite(fn, offset: offset, site: site.parent)
-			at(file, line, column) gives DebugSourcePosition.create(self.openablePath(file), line: line as DebugLineNumber, column: column as DebugColumnNumber)
+			at(file, line, column) gives DebugSourcePosition.create(DebugSourcePath.file(self.openablePath(file)), spot: DebugSourceSpot.at(line as DebugLineNumber, column: column as DebugColumnNumber))
 		end 'where'
 	end 'callerPositionOf'
 
@@ -713,7 +742,7 @@ export type DebugSymbols
 			end 'pastTheOffset'
 
 			if sameInlineSite(self.reader.inlineSiteContaining(row.codeOffset), other: site) 'theCallersOwnRow'
-				position = DebugSourcePosition.create(self.openablePath(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber)
+				position = DebugSourcePosition.create(DebugSourcePath.file(self.openablePath(row.file)), spot: DebugSourceSpot.at(row.line as DebugLineNumber, column: row.column as DebugColumnNumber))
 			end 'theCallersOwnRow'
 		end 'eachRow'
 
@@ -760,14 +789,19 @@ export type DebugSymbols
 
 	function positionAt(fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns DebugSourcePosition
 		return match self.reader.pcToLine(offset) 'positioned'
-			none gives DebugSourcePosition.create(self.openablePath(self.pathOfFunction(fn)), line: NoSourceLine, column: NoSourceColumn)
-			found(row) gives DebugSourcePosition.create(self.openablePath(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber)
+			none gives self.unlinedPositionOf(fn)
+			found(row) gives DebugSourcePosition.create(DebugSourcePath.file(self.openablePath(row.file)), spot: DebugSourceSpot.at(row.line as DebugLineNumber, column: row.column as DebugColumnNumber))
 		end 'positioned'
 	end 'positionAt'
 
-	function pathOfFunction(fn MxdbgFunctionInfo) returns String
+	function unlinedPositionOf(fn MxdbgFunctionInfo) returns DebugSourcePosition
+		let recorded = try self.pathOfFunction(fn) otherwise return DebugSourcePosition.unknown()
+		return DebugSourcePosition.create(DebugSourcePath.file(self.openablePath(recorded)), spot: DebugSourceSpot.unknown)
+	end 'unlinedPositionOf'
+
+	function pathOfFunction(fn MxdbgFunctionInfo) returns String throws AbsentError
 		if fn.lineCount == 0 'noRows'
-			return ""
+			throw AbsentError.absent
 		end 'noRows'
 
 		return self.reader.lineRecord(fn.lineFirst).file
@@ -792,7 +826,7 @@ export type DebugSymbols
 			end 'theEntryPoint'
 		end 'eachFunction'
 
-		let recorded = try self.programFiles.get(0) otherwise return BreakResolution.noCode("", line: line)
+		let recorded = try self.programFiles.get(0) otherwise return BreakResolution.noCode(DebugFileName.unknown, line: DebugLineLookup.line(line))
 
 		return self.resolvedLineOfRecorded(recorded, line: line)
 	end 'resolvedLineOfMain'
@@ -815,7 +849,7 @@ export type DebugSymbols
 
 	function resolvedLineOfFile(file String, line DebugLineNumber) returns BreakResolution
 		match self.resolvedSourceFile(file) 'named'
-			unknown then return BreakResolution.noCode(baseNameOf(file), line: line)
+			unknown then return BreakResolution.noCode(DebugFileName.named(baseNameOf(file)), line: DebugLineLookup.line(line))
 			ambiguous(candidates) then return BreakResolution.ambiguous(candidates)
 			files(fileIds, name, path) then return self.resolvedLine(fileIds, name: name, path: path, line: line)
 		end 'named'
@@ -864,28 +898,28 @@ export type DebugSymbols
 
 	function resolvedOffset(offset MxdbgCodeOffset) returns BreakResolution
 		if (offset as DebugAddress) >= (self.code.count() as DebugAddress) 'pastTheText'
-			return BreakResolution.refused("", line: NoSourceLine, functionName: DebugFunctionNameLookup.none, reason: DebugOutOfTextReason)
+			return BreakResolution.refused(DebugFileName.unknown, line: DebugLineLookup.unknown, functionName: DebugFunctionNameLookup.none, reason: DebugOutOfTextReason)
 		end 'pastTheText'
 
 		match self.reader.functionContaining(offset) 'enclosing'
-			none then return BreakResolution.refused("", line: NoSourceLine, functionName: DebugFunctionNameLookup.none, reason: DebugOutOfTextReason)
+			none then return BreakResolution.refused(DebugFileName.unknown, line: DebugLineLookup.unknown, functionName: DebugFunctionNameLookup.none, reason: DebugOutOfTextReason)
 			found(fn) then return self.resolvedInsideFunction(fn, offset: offset)
 		end 'enclosing'
 	end 'resolvedOffset'
 
 	function resolvedInsideFunction(fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns BreakResolution
 		let position = self.positionAt(fn, offset: offset)
-		let file = baseNameOf(position.path)
+		let file = position.path.fileName()
 		let named = DebugFunctionNameLookup.named(self.presentedNameAt(offset as DebugAddress, hidden: 0))
 
 		if mxdbgOriginIsTheRuntimes(fn.origin) 'notABodyTheProgramsAuthorWrote'
-			return BreakResolution.refused(file, line: position.line, functionName: named, reason: DebugInsideRuntimeSymbolReason)
+			return BreakResolution.refused(file, line: position.spot.lineLookup(), functionName: named, reason: DebugInsideRuntimeSymbolReason)
 		end 'notABodyTheProgramsAuthorWrote'
 
 		return match self.instructionStartAt(fn, offset: offset) 'boundary'
-			start gives BreakResolution.atLine(file, line: position.line, bodies: singleBody(offset as DebugAddress), functionName: named, breakpoint: exactOffsetSpelling(offset))
-			inside gives BreakResolution.refused(file, line: position.line, functionName: named, reason: DebugNotAnInstructionStartReason)
-			undecodable gives BreakResolution.refused(file, line: position.line, functionName: named, reason: DebugUnclassifiedReason)
+			start gives BreakResolution.atLine(file, line: position.spot.lineLookup(), bodies: singleBody(offset as DebugAddress), functionName: named, breakpoint: exactOffsetSpelling(offset))
+			inside gives BreakResolution.refused(file, line: position.spot.lineLookup(), functionName: named, reason: DebugNotAnInstructionStartReason)
+			undecodable gives BreakResolution.refused(file, line: position.spot.lineLookup(), functionName: named, reason: DebugUnclassifiedReason)
 		end 'boundary'
 	end 'resolvedInsideFunction'
 
@@ -960,11 +994,11 @@ export type DebugSymbols
 		end 'called'
 	end 'entersHere'
 
-	export function presentedLineAt(offset DebugAddress, hidden DebugTally) returns DebugLineNumber
+	export function presentedLineAt(offset DebugAddress, hidden DebugTally) returns DebugLineLookup
 		if hidden == 0 'nothingHidden'
 			return match self.reader.pcToLine(codeOffsetIn(offset)) 'positioned'
-				none gives NoSourceLine
-				found(row) gives row.line as DebugLineNumber
+				none gives DebugLineLookup.unknown
+				found(row) gives DebugLineLookup.line(row.line as DebugLineNumber)
 			end 'positioned'
 		end 'nothingHidden'
 
@@ -973,7 +1007,7 @@ export type DebugSymbols
 
 		match self.reader.inlineSite(outermostHidden).call 'called'
 			none then panic("DebugSymbols.presentedLineAt: site {outermostHidden} is hidden at 0x{offset:x} and records no call position — only a site with one is ever hidden")
-			at(_, line, _) then return line as DebugLineNumber
+			at(_, line, _) then return DebugLineLookup.line(line as DebugLineNumber)
 		end 'called'
 	end 'presentedLineAt'
 
@@ -984,10 +1018,10 @@ export type DebugSymbols
 			grouping.place(placed.candidate, site: placed.context, functionStart: self.functionStartOf(codeOffsetIn(placed.candidate.offset)))
 		end 'eachCandidate'
 
-		let firstBody = try grouping.bodies.get(0) otherwise return BreakResolution.noCode(name, line: line)
+		let firstBody = try grouping.bodies.get(0) otherwise return BreakResolution.noCode(DebugFileName.named(name), line: DebugLineLookup.line(line))
 		let first = try firstBody.get(0) otherwise panic("resolvedLine: a body is opened by the candidate that places it, so it is never empty")
 
-		return BreakResolution.atLine(name, line: line, bodies: grouping.bodies, functionName: DebugFunctionNameLookup.named(self.presentedNameAt(first.offset, hidden: first.hidden)), breakpoint: "{path}{TargetSeparator}{line}")
+		return BreakResolution.atLine(DebugFileName.named(name), line: DebugLineLookup.line(line), bodies: grouping.bodies, functionName: DebugFunctionNameLookup.named(self.presentedNameAt(first.offset, hidden: first.hidden)), breakpoint: "{path}{TargetSeparator}{line}")
 	end 'resolvedLine'
 
 	function lineCandidatesOf(fileIds MxdbgIndexArray, line DebugLineNumber) returns DebugPlacedCandidateArray
@@ -1023,7 +1057,7 @@ export type DebugSymbols
 
 			match self.firstStatementRowOf(fn) 'opening'
 				none then continue
-				found(row) then return BreakResolution.atLine(baseNameOf(row.file), line: row.line as DebugLineNumber, bodies: singleBody(row.codeOffset as DebugAddress), functionName: DebugFunctionNameLookup.named(name), breakpoint: name)
+				found(row) then return BreakResolution.atLine(DebugFileName.named(baseNameOf(row.file)), line: DebugLineLookup.line(row.line as DebugLineNumber), bodies: singleBody(row.codeOffset as DebugAddress), functionName: DebugFunctionNameLookup.named(name), breakpoint: name)
 			end 'opening'
 		end 'eachFunction'
 
@@ -1041,11 +1075,11 @@ export type DebugSymbols
 
 			match self.reader.pcToLine(offset) 'positioned'
 				none then continue
-				found(row) then return BreakResolution.atLine(baseNameOf(row.file), line: row.line as DebugLineNumber, bodies: singleBody(offset as DebugAddress), functionName: DebugFunctionNameLookup.named(name), breakpoint: name)
+				found(row) then return BreakResolution.atLine(DebugFileName.named(baseNameOf(row.file)), line: DebugLineLookup.line(row.line as DebugLineNumber), bodies: singleBody(offset as DebugAddress), functionName: DebugFunctionNameLookup.named(name), breakpoint: name)
 			end 'positioned'
 		end 'eachSplicedRange'
 
-		return BreakResolution.noCode(name, line: 0)
+		return BreakResolution.noCode(DebugFileName.named(name), line: DebugLineLookup.unknown)
 	end 'resolvedSplicedBody'
 
 	function firstStatementRowOf(fn MxdbgFunctionInfo) returns MxdbgLineLookup
@@ -1060,10 +1094,11 @@ export type DebugSymbols
 		return MxdbgLineLookup.none
 	end 'firstStatementRowOf'
 
-	function sourceWindow(path String, line DebugLineNumber) returns DebugSourceLineArray
+	function sourceWindow(path DebugSourcePath, line DebugLineLookup) returns DebugSourceLineArray
 		var window = DebugSourceLineArray.create()
+		let known = try path.filePath() otherwise return window
 
-		match self.readSource(path) 'read'
+		match self.readSource(known) 'read'
 			none then return window
 			text(content) then appendSourceWindow(window, content: content, line: line)
 		end 'read'
@@ -1088,15 +1123,29 @@ function sourceTextAt(path FilePath) returns DebugSourceText
 	return DebugSourceText.text(content)
 end 'sourceTextAt'
 
-function appendSourceWindow(window DebugSourceLineArray, content String, line DebugLineNumber)
+function appendSourceWindow(window DebugSourceLineArray, content String, line DebugLineLookup)
 	for (iter, row) in content.split(LineSeparator).withIterator() 'eachLine'
 		let number = (iter.index() + 1) as DebugLineNumber
 
-		if number + SourceWindowRadius >= line and number <= line + SourceWindowRadius 'insideTheWindow'
-			window.push(DebugSourceLine.create(number, text: row.replace(CarriageReturn, with: ""), current: number == line))
+		if sourceWindowHolds(line, number: number) 'insideTheWindow'
+			window.push(DebugSourceLine.create(number, text: row.replace(CarriageReturn, with: ""), current: sourceWindowCentresOn(line, number: number)))
 		end 'insideTheWindow'
 	end 'eachLine'
 end 'appendSourceWindow'
+
+function sourceWindowHolds(line DebugLineLookup, number DebugLineNumber) returns bool
+	return match line 'centre'
+		unknown gives number <= SourceWindowRadius
+		line(centre) gives number + SourceWindowRadius >= centre and number <= centre + SourceWindowRadius
+	end 'centre'
+end 'sourceWindowHolds'
+
+function sourceWindowCentresOn(line DebugLineLookup, number DebugLineNumber) returns bool
+	return match line 'centre'
+		unknown gives false
+		line(centre) gives number == centre
+	end 'centre'
+end 'sourceWindowCentresOn'
 
 function resolutionOf(matching DebugSourceFileArray) returns DebugFileResolution
 	let first = try matching.get(0) otherwise return DebugFileResolution.unknown
@@ -1212,25 +1261,22 @@ function singleBody(offset DebugAddress) returns DebugLineBodyArray
 	return bodies
 end 'singleBody'
 
-let NoSourceLine = 0 as DebugLineNumber
-let NoSourceColumn = 0 as DebugColumnNumber
-
 type DebugSourcePosition
-	export let path as String
-	export let line as DebugLineNumber
-	export let column as DebugColumnNumber
+	export let path as DebugSourcePath
+	export let spot as DebugSourceSpot
 
-	static function create(path String, line DebugLineNumber, column DebugColumnNumber) returns DebugSourcePosition
-		return Self{path: path, line: line, column: column}
+	static function create(path DebugSourcePath, spot DebugSourceSpot) returns DebugSourcePosition
+		return Self{path: path, spot: spot}
 	end 'create'
 
 	static function unknown() returns DebugSourcePosition
-		return Self{path: "", line: NoSourceLine, column: NoSourceColumn}
+		return Self{path: DebugSourcePath.unknown, spot: DebugSourceSpot.unknown}
 	end 'unknown'
 end 'DebugSourcePosition'
 
 union DebugWholeNumber
 	none
+	zero
 	value(number DebugLineNumber)
 end 'DebugWholeNumber'
 
@@ -1242,7 +1288,7 @@ let CarriageReturn = "\r"
 function wholeNumberIn(spelling String) returns DebugWholeNumber
 	match parseDigits(spelling.trim(), skipping: 0, base: DecimalBase) 'read'
 		invalid then return DebugWholeNumber.none
-		valid(value) then return DebugWholeNumber.value(value as DebugLineNumber)
+		valid(value) then return DebugWholeNumber.zero if value == 0 else DebugWholeNumber.value(value as DebugLineNumber)
 	end 'read'
 end 'wholeNumberIn'
 
@@ -1601,3 +1647,8 @@ function noteDebugName(names StringArray, seen DebugNameSet, name String)
 	seen.insert(name)
 	names.push(name)
 end 'noteDebugName'
+
+function functionValueTargetOf(fn MxdbgFunctionInfo) returns DebugFunctionValueTarget
+	let target = String.from(try fnRefThunkTarget(fn.name.toByteArray()) otherwise return DebugFunctionValueTarget.named(fn.name, display: fn.displayName))
+	return DebugFunctionValueTarget.named(target, display: target)
+end 'functionValueTargetOf'

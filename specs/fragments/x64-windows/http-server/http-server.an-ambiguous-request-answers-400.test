@@ -39,23 +39,26 @@ function paddedHead() returns String
 	return head
 end 'paddedHead'
 
-function main() returns ExitCode
-	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
-	var limits = HttpServerLimits.create()
-	limits.maxHeaderBytes = HeadCap
-	server.setLimits(limits)
-
-	let port = server.port()
+function exchangeOver(listening HttpServer) returns ExitCode
+	let port = listening.port()
 	let blocks = ["GET / HTTP/1.1\r\n\r\n", "GET @127.0.0.1/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\nhi", "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nHost: 127.0.0.1\r\n\r\n", paddedHead()]
 
 	for block in blocks 'eachBlock'
-		let peer = async acceptedAs(server)
+		let peer = async acceptedAs(listening)
 		let status = shout(port, block: block)
 		let accepted = await peer
 		print("status={status} accept={accepted}\n")
 	end 'eachBlock'
 
 	return 0
+end 'exchangeOver'
+
+function main() returns ExitCode
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var limits = HttpServerLimits.create()
+	limits.maxHeaderBytes = HeadCap
+	server.setLimits(limits)
+	return exchangeOver(server)
 end 'main'
 ---
 ExitCode: 0
@@ -502,7 +505,7 @@ func @main {
     x64.storeSlotReg slot0, r8
     x64.movRegImm32 rax, 160
     x64.storeBaseDispReg.word64 [r8 + 0], rax
-  __il_body#11:
+  __il_body#4:
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.movRegReg rcx, r8
     x64.callDirect __mm_own
@@ -510,10 +513,10 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.storeBaseDispReg.word64 [rbx + 8], r13
-  __il_body#12:
+  __il_body#14:
     x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.storeSlotReg slot14, rax
-  __il_cont#9:
+  __il_cont#13:
     x64.leaRegRdata rbx, [rip + __str_rec_172]  ; "GET / HTTP/1.1\x0d\x0a\x0d\x0a"
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
@@ -539,7 +542,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-  __il_body#13:
+  __il_body#15:
     x64.leaRegRdata rax, [rip + __str_rec_169]  ; "GET / HTTP/1.1\x0d\x0aHost: 127.0.0.1\x0d\x0aX-Pad: "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -559,21 +562,21 @@ func @main {
     x64.storeBaseDispReg.word64 [r14 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
-    x64.jmp __il_body#20
+    x64.jmp __il_body#22
   pad:
     x64.leaRegRdata rdx, [rip + __str_rec_170]  ; "aaaaaaaaaa"
     x64.movRegReg rcx, r14
     x64.callDirect String.append
-  __il_body#20:
+  __il_body#22:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-  __il_cont#19:
+  __il_cont#21:
     x64.cmpRegImm32 rax, 160
     x64.jcc belowEqual, pad
   whileexit:
     x64.leaRegRdata rdx, [rip + __str_rec_171]  ; "\x0d\x0a\x0d\x0a"
     x64.movRegReg rcx, r14
     x64.callDirect String.append
-  __il_cont#8:
+  __il_cont#12:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
     x64.callDirect __managed_push
@@ -670,10 +673,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 16], rcx
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.word64 [rax + 24], rcx
-  __il_body#18:
+  __il_body#20:
     x64.loadRegSlot rcx, slot6
     x64.callDirect __write_stdout
-  __il_cont#17:
+  __il_cont#19:
     x64.loadRegSlot rcx, slot6
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot3
@@ -692,6 +695,7 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
+  __il_cont#5:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot15

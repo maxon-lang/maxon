@@ -753,15 +753,7 @@ extension Project
 	function sweptOver(walk SourceSweep, readerPath FilePath) returns LspCorpus
 		let reader = try self.refreshFromWalk(walk, readerPath: readerPath, unreadable: UnreadableSource.skipped) otherwise panic("sweptOver: a corpus skips a source it cannot read, so its refresh refuses nothing")
 
-		var pool = FrontEndPool.create()
-
-		try pool.lexEveryFile(self) otherwise 'lexingFailed'
-			pool.close(self)
-			return LspCorpus.unavailable
-		end 'lexingFailed'
-
-		pool.close(self)
-
+		try lexEveryFileOnAPool(self) otherwise return LspCorpus.unavailable
 		let signatures = try queryProgramSignatures(self) otherwise return LspCorpus.unavailable
 		return LspCorpus.loaded(self, signatures: signatures, readerPath: reader)
 	end 'sweptOver'
@@ -782,9 +774,7 @@ extension Project
 		// Seeded from the array the library loops index (`StdlibSource.growStdlibBodyDemand` and its two
 		// siblings), so the keep-set and their domain cannot drift apart. `registerTheReader` names what
 		// a library file missing from the corpus costs.
-		let libraryPaths = self.librarySourcePaths.clone()
-
-		for path in libraryPaths 'eachLibraryFile'
+		for path in self.librarySourcePaths.clone() 'eachLibraryFile'
 			try self.keptAndRefreshed(path, kept: kept, unreadable: unreadable)
 		end 'eachLibraryFile'
 

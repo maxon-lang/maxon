@@ -466,8 +466,21 @@ typealias LspRequestIdNumber = int(1 to i64.max)
 
 let FirstRequestId = 1 as LspRequestIdNumber
 
-// A framed body's length in bytes, and how many bytes the line writer appends beyond it.
-typealias FrameByteCount = int(0 to i64.max)
+enum FrameLengthError implements Error
+	unstated
+end 'FrameLengthError'
+
+union StatedFrameLength
+	unstated
+	stated(count ByteLimit)
+
+	function count() returns ByteLimit throws FrameLengthError
+		match self 'length'
+			unstated then throw FrameLengthError.unstated
+			stated(count) then return count
+		end 'length'
+	end 'count'
+end 'StatedFrameLength'
 
 // How many messages addressed to somebody else may arrive before this client stops waiting. Server
 // notifications are legitimate and unbounded in principle; a budget turns a server that answers nothing
@@ -770,8 +783,8 @@ public type LspClient
 		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilReported'
 			_ = try self.documentSymbols(uri)
 
-			for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isProjectCheckReport(candidate, prefix: prefix), take: StashTake.every) 'eachReport'
-				reports.push(try readProjectCheckReport(doc, prefix: prefix))
+			for report in try self.takeProjectCheckReports(prefix) 'eachReport'
+				reports.push(report)
 			end 'eachReport'
 
 			for report in reports 'eachTaken'
@@ -785,6 +798,16 @@ public type LspClient
 
 		throw LspClientError.transportFailed("no project check outcome for version {through} of {uri} arrived within {ProjectCheckPublishFailureBoundMs} ms; {reports.count()} outcome line(s) for earlier versions did")
 	end 'awaitProjectCheckReports'
+
+	function takeProjectCheckReports(prefix String) returns ProjectCheckReportArray throws LspClientError
+		var reports = ProjectCheckReportArray.create()
+
+		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isProjectCheckReport(candidate, prefix: prefix), take: StashTake.every) 'eachReport'
+			reports.push(try readProjectCheckReport(doc, prefix: prefix))
+		end 'eachReport'
+
+		return reports
+	end 'takeProjectCheckReports'
 
 	function takeStashedWhere(wanted StashedNotificationTest, take StashTake) returns StashedNotificationArray throws LspClientError
 		var kept = StringArray.create()
@@ -1092,22 +1115,15 @@ public type LspClient
 	// length. `readStdoutBytes` shares the per-handle buffer with the line reader, which is what lets the
 	// headers be read by line and the body by count on one stream.
 	function readFrame() returns String throws LspClientError
-		var contentLength = 0 as FrameByteCount
-		var haveContentLength = false
+		var statedLength = StatedFrameLength.unstated
 		var inHeaders = true
 
 		while inHeaders 'headers'
 			let line = try self.server.readStdoutLine() otherwise (e) 'headerReadFailed'
-				throw LspClientError.transportFailed("reading a message header failed: {e.displayReason()}")
+				throw LspClientError.transportFailed(headerReadFailure(e))
 			end 'headerReadFailed'
 
 			if line.isEmpty() 'blankLine'
-				// EOF reads as an empty line here too, and both end the session: a blank line arriving
-				// before a `Content-Length` is not a frame this client can read either way.
-				if not haveContentLength 'noFrame'
-					throw LspClientError.transportFailed("the server's stdout ended before any Content-Length header")
-				end 'noFrame'
-
 				inHeaders = false
 			end 'blankLine' else 'headerField'
 				let parts = line.split(HeaderFieldSeparator)
@@ -1116,14 +1132,16 @@ public type LspClient
 				// Every other header is ignored, as the protocol requires of one a peer does not know.
 				if name == ContentLengthHeaderName 'contentLengthField'
 					let raw = (try parts.get(1) otherwise "").trim()
-					contentLength = try int.fromString(raw) otherwise 'notACount'
+					let length = try int.fromString(raw) otherwise 'notACount'
 						throw LspClientError.transportFailed("a Content-Length header is not a byte count: '{raw}'")
 					end 'notACount'
 
-					haveContentLength = true
+					statedLength = StatedFrameLength.stated(length as ByteLimit)
 				end 'contentLengthField'
 			end 'headerField'
 		end 'headers'
+
+		let contentLength = try statedLength.count() otherwise throw LspClientError.transportFailed("the server's headers ended before any Content-Length header")
 
 		// A refusal throws; a SHORT answer is end of stream, which mid-frame is its own transport
 		// failure, so both are checked and neither is a whole frame.
@@ -1131,7 +1149,7 @@ public type LspClient
 			throw LspClientError.transportFailed("reading a {contentLength}-byte message body failed: {e.displayReason()}")
 		end 'bodyReadFailed'
 
-		if body.byteLength() != contentLength 'truncated'
+		if (body.byteLength() as ByteLimit) != contentLength 'truncated'
 			throw LspClientError.transportFailed("the server's stdout ended after {body.byteLength()} of {contentLength} body bytes")
 		end 'truncated'
 
@@ -1166,6 +1184,10 @@ public type LspClient
 		throw LspClientError.transportFailed("no reply to request {id} arrived within {UnaddressedMessageBudget} messages addressed elsewhere")
 	end 'awaitReply'
 end 'LspClient'
+
+function headerReadFailure(e SubprocessError) returns String
+	return "the server's stdout ended before a message's headers did" if e.endedTheStream() else "reading a message header failed: {e.displayReason()}"
+end 'headerReadFailure'
 
 // The server binary with the suffix this host can actually spawn.
 function testedServerPath() returns FilePath

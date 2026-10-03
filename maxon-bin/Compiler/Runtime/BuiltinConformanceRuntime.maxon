@@ -1,10 +1,11 @@
-// BuiltinConformanceRuntime.maxon — the synthesized `int.hash`/`int.equals` (P1.7a slice 2b),
-// `int.compare` (P1.7a slice 2b-ii), `float.equals`/`float.compare` + `bool.compare` (P1.7a slice 2b-iii),
-// `String.hash`/`String.equals` (P1.7b) and `float.hash` (P1.7a's last slice) impls that make the BUILTIN
+// BuiltinConformanceRuntime.maxon — the synthesized `int.hash`/`int.equals`, `int.compare`,
+// `float.equals`/`float.compare` + `bool.compare`, `String.hash`/`String.equals` and `float.hash`
+// impls that make the BUILTIN
 // types conform to `Hashable`/`Equatable`/`Comparable`. WHICH type conforms to WHICH protocol is not
 // restated here — it is
 // `IrInterface.isIntrinsicBuiltinConformance`, and the impls below are exactly its true entries — one per
-// (type, protocol) pair, no count written down, because a count is a copy that goes stale on the next rung.
+// (type, protocol) pair, no count written down, because a count is a copy that goes stale when the
+// list grows.
 //
 // ⭐ **The builtin types conform NATIVELY, the type-side twin of the synthesized
 // `Hashable`/`Equatable`/`Comparable` interfaces (`builtinInterface`).** The compiler reads no stdlib, so there is no
@@ -47,17 +48,17 @@
 // `lessThan`/`greaterThan`/`equalTo` cascade, which `float.compare` precedes with a NaN preamble
 // (`buildFloatCompare`); `String.hash() = djb2` over the bytes; `String.equals(other) = __str_eq`'s content
 // compare. The witness reloc these ride is baked by EVERY writer: the x64 one, the wasm one as a
-// funcref-table index (P1.7a slice 2b-iv-B) and the arm64 Mach-O/ELF one (slice 2b-iv-C).
+// funcref-table index and the arm64 Mach-O/ELF one.
 //
 // ⛔⛔ **FIVE OF THE FOURTEEN CANDIDATES CAN NO LONGER BE INSTALLED IN ANY COMPILE, AND THAT IS THE
-// "does not already DEFINE it" HALF WORKING RATHER THAN A HOLE (MEASURED, W49 wave 7).**
+// "does not already DEFINE it" HALF WORKING RATHER THAN A HOLE.**
 // `String.hash`/`String.equals` and `Character.hash`/`Character.equals`/`Character.compare` are all
 // DECLARED by corpus modules the loader lists UNCONDITIONALLY (`stdlib/String.maxon:365`, `:373`;
 // `stdlib/Character.maxon:107`, `:62`, `:80`), and `LowerMaxonToStd` pushes every stdlib function into
 // `module.functions` even when it skips the BODY — so `undefinedImplNames` finds each of the five DEFINED in
 // every compile and never offers it here.
 //
-// **Measured, not inferred, on the base binary before a line of wave 7 was written:** `s.hash()` on a
+// **The corpus body is the one that runs:** `s.hash()` on a
 // `String` emits `call String.hash`, and the emitted `String.hash` is `call hashString` — the corpus's
 // `helpers/string/hash.maxon:22`. A `Set with String` reaches the same body through its witness slot, and a
 // `Set with Character` emits a `Character.hash` that calls `__str_bytes_view`/`__managed_count` — the corpus's
@@ -73,8 +74,8 @@
 // ⇒ The two hashes AGREE where it would matter if they did not: `hashString` is the same djb2 with the same
 // `5381`/`33`/low-32 mask as `emitDjb2HashOverByteRange`, so a `Set with String`'s bucket layout would be
 // identical whichever body a compile ended up with. `Character`'s pair do NOT agree on cost (the corpus
-// walks a materialized `bytes()` view where the synthesized one reads `buffer@0` directly), which is a
-// trade belonging to whichever rung retires `Character.bytes()`, and is recorded at `ByteViewMethod`.
+// walks a materialized `bytes()` view where the synthesized one reads `buffer@0` directly), a cost
+// trade recorded at `ByteViewMethod`.
 //
 // ⚠⚠ **THAT AGREEMENT IS A READING OF TWO SOURCES AND IS CHECKED BY NOTHING — DO NOT PROMOTE IT TO A
 // GUARANTEE.** It cannot be tested, and the reason is the very fact above: the synthesized `String.hash`
@@ -163,11 +164,11 @@ function emitEquatableWitnessEquals(module StdModule, block IrBlock, eqWitness V
 end 'emitEquatableWitnessEquals'
 
 // Install the synthesized builtin-type conformance impls when — and only when — a witness table references
-// them (P1.7a slice 2b + P1.7b). Each impl NAME is `qualifiedMethodName(<conformer>, <method>)`, the SAME
+// them. Each impl NAME is `qualifiedMethodName(<conformer>, <method>)`, the SAME
 // construction `ensureWitnessTable` names its reloc target by, so the built function, the reloc, and the
 // dispatch cannot disagree on the symbol.
 //
-// ⭐⭐ **`arrayConformerName` IS THE ONE SYMBOL HALF THIS FILE CANNOT SPELL (ARR6).** Five of the six
+// ⭐⭐ **`arrayConformerName` IS THE ONE SYMBOL HALF THIS FILE CANNOT SPELL.** Five of the six
 // conformers are compiler-owned spellings — three keywords and two names no declaration may take — so their
 // impl symbols are joined from constants here. The SIXTH is the corpus's array record, whose name the
 // program's own `BuiltinArrayLiteral` declaration chooses (`ProgramSignatures.arrayRecordDeclaredName`), and
@@ -190,8 +191,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	// `bool` has neither `Hashable` nor `Equatable`, so there is no `bool.hash`/`bool.equals` to mint —
 	// and `String` has no `Comparable`, so no `String.compare`. Those three holes are one fact, stated in
 	// `isIntrinsicBuiltinConformance` and read from there rather than restated here. ⚠ `Character` looks
-	// like a fourth and is not: it conforms to all three (A5m-c), and the arm that said otherwise was a
-	// claim about `stdlib/Character.maxon` that the file contradicts.
+	// like a fourth and is not: it conforms to all three.
 	var impls = ByteArrayArray.create()
 	let intHash = candidateImplName(impls, conformerName: IntConformerName, methodName: HashMethodName)
 	let intEquals = candidateImplName(impls, conformerName: IntConformerName, methodName: EqualsMethodName)
@@ -265,7 +265,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	end 'strEquals'
 
 	// ⭐ **`Character.hash` IS `String.hash`'s GRAPH AND `Character.equals` IS `String.equals`'s, UNDER
-	// THEIR OWN SYMBOLS** (P1.8 Slice D) — the `bool.compare`/`int.compare` arrangement one type over. Both
+	// THEIR OWN SYMBOLS** — the `bool.compare`/`int.compare` arrangement one type over. Both
 	// types ARE the fused byte record (`TypeRules.tagIsByteRecord`), so djb2 over `buffer@0`/`length@8` and
 	// `__str_eq`'s content compare answer for a Character exactly as they answer for a String; two
 	// transcriptions could only ever come to disagree about what equality MEANS for a pair that hashes alike.
@@ -282,7 +282,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 		buildStrEq(module, name: charEquals)
 	end 'charEquals'
 
-	// ⭐ **`Character.compare` IS THE ONE IMPL A `String` HAS NO TWIN FOR** (A5m-c). The graph is the
+	// ⭐ **`Character.compare` IS THE ONE IMPL A `String` HAS NO TWIN FOR**. The graph is the
 	// byte-record lexicographic cascade, installed here under the WITNESS-visible symbol and under
 	// `__char_cmp` by `installGraphemeRuntime` for the operator door — `buildStrEq`'s two-symbol
 	// arrangement, one builder.
@@ -497,6 +497,8 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			osCommandLine or
 			osStdHandle or
 			osExecutablePath or
+			osProcessNamespace or
+			osRandomFill or
 			osWriteStderr or
 			stackRecordAddr or
 			osOpenNamedSegment or
@@ -530,6 +532,7 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
+			osFileOpenCreateNew or
 			osEnvBlock or
 			osEnvBlockFree or
 			loadAcquire or
@@ -568,7 +571,7 @@ end 'noteBuiltinImplReference'
 // by-value scalar i64 in arg-0 (the witness dispatch passes `self.item`, a scalar `T` field read, straight in
 // — no pointer indirection), so the whole body is a mask and a return.
 function buildIntHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -608,7 +611,7 @@ end 'buildIntHash'
 // `primitive-hashable/float.hash.nan` pins the fold so a later reader does not "fix" it. `float.compare`'s
 // NaN preamble is not a counter-example: `compare` implements a TOTAL order, which IEEE does not give.
 function buildFloatHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneF64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneF64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -653,18 +656,16 @@ end 'returnLow32Masked'
 // declared types) with nothing to report it.
 //
 // ⭐ **THE RESULT TYPE IS THE INTERFACE'S, NOT A UNIFORM MACHINE WORD, AND THAT IS A WITNESS-TABLE
-// OBLIGATION (P1.7a slice 2b-iv-B).** These impls are installed into a witness table typed by the interface,
+// OBLIGATION.** These impls are installed into a witness table typed by the interface,
 // and there is no `ConformanceCheck` to hold them to it — they are synthesized, so nothing but this line
 // makes their declared signature agree with the one every DISPATCH SITE derives from
 // `Equatable`/`Comparable` itself. `equals` returns `bool` (an `i1`) and `compare` an `Ordering` tag (an
-// `i64`); declaring both `i64` was invisible on the register targets, where a `bool` rides a 64-bit register
-// as readily as a tag, and on wasm it was a **`wasm trap: indirect call type mismatch`** — the dispatch site
-// declared `(i64,i64)->i32` against an impl typed `(i64,i64)->i64`. MEASURED: 7 `Equatable`-via-constraint
-// spec cases across `equatable`/`primitive-conformance`/`string-conformance` trapped under wasmtime while
-// answering correctly on x64. The PARAMETERS stay i64 — the uniform indirect ABI passes every non-float
-// argument as a machine word, so those already agree.
+// `i64`); declaring both `i64` is invisible on the register targets, where a `bool` rides a 64-bit register
+// as readily as a tag, and on wasm it is a **`wasm trap: indirect call type mismatch`** — the dispatch site
+// declares `(i64,i64)->i32` against an impl typed `(i64,i64)->i64`. The PARAMETERS stay i64 — the
+// uniform indirect ABI passes every non-float argument as a machine word, so those already agree.
 function createTwoOperandImpl(name ByteArray, operandType StdType, resultType StdType) returns IrFunction
-	return IrFunction.createFromStd(name, returnType: StdReturnType.value(resultType), paramCount: 2, paramTypes: twoOperandParams(operandType), returnLine: 0)
+	return IrFunction.createFromStd(name, returnType: StdReturnType.value(resultType), paramCount: 2, paramTypes: twoOperandParams(operandType))
 end 'createTwoOperandImpl'
 
 // The parameter list for `createTwoOperandImpl`, routed through `MmRuntime`'s shared param shapes rather
@@ -740,7 +741,7 @@ end 'emitOrderingTest'
 // tests together. Naming the CASE here rather than passing a number is what keeps that derivation at one
 // call per verdict, across both compare impls.
 //
-// ⚠ **THE LAYOUT IS HANDED IN RATHER THAN FETCHED (W3), AND THAT IS WHAT MAKES "the same declaration" TRUE
+// ⚠ **THE LAYOUT IS HANDED IN RATHER THAN FETCHED, AND THAT IS WHAT MAKES "the same declaration" TRUE
 // RATHER THAN INTENDED.** It is `stdlib/Interfaces.maxon`'s, read ONCE per compile by the caller of
 // `installBuiltinConformanceRuntime` / `installGraphemeRuntime` off `Project.enumTypes`; these builders sit
 // at the Std tier with no `Project` in reach, and a second door to the layout would be a second thing to keep
@@ -781,8 +782,8 @@ function emitOrderedCascade(module StdModule, head IrBlock, a ValueId, b ValueId
 	emitOrderingVerdict(module, block: equalBlock, ordering: ordering, caseName: OrderingEqualToCaseName, ids: ids)
 end 'emitOrderedCascade'
 
-// `<conformer>.compare(self, other) -> Ordering` for a scalar whose MACHINE ORDER IS ITS TOTAL ORDER (P1.7a
-// slices 2b-ii/2b-iii) — the bare cascade, entered at `entry`, with nothing in front of it.
+// `<conformer>.compare(self, other) -> Ordering` for a scalar whose MACHINE ORDER IS ITS TOTAL ORDER —
+// the bare cascade, entered at `entry`, with nothing in front of it.
 //
 // It serves `int.compare` AND `bool.compare` (the installer states why bool's graph IS int's). `float`
 // cannot use it: IEEE `<`/`>` are false for every NaN pair, so `buildFloatCompare` enters the SAME cascade
@@ -806,7 +807,7 @@ function buildOrderingCompare(module StdModule, name ByteArray, operandType StdT
 	module.functions.push(func)
 end 'buildOrderingCompare'
 
-// ⭐⭐ `float.compare(self, other) -> Ordering` (P1.7a slice 2b-iii) — a **TOTAL** order over f64, which IEEE
+// ⭐⭐ `float.compare(self, other) -> Ordering` — a **TOTAL** order over f64, which IEEE
 // `<`/`>`/`==` do not give: they answer FALSE for every NaN pair, so the bare cascade above would call a NaN
 // `equalTo` everything. NaN is placed at the BOTTOM — below every non-NaN including `-inf` — and two NaNs
 // compare `equalTo` — the order `stdlib/PrimitiveExtensions.maxon:46-64` states, and the canonical corpus
@@ -859,8 +860,8 @@ function buildFloatCompare(module StdModule, name ByteArray, ordering EnumLayout
 	module.functions.push(func)
 end 'buildFloatCompare'
 
-// ⭐⭐ **`<name>(self, other) -> Ordering` — THE LEXICOGRAPHIC BYTE COMPARE OF TWO FUSED BYTE RECORDS
-// (A5m-c).** The corpus's `Character.compare` (`stdlib/Character.maxon:80-104`), verbatim as a rule: walk the
+// ⭐⭐ **`<name>(self, other) -> Ordering` — THE LEXICOGRAPHIC BYTE COMPARE OF TWO FUSED BYTE RECORDS.**
+// The corpus's `Character.compare` (`stdlib/Character.maxon:80-104`), verbatim as a rule: walk the
 // bytes up to the SHORTER length, and the first differing byte decides; if every byte agrees, the SHORTER
 // record is `lessThan` and equal lengths are `equalTo`. Both operands are BORROWED — it reads `buffer@0`/
 // `length@8` and walks the bytes, freeing and allocating nothing — so it is safe on an `.rdata` literal and
@@ -973,7 +974,7 @@ end 'buildByteRecordCompare'
 // accumulator added. Both phi `argType`s are set to i64 explicitly: `retypeBlockArgs` runs in
 // `lowerMaxonToStd`, which these post-pipeline functions never pass through.
 function buildStrHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

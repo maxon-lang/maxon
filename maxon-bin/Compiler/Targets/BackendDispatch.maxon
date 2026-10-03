@@ -55,7 +55,7 @@ let MainThreadEntryFrameBytes = (ShadowSpaceBytes + StackWordBytes) as StackSize
 // nest UNDER this phase in both reports; they are a breakdown of what is measured here,
 // never additional phases.
 // Run the backend for `target`, dispatched on its CPU: the x64 pipeline, or the arm64 one
-// (`Arm64Backend`, wave 1). Both share the register allocator, the runtime augmentation and the
+// (`Arm64Backend`). Both share the register allocator, the runtime augmentation and the
 // per-OS writer; they differ in isel + encoder + frame, which is exactly the per-ISA split the
 // unified `TargetOp` was chosen to allow (USER RULING). The sugar gate is target-neutral and runs
 // here, once, so every backend inherits it.
@@ -257,7 +257,7 @@ end 'appendDataSectionEntries'
 // `StdToWasm.appendLeakGate`.
 function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: project.entryStubCalls.checksLeaks, initGlobals: usage.usesManagedGlobals, releasesRegistry: project.entryStubCalls.releasesRegistry, funcNames: funcNames, entryFunction: project.entryFunctionName)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: project.entryStubCalls.checksLeaks, initGlobals: usage.usesManagedGlobals, releasesRegistry: project.entryStubCalls.releasesRegistry, funcNames: funcNames, entryFunction: project.entryFunctionName, spellings: project.stdlibShadowSpellings)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)
@@ -326,14 +326,17 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 			wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
 	end 'panicRuntime'
 
-	// The x64-LINUX host surface — the `mrt_host_*` file, directory and standard-input bodies, which are
-	// raw `syscall` sequences with no TargetOp spelling for the same reason the panic runtime above has
-	// none. Each rides the `RuntimeUsage` bit its Std-tier installer was gated on, so the list is empty for
-	// a program that touches no file. Windows has no counterpart: every one of those primitives is a Win32
-	// import the isel emits inline.
-	if target.os == Os.linux 'linuxHostSurface'
-		appendX64LinuxHostSurfaceChunks(chunks, usage: usage)
-	end 'linuxHostSurface'
+	// The host surface — hand-assembled bodies with no TargetOp spelling for the same reason the panic
+	// runtime above has none: on Linux the `mrt_host_*` raw `syscall` sequences, on Windows the
+	// process-namespace chunk (every other Windows primitive is a Win32 import the isel emits inline).
+	// Each rides the `RuntimeUsage` bit its Std-tier installer was gated on, so the list is empty for
+	// a program that uses none of them.
+	match target.os 'hostSurface'
+		linux then appendX64LinuxHostSurfaceChunks(chunks, usage: usage)
+		windows then appendX64WindowsHostSurfaceChunks(chunks, usage: usage)
+		macos or
+			wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
+	end 'hostSurface'
 
 	// The hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`,
 	// `__gt_morestack`) are part of the GT runtime's installation, so they ride the bit
@@ -401,7 +404,7 @@ function refuseDuplicateChunkName(name ByteArray, project Project, funcNames Fun
 		panic("refuseDuplicateChunkName: two chunks are laid out under '{spelled}' and NEITHER is a Std function, so both were minted at the Target tier — the entry stub, a hand-assembled runtime chunk, `__symtable` or `__inlframes`. Each of those is appended at exactly one site, so this is an augmentation that ran twice")
 	end 'noModuleFunction'
 
-	if declared.sourceFilePath.isEmpty() 'bothSynthesized'
+	if declared.isCompilerBuilt() 'bothSynthesized'
 		panic("refuseDuplicateChunkName: the Std function named '{spelled}' is SYNTHESIZED, and a Target-tier chunk claims the same name — an `install*Runtime` and a hand-assembled chunk both supply this symbol, which is a compiler bug rather than anything a program can cause")
 	end 'bothSynthesized'
 
@@ -482,7 +485,7 @@ end 'augmentWithRuntime'
 // walk's `.text` bound is what discards it. When `main` is a green thread the same line
 // comes from `mrt_main_entry` instead — see `prependMainThreadEntry`.
 function prependEntryStub(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, entryFunction ByteArray)
-	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	module.appendOp(block, op: TargetOp.pushReg(X64Register.rbp))
@@ -557,7 +560,7 @@ end 'appendMainCall'
 // `main`'s saved rbp ends the walk there — the same `in main` / `in mrt_start` a program without green threads
 // prints.
 function prependMainThreadEntry(module TargetModule, initGlobals bool, entryFunction ByteArray)
-	var func = IrFunction.createFromStd(MainThreadEntryName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(MainThreadEntryName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	module.appendOp(block, op: TargetOp.prologue(MainThreadEntryFrameBytes))
@@ -719,7 +722,7 @@ end 'appendExitCodePassThroughCall'
 // and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
 // terminates cleanly without this stub setting one up.
 function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, entryFunction ByteArray)
-	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	// Install the fault handler (rt_sigaction) before any user code runs, exactly as the Windows

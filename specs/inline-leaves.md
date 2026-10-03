@@ -42,7 +42,7 @@ call's spelling AND the existential-returning call's, and neither is what a tiny
 
 A `runtime/` body may declare `__Raw.splicedAtEverySite()`. It says the body has no frame worth keeping:
 the inliner must splice it into every one of its call sites whatever its size. It exists so a family a
-BUILDER used to emit inline can live in tier source instead — a builder splices its code at each site and
+BUILDER would emit inline can live in tier source instead — a builder splices its code at each site and
 pays nothing, and a tier body reached by a call would pay the frame, the argument moves and the `ret` the
 builder never paid.
 
@@ -59,7 +59,7 @@ builder never paid.
 **What it may never waive** is every judgement about what inlining would BREAK, and each still refuses:
 `splicingWouldWidenTheSafePoint`, a by-reference parameter, the green-thread stack guard, `ownFrame` (a
 contradiction, refused at the declaration as E3157), an `isUnsupportedInInlineBody` op, and a
-```RequiredRuntime request for the body itself.
+`RequiredRuntime` request for the body itself.
 
 **A refusal is never silent.** `requireAlwaysSplicedBodiesAreGone` reads the SURVIVING module in
 `BackendDispatch.buildBackend` and reports **E3158** at the body's declaration, naming the reference that
@@ -70,23 +70,21 @@ The leaf rule is one of the inliner's TWO admission rules. The other — a funct
 direct call site in the program is spliced regardless of size — is `specs/inline-called-once.md`,
 which also holds the trace mechanism both rules share.
 
-### ⭐ WHY IT RUNS AFTER `inlineManagedPrimitives` (EC17)
+### ⭐ WHY IT RUNS AFTER `inlineManagedPrimitives`
 
 `__managed_count(a)` is the one managed primitive `inlineManagedPrimitives` rewrites IN PLACE — into a
 single `loadIndirect` of the record's `length@8`. Every accessor whose whole body is that one call is
 therefore a body **holding a call** until that pass has run, and the leaf rule refuses one outright. Run
-the other way round, this pass refused them one pass before the call stopped existing: MEASURED on the
-compiler's own self-compile, `Array.isEmpty` kept **209** call sites, `Parser.advance` **106** and
-`String.byteLength` **92**, plus about a hundred more `count`/`size` accessors of the same shape — **641
-direct calls in one program.**
+the other way round, this pass would refuse them one pass before the call stops existing, and on the
+compiler's own self-compile accessors such as `Array.isEmpty`, `Parser.advance` and `String.byteLength`
+— with about a hundred more `count`/`size` accessors of the same shape — would keep hundreds of direct
+calls.
 
-⭐ **THE REORDER CANNOT COST THIS PASS A CALLEE, AND THAT IS A PROOF RATHER THAN A MEASUREMENT.**
+⭐ **THE ORDER CANNOT COST THIS PASS A CALLEE, AND THAT IS A PROOF RATHER THAN A MEASUREMENT.**
 `inlineManagedPrimitives` rewrites only bodies that hold a `__managed_*` CALL, and a leaf holds no call
-by rule — so no body it can reach is one this pass would have accepted. (Measured anyway: eligible
-callees 469 → 530, sites 4,138 → 4,921, and that pass's own expansion count unchanged at 6,032.)
+by rule — so no body it can reach is one this pass would have accepted.
 
-⚠ **IT IS A REORDER AND NOT A SECOND ROUND**, which was the other shape considered. A second round
-would admit the cascade the next paragraph refuses on purpose.
+⚠ **IT IS AN ORDER AND NOT A SECOND ROUND.** A second round would admit the cascade the next paragraph refuses on purpose.
 
 **ONE ROUND, NO CASCADE.** Eligibility is decided on the pre-splice body, so a caller that becomes
 call-free BY being inlined into does not become eligible in the same compile. That is what bounds the
@@ -371,7 +369,7 @@ instantiation, each carrying that instantiation's own `__layout_Box_*` address i
 ⚠ **IT READS A FIELD OF A CONCRETE TYPE, AND THAT IS THE WHOLE DIFFERENCE FROM `get() returns T`.**
 Handing back the type PARAMETER makes the body retain it — `call __retain_type_param`, since `T` may be
 managed — and a body with a call is not a leaf. So the shape that inlines is the accessor whose ANSWER
-is concrete, however generic the record holding it is; measured on the self-compile, `Map.count` and
+is concrete, however generic the record holding it is; on the self-compile, `Map.count` and
 `Set.count` are exactly this and both reach zero call sites.
 
 ```maxon
@@ -466,10 +464,10 @@ end 'main'
 ```
 
 <!-- test: an-accessor-that-becomes-a-leaf-after-the-managed-rewrite-is-inlined -->
-⭐ **EC17's GATE.** `Array.isEmpty`'s whole body is one call to `__managed_count`, which
+⭐ **THE ORDER'S GATE.** `Array.isEmpty`'s whole body is one call to `__managed_count`, which
 `inlineManagedPrimitives` rewrites in place into a single `loadIndirect`. Ordered before that pass this
-one saw a body holding a call and refused it; ordered after, the accessor is a two-op leaf and both call
-sites are spliced. The fragment is the pin: `main` holds no `callDirect Array.isEmpty`.
+one would see a body holding a call and refuse it; ordered after, the accessor is a two-op leaf and both
+call sites are spliced. The fragment is the pin: `main` holds no `callDirect Array.isEmpty`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -492,8 +490,8 @@ end 'main'
 ```
 
 <!-- test: a-whole-loop-over-an-array-becomes-a-leaf -->
-⭐ The reorder reaches further than the `count` accessors: EC15 made a `for v in a` over a concrete
-`Array with Integer` CALL-FREE (a known stride needs no fork and no slow arm), so a function whose only
+⭐ The order reaches further than the `count` accessors: a `for v in a` over a concrete
+`Array with Integer` is CALL-FREE (a known stride needs no fork and no slow arm), so a function whose only
 calls were the loop's own element access is a leaf too. `total` is spliced into `main`, frame and all.
 
 ```maxon
@@ -520,7 +518,7 @@ end 'main'
 ```
 
 <!-- test: the-panic-rule-holds-when-the-argument-is-an-inlined-element -->
-⭐ **THE PANIC RULE, UNDER THE EC17 ORDER.** The value the inlined guard tests is an ELEMENT, produced
+⭐ **THE PANIC RULE, UNDER THAT ORDER.** The value the inlined guard tests is an ELEMENT, produced
 by the access `inlineManagedPrimitives` has already expanded into this loop — so the splice reads a
 value that pass wrote, in a block it shaped. The guard still refuses it, the copied panic block still
 carries `clampPct` as its inline site, and the trace still names `clampPct` above `main`.
@@ -559,10 +557,10 @@ Stack trace:
 
 <!-- test: a-loop-whose-element-access-keeps-a-slow-arm-is-not-a-leaf -->
 ⛔ **THE CONTROL, AND IT IS THE SAME SOURCE AS `a-whole-loop-over-an-array-becomes-a-leaf` WITH ONE
-TYPE CHANGED.** A `Byte` element is stamped 1, and EC15's plan for a byte stamp is `runtimeFork` — both
+TYPE CHANGED.** A `Byte` element is stamped 1, and the element-access plan for a byte stamp is `runtimeFork` — both
 width arms AND the slow arm holding `__managed_get_unchecked`. So this loop still holds a call after the
-managed rewrite, `totalBytes` is still not a leaf, and `main` still calls it. What the reorder changes
-is which bodies stop holding a call, not what a leaf is.
+managed rewrite, `totalBytes` is not a leaf, and `main` calls it. What the order decides is which
+bodies stop holding a call, not what a leaf is.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

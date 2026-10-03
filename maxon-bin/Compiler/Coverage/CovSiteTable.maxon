@@ -1,44 +1,4 @@
-// Coverage plumbing types: the SITE TABLE a `--coverage` build mints its counter slots into, and
-// `BlockSourceInfo`, the per-block source footprint `IrModule` writes at every block-creation site and
-// preserves through Maxon→Std lowering.
-//
-// ⚠ The two are independent. A coverage point is minted where the USER'S control-flow structure is
-// still visible, which is above the block graph rather than on it, so nothing here reads
-// `blockSourceInfo`.
-
-// (`LineNumberArray` is homed in Lexer.maxon, next to `LineNumber` — it is shared
-// with `SourceRangeTable`.)
-
-// Source-location metadata for a single basic block. `firstLine` is the line of
-// the token that opened the block (used for display); `lines` is the
-// deduped-in-order sequence of starting lines of the statements appended to the
-// block. An empty `lines` means the block carries no statements of its own
-// (e.g. an if/else merge block that is only a branch target).
-export type BlockSourceInfo
-	export var filePath as String
-	export var firstLine as LineNumber
-	export var lines as LineNumberArray
-
-	// Create a populated entry for a newly-opened block.
-	export static function create(filePath String, firstLine LineNumber) returns BlockSourceInfo
-		return Self{filePath: filePath, firstLine: firstLine, lines: LineNumberArray.create()}
-	end 'create'
-
-	// Sentinel for blocks the parser never saw (detached blocks, blocks
-	// materialized by later passes). Callers detect it via an empty filePath.
-	export static function empty() returns BlockSourceInfo
-		return Self{filePath: "", firstLine: 0, lines: LineNumberArray.create()}
-	end 'empty'
-
-	// True when this entry carries no usable source location.
-	export function isEmpty() returns bool
-		return self.filePath.isEmpty()
-	end 'isEmpty'
-end 'BlockSourceInfo'
-
-// Dense parallel array indexed by flat block reference (position in the owning
-// IrModule's `blocks` array). Unfilled slots hold BlockSourceInfo.empty().
-export typealias BlockSourceInfoArray = Array with BlockSourceInfo
+// Coverage plumbing types: the SITE TABLE a `--coverage` build mints its counter slots into.
 
 // A coverage point's identity: its INDEX in the module's `CovPointTable`. That one number is the counter
 // slot the emitted code increments, the record index in the `.mxdbg` coverage table, and the counter

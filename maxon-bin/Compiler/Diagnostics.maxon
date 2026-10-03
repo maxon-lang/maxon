@@ -11,7 +11,7 @@
 // A SECOND source position on one diagnostic — a line the reader has to see beside
 // the one the error is anchored at. `none` for the overwhelming majority.
 //
-// ⭐ **TWO PRODUCERS SINCE SV2, AND THEY DIFFER IN WHETHER THEY SWAP.**
+// ⭐ **TWO PRODUCERS, AND THEY DIFFER IN WHETHER THEY SWAP.**
 // `Diagnostic.blamedAt` MOVES a library line into the note and promotes the user's
 // construct to the primary slot, with fixed text. `reportPositionedWithNote` ADDS
 // one: both sites are the author's, neither displaces the other, and the text is
@@ -27,12 +27,189 @@ export union DiagnosticNote
 			at(message, line, column, filePath) gives DiagnosticNote.at(message, line: line, column: column, filePath: origins.authoredPathOf(filePath))
 		end 'note'
 	end 'reportedUnder'
+
+	function respelledFor(respellingsOf ShadowRespellingsOf) returns DiagnosticNote
+		return match self 'note'
+			none gives DiagnosticNote.none
+			at(message, line, column, filePath) gives DiagnosticNote.at(respelledText(message, respellings: respellingsOf(filePath)), line: line, column: column, filePath: filePath)
+		end 'note'
+	end 'respelledFor'
 end 'DiagnosticNote'
+
+export enum ShadowSpellingReader
+	authorCode
+	libraryCode
+end 'ShadowSpellingReader'
+
+// A name the compiler minted to keep a stdlib declaration apart from another of the same name
+// (`SignatureIndex.settleStdlibShadowSpellings`). No reader wrote `minted`, so text shown to a
+// reader carries `spellingFor` instead.
+export type StdlibShadowSpelling
+	export let minted as ByteArray
+	let qualified as ByteArray
+	export let bare as ByteArray
+
+	export static function create(minted ByteArray, qualified ByteArray, bare ByteArray) returns StdlibShadowSpelling
+		return Self{minted: minted, qualified: qualified, bare: bare}
+	end 'create'
+
+	export function spellingFor(reader ShadowSpellingReader) returns ByteArray
+		return match reader 'reader'
+			authorCode gives self.qualified
+			libraryCode gives self.bare
+		end 'reader'
+	end 'spellingFor'
+
+	function libraryNameRespelling() returns ShadowRespelling
+		return ShadowRespelling.create(self.bare, shown: self.qualified)
+	end 'libraryNameRespelling'
+
+	function bareName() returns ByteArray
+		return self.bare
+	end 'bareName'
+end 'StdlibShadowSpelling'
+
+export typealias StdlibShadowSpellingArray = Array with StdlibShadowSpelling
+
+export type ShadowRespelling
+	export let minted as ByteArray
+	export let shown as ByteArray
+
+	static function create(minted ByteArray, shown ByteArray) returns ShadowRespelling
+		return Self{minted: minted, shown: shown}
+	end 'create'
+end 'ShadowRespelling'
+
+export typealias ShadowRespellingArray = Array with ShadowRespelling
+
+export typealias ShadowRespellingsOf = function(FilePath) returns ShadowRespellingArray
+
+export typealias WrittenMintSet = Set with ByteArray
+
+module function shadowRespellings(spellings StdlibShadowSpellingArray, reader ShadowSpellingReader, written WrittenMintSet) returns ShadowRespellingArray
+	var respellings = ShadowRespellingArray.create()
+
+	for spelling in spellings 'eachSpelling'
+		if written.contains(spelling.minted) 'theFileSpellsItItself'
+			continue
+		end 'theFileSpellsItItself'
+
+		respellings.push(ShadowRespelling.create(spelling.minted, shown: spelling.spellingFor(reader)))
+	end 'eachSpelling'
+
+	return respellings
+end 'shadowRespellings'
+
+module function authorSpelledText(text String, spellings StdlibShadowSpellingArray) returns String
+	return respelledText(text, respellings: authorCodeRespellings(spellings))
+end 'authorSpelledText'
+
+module function authorCodeRespellings(spellings StdlibShadowSpellingArray) returns ShadowRespellingArray
+	return shadowRespellings(spellings, reader: ShadowSpellingReader.authorCode, written: WrittenMintSet.create())
+end 'authorCodeRespellings'
+
+module function libraryNameRespellings(spellings StdlibShadowSpellingArray) returns ShadowRespellingArray
+	var respellings = ShadowRespellingArray.create()
+
+	for spelling in spellings 'eachSpelling'
+		respellings.push(spelling.libraryNameRespelling())
+	end 'eachSpelling'
+
+	return respellings
+end 'libraryNameRespellings'
+
+module function bareSpellingOf(name ByteArray, spellings StdlibShadowSpellingArray) returns ByteArray
+	for spelling in spellings 'eachSpelling'
+		if spelling.minted.equals(name) 'thisMint'
+			return spelling.bareName()
+		end 'thisMint'
+	end 'eachSpelling'
+
+	return name
+end 'bareSpellingOf'
+
+module function authorSpelledName(name ByteArray, spellings StdlibShadowSpellingArray) returns ByteArray
+	if spellings.isEmpty() 'nothingIsRenamed'
+		return name
+	end 'nothingIsRenamed'
+
+	return authorSpelledText(String.from(name), spellings: spellings).toByteArray()
+end 'authorSpelledName'
+
+module function respelledText(text String, respellings ShadowRespellingArray) returns String
+	var spelled = text
+
+	for respelling in respellings 'eachRespelling'
+		spelled = withIdentifierRespelled(spelled, identifier: respelling.minted, spelling: respelling.shown)
+	end 'eachRespelling'
+
+	return spelled
+end 'respelledText'
+
+function withIdentifierRespelled(text String, identifier ByteArray, spelling ByteArray) returns String
+	let bytes = text.toByteArray()
+	var respelled = ByteArray.create()
+	var at = 0 as ElementIndex
+
+	while at < bytes.count() 'eachByte'
+		if identifierStandsAt(bytes, identifier: identifier, at: at) 'theIdentifier'
+			respelled.append(spelling)
+			at = at + identifier.count()
+			continue
+		end 'theIdentifier'
+
+		respelled.push(try bytes.get(at) otherwise panic("withIdentifierRespelled: {at} is below the count the loop is bounded by"))
+		at = at + 1
+	end 'eachByte'
+
+	return String.from(respelled)
+end 'withIdentifierRespelled'
+
+module function textMentionsIdentifier(text String, identifier ByteArray) returns bool
+	let bytes = text.toByteArray()
+
+	for at in 0 upto bytes.count() 'eachByte'
+		if identifierStandsAt(bytes, identifier: identifier, at: at) 'mentioned'
+			return true
+		end 'mentioned'
+	end 'eachByte'
+
+	return false
+end 'textMentionsIdentifier'
+
+function identifierStandsAt(bytes ByteArray, identifier ByteArray, at ElementIndex) returns bool
+	let past = at + identifier.count()
+
+	if past > bytes.count() 'runsOffTheEnd'
+		return false
+	end 'runsOffTheEnd'
+
+	for (iter, expected) in identifier.withIterator() 'eachIdentifierByte'
+		if (try bytes.get(at + iter.index()) otherwise panic("identifierStandsAt: {at + iter.index()} is below `past`, which is within the text")) != expected 'differs'
+			return false
+		end 'differs'
+	end 'eachIdentifierByte'
+
+	if at > 0 and continuesAName(try bytes.get(at - 1) otherwise panic("identifierStandsAt: {at - 1} precedes an index within the text")) 'continuesAnEarlierName'
+		return false
+	end 'continuesAnEarlierName'
+
+	if past < bytes.count() and isAlphaNum(try bytes.get(past) otherwise panic("identifierStandsAt: {past} is below the text's count")) 'continuesIntoALongerName'
+		return false
+	end 'continuesIntoALongerName'
+
+	return true
+end 'identifierStandsAt'
+
+function continuesAName(before Byte) returns bool
+	return isAlphaNum(before) or before == '.'
+end 'continuesAName'
 
 // The calls to undeclared functions a diagnostic rests on, when it rests on some. Compiling a
 // buffer alone makes a sibling file's call opaque, so the editor drops a diagnostic whose every
-// such call a sibling declares (`LspDiagnostics.theProjectDeclaresEveryCallee`). A build never
-// reads it.
+// such call a sibling declares (`LspDiagnostics.theProjectDeclaresEveryCallee`). A build reads it
+// only through `identityText`, so two diagnostics that render alike but rest on different calls
+// stay two.
 //
 // ⚠ Attached when the diagnostic is created, never after it is reported: the sink rewrites a staged
 // path to the author's (`reportedUnder`), and a cause attached later would keep the staged one.
@@ -46,24 +223,38 @@ export union DiagnosticCause
 			undeclaredCalls(calls, filePath) gives DiagnosticCause.undeclaredCalls(calls, filePath: origins.authoredPathOf(filePath))
 		end 'cause'
 	end 'reportedUnder'
+
+	function identityText() returns String
+		match self 'cause'
+			standsAlone then return ""
+			undeclaredCalls(calls, filePath) then return undeclaredCallsIdentity(calls, filePath: filePath)
+		end 'cause'
+	end 'identityText'
 end 'DiagnosticCause'
+
+function undeclaredCallsIdentity(calls SourceRangeArray, filePath FilePath) returns String
+	var identity = "\ncause: {filePath.toString()}"
+
+	for call in calls 'eachCall'
+		identity.append(" {call.line}:{call.column}")
+	end 'eachCall'
+
+	return identity
+end 'undeclaredCallsIdentity'
 
 // ⭐⭐ **THE USER CONSTRUCT A LIBRARY-BODY DIAGNOSTIC IS REALLY ABOUT (BLAME).**
 //
 // A `stdlib/` module is ordinary compiled source, so a refusal that a user's own
 // program forces is raised at a line in the library — `stdlib/Array.maxon:142`,
 // which no user wrote and which names neither the user's type nor the user's
-// line. That is not hypothetical drift: every member struck from
-// `Parser.arraySurfaceMemberNames` RELOCATES its refusals out of a dispatch arm
-// and into the library body that now serves them, and `String` and `Map` retired
-// by the same route.
+// line.
 //
 // ⚖ **USER RULING:** such a diagnostic reports the USER's construct as its
 // primary location and keeps the library line as a NOTE. Losing the library line
 // is not the fix — it is what makes a library BUG diagnosable.
 //
-// The blame is produced by whichever gate consulted the user-supplied fact (only
-// `Parser.requireOpaqueArrayCopyable` does today: it reads the INSTANTIATION
+// The blame is produced by whichever gate consulted the user-supplied fact
+// (`Parser.blameLibraryRefusalOnInstantiation`: it reads the INSTANTIATION
 // registry, so the construct it is about is the instantiation the user wrote),
 // carried out of the parse on `Parser.libraryBlame`, and applied by the single
 // diagnostic sink `reportDiagnostic`. One producer per gate, ONE applier.
@@ -77,22 +268,85 @@ end 'LibraryBlame'
 // same way and no gate has to phrase it.
 let LibraryBlameNoteText = "raised inside the library, on behalf of the construct above"
 
-// One reported problem. `line` / `column` are 1-based source positions, or 0
-// when the diagnostic has no single anchor (E3001 "no main" is whole-program).
-// `filePath` is the declaring file, empty when program-wide. The rendered form
-// (`error <code>: <message>`) matches the `maxoncstderr` spec blocks exactly.
+export typealias DiagnosticLine = int(1 to u64.max) implements LineNumber
+export typealias DiagnosticColumn = int(1 to u64.max) implements ColumnNumber
+
+export union DiagnosticAnchor
+	programWide
+	file(filePath FilePath)
+	at(filePath FilePath, line DiagnosticLine, column DiagnosticColumn)
+
+	function reportedUnder(origins StagedOriginIndex) returns DiagnosticAnchor
+		return match self 'anchor'
+			programWide gives DiagnosticAnchor.programWide
+			file(filePath) gives DiagnosticAnchor.file(origins.authoredPathOf(filePath))
+			at(filePath, line, column) gives DiagnosticAnchor.at(origins.authoredPathOf(filePath), line: line, column: column)
+		end 'anchor'
+	end 'reportedUnder'
+
+	function respellings(programWide ShadowRespellingArray, respellingsOf ShadowRespellingsOf) returns ShadowRespellingArray
+		return match self 'anchor'
+			programWide gives programWide
+			file(filePath) gives respellingsOf(filePath)
+			at(filePath, _, _) gives respellingsOf(filePath)
+		end 'anchor'
+	end 'respellings'
+
+	export function isProgramWide() returns bool
+		return match self 'anchor'
+			programWide gives true
+			file or
+				at gives false
+		end 'anchor'
+	end 'isProgramWide'
+
+	export function anchoredFile() returns FilePath throws AbsentError
+		match self 'anchor'
+			programWide then throw AbsentError.absent
+			file(filePath) then return filePath
+			at(filePath, _, _) then return filePath
+		end 'anchor'
+	end 'anchoredFile'
+
+	function renderedPosition() returns String
+		return match self 'anchor'
+			programWide or
+				file gives ""
+			at(filePath, line, column) gives "{filePath.toString()}:{line}:{column}: "
+		end 'anchor'
+	end 'renderedPosition'
+end 'DiagnosticAnchor'
+
 export type Diagnostic
 	export let code as ErrorCode
 	export let message as String
-	export let line as LineNumber
-	export let column as ColumnNumber
-	export let filePath as FilePath
+	export let anchor as DiagnosticAnchor
 	export let note as DiagnosticNote
 	export let cause as DiagnosticCause
 
-	export static function create(code ErrorCode, message String, line LineNumber = 0, column ColumnNumber = 0, filePath FilePath = FilePath from "") returns Diagnostic
-		return Self{code: code, message: message, line: line, column: column, filePath: filePath, note: DiagnosticNote.none, cause: DiagnosticCause.standsAlone}
+	export static function programWide(code ErrorCode, message String) returns Diagnostic
+		return Self.anchored(code, message: message, anchor: DiagnosticAnchor.programWide)
+	end 'programWide'
+
+	export static function inFile(code ErrorCode, message String, filePath FilePath) returns Diagnostic
+		return Self.anchored(code, message: message, anchor: DiagnosticAnchor.file(filePath))
+	end 'inFile'
+
+	export static function create(code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath) returns Diagnostic
+		if line == 0 or column == 0 'noSourcePosition'
+			panic("Diagnostic.create: {code.rawValue} was handed line {line}, column {column}, which is no source position — a diagnostic with no line is `Diagnostic.programWide` or `Diagnostic.inFile`")
+		end 'noSourcePosition'
+
+		if filePath.isEmpty() 'noSourceFile'
+			panic("Diagnostic.create: {code.rawValue} at {line}:{column} was handed no file — a position is a line in some file")
+		end 'noSourceFile'
+
+		return Self.anchored(code, message: message, anchor: DiagnosticAnchor.at(filePath, line: line as DiagnosticLine, column: column as DiagnosticColumn))
 	end 'create'
+
+	static function anchored(code ErrorCode, message String, anchor DiagnosticAnchor) returns Diagnostic
+		return Self{code: code, message: message, anchor: anchor, note: DiagnosticNote.none, cause: DiagnosticCause.standsAlone}
+	end 'anchored'
 
 	// ⭐ **THE ONE PRODUCER OF A NOTED DIAGNOSTIC — the blame SWAP, in one place.**
 	// The user's site becomes primary and the location this diagnostic was raised
@@ -103,19 +357,27 @@ export type Diagnostic
 	export function blamedAt(blame LibraryBlame) returns Diagnostic
 		match blame 'blame'
 			unblamed then return self
-			userSite(blamedPath, blamedLine, blamedColumn) then return Self{code: self.code, message: self.message, line: blamedLine, column: blamedColumn, filePath: blamedPath, note: DiagnosticNote.at(LibraryBlameNoteText, line: self.line, column: self.column, filePath: self.filePath), cause: self.cause}
+			userSite(blamedPath, blamedLine, blamedColumn) then return Self{code: self.code, message: self.message, anchor: DiagnosticAnchor.at(blamedPath, line: blamedLine as DiagnosticLine, column: blamedColumn as DiagnosticColumn), note: self.libraryBlameNote(), cause: self.cause}
 		end 'blame'
 	end 'blamedAt'
+
+	function libraryBlameNote() returns DiagnosticNote
+		match self.anchor 'raisedAt'
+			at(filePath, line, column) then return DiagnosticNote.at(LibraryBlameNoteText, line: line, column: column, filePath: filePath)
+			programWide or
+				file then panic("Diagnostic.blamedAt: {self.code.rawValue} was raised at no library line, so there is no library site to keep as the blame note")
+		end 'raisedAt'
+	end 'libraryBlameNote'
 
 	// The same diagnostic carrying a second source position. Split from `create` because a note is the
 	// exception rather than a parameter every one of the hundreds of `create` calls would have to answer —
 	// and split from `blamedAt` because that one SWAPS and this one ADDS (see `reportPositionedWithNote`).
 	export function withNote(second DiagnosticNote) returns Diagnostic
-		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: self.filePath, note: second, cause: self.cause}
+		return Self{code: self.code, message: self.message, anchor: self.anchor, note: second, cause: self.cause}
 	end 'withNote'
 
 	export function withCause(origin DiagnosticCause) returns Diagnostic
-		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: self.filePath, note: self.note, cause: origin}
+		return Self{code: self.code, message: self.message, anchor: self.anchor, note: self.note, cause: origin}
 	end 'withCause'
 
 	// Applied by the sink `reportDiagnostic` after `blamedAt`, so both slots a blame swap produces are
@@ -125,26 +387,23 @@ export type Diagnostic
 			return self
 		end 'nothingWasStaged'
 
-		return Self{code: self.code, message: self.message, line: self.line, column: self.column, filePath: origins.authoredPathOf(self.filePath), note: self.note.reportedUnder(origins), cause: self.cause.reportedUnder(origins)}
+		return Self{code: self.code, message: self.message, anchor: self.anchor.reportedUnder(origins), note: self.note.reportedUnder(origins), cause: self.cause.reportedUnder(origins)}
 	end 'reportedUnder'
+
+	export function respelledFor(programWide ShadowRespellingArray, respellingsOf ShadowRespellingsOf) returns Diagnostic
+		return Self{code: self.code, message: respelledText(self.message, respellings: self.anchor.respellings(programWide, respellingsOf: respellingsOf)), anchor: self.anchor, note: self.note.respelledFor(respellingsOf), cause: self.cause}
+	end 'respelledFor'
 
 	// Render as `error <code>: <message>` — the exact wire format the spec's
 	// `maxoncstderr` blocks compare against. The code's `.rawValue` is the 4-digit
 	// string.
-	//
-	// A POSITIONED diagnostic (one with a real source line — parser/lexer errors,
-	// e.g. E2010) renders a `<file>:<line>:<col>:` prefix before the message, which
-	// `variables.md`'s type-annotation tests gate on. A whole-program semantic error
-	// (E3001/E3002) carries no anchor (`line == 0`), so it renders bare, exactly as
-	// `basics.md` expects. `line == 0` is the discriminator because 1-based source
-	// lines start at 1 — line 0 is unreachable for a real span.
 	export function render() returns String
-		if self.line == 0 'wholeProgram'
-			return "error {self.code.rawValue}: {self.message}{self.renderedNote()}"
-		end 'wholeProgram'
-
-		return "error {self.code.rawValue}: {self.filePath.toString()}:{self.line}:{self.column}: {self.message}{self.renderedNote()}"
+		return "error {self.code.rawValue}: {self.anchor.renderedPosition()}{self.message}{self.renderedNote()}"
 	end 'render'
+
+	export function identityText() returns String
+		return "{self.render()}{self.cause.identityText()}"
+	end 'identityText'
 
 	// A NOTE renders as a SECOND LINE below the error, `note: <file>:<line>:<col>:
 	// <message>` — clang's shape, and one a `maxoncstderr` block can carry unchanged,
@@ -255,8 +514,8 @@ function unneededCastMessage(repeated String, targetName ByteArray) returns Stri
 end 'unneededCastMessage'
 
 // ⭐⭐ **THE SAME FUNNEL FOR A DIAGNOSTIC THAT CARRIES A SECOND SITE — the note producer that is not a BLAME
-// SWAP (SV2).** `Diagnostic.blamedAt` was the only `DiagnosticNote.at` there had ever been, and it is a swap
-// with FIXED text: it moves a library line into the note and puts the user's construct in the primary slot.
+// SWAP.** `Diagnostic.blamedAt` is a swap with FIXED text: it moves a library line into the note
+// and puts the user's construct in the primary slot.
 //
 // ⭐ **THIS ONE ADDS RATHER THAN SWAPS, AND THE TEXT IS THE CALLER'S.** A service diagnostic is raised where
 // the author wrote the offending line and has to name a SECOND line the author also wrote — the `spawn` that
@@ -284,7 +543,7 @@ end 'DiagnosticDestination'
 // ⭐⭐ **THE ONE WRITER OF A COMPILER-FACING DIAGNOSTIC LINE — so a caller compiling IN PROCESS can
 // READ exactly what a command line would have PRINTED.**
 //
-// `spec-test` compiles every case inside this process (G20), and a ```maxoncstderr``` block compares
+// `spec-test` compiles every case inside this process, and a ```maxoncstderr``` block compares
 // the exact text a refused compile emits. Re-rendering `project.diagnostics` at that call site would
 // be a SECOND SPELLING of what the CLI prints — this tree's signature bug — so the capture is taken
 // at the SINK instead, and the bytes are computed ONCE for both destinations: byte identity holds by

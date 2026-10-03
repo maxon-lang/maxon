@@ -15,37 +15,35 @@ error types binds `(e)` to a *synthesized error union*, and `match e` in the han
 name — and when it does, `match e` is a match on the **shadow**, with the shadow's own type and cases. The
 error union is reached through the binding the handler installed, never through its spelling.
 
-⛔⛔ **THIS FILE IS COMPILER-AUTHORED AND EXISTS BECAUSE THE FIRST IMPLEMENTATION GOT IT WRONG — SILENTLY.**
-`/specs/try-block.md` says nothing about shadowing, so nothing in the ported suite could see it. the compiler's
-error-union lookup was keyed on the binding's **source NAME** alone, which made any inner `let e = …` hijack
-the handler's dispatch: the shadow's `match` was compiled against the *error's* fused ordinal instead of
-against the shadow's own enum. Measured on `shadowed-binding-is-not-the-error-union` below: **The compiler exited 11
-where 22 is correct**, with no diagnostic anywhere. Case names were chosen to collide on purpose
-— with non-colliding names the same defect surfaced as a loud `E3034 no case '…' in the error union`, which
-is how the silent form was found at all. The key is now the binding's **identity** (the name must still
-resolve to the value the handler bound), so a shadow simply is not the union.
+⛔⛔ **THE DEFECT THIS FILE GUARDS IS SILENT.** `try-block.md` says nothing about shadowing, so nothing
+there can see it. An error-union lookup keyed on the
+binding's **source NAME** alone would let any inner `let e = …` hijack the handler's dispatch: the
+shadow's `match` would be compiled against the *error's* fused ordinal instead of against the shadow's
+own enum, and `shadowed-binding-is-not-the-error-union` below would exit **11 where 22 is correct**, with
+no diagnostic anywhere. Case names are chosen to collide on purpose — with non-colliding names the same
+defect surfaces as a loud `E3034 no case '…' in the error union`. The key is the binding's **identity**
+(the name must still resolve to the value the handler bound), so a shadow simply is not the union.
 
-**A lossy key used as an identity** — the shape this tree has paid for before, and the one the union's own
-design note claimed to have avoided by not joining member names into a table key. That claim was true of one
-handler against another and false of a handler against its own body.
+**A lossy key used as an identity** — a name distinguishes one handler from another, but not a handler
+from its own body.
 
 ⚠ **E3084 IS KEYED ON THE NAME, AND DELIBERATELY SO — the two questions are not the same question.** The
 dispatch asks *"which value is being discriminated?"*, which a shadow answers differently and must. E3084
 asks *"did the author write a `match` on this name in this handler?"*, which is syntactic and is
-implemented syntactically. Tightening E3084 to the identity too was measured to refuse
+implemented syntactically. Tightening E3084 to the identity too would refuse
 `handler-matching-only-a-shadow-still-compiles` — a program that must compile and run — so the strict
 reading is not the language's. Both halves are pinned here so neither can be "tidied" into the other.
 
 ## Tests
 
 <!-- test: try-block-shadowed-binding.shadowed-binding-is-not-the-error-union -->
-### RED-GATE CONTROL. Returned **11** before the identity key; returns **22** after, which is the oracle's answer.
+### The shadow's `match` answers **22**; keyed on the name alone it would answer **11**.
 
 The body routes two error types, so `(e)` is a synthesized error union; `callA(true)` throws, so `ErrA.bad`
 is the error in flight. The handler then shadows `e` with an `Inner` value whose cases are spelled `bad` and
 `splat` — the same two names the union's members carry. `match e` is a match on the shadow, so it must take
-the `splat` arm (the shadow holds `Inner.splat`) and answer 22. Keyed on the name alone it took the union's
-dispatch and answered 11, which is the `bad` arm — the error's case, matched against the shadow's arms.
+the `splat` arm (the shadow holds `Inner.splat`) and answer 22. Keyed on the name alone it would take the
+union's dispatch and answer 11, which is the `bad` arm — the error's case, matched against the shadow's arms.
 
 ```maxon
 typealias Score = int(0 to 100)
@@ -102,8 +100,7 @@ end 'main'
 
 <!-- test: try-block-shadowed-binding.handler-matching-only-a-shadow-still-compiles -->
 E3084's half of the same program: the handler's ONLY `match e` names a shadow, so the error itself is never
-discriminated — and that is accepted, because the rule is about what the author WROTE and both references
-read it that way. The case is the one above with the shadow's arms made unreachable-but-distinct, so a
+discriminated — and that is accepted, because the rule is about what the author WROTE. The case is the one above with the shadow's arms made unreachable-but-distinct, so a
 regression that revived the union dispatch here would answer 33 rather than 44.
 
 ```maxon

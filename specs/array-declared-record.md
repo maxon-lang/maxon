@@ -17,16 +17,16 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	export var managed as ElementMemory
 ```
 
-and the compiler could not admit that declaration at all: **every construction in it was `E2015 'Array'
-implements 'BuiltinArrayLiteral' … the compiler mints that record only for the two names it owns the record
-FOR — String and Character`.** That refusal is about a real hazard and it stays (see the two
-`error.` cases below) — it simply never applied to this one shape, and the whole of why is one
+and the compiler admits that declaration, although the same shape under another name is refused with
+**`E2015 '<name>' implements 'BuiltinArrayLiteral' … the compiler mints that record only for the two names
+it owns the record FOR — String and Character`.** That refusal is about a real hazard (see the two
+`error.` cases below) — it simply does not apply to this one shape, and the whole of why is one
 sentence: **an `Array` IS its `__ManagedMemory`.**
 
 `SignatureIndex.canonicalGenericBaseName` maps `__ManagedMemory with T` onto `Array with T`, one
 `GenericInstanceId`, told apart only by a per-value PROVENANCE mark (`Parser.markBufferSurface`).
 So the sole field this declaration has is not a slot inside a box — it is the box. There is nothing
-for a construction to discard, which is precisely what the refusal was protecting against.
+for a construction to discard, which is precisely what the refusal protects against.
 
 ### What that costs the compiler: `Self` is the INSTANCE, not the base
 
@@ -42,15 +42,15 @@ answering `Self` with its TAG (`String`, `Character`); `Array` is that same fact
 parameter on it, so `Parser.enclosingSelfType` answers with the instance over the declaration's own
 parameters (`ProgramSignatures.ownRecordSelfInstance`).
 
-Four readers had to learn the second spelling, and each was a hard failure rather than a wrong
+Four readers must know the second spelling, and a miss in each is a hard failure rather than a wrong
 answer, which is why they are all pinned here:
 
-| reader | what it did before | measured symptom |
+| reader | the reading that misses it | symptom |
 |---|---|---|
-| `Parser.returnsEnclosingType` | tested `structRef` only | `E2015 … a static that needs the type parameter's layout descriptor must return `Self`` — on a static that returns `Self` |
-| `IrInterface.renderDeclaredTypeName` | rendered the mangled instance | three `E3016`s at once, against `Cloneable`, `Equatable` and `BuiltinArrayLiteral` |
-| the descriptor-need pre-scan | saw `<Alias>{}`, not `Self{}` | `panic … appendOpaqueArrayCreate: … the parser's descriptor-need seed and this lowering disagree` |
-| `Parser.emitFieldLoad`'s inline-`managed` arm | minted a BYTE view | `panic … opaqueTypeParamPosition: asked for the `uses`-list position of a `int`` |
+| `Parser.returnsEnclosingType` | testing `structRef` only | `E2015 … a static that needs the type parameter's layout descriptor must return `Self`` — on a static that returns `Self` |
+| `IrInterface.renderDeclaredTypeName` | rendering the mangled instance | three `E3016`s at once, against `Cloneable`, `Equatable` and `BuiltinArrayLiteral` |
+| the descriptor-need pre-scan | seeing `<Alias>{}`, not `Self{}` | `panic … appendOpaqueArrayCreate: … the parser's descriptor-need seed and this lowering disagree` |
+| `Parser.emitFieldLoad`'s inline-`managed` arm | minting a BYTE view | `panic … opaqueTypeParamPosition: asked for the `uses`-list position of a `int`` |
 
 The last of those is the one worth reading twice, because the byte view is also a **stride lie**: it
 stamps `element_size@24 = 1` on a record whose slots are 8 bytes wide. `String` and `Character` are
@@ -58,11 +58,11 @@ byte buffers so the view is correct for them; an `Array with Element` is not, an
 is simply the surface flip — the same answer `arr.managed` gets from `Parser.bufferSurfaceOf`, and
 it allocates nothing where the String path allocates a record.
 
-### The two halves of the refusal that remain
+### The two halves of the refusal
 
 The hazard `requireFusedWrapperTag` documents is that construction DISCARDS every declared field the
 fused record has no slot for, and the drop and clone cascades then read past the record's end. Both
-`error.` cases below are that hazard still being true:
+`error.` cases below are that hazard:
 
 - **another NAME** — the compiler owns no record for it, so there is no identity to perform.
 - **a SECOND FIELD under the name `Array`** — the identity would drop it silently. `Array` is
@@ -70,39 +70,29 @@ fused record has no slot for, and the drop and clone cascades then read past the
   program may declare its own container and this is the shape that must not be admitted. The
   admission is therefore STRUCTURAL and not a name whitelist: sole field, and that field the buffer.
 
-### ⚠ This does NOT list `stdlib/Array.maxon`, and the boundary is exact
+### ⚠ The admission covers the record AND the members, and the boundary is exact
 
 The declaration is admitted and its record, its `Self`, its literals, its statics and its
-conformances are correct — measured here on a user-written one, because the corpus module is not yet
-loadable. The **MEMBERS** are served too, as of the cases at the end of this file: a name the roster
-carries is the synthesized arm's in both spellings, and a name only the declaration carries is an
-ordinary call to an ordinary declared function.
+conformances are correct — pinned here on a user-written one. The **MEMBERS** are served too, as the
+cases at the end of this file show: a name the roster carries is the synthesized arm's in both
+spellings, and a name only the declaration carries is an ordinary call to an ordinary declared function.
 
-⛔ **AND THAT WAS *NOT* ONE CHANGE WITH `ProgramSignatures.genericInstanceHasBaseLayout`, WHICH THIS
-SECTION USED TO SAY IT WAS.** The reasoning was that the gate also decides the FIELD WALK the drop
-cascade reads, so the two had to move together. **MEASURED on this tree by widening exactly that gate
-to admit a declared `Array` base: 551 `--filter=array` cases, 0 failures — INERT.** The walk it opens
-enumerates one field, the buffer, whose drop callee is `__managed_decref`, which is already the callee
-`genericInstanceBoxDropCallee` gives the record; both cascade readers filter a non-`__destruct_` leaf
-out. The door that was actually refusing the member is `Parser.structLayoutOfType`, which reads that
-gate as one of its inputs, so the admission is spent there — a layout to NAME a member is not a layout
-to ENUMERATE fields.
-
-What still blocks the listing is three mechanisms this spec does not exercise, each named by its own
-wall in `stdlib/Array.maxon`: `for … in` over an interface EXISTENTIAL (`from`, line 132), an opaque
-type-parameter value moved into a slot from a BORROW (`appendMemory`, line 281 — the first wall left
-once the member walls fell, and reached identically by the `self.push(borrowed)` spelling the roster
-has always served), and an extension method OWNING an opaque type-parameter parameter with no
-descriptor reserved (`contains`).
+⛔ **THE MEMBER ADMISSION IS NOT `ProgramSignatures.genericInstanceHasBaseLayout`.** That gate also
+decides the FIELD WALK the drop cascade reads, and widening it to admit a declared `Array` base is
+INERT there: the walk it opens enumerates one field, the buffer, whose drop callee is
+`__managed_decref`, which is already the callee `genericInstanceBoxDropCallee` gives the record; both
+cascade readers filter a non-`__destruct_` leaf out. The door that admits the member is
+`Parser.structLayoutOfType`, which reads that gate as one of its inputs, so the admission is spent
+there — a layout to NAME a member is not a layout to ENUMERATE fields.
 
 ### ⭐⭐ TWO `Array` DECLARATIONS IN ONE COMPILE — what is scoped, and what deliberately is not
 
-`stdlib/Array.maxon` is now listed, so declaring a `type Array` does not replace the corpus's: it
+`stdlib/Array.maxon` is listed, so declaring a `type Array` does not replace the corpus's: it
 CONTESTS it. `SignatureIndex.contestStdlibTypeName` moves the library's declaration into the reserved
 space, and the compile then holds **two** `Array`s at once — the program's under the bare name, the
 library's under a name this compile minted and no author may write. ⚖ **The rule is module-scoped
 resolution: a stdlib body resolves `Array` to the STDLIB declaration, and the program's `Array` wins in
-the program's own code.**
+the file that declares it.** Any other author file that can see both must qualify one (E3063).
 
 The two consequences point in opposite directions, and neither is an accident:
 
@@ -128,13 +118,11 @@ value is a run-time record, and here the record is one thing under two names.
 
 <!-- test: the-empty-literal-is-the-empty-container -->
 `Self{}` inside `type Array` builds the EMPTY container, which is the answer `<InnerAlias>{}` already
-gets: the sole field IS the record, so an empty literal leaves no slot unwritten. Before this it was
-`E3086 field 'managed' … is not initialized by this literal, and it has no default value`.
+gets: the sole field IS the record, so an empty literal leaves no slot unwritten.
 
-⚠ **THE EMPTINESS IS ASKED THROUGH `count()` AND WAS ASKED THROUGH `isEmpty()` UNTIL ARR4 RETIRED THAT
-NAME.** The two say the same thing about this program and only one of them is still on the synthesized
-surface, so the edit costs the case nothing — which is exactly what makes it the INCIDENTAL half of the
-declared-own question (`Parser.arraySurfaceMemberNames` carries the ruling). A declaration of its own
+⚠ **THE EMPTINESS IS ASKED THROUGH `count()`, THE NAME ON THE SYNTHESIZED SURFACE.** Which surface
+member the program asks through is the INCIDENTAL half of the declared-own question
+(`Parser.arraySurfaceMemberNames` carries the ruling). A declaration of its own
 would have worked too and would have tested the declaration rather than the literal.
 ```maxon
 typealias Num = int(0 to 1000)
@@ -337,8 +325,8 @@ end 'main'
 
 <!-- test: self-in-an-interface-requirement-matches-the-declaration -->
 `Cloneable.clone() returns Self` and `BuiltinArrayLiteral.init(…) returns Self` are matched against a
-declaration whose `Self` is now an INSTANCE. The comparison and the diagnostic both spell it as the
-declaration — three simultaneous `E3016`s said `Array_Te3315404e8d3fd14`, a type no author can write.
+declaration whose `Self` is an INSTANCE. The comparison and the diagnostic both spell it as the
+declaration, never as a mangled instance name such as `Array_Te3315404e8d3fd14`, a type no author can write.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -397,13 +385,13 @@ error E2015: <fragment>:8:10: Unsupported: `Array` implements `BuiltinArrayLiter
 ```
 
 <!-- test: error.a-sole-field-that-is-not-the-buffer -->
-⛔ **THE OTHER HALF OF THE SAME HAZARD, AND THE ONE THE NAME-KEYED ADMISSION LET THROUGH.** The
-admission used to be `isArrayBaseName(name)` plus a sole field the layout calls inline-managed — and
-that index is a question about the field's NAME and the declaration's MARKER, never about its TYPE. So
-this declaration was ADMITTED and the identity handed the raw `Num` back as the container; the only
-thing that refused it was a later type compare, whose sentence is about a return
-(`E3005 … Cannot return 'int' from function declared to return 'struct'`). The admission is the SHAPE
-now, so the refusal is positioned at the literal and names the field.
+⛔ **THE OTHER HALF OF THE SAME HAZARD, AND THE ONE A NAME-KEYED ADMISSION LETS THROUGH.** An
+admission of `isArrayBaseName(name)` plus a sole field the layout calls inline-managed asks about the
+field's NAME and the declaration's MARKER, never about its TYPE. It would ADMIT this declaration and the
+identity would hand the raw `Num` back as the container; the only thing left to refuse it would be a
+later type compare, whose sentence is about a return
+(`E3005 … Cannot return 'int' from function declared to return 'struct'`). The admission is the SHAPE,
+so the refusal is positioned at the literal and names the field.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -424,15 +412,14 @@ error E2015: <fragment>:8:10: Unsupported: `Array` implements `BuiltinArrayLiter
 ```
 
 <!-- test: a-generic-conformer-of-another-name-is-the-record-too -->
-⭐⭐ **THE BOUNDARY THE STRUCTURAL ADMISSION USED TO STOP AT, AND THE NAME IS NOT WHERE IT LIES.** This
+⭐⭐ **THE STRUCTURAL ADMISSION'S BOUNDARY, AND THE NAME IS NOT WHERE IT LIES.** This
 declaration is generic over one parameter and its sole field IS a `__ManagedMemory` over that parameter
 — the whole shape — so it IS the record, and it is admitted although nothing about it is spelled
-`Array`. What used to refuse it was the fold: `canonicalGenericBaseName` mapped a written
-`__ManagedMemory` onto a CONSTANT, so `Bag`'s own field resolved to the record declaration's instance
-rather than to `Bag`'s, and the identity would have handed back a value of a type `Self` is not. The
-fold now learns its target from the conformance — inside a `BuiltinArrayLiteral` conformer's body a
-written `__ManagedMemory` is that conformer — so the field's instance IS `Bag`'s and the shape test is
-the whole test.
+`Array`. The fold learns its target from the conformance — inside a `BuiltinArrayLiteral` conformer's
+body a written `__ManagedMemory` is that conformer — so the field's instance IS `Bag`'s and the shape
+test is the whole test. A `canonicalGenericBaseName` that mapped a written `__ManagedMemory` onto a
+CONSTANT would resolve `Bag`'s own field to the record declaration's instance rather than to `Bag`'s,
+and the identity would hand back a value of a type `Self` is not.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -506,7 +493,7 @@ beta
 ⭐⭐ **TWO RECORDS, TWO GIDS, ONE PROGRAM — which is what the fold being per-DECLARATION rather than
 per-compile buys.** `Bag with String` is `Bag`'s own instance and `"a,bb,ccc".split(",")` is the corpus
 array's, and both carry the compiler's synthesized surface because both declarations carry the marker. A
-single canonical fold target would have merged them, which is the merge `ARR5` measured and refused.
+single canonical fold target would merge them.
 ```maxon
 type Bag uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
@@ -541,8 +528,8 @@ end 'main'
 ```
 
 <!-- test: error.a-conformer-of-another-name-is-still-refused -->
-The unchanged refusal. The identity rests on `Array with T` and `__ManagedMemory with T` being one
-instance, which is a fact about that base name and no other — so a conformer of any other name still
+The refusal. The identity rests on `Array with T` and `__ManagedMemory with T` being one
+instance, which is a fact about that base name and no other — so a conformer of any other name
 gets the sentence about the two names the compiler owns a record for.
 ```maxon
 type Holder implements BuiltinArrayLiteral
@@ -563,9 +550,9 @@ error E2015: <fragment>:6:10: Unsupported: `Holder` implements `BuiltinArrayLite
 
 <!-- test: a-declared-member-off-the-roster-is-served-from-the-corpus -->
 ⭐ **A MEMBER THE DECLARATION CARRIES AND THE ROSTER DOES NOT IS AN ORDINARY CALL TO AN ORDINARY DECLARED
-FUNCTION.** `at` is not one of the members the compiler synthesizes, so before this the call was
-`E2015 … 'Array' member 'at' — P1.7 provides managed/get/set/…; that list IS the surface` — about a
-method the program plainly has, sitting in the very declaration whose record the compiler owns.
+FUNCTION.** `at` is not one of the members the compiler synthesizes, and the call is served from the declaration
+rather than refused with the roster sentence — the program plainly has the method, sitting in the very
+declaration whose record the compiler owns.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -602,8 +589,8 @@ end 'main'
 
 <!-- test: the-self-spelling-of-a-corpus-served-member-reaches-the-same-body -->
 The `self.` spelling of the call above, made from inside the declaration's own body. It is the spelling
-that reaches `dispatchMethodOnReceiver`, and it was refused by the same roster sentence — so the two
-spellings of one member disagreed about whether the member existed at all.
+that reaches `dispatchMethodOnReceiver`, and it is served exactly as the call above is — the two
+spellings of one member agree about whether the member exists at all.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -643,9 +630,9 @@ end 'main'
 ```
 
 <!-- test: a-bare-call-to-a-roster-member-takes-the-roster -->
-⭐⭐ **THE ROSTER-WINS ORDER APPLIES TO THE BARE SPELLING TOO — W17's RULE, SECOND SURFACE.** `self.get(i)`
-has always reached the synthesized arm; a BARE `get(i)` in the same body reached the declaration instead,
-so one member had two meanings depending on how it was written. The two bodies are made to DISAGREE on
+⭐⭐ **THE ROSTER-WINS ORDER APPLIES TO THE BARE SPELLING TOO.** `self.get(i)` reaches the synthesized
+arm, and so does a BARE `get(i)` in the same body, so one member has one meaning however it is written.
+The two bodies are made to DISAGREE on
 purpose — the declared `count` answers 99 and the buffer holds 3 — so the case reports WHICH one the bare
 call took rather than merely that it compiled. `count` is the discriminator and `get` is not, because the
 roster's `get` hands back the ELEMENT, which in the shared generic body is an opaque `Element` no concrete
@@ -741,15 +728,15 @@ end 'main'
 ⭐⭐ **THE OWNERSHIP HALF, AND IT PINS THE EXIT CODE BECAUSE THE PRINT ALONE COULD NOT SEE THE BUG.** The
 corpus-served member hands back a MANAGED element, which is a `+1` the CALLEE owes
 (`Parser.emitOwnedValueReturn`'s opaque arm) and takes through the enclosing instance's descriptor
-`retainFunc@64`. That word was stamped ZERO for an `Array with String`, because the gate deciding whether a
-descriptor carries ownership words asked `genericInstanceHasBaseLayout` — i.e. *"is there a shared body that
-reads this block?"* — and answered no for every `Array`. A record-collapsed `type Array` is the case where
-the record is the compiler's AND the methods are a shared body, so the caller was handed a BORROW it then
-released: **this program printed `alpha beta 2` and SEGFAULTED at teardown.**
+`retainFunc@64`. A record-collapsed `type Array` is the case where the record is the compiler's AND the
+methods are a shared body, so a gate that decided whether a descriptor carries ownership words by asking
+*"is there a shared body that reads this block?"* would stamp that word ZERO for an `Array with String`, and
+the caller would be handed a BORROW it then released: **the program would print `alpha beta 2` and
+SEGFAULT at teardown.**
 
-⛔ **AND THE FIRST VERSION OF THIS CASE PINNED ONLY `stdout`, SO IT PASSED WHILE DOING EXACTLY THAT.** An
-unpinned exit code asserts nothing (`SpecTestRunner.runAssertions` says so deliberately, for the ported
-`/specs` cases that pin only what a program prints) — so a fault or a **101** AFTER the last `print` is
+⛔ **A CASE PINNING ONLY `stdout` WOULD PASS WHILE DOING EXACTLY THAT.** An
+unpinned exit code asserts nothing (`SpecTestRunner.runAssertions` says so deliberately, for the
+spec cases that pin only what a program prints) — so a fault or a **101** AFTER the last `print` is
 invisible to a stdout-only case. Any authored case whose subject is OWNERSHIP must pin the exit code too.
 ```maxon
 typealias Slot = int(0 to 1000)
@@ -792,28 +779,27 @@ alpha beta 2
 ```
 
 <!-- test: a-buffer-member-off-the-old-six-takes-the-record -->
-⭐⭐ **`EC2`: A BARE `managed.<member>(…)` HANDS OVER THE RECEIVER'S OWN RECORD FOR *EVERY* MEMBER, NOT
-FOR SIX.** `Parser.fusedManagedMemberTakesTheRecord` used to admit `length`, `byteAt`, `setByte`, `append`,
-`toCString` and `makeCharFromBytes` and nothing else, so `clear`, `get`, `set`, `setLength`, `capacity`,
-`grow`, `slice`, `remove`, `fill`, `shiftRight` and `elementSize` — **39 call sites across `stdlib/`** —
-fell through to the `managed`-as-a-VALUE door instead, which pays an `__mm_retain`/`__managed_decref` pair
-around the call. **The entry receives the SAME POINTER either way** — an `Array`'s buffer IS the `Array`
-(W57), and `__str_bytes_view` is an `__mm_incref` that hands the receiver's own record straight back (W157)
-— so the pair decided nothing but whether it was paid, and the receiver here is `self`, a parameter the
-CALLER owns for the whole frame, which nothing a buffer entry does can free. MEASURED: the compiler's own
-stage-2 self-compile **79.7 s → 78.0 s**, and `stdlib/Array.maxon`'s `clear()` — whose whole body is
-`managed.clear()` — **14 emitted ops → 7**, opening no frame and saving no register.
+⭐⭐ **A BARE `managed.<member>(…)` HANDS OVER THE RECEIVER'S OWN RECORD FOR *EVERY* MEMBER.**
+`Parser.fusedManagedMemberTakesTheRecord` admits `clear`, `get`, `set`, `setLength`, `capacity`, `grow`,
+`slice`, `remove`, `fill`, `shiftRight` and `elementSize` exactly as it admits `length`, `byteAt`,
+`setByte`, `append`, `toCString` and `makeCharFromBytes`, so none of them goes through the
+`managed`-as-a-VALUE door, which pays an `__mm_retain`/`__managed_decref` pair around the call. **The
+entry receives the SAME POINTER either way** — an `Array`'s buffer IS the `Array`, and `__str_bytes_view`
+is an `__mm_incref` that hands the receiver's own record straight back — so the pair decides nothing but
+whether it is paid, and the receiver here is `self`, a parameter the CALLER owns for the whole frame,
+which nothing a buffer entry does can free. `stdlib/Array.maxon`'s `clear()` — whose whole body is
+`managed.clear()` — opens no frame and saves no register.
 
 ⚠ **THE ELEMENT IS A `String` AND THE EXIT CODE IS PINNED, WHICH IS WHAT MAKES THIS A GATE RATHER THAN A
 GOLDEN.** `clear()` runs the element-destroy walk over the two `String`s: a reference LOST here is a double
 free, a reference GAINED is a leak and **exit 101**, and neither is visible to a stdout-only case. The array
 is refilled after the clear and read back, so the walk must have destroyed exactly the two it was given.
 
-⚠ **SABOTAGE-VERIFIED.** Restore the six-name whitelist on the door's condition and **10 of this spec's 37
-fragments move**, this one among them — its frame grows a callee-saved register back, which is where the
-`__mm_retain`'s result had to live across `__managed_clear`. `the-value-spelling-of-the-same-field-keeps-its-reference`
-below is **byte-identical** under the same sabotage, which is what says the two doors were separated and not
-merged. Nothing in the suite goes red either way: this is a cost, not a semantics.
+⚠ **THE FRAGMENT IS WHAT GATES THE COST.** A six-name whitelist on the door's condition moves this
+fragment — its frame grows a callee-saved register, which is where the `__mm_retain`'s result has to
+live across `__managed_clear` — while `the-value-spelling-of-the-same-field-keeps-its-reference` below
+stays **byte-identical**, which is what says the two doors are separate and not merged. Nothing in the
+suite goes red either way: this is a cost, not a semantics.
 ```maxon
 typealias Slot = int(0 to 1000)
 
@@ -862,11 +848,11 @@ gamma 1
 
 <!-- test: the-value-spelling-of-the-same-field-keeps-its-reference -->
 ⭐ **THE CONTROL FOR THE CASE ABOVE — `managed` USED AS A VALUE STILL MINTS ITS REFERENCE.** The door
-`EC2` widened is gated on a member call FOLLOWING the field (`Parser.memberCallFollows`), which is exactly
-*"the only consumer is a call in the same statement"*. A `return managed` has no such consumer: the buffer
-outlives the statement, so `Parser.bufferSurfaceOf` co-owns it and the two names release one box each.
-Handing back the receiver's own `ValueId` uncounted here is the double free that function's header measures,
-and this case is what says `EC2` did not widen into it.
+the case above takes is gated on a member call FOLLOWING the field (`Parser.memberCallFollows`), which is
+exactly *"the only consumer is a call in the same statement"*. A `return managed` has no such consumer: the
+buffer outlives the statement, so `Parser.bufferSurfaceOf` co-owns it and the two names release one box each.
+Handing back the receiver's own `ValueId` uncounted here is the double free that function's header names,
+and this case is what says the door does not reach it.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
@@ -933,7 +919,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:22:11: Unsupported: `Array` member 'nosuch' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:22:11: Unsupported: `Array` member 'nosuch' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-corpus-served-managed-element-balances-across-a-loop -->
@@ -1010,13 +996,13 @@ end 'main'
 <!-- test: a-buffer-member-keeps-its-meaning-when-the-record-declares-the-name -->
 ⭐⭐ **`managed.<m>()` MEANS THE BUFFER'S `<m>`, EVEN WHEN THE RECORD AROUND IT DECLARES ONE TOO.**
 `Array with T` and `__ManagedMemory with T` are ONE record with TWO surfaces, so nothing about the
-receiver's TYPE tells them apart — only the buffer mark does. The corpus door read the type alone and
-so asked the **`Array`** roster about a receiver denoting the **buffer**: `elementSize` is off the
-`Array` roster and the record declares one, so the call was handed to the record's own method. It
-compiled, it linked and it RAN, returning **99** where the buffer's answer is **8** — a silent wrong
+receiver's TYPE tells them apart — only the buffer mark does. A corpus door that read the type alone
+would ask the **`Array`** roster about a receiver denoting the **buffer**: `elementSize` is off the
+`Array` roster and the record declares one, so the call would be handed to the record's own method. It
+would compile, link and RUN, returning **99** where the buffer's answer is **8** — a silent wrong
 answer with no diagnostic anywhere, which is why this case pins a VALUE rather than a refusal.
 
-**Both directions are pinned, because the cure must not swap the collision round.** The three
+**Both directions are pinned, because the rule must not swap the collision round.** The three
 buffer-denoting spellings (bare `managed.`, `self.managed.`, and `a.managed.` from outside) all mean
 the BUFFER; the three record-denoting spellings (bare `elementSize()`, `self.elementSize()` and
 `a.elementSize()`) all mean the RECORD. Declaring the name on the record changes neither: this
@@ -1084,12 +1070,12 @@ end 'main'
 ```
 
 <!-- test: a-managed-swap-through-the-buffer-is-not-the-records-own -->
-⭐⭐ **THE SAME COLLISION ON A THROWING MEMBER, WHICH IS WHERE IT WAS FOUND.**
+⭐⭐ **THE SAME COLLISION ON A THROWING MEMBER.**
 `stdlib/helpers/sort/smallSort.maxon:32` is `try managed.swap(i, j: j)` inside an `export extension
-Array` that declares a `swap` of its own — so the bare call resolved to the extension's own method and
-the build stopped at **`E3055 … 'Array.swap' does not throw`**, about a call whose real target throws.
+Array` that declares a `swap` of its own — a bare call resolved to the extension's own method would stop
+the build at **`E3055 … 'Array.swap' does not throw`**, about a call whose real target throws.
 `swap` is off the `Array` roster and on the buffer's, exactly as `elementSize` is; the only thing the
-throws-mismatch added was a diagnostic where the case above got silence.
+throws-mismatch adds is a diagnostic where the case above would get silence.
 
 **The element is a `String`, so the ownership is exercised and not merely the routing.** A buffer
 `swap` MOVES ownership between slots with refcounts unchanged — the reason it may not be built from
@@ -1330,9 +1316,8 @@ error E2015: <fragment>:21:7: Unsupported: `Array` member 'truncate' — this va
 
 <!-- test: error.a-program-only-member-is-not-served-on-a-library-array -->
 ⛔ **AND FROM THE LIBRARY'S SIDE, WHICH IS THE HALF A READER MEETS BY SURPRISE.** `at` is declared two
-lines up, in this program's own `type Array`, and `s.split(",")` is not a value of it. Before the
-receiver-scoped lookup this program was refused by the roster sentence alone, about a method the reader
-was looking straight at.
+lines up, in this program's own `type Array`, and `s.split(",")` is not a value of it. The receiver-scoped
+lookup says so; the roster sentence alone would be about a method the reader is looking straight at.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
@@ -1369,8 +1354,8 @@ wrote a type for it to be read from.** `b"Hi!"` and `[4, 5]` name no declaration
 `Array with Byte` / `Array with int` instances itself. Under a contest the corpus's own declaration has
 MOVED (`SignatureIndex.contestStdlibTypeName`), so a mint filed under the bare name lands on the
 PROGRAM's container and every library-only member is refused on a value the reader never typed. `isEmpty`
-is declared on `stdlib/Array.maxon` and nowhere else here, so it is the whole question. The bootstrap
-oracle prints `false false` and exits 5.
+is declared on `stdlib/Array.maxon` and nowhere else here, so it is the whole question. The program
+prints `false false` and exits 5.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
@@ -1435,16 +1420,15 @@ true
 
 <!-- test: error.a-conformer-of-another-name-under-a-contest-is-still-refused-under-its-own-name -->
 ⛔⛔ **THE TWO-DECLARATIONS SENTENCE IS ABOUT TWO `Array`s, SO A RECEIVER THAT IS NEITHER MAY NOT BE
-HANDED IT.** Found in review of ARRO, and it is the cure one door up applied everywhere EXCEPT its own
-twin: `refuseArrayMemberTheOtherDeclarationCarries` gated only on whether a CONTEST exists, never on
-whether the receiver is one of the two `Array`s. Since ARR5b the array surface serves every
+HANDED IT.** `refuseArrayMemberTheOtherDeclarationCarries` gates on whether the receiver is one of the
+two `Array`s, not only on whether a CONTEST exists. The array surface serves every
 `BuiltinArrayLiteral` conformer, so this program — a contested `type Array` AND a `Bag`, asking a `Bag`
-for a member the OTHER declaration carries — met *"this value's type is the `Array` the standard library
-declares"*. `receiverIsTheProgramsOwn` was `false` for the WRONG REASON, so it took the library arm and
-**the whole sentence frame was false, not merely its noun** — which is why naming the receiver would have
-fixed the first word and left the claim standing.
+for a member the OTHER declaration carries — would otherwise meet *"this value's type is the `Array` the
+standard library declares"*: `receiverIsTheProgramsOwn` is `false` for the WRONG REASON, the library arm
+is taken, and **the whole sentence frame is false, not merely its noun** — which is why naming the
+receiver would fix the first word and leave the claim standing.
 
-A conformer of another name now falls through to the roster refusal, which states what the SURFACE
+A conformer of another name falls through to the roster refusal, which states what the SURFACE
 serves — and the surface is exactly what such a receiver has.
 
 ⚠ The three conditions are all load-bearing and no earlier case has them together: the sibling above
@@ -1493,7 +1477,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:39:11: Unsupported: `Bag` member 'at' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:39:11: Unsupported: `Bag` member 'at' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.a-conformer-of-another-name-is-refused-under-its-own-name -->
@@ -1526,7 +1510,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:21:11: Unsupported: `Bag` member 'nosuchmember' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:21:11: Unsupported: `Bag` member 'nosuchmember' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.the-librarys-array-is-refused-under-the-name-its-file-writes -->
@@ -1556,22 +1540,22 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:18:15: Unsupported: `Array` member 'nosuchmember' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:18:15: Unsupported: `Array` member 'nosuchmember' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.a-conformer-named-for-a-container-the-compiler-serves-is-refused -->
-⛔⛔ **THE MARKER IS OPEN TO ANY NAME EXCEPT ONE THE COMPILER ALREADY SERVES A CONTAINER UNDER, AND THAT
-EXCEPTION WAS MISSING — A FIXED-SIZE `Vector with 3 Num` GREW.** `Bag` above is admitted because the
+⛔⛔ **THE MARKER IS OPEN TO ANY NAME EXCEPT ONE THE COMPILER ALREADY SERVES A CONTAINER UNDER, AND
+WITHOUT THAT EXCEPTION A FIXED-SIZE `Vector with 3 Num` GROWS.** `Bag` above is admitted because the
 compiler owns no `Bag`; `Vector` is different in kind, because the compiler synthesizes that container itself and
 a `Vector with N T` states its SIZE as a second coordinate of its instance identity
 (`GenericInstanceRegistry.fixedSizes`) where a `__ManagedMemory with T` states none.
 
-**MEASURED on the tree before this case existed, with nothing but the declaration below added to an
-ordinary program**: `noteArrayLiteralConformer` filed `Vector` as a conformer, `isArrayBaseName("Vector")`
-went TRUE through the non-corpus widening, and `Parser.dispatchMethodOnReceiver` — which asks the ARRAY
-arm before the vector one — served the growable surface on a fixed-size receiver. `Vec3.create()` reported
-**count 0**, four `push`es took it to **4**, and `resize(9)` to **9**. Not a refusal and not a diagnostic:
-the size that is part of the type was simply gone.
+**Without it, the declaration below added to an ordinary program** is filed as a conformer by
+`noteArrayLiteralConformer`, `isArrayBaseName("Vector")` goes TRUE through the non-corpus widening, and
+`Parser.dispatchMethodOnReceiver` — which asks the ARRAY arm before the vector one — serves the growable
+surface on a fixed-size receiver. `Vec3.create()` reports **count 0**, four `push`es take it to **4**,
+and `resize(9)` to **9**. Not a refusal and not a diagnostic: the size that is part of the type is
+simply gone.
 
 ⇒ **A name the compiler serves a container under is not open to the marker.** The conformance REQUIRES a
 `static init(value __ManagedMemory) returns Self` (E3016 without one), and that body's identity is
@@ -1603,27 +1587,21 @@ error E2015: <fragment>:10:10: Unsupported: `Vector` is a generic container the 
 ```
 
 <!-- test: a-conformer-named-for-the-list-is-admitted-because-the-list-left-the-class -->
-⭐⭐ **THE SECOND NAME LEFT THE CLASS AT `W153`, AND THIS CASE IS NOW THE GUARD ON THAT.** It used to pin
-the refusal above at a second name — `List` was the other container the compiler synthesized under a name a user
-may write, its record a chain of 24-byte nodes dropped through `__list_decref` rather than the 48-byte
-managed record — because pinning one name would have left the other open. **`W153` retired the synthesized
-`List`**, striking it from `isBuiltinGenericBaseNameBesidesTheRecord`, so `requireNameIsNotABuiltinContainerBase`
-correctly no longer answers about it: a user `type List` is an ordinary declaration, exactly like the `Bag`
-further up, and the `BuiltinArrayLiteral` marker gives it the growable surface it asked for. `l.resize(9)`
-then `count()` answers **9**, at exit 9.
+⭐⭐ **`List` IS NOT IN THE CLASS, AND THIS CASE IS THE GUARD ON THAT.** The compiler synthesizes no
+`List`: the name is absent from `isBuiltinGenericBaseNameBesidesTheRecord`, so
+`requireNameIsNotABuiltinContainerBase` does not answer about it — a user `type List` is an ordinary
+declaration, exactly like the `Bag` further up, and the `BuiltinArrayLiteral` marker gives it the growable
+surface it asked for. `l.resize(9)` then `count()` answers **9**, at exit 9.
 
-⚠ **THE ANSWER THIS CASE PINS IS THE ONE ITS OWN PROSE ONCE CALLED WRONG, AND THE DIFFERENCE IS THE
-RETIREMENT RATHER THAN A CHANGE OF MIND.** *"MEASURED before the rule existed: the identical declaration
-named `List` compiled, and `l.resize(9)` answered count 9"* was a wrong answer while `List with …` was
-already this compiler's own chain instance — the marker put the growable surface under the container's own
-name. Nothing of the compiler's is under that name now, so the same 9 is the declaration's own answer.
+⚠ **THE SAME 9 WOULD BE A WRONG ANSWER IF `List with …` WERE THIS COMPILER'S OWN INSTANCE** — the marker
+would put the growable surface under the container's own name. Nothing of the compiler's is under that
+name, so the 9 is the declaration's own answer.
 ⇒ **Re-add `List` to that roster and this case goes red**, which is the whole of why it is kept.
 
-⛔ **AND A COVERAGE LOSS, STATED RATHER THAN QUIETLY ABSORBED: the class above has ONE user-writable member
-left.** The roster is `Vector`, `__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`, and the three
+⛔ **THE CLASS ABOVE HAS ONE USER-WRITABLE MEMBER.** The roster is `Vector`, `__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`, and the three
 `__` names are refused earlier by `E2051` (*"declarations starting with `__` are reserved"*), so no second
 name can demonstrate that the rule is about the CLASS until the compiler synthesizes another container under a
-writable name. The refusal itself stays pinned by the `Vector` case directly above.
+writable name. The refusal itself is pinned by the `Vector` case directly above.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -1655,18 +1633,14 @@ the conformance by DELEGATING, so it never reaches a fused-wrapper literal and t
 must still hold is that the marker did not make `Vector` an ARRAY declaration, and the only thing holding
 that is `ProgramSignatures.noteArrayLiteralConformer`'s skip.
 
-⚠ **THE ASSERTION USED TO BE THE ROSTER IN THE SENTENCE, AND W190 RETIRED THE ROSTER.** It read
-*"`count/get/set` is the VECTOR surface, and a hijacked receiver would be reciting the growable array's
-`managed/get/set/first/count/push/resize/append/appendMemory` instead"*. Every member of a `Vector` is
-`stdlib/Vector.maxon`'s now, so there is no synthesized surface for a sentence to recite — and what the
-refusal names instead is the fact the case has always been about: the RECORD is this compiler's, so a
-`type Vector` declared here is not the container the instance denotes. A hijacked receiver would still be
-served `push` and answer 4, which is what this case fails on — or, as it did before the skip existed, not
-being refused at all.
+⚠ **THE ASSERTION IS THE RECORD, NOT A ROSTER.** Every member of a `Vector` is `stdlib/Vector.maxon`'s,
+so there is no synthesized surface for a sentence to recite — and what the refusal names is the fact the
+case is about: the RECORD is this compiler's, so a `type Vector` declared here is not the container the
+instance denotes. A hijacked receiver would be served `push` and answer 4, which is what this case fails
+on — or, without the skip, not be refused at all.
 
-⭐ **BOTH SABOTAGES WERE RUN, AND THE FIRST ONE REFUTED THE PARAGRAPH THAT USED TO STAND HERE.** It said the
-skip covers the surface, the refusal covers the declaration, and neither substitutes for the other — a tidy
-split, and wrong about the direction of the dependency:
+⭐ **THE DEPENDENCY RUNS ONE WAY.** The skip does not merely cover the surface while the refusal covers the
+declaration; disabling each in turn shows which rests on which:
 
 | sabotage | this case | the two above |
 |---|---|---|
@@ -1676,7 +1650,7 @@ split, and wrong about the direction of the dependency:
 ⇒ **The skip is the load-bearing rule and it is what makes the refusal REACHABLE.** Without it
 `isArrayBaseName` answers TRUE for the name, `firstFieldIsItsOwnBuffer` follows, and
 `Parser.emitFusedWrapperLiteral` returns down its IDENTITY arm before any of the three sentences is asked —
-which is precisely how a fixed-size vector came to be served `push`. The refusal is not a second half; it is
+which is precisely how a fixed-size vector would be served `push`. The refusal is not a second half; it is
 the NOUN the declaration gets once the skip has taken it off the array surface.
 ```maxon
 typealias Num = int(0 to 100)
@@ -1704,25 +1678,23 @@ error E2015: <fragment>:18:2: Unsupported: a member access on 'v': `Vector` is a
 ```
 
 <!-- test: error.a-string-marker-conformer-named-for-a-container-is-not-this-doors-subject -->
-⛔ **THE NEW REFUSAL'S NOUN WAS WRONG FOR EVERY MARKER BUT ITS OWN, AND THE HEADER SAID IT COULD NOT BE
-(found in review).** `Parser.requireNameIsNotABuiltinContainerBase` RENDERS the marker into its sentence
-rather than spelling it, and its header read that as proof a `BuiltinStringLiteral` conformer would "meet
-its own marker in the sentence rather than the array one". Rendering carries the marker's NAME and not the
-REASON under it, which stayed hardcoded to the growable surface. **MEASURED before the gate**, on the
-declaration below — `interface-conformance.error.literal-marker-conformer-would-be-discarded-at-construction`
-with only the type's name changed:
+⛔ **THE CONTAINER-NAME REFUSAL'S NOUN IS RIGHT ONLY FOR THE ARRAY MARKER.**
+`Parser.requireNameIsNotABuiltinContainerBase` RENDERS the marker into its sentence rather than spelling
+it, but rendering carries the marker's NAME and not the REASON under it, which is the growable surface.
+Ungated, it would answer the declaration below — `interface-conformance.error.literal-marker-conformer-would-be-discarded-at-construction`
+with only the type's name changed — with:
 
 > ``…not the `__ManagedMemory` record a `BuiltinStringLiteral` conformer's literal is an identity on.
 > Honouring the marker would put every `Vector` on the growable array's surface — `push`, `resize`…``
 
 Three clauses, none of them true of it: the declaration is **not generic**, so the `Vector with …` the
 sentence quotes does not exist; `ProgramSignatures.noteArrayLiteralConformer` is called for the ARRAY marker
-alone, so no array surface is at stake and nothing was skipped; and it **preempted**
+alone, so no array surface is at stake and nothing is skipped; and it would **preempt**
 `requireFusedWrapperTag`, whose sentence is the right one here and is what the byte-for-byte identical
-declaration named `Wrapped` still gets.
+declaration named `Wrapped` gets.
 
 ⇒ **The door is gated on the array marker, the same opening clause its sibling
-`requireArrayMarkerDeclaresTheBuffer` already had.** The assertion below is that the name `Vector` buys this
+`requireArrayMarkerDeclaresTheBuffer` has.** The assertion below is that the name `Vector` buys this
 declaration NOTHING — it meets the byte-record sentence a `Wrapped` meets, because the byte record is what
 its marker is about. A container name is disqualifying for the ARRAY marker specifically, and that is the
 whole of the rule.

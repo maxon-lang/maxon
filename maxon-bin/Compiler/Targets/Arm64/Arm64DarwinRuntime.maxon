@@ -81,6 +81,10 @@ let RealpathAllocatesResult = 0
 // one closing sequence instead of guarding three.
 let NothingToFree = 0
 
+let DarwinBootSessionUuidSysctl = b"kern.bootsessionuuid"
+let SysctlProbesTheSize = 0
+let SysctlWritesNothing = 0
+
 // ==========================================================================
 // The chunk symbol names
 // ==========================================================================
@@ -392,6 +396,65 @@ function buildArm64DarwinExePathChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(HostExePathName)
 end 'buildArm64DarwinExePathChunk'
+
+// `getentropy` refuses a request over 256 bytes, which `__rand_fill` never makes: it fills in
+// pieces of at most `RandomRuntime.RandomFillPieceBytes`.
+function buildArm64DarwinRandomFillChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+	arm64PosixEmitHostCallErrno(asm, call: PosixHostCall.importCall(OsImportSlot.getentropy))
+	return asm.finishFunction(HostRandomFillName)
+end 'buildArm64DarwinRandomFillChunk'
+
+function buildArm64DarwinProcessNamespaceChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	let SlotBufPtr = 0 as StackSize
+	let SlotBufLen = 1 as StackSize
+	let SlotValueLen = 2 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(3)
+
+	let unavailable = asm.newLabel()
+	let tooSmall = asm.newLabel()
+	let finish = asm.newLabel()
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBufLen)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: SysctlProbesTheSize)
+	arm64DarwinCallBootSessionSysctl(asm, globalData: globalData, valueLenSlot: SlotValueLen)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: unavailable)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotValueLen)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x3, slot: SlotBufLen)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hi, label: tooSmall)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotValueLen)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotBufPtr)
+	arm64DarwinCallBootSessionSysctl(asm, globalData: globalData, valueLenSlot: SlotValueLen)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: unavailable)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBufPtr)
+	arm64EmitCStringLength(asm, src: Arm64Register.x0, dest: Arm64Register.x2, cursor: Arm64Register.x1, scratch: Arm64Register.x2)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x2)
+	arm64EmitBranchTo(asm, label: finish)
+
+	asm.placeLabel(tooSmall)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBufLen)
+	arm64EmitBranchTo(asm, label: finish)
+
+	asm.placeLabel(unavailable)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+
+	asm.placeLabel(finish)
+	return asm.finishFunction(HostProcessNamespaceName)
+end 'buildArm64DarwinProcessNamespaceChunk'
+
+function arm64DarwinCallBootSessionSysctl(asm Arm64RuntimeAsm, globalData GlobalDataTable, valueLenSlot StackSize)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: valueLenSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: SysctlWritesNothing)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: SysctlWritesNothing)
+	arm64EmitCStringArg(asm, globalData: globalData, bytes: DarwinBootSessionUuidSysctl)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.sysctlbyname)
+end 'arm64DarwinCallBootSessionSysctl'
 
 // ==========================================================================
 // The green-thread floor's HOST OBJECTS: `DarwinWaitObject`
@@ -2027,12 +2090,19 @@ end 'emitArm64DarwinChildDup2'
 // prefix (`Arm64PosixRuntime`), which reaches this lane's naming through `PosixShmNaming.sharedObjectName`.
 export let DarwinShmOpenName = b"mrt_darwin_shm_open"
 
-// `O_RDWR|O_CREAT|O_EXCL` as Darwin numbers them — `O_CREAT` 0x200 and `O_EXCL` 0x800, where Linux spells
-// them 0x40 and 0x80. The `O_EXCL` is load-bearing for the reason `LinuxRuntime.LinuxShmCreateFlags` states.
-let DarwinShmCreateFlags = 0xA02
+// Darwin's `O_*` bits, which are not Linux's: Linux spells `O_CREAT` 0x40, `O_TRUNC` 0x200 and
+// `O_EXCL` 0x80.
+let DarwinOpenCreate = 0x200
+let DarwinOpenTruncate = 0x400
+let DarwinOpenExclusive = 0x800
+
+// The `O_EXCL` is load-bearing for the reason `LinuxRuntime.LinuxShmCreateFlags` states.
+let DarwinShmCreateFlags = PosixOpenReadWrite or DarwinOpenCreate or DarwinOpenExclusive
 
 // `O_WRONLY|O_CREAT|O_TRUNC` as Darwin numbers them; see `LinuxRuntime.LinuxOpenCreateTruncateFlags`.
-export let DarwinOpenCreateTruncateFlags = 0x601
+export let DarwinOpenCreateTruncateFlags = PosixOpenWriteOnly or DarwinOpenCreate or DarwinOpenTruncate
+
+export let DarwinOpenCreateExclusiveFlags = PosixOpenWriteOnly or DarwinOpenCreate or DarwinOpenExclusive
 
 // `mrt_host_file_open(x0 = path, x1 = flags, x2 = mode) -> x0 = fd | -1` — `open`, re-issued on `EINTR`.
 // A chunk because `open` is variadic and its mode travels on the stack, which an isel has no frame for.
@@ -2152,6 +2222,14 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	if usage.usesExecutablePath 'executablePath'
 		chunks.push(buildArm64DarwinExePathChunk())
 	end 'executablePath'
+
+	if usage.usesProcessNamespace 'processNamespace'
+		chunks.push(buildArm64DarwinProcessNamespaceChunk(globalData))
+	end 'processNamespace'
+
+	if usage.usesEntropy 'entropy'
+		chunks.push(buildArm64DarwinRandomFillChunk())
+	end 'entropy'
 
 	// `installTerminalRuntime`'s own bit, and the only producer of `osHandleFileType` is the detecting body
 	// it builds under exactly this condition — one bit, two tiers, as everywhere else here.

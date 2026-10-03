@@ -16,13 +16,12 @@ scaffolding is identical in every test and would be pure noise in all of them.
 
 The **library** is withheld by the same rule and for the same reason. The compiler compiles `stdlib/`
 from source into the same module as the program, so `String.trim`, `Array.reserve` and every
-grapheme helper the cone reaches are ordinary module functions the printer could render — and
-until 2026-08-29 it did. That made `abs/abs.rt-float.test`, a five-line program, a **5,846-line**
-golden of which 120 lines were `main`; it is now 135. What the noise cost was not disk: an edit
-anywhere in `stdlib/` moved thousands of goldens at once, and the drift signal the fragments exist
-to carry was inside that diff.
+grapheme helper the cone reaches are ordinary module functions the printer could render. Rendered,
+they would outweigh the program in every golden — and what that noise costs is not disk: an edit
+anywhere in `stdlib/` would move thousands of goldens at once, burying the drift signal the fragments
+exist to carry.
 
-That default is right for the scaffolding and wrong for a body a rung has just written.
+That default is right for the scaffolding and wrong for a body that is itself under test.
 `__str_bytes_view` publishes a zero-copy `Array with Byte` over a String's own bytes and
 counts a reference on the allocation those bytes live in; getting that count wrong is a
 use-after-free that BALANCES — the matching release disappears with it — so neither the
@@ -43,7 +42,7 @@ be one the program REACHES: an unreached stdlib function is eliminated before th
 naming it renders nothing and is refused exactly as a misspelling is.
 
 Only the named functions are added, and only to that test's fragment; every test without
-the block renders byte-identically to a test written before the block existed. A name
+the block renders only the program's own functions. A name
 that matches no emitted function — or one that names a function the fragment already
 shows — is refused by the compiler, so a misspelling cannot silently pin nothing. An
 EMPTY block is refused by the spec parser for the same reason: it would render no body at
@@ -92,21 +91,14 @@ The byte-view runtime entry, reached through `stdlib/FilePath.maxon`'s own cone.
 as the buffer value exists; `bvret` is the arm an IMMORTAL record takes, which increfs nothing
 because a `.rdata` record can neither be freed nor written.
 
-⚠ **THE BODY WAS FOUR TIMES THIS SIZE UNTIL W157, AND WHAT IT LOST WAS AN ALLOCATION.** It used to
-MINT a fresh 48-byte `Array with Byte` view over the receiver's bytes — `__managed_create`, six
-field stores, and a branchy derivation of which allocation to count — because a String record and a
-buffer record disagreed at `@40` (`singleByteGraphemes` against `element_destroy`). A String record
-now embeds the buffer record whole and keeps its flag at `@48`, so `return managed` is served by
-handing back the receiver: one capacity test and one `__mm_incref`. This golden is where that shows
-as instructions rather than as a trace.
+⚠ **THE BODY ALLOCATES NOTHING.** A String record embeds the buffer record whole and keeps its flag
+at `@48`, so `return managed` is served by handing back the receiver: one capacity test and one
+`__mm_incref`. This golden is where that shows as instructions rather than as a trace.
 
-⚠ **THIS CASE NAMED A PAIR UNTIL W49 WAVE 7, AND ITS SECOND HALF NO LONGER EXISTS AS A RUNTIME
-BODY.** `__str_byte_at_or_panic` was `String.byteAtOrPanic`'s synthesized body; that member retired
-onto `stdlib/String.maxon:299`, whose own body is `try byteAt(index) otherwise panic(…)` — ordinary
-Maxon, compiled as an ordinary function, with no runtime chunk to render. The surviving name is not
-an accident of the same retirement: `String.addressableBytes()` retired too, but its corpus body is
-`return managed`, and reading a fused wrapper's inline `managed` is exactly what mints this entry
-(`Parser.emitFieldLoad`). So the producer moved one call frame down and the body is unchanged.
+⚠ **THIS CASE NAMES ONE BODY.** `String.byteAtOrPanic` is `stdlib/String.maxon:299`, whose own body is
+`try byteAt(index) otherwise panic(…)` — ordinary Maxon, compiled as an ordinary function, with no
+runtime chunk to render. `String.addressableBytes()`'s corpus body is `return managed`, and reading a
+fused wrapper's inline `managed` is exactly what mints this entry (`Parser.emitFieldLoad`).
 
 ```maxon
 function main() returns ExitCode
@@ -211,7 +203,7 @@ mrt_start
 ⚠ **THE ASSERTION IS EMITTED x64 TEXT.** The ```RequiredRuntime body below is this backend's instruction
 sequence; arm64 emits its own, so the pin is meaningless there rather than merely different.
 The panic runtime is HAND-ASSEMBLED bytes, not `TargetOp`s — so it has no IR body, is skipped
-by every fragment, and until this case had no gate of any kind: not an exit code (a program
+by every fragment, and has no other gate of any kind: not an exit code (a program
 that never panics never enters it), not the leak gate, not a section pin, not a golden. It is
 installed in EVERY x64 program, so the smallest possible one pins it. The zero
 displacements are the unresolved call fixups the linker fills in; see the note above.
@@ -232,9 +224,7 @@ mrt_panic
 <!-- unsupported-targets: arm64-macos, arm64-linux -->
 ⚠ **THE ASSERTION IS EMITTED x64 TEXT**, as `panic-runtime-chunk`'s: the grower's arm64 body is a
 different instruction sequence, so this pin does not describe it.
-`__gt_morestack` — the relocating stack grower every green thread's prologue calls. The
-directive's own documentation used to name it as the example of a piece that *could not* be
-pinned at any spelling; this case is that claim's retirement. It is installed on demand, so
+`__gt_morestack` — the relocating stack grower every green thread's prologue calls. It is installed on demand, so
 the program has to actually run a green thread. Gated to x64-windows for
 `async-stack-growth.md`'s reason: the grower is hand-written x64 assembly over a
 `VirtualAlloc`ed stack.
@@ -294,13 +284,11 @@ dual-register `errorReturn` ABI carrying `__ManagedMemoryError.invalidByteRange`
 `stdlib/String.maxon:285` declares. The corpus's `hashString` is what installs it here, and this block is
 its only gate.
 
-⚠ **IT WAS `__str_byte_at` UNTIL W49 WAVE 7, AND THE SUBJECT SURVIVED THE SYMBOL.** `String.byteAt` was a
-synthesized arm with its own runtime body; retiring it onto the corpus made the declaration's own
-`try managed.byteAt(index)` the real call, so the read now happens where the BUFFER's `byteAt` always
-happened — one entry point with one bound, rather than two graphs to keep in step. The
-`RequiredRuntime` guard is what forced this edit rather than letting the case quietly pin nothing: a
-name no program emits is a loud panic (`TargetPrinter.requireEveryNameRendered`), which is the whole
-reason that guard exists.
+⚠ **THE READ IS THE BUFFER'S.** `String.byteAt` is a corpus declaration whose own
+`try managed.byteAt(index)` is the real call, so the read happens where the BUFFER's `byteAt`
+happens — one entry point with one bound, rather than two graphs to keep in step. The
+`RequiredRuntime` guard keeps the case from quietly pinning nothing: a name no program emits is a
+loud panic (`TargetPrinter.requireEveryNameRendered`), which is the whole reason that guard exists.
 
 ```maxon
 function main() returns ExitCode

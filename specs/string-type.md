@@ -412,13 +412,10 @@ end 'main'
 <!-- test: contains-both-overloads -->
 ### BOTH members of the corpus `contains` pair, from one program
 `contains` is an OVERLOAD PAIR in the corpus — `contains(needle String)` (`stdlib/String.maxon:456`) and
-`contains(character Character)` (`:464`) — and until W49 wave 4 the compiler served the `String` form from a
-synthesized `__str_contains` arm, so the `Character` form did not exist here at all. Retiring the member
-hands both to `SemanticCheck.resolveOverloadedCalls`.
+`contains(character Character)` (`:464`) — and neither is synthesized by the compiler, so both reach
+`SemanticCheck.resolveOverloadedCalls`.
 
-⚠ **THE CHARACTER MEMBER WAS DOCUMENTED IN THIS FILE'S PROSE AND PINNED BY NOTHING**, which is why "the
-suite stayed green" could not have been evidence that retiring the pair was safe. It is pinned here, with
-the non-ASCII case that distinguishes a GRAPHEME search from a byte one: the `Character` member's body
+⚠ **THE CHARACTER MEMBER IS PINNED HERE**, with the non-ASCII case that distinguishes a GRAPHEME search from a byte one: the `Character` member's body
 converts to a String and searches, so a multi-byte cluster must match itself and not its first byte.
 ```maxon
 function main() returns ExitCode
@@ -444,8 +441,8 @@ true false true false true false
 <!-- test: contains-in-a-loop-does-not-leak -->
 ### Neither member leaks its temporary
 The `Character` member builds a `String` from its argument (`character.toString()`) and the `String`
-member borrows its needle. Both are the CORPUS's bodies now, so the drops are the ones its declarations
-own rather than ones a synthesized arm enrolled — a loop is what makes a missing one exit 101.
+member borrows its needle. Both are the CORPUS's bodies, so the drops are the ones its declarations
+own — a loop is what makes a missing one exit 101.
 ```maxon
 function main() returns ExitCode
 	var hits = 0
@@ -1037,11 +1034,9 @@ end 'main'
 
 <!-- test: split-result-crosses-a-user-function-and-a-struct-field -->
 ### An owned `Array with String` survives being returned out of the corpus body
-`split` was held back from three retirement waves for ONE unmeasured question, and this case is where it
-was settled. It is the only retired `String` member that CONSTRUCTS a container: until W49 wave 5 the
-compiler's own arm built the result through `emitArrayCreateOp`, so the compiler — not the corpus — decided that
-array's element size and its `element_destroy@40` stamp. The corpus builds it through
-`StringArray.create()` (`stdlib/String.maxon:621-625`) instead.
+`split` is the only corpus `String` member that CONSTRUCTS a container. The corpus builds it through
+`StringArray.create()` (`stdlib/String.maxon:621-625`), so the corpus decides that array's element size
+and its `element_destroy@40` stamp.
 
 ⚠ **A WRONG STAMP ANNOUNCES ITSELF IN NEITHER DIRECTION**: too small and the segments leak, too eager and
 they are freed twice, and both compile clean. So the result is carried across every boundary that could

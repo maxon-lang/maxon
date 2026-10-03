@@ -80,21 +80,23 @@ function checkInterfaceRequirements(project Project, signatures ProgramSignature
 			continue
 		end 'noTypeCanBeNarrowerThanAFilePrivateInterface'
 
-		match lookupInterface(interfaces, name: site.name) 'declared'
+		let name = try site.name.declaredName() otherwise continue
+
+		match lookupInterface(interfaces, name: name) 'declared'
 			notFound then continue
-			found(declared) then checkEveryRequirement(project, signatures: signatures, site: site, declared: declared)
+			found(declared) then checkEveryRequirement(project, signatures: signatures, site: site, name: name, declared: declared)
 		end 'declared'
 	end 'eachInterface'
 end 'checkInterfaceRequirements'
 
-function checkEveryRequirement(project Project, signatures ProgramSignatures, site InterfaceDeclSite, declared IrInterface)
+function checkEveryRequirement(project Project, signatures ProgramSignatures, site InterfaceDeclSite, name ByteArray, declared IrInterface)
 	for method in declared.methods 'eachRequirement'
-		checkOneRequirement(project, signatures: signatures, site: site, method: method)
+		checkOneRequirement(project, signatures: signatures, site: site, name: name, method: method)
 	end 'eachRequirement'
 end 'checkEveryRequirement'
 
-function checkOneRequirement(project Project, signatures ProgramSignatures, site InterfaceDeclSite, method InterfaceMethodSig)
-	let subject = SignatureSubject.create(SignatureSpelling.inDeclaringFile, tier: site.visibility, readerFilePath: site.path, nameLine: method.nameLine, nameColumn: method.nameColumn, enclosing: EnclosingType.named(site.name), declaredName: qualifiedMethodName(site.name, methodName: method.name))
+function checkOneRequirement(project Project, signatures ProgramSignatures, site InterfaceDeclSite, name ByteArray, method InterfaceMethodSig)
+	let subject = SignatureSubject.create(SignatureSpelling.inDeclaringFile, tier: site.visibility, readerFilePath: site.path, nameLine: method.nameLine, nameColumn: method.nameColumn, enclosing: EnclosingType.named(name), declaredName: qualifiedMethodName(name, methodName: method.name))
 
 	for position in 0 upto method.paramTypeNames.count() 'eachParam'
 		let typeName = try method.paramTypeNames.get(position) otherwise panic("checkOneRequirement: paramTypeNames.get OOB at {position} inside its own `upto` bound")
@@ -138,7 +140,7 @@ function checkDeclaredSignature(project Project, signatures ProgramSignatures, f
 		return
 	end 'noTypeCanBeNarrowerThanAFilePrivateFunction'
 
-	if func.sourceFilePath.toString().isEmpty() 'synthesizedAndSpellsNothingAnAuthorWrote'
+	if func.isCompilerBuilt() 'synthesizedAndSpellsNothingAnAuthorWrote'
 		return
 	end 'synthesizedAndSpellsNothingAnAuthorWrote'
 
@@ -278,7 +280,7 @@ function judgeDeclaredType(project Project, signatures ProgramSignatures, subjec
 	project.signatureTypeDemands.push(SignatureTypeDemand.create(subject.declaredName, demandingTier: subject.tier, typeName: name))
 
 	if not tierIsAtLeastAsVisible(visibility, floor: subject.tier) 'narrowerThanTheFunctionThatNamesIt'
-		reportPositioned(project, code: ErrorCode.semanticSignatureTypeLessVisibleThanFunction, message: "{visibilityTierWord(subject.tier)} function '{subjectDisplay(signatures, subject: subject)}' names {visibilityTierWord(visibility)} {declaredTypeNoun(kind)} '{String.from(name)}' {positionText(where)}", line: subject.nameLine, column: subject.nameColumn, filePath: subject.readerFilePath)
+		reportPositioned(project, code: ErrorCode.semanticSignatureTypeLessVisibleThanFunction, message: "{visibilityTierWord(subject.tier)} function '{subjectDisplay(signatures, subject: subject)}' names {visibilityTierWord(visibility)} {declaredTypeNoun(kind)} '{sourceSpelledAliasText(name)}' {positionText(where)}", line: subject.nameLine, column: subject.nameColumn, filePath: subject.readerFilePath)
 		return
 	end 'narrowerThanTheFunctionThatNamesIt'
 

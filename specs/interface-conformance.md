@@ -392,17 +392,16 @@ end 'main'
 ```
 
 <!-- test: error.builtin-array-conformer-over-the-wrong-element -->
-⭐⭐ **The compiler REFUSES A CONFORMER WHOSE BUFFER IS NOT OVER ITS OWN TYPE PARAMETER, AND THE ORACLE ACCEPTS IT.**
-Since the envelope collapse, `Array with T` and `__ManagedMemory with T` are ONE `GenericInstanceId`, so a
+⭐⭐ **The compiler REFUSES A CONFORMER WHOSE BUFFER IS NOT OVER ITS OWN TYPE PARAMETER.**
+`Array with T` and `__ManagedMemory with T` are ONE `GenericInstanceId`, so a
 `MyCollection{managed: m}` literal is not a CONSTRUCTION at all — it is an IDENTITY on the record, handed back
 wearing `Self`. A bare `__ManagedMemory` field is a buffer over `Byte`, so the value handed back would wear an
 identity its bytes do not have: a container declared generic over `Element` whose storage has a one-byte
 stride whatever `Element` is.
 
-⚠ **THE PROGRAM WAS ALREADY REFUSED HERE, BY THE LATER RETURN COMPARE, IN A SENTENCE THAT NAMED NEITHER
+⚠ **THE REFUSAL IS AT THE FIELD, AHEAD OF THE LATER RETURN COMPARE, WHOSE SENTENCE NAMES NEITHER
 FAULT**: `Cannot return 'ByteArray' from function declared to return 'MyCollection_Te051b2272b3afaf0'` — a
-mangled instance name at the author, about a RETURN, in a program whose fault is a FIELD. The refusal is at
-the field now.
+mangled instance name at the author, about a RETURN, in a program whose fault is a FIELD.
 ```maxon
 type MyCollection uses Element implements BuiltinArrayLiteral
 	var managed as __ManagedMemory
@@ -604,9 +603,7 @@ error E3012: specs/fragments/interface-conformance/interface-method-local-var-st
 ```
 
 <!-- test: interface-method-loop-variable-still-errors -->
-⭐ **THE WAIVER IS ABOUT PARAMETERS, AND A `for` BINDING IS NOT ONE** (A4g). `interface-method-may-leave-a-required-parameter-unread` above is the positive control that the waiver is live at all; this is the line it stops at. A contract can force an implementer to DECLARE a parameter it has no use for, and it has nothing whatever to say about a loop variable the author wrote inside the body — so the loop binding is still refused, and `for _ in` is the spelling that fixes it.
-
-MEASURED on the runnable oracle, which draws the same line structurally: its `skipParamCheck` skips the parameter loop and never the locals loop, and it reports `unused variable: 'i'` on this program.
+⭐ **THE WAIVER IS ABOUT PARAMETERS, AND A `for` BINDING IS NOT ONE**. `interface-method-may-leave-a-required-parameter-unread` above is the positive control that the waiver is live at all; this is the line it stops at. A contract can force an implementer to DECLARE a parameter it has no use for, and it has nothing whatever to say about a loop variable the author wrote inside the body — so the loop binding is still refused, and `for _ in` is the spelling that fixes it.
 
 ⚠ **`limit` IS ALSO UNREAD, DELIBERATELY.** The two unused declarations in one method are what make this case discriminating in BOTH directions: it fails if the waiver is allowed to reach the loop binding, and it fails again if a waived PARAMETER is allowed to end the scan before the loop binding is reached.
 ```maxon
@@ -731,23 +728,21 @@ error E3016: <fragment>:5:6: Partial interface implementation: type 'Thing' is m
 
 <!-- test: overloaded-method-on-conforming-type -->
 A conforming type may OVERLOAD the method it conforms with: `label()` satisfies `Named`, and
-`label(extra Integer)` registers beside it as a distinct member (D7). It was `E3006 duplicate definition of
-function 'Widget.label'` until this rung, because the compiler keyed a method by its bare `Type.method` name alone —
-which is also what this case originally existed to pin, and the ORACLE has always accepted the program.
+`label(extra Integer)` registers beside it as a distinct member. A method is not keyed by its bare
+`Type.method` name alone, which would make this `E3006 duplicate definition of function 'Widget.label'`.
 
-⚠ **IT DOES NOT KEEP GUARDING THE REGRESSION IT WAS WRITTEN FOR. The case BELOW is what does.** The original
-guarded a PANIC on the REFUSAL path, and converting a negative test into a positive one is exactly how such a
-guard is lost: the conformance check reads a method's param TYPES from the module and its param NAMES from the
-signature registry, those were two independent resolutions of ONE collision, they disagreed on arity, and the
-check indexed one column by the other's count. What prevents it is `ConformanceCheck.checkConformance`'s
+⚠ **THIS CASE DOES NOT GUARD THE REFUSAL PATH. The case BELOW is what does.** The conformance check reads a
+method's param TYPES from the module and its param NAMES from the signature registry; were those two
+independent resolutions of ONE collision that disagreed on arity, the check would index one column by the
+other's count. What prevents it is `ConformanceCheck.checkConformance`'s
 `projectHasErrors` gate — and THIS program has no diagnostic at all, so it never reaches that gate.
-`formatActualSignature`, the function that panicked, is reached only from the E3016 mismatch arm, and here
+`formatActualSignature`, the function that would panic, is reached only from the E3016 mismatch arm, and here
 `label()` matches `Named.label()` exactly. **Delete the gate and this test stays GREEN.**
 
-Nor are the two halves still played off each other: under D7 the second method registers under a MANGLED name,
+Nor are the two halves played off each other here: the second method registers under a MANGLED name,
 so the module's function map and `funcSignatures` hold two DISTINCT keys and cannot disagree about one. Only an
-IDENTICAL-signature duplicate still collides. This case is therefore kept purely as D7 acceptance — the
-assertion is that it compiles and runs — and the guard is restored by
+IDENTICAL-signature duplicate collides. This case is therefore purely an acceptance case — the
+assertion is that it compiles and runs — and the guard is
 `error.duplicate-method-conformance-same-signature` below.
 ```maxon
 
@@ -782,33 +777,31 @@ end 'main'
 ```
 
 <!-- test: error.duplicate-method-conformance-same-signature -->
-⭐⭐ **THE ONE DUPLICATE D7 STILL REFUSES — and the only program left that reaches the conformance check's
+⭐⭐ **THE ONE DUPLICATE OVERLOADING STILL REFUSES — and the only program that reaches the conformance check's
 malformed-module gate.** Overloading resolves a collision by MANGLING the later member's registration name, so
 two methods of one name are two distinct keys unless their signatures are IDENTICAL too; then
 `Parser.overloadRegistrationNameFor` hands back the INCUMBENT'S OWN registration name on purpose and it
-collides in `commitFuncSignatures`, earning the E3006 it always did.
+collides in `commitFuncSignatures`, earning E3006.
 
 ⚠ **THAT NAME IS BARE ONLY WHEN THE INCUMBENT IS THE FIRST MEMBER OF ITS SET** — which is the case here, and
 is why this test reads `'Widget.label'`. Redeclare a LATER member and the name handed back is the incumbent's
 MINTED one (`Parser.overloadMemberHoldingSignature`), which is a symbol no declaration wrote; E3006 then says
 so rather than quoting it bare, and `function-overloads/error.overload-redeclared-with-the-same-parameters`
-pins that half. Stated because the earlier wording said "the BARE name" flatly, which is true of this program
-and false of the mechanism.
+pins that half. "The BARE name" is true of this program and false of the mechanism.
 
-⚠ **D7 DID NOT LOSE THE OLD PANIC GUARD — IT MADE THE PANIC UNREACHABLE, AND THAT IS A STRONGER OUTCOME THAN A
-TEST.** The panic needed TWO things: a name collision, AND the module's function table and `funcSignatures`
+⚠ **THE ARITY-DISAGREEMENT PANIC IS UNREACHABLE, AND THAT IS A STRONGER OUTCOME THAN A
+TEST.** The panic needs TWO things: a name collision, AND the module's function table and `funcSignatures`
 disagreeing about the colliding method's ARITY (`checkOneMethod` reads param TYPES from the former and param
-NAMES from the latter, so it indexed one column by the other's count). Its predecessor supplied both with
-`label()` beside `label(extra Integer)`. Post-D7 a collision survives ONLY when the two signatures are
-IDENTICAL — anything else mangles — so the arities necessarily AGREE and the disagreement cannot be
-constructed. The second premise is gone, not merely untested.
+NAMES from the latter, so it would index one column by the other's count). A collision survives ONLY when the
+two signatures are IDENTICAL — anything else mangles — so the arities necessarily AGREE and the disagreement
+cannot be constructed. The second premise is unconstructible, not merely untested.
 
-⚠ **MEASURED, and it is why this note does not claim to be that guard:** stubbing
-`ConformanceCheck.checkConformance`'s `projectHasErrors` early-return out entirely leaves the suite at
-**2581 passed / 0 failed**. Nothing here exercises that gate — not this case and not any other. It is retained
+⚠ **This note does not claim to be that guard:** stubbing
+`ConformanceCheck.checkConformance`'s `projectHasErrors` early-return out entirely leaves the suite green.
+Nothing here exercises that gate — not this case and not any other. It is retained
 as defence-in-depth for a malformed module arriving by some other route (any diagnostic, not just E3006), and a
-reader should know it is unexercised rather than assume this case covers it. What THIS case pins is the D7
-boundary itself: the one duplicate shape the rung still refuses, refused with a clean diagnostic.
+reader should know it is unexercised rather than assume this case covers it. What THIS case pins is the
+overloading boundary itself: the one duplicate shape the compiler still refuses, refused with a clean diagnostic.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -841,14 +834,14 @@ end 'main'
 error E3006: <fragment>:16:11: Duplicate function 'Widget.label'
 ```
 
-### `static` interface requirements (R9)
+### `static` interface requirements
 
-An `interface` may declare a `static function` requirement. Until R9 the conformance check SKIPPED every
-such requirement, so a type could declare `implements` and supply nothing for it. That was not a lenience,
-it was a disagreement: The compiler dispatches an interface through a WITNESS TABLE with one slot per interface
+An `interface` may declare a `static function` requirement, and the conformance check holds a conformer to
+it like any other requirement. Skipping it would not be a lenience but a disagreement: The compiler
+dispatches an interface through a WITNESS TABLE with one slot per interface
 method — statics included — and the slot is stamped with a relocation naming `<Type>.<method>`. A conformer
-that supplied nothing left the linker resolving an address for a function nobody emitted, and the build
-died in `bakeFuncAbs64Relocs`, not in a diagnostic.
+that supplied nothing would leave the linker resolving an address for a function nobody emitted, and the
+build would die in `bakeFuncAbs64Relocs`, not in a diagnostic.
 
 ⚠ **THE RULE IS THE ONE E3016 ALREADY STATES, AND IT DOES NOT CONSULT THE WITNESS TABLE.** A type that does
 not define all of an interface's members does not conform to it — whether or not any generic in the program
@@ -856,15 +849,12 @@ happens to instantiate against that interface. Making the table's existence deci
 the same program accepted or rejected depending on a `typealias` written elsewhere, which is exactly the
 two-components-disagreeing shape this rule closes.
 
-⚠ **DIVERGENCE FROM THE C# BOOTSTRAP, DELIBERATE AND MEASURED.** The bootstrap ACCEPTS a conformer that
-omits a static requirement (measured: exit 42) — it monomorphizes and has no witness tables at all, so the
-question cannot arise there. v1 already reports a MISSING static (`SemanticCheck.maxon:402-430` pushes the
-missing entry before its static skip); it skips only a PRESENT static's signature, which the compiler cannot afford
-because the compiler's slot carries an address whose ABI the interface picked.
+⚠ **A PRESENT static's SIGNATURE IS CHECKED TOO**, because its slot carries an address whose ABI the
+interface picked.
 
 <!-- test: error.static-requirement-not-supplied -->
-A `static` requirement the conformer does not supply is E3016 — the program that used to panic the
-compiler in `bakeFuncAbs64Relocs`.
+A `static` requirement the conformer does not supply is E3016, not a failure in
+`bakeFuncAbs64Relocs`.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -913,7 +903,7 @@ error E3016: <fragment>:9:6: Partial interface implementation: type 'Point' is m
 <!-- test: error.static-requirement-not-supplied-without-witness -->
 ⭐ **WHETHER A WITNESS TABLE IS BUILT MUST NOT DECIDE WHETHER A TYPE CONFORMS.** The identical conformance
 with no generic instantiation anywhere in the program — so no witness table, no relocation, nothing that
-could fail at link time — is the SAME E3016. Before R9 this program compiled and returned 42.
+could fail at link time — is the SAME E3016.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -999,8 +989,8 @@ end 'main'
 
 <!-- test: error.static-requirement-wrong-signature -->
 A supplied static whose signature disagrees with the requirement reaches E3016's WRONG-SIGNATURE arm, the
-same arm an instance method reaches. v1 skips this comparison because *"no runtime witness is dispatched
-against them"*; under the compiler's dictionary-passing one is, so the shapes must agree.
+same arm an instance method reaches. Under dictionary-passing a static is dispatched through its witness
+slot, so the shapes must agree.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -1036,7 +1026,7 @@ error E3016: <fragment>:9:6: Partial interface implementation: type 'Point' has 
 ```
 
 <!-- test: error.static-requirement-supplied-as-instance-method -->
-⭐ **A RECEIVER-KIND DISAGREEMENT IS A SIGNATURE DISAGREEMENT (R9's own rule — neither reference has it).**
+⭐ **A RECEIVER-KIND DISAGREEMENT IS A SIGNATURE DISAGREEMENT (this compiler's own rule — neither reference has it).**
 An instance method carries `__self` at position 0 and a static does not, so an instance impl installed in a
 slot the interface declared static would be dispatched with no receiver in the register it reads `self`
 from. The `static ` prefix is in the rendered signature precisely so this rejection's two halves do not
@@ -1076,8 +1066,8 @@ error E3016: <fragment>:9:6: Partial interface implementation: type 'Point' has 
 ```
 
 <!-- test: error.instance-requirement-supplied-as-static-method -->
-The other direction, which was a SILENT WRONG ANSWER before R9: an INSTANCE requirement met by a static was
-accepted, and the dispatch then passed a receiver into a callee with no `self` parameter.
+The other direction, which accepted would be a SILENT WRONG ANSWER: an INSTANCE requirement met by a static
+would be dispatched with a receiver passed into a callee with no `self` parameter.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -1107,31 +1097,26 @@ error E3016: <fragment>:8:6: Partial interface implementation: type 'Point' has 
   - static digest() returns Code (expected digest() returns Code)
 ```
 
-### An OVERLOADED member may satisfy a requirement, whatever order it is written in (R10)
+### An OVERLOADED member may satisfy a requirement, whatever order it is written in
 
-Conformance used to resolve a requirement by the BARE `Type.method` key alone, and under D7 only the
-FIRST-declared overload of a name registers under that key — so **a conforming type was accepted or
-rejected according to the order its members happened to be written in.** The requirement is now matched
+Only the FIRST-declared overload of a name registers under the BARE `Type.method` key, so resolving a
+requirement by that key alone would make **a conforming type accepted or rejected according to the order
+its members happen to be written in.** The requirement is matched
 against every member of the name's overload set (`project.overloadSets`) through the same
 `signatureMatches` a single member goes through, and the requirement is satisfied when EXACTLY ONE matches.
 
 ⚠⚠ **THE SELECTION AND THE WITNESS SLOT ARE ONE VALUE, NOT TWO LOOKUPS THAT AGREE.**
-`LowerMaxonToStd.ensureWitnessTable` stamps each slot's `funcAbs64InRdata` relocation with an impl symbol,
-and it used to mint the same bare join independently. That was harmless only because it was COUPLED to the
-bug — both sites were wrong the same way, so they agreed. Teaching conformance to accept a mangled member
-without moving the slot would have converted a loud false reject into a **silent wrong dispatch**: the
-witness would carry the address of whichever overload was written first. So conformance RECORDS what it
+`LowerMaxonToStd.ensureWitnessTable` stamps each slot's `funcAbs64InRdata` relocation with an impl symbol.
+Minting that symbol independently, as the bare join, would turn an accepted mangled member into a
+**silent wrong dispatch**: the witness would carry the address of whichever overload was written first. So conformance RECORDS what it
 selected (`project.witnessSlotImpls`) and the table READS that recording; a slot with no recording is a
 compiler-internal disagreement and panics, except for a builtin conformer, whose impls are synthesized one
 per `(conformer, method)` and can never be overloaded.
 
 <!-- test: overloaded-method-satisfies-requirement-declared-second -->
-⭐ **THE RUNG, at its smallest: the same program as `overloaded-method-on-conforming-type` with the two
+⭐ **THE RULE, at its smallest: the same program as `overloaded-method-on-conforming-type` with the two
 members SWAPPED.** `label(extra Integer)` is written first and takes the bare `Widget.label` registration;
-`label()` — the one `Named` requires — registers as `Widget.label#`. Before R10 this was
-`E3016 … has 1 method(s) with wrong signature: - label(extra Integer) returns Integer (expected label()
-returns Integer)` — a rejection of a type that supplies the method, naming the member that is not the
-candidate, decided purely by declaration order.
+`label()` — the one `Named` requires — registers as `Widget.label#`, and still satisfies the requirement.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1165,16 +1150,16 @@ end 'main'
 ```
 
 <!-- test: overloaded-method-dispatched-through-witness -->
-⭐⭐ **THE DISPATCH CONTROL, and it is the case that matters most in this rung.** Every case here that does
-not build a witness table would still pass if conformance were fixed and the table left minting the bare
-name — the program would compile, and dispatch to the WRONG overload with no diagnostic. This one calls the
+⭐⭐ **THE DISPATCH CONTROL, and it is the case that matters most in this section.** Every case here that does
+not build a witness table would still pass if conformance accepted the mangled member and the table minted
+the bare name — the program would compile, and dispatch to the WRONG overload with no diagnostic. This one calls the
 requirement THROUGH the witness (`self.item.label()` inside `Box uses T where T is Labeled`) and asserts a
 value the two overloads disagree about: the requirement's `label()` answers **42** and the bare-named
 `label(extra Code)` answers 7.
 
-⚠ **MEASURED, and it is the reason this case exists:** reverting `ensureWitnessTable`'s half alone —
-conformance still accepting the mangled member — leaves the whole rest of this suite green while this
-program returns **7**, silently. Two other cases catch that revert as well, one of them differently: the
+⚠ **It is the reason this case exists:** with `ensureWitnessTable` minting the bare name while
+conformance accepts the mangled member, the rest of this suite stays green while this program returns
+**7**, silently. Two other cases catch that as well, one of them differently: the
 two-interface case below answers 7 where 40 is correct, and the overloaded-STATIC case — which has no
 runtime observation at all — moves its golden fragment.
 ```maxon
@@ -1284,20 +1269,19 @@ end 'main'
 ```
 
 <!-- test: overloaded-static-requirement-declared-second -->
-⭐ **R9 MADE THIS BUG REACHABLE FOR STATICS, and nothing covered it.** Before R9 the conformance check
-skipped a `static` requirement outright, so no bare-key lookup happened for one; R9 removed the skip and
-routed statics through the same key. Here `static tag(extra Code)` takes the bare `Point.tag` and the
-required `static tag()` registers as `Point.tag#` — E3016 before R10, purely from the order.
+⭐ **A `static` REQUIREMENT IS RESOLVED THE SAME WAY.** The conformance check routes statics through the same
+key as instance methods. Here `static tag(extra Code)` takes the bare `Point.tag` and the
+required `static tag()` registers as `Point.tag#`, and it still satisfies the requirement.
 
 ⚠ **A STATIC SLOT HAS NO *RUNTIME* CONTROL — the compiler has no syntax for calling a static through a constrained
 type parameter, so the slot is stamped and never read, and a wrong symbol in it cannot change an exit code.
-ITS GUARD IS THE GOLDEN FRAGMENT, and that guard is real: MEASURED.** The `tag` slot's relocation is also
+ITS GUARD IS THE GOLDEN FRAGMENT, and that guard is real.** The `tag` slot's relocation is also
 what DCE-roots the member it names (`DeadFunctionElimination` roots every function a `pendingRdataReloc`
 targets), so the committed fragment below emits `func @Point.tag#` — the selected 0-argument member — and
-emits it *because* the slot named it. Reverting `ensureWitnessTable` to the bare join reddens this case as
-a golden mismatch: the reloc names `Point.tag`, that member is rooted instead, and `Point.tag#` is pruned.
-The table IS built here (`PointBox`), so the same relocation additionally has to name a symbol the linker
-can resolve — which is exactly how R9's original defect surfaced, in `bakeFuncAbs64Relocs`.
+emits it *because* the slot named it. An `ensureWitnessTable` minting the bare join would redden this case as
+a golden mismatch: the reloc would name `Point.tag`, that member would be rooted instead, and `Point.tag#`
+pruned. The table IS built here (`PointBox`), so the same relocation additionally has to name a symbol the
+linker can resolve — one that does not fails in `bakeFuncAbs64Relocs`.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -1408,21 +1392,20 @@ end 'main'
 ```
 
 <!-- test: overloaded-tostring-satisfies-stringable-and-formatted -->
-⭐ **THE SHAPE THE STDLIB ITSELF ASKS FOR, and the proof that the witness table is the ONLY site that had to
-move.** `stdlib/Interfaces.maxon` declares `Stringable.toString()` beside
+⭐ **THE SHAPE THE STDLIB ITSELF ASKS FOR, and the proof that the witness table is the ONLY site besides
+conformance that needs the selection.** `stdlib/Interfaces.maxon` declares `Stringable.toString()` beside
 `FormattedStringable.toString(format String)`, so a type conforming to both MUST overload `toString` — and
-before R10 that was rejected whichever order the two were written in, because only one of them could hold
-the bare `Point.toString` key. Here the FORMATTED member is written first and takes it.
+only one of them can hold the bare `Point.toString` key. Here the FORMATTED member is written first and takes it.
 
 Interpolation dispatches a user struct's `toString` DIRECTLY (`"{p}"` → a plain `Point.toString` call, not a
-witness — the concrete type is statically known), so this program also asks whether that third site needed
-the same treatment. It did not, and for a reason rather than by luck: the call carries its arguments, so
+witness — the concrete type is statically known), so this program also asks whether that third site needs
+the same treatment. It does not, and for a reason rather than by luck: the call carries its arguments, so
 `SemanticCheck.resolveOverloadedCalls` retargets it to the 0-argument member exactly as it retargets any
 other overloaded call. Printing `P` and not `F` is that answer.
 
 ⚠ **THE SAME FACT IS PINNED A SECOND TIME**, from the interpolation side, by
-`specs/string-interpolation.md`'s `stringable-and-formatted-interp-selects-the-zero-arg-overload`
-(R10d). Both write the FORMATTED member first for the same reason — the bare registration key must be held
+`specs/string-interpolation.md`'s `stringable-and-formatted-interp-selects-the-zero-arg-overload`.
+Both write the FORMATTED member first for the same reason — the bare registration key must be held
 by the member the call must NOT reach, or a resolver that picked nothing would pass anyway. **Change the
 dispatch rule and both cases move; change one alone and the corpus is asserting two rules.**
 ```maxon
@@ -1458,8 +1441,8 @@ P
 ```
 
 <!-- test: error.no-overload-matches-requirement -->
-⭐ **THE FIX IS NOT "ACCEPT ANYTHING WITH THE RIGHT NAME".** Two overloads named `label` and NEITHER has
-the required shape, so the type does not conform — and the message may no longer speak as though one
+⭐ **THE RULE IS NOT "ACCEPT ANYTHING WITH THE RIGHT NAME".** Two overloads named `label` and NEITHER has
+the required shape, so the type does not conform — and the message does not speak as though one
 candidate existed. It lists every member declared under the name instead of naming whichever one happened
 to hold the bare key.
 ```maxon
@@ -1576,18 +1559,16 @@ keyed by `(conformer, declaring interface, method NAME)` and carries NO ARITY.**
 the member it accepted for each requirement under that key and `ensureWitnessTable` stamps every slot's
 relocation from the filing, so two same-named requirements of ONE interface are two slots contending for
 one entry: the first is filed and the second either contradicts it or leaves its slot pointing at the
-first's member. The refusal is what keeps the key injective over slots. Before R10 the program was rejected
-anyway (the bare `Type.method` key could satisfy only one of the two requirements, so the other reported a
-wrong signature), which is why it changes no accepted program.
+first's member. The refusal is what keeps the key injective over slots.
 
-⚠⚠ **THE REASON USED TO BE "a dispatch resolves by NAME alone", AND R10c FALSIFIED IT — both here and in
-the message.** `findWitnessDispatchCandidates` now collects every requirement of the name and selects by
+⚠⚠ **THE REASON IS NOT "a dispatch resolves by NAME alone" — neither here nor in
+the message.** `findWitnessDispatchCandidates` collects every requirement of the name and selects by
 ARITY, so a second same-named requirement is perfectly dispatchable: `where-clauses.inherited-overload-dispatch`
 pins exactly this pair (`label()` and `label(width Code)`) WORKING, across an `extends` edge, where the
 declaring-interface half of the key differs and the collision does not arise. So the same two requirements
 are accepted or refused according to which interface the author wrote each in. That split is real and is
 not defensible on its own terms; closing it means widening the impl key to carry a requirement's arity,
-which moves R10's conflicting-conformance detection (E3111) with it. It is its own rung. This case pins
+which moves the conflicting-conformance detection (E3111) with it. This case pins
 the refusal AND its true reason so that the day the key is widened, it turns red and forces the decision.
 ```maxon
 typealias Code = int(0 to u32.max)
@@ -1623,15 +1604,13 @@ error E2015: <fragment>:6:11: Unsupported: interface 'Labeled' declares two requ
 ```
 
 <!-- test: error.one-interface-bound-two-ways -->
-⭐⭐ **ONE INTERFACE, TWO BINDINGS, ONE WITNESS SLOT — AND THIS PANICKED THE COMPILER UNTIL THE R10 REVIEW.**
+⭐⭐ **ONE INTERFACE, TWO BINDINGS, ONE WITNESS SLOT.**
 `Conv` is named twice with different associated-type arguments, so its one requirement is substituted two
 ways (`convert(v Whole)` and `convert(v Real)`) and the overload set answers each with a DIFFERENT member.
 There is one witness table per (conformer, interface) and one address per method slot, so there is nothing
-to choose by. Before R10 this was refused cleanly as E3016 — the bare key could satisfy only the
-first-declared member, so the other binding reported a wrong signature — and matching a requirement against
-the whole overload set is exactly what let both routes succeed and disagree. It is now E3111, which is the
-same verdict for the true reason; it is NOT a compiler panic, which is what a wrong internal-invariant
-claim had made it.
+to choose by. Matching a requirement against the whole overload set lets both routes succeed and disagree,
+so the verdict is E3111, for the true reason; it is NOT a compiler panic, which is what a wrong
+internal-invariant claim would make it.
 ```maxon
 typealias Whole = int(i64.min to i64.max)
 typealias Real = float(f64.min to f64.max)
@@ -1715,7 +1694,7 @@ error E3111: <fragment>:13:6: Type 'Machine' reaches interface 'Parent''s requir
 
 <!-- test: throws-narrower-than-abstract-requirement -->
 ⭐⭐ **AN IMPLEMENTATION MAY THROW A NARROWER ERROR TYPE THAN THE REQUIREMENT DECLARES, WHEN THE
-REQUIREMENT IS ABSTRACT (A1s).** `Digest.digest` declares `throws Error` — the marker interface, which
+REQUIREMENT IS ABSTRACT.** `Digest.digest` declares `throws Error` — the marker interface, which
 declares no case — so the `try` at the witness dispatch has nothing to decode and binds an opaque scalar.
 `Point.digest` throwing its own `MyParseError` is a conformer being MORE SPECIFIC, which is exactly what an
 error interface is for; `stdlib/Builtins.maxon`'s `Parsable.fromString … throws Error` is the shape the whole
@@ -1768,8 +1747,8 @@ end 'main'
 ```
 
 <!-- test: error.throws-wider-than-concrete-requirement -->
-⭐⭐ **THE NARROWING IS ONE-DIRECTIONAL, AND THIS IS THE CASE THAT PROVES THE NEW PERMISSION DID NOT SWALLOW
-THE OLD REFUSAL.** The requirement names a CONCRETE error type, so its ordinals are exactly what the `try` at
+⭐⭐ **THE NARROWING IS ONE-DIRECTIONAL, AND THIS IS THE CASE THAT PROVES THE PERMISSION DOES NOT SWALLOW
+THE REFUSAL.** The requirement names a CONCRETE error type, so its ordinals are exactly what the `try` at
 the dispatch decodes; an implementation declaring the abstract `throws Error` is a WIDENING — it may throw
 anything at all, and whatever it throws comes back decoded as a `DigestError`. Refused, with the same
 sentence any other disagreeing pair of named types gets.
@@ -1812,12 +1791,9 @@ SCALAR `ordinal + bias` ABI — while a payload-carrying union hands its error o
 this accepted, the pointer would be decoded as an ordinal and the box would never be released.
 The narrowing is granted only to error types whose own flag is that same scalar.
 
-⚠ **THE PLAIN-FUNCTION SPELLING OF THIS PROGRAM USED TO EXIT 101 — A LEAK — IN the compiler AND IN THE REFERENCE
-ORACLE ALIKE, AND IT NO LONGER COMPILES IN EITHER (A1s-throwsbox).** When this case shipped, refusing the
-witness-dispatch route was explicitly *"rather than opening a second door"* to a hole that stood open on the
-direct path: `function f(x Code) returns Code throws Error` throwing this same `BoxedError` and caught by
-`try f(3) otherwise 55` linked, ran, decoded the box pointer as an ordinal and leaked the box. The FIRST
-door is now shut too — a plain function's `throws` clause must name a declared enum or union (**E3113**,
+⚠ **THE PLAIN-FUNCTION SPELLING OF THIS PROGRAM IS REFUSED TOO, BY A CHECK OF ITS OWN.** `function f(x Code) returns Code throws Error` throwing this same
+`BoxedError` and caught by `try f(3) otherwise 55` would decode the box pointer as an ordinal and leak the
+box — a plain function's `throws` clause must name a declared enum or union (**E3113**,
 `specs/error-handling.md`'s `error.throws-interface-on-a-plain-function`) — so the two routes into the
 boxed-flag mismatch are refused by two checks that each own their own side: E3016 owns the relation between
 a requirement and its impl, E3113 owns a function's own clause. This case's own program is untouched by
@@ -1936,18 +1912,17 @@ error E3016: <fragment>:17:6: Method 'Point.digest' throws 'OtherError' but inte
 ```
 
 <!-- test: error.throws-unresolvable-impl-type-under-abstract-requirement -->
-⭐⭐ **THE MIRROR OF THE CASE ABOVE, ON THE SIDE THE RUNG DID NOT ASK ABOUT (found by review probing, A1s).**
+⭐⭐ **THE MIRROR OF THE CASE ABOVE, ON THE IMPLEMENTATION'S SIDE.**
 `error.throws-unknown-requirement-type-is-not-abstract` establishes that a REQUIREMENT naming nothing is a
-mistake and not a licence. The IMPLEMENTATION owes the identical argument and was not made to: the guard
-that keeps the narrowing to scalar-flagged errors asked the enum registry and read "no entry" as "not
-boxed, therefore fine" — the PERMISSIVE answer to a memory-safety question, for a name it could not
-resolve. MEASURED on the shipped rung: this exact program compiled, linked and ran, where the strict
-same-name rule the exemption relaxes had refused it.
+mistake and not a licence. The IMPLEMENTATION owes the identical argument: the guard that keeps the
+narrowing to scalar-flagged errors must not read "no entry" in the enum registry as "not boxed, therefore
+fine" — the PERMISSIVE answer to a memory-safety question, for a name it cannot resolve. Read that way,
+this exact program would compile, link and run, where the strict same-name rule the exemption relaxes
+refuses it.
 
-⚠ The refusal reaches only pairs the strict rule ALREADY refused — a same-named pair never asks either
-question — so nothing that compiled before the exemption existed is touched by it. `throws Bogus` on a
-plain function was accepted when this case shipped, and this door was not where that got closed:
-A1s-throwsbox's **E3113** closed it, at the function's own clause. Both fire on the program below, and this
+⚠ The refusal reaches only pairs the strict rule refuses — a same-named pair never asks either
+question — so nothing the strict rule accepts is touched by it. `throws Bogus` on a
+plain function is not refused at this door: **E3113** refuses it, at the function's own clause. Both fire on the program below, and this
 one WINS, deliberately — `checkConformance` runs before the pipeline, and it is the only one of the two that
 can name the requirement the implementation is violating.
 ```maxon
@@ -1986,8 +1961,8 @@ holds its `managed` inline, and its `Self{…}` is built through the fused byte-
 (`__str_from_bytes` / `__str_of_buffer`) — 48 bytes, `managed` at 0 and the grapheme flag at 40. But the
 VALUE is tagged `structRef`, because `returns Self` resolves to the struct, so it is dropped by
 `__destruct_<T>` and copied by `__clone_<T>`: cascades built from the DECLARED field list, over a record
-that has no slot for a third field. Measured on the program below before the refusal existed: **exit
-0xC0000005**, the cascade reading `label` at offset 48 of a 48-byte record and handing whatever it found
+that has no slot for a third field. Unrefused, the program below faults with **exit
+0xC0000005**, the cascade reading `label` at offset 48 of a 48-byte record and handing whatever it finds
 to `__str_decref`.
 
 ⇒ the compiler mints a fused record only for the two names it owns the record FOR. `String` and `Character` are
@@ -2019,7 +1994,7 @@ error E2015: <fragment>:8:10: Unsupported: `Wrapped` implements `BuiltinStringLi
 ### The clone half of the same refusal
 
 `__clone_<T>` is built from the identical declared field list, so co-owning such a value out of a struct
-field faults for the identical reason — measured **0xC0000005** before the refusal. One door refuses both,
+field faults for the identical reason — **0xC0000005** unrefused. One door refuses both,
 because there is exactly one producer of a fused wrapper value.
 ```maxon
 type Wrapped implements BuiltinStringLiteral
@@ -2063,7 +2038,7 @@ error E2015: <fragment>:8:10: Unsupported: `Wrapped` implements `BuiltinStringLi
 `managed` field as its source and the field named `singleByteGraphemesFlag` as its flag; a conformer whose
 second field is named anything else reaches `__str_from_bytes`, which CLASSIFIES the bytes and writes its
 own answer at @40. The declared `flag` occupies @40 in the collapsed layout, so `Self{flag: false}` is
-written, discarded, and read back as the classifier's `true`. Measured before the refusal: **exit 7**,
+written, discarded, and read back as the classifier's `true`. Unrefused, it exits **7**,
 the `true` branch, for a program whose only literal wrote `false`.
 ```maxon
 type Wrapped implements BuiltinStringLiteral

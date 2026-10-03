@@ -1,0 +1,19 @@
+let CaseDirName = "an-empty-option-value-is-refused"
+let MainFileName = "main.maxon"
+let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let InvalidValueRefusal = "invalid option value: "
+let MetricsOptionPrefix = "--metrics="
+let TargetOptionPrefix = "--target="
+
+test 'an option stated with an empty value is refused rather than read as unstated'
+	let dir = freshCaseDir(CaseDirName)
+	let source = dir.join(MainFileName)
+	writeStagedFile(source, content: MainSource)
+
+	for option in [OutputOptionPrefix, MetricsOptionPrefix, TargetOptionPrefix] 'eachOption'
+		let build = runDriver([BuildCommandWord, source.toString(), option], workingDirectory: dir)
+		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+		Expect.equal(build.exitCode(), expected: 1, message: "`maxon {BuildCommandWord} main.maxon {option}` did not exit 1. {said}")
+		Expect.contains(build.stderr, needle: "{InvalidValueRefusal}{option}", message: "`maxon {BuildCommandWord} main.maxon {option}` did not refuse the empty value. {said}")
+	end 'eachOption'
+end 'an option stated with an empty value is refused rather than read as unstated'

@@ -1,7 +1,6 @@
 ---
 feature: subprocess-unsupported
 status: selfhosted
-status-reason: E3074 is a self-hosted-only diagnostic - that, and only that, is what `selfhosted` means here. THE COMPILER TAKES IT AND PASSES IT: measured 2026-09-02, `spec-test --filter=subprocess-unsupported --target=wasm32-wasi` reports 1 passed, 0 failed.
 keywords: [subprocess, wasm, wasi, diagnostics, target]
 category: diagnostics
 ---

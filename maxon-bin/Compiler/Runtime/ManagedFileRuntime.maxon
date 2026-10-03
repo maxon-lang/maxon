@@ -1,7 +1,7 @@
 // Runtime/ManagedFileRuntime.maxon — the `__ManagedFile` box: one OS file HANDLE, closed on drop.
 //
 // ⭐ **THE ORACLE IS `specs/managed-file.md`, AND IT IS THE ONLY ORACLE AVAILABLE FOR THIS SUBSYSTEM.**
-// Its 11 committed cases are the whole of it, so a question the corpus does not already ask has nothing
+// Its committed cases are the whole of it, so a question the corpus does not already ask has nothing
 // to settle it: say so at the site rather than inventing an answer.
 //
 // ⭐⭐ **TWO LANES — `x64-windows` and `arm64-macos` — AND EACH IS ONE WHOSE EVERY ENTRY POINT THE CORPUS
@@ -82,19 +82,22 @@ export let InvalidHandleValue = -1 as ParsedInt
 
 // The Win32 last-error codes the corpus discriminates. `specs/managed-file.md`'s own note records that
 // Win32 `ERROR_FILE_NOT_FOUND` and POSIX `ENOENT` are BOTH 2 — which is why the errno→variant mapping is
-// builder-built Std here rather than backend code, and why a future POSIX lane reuses this arithmetic
+// builder-built Std here rather than backend code, and why a POSIX lane reuses this arithmetic
 // unchanged and supplies only the OPEN.
 // ⚠ **EXPORTED FOR THE POSIX LANES, WHICH MUST *PRODUCE* THESE NUMBERS.** The classification below
 // is target-neutral arithmetic over a Win32 code, so a lane whose OS answers `errno` has to translate —
-// and `Arm64DarwinRuntime.buildArm64DarwinLastErrorChunk` reads these three rather than transcribing them,
+// and a POSIX last-error chunk (`Arm64PosixRuntime`) reads these rather than transcribing them,
 // because a producer and a consumer of one number are exactly the pair this project keeps finding drifted.
 export let ErrorFileNotFound = 2 as ParsedInt
 export let ErrorPathNotFound = 3 as ParsedInt
 export let ErrorAccessDenied = 5 as ParsedInt
+export let ErrorFileExists = 80 as ParsedInt
+export let ErrorSharingViolation = 32 as ParsedInt
 
 // ⭐ **THE `__ManagedFileError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`).** DERIVED from
-// the bias rather than spelled 1…11, exactly as `ManagedMemoryRuntime.ArrayErrorIndexOutOfBoundsFlag` is — and the ordinals
-// themselves are positional facts about the case order of the enum DECLARED at `stdlib/Builtins.maxon:175`.
+// the bias rather than spelled as literals, exactly as
+// `ManagedMemoryRuntime.ArrayErrorIndexOutOfBoundsFlag` is — and the ordinals themselves are
+// positional facts about the case order of the enum DECLARED at `stdlib/Builtins.maxon:175`.
 // `verifyManagedFileOrdinals` below is what holds these literals to that declaration.
 //
 // ⚠ `renameFailed` is ABSENT because the enum has no such case: a failed rename routes to `deleteFailed`,
@@ -119,6 +122,8 @@ let ManagedFileStatFailedOrdinal = 7 as ParsedInt
 let ManagedFileInvalidStatBufferOrdinal = 8 as ParsedInt
 let ManagedFileInvalidStatIndexOrdinal = 9 as ParsedInt
 let ManagedFileClosedOrdinal = 10 as ParsedInt
+let ManagedFileAlreadyExistsOrdinal = 11 as ParsedInt
+let ManagedFileBusyOrdinal = 12 as ParsedInt
 let ManagedFileNotFoundFlag = ManagedFileNotFoundOrdinal + ErrorFlagOrdinalBias
 let ManagedFileAccessDeniedFlag = ManagedFileAccessDeniedOrdinal + ErrorFlagOrdinalBias
 let ManagedFileOpenFailedFlag = ManagedFileOpenFailedOrdinal + ErrorFlagOrdinalBias
@@ -128,6 +133,8 @@ let ManagedFileSizeFailedFlag = ManagedFileSizeFailedOrdinal + ErrorFlagOrdinalB
 let ManagedFileDeleteFailedFlag = ManagedFileDeleteFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedFileStatFailedFlag = ManagedFileStatFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedFileClosedFlag = ManagedFileClosedOrdinal + ErrorFlagOrdinalBias
+let ManagedFileAlreadyExistsFlag = ManagedFileAlreadyExistsOrdinal + ErrorFlagOrdinalBias
+let ManagedFileBusyFlag = ManagedFileBusyOrdinal + ErrorFlagOrdinalBias
 
 // ⭐ **`WIN32_FIND_DATAA` — the 320-byte record `FindFirstFileA` fills**, which `stat` and `exists` read the
 // filesystem through and which `__ManagedDirectory` iterates over. The offsets are the Win32 struct's,
@@ -232,7 +239,7 @@ let Win32OutWordBytes = 8 as ParsedInt
 // this allocation's layout, transcribed three times, in three files, none of which declares it.
 export let Win32OutWordAnswerOffset = 0 as ByteOffset
 
-// ⭐ **THE FOURTEEN ENTRY POINTS.** Thirteen name a `__ManagedFile` method; `__mf_destruct` is the
+// ⭐ **THE SIXTEEN ENTRY POINTS.** Fifteen name a `__ManagedFile` method; `__mf_destruct` is the
 // compiler-INSERTED one — the drop a `__ManagedFile` box takes when its last owner goes away
 // (`SignatureIndex.managedNameDropCallee`), which is the whole of the RAII half of this type.
 //
@@ -242,13 +249,15 @@ export let Win32OutWordAnswerOffset = 0 as ByteOffset
 export let ManagedFileOpenReadName = b"__mf_open_read"
 export let ManagedFileOpenWriteName = b"__mf_open_write"
 export let ManagedFileOpenWriteExecutableName = b"__mf_open_write_exec"
+export let ManagedFileOpenCreateNewName = b"__mf_open_create_new"
 
 // The close. NON-throwing, which is what makes the drift guard below a real check rather than a
-// tautology: thirteen callees, eight throwing and five not, and the predicate must separate them.
+// tautology: sixteen callees, eleven throwing and five not, and the predicate must separate them.
 export let ManagedFileCloseName = b"__mf_close"
 export let ManagedFileDestructName = b"__mf_destruct"
 export let ManagedFileSizeName = b"__mf_size"
 export let ManagedFileReadName = b"__mf_read"
+export let ManagedFileReadAppendingName = b"__mf_read_append"
 export let ManagedFileWriteName = b"__mf_write"
 export let ManagedFileExistsName = b"__mf_exists"
 export let ManagedFileDeleteName = b"__mf_delete"
@@ -273,7 +282,7 @@ export function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns boo
 	//   • `__mf_stat_field` / `__mf_stat_free` — stdlib-only INVARIANT sites. A null buffer or an index past
 	//     the six fields is a caller bug, not a runtime condition, so they ABORT (see `RuntimeAbort`) rather
 	//     than hand back an error a caller would have to pretend to handle.
-	return callee.equals(ManagedFileOpenReadName) or callee.equals(ManagedFileOpenWriteName) or callee.equals(ManagedFileOpenWriteExecutableName) or callee.equals(ManagedFileSizeName) or callee.equals(ManagedFileReadName) or callee.equals(ManagedFileWriteName) or callee.equals(ManagedFileDeleteName) or callee.equals(ManagedFileRenameName) or callee.equals(ManagedFileStatName)
+	return callee.equals(ManagedFileOpenReadName) or callee.equals(ManagedFileOpenWriteName) or callee.equals(ManagedFileOpenWriteExecutableName) or callee.equals(ManagedFileOpenCreateNewName) or callee.equals(ManagedFileSizeName) or callee.equals(ManagedFileReadName) or callee.equals(ManagedFileReadAppendingName) or callee.equals(ManagedFileWriteName) or callee.equals(ManagedFileDeleteName) or callee.equals(ManagedFileRenameName) or callee.equals(ManagedFileStatName)
 end 'isThrowingManagedFileRuntimeCallee'
 
 // ⭐ **WHAT THE USER ACTUALLY WROTE** — this family's `managedDirectorySourceMethodName`, and read through
@@ -317,6 +326,10 @@ export function managedFileSourceMethod(callee ByteArray) returns RuntimeCalleeS
 		return RuntimeCalleeSourceMethod.found(ManagedFileOpenWriteExecutableMethod)
 	end 'openWriteExecutable'
 
+	if callee.equals(ManagedFileOpenCreateNewName) 'openCreateNew'
+		return RuntimeCalleeSourceMethod.found(ManagedFileOpenCreateNewMethod)
+	end 'openCreateNew'
+
 	if callee.equals(ManagedFileSizeName) 'size'
 		return RuntimeCalleeSourceMethod.found(ManagedFileSizeMethod)
 	end 'size'
@@ -324,6 +337,10 @@ export function managedFileSourceMethod(callee ByteArray) returns RuntimeCalleeS
 	if callee.equals(ManagedFileReadName) 'read'
 		return RuntimeCalleeSourceMethod.found(ManagedFileReadMethod)
 	end 'read'
+
+	if callee.equals(ManagedFileReadAppendingName) 'readAppending'
+		return RuntimeCalleeSourceMethod.found(ManagedFileReadAppendingMethod)
+	end 'readAppending'
 
 	if callee.equals(ManagedFileWriteName) 'write'
 		return RuntimeCalleeSourceMethod.found(ManagedFileWriteMethod)
@@ -346,14 +363,14 @@ end 'managedFileSourceMethod'
 
 // ⭐ **THE ERROR TYPE A FILE CALLEE THROWS — the WHAT to the predicate's THAT.** `ProgramSignatures.throwsOf`
 // answers with it for a callee no file declares, which is what types an `otherwise (e)` binding and
-// therefore what makes `match e` see an enum instead of a scalar; the eight throwing builders stamp it as
-// their `throws` clause. ONE speller for one fact — kept beside the predicate deliberately, because the two
-// are halves of it and the drift guard in `installManagedFileRuntime` holds the predicate to the stamps.
+// therefore what makes `match e` see an enum instead of a scalar; the eleven throwing builders
+// stamp it as their `throws` clause. ONE speller for one fact — kept beside the predicate
+// deliberately, because the two are halves of it and the drift guard in `installManagedFileRuntime`
+// holds the predicate to the stamps.
 //
 // ⚠ It is EXPORTED, and there is no `…RuntimeThrowsClause` wrapper beside it: a wrapper returning an
 // optional over a type that ALREADY has a `none` arm costs one extra 16-byte union box per `try` in the
-// program, and composing two of them is **+20 allocations at rung 0, DOUBLING to +640 at rung 5** on the
-// ladder. The composer (`GtRuntime.runtimeThrowsClause`) asks the two PREDICATES and returns a
+// program. The composer (`GtRuntime.runtimeThrowsClause`) asks the two PREDICATES and returns a
 // `ThrowsClause` directly, so exactly one clause value is built per ask.
 export function managedFileThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(ManagedFileErrorTypeName))
@@ -393,9 +410,9 @@ end 'emitPathToCString'
 // path scratch, a `WIN32_FIND_DATAA`, a stat buffer) owns anything to cascade to.
 //
 // ⚠ **CALLING `__mm_alloc` WITH ONE ARGUMENT LEAVES THE DESTRUCTOR SLOT HOLDING WHATEVER WAS IN THE SECOND
-// ARGUMENT REGISTER**, and nothing reads that slot back TODAY (`__mm_free`'s destructor cascade is deferred
-// — see its comment), so a green suite would not notice; the day it does, every `__ManagedFile` box would
-// `callIndirect` through a garbage pointer. Stated once here so the arity cannot be got wrong per call site.
+// ARGUMENT REGISTER**, and `__mm_decref` calls a non-trivial `destructor@0` through `callIndirect`
+// at the last owner, so a box released through it would call through a garbage pointer. Stated once
+// here so the arity cannot be got wrong per call site.
 export function emitRawAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
 	let dtor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let ptr = ids.mint()
@@ -428,7 +445,7 @@ end 'emitRawFree'
 // four bytes `ReadFile` does not write read back as zero. The caller owns it and releases it through
 // `emitWin32BoolOutcome`.
 //
-// ⚠ EXPORTED for `ConsoleRuntime` (W5), which hands `osReadFile` an out word for a read on the STDIN handle
+// ⚠ EXPORTED for `ConsoleRuntime`, which hands `osReadFile` an out word for a read on the STDIN handle
 // rather than on a `__ManagedFile` box. Exported rather than re-implemented for the reason the constant
 // itself is named: the width AND the "the allocator zeroed it, so the four bytes the OS does not write read
 // back as 0" guarantee are one fact, and a second copy would be free to drift from either half.
@@ -452,6 +469,13 @@ end 'emitWin32OutWord'
 // `failed` and `ok` arrive from the caller rather than being minted here so the function's block ORDER is the
 // caller's to state — it is what the emitted code's layout follows.
 function emitWin32BoolOutcome(module StdModule, func IrFunction, block IrBlock, verdict ValueId, out ValueId, failed IrBlock, ok IrBlock, fallbackFlag ParsedInt, ids ValueMinter)
+	let answer = emitWin32BoolVerdict(module, func: func, block: block, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: fallbackFlag, ids: ids)
+	emitOkReturn(module, block: ok, value: answer, ids: ids)
+end 'emitWin32BoolOutcome'
+
+// The same tail without the success exit, answering the out word to a caller that has more to emit
+// on `ok`.
+function emitWin32BoolVerdict(module StdModule, func IrFunction, block IrBlock, verdict ValueId, out ValueId, failed IrBlock, ok IrBlock, fallbackFlag ParsedInt, ids ValueMinter) returns ValueId
 	let err = ids.mint()
 	module.appendOp(block, op: StdOp.osLastError(err))
 	let answer = emitLoadField(module, block: block, record: out, offset: Win32OutWordAnswerOffset, ids: ids)
@@ -461,10 +485,10 @@ function emitWin32BoolOutcome(module StdModule, func IrFunction, block IrBlock, 
 	module.setTerminator(block, op: StdOp.condBranch(failedCall, thenBlockId: failed.id, elseBlockId: ok.id))
 
 	emitFileErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: fallbackFlag, ids: ids)
-	emitOkReturn(module, block: ok, value: answer, ids: ids)
-end 'emitWin32BoolOutcome'
+	return answer
+end 'emitWin32BoolVerdict'
 
-// ⭐⭐ **THE errno → VARIANT MAPPING, AND THE ONLY PLACE IT LIVES.** `err` is a `GetLastError` reading the
+// ⭐⭐ **THE errno → VARIANT MAPPING EVERY FAMILY SHARES.** `err` is a `GetLastError` reading the
 // caller captured; this turns it into one of THREE error-enum cases and THROWS from `block`.
 //
 // `ERROR_PATH_NOT_FOUND` joins `ERROR_FILE_NOT_FOUND` in the `notFound` arm: a missing DIRECTORY component
@@ -481,37 +505,35 @@ end 'emitWin32BoolOutcome'
 //
 // ⚠ It is builder-built Std rather than backend code because the arithmetic is the same on every platform
 // even though the READ is not: `specs/managed-file.md`'s own note records that Win32 `ERROR_FILE_NOT_FOUND`
-// and POSIX `ENOENT` are BOTH 2, so a future POSIX lane reuses this unchanged and supplies only the calls.
+// and POSIX `ENOENT` are BOTH 2, so a POSIX lane reuses this unchanged and supplies only the calls.
 export function emitErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, notFoundFlag ParsedInt, deniedFlag ParsedInt, fallbackFlag ParsedInt, ids ValueMinter)
-	var checkPath = module.addBlock(func, label: b"mfchkp", heat: BlockHeat.normal)
-	var checkDenied = module.addBlock(func, label: b"mfchkd", heat: BlockHeat.normal)
-	var notFoundBlock = module.addBlock(func, label: b"mfnf", heat: BlockHeat.normal)
-	var deniedBlock = module.addBlock(func, label: b"mfden", heat: BlockHeat.normal)
-	var otherBlock = module.addBlock(func, label: b"mfoth", heat: BlockHeat.normal)
-
-	let notFoundConst = emitConst(module, block: block, value: ErrorFileNotFound, ids: ids)
-	let isNotFound = emitCmp(module, block: block, a: err, b: notFoundConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(isNotFound, thenBlockId: notFoundBlock.id, elseBlockId: checkPath.id))
-
-	let pathNotFoundConst = emitConst(module, block: checkPath, value: ErrorPathNotFound, ids: ids)
-	let isPathNotFound = emitCmp(module, block: checkPath, a: err, b: pathNotFoundConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(checkPath, op: StdOp.condBranch(isPathNotFound, thenBlockId: notFoundBlock.id, elseBlockId: checkDenied.id))
-
-	let deniedConst = emitConst(module, block: checkDenied, value: ErrorAccessDenied, ids: ids)
-	let isDenied = emitCmp(module, block: checkDenied, a: err, b: deniedConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(checkDenied, op: StdOp.condBranch(isDenied, thenBlockId: deniedBlock.id, elseBlockId: otherBlock.id))
-
-	emitErrorReturn(module, block: notFoundBlock, flag: notFoundFlag, ids: ids)
-	emitErrorReturn(module, block: deniedBlock, flag: deniedFlag, ids: ids)
-	emitErrorReturn(module, block: otherBlock, flag: fallbackFlag, ids: ids)
+	var checkPath = emitThrowOnCode(module, func: func, block: block, err: err, code: ErrorFileNotFound, flag: notFoundFlag, ids: ids)
+	var checkDenied = emitThrowOnCode(module, func: func, block: checkPath, err: err, code: ErrorPathNotFound, flag: notFoundFlag, ids: ids)
+	var other = emitThrowOnCode(module, func: func, block: checkDenied, err: err, code: ErrorAccessDenied, flag: deniedFlag, ids: ids)
+	emitErrorReturn(module, block: other, flag: fallbackFlag, ids: ids)
 end 'emitErrnoClassifiedThrow'
 
-// The three-flag classification, with THIS family's two fixed cases supplied. Every `__ManagedFile` caller
-// throws `__ManagedFileError`, so its `notFound`/`accessDenied` are a per-FILE fact rather than a per-call
-// one; only the catch-all differs. Not a thin wrapper: it is what keeps the pairing out of five call sites.
+// The shared classification with THIS family's fixed cases supplied — `alreadyExists` and `busy`
+// ahead of it, `notFound`/`accessDenied` through it. Every `__ManagedFile` caller throws
+// `__ManagedFileError`, so these are a per-FILE fact rather than a per-call one; only the catch-all
+// differs.
 function emitFileErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, fallbackFlag ParsedInt, ids ValueMinter)
-	emitErrnoClassifiedThrow(module, func: func, block: block, err: err, notFoundFlag: ManagedFileNotFoundFlag, deniedFlag: ManagedFileAccessDeniedFlag, fallbackFlag: fallbackFlag, ids: ids)
+	var checkBusy = emitThrowOnCode(module, func: func, block: block, err: err, code: ErrorFileExists, flag: ManagedFileAlreadyExistsFlag, ids: ids)
+	var classify = emitThrowOnCode(module, func: func, block: checkBusy, err: err, code: ErrorSharingViolation, flag: ManagedFileBusyFlag, ids: ids)
+	emitErrnoClassifiedThrow(module, func: func, block: classify, err: err, notFoundFlag: ManagedFileNotFoundFlag, deniedFlag: ManagedFileAccessDeniedFlag, fallbackFlag: fallbackFlag, ids: ids)
 end 'emitFileErrnoClassifiedThrow'
+
+function emitThrowOnCode(module StdModule, func IrFunction, block IrBlock, err ValueId, code ParsedInt, flag ParsedInt, ids ValueMinter) returns IrBlock
+	var matched = module.addBlock(func, label: b"mfcode", heat: BlockHeat.normal)
+	var rest = module.addBlock(func, label: b"mfrest", heat: BlockHeat.normal)
+
+	let codeConst = emitConst(module, block: block, value: code, ids: ids)
+	let isCode = emitCmp(module, block: block, a: err, b: codeConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(isCode, thenBlockId: matched.id, elseBlockId: rest.id))
+
+	emitErrorReturn(module, block: matched, flag: flag, ids: ids)
+	return rest
+end 'emitThrowOnCode'
 
 // ⚠ This file's throwing exits are `MmRuntime.emitErrorReturn`/`emitOkReturn`, which every family shares —
 // see their header in `MmRuntime` for why they have one home.
@@ -582,7 +604,7 @@ export function emitArrayByteExtent(module StdModule, block IrBlock, arrRec Valu
 end 'emitArrayByteExtent'
 
 // ⭐ **WHICH OPEN A BUILDER EMITS.** A bare bool at `buildManagedFileOpen` would be a magic value at the
-// call sites; this names the three the corpus has.
+// call sites; this names the modes the corpus has.
 //
 // ⚠ `writeExecutable` differs from `write` in exactly one thing — the permission mask its `StdOp` carries —
 // and that mask lives in the BACKENDS rather than here, because it is a POSIX fact with no Win32
@@ -591,14 +613,14 @@ enum ManagedFileOpenMode
 	read
 	write
 	writeExecutable
+	createNew
 end 'ManagedFileOpenMode'
 
-// `__mf_open_read(pathRec) -> (box, flag)` / `__mf_open_write(pathRec) -> (box, flag)` — open a file, or
-// throw `__ManagedFileError`. ONE builder: the two differ only in which Std op they emit and which
-// catch-all variant a non-errno failure takes, so the scratch copy, the failure classification and the box
-// are written once.
+// `__mf_open_*(pathRec) -> (box, flag)` — open a file, or throw `__ManagedFileError`. ONE builder:
+// the modes differ only in which Std op they emit, so the scratch copy, the failure classification
+// and the box are written once.
 function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFileOpenMode)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedFileThrows())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -622,6 +644,7 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 		read then module.appendOp(afterCopy, op: StdOp.osFileOpenRead(handle, pathPtrId: scratch))
 		write then module.appendOp(afterCopy, op: StdOp.osFileOpenWrite(handle, pathPtrId: scratch))
 		writeExecutable then module.appendOp(afterCopy, op: StdOp.osFileOpenWriteExecutable(handle, pathPtrId: scratch))
+		createNew then module.appendOp(afterCopy, op: StdOp.osFileOpenCreateNew(handle, pathPtrId: scratch))
 	end 'op'
 
 	let err = ids.mint()
@@ -654,7 +677,7 @@ end 'buildManagedFileOpen'
 // destructor close again" sequence safe rather than a double `CloseHandle` on a handle the OS may have
 // reused for something else.
 function buildManagedFileClose(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedFileCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -704,7 +727,7 @@ end 'buildManagedFileClose'
 // The skeleton is `MmRuntime.emitFieldCascadeDestructor`'s, minus the field walk: `emitRefcountCheckToLastOwner`
 // is shared with it, so "how many owners are left?" is asked one way by every destructor in the compiler.
 function buildManagedFileDestruct(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedFileDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -728,7 +751,7 @@ end 'buildManagedFileDestruct'
 // The 64-bit answer arrives through an out-param (a size cannot share RAX with a success flag), so a
 // scratch word is allocated for it and released before either exit.
 function buildManagedFileSize(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedFileThrows())
+	var func = IrFunction.createFromStd(ManagedFileSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -749,7 +772,8 @@ function buildManagedFileSize(module StdModule)
 	module.functions.push(func)
 end 'buildManagedFileSize'
 
-// `__mf_read(box, arrRec, size) -> (bytesRead, flag)` — read up to `size` BYTES into the managed buffer.
+// `__mf_read(box, arrRec, size) -> (bytesRead, flag)` — read up to `size` BYTES into the managed buffer;
+// `__mf_read_append` reads them in after its live length and publishes the new length.
 //
 // ⭐⭐ **`size > capacity` THROWS `readFailed`; IT IS NOT CLAMPED.** A silent clamp in the runtime would
 // hide a user contract violation, and `specs/managed-file.md` states the throw as the method's contract.
@@ -757,32 +781,25 @@ end 'buildManagedFileSize'
 // test: `ReadFile`'s `nNumberOfBytesToRead` is a DWORD, so a negative i64 would arrive as an enormous
 // unsigned count and read off the end of the buffer.
 //
-// ⛔⛔ **THE BOUND IS THE RECORD'S BYTE CAPACITY, AND IT CANNOT REFUSE A NON-OWNED BUFFER — THIS HEADER
-// CLAIMED THE OPPOSITE, AND THE CLAIM WAS FALSE FOR AS LONG AS IT STOOD.** It said a zero-copy view or an
-// `.rdata`-backed literal "FAILS IT STRUCTURALLY", because such a record carries a NEGATIVE `capacity@16`
-// (the `BufferOwnership` encoding) and every positive `size` is therefore above it. The negative never
-// reaches the comparison: `emitArrayByteExtent` → `emitElementByteLen` → `emitBitsToBytes` ends in a
-// LOGICAL shift right, so `capacity = -1` arrives as `0x1FFFFFFFFFFFFFFF` — enormous and POSITIVE, and
-// every `size` below 2^61 is UNDER it and accepted. **MEASURED on this tree before the fix: a 24-byte
-// `read` into a 4-byte zero-copy view over a heap `Array` was ACCEPTED, answered `bytesRead = 24`, and
-// `ReadFile` rewrote the parent's four bytes plus 20 more past the end of its allocation.** The identical
-// premise was copied into the socket runtime's `sendFrom` and caught there the same way.
+// ⛔⛔ **THE BOUND IS THE RECORD'S BYTE CAPACITY, AND IT CANNOT REFUSE A NON-OWNED BUFFER.** A
+// non-owned record's NEGATIVE `capacity@16` arrives at the comparison enormous and POSITIVE — see
+// `BufferOwnership.emitRefuseNonOwnedFillTarget`.
 //
 // ⇒ **THE OWNERSHIP QUESTION IS ASKED BY ITS OWN TEST, AND IT IS `emitRefuseNonOwnedFillTarget` —
-// `emitBufferNotOwned`'s guard, shared with `__ms_recv`, which fills a caller's buffer from the kernel for
-// the same reasons.** A `read` is a WRITE into memory the caller handed in: of the four non-owned
-// provenances one is a READ-ONLY `.rdata` image page and the other three are bytes somebody else is still
-// reading. Only a buffer the record OWNS may be filled — `__ManagedMemory.create`'s, or one a mutator has
-// already detached.
+// `emitBufferNotOwned`'s guard, shared with `__ms_recv` and `__rand_fill`, which fill a caller's
+// buffer from the kernel for the same reasons.** A `read` is a WRITE into memory the caller handed
+// in: of the four non-owned provenances one is a READ-ONLY `.rdata` image page and the other three
+// are bytes somebody else is still reading. Only a buffer the record OWNS may be filled —
+// `__ManagedMemory.create`'s, or one a mutator has already detached.
 //
 // ⭐ **AND THE REFUSAL IS THE DOCUMENTED CONTRACT RATHER THAN A NEW RULE.** `specs/managed-file.md` says
 // *"throws `readFailed` if `size > managed.capacity`"*, and `managed.capacity()` hands `capacity@16` to
 // user code unchanged (`__managed_capacity`) — so for a non-owned record the observable capacity is a
-// NEGATIVE sentinel and EVERY `size >= 0` is above it, `0` included. That is exactly what this guard now
+// NEGATIVE sentinel and EVERY `size >= 0` is above it, `0` included. That is exactly what this guard
 // does. The byte conversion stays for the OWNED bound, where an Array counts ELEMENTS and a file counts
 // BYTES (`emitArrayByteExtent`); what it may not also do is answer the ownership question.
-function buildManagedFileRead(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: managedFileThrows())
+function buildManagedFileRead(module StdModule, name ByteArray, placement ManagedFileReadPlacement)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -810,21 +827,61 @@ function buildManagedFileRead(module StdModule)
 	emitRefuseNonOwnedFillTarget(module, block: checkOwned, record: arrRec, refuse: tooBig, fill: checkCap, ids: ids)
 
 	// The buffer is OWNED here, so `capacity@16` is a real count and its byte extent is non-negative.
+	let start = emitManagedFileReadStart(module, block: checkCap, arrRec: arrRec, placement: placement, ids: ids)
 	let byteCapacity = emitArrayByteExtent(module, block: checkCap, arrRec: arrRec, offset: ManagedRecordCapacityOffset, ids: ids)
-	let overCapacity = emitCmp(module, block: checkCap, a: size, b: byteCapacity, pred: StdCmpPred.gt, ids: ids)
+
+	let readEnd = match start 'start'
+		bufferStart gives size
+		afterLength(length) gives emitBin(module, block: checkCap, a: length, b: size, opcode: StdBinOpcode.add, ids: ids)
+	end 'start'
+
+	let overCapacity = emitCmp(module, block: checkCap, a: readEnd, b: byteCapacity, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(checkCap, op: StdOp.condBranch(overCapacity, thenBlockId: tooBig.id, elseBlockId: doRead.id))
 
 	emitErrorReturn(module, block: tooBig, flag: ManagedFileReadFailedFlag, ids: ids)
 
 	let buffer = emitLoadField(module, block: doRead, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
+
+	let target = match start 'start'
+		bufferStart gives buffer
+		afterLength(length) gives emitBin(module, block: doRead, a: buffer, b: length, opcode: StdBinOpcode.add, ids: ids)
+	end 'start'
+
 	let out = emitWin32OutWord(module, block: doRead, ids: ids)
 	let verdict = ids.mint()
 	emitIoPark(module, block: doRead, operation: GtIoOperation.fileExists, ids: ids)
-	module.appendOp(doRead, op: StdOp.osReadFile(verdict, handleId: handle, bufId: buffer, lenId: size, bytesOutPtrId: out))
-	emitWin32BoolOutcome(module, func: func, block: doRead, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileReadFailedFlag, ids: ids)
+	module.appendOp(doRead, op: StdOp.osReadFile(verdict, handleId: handle, bufId: target, lenId: size, bytesOutPtrId: out))
+	let bytesRead = emitWin32BoolVerdict(module, func: func, block: doRead, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileReadFailedFlag, ids: ids)
+
+	match start 'start'
+		bufferStart then break 'start'
+		afterLength(length) then emitStoreField(module, block: ok, record: arrRec, offset: ManagedRecordLengthOffset, value: emitBin(module, block: ok, a: length, b: bytesRead, opcode: StdBinOpcode.add, ids: ids))
+	end 'start'
+
+	emitOkReturn(module, block: ok, value: bytesRead, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedFileRead'
+
+// ⚠ `appending` treats `length@8` as a BYTE offset — the read lands at `buffer + length` and
+// publishes `length + bytesRead` — which is sound only because the front end admits nothing but a
+// byte-element buffer to either read (`Parser.parseManagedFileFillArgs`).
+enum ManagedFileReadPlacement
+	atStart
+	appending
+end 'ManagedFileReadPlacement'
+
+union ManagedFileReadStart
+	bufferStart
+	afterLength(length ValueId)
+end 'ManagedFileReadStart'
+
+function emitManagedFileReadStart(module StdModule, block IrBlock, arrRec ValueId, placement ManagedFileReadPlacement, ids ValueMinter) returns ManagedFileReadStart
+	return match placement 'placement'
+		atStart gives ManagedFileReadStart.bufferStart
+		appending gives ManagedFileReadStart.afterLength(emitLoadField(module, block: block, record: arrRec, offset: ManagedRecordLengthOffset, ids: ids))
+	end 'placement'
+end 'emitManagedFileReadStart'
 
 // `__mf_write(box, arrRec) -> (bytesWritten, flag)` — write the WHOLE live buffer.
 //
@@ -847,7 +904,7 @@ end 'buildManagedFileRead'
 // path's capacity bound useless has no counterpart here — this site reads the one field that cannot carry a
 // provenance marker.
 function buildManagedFileWrite(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileWriteName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: managedFileThrows())
+	var func = IrFunction.createFromStd(ManagedFileWriteName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -879,7 +936,7 @@ end 'buildManagedFileWrite'
 // Importing `GetFileAttributesA` would be a second entry point answering a question this record already
 // answers, and two can disagree.
 function buildManagedFileExists(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedFileExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -939,7 +996,7 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 		paramTypes = twoI64Params()
 	end 'twoPaths'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: managedFileThrows())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1016,7 +1073,7 @@ end 'emitOptionalSecondPath'
 // bare `int`, so the ownership model cannot see it and the exit-101 leak gate WILL: a `stat` whose buffer
 // is never freed fails the suite, which is exactly the behaviour wanted.
 function buildManagedFileStat(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileStatName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedFileThrows())
+	var func = IrFunction.createFromStd(ManagedFileStatName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedFileThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1130,10 +1187,10 @@ end 'emitStoreAttributeFlag'
 // violation, not a runtime condition, and there is no error a caller could act on.
 //
 // ⚠ **IT ABORTS RATHER THAN READING PAST THE BUFFER.** Without the two guards a `statField(buf, 99)`
-// returns whatever sits 792 bytes past a 48-byte allocation — a silent wrong answer, and the exact class
-// this rung may not ship. `RuntimeAbort` owns the exit codes.
+// returns whatever sits 792 bytes past a 48-byte allocation — a silent wrong answer, the class this
+// runtime refuses to ship. `RuntimeAbort` owns the exit codes.
 function buildManagedFileStatField(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileStatFieldName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedFileStatFieldName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1177,7 +1234,7 @@ end 'buildManagedFileStatField'
 // the reason `statField` does: `__mm_free` is not null-safe, so the alternative is a wild write to the
 // header eight bytes below address 0.
 function buildManagedFileStatFree(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileStatFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedFileStatFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1238,6 +1295,8 @@ function claimManagedFileOrdinals(project Project, declaration EnumLayout)
 	fileErrors.neverThrown(ManagedFileInvalidStatBufferCaseName, ordinal: ManagedFileInvalidStatBufferOrdinal)
 	fileErrors.neverThrown(ManagedFileInvalidStatIndexCaseName, ordinal: ManagedFileInvalidStatIndexOrdinal)
 	fileErrors.claim(ManagedFileClosedCaseName, ordinal: ManagedFileClosedOrdinal)
+	fileErrors.claim(ManagedFileAlreadyExistsCaseName, ordinal: ManagedFileAlreadyExistsOrdinal)
+	fileErrors.claim(ManagedFileBusyCaseName, ordinal: ManagedFileBusyOrdinal)
 	fileErrors.requireTotal()
 end 'claimManagedFileOrdinals'
 
@@ -1253,10 +1312,12 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 	buildManagedFileOpen(module, name: ManagedFileOpenReadName, mode: ManagedFileOpenMode.read)
 	buildManagedFileOpen(module, name: ManagedFileOpenWriteName, mode: ManagedFileOpenMode.write)
 	buildManagedFileOpen(module, name: ManagedFileOpenWriteExecutableName, mode: ManagedFileOpenMode.writeExecutable)
+	buildManagedFileOpen(module, name: ManagedFileOpenCreateNewName, mode: ManagedFileOpenMode.createNew)
 	buildManagedFileClose(module)
 	buildManagedFileDestruct(module)
 	buildManagedFileSize(module)
-	buildManagedFileRead(module)
+	buildManagedFileRead(module, name: ManagedFileReadName, placement: ManagedFileReadPlacement.atStart)
+	buildManagedFileRead(module, name: ManagedFileReadAppendingName, placement: ManagedFileReadPlacement.appending)
 	buildManagedFileWrite(module)
 	buildManagedFileExists(module)
 	buildManagedFilePathOperation(module, name: ManagedFileDeleteName, mode: ManagedFilePathOpMode.delete, fallbackFlag: ManagedFileDeleteFailedFlag)
@@ -1276,13 +1337,7 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 		let named = isThrowingManagedFileRuntimeCallee(func.name)
 		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
 
-		if stamped and not named 'stampedNotNamed'
-			panic("installManagedFileRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingManagedFileRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted (R4.1)")
-		end 'stampedNotNamed'
-
-		if named and not stamped 'namedNotStamped'
-			panic("installManagedFileRuntime: isThrowingManagedFileRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted (R4.1)")
-		end 'namedNotStamped'
+		requireThrowsStampMatchesPredicate("installManagedFileRuntime", predicate: "isThrowingManagedFileRuntimeCallee", callee: func.name, stamped: stamped, named: named)
 
 		// ⭐ **THE THIRD LIST: a throwing callee must also have a SOURCE-METHOD arm.** Asked, not
 		// described — the answer is discarded and the CALL is the check, so a missing arm is

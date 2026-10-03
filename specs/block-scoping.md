@@ -212,13 +212,12 @@ end 'main'
 <!-- test: local-shadows-prior-field-access -->
 ### Local declared after a non-self field access on the same name
 A field access like `foo.name` in an outer loop must not shadow a later
-local declaration `let name = ...` in a sibling block. Regression: the
-Maxon→Standard pass installed `varNameToStructPrefix["name"]` from the
-field access and the snapshot/restore semantics preserved that mapping
-across blocks, so subsequent references to the local `name` resolved to
-the field-access tempvar holding stale data from the outer loop. Hits
-when the local is declared in a `try` success path and used in a sibling
-sub-block — the shape that fired in MirToWasm.emitWasmModule.
+local declaration `let name = ...` in a sibling block. The hazard: a
+Maxon→Standard pass that installs `varNameToStructPrefix["name"]` from the
+field access and carries that mapping across blocks resolves later
+references to the local `name` to the field-access tempvar holding stale
+data from the outer loop. The shape that reaches it is a local declared in
+a `try` success path and used in a sibling sub-block.
 ```maxon
 typealias Kind = int(0 to 100)
 typealias StringArray = Array with String

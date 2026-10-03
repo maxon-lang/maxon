@@ -333,14 +333,10 @@ let FloatOpsBase = 64 as KnobSize
 // ONE function, N loops, each holding `floatsLivePerSpillLoop()` floats live ACROSS a call — the most
 // expensive thing a float does on this target, and a shape no GPR knob can stand in for.
 //
-// ⚠ WHAT THIS KNOB MEASURES CHANGED AT WAVE 2. Under Wave 1 every XMM was caller-saved, so a float
-// live across a call had an allowed set of EXACTLY ∅ and MUST go to memory — a store/reload bracket
-// at every call, which is what made `regalloc:splitting` superlinear in the number of cross-call
-// floats. Wave 2 gave the XMM file a callee-saved half (xmm6-15, `calleeSavedMask`), so cross-call
-// floats now live in registers exactly as `callChain`'s GPRs do, and this knob spills only the
-// OVERFLOW past that half — which is why `floatsLivePerSpillLoop()` stopped being the literal 4 and
-// became the half's width plus headroom, DERIVED from `calleeSavedMask` so the next move of that
-// line retunes it instead of blinding it.
+// ⚠ The XMM file has a callee-saved half (xmm6-15, `calleeSavedMask`), so cross-call floats live
+// in registers exactly as `callChain`'s GPRs do, and this knob spills only the OVERFLOW past that
+// half — which is why `floatsLivePerSpillLoop()` is the half's width plus headroom, DERIVED from
+// `calleeSavedMask` so the next move of that line retunes it instead of blinding it.
 // It is forced spilling rather than E5001: the amended Rule 2 permits a spill whose placement is
 // forced by a call bracket.
 let FloatSpillLoopsBase = 2 as KnobSize
@@ -357,15 +353,12 @@ let WorkingFloatsPerFunction = 4 as KnobSize
 // across its call: enough to OVERFLOW the callee-saved XMM half, because that half is now where a
 // cross-call float lives.
 //
-// ⚠⚠ IT NEEDS A HEADROOM CALCULATION AGAIN, AND WAVE 2 IS WHY. It was 4, under a comment saying it
-// "needs no headroom calculation because the XMM file's answer for a value live across a call is ∅
-// at any pool size" — true while every XMM was caller-saved, and FALSE the moment xmm6–15 became
-// callee-saved: four floats then fit comfortably and the knob generated a loop that spills NOTHING,
-// measuring the force-spill path by not exercising it. That is the failure this corpus was rebuilt
-// to end (see the `pressuredLoops` note): an instrument that cannot express the feature reports Δ0
-// and the Δ0 reads as evidence.
+// ⚠⚠ IT NEEDS A HEADROOM CALCULATION, BECAUSE xmm6–15 ARE CALLEE-SAVED: a count that fits in
+// that half generates a loop that spills NOTHING, measuring the force-spill path by not exercising
+// it. That is the failure this corpus exists to end (see the `pressuredLoops` note): an instrument
+// that cannot express the feature reports Δ0 and the Δ0 reads as evidence.
 //
-// So it is now the float twin of `PressuredValuesPerLoop` in the way that matters: the width of the
+// So it is the float twin of `PressuredValuesPerLoop` in the way that matters: the width of the
 // callee-saved XMM half is what the set live across the call must EXCEED for a bracket to be forced.
 //
 // ⭐⭐ AND THAT WIDTH IS **DERIVED FROM THE ALLOCATOR'S OWN MASKS**, NOT WRITTEN DOWN HERE AS A TEN.
@@ -382,8 +375,8 @@ let WorkingFloatsPerFunction = 4 as KnobSize
 // INERT at 4 and at 6, barely engaged at 8–9, and forcing brackets from 10 up — which is the half's
 // width, exactly as the derivation says.
 //
-// ⚠ THE HEADROOM IS **NOT** "the same slack the GPR knob keeps over its five", which this comment
-// claimed until it was checked: `PressuredValuesPerLoop` is 8 against 5, a slack of THREE. The two
+// ⚠ THE HEADROOM IS **NOT** "the same slack the GPR knob keeps over its five":
+// `PressuredValuesPerLoop` is 8 against 5, a slack of THREE. The two
 // knobs have different pools AND different accumulator counts, so their knees are in different
 // places and neither slack derives from the other. Re-derive this one from the sweep above, never by
 // copying the GPR figure.
@@ -843,15 +836,10 @@ let GeneratedLoopTrips = 4
 typealias TrackedValue = int(i64.min to i64.max)
 typealias TrackedValueArray = Array with TrackedValue
 
-// ⭐ **THE FULL-RANGE INT ALIAS THE GENERATED CORPUS NAMES**, and the declaration `writeRungFile` prepends
-// to every generated file that mentions it. The ranged-typealias rule makes the bare `int` keyword
-// illegal in an emitted `returns`, parameter or field position, so the generated
+// ⭐ **THE FULL-RANGE INT ALIAS THE GENERATED CORPUS NAMES.** The ranged-typealias rule makes the bare `int`
+// keyword illegal in an emitted `returns`, parameter or field position, so the generated
 // programs need a name for the same domain. Full-range and SIGNED, so the corpus's arithmetic, shift
 // fill and division signedness are byte-for-byte `int`'s.
-//
-// ⚠ **DECLARED PER FILE, BY THE WRITER, AND ONLY WHERE IT IS USED** — a typealias is file-scoped, so every
-// generated file that names it must declare it; and an unused one is E3062, so a file that does not name it
-// must NOT. Both halves are `writeRungFile`'s, which is the single door every corpus file goes through.
 let ScaleIntAlias = "ScaleInt"
 let ScaleIntAliasDecl = "public typealias ScaleInt = int(i64.min to i64.max)\n"
 
@@ -1094,12 +1082,12 @@ let StringOpsBase = 8 as KnobSize
 // these counts independently of each other. That is exactly the test `EnumTypesBase` states for when two
 // knobs are not one knob.
 
-// Slice C — the seven BYTE/ASCII members, plus `replaceFirst` (slice E, which is `replace`'s emitter with
+// The seven BYTE/ASCII members, plus `replaceFirst` (which is `replace`'s emitter with
 // one flag). No Unicode character database, no grapheme segmentation, no `StringIndex`: `startsWith`,
 // `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `replaceFirst`, `split`.
 let StringSearchOpsBase = 8 as KnobSize
 
-// Slice B2 — the `StringIndex` family: the two ends (`startIndex`/`endIndex`), the two THROWING searches
+// The `StringIndex` family: the two ends (`startIndex`/`endIndex`), the two THROWING searches
 // (`findFirst`/`findLast`), the third throwing method (`indexAfter`), both `slice` overloads and the
 // index's own two accessors (`charIndex`/`bytePos`).
 //
@@ -1112,7 +1100,7 @@ let StringSearchOpsBase = 8 as KnobSize
 // file net of a 147 ms compiler startup, measured on this tree; the ladder compiles them together.)
 let StringIndexOpsBase = 4 as KnobSize
 
-// Slice D — the three trims, over BOTH argument forms: the default `CharacterSet` (built by the compiler
+// The three trims, over BOTH argument forms: the default `CharacterSet` (built by the compiler
 // when the call presents none) and an explicit one. They are one runtime graph and two flags, so what
 // grows here is how many places that graph is REACHED from.
 //
@@ -1241,22 +1229,12 @@ let GenericInstanceArgShapeCount = 2 as KnobSize
 // ⭐⭐ **M `try` SITES OVER A SUBSTITUTED *MANAGED* `T` RETURN — a shape this corpus has to be able to
 // spell.**
 //
-// A shared generic body cannot classify its `T` return, so a caller-side shape hands one back as a BORROW
-// and the CALLER takes the `+1` (`coOwnSubstitutedCallResult`) — necessarily after the call. Under a `try`
-// that `+1` may not sit in the block the fork splits, where the error edge would run it against a result
-// register the throw never wrote; the promotion's ops are LIFTED off that block and re-attached at the head
-// of the ok edge. **Every op of that mechanism is per-SITE**, which is what this knob doubles.
-//
-// ⚠⚠ **THE CALLER-SIDE HALF OF THAT MECHANISM IS ABSENT, SO PART OF WHAT THIS KNOB WAS BUILT TO SEE IS
-// NOT THERE TO SEE.** The `+1` sits in the CALLEE (
-// `Parser.emitOwnedValueReturn` → `coOwnBorrowedOpaque` → `__retain_type_param`) and not in any caller-side
-// `coOwnSubstitutedCallResult`, so a
-// substituted `T` return leaves NOTHING trailing the call and the lift finds nothing to relocate — measured
-// on `specs/generic-types.md`'s own golden, whose `tryok:` block is a bare `jmp`. The knob still
-// generates real per-site `try` work (the fork, the flag test, the callee's descriptor-gated retain), and it
-// is deliberately LEFT AS IT IS rather than retuned here: changing what the corpus emits moves every column
-// in `docs/optimization-log.md` and owes a measurement of its own. Read a flat column from the LIFT as the
-// corpus's blind spot, never as the cost.
+// A shared generic body cannot classify its `T` return, so the CALLEE takes the `+1`
+// (`Parser.emitOwnedValueReturn` → `coOwnBorrowedOpaque` → `__retain_type_param`) and a substituted `T`
+// return leaves nothing trailing the call — `specs/generic-types.md`'s own golden's `tryok:` block is a bare
+// `jmp`. What doubles with this knob is the per-site `try` work: the fork, the flag test and the callee's
+// descriptor-gated retain. A flat column for anything trailing the call is therefore the shape's own, never
+// a cost this corpus hid.
 //
 // ⚠ **IT IS A SITE KNOB, AND THE TYPES ARE FIXED — for the Array knobs' reason.** The per-INSTANCE cost
 // (a layout descriptor, a per-instance `__destruct_<instance>`) is `genericInstances`' dimension and
@@ -1555,6 +1533,7 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 
 	// `a_` / `b_` / ... prefixes only order the directory listing for a human reading a dumped
 	// corpus; The compiler merges files in listing order and the merge is order-independent.
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "a_scaleint", source: ScaleIntAliasDecl, written: written, drivers: drivers, driver: RungDriver.threadsNothing)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "a_seed", source: seedSource(), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
 	sourceBytes = sourceBytes + try writeManyFunctions(dir, fileCount: fileCount, funcCount: funcCount, written: written, drivers: drivers)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "c_long", source: longFunctionSource(knobAt(LongIfsBase, rung: rung), localCount: localCount), written: written, drivers: drivers, driver: RungDriver.threads(LongIfDriver))
@@ -1701,12 +1680,7 @@ function writeRungFile(dir FilePath, name String, source String, written StringA
 	let fileName = "{name}{MaxonSourceExtension}"
 	let path = dir.join(fileName)
 
-	// ⭐ **THE ONE PLACE `ScaleIntAlias`'S DECLARATION IS ADDED** — every corpus file is written here, so a
-	// generator that starts naming the alias gets its declaration without knowing it has to. Conditional in
-	// both directions, and both are compile errors otherwise: a file that names it and does not declare it is
-	// E3005 (the alias is file-scoped), and one that declares it without naming it is E3062.
-	let content = "{ScaleIntAliasDecl}{source}" if source.contains(ScaleIntAlias) else source
-	try File.writeText(path, content: content) otherwise throw ScaleError.reason("could not write {path.toString()}")
+	try File.writeText(path, content: source) otherwise throw ScaleError.reason("could not write {path.toString()}")
 	written.push(fileName)
 
 	match driver 'driver'
@@ -1714,7 +1688,7 @@ function writeRungFile(dir FilePath, name String, source String, written StringA
 		threadsNothing then break 'driver'
 	end 'driver'
 
-	return content.byteLength()
+	return source.byteLength()
 end 'writeRungFile'
 
 // Delete everything in the rung directory TREE that this run did not just generate — see the header.
@@ -2562,14 +2536,10 @@ let FloatSpillDriver = "scaleFloatSpill"
 // so at least that many spill in every loop. See `floatsLivePerSpillLoop` for why that count is
 // DERIVED from the allocator's masks rather than chosen.
 //
-// The call is an INTEGER function, and that is not a compromise: a float ARGUMENT and a float RETURN
-// are both Wave 2, so an int callee is the only call a float can currently be live across — and it
-// is precisely the shape that forces the spill, because the floats are live across the bracket and
-// have nowhere caller-saved to survive it.
+// The call is an INTEGER function: it is precisely the shape that forces the spill, because the
+// floats are live across the bracket and have nowhere caller-saved to survive it.
 //
-// Its accumulators are assigned INSIDE the loop, so each is a loop-carried FLOAT PHI. Before the
-// `mintPhi` fix this knob's every rung would have panicked the x64 emitter outright — which is the
-// most direct evidence available that the ladder needed this dimension.
+// Its accumulators are assigned INSIDE the loop, so each is a loop-carried FLOAT PHI.
 //
 // ⚠ WHY THIS IS NOT `pressuredLoopsSource` WITH A PREFIX PARAMETER, though the two emit the same
 // SHAPE (declare, loop, call, update, sum). They are the same shape asked of two register files that
@@ -2578,11 +2548,9 @@ let FloatSpillDriver = "scaleFloatSpill"
 //   • `pressuredLoops` measures a CHOICE. Its eight GPRs have five callee-saved registers to compete
 //     for, so the allocator decides which three go to memory, and the knob is tuned (eight, against a
 //     14-GPR pool) to make exactly five spills fall out of that competition.
-//   • `floatSpill` measures the SAME choice in the OTHER FILE. Since Wave 2 its floats compete for
+//   • `floatSpill` measures the SAME choice in the OTHER FILE. Its floats compete for
 //     ten callee-saved XMMs exactly as the GPRs compete for five, so the knob is tuned (twelve,
-//     against a 16-XMM file) to make the overflow fall out of that competition. Under Wave 1 it
-//     measured no choice at all — the allowed set was ∅ and every float spilled at any knob value —
-//     and that is why the count needed no tuning then and does now.
+//     against a 16-XMM file) to make the overflow fall out of that competition.
 //
 // Merging them would take a `varPrefix`, a `counterPrefix`, a `resultPrefix`, a per-loop count, a
 // literal suffix, an accumulator initializer and a return expression — seven parameters to fold two
@@ -4076,7 +4044,7 @@ end 'stringOpsSource'
 //     the false arm is emitted with `CorpusWitnessFailedOffset` in it and the rung's exit code is the
 //     difference.
 
-// ⭐ SLICE C's payload, in the pieces every witness below is stated from: `<head> segment <i>` followed by
+// ⭐ The search family's payload, in the pieces every witness below is stated from: `<head> segment <i>` followed by
 // `<needle> <gap>` repeated, then `<tail>`. Escape-free by construction, so this generator's
 // `byteLength()` of a joined payload IS the generated program's — which is not true one family down; see
 // `TrimWhitespaceLead`.
@@ -4194,7 +4162,7 @@ function searchReplacementDelta() returns TrackedValue
 	return SearchReplacement.byteLength() - SearchNeedle.byteLength()
 end 'searchReplacementDelta'
 
-// ⭐ SLICE B2's payload: `<head><needle><middle><needle><tail>`, ALL-ASCII on purpose. A grapheme index and
+// ⭐ The `StringIndex` family's payload: `<head><needle><middle><needle><tail>`, ALL-ASCII on purpose. A grapheme index and
 // a byte position coincide over ASCII, which is what lets every expectation below be a byte arithmetic
 // this generator can state — and the family that needs them to DIVERGE is the materializer knob, which
 // carries the non-ASCII payload for exactly that reason.
@@ -4288,7 +4256,7 @@ function stringIndexOpsSource(groupCount KnobSize) returns String
 	return out.build()
 end 'stringIndexOpsSource'
 
-// ⭐⭐ **SLICE D's WHITESPACE PADDING — AND THE ONE PLACE IN THIS FILE WHERE `byteLength()` OF A PAYLOAD
+// ⭐⭐ **THE TRIM FAMILY'S WHITESPACE PADDING — AND THE ONE PLACE IN THIS FILE WHERE `byteLength()` OF A PAYLOAD
 // PIECE IS THE WRONG NUMBER.** These are SOURCE SPELLINGS: `\t` is two characters to this generator and
 // ONE byte to the program it writes. So the emitted-byte count is stated beside each spelling rather than
 // measured off it — deriving it the way every other payload here safely does would make every trim
@@ -5903,7 +5871,7 @@ export function printCorpusManifest()
 	print("    integer / and mod — the idiv path, over an OPAQUE divisor, with `acc` live across the\n")
 	print("      RAX/RDX clobber (a constant divisor folds and measures nothing). BOTH shapes, on\n")
 	print("      two knobs: the divisor cast into a NON-ZERO range (the bare idiv) and the divisor left\n")
-	print("      possibly-zero (the CHECKED divide — cmp/setcc/or plus a three-block `try` fork, A1).\n")
+	print("      possibly-zero (the CHECKED divide — cmp/setcc/or plus a three-block `try` fork).\n")
 	print("      The bare-idiv knob's DIVIDEND IS UNNAMED — a top-level `var` (`{DivideDividendGlobal}`),\n")
 	print("      stored once per driver and loaded once per group — BECAUSE a named dividend cannot meet\n")
 	print("      a differently-aliased divisor: casting the divisor to `{ScaleIntAlias}` discards its\n")
@@ -5917,14 +5885,11 @@ export function printCorpusManifest()
 	print("    STRUCTS (the heap): `type` declarations, an explicit `static create`, Self\{\} construction,\n")
 	print("      field READS *and* field WRITES (`p.y = ...`, and `o.inner.x = ...` through a loaded box),\n")
 	print("      a struct crossing a CALL BOUNDARY as a parameter, and the __mm_alloc site each create\n")
-	print("      emits. ⚠ THIS ENTRY USED TO CLAIM THE OPPOSITE — that writes were 'P1.1a wave 2 and NOT\n")
-	print("      IMPLEMENTED' and a struct across a call 'P1.4, deferred on the borrow-vs-consume ruling'.\n")
-	print("      Both had shipped, with live spec tests, for ten rungs\n")
+	print("      emits\n")
 	print("    the COLORER's exhaustion repair — straight-line groups holding the whole GPR pool live and\n")
 	print("      then a callee-saved-confined set on top, so `chooseRegister` runs out of registers at a\n")
 	print("      point whose Hall verdict is FEASIBLE and `SplitDriver.repairAtExhaustion` splits it. It\n")
-	print("      is DISTINCT from the pressured-loops knob, which makes the SPLITTER work instead; before\n")
-	print("      it, that path ran ZERO times at every rung and every column read a confident Delta-0\n")
+	print("      is DISTINCT from the pressured-loops knob, which makes the SPLITTER work instead\n")
 	print("    if, if/else, while, and NESTED while (to a doubling depth); `break` out of a loop\n")
 	print("    functions (<=6 params), cross-file merge, chained calls holding values live across them\n")
 	print("    short-circuit `and` and `or` (control flow, not operators), `xor` and `not` over bools,\n")
@@ -5945,10 +5910,9 @@ export function printCorpusManifest()
 	print("          fixed `{CoverageNarrowAlias}` cast. This door carries `guardSiteAt`, the guard CHAIN and\n")
 	print("          `splitChainEnd`\n")
 	print("        a narrowed `return` TYPE — its own doubling SITE count, all in ONE function and all\n")
-	print("          returning ONE parameter. This door carries `retBlockOf` and `splitBlockInPlace`,\n")
-	print("          and NOTHING generated one until A2a: every alias reaching a `return` was\n")
-	print("          full-range, which `rangeIsFull` discards, so a per-site scan measured at x3.20 CPU\n")
-	print("          per doubling on a hand ladder read Δ0 here in every column\n")
+	print("          returning ONE parameter. This door carries `retBlockOf` and `splitBlockInPlace`;\n")
+	print("          the narrowed alias is what makes it a door at all, because a full-range alias reaching a\n")
+	print("          `return` is discarded by `rangeIsFull` and emits no guard\n")
 	print("    `print` — the formatted-output path\n")
 	print("    FLOAT (the SSE band): + - * / , compares in BOTH forms (feeding a jcc, and materialized\n")
 	print("      as a bool), float PHIs (branch-merged and loop-carried), int->float promotion and\n")
@@ -5964,27 +5928,26 @@ export function printCorpusManifest()
 	print("      onto a private buffer), `==` through __str_eq, `.byteLength()` as the way back out to int,\n")
 	print("      and a struct owning a String field dropped through its synthesized __destruct_<T> cascade\n")
 	print("    STRING, THE REST OF THE MEMBER SURFACE — four knobs, one per `dispatchStringMethod` family,\n")
-	print("      because the retirement of these members onto `stdlib/String.maxon`'s bodies moves ONE\n")
-	print("      family at a time and each wave's cost has to be readable on its own:\n")
-	print("        BYTE/ASCII (slice C): startsWith / endsWith / contains — each in BOTH directions, since a\n")
+	print("      so each family's cost is readable on its own:\n")
+	print("        BYTE/ASCII: startsWith / endsWith / contains — each in BOTH directions, since a\n")
 	print("          predicate stuck at `true` is witnessed identically by its true arm alone — toLower /\n")
 	print("          toUpper (pinned by a needle that exists only AFTER the conversion, because an ASCII case\n")
 	print("          map does not change a length), replace / replaceFirst (whose replacement is deliberately\n")
 	print("          WIDER than the needle) and split (count AND element 0, so a split into empty pieces fails)\n")
-	print("        STRINGINDEX (slice B2): startIndex / endIndex / charIndex / bytePos, the two THROWING\n")
+	print("        STRINGINDEX: startIndex / endIndex / charIndex / bytePos, the two THROWING\n")
 	print("          searches findFirst / findLast, the third throwing member indexAfter, and BOTH `slice`\n")
 	print("          overloads — which are told apart by an argument LABEL rather than by a type. ⚠ EVERY\n")
 	print("          throwing member is generated on BOTH EDGES: a needle no payload contains throws at every\n")
 	print("          site, so the `otherwise` fork is emitted AND taken\n")
-	print("        TRIMS (slice D): trim / trimStart / trimEnd, in BOTH argument forms — the default\n")
+	print("        TRIMS: trim / trimStart / trimEnd, in BOTH argument forms — the default\n")
 	print("          CharacterSet and an explicit one — over a core that opens and closes on a MULTI-BYTE\n")
 	print("          cluster, which is the only cluster either end has to classify rather than skip.\n")
 	print("          ⚠ ONE SITE PER BLOCK here, alone in this corpus, and its knob base is an EIGHTH of its\n")
 	print("          siblings': a trim against `CharacterSet.whitespacesAndNewlines()` materializes that set\n")
 	print("          INLINE and costs 194 x64 ops in the calling block against 50 for `decimalDigits()` and 12\n")
-	print("          for a `toUpper`. Three of them in one block took `slotCount` to ~4.2M and exhausted\n")
-	print("          committed memory in `PressureDeltaColumn` — rung 4 would not compile. See StringTrimOpsBase\n")
-	print("        MATERIALIZERS (slices B and E): count() (the UAX #29 grapheme walk), bytes(),\n")
+	print("          for a `toUpper`. Three of them in one block take `slotCount` to ~4.2M and exhaust\n")
+	print("          committed memory in `PressureDeltaColumn` by rung 4. See StringTrimOpsBase\n")
+	print("        MATERIALIZERS: count() (the UAX #29 grapheme walk), bytes(),\n")
 	print("          toByteArray(), codepoints(), utf16(), isEmpty() and clone(). ⚠ THIS IS THE CORPUS'S ONLY\n")
 	print("          NON-ASCII PAYLOAD, and it has to be: over ASCII all four of those counts are THE SAME\n")
 	print("          NUMBER, so a materializer answering with its neighbour's walk would witness perfectly.\n")
@@ -5992,23 +5955,14 @@ export function printCorpusManifest()
 	print("          UTF-16 units — four distinct numbers, and the ZWJ sequence is what parts the first two.\n")
 	print("          `clone()` is witnessed by INDEPENDENCE rather than by length: the copy is grown and both\n")
 	print("          are then measured, so a clone that aliased its source reads a difference of zero\n")
-	print("    ⚠ BEFORE THOSE FOUR KNOBS THE STRING KNOB GENERATED A LITERAL, AN INTERPOLATION, `.append`,\n")
-	print("      `.byteLength()` AND `==`, AND NOTHING ELSE — not one predicate, case conversion, trim,\n")
-	print("      StringIndex producer or materializer, at rung 0 or rung 5. Every one of them was in the\n")
-	print("      subset with live spec cases, so every retirement wave would have read a flat delta of ZERO\n")
-	print("      in allocations, in bytes and in CPU alike. That is this file's founding defect for the\n")
-	print("      EIGHTH time; see `StringSearchOpsBase`\n")
-	print("    CHARACTER (the OTHER byte record, BATCH23): character LITERALS at both widths (one ASCII byte\n")
-	print("      and two, sharing a lead byte), a `let`-bound Character, `==` through __str_eq (where a\n")
-	print("      one-byte literal used to be an immediate integer compare), `>` through __char_cmp plus the\n")
+	print("    CHARACTER (the OTHER byte record): character LITERALS at both widths (one ASCII byte\n")
+	print("      and two, sharing a lead byte), a `let`-bound Character, `==` through __str_eq,\n")
+	print("      `>` through __char_cmp plus the\n")
 	print("      Ordering verdict — the ONE operation a Character has and a String does not — a literal in an\n")
 	print("      INTEGER position (which REWRITES the emitted stringLiteral op into an integer literal in\n")
 	print("      place, and is the only thing that fills Parser.charLiteralOps), a `match` with a character\n")
 	print("      INTERVAL arm (the linear compare chain a Character scrutinee keeps), and character RANGE\n")
 	print("      `for` loops in BOTH element forms — one USING the per-trip Character and one DISCARDING it\n")
-	print("    ⚠ THE CORPUS EMITTED NOT ONE CHARACTER LITERAL AT ANY RUNG until that knob, so the whole model\n")
-	print("      above read a flat delta of ZERO in allocations, in bytes and in CPU alike on the rung that\n")
-	print("      introduced it. That is this file's founding defect for the sixth time; see `CharOpsBase`\n")
 	print("    ARRAY, trivial-element: create / reserve / push / get / count, plus the O(1) COW trio\n")
 	print("      slice / clone / append — which refcount the element BUFFER rather than the record\n")
 	print("    ARRAY, CONCRETE-managed-element: `Array with String` and `Array with <struct owning a\n")
@@ -6042,7 +5996,7 @@ export function printCorpusManifest()
 	print("      type argument, and both ownership paths for that argument — a TRIVIAL ranged int (borrowed\n")
 	print("      into the box) and a MANAGED struct owning a String (moved in, dropped through the\n")
 	print("      instance's own cascade)\n")
-	print("    A `try` OVER A SUBSTITUTED MANAGED `T` RETURN (BATCH25): a shared generic body cannot classify\n")
+	print("    A `try` OVER A SUBSTITUTED MANAGED `T` RETURN: a shared generic body cannot classify\n")
 	print("      its `T` return, so the CALLER takes the `+1` after the call and a `try` must carry it onto\n")
 	print("      the OK EDGE alone. All three forms per site — the EXPRESSION form (lifted onto `tryok`), the\n")
 	print("      CONDITION form (`if let x = try …`, whose ok edge is the THEN block and which reaches the\n")
@@ -6052,14 +6006,11 @@ export function printCorpusManifest()
 	print("      COPY ending in an interpolation). ⚠ EVERY SITE IS GENERATED ON BOTH EDGES: the throwing\n")
 	print("      condition is an opaque bool, so the error edge is emitted AND TAKEN, and each of the three\n")
 	print("      edges folds a value only it can produce — the rung's exit code says WHICH edge ran\n")
-	print("    ⚠ NOT ONE `try` OVER A SUBSTITUTED RETURN EXISTED AT ANY RUNG until that knob, so the rung that\n")
-	print("      BUILT the lift read a flat delta of ZERO in allocations, in bytes and in CPU alike. That is\n")
-	print("      this file's founding defect for the seventh time; see `TryCoOwnSitesBase`\n")
 	print("    INTERFACES: `interface` declarations, `type X implements I` conformance, and CONCRETE\n")
 	print("      dispatch (`x.method()`, with and without arguments) — a direct call to a known body\n")
-	print("    NAMESPACES (N1b): a rung is no longer ONE FLAT DIRECTORY. M module SUBDIRECTORIES, each with a\n")
-	print("      nested `{NsInnerDirName}/` of its own, so `deriveModuleDirectory` answers something for the first\n")
-	print("      time — and every reference to them is written with a QUALIFIER, at all three doors and both\n")
+	print("    NAMESPACES: a rung is not ONE FLAT DIRECTORY. M module SUBDIRECTORIES, each with a\n")
+	print("      nested `{NsInnerDirName}/` of its own, so `deriveModuleDirectory` answers something —\n")
+	print("      and every reference to them is written with a QUALIFIER, at all three doors and both\n")
 	print("      segment counts: a one-segment and a two-segment qualified TYPE name (`ns3.{NsSharedAliasName}`,\n")
 	print("      `ns3.{NsInnerDirName}.{NsDeepAliasName}` — the ranged-alias MIRROR), a ONE-DOT qualified call\n")
 	print("      (`parseQualifiedCall`'s door), a TWO-DOT one (`parseDottedPrimary`'s chain WALK), and a\n")
@@ -6068,8 +6019,7 @@ export function printCorpusManifest()
 	print("      `export`ed alias CONTESTED by every module (so the bare key is ambiguous and the qualified\n")
 	print("      key is not), a file-private alias and a file-private free function (which still earns a\n")
 	print("      qualified entry — that side does not gate on the tier), and `module function` — the SUBTREE\n")
-	print("      tier, named BARE from one directory down, of which this corpus generated exactly ZERO\n")
-	print("      before this knob existed.\n")
+	print("      tier, named BARE from one directory down.\n")
 	print("\n")
 	print("  COST DIMENSIONS ON THE DOUBLING LADDER (each DOUBLES per rung; the rung-over-rung RATIO is\n")
 	print("  the growth — x2 linear, x4 quadratic — read straight off the counts):\n")
@@ -6079,7 +6029,7 @@ export function printCorpusManifest()
 	print("    `type` declaration COUNT (a per-TYPE cost), struct `create` SITE count (a per-SITE cost,\n")
 	print("    over a FIXED set of types, so the two move independently), int-divide groups AND\n")
 	print("    CHECKED-divide groups (two knobs, because the second costs three BLOCKS per group where the\n")
-	print("    first costs none — it was named under CONSTRUCTS and missing from this list until A2a),\n")
+	print("    first costs none),\n")
 	print("    guarded ranged-`return` SITE count — all in ONE function and all returning ONE parameter, so\n")
 	print("    the column carries the sites x blocks-in-the-function product a per-site scan would cost,\n")
 	print("    `enum` declaration COUNT (per-TYPE) and `match` SITE count (per-SITE, over a fixed pair of\n")
@@ -6113,9 +6063,8 @@ export function printCorpusManifest()
 	print("  NOT GENERATED — a codegen change to any of these is INVISIBLE here (structural blind spot):\n")
 	print("    `for`-in over anything but a CHARACTER RANGE — an array, a String's clusters and a bare\n")
 	print("    integer range are all still absent, and the character-ops knob is the only `for`-in here.\n")
-	print("    Closures and async. Float ARGUMENTS and float RETURNS are absent because they do not\n")
-	print("    exist yet (Wave 2 — the xmm0 ABI slot); every float here enters by promotion and leaves\n")
-	print("    through trunc, which is the whole of what Wave 1 can express.\n")
+	print("    Closures and async. Float ARGUMENTS and float RETURNS: every float here enters by promotion\n")
+	print("    and leaves through trunc.\n")
 	print("    ⚠ AND THREE FAMILIES ARE ABSENT FOR A REASON THAT IS NEITHER 'unimplemented' NOR 'forgotten',\n")
 	print("    so it is stated in full: WITNESS-TABLE DISPATCH (a `where T is I` constraint), `Set`, and\n")
 	print("    OPAQUE-`T` MANAGED ARRAY ELEMENTS all ride the `funcAbs64InRdata` relocation, which is\n")
@@ -6129,10 +6078,9 @@ export function printCorpusManifest()
 	print("    empty and that fixpoint early-outs at every rung.\n")
 	print("    ⚠ AND `String.byteAt` IS UNREACHABLE FROM A GENERATED RUNG, for the SAME reason as\n")
 	print("    `addressableBytes` below and not for any reason a knob could fix: it is one of the five\n")
-	print("    STDLIB-ONLY String members (`module function` in the corpus). Since W49 wave 7 the refusal is\n")
-	print("    the corpus declaration's own — E3088 from `SemanticCheck.calleeVisibleFrom` — rather than a\n")
-	print("    parser gate on the calling file's location, which changes the diagnostic and not the reach:\n")
-	print("    a rung directory is outside `stdlib/` either way. It is named here rather than left out of\n")
+	print("    STDLIB-ONLY String members (each a `module function` in `stdlib/`), so a call from a rung\n")
+	print("    directory, which is outside `stdlib/`, is refused with E3088 by `SemanticCheck.calleeVisibleFrom`.\n")
+	print("    It is named here rather than left out of\n")
 	print("    the roster silently, because a member missing from a list of what is covered is exactly the\n")
 	print("    defect the four String knobs above exist to end. Its stdlib-only siblings `byteAtOrPanic`,\n")
 	print("    `hasSingleByteGraphemes` and `setByte` are absent for the identical reason. User code reaches\n")
@@ -6149,12 +6097,12 @@ export function printCorpusManifest()
 	print("  !! THE MEMORY COLUMNS CANNOT SEE A COST THAT ALLOCATES NOTHING. THE CPU COLUMN CAN.\n")
 	print("     Allocations and bytes are exact and blind in the same breath: a pass that re-walks tokens or\n")
 	print("     chases pointers without allocating reads FLAT in them however quadratic it is in time. That\n")
-	print("     is why there is now a THIRD per-phase table — CPU TICKS, the compiling THREAD's own time, so\n")
+	print("     is why there is a THIRD per-phase table — CPU TICKS, the compiling THREAD's own time, so\n")
 	print("     preemption and every other process are invisible to it and it can be trended where wall time\n")
 	print("     never could. The worked example is IN this corpus: the loop-nest knob drives the loop-phi\n")
 	print("     token pre-scan (Parser.blockStatementEndIndex + assignedBindingsIn) to O(depth x tokens) while\n")
 	print("     allocating ~one small list per loop, so it reads ~x2 in allocations and is the CPU column's\n")
-	print("     to show. It is no longer an example of what this instrument cannot see.\n")
+	print("     to show.\n")
 	print("     ⚠ THE CPU COLUMN IS NOT EXACT, AND IS NOT READ LIKE THE OTHER TWO. It moves a few percent\n")
 	print("     with turbo, thermal throttling and cache pressure from other cores, so a movement inside that\n")
 	print("     band is NOT a datapoint — against the x2-vs-x4 question the ladder asks that band has a 100%\n")
@@ -6170,13 +6118,7 @@ export function printCorpusManifest()
 	print("     COLUMN CAN CURE IT: every one of the three can only see a cost the generated programs\n")
 	print("     actually TRIGGER. A construct this generator never emits, or a knob set too low to reach the\n")
 	print("     cost it exists to measure, reads a flat delta of ZERO in allocations, in bytes AND in CPU\n")
-	print("     ticks — indistinguishable from a compiler that did not change.\n")
-	print("     THIS HAS HAPPENED, TWICE, WHICH IS WHY IT IS PRINTED RATHER THAN FILED: FloatsLivePerSpillLoop\n")
-	print("     was 4, which stopped overflowing the callee-saved XMM half the day that half existed, so the\n")
-	print("     knob that exists to FORCE a float spill forced none and a genuinely quadratic path read flat;\n")
-	print("     and ten consecutive rungs of match / String / Array / generics / interfaces were in the\n")
-	print("     subset while this ladder emitted NOT ONE of them, with every rung's log entry recording a\n")
-	print("     delta of zero as though it meant something. A zero from an instrument that cannot express\n")
-	print("     the feature is not evidence. Check the list above before believing one.\n")
+	print("     ticks — indistinguishable from a compiler that did not change. A zero from an instrument\n")
+	print("     that cannot express the feature is not evidence. Check the list above before believing one.\n")
 	print("\n")
 end 'printCorpusManifest'

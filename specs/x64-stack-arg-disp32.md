@@ -17,15 +17,13 @@ argument sits at `[rbp + 0x30]`: 16 bytes for the return address and the saved
 (`win64IncomingArgDisp`). The ELEVENTH stack argument — the 17th integer
 parameter — therefore lands at exactly `[rbp + 128]`.
 
-⚠ **Those numbers read SEVEN registers and `[rbp + 0x10]` until this rung, describing
-v1's ABI, from which this spec was ported verbatim.** Corrected here against the
-emitted code, where `sum22`'s parameter loads step `0x78(%rbp)` (disp8) then
-`0x80(%rbp)` (disp32) — so the boundary parameter under the compiler is `a17`, not `a22`.
-**The tests are unaffected and still pin exactly what they claim to**: each sums EVERY
+⚠ **The emitted code is the authority for those numbers**: `sum22`'s parameter loads step
+`0x78(%rbp)` (disp8) then `0x80(%rbp)` (disp32) — so the boundary parameter under the
+compiler is `a17`, not `a22`. **The tests pin exactly what they claim to**: each sums EVERY
 parameter, so it straddles the boundary and catches a wrong load at any one of them,
-whichever index happens to sit on it. (The same v1 arithmetic survives in a comment
-inside `twenty-second-param-at-rbp-128`'s source. It is left alone deliberately —
-editing it would rewrite a committed fragment for a comment.)
+whichever index happens to sit on it. (A comment inside `twenty-second-param-at-rbp-128`'s
+source states a seven-register, `[rbp + 0x10]` arithmetic that is not this compiler's. It is
+left alone deliberately — editing it would rewrite a committed fragment for a comment.)
 
 A signed-byte (disp8) memory displacement only spans `-128..+127`, so a `+128`
 displacement must be encoded with a 32-bit displacement (disp32). Encoding it as
@@ -36,17 +34,12 @@ disp8/disp32 boundary. Every parameter is summed so a corrupted load of any one
 of them changes the result.
 
 **Targets: an x64 case on its merits** — disp8-vs-disp32 is an x86 instruction-encoding fact, so arm64
-cannot exhibit it and the `wasm32-wasi` lane (kept, already green) checks the sum rather than the
-encoding. Unlike `x64-large-frame-arg7`, **`x64-linux` shares this encoding and belongs here on the
-merits**, and it is listed.
-
-⚠ **It was NOT listed until 2026-07-28, and the reason it was missing was never a technical one**: the
-note here claimed "this host cannot execute it, so its fragment was never generated". That claim was
-stale — a Windows host cross-compiles x64-linux and runs the ELF under WSL2, which is exactly what the
-cross-target gate does. Both cases were measured green on x64-linux the moment the marker was widened,
-and the goldens generated from this host. **A target absent because nobody generated its golden is not
-a restriction; it is a gap wearing a restriction's syntax**, and it hid the one other native target
-that can exhibit the bug this spec exists to catch.
+cannot exhibit it and the `wasm32-wasi` lane (kept, green) checks the sum rather than the encoding.
+Unlike `x64-large-frame-arg7`, **`x64-linux` shares this encoding and belongs here on the merits**, and
+it runs: a Windows host cross-compiles x64-linux and runs the ELF under WSL2, which is exactly what the
+cross-target gate does. ⚠ **A target absent because nobody generated its golden is not a restriction; it
+is a gap wearing a restriction's syntax**, and here it would hide the one other native target that can
+exhibit the bug this spec exists to catch.
 
 ## Tests
 

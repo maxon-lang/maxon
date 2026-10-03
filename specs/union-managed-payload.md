@@ -5,7 +5,7 @@ keywords: [union, enum, payload, String, struct, ownership, move, drop, decref]
 category: ownership
 ---
 
-# Union Managed Payloads (P1.3 slice 2)
+# Union Managed Payloads
 
 ## Documentation
 
@@ -16,22 +16,18 @@ pointer.
 
 Ownership is static single-owner, exactly as for a `String` or a struct binding:
 
-- **Construct gives the payload slot its OWN reference (⚖ user ruling,
-  2026-08-12).** `U.case(s)` leaves the slot holding exactly one reference, and
+- **Construct gives the payload slot its OWN reference.** `U.case(s)` leaves the slot holding exactly one reference, and
   which act supplies it depends on what `s` is: a borrowed String literal is
   promoted to an owned heap copy; an owned TEMPORARY has no other owner, so the
   slot ADOPTS its `+1`; and a live owned BINDING is CO-OWNED — the slot increfs
   and `s` stays readable, releasing its own reference at scope exit. Either way
   the box owns a droppable payload and releases exactly what it took.
 
-  > This bullet used to read *"Construct is a MOVE … no incref, no copy. The
-  > source binding is moved-from (a later read is `E3102`)"*. The move-only
-  > premise behind it was retracted: two sinks for one value each need a
-  > reference of their own. `construct-co-owns-string-source` and
-  > `construct-co-owns-struct-source` below are the two cases that were flipped.
-  > **The MOVE-OUT rules below are a different question** — a `match` binding on an
-  > IMMUTABLE solely-owned box still moves a payload OUT of it, because it nulls
-  > the slot rather than adding an owner.
+  Two sinks for one value each need a reference of their own;
+  `construct-co-owns-string-source` and `construct-co-owns-struct-source` below
+  pin it. **The MOVE-OUT rules below are a different question** — a `match`
+  binding on an IMMUTABLE solely-owned box moves a payload OUT of it, because it
+  nulls the slot rather than adding an owner.
 - **A match binding on a SOLELY-OWNED IMMUTABLE union is a MOVE-OUT.**
   `let u = U.case(s)` then `match u { case(x) then … }` loads the managed field
   into `x` (which becomes an owned binding, dropped at its own scope exit) and
@@ -90,19 +86,19 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
   frees the box. A moved-out slot is null and is skipped, so a payload is freed
   exactly once whether it was moved out, discarded, or left in place.
 
-- **THE RETAIN IS NOT A CONSERVATISM THAT A SINGLE-USE ARM COULD SKIP.** The standing
-  proposal against `retainBorrowedPayload` is that an arm whose body is one call, taking
+- **THE RETAIN IS NOT A CONSERVATISM THAT A SINGLE-USE ARM COULD SKIP.** The argument
+  against `retainBorrowedPayload` is that an arm whose body is one call, taking
   the payload as one argument, borrows it no longer than an anonymous field read does —
-  and the compiler hands `f(obj.managedField)` to a call with no refcount at all. **Measured
+  and the compiler hands `f(obj.managedField)` to a call with no refcount at all. **It is
   false**: the callee can release the box between receiving the pointer and reading it,
   and then the payload is gone. `a-borrowed-payload-outlives-a-callee-that-frees-its-box`
   below is that program, and its control is the same arm with a callee that frees nothing.
   ⛔ The elision produces a **silent wrong answer at exit 0**, so neither `exitcode` nor a
-  leak check sees it; the whole suite stayed green with the incref removed.
+  leak check sees it; the rest of the suite stays green with the incref removed.
 
 Passing a managed-payload union across a call boundary as a *return value* is
-still the cross-call ownership ruling deferred beyond this rung; passing one as a
-**parameter** and binding its managed payload out is the retain above (D1b).
+outside this spec's cross-call ownership rules; passing one as a **parameter** and
+binding its managed payload out is the retain above.
 
 ## Tests
 
@@ -1548,15 +1544,15 @@ end 'main'
 ```
 
 <!-- test: error.fallthrough-into-a-managed-binding-arm -->
-⭐ **A FALLTHROUGH TARGET MAY NOT BIND A PAYLOAD**, and this is the case that made it a
+⭐ **A FALLTHROUGH TARGET MAY NOT BIND A PAYLOAD**, and this is the case that makes it a
 refusal rather than a rule on paper: `a(s) … and fallthrough` reaches `b(t)`'s body while the
-union holds an `a`, so `t` destructures a case the value does not have. **MEASURED before the
-refusal existed: SIGSEGV (exit 139)** — arm `a` moved its payload out and nulled the slot, and
-`b(t)` then bound the null and printed it.
+union holds an `a`, so `t` destructures a case the value does not have. **Unrefused it is a
+SIGSEGV (exit 139)** — arm `a` moves its payload out and nulls the slot, and `b(t)` then binds
+the null and prints it.
 
 It is the `or`-pattern rule (`rejectOrPatternBinding`) one construct over: *a payload binding
 is meaningful only where exactly one case matched*, and a fallthrough edge is precisely an
-arrival from a DIFFERENT case. No working behaviour is being broken; a hole is being closed.
+arrival from a DIFFERENT case. The refusal takes away no program that works.
 ```maxon
 union U
 	a(x String)
@@ -1577,10 +1573,10 @@ error E2015: <fragment>:11:3: Unsupported: `and fallthrough` into the payload-bi
 ```
 
 <!-- test: error.fallthrough-into-a-borrowed-binding-arm -->
-The same refusal on the BORROWED scrutinee D1b opens, where the payload is retained rather
+The same refusal on a BORROWED scrutinee, where the payload is retained rather
 than moved so the slot is intact — which makes the failure a silent TYPE CONFUSION instead of
-a crash: `b(n)`'s `Code` binding would read the `String` POINTER arm `a` matched. Measured at
-exit 1 (the pointer failing `Code`'s range check) before the refusal existed.
+a crash: `b(n)`'s `Code` binding would read the `String` POINTER arm `a` matched. Unrefused it
+exits 1 (the pointer failing `Code`'s range check).
 ```maxon
 typealias Code = int(0 to 255)
 
@@ -1609,9 +1605,8 @@ error E2015: <fragment>:12:3: Unsupported: `and fallthrough` into the payload-bi
 <!-- test: error.fallthrough-into-a-scalar-binding-arm -->
 The refusal is about the BINDING, not about ownership: a SCALAR payload has no drop, no
 pointer and no crash, and is therefore the worst of the three — a silently wrong number.
-**MEASURED at 18 in BOTH compilers** (`m` reads `a`'s `9`, so `t = 9 + 9`) where `b`'s payload
-does not exist at all. That the two references agree on 18 is not evidence it is right; it is
-evidence neither of them asks the question.
+**Unrefused, the program answers 18** (`m` reads `a`'s `9`, so `t = 9 + 9`) where `b`'s payload
+does not exist at all.
 ```maxon
 typealias Code = int(0 to 255)
 
@@ -1787,10 +1782,10 @@ reassign first payload string long enough to be a real heap allocationreassign s
 ```
 
 <!-- test: construct-co-owns-string-source -->
-Storing a String binding into a union payload CO-OWNS it (⚖ 2026-08-12): the payload slot takes its own
+Storing a String binding into a union payload CO-OWNS it: the payload slot takes its own
 reference, `msg` stays live, and its scope-exit drop releases the reference it always held. The record is
-freed exactly once, by whichever of the two owners drops last. (This construct used to POISON `msg`, on
-the premise that the compiler has no incref — retracted when a durable store started taking a reference.)
+freed exactly once, by whichever of the two owners drops last. A durable store takes a reference rather
+than poisoning `msg`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1890,14 +1885,13 @@ error E3102: <fragment>:23:21: use of moved value 's': its ownership moved to an
 ```
 
 <!-- test: error.read-the-consumed-scrutinee-inside-the-arm-that-moved-it -->
-⭐ **THE SIGSEGV D1b WIDENED.** `error.match-consume-then-use` pins the read that comes AFTER the
-match; this is the same read INSIDE the arm that did the moving, where the slot is nulled from the
-bind onwards. The scrutinee was marked `partiallyMoved` only once the whole arm loop had been parsed,
-so this read parsed against a LIVE `m` and compiled — and `grab` binds the payload out of its borrowed
-parameter, loads the null the outer arm just stored, and dereferences it. **Measured: exit 139
-(SIGSEGV).** It is D1b that made it reachable this way: the borrowed bind `grab` needs was `E2015`
-until this rung, so before it the only spelling was a nested `match m` (below). The mark now lands at
-the arm that moved, not after the loop.
+⭐ **THE READ INSIDE THE ARM THAT MOVED.** `error.match-consume-then-use` pins the read that comes AFTER
+the match; this is the same read INSIDE the arm that did the moving, where the slot is nulled from the
+bind onwards. The scrutinee is marked `partiallyMoved` at the arm that moved, not after the whole arm
+loop has been parsed — otherwise this read would parse against a LIVE `m` and compile, and `grab` would
+bind the payload out of its borrowed parameter, load the null the outer arm just stored, and dereference
+it: **exit 139 (SIGSEGV)**. A borrowed bind like `grab`'s is one spelling of the read; a nested
+`match m` (below) is the other.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1928,8 +1922,8 @@ error E3102: <fragment>:20:22: use of moved value 'm': its ownership moved to an
 ```
 
 <!-- test: error.re-match-the-consumed-scrutinee-inside-its-own-arm -->
-The pre-D1b spelling of the case above, and it segfaulted the same way (**measured: exit 139**): the
-arm binds `s`, which nulls slot 0, and the nested `match m` in its own body binds `t` from that null.
+The nested-`match` spelling of the case above, which segfaults the same way unrefused (**exit 139**):
+the arm binds `s`, which nulls slot 0, and the nested `match m` in its own body binds `t` from that null.
 The borrowed twin — `the-same-borrowed-container-matched-again-inside-its-own-arm` — is LEGAL and stays
 legal, because a retain leaves the slot intact. Which of the two a program gets is exactly the
 owned/borrowed split, so the two tests are read together.
@@ -2207,13 +2201,13 @@ n=13800
 The `create` parameter is a RANGED-INT-ALIAS, which adds a name to this file's
 interner and shifts its ids relative to the signatures interner's. The union's
 `BoxA` payload type is minted in the signatures interner; classifying it against
-the file interner without re-interning let the shift misread it as `int` — a
+the file interner without re-interning would let the shift misread it as `int` — a
 wrong `E3005` reject at construct, and (once the construct is allowed) a
-misrouted scope-exit drop that leaks the payload. The payload type is now
+misrouted scope-exit drop that leaks the payload. The payload type is
 ADOPTED into the file interner before it is classified (the `fieldTypeOf`/
-`adoptType` door the struct side already used), and the drop callee is chosen
+`adoptType` door the struct side uses), and the drop callee is chosen
 inside `ProgramSignatures` over its own interner, so id and interner always
-agree (OPEN #52).
+agree.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2243,12 +2237,11 @@ holds
 ```
 
 <!-- test: union-struct-payload-ranged-alias-match -->
-The match-bind path shares the construct path's interner mismatch: with the
-ranged-int alias present, the bound payload's `BoxA` type (a signatures id) was
-classified against the file interner, so the managed payload could be misread as
-a scalar and never moved out — a leak. Binding the payload now adopts its type
-first, so the move-out and the scope-exit drop agree on what the payload is
-(OPEN #52).
+The match-bind path shares the construct path's interner hazard: with the
+ranged-int alias present, the bound payload's `BoxA` type (a signatures id)
+classified against the file interner could be misread as a scalar and never
+moved out — a leak. Binding the payload adopts its type first, so the move-out
+and the scope-exit drop agree on what the payload is.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2439,8 +2432,7 @@ the `named` tag that every payload-free enum and every ranged-int alias also car
 the tag comparison alone AGREES for any two of them and only the interned NAME separates
 them (`requireSlotAggregateIdentity`). Unchecked, an `Other` box would be stored in an
 `Inner` slot and later released by `Inner`'s destructor. Anchored at the ARGUMENT, not at
-the case name. ⭐ The bootstrap oracle answers this program character for character,
-including the position.
+the case name.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2517,25 +2509,22 @@ end 'main'
 ```
 
 <!-- test: write-back-through-a-loop-carried-nested-union-payload -->
-⭐⭐ **THE EDGE OF THE CASE ABOVE — A LOOP-CARRIED `var` — AND IT IS THE SAME ANSWER, WHICH IT WAS NOT.**
-Writability is decided from MEMBERSHIP (`scrutMutable` — is the scrutinee a `var`?) and the acquisition
-from PROVENANCE (`scrutOwned` — does the value carry an owned-heap bit?), and the two used to disagree
-here: the scrutinee's current value inside the loop is a header phi, and a phi carried no provenance bit,
-so the payload was acquired by RETAIN, the slot was left occupied, `declarePayloadBindings` demoted the
-binding to read-only, and the write-back was E2013.
+⭐⭐ **THE EDGE OF THE CASE ABOVE — A LOOP-CARRIED `var` — AND IT IS THE SAME ANSWER.** Writability is
+decided from MEMBERSHIP (`scrutMutable` — is the scrutinee a `var`?) and the acquisition from PROVENANCE
+(`scrutOwned` — does the value carry an owned-heap bit?), and inside the loop the scrutinee's current
+value is a header phi. A phi with no provenance bit would make the two disagree: the payload acquired by
+RETAIN, the slot left occupied, `declarePayloadBindings` demoting the binding to read-only, and the
+write-back refused E2013 — a compiler defect that would wear a rule's clothes.
 
-⛔⛔ **THAT REFUSAL WAS A COMPILER DEFECT WEARING A RULE'S CLOTHES, AND THIS FILE HAD WRITTEN IT DOWN AS
-THE RULE.** A phi is not a fresh value — it is the same allocation the merged binding already owned,
-renamed at a join — so `mintPhiForBinding` now carries the owned-heap bit onto it (and
-`pushMergedEdgeValue` checks every other incoming against it). Membership and provenance no longer
-disagree, the payload is CONSUMED exactly as it is outside a loop, and the write-back is the ordinary
-one the case above pins.
+⛔⛔ **A PHI IS NOT A FRESH VALUE** — it is the same allocation the merged binding already owned, renamed
+at a join — so `mintPhiForBinding` carries the owned-heap bit onto it (and `pushMergedEdgeValue` checks
+every other incoming against it). Membership and provenance agree, the payload is CONSUMED exactly as it
+is outside a loop, and the write-back is the ordinary one the case above pins.
 
-⚠ **THE SAME MISSING BIT WAS A LEAK, WHICH IS HOW IT WAS FOUND** — not by this refusal, which read as
-deliberate. A merged name that reads as borrowed gets laundered by whatever it is handed to next, so a
-rebind both POISONED its source (a move: nothing drops it) and emitted an `__mm_retain` (a co-own:
-something must). One reference, no owner. In the compiler's own self-compile that leaked an `IrBlock` per
-`matchnext` block — every `match` of two or three intervals — and the leak gate reported exit 101.
+⚠ **THE SAME MISSING BIT WOULD ALSO BE A LEAK.** A merged name that reads as borrowed gets laundered by
+whatever it is handed to next, so a rebind would both POISON its source (a move: nothing drops it) and
+emit an `__mm_retain` (a co-own: something must). One reference, no owner — in the compiler's own
+self-compile, an `IrBlock` leaked per `matchnext` block, and the leak gate's exit 101.
 
 ```maxon
 union Ty
@@ -2570,12 +2559,10 @@ end 'main'
 
 <!-- test: write-back-through-a-loop-carried-string-payload-is-the-same-answer -->
 ⭐⭐ **THE CONTROL FOR THE CASE ABOVE, AND IT IS WHAT MAKES THE ANSWER ATTRIBUTABLE.** The identical shape
-over a `String` payload — a payload kind writable since `mutable-enums.md` shipped — gets the identical
-answer. So neither the old refusal nor the current acceptance belongs to the nested-union payload kind:
-both belong to how a loop-carried scrutinee's provenance is read, and the rung that made a nested boxed
-union writable neither introduced the refusal nor removed it. ⚠ Keep BOTH halves of the pair — a
-single-payload-kind case cannot tell a payload-kind rule from an acquisition rule, which is exactly the
-attribution the retired E2013 got wrong.
+over a `String` payload — a payload kind `mutable-enums.md` makes writable — gets the identical
+answer. So the acceptance does not belong to the nested-union payload kind: it belongs to how a
+loop-carried scrutinee's provenance is read. ⚠ Keep BOTH halves of the pair — a single-payload-kind
+case cannot tell a payload-kind rule from an acquisition rule.
 
 ⚠ **THE EXIT CODE IS NOT THE SUBJECT — THE LEAK GATE IS.** `total` is 3 for a loop that runs twice
 whatever the payloads do, so a `3` here proves only that the program ran. What discriminates is that
@@ -2611,7 +2598,7 @@ end 'main'
 <!-- test: co-owned-container-field-bind-then-the-field-is-read-again -->
 ⭐⭐ **CO-OWNERSHIP IS THE THIRD STATE, AND A MOVE-OUT OF A CO-OWNED BOX IS A THEFT.** `let borrowed = h.ty`
 reads a union out of a MUTABLE struct field, and a value read out of a rebindable slot is promoted by
-`__mm_retain` (W41) — so `borrowed` carries the owned-heap bit while `h.ty` still points at the SAME box.
+`__mm_retain` — so `borrowed` carries the owned-heap bit while `h.ty` still points at the SAME box.
 The move-out reads that bit and nulls a slot the struct's field is the other owner of; `tyLen(h.ty)` then
 loads a null payload and dereferences it. Neither union here is nested and neither is a parameter, so this
 is the generic shape: the acquisition question is *"is this frame the box's SOLE owner?"*, which is not
@@ -2662,9 +2649,9 @@ first=67 second=67
 <!-- test: co-owned-nested-payload-bound-inside-a-borrowed-union-s-arm -->
 ⭐ **THE SAME RULE ONE LEVEL DOWN, and the route the nested-union payload opens.** `steal(e Expr)` binds
 `ty` out of a BORROWED parameter, so the outer bind is a retain and `ty` is co-owned with the caller's
-box. The INLINE nested `match ty` then reads `ty`'s owned-heap bit and moves the String out of a `Ty` box
-the caller still reaches through `e`, so the caller's own re-match loads a nulled slot. The cure is the one
-above and not a nested-union special case: a retained payload is co-owned, so the nested match retains too
+box. An INLINE nested `match ty` that read only `ty`'s owned-heap bit would move the String out of a `Ty`
+box the caller still reaches through `e`, so the caller's own re-match would load a nulled slot. The cure is
+the one above and not a nested-union special case: a retained payload is co-owned, so the nested match retains too
 and the refcount balances at one free per allocation (a second free or a leak is exit 101, not a wrong
 number).
 ```maxon
@@ -2713,12 +2700,11 @@ stolen=65 again=65
 
 <!-- test: the-same-nested-payload-handed-to-a-helper-instead -->
 ⭐⭐ **THE CONTROL FOR THE CASE ABOVE, AND THE CONTRAST IS THE DIAGNOSIS.** The identical program with the
-inline nested match replaced by a HELPER CALL passed the whole time: `tyLen(ty)` hands the co-owned `Ty`
-box to a callee whose own parameter is borrowed, so the callee retains and the destructive move-out is
-never reached. So the defect belonged to the ACQUISITION the inline nested match chose and never to the
-nesting, the payload kind, or the depth — which is why the cure is a property of the scrutinee's ownership
-and not a rule about nested unions. Pinned so that a future acquisition change cannot fix one spelling and
-leave the other.
+inline nested match replaced by a HELPER CALL: `tyLen(ty)` hands the co-owned `Ty` box to a callee whose
+own parameter is borrowed, so the callee retains and no destructive move-out is reachable. The hazard
+belongs to the ACQUISITION the inline nested match chooses and never to the nesting, the payload kind, or
+the depth — which is why the rule is a property of the scrutinee's ownership and not a rule about nested
+unions. Pinned so that an acquisition change cannot fix one spelling and leave the other.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2767,10 +2753,10 @@ stolen=65 again=65
 <!-- test: co-owned-array-element-bind-then-the-element-is-read-again -->
 ⭐ **THE CONTAINER ROUTE, AND IT TURNS ON THE BINDING'S MUTABILITY RATHER THAN ON THE CONTAINER.** An array
 element read is a BORROW the array keeps (`emitContainerElementAccessor(owned: false)`), so `let e = …get(0)`
-is not owned and matches by retain — which is why the `let` spelling of this program was never broken. A `var`
+is not owned and matches by retain — which is why the `let` spelling of this program is safe. A `var`
 binding promotes its borrowed initializer by `__mm_retain` at the declaration, and THAT reference is co-owned
-with the array's slot: the move-out nulled a payload slot `arr.get(0)` reads again. One `var` keyword apart,
-and only one of the two faulted, which is what makes the rule a fact about the ACQUISITION and not about
+with the array's slot: a move-out would null a payload slot `arr.get(0)` reads again. One `var` keyword apart,
+only one of the two could fault, which is what makes the rule a fact about the ACQUISITION and not about
 containers.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2809,10 +2795,10 @@ first=66 second=66
 ```
 
 <!-- test: a-thrown-field-of-a-co-owned-container-is-retained-not-moved-out -->
-⭐ **THE SAME DEFECT IN THE THROW CHANNEL, whose move-out asked the same too-weak question.** `throw c.e` out
-of a container the frame merely CO-OWNS (`let c = g.inner`, a read out of a mutable field the promotion
-retained) nulled the field slot `g.inner.e` still points at, so the caller's `whyLen(g.inner.e)` dereferenced
-a hole. `moveOutThrownField` now gates on sole ownership exactly as the match's move-out does, and a co-owned
+⭐ **THE SAME QUESTION IN THE THROW CHANNEL.** A `throw c.e` out of a container the frame merely CO-OWNS
+(`let c = g.inner`, a read out of a mutable field the promotion retained) that nulled the field slot would
+leave `g.inner.e` pointing at a hole, and the caller's `whyLen(g.inner.e)` would dereference it.
+`moveOutThrownField` gates on sole ownership exactly as the match's move-out does, and a co-owned
 container takes `retainBorrowedAggregate` — the box is increfed, the caught reference is consumed by the handler,
 the container drops its own, and the refcount balances at one free (a second free or a leak would be exit 101
 rather than a wrong number).
@@ -3017,8 +3003,8 @@ n=62 again=62
 
 <!-- test: a-co-owned-payload-out-of-a-sole-box-through-a-helper -->
 ⭐ **CONTROL ONE FOR THE CASE ABOVE.** The identical program with the inline nested match replaced by a HELPER
-CALL passed throughout: the callee's parameter is borrowed, so it retains and never reaches the destructive
-write. Pinned so a future acquisition change cannot fix one spelling and leave the other — the same pairing
+CALL: the callee's parameter is borrowed, so it retains and never reaches the destructive
+write. Pinned so an acquisition change cannot fix one spelling and leave the other — the same pairing
 `the-same-nested-payload-handed-to-a-helper-instead` makes for the outer level.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3064,18 +3050,18 @@ n=62 again=62
 <!-- test: a-freshly-built-payload-in-a-sole-box-is-genuinely-sole -->
 ⭐⭐ **CONTROL TWO, AND IT IS THE ONE THAT ISOLATES THE DISCRIMINATOR TO MOVE-IN VS CO-OWN-IN.** The same
 sole box and the same inline nested match, but the payload is CONSTRUCTED at the construct site — so it is
-moved in, the frame really is the allocation's only owner, and the program was correct before this rule and
-stays correct after it. Its answer therefore attributes the fault above to the co-own-in and to nothing about
+moved in, the frame really is the allocation's only owner, and the program is correct with or without this
+rule. Its answer therefore attributes the fault above to the co-own-in and to nothing about
 nesting, depth, or the inline spelling. It also pins the cost of the cure: this shape gains a refcount pair
 it does not need, which is the price of a box's soleness not being transitive.
 
 ⛔ **READ THE NAME AS A CLAIM ABOUT THE PROGRAM, NEVER ABOUT THE EMITTED CODE.** The payload here *is*
 genuinely the allocation's only reference — that is why the case is named so — but the compiler deliberately
-**no longer CLAIMS `sole` for it**, because proving it would need a per-box "every payload was moved in" bit
-and that would be a third ownership state (W55 declined it; see `OwnedHeapExclusivity`). So the `__mm_incref`
+**does not CLAIM `sole` for it**, because proving it would need a per-box "every payload was moved in" bit
+and that would be a third ownership state (see `OwnedHeapExclusivity`). So the `__mm_incref`
 in this case's golden is CORRECT AND OWED, not a missed optimization. A future reader who takes the title as a
-codegen claim and removes the retain re-arms the destructive write two cases above — which is exactly the
-inference this rung retired, arriving through a test name instead of through a comment.
+codegen claim and removes the retain re-arms the destructive write two cases above — the same inference,
+arriving through a test name instead of through a comment.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3111,9 +3097,9 @@ n=52
 <!-- test: a-list-element-removed-from-its-container-may-still-be-co-owned -->
 ⛔ **REMOVING AN ELEMENT PROVES THE CONTAINER NO LONGER HOLDS IT — NOT THAT NOBODY DOES.** `list.append(ty)`
 over a BORROWED `ty` co-owns the box through the same `moveManagedValueInto` arm the construct above takes, so
-`removeFirst()` hands back a reference the CALLER still shares. The compiler-emitted element accessor stamped
-that result SOLE, and matching it nulled the caller's `Ty` slot. The removal is not the question the move-out
-asks.
+`removeFirst()` hands back a reference the CALLER still shares. A compiler-emitted element accessor that
+stamped that result SOLE would have the match null the caller's `Ty` slot. The removal is not the question
+the move-out asks.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias TyList = List with Ty
@@ -3149,11 +3135,11 @@ n=56 again=56
 ```
 
 <!-- test: the-array-spelling-of-a-removed-element-was-never-wrong -->
-⭐⭐ **THE CONTROL THAT NAMES WHICH DOOR LIED.** `Array.remove` is a CORPUS member, so its result arrives
-through `enrolOwnedCallTemp` — the user-call door, which is co-owned because a `return` may launder a borrow —
-and this program was correct the whole time. `List.removeFirst` is COMPILER-EMITTED and went through
-`emitContainerElementAccessor`'s `owned` arm, which claimed sole. Two spellings of one operation disagreeing is
-what says the defect belonged to the door and not to removal; both now answer the same way.
+⭐⭐ **THE CONTROL THAT NAMES THE DOOR.** `Array.remove` is a CORPUS member, so its result arrives
+through `enrolOwnedCallTemp` — the user-call door, which is co-owned because a `return` may launder a borrow.
+`List.removeFirst` is COMPILER-EMITTED and goes through `emitContainerElementAccessor`'s `owned` arm, which
+must not claim sole either. Two spellings of one operation are what locate the hazard at the door and not at
+removal; both answer the same way.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias TyArray = Array with Ty
@@ -3190,17 +3176,16 @@ n=56 again=56
 
 <!-- test: a-borrowed-payload-outlives-a-callee-that-frees-its-box -->
 ⭐⭐ **THE RETAIN IS LOAD-BEARING, AND THIS IS THE PROGRAM THAT SAYS SO.** `retainBorrowedPayload`'s
-`__mm_incref` is unconditional, and the standing question is whether an arm that consumes its payload ONCE —
+`__mm_incref` is unconditional, and the question is whether an arm that consumes its payload ONCE —
 as the single argument of the arm's one call — could skip it. **It cannot.** The arm here is
 `filled(s) gives cell.replaceThenMeasure(s)`: one call, one use, nothing else in the arm. The callee reassigns
 `self.slot`, which releases the box `s` was borrowed out of and drives the payload's refcount to zero; the
 `refill` allocation then reuses the freed record through the slab free list and the read comes back garbage.
 The binding's SECOND reference is the whole of what carries it across that call.
-⛔ **MEASURED BOTH WAYS.** With the incref: `measured=62055`. With
-`retainBorrowedPayload` made a no-op, the same source through the same compiler prints
-`measured=1085102592571149903` **and still exits 0** — a silent wrong answer, neither a crash nor a leak, so an
-`exitcode` pin alone would not have caught it. Every other one of the suite's 6,954 cases stayed green under
-that elision; this is the one that does not.
+⛔ **BOTH WAYS.** With the incref: `measured=62055`. With `retainBorrowedPayload` made a no-op, the same
+source through the same compiler prints `measured=1085102592571149903` **and still exits 0** — a silent wrong
+answer, neither a crash nor a leak, so an `exitcode` pin alone would not catch it. The rest of the suite
+stays green under that elision; this is the case that does not.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

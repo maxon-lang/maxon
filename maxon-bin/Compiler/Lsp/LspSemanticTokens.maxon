@@ -139,16 +139,19 @@ function encodedTokensOf(source String, keywords KeywordTable) returns LspSemant
 	var data = LspSemanticTokenValueArray.create()
 	var previousLine = 0 as LspLineNumber
 	var previousCharacter = 0 as LspCharacter
-	var lineOfPreviousToken = NoLineYet
-	var haveEmitted = false
+	var lineOfPreviousToken = PreviousTokenLine.none
 
 	for (position, token) in tokens.withIterator() 'eachToken'
 		if token.kind == TokenKind.eof or tokenKindIsSkippedLayout(token.kind) and token.kind != TokenKind.docComment 'notCode'
 			continue
 		end 'notCode'
 
-		let firstOnLine = token.line != lineOfPreviousToken
-		lineOfPreviousToken = token.line
+		let firstOnLine = match lineOfPreviousToken 'previous'
+			none gives true
+			at(line) gives token.line != line
+		end 'previous'
+
+		lineOfPreviousToken = PreviousTokenLine.at(token.line)
 
 		if token.endByte <= token.startByte 'noSpanToColour'
 			continue
@@ -158,16 +161,12 @@ function encodedTokensOf(source String, keywords KeywordTable) returns LspSemant
 		let finish = index.positionOf(source, offset: token.endByte)
 		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: insideCaseList(blocks, line: start.line))
 
-		var deltaLine = start.line
+		let deltaLine = start.line - previousLine
 		var deltaCharacter = start.character
 
-		if haveEmitted 'relativeToTheTokenBefore'
-			deltaLine = start.line - previousLine
-
-			if deltaLine == 0 'sameLine'
-				deltaCharacter = start.character - previousCharacter
-			end 'sameLine'
-		end 'relativeToTheTokenBefore'
+		if deltaLine == 0 'sameLine'
+			deltaCharacter = start.character - previousCharacter
+		end 'sameLine'
 
 		data.push(deltaLine)
 		data.push(deltaCharacter)
@@ -177,15 +176,15 @@ function encodedTokensOf(source String, keywords KeywordTable) returns LspSemant
 
 		previousLine = start.line
 		previousCharacter = start.character
-		haveEmitted = true
 	end 'eachToken'
 
 	return data
 end 'encodedTokensOf'
 
-// No token has been seen yet. `LineNumber` counts source lines from 1, so 0 is not one — it is the line a
-// SYNTHESIZED token carries, and no token this walk reaches is synthesized.
-let NoLineYet = 0 as LineNumber
+union PreviousTokenLine
+	none
+	at(line LineNumber)
+end 'PreviousTokenLine'
 
 function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLine bool, inCaseList bool) returns LspSemanticTokenType
 	// A case list is spelled one name per line, so the line's FIRST word is the case and anything after it

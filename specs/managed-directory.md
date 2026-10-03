@@ -11,7 +11,7 @@ category: type-system
 
 ### Overview
 
-`__ManagedDirectory` is a compiler builtin type that wraps a Windows FindFirstFile/FindNextFile search handle with automatic cleanup via a destructor when the last reference goes out of scope. It replaces the raw `__Builtins` directory functions with a managed, RAII-based API.
+`__ManagedDirectory` is a compiler builtin type that wraps a Windows FindFirstFile/FindNextFile search handle with automatic cleanup via a destructor when the last reference goes out of scope — a managed, RAII-based API.
 
 ### Type Structure
 
@@ -35,24 +35,16 @@ operations it lowers are `CreateDirectoryA`, `GetFileAttributesA`, `FindFirstFil
 `GetCurrentDirectoryA` and `DeleteFileA`, and `DeleteFileA` refuses a directory. So a case can delete every
 FILE it wrote and cannot delete the directory that held them: whatever it makes outlives the suite run.
 
-⚠⚠ **UPDATED BY `R4.8` (2026-08-03): THE PREFIX BELOW IS NOW REDUNDANT, AND THE REASON IT WAS ADDED IS
-NOW THE HARNESS'S JOB.** `R4.8` found that this runner spawned every test binary with **no working
-directory at all**, so a case inherited the SUITE's cwd — the checkout root — which is exactly why
-these six had to spell `temp/` themselves to stay out of it. The runner now spawns every test binary in
-**`<checkoutRoot>/temp/`** (`SpecTestRunner.RunWorkingSubdirName`), so a bare relative path already
-lands under `temp/`. ⇒ **These six now resolve
-to `temp/temp/…`** — still gitignored, still passing, and harmless, but it is a second mechanism doing
-one job. Dropping the prefix is safe once someone re-runs this file; it was left in place by `R4.8`
-deliberately, because churning six PASSING cases buys no coverage and this file already diverges from
-`/specs` by design (it carries nine compiler-authored cases beyond the canonical ten). **The paragraph
-below is kept for its reasoning, which is still correct about WHY the root must stay clean — only its
-claim that this prefix is what keeps it clean is now stale.**
+⚠⚠ **THE HARNESS KEEPS THE ROOT CLEAN; THE PREFIX BELOW IS REDUNDANT.** The runner spawns every test
+binary in **`<checkoutRoot>/temp/`** (`SpecTestRunner.RunWorkingSubdirName`), so a bare relative path
+already lands under `temp/`. ⇒ **These six resolve to `temp/temp/…`** — gitignored, passing, and
+harmless, but a second mechanism doing one job. The paragraph below states WHY the root must stay clean;
+the runner's working directory, not this prefix, is what keeps it clean.
 
 ⇒ Every one of them makes it under **`temp/`, which is gitignored**, rather than at the repo ROOT. That is
 not cosmetic: the project-root resolver walks UP, so a stray directory at the root is inside the project
-every later build resolves, and six of them were being left there on every suite run. Adding a
-`__ManagedDirectory.remove` is the real cure and is its own rung; until it exists this is the whole of what
-a spec can do.
+every later build resolves. Without a `__ManagedDirectory.remove`, this is the whole of what a spec can
+do.
 
 ⚠ **The scratch root is SHARED** — by these six cases and by every parallel spec worker — so its creation
 must not race. Each case attempts the create and treats a LOSS as ordinary (`CreateDirectoryA` reports
@@ -324,10 +316,8 @@ error E3072: specs/fragments/managed-directory/managed-directory.error-direct-co
 
 ### the compiler's own cases
 
-The nine cases below are the compiler's own, added by R4.3's adversarial probing (seven)
-and by its independent review (the last two). Each pins something the ten ported
-cases above do not reach — and every one of them was written because a probe
-found the mechanism, not to restate a passing one.
+Each of the nine cases below pins a mechanism the ten cases above do not reach,
+rather than restating a passing one.
 
 <!-- test: managed-directory.next-does-not-skip-the-first-match -->
 
@@ -336,7 +326,7 @@ search, it returns the FIRST entry — so a `next()` that fetches immediately
 loses it. `search-and-list` above cannot catch that: a `dir/*` pattern's first
 two entries are `.` and `..`, which the runtime's dot filter discards anyway.
 This searches `*.txt` in a directory whose first match is a REAL file.
-MEASURED by sabotage: with the flag cleared at the open, this returns 1.
+With the flag cleared at the open, this returns 1.
 
 ```maxon
 enum ProbeError implements Error
@@ -392,9 +382,9 @@ end 'main'
 
 <!-- test: managed-directory.filename-round-trip -->
 
-⭐ **`filename()` — which NO ported case reaches.** It answers with a FRESH
-owned `__ManagedMemory` copy rather than a pointer into the find block (the
-bootstrap's shape, which the next `next()` invalidates), so the name survives
+⭐ **`filename()` — which no case above reaches.** It answers with a FRESH
+owned `__ManagedMemory` copy rather than a pointer into the find block (which
+the next `next()` would invalidate), so the name survives
 being read back into a `String`. The dot filter is checked here too: `.` and
 `..` never reach the caller, so every name this sees is a real entry.
 
@@ -453,12 +443,12 @@ end 'main'
 
 <!-- test: managed-directory.next-after-close-throws-closed -->
 
-⚠ **the compiler's ONE deliberate divergence from both references.** Neither throws
-`closed` — and neither guards, so `close()` followed by `next()` reaches Win32
-with a NULL handle while the pending flag still says an entry is waiting, and
-the search's FIRST entry is replayed as if it were found. `__ManagedFile`'s
-`size`/`read`/`write` already throw `__ManagedFileError.closed` from the
-identical guard, so this is the family's established contract in the compiler.
+⚠ **`next()` after `close()` throws `closed`.** Without the guard, `close()`
+followed by `next()` would reach Win32 with a NULL handle while the pending flag
+still says an entry is waiting, and the search's FIRST entry would be replayed as
+if it were found. `__ManagedFile`'s `size`/`read`/`write` throw
+`__ManagedFileError.closed` from the identical guard, so this is the family's
+contract.
 
 ```maxon
 function main() returns ExitCode
@@ -556,9 +546,9 @@ end 'main'
 The RAII half: a search opened and NEVER closed explicitly, reclaimed only by
 the destructor at the scope exit. The exit code proves the memory half (a leaked
 find block or box fails the exit-101 gate); the OS SEARCH HANDLE half is
-structurally invisible to that gate and was measured separately, by process
-handle count — 20,000 unclosed searches leave 66 handles live, and 20,060 with
-the destructor's `close` removed.
+structurally invisible to that gate, and only a process handle count shows it —
+without the destructor's `close`, 20,000 unclosed searches leave about 20,000
+more handles live.
 
 ```maxon
 function main() returns ExitCode
@@ -577,7 +567,7 @@ end 'main'
 
 <!-- test: managed-directory.error-enum-name-is-reserved -->
 
-⚠ **SEEDED IS NOT RESERVED** — the R4.4 trap, verified rather than assumed.
+⚠ **SEEDED IS NOT RESERVED.**
 `__ManagedDirectoryError` is seeded into the enum registry unconditionally, and
 a user declaration that could DISPLACE the seed would capture the runtime's
 ordinals and reroute every handler arm with no diagnostic anywhere. The `__`
@@ -606,7 +596,7 @@ above can see the difference: `search-and-list` and
 `next-does-not-skip-the-first-match` list directories that contain no dotfile,
 and `filename-round-trip` searches `*.txt`. This one lists a directory holding
 `.gitignore` (byte1 is not NUL), `..config` (byte1 IS `.`, byte2 is not NUL) and
-a plain file, and requires all three back. MEASURED: with `dot1` routed
+a plain file, and requires all three back. With `dot1` routed
 unconditionally back to the fetch, this returns 1 and the other seventeen stay
 green.
 

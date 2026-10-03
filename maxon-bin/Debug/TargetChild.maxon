@@ -181,20 +181,27 @@ end 'forwardChildOutput'
 
 // Everything the child left behind, including a last line it wrote with no terminator — the poll above
 // stops at a newline that never arrives. Asked only once the child has ended, which is what makes the
-// blocking read safe: an empty answer there can only be end of stream, and a read that refuses is one too.
+// blocking reads safe, and a read that refuses ends its stream exactly as end of stream does.
 export function forwardChildTail(child StreamingSubprocess, routing ChildOutputRouting) returns bool
 	var faulted = forwardChildOutput(child, routing: routing, budget: ChildLineBudget.unbounded)
 
 	for stream in ChildStream.allCases 'eachStream'
-		let tail = readChildStreamTail(child, stream: stream)
-
-		if not tail.isEmpty() 'thereWasOne'
-			faulted = emitChildStreamLine(tail, stream: stream, routing: routing) or faulted
-		end 'thereWasOne'
+		faulted = forwardChildStreamToItsEnd(child, stream: stream, routing: routing) or faulted
 	end 'eachStream'
 
 	return faulted
 end 'forwardChildTail'
+
+function forwardChildStreamToItsEnd(child StreamingSubprocess, stream ChildStream, routing ChildOutputRouting) returns bool
+	var faulted = false
+
+	while true 'eachLine'
+		let line = try readChildStreamLine(child, stream: stream) otherwise break
+		faulted = emitChildStreamLine(line, stream: stream, routing: routing) or faulted
+	end 'eachLine'
+
+	return faulted
+end 'forwardChildStreamToItsEnd'
 
 export function endChild(child StreamingSubprocess, routing ChildOutputRouting) returns bool
 	_ = try child.waitWithTimeout(KillDeadlineMs) otherwise 0
@@ -284,12 +291,12 @@ function pollChildStreamLine(child StreamingSubprocess, stream ChildStream) retu
 	end 'which'
 end 'pollChildStreamLine'
 
-function readChildStreamTail(child StreamingSubprocess, stream ChildStream) returns String
-	return match stream 'which'
-		stdout gives try child.readStdoutLine() otherwise ""
-		stderr gives try child.readStderrLine() otherwise ""
+function readChildStreamLine(child StreamingSubprocess, stream ChildStream) returns String throws SubprocessError
+	match stream 'which'
+		stdout then return try child.readStdoutLine()
+		stderr then return try child.readStderrLine()
 	end 'which'
-end 'readChildStreamTail'
+end 'readChildStreamLine'
 
 function emitChildStreamLine(text String, stream ChildStream, routing ChildOutputRouting) returns bool
 	match routing 'where'

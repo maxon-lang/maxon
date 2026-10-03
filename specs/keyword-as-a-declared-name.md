@@ -15,11 +15,11 @@ cross-file; this file carries the mechanism in SINGLE-FILE form.
 **The rule is one sentence: a declaration position that expects an identifier accepts a KEYWORD
 TOKEN as a NAME.** A function's declared name and a parameter's name are both such positions —
 nothing else may stand there — so a keyword written in one is a name and not the construct it
-usually opens. Measured on the reference bootstrap: `function from`, `function if` and
+usually opens. `function from`, `function if` and
 `function match` all compile, and to a byte-identical output size, because the name never reaches
 codegen.
 
-**`stdlib/FilePath.maxon:34` is the consumer** — `export static function from (path String) returns
+**`stdlib/FilePath.maxon` is the consumer** — `public static function from (path String) returns
 FilePath throws FilePathError` — and `from` is the only keyword any `stdlib/` file declares as a
 function name (4 sites, all `from`). `FilePath` gates `Process`/`File`/`Directory`.
 
@@ -44,7 +44,7 @@ spelled as an enum CASE name.
 type` inside `function identity(type Integer)` reads the parameter. Every keyword that has an
 expression meaning of its own keeps it — `match`, `try`, `function`, `self`, `Self`, `sizeof`,
 `true`, `false` in operand position, and `not`/`async`/`await` as prefix operators — so those may be
-DECLARED as names but not read bare, which is exactly what the reference bootstrap does. `return
+DECLARED as names but not read bare. `return
 end` is a BARE return for the same reason (`end` terminates a value-less `return`).
 
 ## Tests
@@ -68,7 +68,7 @@ end 'main'
 ```
 
 <!-- test: a-keyword-as-a-static-method-name -->
-The shape `stdlib/FilePath.maxon:34` declares.
+The shape `stdlib/FilePath.maxon` declares.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -274,8 +274,8 @@ are unread by construction — the whole point is that they occupy the parameter
 parameter is `E3012` (see `unused-parameters`), which no spelling of these three can avoid: `_` would
 delete the very thing under test. But E3012 is raised in the SEMANTIC stage, so reaching it is proof the
 token stream was counted correctly and the declaration PARSED — a miscount would produce a spurious closer
-and a parse error instead, which is the regression this case exists to catch. The capability is still
-tested, one stage earlier than the exit code used to test it: `E3012 … unused variable: 'while'`,
+and a parse error instead, which is the regression this case exists to catch. The capability is
+tested one stage before any exit code could test it: `E3012 … unused variable: 'while'`,
 at the declared name's own position.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -320,8 +320,7 @@ DERIVED by asking `opensBlockAt`/`closesBlockAt` at the cursor, so it answers pe
 keyword. A bare `otherwise` read as a whole block condition puts the header's label straight after it
 (`while otherwise 'loop'`), which is `otherwiseOpensBlock`'s labelled-handler form — so that one program
 is refused with the same E2015, while `acc + otherwise` is not. The derivation is what makes the set
-right without anyone maintaining it; the prose that tried to summarise the set as three exempt keywords
-was wrong, and the review that found it also found the missing exclusion behind it (below).
+right without anyone maintaining it; no fixed list of exempt keywords summarises it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -337,16 +336,16 @@ end 'main'
 error E2015: specs/fragments/keyword-as-a-declared-name/error.a-bare-read-of-a-block-keyword-parameter.test:5:13: Unsupported: reading 'while' as a value here — it is a legal DECLARED name, but the token scans that re-derive Maxon's block structure read a bare `while` in this position as block structure and have no scope to tell them otherwise. Pass it under a different name, or read a differently-named binding
 ```
 
-### The two defects this rung's own review found, and neither was in the grammar
+### Two hazards outside the grammar
 
 <!-- test: a-keyword-named-parameter-that-a-CONSTRUCTOR-CONSUMES -->
 ⚠⚠ **A KEYWORD-NAMED PARAMETER IS STILL A PARAMETER TO THE OWNERSHIP MACHINERY, and the token scans
-that decide "does this constructor CONSUME parameter k?" read a reference to one by TOKEN KIND.** Taught
-the declaration and not those scans, `Self{value: from}` recorded no consume: the caller kept its `+1`,
-the box owned the same `String`, and both dropped it. Measured before the fix — **SIGSEGV, exit 139** —
-and renaming the parameter to anything that is not a keyword was the entire difference between a crash
-and the right answer. The monomorphic twin did not crash but emitted a spurious `__mm_alloc` +
-`__str_copy` per construction, which is a wrong COST driven by a name's spelling.
+that decide "does this constructor CONSUME parameter k?" read a reference to one by TOKEN KIND.** A scan
+that does not know a keyword may be a name records no consume for `Self{value: from}`: the caller keeps
+its `+1`, the box owns the same `String`, and both drop it — **SIGSEGV, exit 139** — so renaming the
+parameter to anything that is not a keyword is the entire difference between a crash and the right
+answer. The monomorphic twin does not crash but emits a spurious `__mm_alloc` + `__str_copy` per
+construction, which is a wrong COST driven by a name's spelling.
 ```maxon
 type Box uses T
 	export var value as T
@@ -371,14 +370,14 @@ end 'main'
 
 <!-- test: a-keyword-case-arm-whose-value-is-a-PARENTHESIZED-match -->
 ⚠⚠ **`function gives (…)` SPELLS `function <name> (` CHARACTER FOR CHARACTER**, because `function` is a
-legal case NAME and `gives` is word-shaped. So a match ARM was read as a function declaration and the
-parenthesized expression as its parameter list — and everything inside it, the nested `match` and its own
-`end` included, was recorded as a declared name. `closesBlockAt` then stopped seeing that `end`, the
-inner arm loop read it as one more case, and the compiler refused a program the reference bootstrap compiles:
+legal case NAME and `gives` is word-shaped. Taken at its word, a match ARM reads as a function declaration
+and the parenthesized expression as its parameter list — and everything inside it, the nested `match` and
+its own `end` included, would be recorded as a declared name. `closesBlockAt` would then stop seeing that
+`end`, the inner arm loop would read it as one more case, and the compiler would refuse a legal program:
 **`E3034 unknown enum case: 'end'`**, pointing at the closing `end`.
 
-The cure is that "no block structure may appear inside a parameter list" — the argument the recording
-walk rests on — is now a CHECK (`parenGroupCanBeAParameterList`) rather than a claim: a block keyword may
+"No block structure may appear inside a parameter list" — the argument the recording walk rests on — is
+therefore a CHECK (`parenGroupCanBeAParameterList`) rather than a claim: a block keyword may
 stand in a parameter list only where a NAME may, so one anywhere else proves the group is an expression.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -411,23 +410,22 @@ end 'main'
 42
 ```
 
-### The two defects the INDEPENDENT review found — both compiler PANICS on a correct program
+### Two scans that must ask the keyword-as-a-name predicate — each a compiler PANIC on a correct program otherwise
 
-⭐⭐ **BOTH WERE THE SAME MISTAKE: A SCAN THAT ASKED A RAW `TokenKind` INSTEAD OF THE ONE PREDICATE THAT
-KNOWS A KEYWORD MAY BE A NAME.** Neither was in the grammar, neither was caught by 2551 green tests, and
-in both the widened DECLARATION position is what made an old unguarded scan reachable. The cure in both
-places is to delete the raw test, not to add a case to it.
+⭐⭐ **BOTH ARE THE SAME HAZARD: A SCAN THAT ASKS A RAW `TokenKind` INSTEAD OF THE ONE PREDICATE THAT
+KNOWS A KEYWORD MAY BE A NAME.** Neither is in the grammar, and in both the widened DECLARATION position
+is what makes a raw-token scan reachable. The cure in both places is to ask the predicate rather than
+test the raw token, not to add a case to the raw test.
 
 <!-- test: a-keyword-named-METHOD-CALL-ending-a-block-HEADER -->
-⛔ **`opensBlockAt` spelled the keyword-as-a-name exclusion once PER ARM, and the `otherwise` arm had no
-copy.** `otherwiseOpensBlock`'s caught-error handler form is `otherwise ( <ident> ) <label>` — which a
+⛔ **`opensBlockAt` asks the keyword-as-a-name exclusion ONCE, ahead of every arm, and the `otherwise`
+arm is why.** `otherwiseOpensBlock`'s caught-error handler form is `otherwise ( <ident> ) <label>` — which a
 keyword-named METHOD CALL at the end of a block header spells character for character, `.otherwise`
-having become a legal member name in this very rung. So `while Ops.otherwise(i) 'loop'` opened a second
-block nothing closed and the extent scan ran past the loop's `end`:
+being a legal member name. An arm that skipped the exclusion would read `while Ops.otherwise(i) 'loop'`
+as opening a second block nothing closes, and the extent scan would run past the loop's `end`:
 `panic: parseWhileStatement: the token scan predicted the closing 'end' at token 76 but the parser closed
-the last body at token 68`. The `if` form panics identically. The exclusion is now asked ONCE, ahead of
-every arm — an arm decides whether this POSITION opens a block, and whether the token is block structure
-AT ALL is not an arm's business.
+the last body at token 68`. The `if` form is the same. An arm decides whether this POSITION opens a
+block, and whether the token is block structure AT ALL is not an arm's business.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -455,19 +453,19 @@ end 'main'
 ```
 
 <!-- test: keyword-named-INTERFACE-REQUIREMENTS-among-others -->
-⛔ **THE DECLARATION SWEEP CLOSED AN `interface` BODY ON A RAW `end`, WHICH THIS RUNG HAD JUST MADE A
-LEGAL REQUIREMENT NAME.** `recordScannedInterface` must consume the whole declaration itself — its
+⛔ **THE DECLARATION SWEEP MUST NOT CLOSE AN `interface` BODY ON A RAW `end`, WHICH IS A LEGAL
+REQUIREMENT NAME.** `recordScannedInterface` must consume the whole declaration itself — its
 bodiless signatures would otherwise trip the sweep's `function` arm and leave `depth` permanently one too
-deep — and it found its terminator by testing `TokenKind.end`. A `function end(…)` requirement stopped the
-walk ON THAT NAME, mid-signature, and the requirements after it fell to the outer loop and did exactly the
-damage the routine exists to prevent: every `depth == 0` gate (`type`, `enum`, `interface`) stopped firing
-for the rest of the file. `panic: requireConstructible: type Cell is being parsed right now, but the
-declaration sweep never recorded it`.
+deep — and it finds its terminator through `closesBlockAt`. A terminator found by testing `TokenKind.end`
+stops the walk ON a `function end(…)` requirement, mid-signature, and the requirements after it fall to
+the outer loop and do exactly the damage the routine exists to prevent: every `depth == 0` gate (`type`,
+`enum`, `interface`) stops firing for the rest of the file. `panic: requireConstructible: type Cell is
+being parsed right now, but the declaration sweep never recorded it`.
 
 ⚠ **IT TAKES THREE REQUIREMENTS TO SEE, AND THAT IS THE INTERESTING PART.** With exactly ONE requirement
-after the `end`-named one, the stray `function`'s `+1` happened to cancel the interface's own `end` and
-the file compiled — a green answer from a broken scan, off an arithmetic coincidence. A two-case probe
-would have called this clean.
+after the `end`-named one, the stray `function`'s `+1` cancels the interface's own `end` and the file
+compiles — a green answer from a broken scan, off an arithmetic coincidence. A two-case probe would call
+this clean.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -528,10 +526,9 @@ end 'main'
 ```
 
 <!-- test: a-parameter-named-type-beside-a-real-type-declaration -->
-`type` declares a type. A parameter named `type` in the same program must not be read as one — the
-historical failure this rule's canonical spec was written for was a token pre-scanner that read
-`type StdType` inside a parameter list as a top-level `type StdType` declaration and shadowed the
-real one.
+`type` declares a type. A parameter named `type` in the same program must not be read as one — a
+token pre-scanner that read `type StdType` inside a parameter list as a top-level `type StdType`
+declaration would shadow the real one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -555,25 +552,22 @@ end 'main'
 42
 ```
 
-### The defect the SELF-HOST attempt found — a keyword-named binding OPENING a block header
+### A keyword-named binding OPENING a block header
 
 <!-- test: a-keyword-named-parameter-AS-THE-FIRST-TOKEN-OF-A-CONDITION -->
 ⛔⛔ **A BLOCK HEADER'S CONDITION MAY *BEGIN* WITH A KEYWORD-NAMED BINDING, AND THAT PUTS AN ARM
-SEPARATOR IMMEDIATELY AFTER THE BLOCK KEYWORD.** `keywordIsAName` read a keyword followed by
-`gives`/`then`/`to`/`upto`/`or` as a match-arm case name, on the stated premise that *"a control keyword
-is NEVER followed by a match-arm separator in real control flow — `if` takes a condition, `while` a
-condition"*. This rule falsified that premise in a file the premise never mentions: a condition is an
-expression, an expression may start with a NAME, and five of Maxon's separators are declarable as names.
-So `if to >= from 'forward'` is an `if` whose next token is `to` — read as an arm, it opened no block,
-its `end` closed one that never opened, the extent index shifted, and `assertScanAligned` took the
-compiler down on a well-formed program.
+SEPARATOR IMMEDIATELY AFTER THE BLOCK KEYWORD.** A keyword followed by `gives`/`then`/`to`/`upto`/`or`
+is not necessarily a match-arm case name, because a control keyword CAN be followed by a match-arm
+separator in real control flow: a condition is an expression, an expression may start with a NAME, and
+five of Maxon's separators are declarable as names. So `if to >= from 'forward'` is an `if` whose next
+token is `to` — read as an arm, it would open no block, its `end` would close one that never opened, the
+extent index would shift, and `assertScanAligned` would take the compiler down on a well-formed program.
 
-⚠ **IT WAS NOT A CONSTRUCTED CASE — it is `maxon-bin/Compiler/Targets/Shared/GlobalDataTable.maxon:127`,
-`function twosComplementDistance(to ByteOffset, from ByteOffset)`, and it was the FIRST error the compiler hit
-compiling its own source.** The cure is to ask the arm lookahead only where an arm can stand: at the top
-level of a `match` BODY, which the block-extent walk's own opener stack knows and no bounded lookaround
-can see (`keywordIsANameAt`). The case below reads `to` first in an `if`, in a `while` and as a `match`
-SCRUTINEE — the three headers whose next token is an expression — and every one of them was a panic.
+⚠ **IT IS NOT A CONSTRUCTED CASE — `maxon-bin/Compiler/Targets/Shared/GlobalDataTable.maxon` declares
+`function twosComplementDistance(to ByteOffset, from ByteOffset)`.** So the arm lookahead is asked only
+where an arm can stand: at the top level of a `match` BODY, which the block-extent walk's own opener stack
+knows and no bounded lookaround can see (`keywordIsANameAt`). The case below reads `to` first in an `if`,
+in a `while` and as a `match` SCRUTINEE — the three headers whose next token is an expression.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -657,25 +651,25 @@ end 'main'
 
 ### A KEYWORD-NAMED CALL TARGET AFTER `try`
 
-⛔⛔ **`parseTryCallReceiver`'s general arm asked `TokenKind.identifier`, WHICH A KEYWORD IS NOT.** Since D8
-a function and a parameter may be DECLARED with a keyword, so `try from.get(k)` on a parameter named `from`
-(`IR/CsrGraph.maxon:75`) is an ordinary throwing method call — and it was
+⛔⛔ **`parseTryCallReceiver`'s general arm must not ask `TokenKind.identifier`, WHICH A KEYWORD IS NOT.** A
+function and a parameter may be DECLARED with a keyword, so `try from.get(k)` on a parameter named `from`
+(`IR/CsrGraph.maxon`'s `buildCsr`) is an ordinary throwing method call — and an identifier test would refuse it as
 `E2015 "try must be applied to a call … (got 'from')"` on well-formed source. This is
 `keyword-as-a-declared-name.md`'s rule at one more door.
 
-⭐⭐ **THE ARM MOVED DOWN RATHER THAN GAINING AN EXCLUSION LIST, and the difference is the one this file
-keeps paying for.** Widened where it stood, it would have claimed `Self.check(v)` and `int.fromString(s)`
+⭐⭐ **THE GENERAL ARM STANDS LAST RATHER THAN CARRYING AN EXCLUSION LIST, and the difference is the one
+this file keeps paying for.** Standing any higher, it would claim `Self.check(v)` and `int.fromString(s)`
 out from under the two arms that exist to serve them — the `Self` arm's own header says it cannot ride the
-named arm, and a primitive static reaches `parseDottedPrimary` through neither. The alternative was
+named arm, and a primitive static reaches `parseDottedPrimary` through neither. The alternative is
 `tokenCanBeAName(…) and not at(selfType) and not primitiveStaticCallAt(…)`, an enumerated exclusion that
 goes stale the next time a keyword-headed target earns an arm. **Ordering IS the rule in this router** — its
 own header says the field-chain arm is "checked FIRST" for exactly this reason — so the general case goes
 last and every specific one keeps its claim by standing above it.
 
 <!-- test: a-try-target-may-be-a-keyword-named-receiver -->
-All three shapes in one program, because the fix is about which arm claims which: a KEYWORD-named receiver
-(the one that was broken), a PRIMITIVE static, and a `Self.`-qualified static — the two that had to keep
-their claim when the general arm moved past them.
+All three shapes in one program, because the rule is about which arm claims which: a KEYWORD-named
+receiver, a PRIMITIVE static, and a `Self.`-qualified static — the two that keep their claim because the
+general arm stands below them.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -728,28 +722,28 @@ a=7 b=5 c=2
 ```maxon
 // --- file: span.maxon
 module type Span
-	var start as BytePos
+	var start as SpanPos
 
-	module static function create(start BytePos) returns Span
+	module static function create(start SpanPos) returns Span
 		return Span{start: start}
 	end 'create'
 
-	module function endsBefore(position BytePos, end BytePos) returns bool
+	module function endsBefore(position SpanPos, end SpanPos) returns bool
 		return position < end and start < end
 	end 'endsBefore'
 
-	module function shifted(by BytePos) returns Span
+	module function shifted(by SpanPos) returns Span
 		let moved = Span.create(start + by)
 		return moved
 	end 'shifted'
 
-	module function width(to BytePos) returns BytePos
+	module function width(to SpanPos) returns SpanPos
 		return to - start
 	end 'width'
 end 'Span'
 
 // --- file: types.maxon
-module typealias BytePos = int(0 to 1000)
+module typealias SpanPos = int(0 to 1000)
 
 // --- file: main.maxon
 function main() returns ExitCode

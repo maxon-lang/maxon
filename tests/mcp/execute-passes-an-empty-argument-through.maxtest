@@ -1,0 +1,11 @@
+let ArgumentsArgument = "arguments"
+let BracketingProgram = "function main() returns ExitCode\n\tlet given = CommandLine.args()\n\tvar shown = \"\"\n\n\tfor (iter, argument) in given.withIterator() 'each'\n\t\tif iter.index() > 0 'passed'\n\t\t\tshown.append(\"[\{argument\}]\")\n\t\tend 'passed'\n\tend 'each'\n\n\tprint(\"passed \{shown\}\\n\")\n\n\treturn 0\nend 'main'\n"
+let PassedArguments = "[\"first\",\"\",\"last\"]"
+let ExpectedLine = "passed [first][][last]"
+
+test 'execute hands an empty program argument to the program instead of refusing it'
+	let doc = callTool(ExecuteTool, argumentsJson: argumentsOf([sourceMember(BracketingProgram), "\"{ArgumentsArgument}\":{PassedArguments}"]))
+
+	try Expect.isFalse(toolCallIsError(doc), message: "an empty element of `{ArgumentsArgument}` is a legitimate argv element and must reach the program: {toolCallText(doc)}")
+	try Expect.contains(toolCallText(doc), needle: ExpectedLine, message: "the program must see all three arguments, the empty one in its place: {toolCallText(doc)}")
+end 'execute hands an empty program argument to the program instead of refusing it'

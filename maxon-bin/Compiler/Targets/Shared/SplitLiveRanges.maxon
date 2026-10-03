@@ -165,9 +165,8 @@
 //  • `EffectivePools`, `defLiveAfter` and the sweep's working row are all sized by the VALUE SPACE,
 //    which itself grows with every split — so re-initializing them per iteration is Θ(splits × values).
 //    They are now GROWN (only the added entries are written) and MAINTAINED per value.
-//  • `defLiveAfter`'s "no store anchor" sentinel is a CONSTANT (`NoStoreAnchorPressure`) and not
-//    `valueCount + 1`, which changes whenever a split mints an id and would force the whole column to
-//    be re-stamped. Nothing reads it: see there.
+//  • `defLiveAfter` holds "no store anchor" as an ABSENT entry and not as `valueCount + 1`, which
+//    changes whenever a split mints an id and would force the whole column to be re-stamped.
 //  • `materializePeak` took a FRESH `wordsPerRow` row per analysis to carry the peak's live-before set,
 //    and `refreshPeak` materializes a peak after EVERY split — O(splits × values) BYTES per function.
 //    (`SplitScratch.peakLiveBefore`; `usesAtPeakOp`'s row is the same shape.)
@@ -183,7 +182,7 @@
 // either: its splits were confined to small functions, so splits and values did not grow together.
 
 // One memoized reachability ROW of `ReachCache` — one per distinct DEF BLOCK the peak's candidates
-// have, so there are at most `numBlocks` of them and `numBlocks` is the "not walked yet" sentinel.
+// have, so there are at most `numBlocks` of them.
 // It shares the CFG's dense numbering space but is NOT a block index: row 3 is "the walk for the
 // third def block we met", not "block 3".
 typealias ReachRow = int(0 to u64.max) implements ElementIndex
@@ -192,9 +191,10 @@ typealias ReachRowColumn = Array with ReachRow
 // The stamp of one peak the cache was aimed at: a row slot or a `rowOf` entry is live under the current
 // one and stale under any other, so aiming at a new peak is a bump rather than a clear.
 typealias ReachGeneration = int(0 to u64.max)
-typealias ReachGenerationColumn = Array with ReachGeneration
+typealias ReachStampColumn = OptionalIndexColumn with ReachGeneration
+typealias DefPressureColumn = OptionalIndexColumn with RegCount
 
-let NoReachGeneration = 0 as ReachGeneration
+let FirstReachGeneration = 0 as ReachGeneration
 
 // SplitLineage — maps every fresh ValueId the splitter mints back to the ORIGINAL user value
 // it derives from: a reload's `loadRegSlot` def -> the value it reloads, a rematerialized
@@ -556,20 +556,9 @@ union SpillChoice
 	spill(valueId ValueId, scope SplitScope)
 end 'SpillChoice'
 
-// The `defLiveAfter` entry of a value with NO def point at all — one this function neither defines by
-// an op nor carries as a phi. `storeFitsPool` is its only reader, and reads it as "no register-free
-// store anchor", so it need only EXCEED any pool.
-//
-// It is a CONSTANT rather than `valueCount + 1`. The value space GROWS with every split, so a
-// sentinel derived from it goes stale the moment an id is minted, and keeping it current means
-// re-stamping the whole column — O(values) per split, which is exactly the term the incremental driver
-// exists to remove.
-//
-// No decision moves. Only a value LIVE at the peak is ever asked, a live value has a use, and a used
-// value has a def (Rule 1, SSA) — so what `storeFitsPool` reads is always a real def-point pressure and
-// never this. The sentinel exists so that malformed IR fails the gate rather than passing it by
-// accident, and any value above the pool size does that.
-let NoStoreAnchorPressure = RegisterFileSize + 1
+enum DefPointLookup implements Error
+	noDefPoint
+end 'DefPointLookup'
 
 // The op INSERTIONS and REMOVALS one split made — RECORDED as it makes them, MATERIALIZED in one pass
 // per block when it is done.
@@ -2217,9 +2206,9 @@ function applyValueToPressure(liveness LivenessResult, pressure PressureIndex, v
 
 	let useSites = index.useCount(v)
 
-	// `numBlocks` is "no block read yet" — no block index can equal it (the sentinel `ReachCache` and
-	// `PeakTree` both use). The live-out answer is a fact about a BLOCK, so it is read once per run of
-	// records in one block rather than once per record.
+	// `numBlocks` is "no block read yet" — no block index can equal it (the sentinel `PeakTree`
+	// uses). The live-out answer is a fact about a BLOCK, so it is read once per run of records in
+	// one block rather than once per record.
 	var scannedBlock = liveness.cfg.topo.numBlocks
 	var scannedLiveOut = false
 	var usedInDefBlock = false
@@ -2785,8 +2774,7 @@ end 'refreshBlockDemands'
 // occupant's bytes. It does not: THE CAPACITY-SLOT INVARIANT (ManagedMemoryRuntime.maxon) zeroes a slot on
 // the way OUT of the live range, so what `resize` exposes always reads zero. Verified — see
 // `zeroColumn` in TargetLiveness.maxon. The reason these buffers are refilled is that most of them want
-// a NON-zero value in every entry (`NoStoreAnchorPressure`, a `numBlocks` "unset", an out-of-file
-// register), which no invariant will hand you.
+// a NON-zero value in every entry (a `numBlocks` "unset"), which no invariant will hand you.
 export type SplitScratch
 	// The pressure sweep's ONE dense working row, and the operand/op buffers it steps with — shared with
 	// the liveness sweep it re-runs on a dirty block (`sweepBlockPressure`). The row is zero on entry to
@@ -2808,7 +2796,7 @@ export type SplitScratch
 	// answering `storeFitsPool`, a VERIFY-MODE column and nothing else: it is the independent second
 	// derivation `verifyIncremental` checks the index against, and it is maintained only when that check
 	// is compiled in. See `VerifyIncrementalSplit`.
-	export var defLiveAfter as RegCountColumn
+	export var defLiveAfter as DefPressureColumn
 
 	// `chooseVictim`'s two buffers, plus the reachability memo — which, unlike everything else here,
 	// keeps its CONTENTS across iterations (see `ReachCache`).
@@ -2877,7 +2865,7 @@ export type SplitScratch
 	export var confinedMode as bool
 
 	static function create(numBlocks ElementIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitRow.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitRow.create(), tree: PeakTree.create(), pressure: PressureIndex.create(), relayout: PressureRelayoutScratch.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), opEffective: zeroClassRow(), exitPopulation: zeroClassRow(), reindexCandidates: DenseColumn.create(), reindexSortBuf: DenseColumn.create(), rank: emptyRank(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), span: LiveAcrossSpan.create(), anchor: SplitAnchor.create(), confinedMode: false, unrelievableAtLastPeak: 0}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: DefPressureColumn.create(), usedAtPeak: BitRow.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitRow.create(), tree: PeakTree.create(), pressure: PressureIndex.create(), relayout: PressureRelayoutScratch.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), opEffective: zeroClassRow(), exitPopulation: zeroClassRow(), reindexCandidates: DenseColumn.create(), reindexSortBuf: DenseColumn.create(), rank: emptyRank(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), span: LiveAcrossSpan.create(), anchor: SplitAnchor.create(), confinedMode: false, unrelievableAtLastPeak: 0}
 	end 'create'
 
 	// Size everything the incremental update needs and BUILD the positional pressure index. Deferred
@@ -3795,7 +3783,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	if VerifyIncrementalSplit 'theVerifiersOwnDerivation'
 		// The walk still writes this column on the CONFINED path, so it has to reach the ids the split
 		// just minted — even though nothing but the verifier ever reads it.
-		scratch.defLiveAfter.growFilled(cfg.valueCount, value: NoStoreAnchorPressure)
+		scratch.defLiveAfter.growAbsent(cfg.valueCount)
 	end 'theVerifiersOwnDerivation'
 
 	// Re-derive the index facts of the values the split touched, from the dirty region alone. It must be
@@ -4013,16 +4001,13 @@ end 'choiceFound'
 //    fix that; only the author can, by restructuring. `maxlive` is EXACT here (SSA interference is
 //    chordal, so χ = ω), so the deficit is a theorem about the program, not the outcome of a search.
 //
-//    ⚠⚠ **THIS SAID "every value crossing the point is USED inside the loop", WHICH IS NARROWER
-//    THAN THE TRUTH — narrow enough that reading it produced a wrong diagnosis of a live E5001.**
+//    ⚠⚠ **A VALUE CROSSING THE POINT NEED NOT BE USED INSIDE THE LOOP.**
 //    A loop-carried `var` the loop only ASSIGNS is read ZERO times inside it and is still here,
 //    because it is a block arg DEFINED in the loop: its store would anchor at its own header block
 //    and its reloads would sit at its in-loop edge uses, so no split shortens its range at all.
 //    `isColdSpillable` refuses it on the DEPTH of that def, which is the fact that matters, and the
 //    ranked list prints it at "read 0 times in the loop" (`RegionReadCount` — it counts op operands,
-//    never edge args). MEASURED on the spec harness's own `MaxonArgs.parse` (BATCH43): 22 of the 33
-//    blocking values were loop-header phis of exactly this shape — 21 `var` flags plus the counter —
-//    against a pool of 14. Relieving THOSE needs a transformation this splitter does not own
+//    never edge args). Relieving such phis needs a transformation this splitter does not own
 //    (demoting a whole phi congruence class into one frame slot), not a live-range split; the
 //    refusal is therefore correct as the design stands, and the author's remedy is the one the
 //    message names.
@@ -4224,10 +4209,8 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	// it minted, and of nothing else.
 	scratch.effPools.fillAll(liveness, pool: pool)
 
-	// A value with no def point at all keeps this sentinel, so it is never mistaken for store-safe.
-	// VERIFY MODE only, like the column itself.
 	if VerifyIncrementalSplit 'theVerifiersOwnDerivation'
-		scratch.defLiveAfter.refill(liveness.valueCount, value: NoStoreAnchorPressure)
+		scratch.defLiveAfter.makeAbsent(liveness.valueCount)
 	end 'theVerifiersOwnDerivation'
 
 	if intoTree 'sizeTheTournament'
@@ -4589,7 +4572,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	// and the pressure that store faces is the block's LIVE-IN population — which `liveRow` now
 	// holds, the backward sweep having folded every op back to the live-before-first-op view.
 	//
-	// Without this a phi keeps the "no def point" sentinel (`NoStoreAnchorPressure`), `storeFitsPool`
+	// Without this a phi has no def-point pressure (`DefPointLookup.noDefPoint`), `storeFitsPool`
 	// rejects it forever, and NO loop-carried accumulator could ever be spilled at a call — which
 	// is precisely the false E5001 the amended Rule 2 exists to eliminate (`sum = sum + f(i)`
 	// makes `sum` a phi). `noVictimAtPeak`'s clobber-only panic is what caught this.
@@ -4885,10 +4868,10 @@ function peakOutranks(fullOverflow bool, atFixedRegisterOp bool, pressure RegCou
 end 'peakOutranks'
 
 // Record each block-arg's def-point live count — the block's live-in population (see the caller).
-function recordPhiDefLiveAfter(defLiveAfter RegCountColumn, block IrBlock, liveInByClass RegCountColumn, classes ValueClassColumn)
+function recordPhiDefLiveAfter(defLiveAfter DefPressureColumn, block IrBlock, liveInByClass RegCountColumn, classes ValueClassColumn)
 	for arg in block.blockArgs 'eachPhi'
 		let class = try classes.get(arg.valueId) otherwise panic("recordPhiDefLiveAfter: phi {arg.valueId} has no recorded register class")
-		try defLiveAfter.set(arg.valueId, value: classRowGet(liveInByClass, class: class)) otherwise panic("recordPhiDefLiveAfter: defLiveAfter.set OOB for phi {arg.valueId}")
+		defLiveAfter.set(arg.valueId, value: classRowGet(liveInByClass, class: class))
 	end 'eachPhi'
 end 'recordPhiDefLiveAfter'
 
@@ -4900,10 +4883,10 @@ end 'recordPhiDefLiveAfter'
 // fourteen idle GPRs do not provide one. Recorded as the MIXED total, the question becomes "does the
 // whole machine have a register spare", which is both too weak (30 is never exceeded, so every value
 // looks anchorable) and about the wrong thing.
-function recordDefLiveAfter(defLiveAfter RegCountColumn, buf OperandList, liveByClass RegCountColumn, classes ValueClassColumn)
+function recordDefLiveAfter(defLiveAfter DefPressureColumn, buf OperandList, liveByClass RegCountColumn, classes ValueClassColumn)
 	for o in buf 'eachOperand'
 		if operandIsDef(o) and operandIsVirtual(o) 'def'
-			try defLiveAfter.set(operandValueId(o), value: classRowGet(liveByClass, class: operandClass(o, classes: classes))) otherwise panic("recordDefLiveAfter: set OOB")
+			defLiveAfter.set(operandValueId(o), value: classRowGet(liveByClass, class: operandClass(o, classes: classes)))
 		end 'def'
 	end 'eachOperand'
 end 'recordDefLiveAfter'
@@ -5170,7 +5153,7 @@ end 'nextUseAfterPeak'
 // available" and reports the FULL-POOL overflow it ranked, rather than letting it reach
 // `noVictimAtPeak`'s confined panic, which asserts an invariant only a ranked peak carries.
 function storeFitsPool(liveness LivenessResult, pressure PressureIndex, valueId ValueId, poolSize RegCount) returns bool
-	return defPointPressure(liveness, pressure: pressure, valueId: valueId) <= (poolSize as PressureDelta)
+	return (try defPointPressure(liveness, pressure: pressure, valueId: valueId) otherwise return false) <= (poolSize as PressureDelta)
 end 'storeFitsPool'
 
 // The live population of `valueId`'s own file at the point its spill STORE would land — right after its
@@ -5178,11 +5161,11 @@ end 'storeFitsPool'
 // rather than carried as a per-value column: a split moves the population over a stretch Θ(the
 // function) wide, so every value DEFINED in that stretch would have to be restated, and there is no
 // bound on how many that is.
-function defPointPressure(liveness LivenessResult, pressure PressureIndex, valueId ValueId) returns PressureDelta
+function defPointPressure(liveness LivenessResult, pressure PressureIndex, valueId ValueId) returns PressureDelta throws DefPointLookup
 	let index = liveness.useIndex
 
 	match index.defKindOf(valueId) 'kind'
-		none then return NoStoreAnchorPressure as PressureDelta
+		none then throw DefPointLookup.noDefPoint
 		opDef then return pressure.liveAfterSlot(index.defBlockOf(valueId), slot: pressure.defSlotOf(valueId), class: liveness.classOf(valueId))
 		phiDef then return pressure.blockLiveIn(index.defBlockOf(valueId), class: liveness.classOf(valueId))
 	end 'kind'
@@ -5462,7 +5445,7 @@ function isCrowdedStoreVictim(index UseIndex, valueId ValueId, placement SpillPl
 	if not hasStoreAnchor(index, valueId: valueId) 'nowhereToPutTheStore'
 		// A LEGALITY condition, unlike the pressure at the anchor, and it must be asked here rather than
 		// inherited: the COLD shape test is about loop depth alone, and `storeFitsPool` — which carried
-		// this for tier 2, through the `NoStoreAnchorPressure` sentinel — is the gate this tier drops.
+		// this for tier 2, through `DefPointLookup.noDefPoint` — is the gate this tier drops.
 		// Without it, malformed IR reaches `insertStore`'s panic instead of failing a gate.
 		return false
 	end 'nowhereToPutTheStore'
@@ -5895,16 +5878,14 @@ type ReachCache
 	var hasPeak as bool
 	var peakBlockLocal as ElementIndex
 
-	// The stamp of the current peak; `NoReachGeneration`, which every grown column starts with, is no
-	// peak's, so a slot or entry nothing walked never reads as live.
 	var generation as ReachGeneration
 
 	// defBlock -> its row index in `rows`, live iff `rowOfGeneration[defBlock]` is the current generation.
 	var rowOf as ReachRowColumn
-	var rowOfGeneration as ReachGenerationColumn
+	var rowOfGeneration as ReachStampColumn
 
 	// Row-major `row * numBlocks + block` (`slotOf`): the generation whose walk marked the slot.
-	var rows as ReachGenerationColumn
+	var rows as ReachStampColumn
 	var rowCount as ReachRow
 
 	// The BFS worklist every row's walk steps with — owned by the CACHE, exactly as
@@ -5924,7 +5905,7 @@ type ReachCache
 	// `chooseVictim` and never walks. Sizing the columns eagerly would put a per-function allocation,
 	// proportional to the block count, on every function in the program to serve the few that spill.
 	static function create(numBlocks ElementIndex) returns ReachCache
-		return Self{numBlocks: numBlocks, hasPeak: false, peakBlockLocal: 0, generation: NoReachGeneration, rowOf: ReachRowColumn.create(), rowOfGeneration: ReachGenerationColumn.create(), rows: ReachGenerationColumn.create(), rowCount: 0, worklist: CfgIndexArray.create(), lowReach: CfgIndexArray.create(), lowReachBuilt: false}
+		return Self{numBlocks: numBlocks, hasPeak: false, peakBlockLocal: 0, generation: FirstReachGeneration, rowOf: ReachRowColumn.create(), rowOfGeneration: ReachStampColumn.create(), rows: ReachStampColumn.create(), rowCount: 0, worklist: CfgIndexArray.create(), lowReach: CfgIndexArray.create(), lowReachBuilt: false}
 	end 'create'
 
 	// Aim the cache at the peak `chooseVictim` is about to ask about. Everything walked from a
@@ -5952,7 +5933,7 @@ type ReachCache
 		end 'pastThePeak'
 
 		let row = self.rowFor(topo, defBlock: defBlock)
-		return (try self.rows.get(self.slotOf(row, block: block)) otherwise panic("ReachCache.reachableFromPeak: block {block} out of range")) == self.generation
+		return stampedWith(self.rows, at: self.slotOf(row, block: block), generation: self.generation)
 	end 'reachableFromPeak'
 
 	// The flat index of `(row, block)` in the row-major `rows` matrix — the ONE place its layout is
@@ -5962,10 +5943,10 @@ type ReachCache
 	end 'slotOf'
 
 	function rowFor(topo FuncTopology, defBlock ElementIndex) returns ReachRow
-		self.rowOfGeneration.growFilled(self.numBlocks, value: NoReachGeneration)
+		self.rowOfGeneration.growAbsent(self.numBlocks)
 		self.rowOf.growFilled(self.numBlocks, value: 0)
 
-		if (try self.rowOfGeneration.get(defBlock) otherwise panic("ReachCache.rowFor: def block {defBlock} out of range")) == self.generation 'hit'
+		if stampedWith(self.rowOfGeneration, at: defBlock, generation: self.generation) 'hit'
 			return try self.rowOf.get(defBlock) otherwise panic("ReachCache.rowFor: def block {defBlock} out of range")
 		end 'hit'
 
@@ -5979,10 +5960,10 @@ type ReachCache
 		// is already there and costs nothing; the fill a new row arrives with is no peak's generation, so
 		// only this walk marks it.
 		let base = self.slotOf(row, block: 0)
-		self.rows.growFilled(self.slotOf(self.rowCount, block: 0), value: NoReachGeneration)
+		self.rows.growAbsent(self.slotOf(self.rowCount, block: 0))
 		markBlocksReachableFromPeak(topo, peakBlockLocal: self.peakBlockLocal, defBlock: defBlock, rows: self.rows, base: base, generation: self.generation, lowReach: self.lowReach, worklist: self.worklist)
 		try self.rowOf.set(defBlock, value: row) otherwise panic("ReachCache.rowFor: rowOf.set OOB")
-		try self.rowOfGeneration.set(defBlock, value: self.generation) otherwise panic("ReachCache.rowFor: rowOfGeneration.set OOB")
+		self.rowOfGeneration.set(defBlock, value: self.generation)
 		return row
 	end 'rowFor'
 
@@ -6035,7 +6016,11 @@ end 'ReachCache'
 //
 // `worklist` is the CACHE's, not this walk's (see `ReachCache.worklist`) — a block is pushed once per
 // in-edge, so a fresh one here was an O(edges) allocation per walk.
-function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal ElementIndex, defBlock ElementIndex, rows ReachGenerationColumn, base ElementIndex, generation ReachGeneration, lowReach CfgIndexArray, worklist CfgIndexArray)
+function stampedWith(column ReachStampColumn, at ElementIndex, generation ReachGeneration) returns bool
+	return (try column.get(at) otherwise return false) == generation
+end 'stampedWith'
+
+function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal ElementIndex, defBlock ElementIndex, rows ReachStampColumn, base ElementIndex, generation ReachGeneration, lowReach CfgIndexArray, worklist CfgIndexArray)
 	worklist.clear()
 	let deg = topo.succ.degree(peakBlockLocal as CsrIndex)
 
@@ -6056,11 +6041,11 @@ function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal ElementIn
 
 		let slot = base + (b)
 
-		if (try rows.get(slot) otherwise panic("markBlocksReachableFromPeak: rows.get OOB")) == generation 'already'
+		if stampedWith(rows, at: slot, generation: generation) 'already'
 			continue
 		end 'already'
 
-		try rows.set(slot, value: generation) otherwise panic("markBlocksReachableFromPeak: rows.set OOB")
+		rows.set(slot, value: generation)
 
 		let d = topo.succ.degree(b as CsrIndex)
 
@@ -6323,7 +6308,7 @@ function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, v
 	var record = index.firstUseOf(valueId)
 
 	// `numBlocks` is "no block walked yet" — no block index can equal it (the same sentinel
-	// `ReachCache` and `PeakTree` use). It is what makes the first iteration take the `newBlock` arm,
+	// `PeakTree` uses). It is what makes the first iteration take the `newBlock` arm,
 	// so the block below is re-read before anything looks at it.
 	var walkedBlock = topo.numBlocks
 	var block = blockAt(module, topo: topo, local: 0)
@@ -7335,17 +7320,32 @@ function verifyIncremental(module TargetModule, cfg FuncCfg, func IrFunction, li
 		// maintained per split and one swept from scratch. This is what catches a repair that withdrew the
 		// wrong contribution: a def-point pressure that is one too low turns a value the store cannot be
 		// anchored for into an eligible victim, and the split that follows relieves nothing.
-		let after = defPointPressure(liveness, pressure: scratch.pressure, valueId: v)
-		let freshAfter = try freshScratch.defLiveAfter.get(v) otherwise panic("verifyIncremental: defLiveAfter.get OOB for value {v}")
-
-		if after != (freshAfter as PressureDelta) 'defLiveAfter'
-			panic("verifyIncremental ('{name}', after split {iterations}): value {v} has def-point pressure {after} in the positional index but a full sweep says {freshAfter}")
-		end 'defLiveAfter'
+		verifyDefPointPressure(liveness, pressure: scratch.pressure, freshDefLiveAfter: freshScratch.defLiveAfter, valueId: v, name: name, iterations: iterations)
 	end 'eachValue'
 
 	verifyPressureIndex(module, liveness: liveness, fresh: fresh, scratch: scratch, freshScratch: freshScratch, name: name, iterations: iterations)
 	verifyPeak(peak, fresh: freshPeak, name: name, iterations: iterations)
 end 'verifyIncremental'
+
+function verifyDefPointPressure(liveness LivenessResult, pressure PressureIndex, freshDefLiveAfter DefPressureColumn, valueId ValueId, name String, iterations EventCount)
+	if valueId >= freshDefLiveAfter.count() 'outsideTheSweep'
+		panic("verifyIncremental: defLiveAfter.get OOB for value {valueId}")
+	end 'outsideTheSweep'
+
+	let swept = freshDefLiveAfter.holds(valueId)
+
+	if let after = try defPointPressure(liveness, pressure: pressure, valueId: valueId) 'aDefPoint'
+		let freshAfter = (try freshDefLiveAfter.get(valueId) otherwise panic("verifyIncremental ('{name}', after split {iterations}): value {valueId} has def-point pressure {after} in the positional index but a full sweep found no def point")) as PressureDelta
+
+		if after != freshAfter 'defLiveAfter'
+			panic("verifyIncremental ('{name}', after split {iterations}): value {valueId} has def-point pressure {after} in the positional index but a full sweep says {freshAfter}")
+		end 'defLiveAfter'
+	end 'aDefPoint' else 'noDefPoint'
+		if swept 'sweptOne'
+			panic("verifyIncremental ('{name}', after split {iterations}): value {valueId} has no def point in the positional index but a full sweep recorded one")
+		end 'sweptOne'
+	end 'noDefPoint'
+end 'verifyDefPointPressure'
 
 // The positional index, LEAF BY LEAF, against one built from a full rebuild of liveness.
 //

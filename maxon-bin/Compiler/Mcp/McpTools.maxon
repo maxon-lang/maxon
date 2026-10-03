@@ -25,29 +25,29 @@ typealias SnippetSerial = int(0 to u64.max)
 // Spawning
 // =============================================================================
 
-// `repoRootLabel` is empty exactly when the tool acts in the host's working directory: there is no
+// `repoRootLabel` is `host` exactly when the tool acts in the host's working directory: there is no
 // tree to name, and every answer leaves the key out rather than reporting an empty one
 // (`addRepoRootIfKnown`).
 module type ToolContext
 	export var compiler as FilePath
 	export var workingDir as FilePath
-	export var repoRootLabel as String
+	export var repoRootLabel as ActingTree
 	export var timeoutMs as DurationMs
 
 	static function hostRelative(compiler FilePath) returns ToolContext
-		return Self{compiler: compiler, workingDir: currentDirPath(), repoRootLabel: "", timeoutMs: CompilerChildTimeoutMs}
+		return Self{compiler: compiler, workingDir: currentDirPath(), repoRootLabel: ActingTree.host, timeoutMs: CompilerChildTimeoutMs}
 	end 'hostRelative'
 
 	static function inTree(compiler FilePath, repoRoot FilePath) returns ToolContext
-		return Self{compiler: compiler, workingDir: repoRoot, repoRootLabel: repoRoot.path, timeoutMs: CompilerChildTimeoutMs}
+		return Self{compiler: compiler, workingDir: repoRoot, repoRootLabel: ActingTree.tree(repoRoot.path), timeoutMs: CompilerChildTimeoutMs}
 	end 'inTree'
 
 	function boundedBy(bound DurationMs) returns ToolContext
-		return Self{compiler: self.compiler, workingDir: self.workingDir, repoRootLabel: self.repoRootLabel, timeoutMs: bound}
+		return Self{compiler: self.compiler, workingDir: self.workingDir, repoRootLabel: self.repoRootLabel.clone(), timeoutMs: bound}
 	end 'boundedBy'
 end 'ToolContext'
 
-typealias ToolAnswer = function(CollectedOutput, DurationMs) returns String
+typealias ToolAnswer = function(StringArray, CollectedOutput, DurationMs) returns String
 module typealias ToolWithin = function(JsonDoc, JsonNodeId, OptionalNode, ToolContext) returns String
 
 function runCompilerThen(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, what String, answer ToolAnswer) returns String
@@ -57,7 +57,7 @@ function runCompilerThen(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, arg
 		return toolErrorText(reqDoc, idNode: idNode, message: unfinishedChildReason(err, doing: "run {what}"), repoRoot: ctx.repoRootLabel)
 	end 'unfinished'
 
-	return answer(res, Clock.elapsedMs(startTime))
+	return answer(argv, res, Clock.elapsedMs(startTime))
 end 'runCompilerThen'
 
 function reportSubprocess(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput) returns String
@@ -66,7 +66,7 @@ function reportSubprocess(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, ar
 end 'reportSubprocess'
 
 function runAndReport(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, what String) returns String
-	return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: what, answer: function(res CollectedOutput, _ DurationMs) gives reportSubprocess(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res))
+	return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: what, answer: function(ranArgv StringArray, res CollectedOutput, _ DurationMs) gives reportSubprocess(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res))
 end 'runAndReport'
 
 module function withinContext(context TreeContext, reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, tool ToolWithin) returns String
@@ -216,21 +216,23 @@ type SourceTarget
 end 'SourceTarget'
 
 function resolveSourceTarget(reqDoc JsonDoc, args OptionalNode) returns SourceTarget
-	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: "")
-	let sourceArg = getOptionalStringArg(reqDoc, args: args, key: "source", defaultVal: "")
-
 	// A tool silently preferring one would act on something the caller did not name.
-	if not pathArg.isEmpty() and not sourceArg.isEmpty() 'both'
+	let source = statedTextArg(reqDoc, args: args, key: "source")
+	let path = statedTextArg(reqDoc, args: args, key: "path")
+
+	if path.isStated() and source.isStated() 'both'
 		return SourceTarget.refused("`path` and `source` are mutually exclusive — give one.")
 	end 'both'
 
-	if not sourceArg.isEmpty() 'inline'
+	if let sourceArg = try source.text() 'inline'
 		let file = try stageSnippet(sourceArg) otherwise return SourceTarget.refused("could not stage the inline source into a scratch file.")
 		return SourceTarget.staged(file)
 	end 'inline'
 
 	// `.` names the working directory, which is what naming nothing already means.
-	if pathArg.isEmpty() or pathArg.equals(".") 'unnamed'
+	let pathArg = try path.text() otherwise return SourceTarget.nothing()
+
+	if pathArg.equals(".") 'unnamed'
 		return SourceTarget.nothing()
 	end 'unnamed'
 
@@ -242,6 +244,11 @@ end 'resolveSourceTarget'
 // Standard tools
 // =============================================================================
 
+function treeCompilerOf(reqDoc JsonDoc, args OptionalNode) returns TreeCompiler
+	let fromArg = try statedStringArg(reqDoc, args: args, key: FromArgument) otherwise return TreeCompiler.ownSlot
+	return TreeCompiler.named(fromArg)
+end 'treeCompilerOf'
+
 module function buildToolContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, devMode bool) returns TreeContext
 	if not devMode 'hostOnly'
 		return TreeContext.usable(ToolContext.hostRelative(exePath))
@@ -249,10 +256,7 @@ module function buildToolContext(reqDoc JsonDoc, idNode JsonNodeId, args Optiona
 
 	// `from` names the compiler to build WITH — the seed case, where the tree's own slot may be
 	// empty precisely because that is what is being fixed.
-	let fromArg = getOptionalStringArg(reqDoc, args: args, key: FromArgument, defaultVal: "")
-	let compiler = TreeCompiler.ownSlot if fromArg.isEmpty() else TreeCompiler.named(fromArg)
-
-	return resolveTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath, compiler: compiler)
+	return resolveTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath, compiler: treeCompilerOf(reqDoc, args: args))
 end 'buildToolContext'
 
 module function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
@@ -270,9 +274,7 @@ module function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args O
 		argv.push(target.file.path)
 	end 'hasSource'
 
-	let outputArg = getOptionalStringArg(reqDoc, args: args, key: "output", defaultVal: "")
-
-	if not outputArg.isEmpty() 'hasOut'
+	if let outputArg = try statedStringArg(reqDoc, args: args, key: "output") 'hasOut'
 		argv.push("{OutputFlagPrefix}{outputArg}")
 	end 'hasOut' else if target.isSnippet 'besideTheSnippet'
 		argv.push("{OutputFlagPrefix}{pathWithoutSuffix(target.file, suffix: SnippetExtension).path}")
@@ -280,9 +282,7 @@ module function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args O
 
 	// A triple is a flag and a target name a positional: `maxon build` reads a bare word as a target
 	// or else a source path, so a triple pushed positionally would compile a file named `wasm32-wasi`.
-	let targetArg = getOptionalStringArg(reqDoc, args: args, key: TargetOption, defaultVal: "")
-
-	if not targetArg.isEmpty() 'hasTgt'
+	if let targetArg = try statedStringArg(reqDoc, args: args, key: TargetOption) 'hasTgt'
 		match parseBuildTarget(targetArg) 'targetKind'
 			resolved then argv.push("{TargetFlagPrefix}{targetArg}")
 			unrecognized then argv.push(targetArg)
@@ -355,12 +355,7 @@ module function executeTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Op
 end 'executeTestToolWithin'
 
 function valuedOptionOf(reqDoc JsonDoc, args OptionalNode, key String, prefix String) returns StringArray
-	let value = getOptionalStringArg(reqDoc, args: args, key: key, defaultVal: "")
-
-	if value.isEmpty() 'notGiven'
-		return StringArray.create()
-	end 'notGiven'
-
+	let value = try statedStringArg(reqDoc, args: args, key: key) otherwise return StringArray.create()
 	return ["{prefix}{value}"]
 end 'valuedOptionOf'
 
@@ -392,8 +387,12 @@ module function executeFmtToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Opt
 
 	// A snippet is formatted in its scratch file and read back: `fmt` rewrites in place and prints
 	// nothing, so the formatted text is the file's new contents.
-	return target.answeredWith(runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: FmtCommandName, answer: function(res CollectedOutput, _ DurationMs) gives formattedSnippetReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, staged: target.file, res: res)))
+	return target.answeredWith(formatStagedSnippet(reqDoc, idNode: idNode, ctx: ctx, argv: argv, staged: target.file))
 end 'executeFmtToolWithin'
+
+function formatStagedSnippet(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, staged FilePath) returns String
+	return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: FmtCommandName, answer: function(ranArgv StringArray, res CollectedOutput, _ DurationMs) gives formattedSnippetReply(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, staged: staged, res: res))
+end 'formatStagedSnippet'
 
 function formattedSnippetReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, staged FilePath, res CollectedOutput) returns String
 	var doc = JsonDoc.create()
@@ -428,7 +427,7 @@ end 'InProcessCompile'
 // output has to be read back: the pipeline stops at a `CodeResult`, exactly as `maxon lsp-server` compiles
 // a buffer. The capture keeps the pipeline's diagnostics off this server's own streams.
 function compileInProcess(reqDoc JsonDoc, args OptionalNode, rendersTargetIr bool, fileMemos SharedFileMemoMap) returns InProcessCompile
-	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: "")
+	let pathArg = requiredStringArg(reqDoc, args: args, key: "path")
 	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: TreeLockHold.none())
 
 	let path = try FilePath.from(pathArg) otherwise 'badPath'
@@ -536,7 +535,7 @@ module function resolveTreeContext(reqDoc JsonDoc, idNode JsonNodeId, args Optio
 	let root = resolveTargetRepoRoot(reqDoc, args: args, exePath: exePath)
 
 	if not root.ok() 'badRoot'
-		return TreeContext.answered(toolErrorText(reqDoc, idNode: idNode, message: root.error, repoRoot: ""))
+		return TreeContext.answered(toolErrorText(reqDoc, idNode: idNode, message: root.error, repoRoot: ActingTree.host))
 	end 'badRoot'
 
 	return match compiler 'which'
@@ -547,7 +546,7 @@ end 'resolveTreeContext'
 
 function slotCompilerContext(reqDoc JsonDoc, idNode JsonNodeId, repoRoot FilePath) returns TreeContext
 	let binary = try compilerBinary(repoRoot) otherwise 'notBuilt'
-		return TreeContext.answered(toolErrorText(reqDoc, idNode: idNode, message: compilerBinaryMissingReason(repoRoot), repoRoot: repoRoot.path))
+		return TreeContext.answered(toolErrorText(reqDoc, idNode: idNode, message: compilerBinaryMissingReason(repoRoot), repoRoot: ActingTree.tree(repoRoot.path)))
 	end 'notBuilt'
 
 	return TreeContext.usable(ToolContext.inTree(binary, repoRoot: repoRoot))
@@ -555,11 +554,11 @@ end 'slotCompilerContext'
 
 function namedCompilerContext(reqDoc JsonDoc, idNode JsonNodeId, repoRoot FilePath, spelling String) returns TreeContext
 	let candidate = try FilePath.from(spelling) otherwise 'badFrom'
-		return TreeContext.answered(toolErrorText(reqDoc, idNode: idNode, message: "`{FromArgument}` is not a valid filesystem path: {spelling}", repoRoot: repoRoot.path))
+		return TreeContext.answered(toolErrorText(reqDoc, idNode: idNode, message: "`{FromArgument}` is not a valid filesystem path: {spelling}", repoRoot: ActingTree.tree(repoRoot.path)))
 	end 'badFrom'
 
 	if not File.exists(candidate) 'noFrom'
-		return TreeContext.answered(toolErrorText(reqDoc, idNode: idNode, message: "compiler binary in `{FromArgument}` does not exist: {spelling}", repoRoot: repoRoot.path))
+		return TreeContext.answered(toolErrorText(reqDoc, idNode: idNode, message: "compiler binary in `{FromArgument}` does not exist: {spelling}", repoRoot: ActingTree.tree(repoRoot.path)))
 	end 'noFrom'
 
 	return TreeContext.usable(ToolContext.inTree(candidate, repoRoot: repoRoot))
@@ -569,7 +568,7 @@ end 'namedCompilerContext'
 // `execute`, `test` and `fmt` resolve their paths against the caller's cwd, so falling back to the
 // tree this binary sits in would run the command somewhere the argument was never written for.
 module function hostOrTreeContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath) returns TreeContext
-	if getOptionalStringArg(reqDoc, args: args, key: "repoRoot", defaultVal: "").isEmpty() 'noTreeNamed'
+	if not statedTextArg(reqDoc, args: args, key: "repoRoot").isStated() 'noTreeNamed'
 		return TreeContext.usable(ToolContext.hostRelative(exePath))
 	end 'noTreeNamed'
 
@@ -581,7 +580,7 @@ module function executeSpecTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, arg
 
 	match specToolArgv(reqDoc, idNode: idNode, args: args, ctx: ctx, directory: dirArg, tool: SpecTestToolName, filterRequired: false) 'argv'
 		refused(reply) then return reply
-		built(argv) then return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: SpecTestCommandName, answer: function(res CollectedOutput, took DurationMs) gives specTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: took))
+		built(argv) then return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: SpecTestCommandName, answer: function(ranArgv StringArray, res CollectedOutput, took DurationMs) gives specTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res, durationMs: took))
 	end 'argv'
 end 'executeSpecTestToolWithin'
 
@@ -666,7 +665,7 @@ module function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, ar
 	argv.append(valuedOptionOf(reqDoc, args: args, key: EmitCorpusOption, prefix: EmitCorpusFlagPrefix))
 	argv.append(valuedOptionOf(reqDoc, args: args, key: LogOption, prefix: LogFlagPrefix))
 
-	return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: ScaleTestCommandName, answer: function(res CollectedOutput, took DurationMs) gives scaleTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: took, resultPath: resultPath))
+	return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: ScaleTestCommandName, answer: function(ranArgv StringArray, res CollectedOutput, took DurationMs) gives scaleTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res, durationMs: took, resultPath: resultPath))
 end 'executeScaleTestToolWithin'
 
 function scaleTestReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, resultPath FilePath) returns String
@@ -697,7 +696,7 @@ end 'scaleTestReply'
 module function executeSpecOutcomeToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	match specToolArgv(reqDoc, idNode: idNode, args: args, ctx: ctx, directory: DefaultSpecDir, tool: SpecOutcomeToolName, filterRequired: true) 'argv'
 		refused(reply) then return reply
-		built(argv) then return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: SpecTestCommandName, answer: function(res CollectedOutput, took DurationMs) gives specOutcomeReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: took))
+		built(argv) then return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: SpecTestCommandName, answer: function(ranArgv StringArray, res CollectedOutput, took DurationMs) gives specOutcomeReply(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res, durationMs: took))
 	end 'argv'
 end 'executeSpecOutcomeToolWithin'
 

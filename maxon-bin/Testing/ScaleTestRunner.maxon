@@ -267,10 +267,10 @@ end 'phaseMetricOf'
 //
 // The alias's range IS the accepted range, so the type and `parseRepeatCount`'s bound check cannot
 // disagree about what a valid repeat count is.
-export typealias RepeatCount = int(1 to 25)
+export typealias ScaleRepeatCount = int(1 to 25)
 
-export let MinRepeatCount = 1 as RepeatCount
-export let MaxRepeatCount = 25 as RepeatCount
+export let MinRepeatCount = 1 as ScaleRepeatCount
+export let MaxRepeatCount = 25 as ScaleRepeatCount
 
 // ONE (user ruling, 2026-07-27) — because the routine per-rung read is a MEMORY read, and MEASURED,
 // the repeats buy that read NOTHING.
@@ -305,13 +305,13 @@ export let MaxRepeatCount = 25 as RepeatCount
 //   2. CPU rows logged before this date are MINIMA and rows after it are single samples, so they sit
 //      ~10% apart for no reason in the compiler. The changeover is recorded in
 //      docs/optimization-log.md at the date; do not read that step as a regression.
-export let DefaultRepeatCount = 1 as RepeatCount
+export let DefaultRepeatCount = 1 as ScaleRepeatCount
 
 // The outcome of parsing `--repeat=<n>`. A union rather than a throw, for `--rungs`'s reason: the
 // caller is inside the argument loop and must neither diverge nor invent a value — `invalid` is
 // recorded as a bad option and the driver then refuses to run at all.
 export union RepeatCountArg
-	valid(count RepeatCount)
+	valid(count ScaleRepeatCount)
 	invalid
 end 'RepeatCountArg'
 
@@ -332,7 +332,7 @@ export function parseRepeatCount(raw String) returns RepeatCountArg
 		return RepeatCountArg.invalid
 	end 'outOfRange'
 
-	return RepeatCountArg.valid(value as RepeatCount)
+	return RepeatCountArg.valid(value as ScaleRepeatCount)
 end 'parseRepeatCount'
 
 // ===========================================================================================
@@ -356,7 +356,7 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	end 'noPositional'
 
 	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
-		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
+		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={try args.emitCorpus.text() otherwise panic("runScaleTest: only a stated --emit-corpus names a path that can fail to parse")}")
 	end 'badCorpus'
 
 	var treeLock = TreeLockHold.none()
@@ -409,8 +409,8 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock TreeLo
 		return brokenRun("the trend log could not be read", detail: scaleErrorText(error))
 	end 'noTrend'
 
-	if not args.note.isEmpty() 'wantsToRecord'
-		try assertRecordable(trend, note: args.note, mintedAt: mintedAt, rungs: args.rungs) otherwise (error) 'unrecordable'
+	if let note = try args.note.text() 'wantsToRecord'
+		try assertRecordable(trend, note: note, mintedAt: mintedAt, rungs: args.rungs) otherwise (error) 'unrecordable'
 			return brokenRun("this run could not be recorded", detail: scaleErrorText(error))
 		end 'unrecordable'
 	end 'wantsToRecord'
@@ -430,7 +430,7 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock TreeLo
 	// `printCorpusManifest`.
 	printCorpusManifest()
 
-	if not args.emitCorpus.isEmpty() 'corpusOnly'
+	if args.emitCorpus.isStated() 'corpusOnly'
 		print("scale-test: corpus written to {corpusRoot.toString()} (--emit-corpus: not compiling)\n")
 		return SucceededExit
 	end 'corpusOnly'
@@ -499,14 +499,14 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock TreeLo
 	printMemoryTrend(results, trend: trend, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
 	printCorpusGrowth(results)
 
-	if not args.resultJson.isEmpty() 'json'
-		try writeResultJson(args.resultJson, results: results, trend: trend, repeat: RepeatSampling.stated(args.repeat), mintedAt: mintedAt, bytes: bytesComparable) otherwise (error) 'jsonFailed'
+	if let resultJson = try args.resultJson.text() 'json'
+		try writeResultJson(resultJson, results: results, trend: trend, repeat: RepeatSampling.stated(args.repeat), mintedAt: mintedAt, bytes: bytesComparable) otherwise (error) 'jsonFailed'
 			return brokenRun("the result document could not be written", detail: scaleErrorText(error))
 		end 'jsonFailed'
 	end 'json'
 
-	if not args.note.isEmpty() 'record'
-		let recorded = recordRun(results, note: args.note, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
+	if let note = try args.note.text() 'record'
+		let recorded = recordRun(results, note: note, mintedAt: mintedAt, bytes: bytesComparable, moved: memoryMoved)
 
 		if not exitSucceeded(recorded) 'recordFailed'
 			return recorded
@@ -565,8 +565,8 @@ end 'unchangedColumnsText'
 // otherwise it goes to the gitignored `.scale-tmp/`, relative to the working directory — see
 // CorpusRelativeRoot for why relative rather than absolute is load-bearing.
 function corpusRootPath(args MaxonArgs) returns FilePath throws FilePathError
-	if not args.emitCorpus.isEmpty() 'explicit'
-		return try FilePath.from(args.emitCorpus)
+	if let emitCorpus = try args.emitCorpus.text() 'explicit'
+		return try FilePath.from(emitCorpus)
 	end 'explicit'
 
 	return try FilePath.from(CorpusRelativeRoot)
@@ -654,7 +654,7 @@ end 'corpusRootFile'
 // stall from the ONE phase it landed in instead of discarding every good reading in the run around
 // it. Each row is the best available answer to "what does this phase cost", which is the question
 // the table is asked; no row is a claim about a particular process.
-function leastCpuRung(first RungResult, again RungResult, run RepeatCount) returns RungResult throws ScaleError
+function leastCpuRung(first RungResult, again RungResult, run ScaleRepeatCount) returns RungResult throws ScaleError
 	// The emitted code size is the degeneracy check's subject, so a rung that emitted a different
 	// executable on the second compile is the same failure as a phase that allocated differently —
 	// it is simply not a number this instrument may keep.
@@ -695,7 +695,7 @@ end 'leastCpuRung'
 // The memory numbers are not folded at all. They are bit-for-bit reproducible, so a second compile
 // has nothing to add to them and everything to say about whether that claim is still true — which is
 // the one thing a repeated compile can check for free, and the one-shot runner could not check at all.
-function leastCpuPhase(first PhaseMetric, again PhaseMetric, what String, rung RungIndex, run RepeatCount) returns PhaseMetric throws ScaleError
+function leastCpuPhase(first PhaseMetric, again PhaseMetric, what String, rung RungIndex, run ScaleRepeatCount) returns PhaseMetric throws ScaleError
 	if again.allocs != first.allocs or again.frees != first.frees or again.bytes != first.bytes 'memoryMoved'
 		throw ScaleError.reason("rung {rung} `{what}`: the first compile reported {first.allocs} allocs / {first.frees} frees / {first.bytes} bytes, repeat {run + 1} reported {again.allocs} / {again.frees} / {again.bytes}")
 	end 'memoryMoved'
@@ -935,7 +935,7 @@ end 'measureOf'
 //
 // The regalloc sub-phases are printed under the phases, not among them: they are a BREAKDOWN of
 // `phase:regalloc` and adding them to the same list would double-count every allocation they make.
-function printPhaseTable(results RungResultArray, measure ScaleMeasure, repeat RepeatCount)
+function printPhaseTable(results RungResultArray, measure ScaleMeasure, repeat ScaleRepeatCount)
 	print("\n")
 	print("  per-phase {measureHeading(measure)}, and its growth over the rung below (the ladder DOUBLES: x2.00 is linear)\n")
 	print("  {repeatNote(measure, repeat: repeat)}\n")
@@ -970,7 +970,7 @@ end 'measureHeading'
 // that: the exact ones took the first and re-checked the rest, the CPU one took the smallest (see
 // this file's header). A reader told neither will assume whichever they last read about, and the
 // two carry very different licences to act on a small movement.
-function repeatNote(measure ScaleMeasure, repeat RepeatCount) returns String
+function repeatNote(measure ScaleMeasure, repeat ScaleRepeatCount) returns String
 	return match measure 'm'
 		allocations or
 			bytes gives exactColumnNote(repeat)
@@ -978,7 +978,7 @@ function repeatNote(measure ScaleMeasure, repeat RepeatCount) returns String
 	end 'm'
 end 'repeatNote'
 
-function exactColumnNote(repeat RepeatCount) returns String
+function exactColumnNote(repeat ScaleRepeatCount) returns String
 	if repeat == 1 'oneCompile'
 		return "from ONE compile per rung (--repeat=1). Exact and reproducible; a repeat would only re-check it."
 	end 'oneCompile'
@@ -986,7 +986,7 @@ function exactColumnNote(repeat RepeatCount) returns String
 	return "from the FIRST of {repeat} compiles per rung, and IDENTICAL in every one of them — checked, not assumed."
 end 'exactColumnNote'
 
-function leastCpuNote(repeat RepeatCount) returns String
+function leastCpuNote(repeat ScaleRepeatCount) returns String
 	if repeat == 1 'oneCompile'
 		return "from ONE compile per rung (--repeat=1): a single sample, undefended against a stall."
 	end 'oneCompile'

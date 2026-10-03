@@ -159,20 +159,25 @@ end 'objectHasKey'
 // A read defaults, or answers absent, on a miss. That is sound only because `validateToolArguments`
 // has already refused any key the tool does not declare and any value of the wrong shape.
 
-export function argumentsGiven(args OptionalNode) returns bool
-	return match args 'a'
-		none gives false
-		some(id) gives id >= 0
-	end 'a'
-end 'argumentsGiven'
+export union ActingTree
+	host
+	tree(root String)
+end 'ActingTree'
 
-// Meaningful only where `argumentsGiven` already answered true.
-export function argumentsNode(args OptionalNode) returns JsonNodeId
-	return match args 'a'
-		none gives 0 as JsonNodeId
-		some(id) gives id
+export function statedStringArg(doc JsonDoc, args OptionalNode, key String) returns String throws AbsentError
+	match args 'a'
+		none then throw AbsentError.absent
+		some(id) then return try doc.getString(id, key: key) otherwise throw AbsentError.absent
 	end 'a'
-end 'argumentsNode'
+end 'statedStringArg'
+
+export function requiredStringArg(doc JsonDoc, args OptionalNode, key String) returns String
+	return try statedStringArg(doc, args: args, key: key) otherwise panic("requiredStringArg: `{key}` is a required argument, and `validateToolArguments` refuses a call that omits one")
+end 'requiredStringArg'
+
+export function statedTextArg(doc JsonDoc, args OptionalNode, key String) returns StatedText
+	return StatedText.stated(try statedStringArg(doc, args: args, key: key) otherwise return StatedText.unstated)
+end 'statedTextArg'
 
 export function getOptionalStringArg(doc JsonDoc, args OptionalNode, key String, defaultVal String) returns String
 	return match args 'a'
@@ -208,20 +213,22 @@ export function getOptionalBoolArg(doc JsonDoc, args OptionalNode, key String, d
 end 'getOptionalBoolArg'
 
 export function getOptionalStringListArg(doc JsonDoc, args OptionalNode, key String) returns StringArray
-	var result = StringArray.create()
+	match args 'a'
+		none then return StringArray.create()
+		some(argsId) then return stringListArgIn(doc, argsId: argsId, key: key)
+	end 'a'
+end 'getOptionalStringListArg'
 
-	if not argumentsGiven(args) 'noArgs'
-		return result
-	end 'noArgs'
-
-	var childId = 0 as JsonNodeId
-
-	match resolveChildKey(doc, parent: argumentsNode(args), key: key) 'cr'
-		none then return result
-		some(id) then childId = id
+function stringListArgIn(doc JsonDoc, argsId JsonNodeId, key String) returns StringArray
+	match resolveChildKey(doc, parent: argsId, key: key) 'cr'
+		none then return StringArray.create()
+		some(valueId) then return stringListAt(doc, valueId: valueId, key: key)
 	end 'cr'
+end 'stringListArgIn'
 
-	let value = doc.get(childId)
+function stringListAt(doc JsonDoc, valueId JsonNodeId, key String) returns StringArray
+	var result = StringArray.create()
+	let value = doc.get(valueId)
 
 	if value.kind == JsonKind.jsonString 'oneString'
 		result.push(value.stringValue)
@@ -243,7 +250,7 @@ export function getOptionalStringListArg(doc JsonDoc, args OptionalNode, key Str
 	end 'each'
 
 	return result
-end 'getOptionalStringListArg'
+end 'stringListAt'
 
 // =============================================================================
 // Responses
@@ -301,15 +308,14 @@ end 'toolResultText'
 // What tree a tool acted in is the single most consequential fact about a dev-mode call, and the
 // caller cannot see it any other way: one server process serves every worktree. Every answer carries
 // it back so a caller can read it against the tree they meant.
-function addRepoRootIfKnown(doc JsonDoc, payload JsonObjectBuilder, repoRoot String)
-	if repoRoot.isEmpty() 'namesNoTree'
-		return
-	end 'namesNoTree'
-
-	payload.addString(doc, key: "repoRoot", value: repoRoot)
+function addRepoRootIfKnown(doc JsonDoc, payload JsonObjectBuilder, repoRoot ActingTree)
+	match repoRoot 'tree'
+		host then return
+		tree(root) then payload.addString(doc, key: "repoRoot", value: root)
+	end 'tree'
 end 'addRepoRootIfKnown'
 
-export function toolErrorPayload(doc JsonDoc, message String, repoRoot String) returns JsonObjectBuilder
+export function toolErrorPayload(doc JsonDoc, message String, repoRoot ActingTree) returns JsonObjectBuilder
 	var payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: false)
 	payload.addString(doc, key: "error", value: message)
@@ -318,20 +324,20 @@ export function toolErrorPayload(doc JsonDoc, message String, repoRoot String) r
 	return payload
 end 'toolErrorPayload'
 
-export function toolErrorText(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot String) returns String
+export function toolErrorText(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot ActingTree) returns String
 	var doc = JsonDoc.create()
 	let payload = toolErrorPayload(doc, message: message, repoRoot: repoRoot)
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
 end 'toolErrorText'
 
-export function addRunFields(doc JsonDoc, payload JsonObjectBuilder, command String, repoRoot String, res CollectedOutput)
+export function addRunFields(doc JsonDoc, payload JsonObjectBuilder, command String, repoRoot ActingTree, res CollectedOutput)
 	payload.addString(doc, key: "command", value: command)
 	addRepoRootIfKnown(doc, payload: payload, repoRoot: repoRoot)
 	payload.addNumber(doc, key: "exitCode", value: res.exitCode() as JsonFloat)
 end 'addRunFields'
 
-export function formatSubprocessResult(res CollectedOutput, command String, repoRoot String) returns String
+export function formatSubprocessResult(res CollectedOutput, command String, repoRoot ActingTree) returns String
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: res.succeeded())

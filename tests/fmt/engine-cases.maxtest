@@ -10,8 +10,10 @@ let StagedSourceExtension = ".maxon"
 
 let UnlexableCasePrefix = "Unterminated"
 let ShebangMarker = "#!"
+let NoSuchLine = "no such line"
 
 typealias CommentOccurrenceTally = int(0 to u64.max)
+typealias CaseLineNumber = int(1 to u64.max)
 typealias FormattedTextMap = Map with (String, String)
 
 type EngineCorpus
@@ -143,7 +145,7 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 			let expected = corpus.caseText(engineCase.name, storedExtension: CaseExpectedExtension)
 
 			if formatted != expected 'divergedFromTheOracle'
-				diverged.push("{engineCase.name}: its {CaseExpectedExtension} holds{LineFeed}{expected}and `fmt` wrote{LineFeed}{formatted}")
+				diverged.push("{engineCase.name}: {firstDifference(expected, formatted: formatted)}{LineFeed}its {CaseExpectedExtension} holds{LineFeed}{expected}and `fmt` wrote{LineFeed}{formatted}")
 			end 'divergedFromTheOracle'
 		end 'hasOracle'
 
@@ -183,6 +185,31 @@ end 'formatting the engine corpus reproduces every oracle, keeps every comment a
 function negativeControlCases() returns StringArray
 	return ["NoMultilineLiteral", "PlainStringNoInterpolation", "UrlInPlainString"]
 end 'negativeControlCases'
+
+function firstDifference(expected String, formatted String) returns String
+	let expectedLines = expected.split(LineFeed)
+	let formattedLines = formatted.split(LineFeed)
+
+	for (iter, expectedLine) in expectedLines.withIterator() 'eachLine'
+		let lineNumber = (iter.index() + 1) as CaseLineNumber
+		let formattedLine = try formattedLines.get(iter.index()) otherwise return differenceAt(lineNumber, expectedHolds: quotedLine(expectedLine), formattedHolds: NoSuchLine)
+
+		if formattedLine != expectedLine 'differs'
+			return differenceAt(lineNumber, expectedHolds: quotedLine(expectedLine), formattedHolds: quotedLine(formattedLine))
+		end 'differs'
+	end 'eachLine'
+
+	let extraLine = try formattedLines.get(expectedLines.count()) otherwise panic("engine-cases.test: the two texts differ, yet every line of the {CaseExpectedExtension} matches the formatted text and it has no line past them.")
+	return differenceAt((expectedLines.count() + 1) as CaseLineNumber, expectedHolds: NoSuchLine, formattedHolds: quotedLine(extraLine))
+end 'firstDifference'
+
+function differenceAt(lineNumber CaseLineNumber, expectedHolds String, formattedHolds String) returns String
+	return "line {lineNumber} is the first to differ: its {CaseExpectedExtension} holds {expectedHolds} and `fmt` wrote {formattedHolds}"
+end 'differenceAt'
+
+function quotedLine(line String) returns String
+	return "\"{line}\""
+end 'quotedLine'
 
 function stageEngineCases(corpus EngineCorpus) returns StagedEngineCaseArray
 	let stagingDir = freshStagingDir(EngineStagingDirName)

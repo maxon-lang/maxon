@@ -24,8 +24,7 @@ up — cannot ask any of them. These three members are the answers that change n
 ⛔ **THE LINE ANSWER IS A UNION BECAUSE A BLANK LINE IS A LINE.** `echo.` writes a line whose text is `""`,
 which is also the only string a `""`-returning door could use for "nothing buffered" — so a caller keyed off
 emptiness silently DROPS every blank line the child writes, and nothing downstream can tell that it did.
-MEASURED: `maxon monitor`, whose whole job is forwarding a traced child's output verbatim, dropped both a
-blank stdout line and a blank stderr line where the reference monitor forwarded them.
+`maxon monitor`, whose whole job is forwarding a traced child's output verbatim, is such a caller.
 `a-blank-line-is-a-line-and-not-an-empty-pipe` is the case that separates the two.
 
 ⛔ **`waitWithTimeout` IS NOT A POLL, AND REACHING FOR IT AS ONE IS THE TRAP `pollExit` EXISTS TO CLOSE.**
@@ -112,7 +111,7 @@ normally. It must report the exit code IT chose, **42**.
 ⛔ **A `1` HERE MEANS THE POLL KILLED THE CHILD.** `1` is the code the runtime stamps on a child it
 terminates when a `waitWithTimeout` deadline fires, so a `pollExit` implemented on top of that path — the
 obvious wrong implementation, and the reason this member is not a wrapper — turns this case red with
-`code=1` rather than merely failing to answer. MEASURED against THIS child: `waitWithTimeout(50)` throws
+`code=1` rather than merely failing to answer. Against THIS child, `waitWithTimeout(50)` throws
 `SubprocessError.timeout`, whose rendering opens `timed out after 50ms`, and a following `wait()` answers **1**, so the two outcomes really are
 distinguishable by the number and not only in principle. `exitedSeen` staying `-1` is the second half of
 the same claim: not one of the five polls claimed an exit that had not happened.
@@ -434,10 +433,9 @@ line whose text is the empty string, which is exactly the value a `""`-returning
 for *"nothing is buffered"* — so under such a door the blank line is not merely mis-labelled, it is
 UNREPORTABLE, and every caller drops it.
 
-⛔ **THE WRONG ANSWER HERE IS A DROPPED LINE, NOT A CRASH.** MEASURED before the union: `maxon monitor`
-forwarded a traced child's `line-one` and `line-three` and silently swallowed the blank line between them,
-on both stdout and stderr, where the reference monitor forwarded all three — an instrument quietly editing
-the output it exists to relay.
+⛔ **THE WRONG ANSWER HERE IS A DROPPED LINE, NOT A CRASH.** A `maxon monitor` keyed off emptiness
+forwards a traced child's `line-one` and `line-three` and silently swallows the blank line between them,
+on both stdout and stderr — an instrument quietly editing the output it exists to relay.
 
 The exit code sums the three descriptions' lengths (`11 + 6 + 10`), so a blank line that came back `none`
 (4 bytes) is **25** rather than 27 as well as a different stdout line. The spin is bounded at 400 turns of

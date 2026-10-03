@@ -3,7 +3,6 @@ feature: register-parameter-permutation
 status: selfhosted
 keywords: [register-allocator, calling-convention, argument-registers, parallel-copy, entry-parameters, permutation, miscompile]
 category: register-allocator
-milestone: M5.6
 ---
 
 # Parameter / argument register permutation
@@ -118,7 +117,7 @@ resulting slot map is `RCX ← a`, `RDX ← d`, `RAX ← b`, `R9 ← f`, `RSI �
 Look at `b`. Its INCOMING register is `RDX`. `forbidEntryParamCrossRegisters` forbids `b` its
 siblings' incoming registers — `{rcx, rax, r9, rsi, rdi}` — and DELIBERATELY leaves `RDX`
 available, because `b` staying in its own register is the case where the capture self-elides.
-But `RDX` is now argument slot 1, filled with `d` BEFORE `b` is read at slot 2. The ONLY thing
+But `RDX` is also argument slot 1, filled with `d` BEFORE `b` is read at slot 2. The ONLY thing
 stopping `b` from being coloured into `RDX` and destroyed there is `applyForbidden` on the
 physical DEF of `mov rdx, d`. Drop that one edge and `b` silently becomes `d`.
 `shuffle6(1..6)` binds `p1=a=1, p2=d=4, p3=b=2, p4=f=6, p5=e=5, p6=c=3` →
@@ -215,7 +214,7 @@ typealias Integer = int(i64.min to i64.max)
 THE COLLISION, in one function. An `idiv` runs BEFORE the reversed call and all six parameters
 are live across it, so on top of the cross-parameter forbid every one of them is ALSO forbidden
 `{RAX, RDX}`. That takes parameter `c` (incoming **RAX**) and parameter `b` (incoming **RDX**)
-off their own argument registers entirely — their forbidden sets now cover all six argument
+off their own argument registers entirely — their forbidden sets then cover all six argument
 registers, and they must be captured out to non-argument ones. The reversed setup then WRITES
 `RAX` and `RDX` as argument slots 2 and 1. The quotient is read after the call, so it is confined
 to callee-saved.

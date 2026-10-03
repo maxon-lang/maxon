@@ -1203,13 +1203,10 @@ end 'main'
 ```
 
 <!-- test: try-block.managed-var-success-path -->
-Regression: a `var` of a managed (heap-allocated) type declared inside a try block
-body must drop its allocation at the body's success-path live tail. Without the fix
-in `ParseTryBlock`, the var leaked. `VarRegistry.KeysSince` now excludes routed
-`__try_block_result_*` temps (created by `RouteEmittedTryCallToTryBlock`) so the
-body's `MaxonScopeEndOp` only decref's user vars — the user var is assigned the
-same call-return value as the temp without an extra incref, so a single decref via
-the user var is enough to balance the original allocation.
+A `var` of a managed (heap-allocated) type declared inside a try block body, bound
+from a bare throwing call, drops its allocation exactly once at the body's success-path
+tail: the routed call's result is owned by the binding, so it is neither leaked nor
+released a second time.
 ```maxon
 typealias Score = int(-1000 to 1000)
 typealias Inner = Array with Score
@@ -1240,13 +1237,10 @@ end 'main'
 ```
 
 <!-- test: try-block.managed-var-in-nested-if -->
-Regression: when an inner construct (here, an `if` block) sits inside a try block and
-declares a `var` of a managed type via a bare throwing call, the inner construct's
-scope-end must not double-decref the routed `__try_block_result_N` temp.
-`RouteEmittedTryCallToTryBlock` injects the temp into the active parser scope (which
-is the innermost construct, not the try-block itself). Centralising the filter in
-`VarRegistry.KeysSince` covers every callsite (try-block body, if/else, while/for,
-match arms) without per-construct fixes.
+When an inner construct (here, an `if` block) sits inside a try block and declares a
+`var` of a managed type via a bare throwing call, the inner construct's scope end
+releases the routed call's result exactly once — the scope that owns it is the
+innermost construct, not the try block itself.
 ```maxon
 typealias Score = int(-1000 to 1000)
 typealias Inner = Array with Score
@@ -1279,13 +1273,12 @@ end 'main'
 ```
 
 <!-- test: try-block.inline-managed-arg-throws -->
-Regression: a bare throwing call inside a try-block whose argument is an
-inline allocation (`workFunc(IntArray.create())`) must release the
-argument's allocation when the call throws. Previously the argument was
-incref'd into the call but the routed-error path branched to the shared
-error block without including the call's `__call_tmp_*` temp in the
-scope-end set, leaking the IntArray + its backing __ManagedMemory on
-every error-path throw.
+A bare throwing call inside a try-block whose argument is an
+inline allocation (`workFunc(IntArray.create())`) releases the
+argument's allocation when the call throws. The argument is owned by
+the calling statement, so a routed error edge that branched to the shared
+error block without dropping it would leak the IntArray and its backing
+__ManagedMemory on every error-path throw.
 ```maxon
 typealias Idx = int(0 to u64.max)
 typealias IntArray = Array with Idx
@@ -1318,18 +1311,11 @@ end 'main'
 ```
 
 <!-- test: try-block.bare-throw-in-nested-if -->
-Regression guard: a bare `throw` routed to the block handler from inside a
-NESTED construct (`if`/`while`/`match`) within the try body. The throw routes
-to the shared error block from the nested block, not the body's entry block.
-This shape used to crash the self-hosted compiler with an entry-block
-use-after-free: when the try body held a nested control-flow construct, the
-body's entry block was over-released by one (parseTryBlock threaded its
-borrowed `block` param into the inner `parseStatements`, whose first
-reassignment decref'd the borrow without a balancing incref) and freed while
-`module.blocks` still referenced it — a later parser pass then walked the
-dangling block. Fixed by re-fetching the body block as an owned value before
-the inner `parseStatements` (see parseTryBlock's `bodyBlock`). Flat bodies
-(no nested construct) never triggered it.
+A bare `throw` routed to the block handler from inside a NESTED construct
+(`if`/`while`/`match`) within the try body. The throw routes to the shared
+error block from the nested block, not from the body's entry block, so the
+edge is built from whichever block the throw sits in. Flat bodies (no nested
+construct) cannot reach this shape.
 ```maxon
 enum MyError implements Error
     failed
@@ -1356,23 +1342,14 @@ end 'main'
 <!-- test: try-block.routed-union-result-is-released -->
 ### A routed call returning an associated-value union releases its result
 
-A bare throwing call inside a `try` block has its success value hoisted into a routed
-`__try_block_result_N` temp, which receives the callee's *transferred* reference. That temp
-therefore owns a reference and must release it at scope end, exactly like the temp the
-single-statement `try` forms use.
+A bare throwing call inside a `try` block receives the callee's *transferred* reference to its
+success value on the ok edge. That reference is owned, and it is released at scope end exactly as
+the single-statement `try` forms release theirs — an associated-value union included.
 
-It did not. `VarRegistry.KeysSince` excluded `__try_block_result_*` from scope-end cleanup on
-the theory that a downstream `let x = <call>` aliased the same slot without increfing — true
-for a struct return, which was separately handed a `CallReturn` `__call_tmp_` that turned the
-alias into a *move*, and false for an associated-value union, which was handed nothing and so
-increfed like any other alias. The result: one reference per routed union-returning call was
-owned by a temp nobody ever decrefed, and the union leaked.
-
-Nothing in the suite returned a union from a bare call inside a `try` block, so the leak went
-unseen. This test is that shape and nothing more: the success path leaks a `Shape` if the
-routed temp's reference is dropped, and the leak checker fails the run with exit 101. Both
-paths are walked because the error path stores null into the same slot and must not
-double-release it.
+This test is that shape and nothing more: the success path leaks a `Shape` if the routed
+result's reference is never released, and the leak checker fails the run with exit 101. Both
+paths are walked because on the error path the result was never written, and releasing it
+there would fault.
 
 ```maxon
 typealias Num = int(0 to 1000)
@@ -1430,20 +1407,14 @@ end 'main'
 
 
 <!-- test: try-block.union-member-names-join-injectively -->
-A synthesized error union's NAME is a table KEY, not a label: `ParseTryBlock` writes the union into
-the type registry under it and the handler's `match` reads the union back out by it. So the join over
-the member enum names has to be INJECTIVE, or a second union silently REPLACES the first and a
-handler resolves its patterns against the wrong member list. `_` is inside the identifier alphabet,
-so joining with it spells `{A_B, C}` and `{A, B_C}` identically. The nested `try` is what makes it
-observable: it is parsed inside the OUTER handler and BEFORE the outer `match`, so its own union is
-the one sitting under the shared name at the moment `match e` resolves. Measured on the `_` join, the
-outer handler was rejected with `'A_B' is not a member of the error union` for a member it plainly
-has; renaming the four enums so no name holds an `_` compiled and returned 11, which is the control
-saying the underscore is the entire difference. The outer block throws `A_B.kaboom`, so the arm that
-must win sets 11. WRITTEN AS TWO FILES ON PURPOSE, and it is not decoration: the runner's batch
-rewriter gives every top-level declaration in a batched test a per-test prefix, which pulls the two
-member names apart and dissolves the very collision this case is about — a multi-file test is never
-batched (`FragmentGenerator.IsBatchable`), so this is the shape in which the case can still fail.
+Each handler's `match` resolves its patterns against its OWN block's synthesized error union,
+whatever its member enums are called. A union identified by joining its member names with `_` would
+not be injective — `_` is inside the identifier alphabet, so `{A_B, C}` and `{A, B_C}` spell
+identically — and the nested `try` is what makes that observable: it is parsed inside the OUTER
+handler and BEFORE the outer `match`, so its union is the most recent one at the moment `match e`
+resolves. Resolved by such a name, the outer handler would be rejected with `'A_B' is not a member
+of the error union` for a member it plainly has. The outer block throws `A_B.kaboom`, so the arm that
+must win sets 11.
 ```maxon
 // --- file: errors.maxon
 export typealias Score = int(0 to 100)

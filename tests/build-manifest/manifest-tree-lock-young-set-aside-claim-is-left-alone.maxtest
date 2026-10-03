@@ -1,0 +1,13 @@
+test 'a manifest build leaves a set-aside claim alone while the time in its name is inside the claim window, however old its file is'
+	let staged = stagedProject("tree-lock-young-set-aside-claim-is-left-alone", fixture: DefaultFixtureName)
+	plantStaleTreeLockClaim(staged)
+	let aside = plantYoungSetAsideClaimOfAnOldFile(staged)
+
+	let build = spawnManifestBuild(staged, options: StringArray.create())
+	let stderr = withoutCarriageReturns(build.stderr)
+
+	Expect.equal(build.exitCode(), expected: 0, message: "`maxon build` beside a young set-aside claim exited {build.exitCode()}. It wrote to stderr: {stderr}")
+	Expect.isTrue(File.exists(builtExecutable(staged)), message: "`maxon build` exited 0 and wrote no executable to {builtExecutable(staged).toString()}.")
+	Expect.isTrue(File.exists(aside), message: "`maxon build` removed the set-aside claim at {aside.toString()}, whose name says it was set aside just now, because its file was older than the claim window. It wrote to stderr: {stderr}")
+	Expect.isFalse(stderr.contains(TreeLockLeftoverSweptWording), message: "`maxon build` said it removed a leftover tree lock file beside a set-aside claim whose name says it was set aside just now. It wrote to stderr: {stderr}")
+end 'a manifest build leaves a set-aside claim alone while the time in its name is inside the claim window, however old its file is'

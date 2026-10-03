@@ -22,13 +22,12 @@ walk cannot connect to it. Reporting one would be a false accusation, so a path 
 **The boundary is MUTABILITY and not "the base is a local".** A top-level `let` refuses mutation at
 every door — `m.upsert(…)` on it directly and `fill(m)` into a mutating parameter are both E3019 —
 so nothing in a then-block can invalidate a membership answer probed through one, and a key that is
-a top-level `let` cannot be rewritten either. Both of those are exactly what the lint is for, and
-both were skipped while the test was "is the base a local or a capture".
+a top-level `let` cannot be rewritten either. Both of those are exactly what the lint is for, and a
+test of "is the base a local or a capture" would skip both.
 
-Both reference compilers skip the whole global family, because their lint runs over the lowered IR
-and their `BuildAccessPath` / `buildAccessPath` cannot canonicalize a global load at all. the compiler's
-runs in the parser, which holds the tokens AND the declaration — so it can tell the two apart, and
-this is a case where the token-level design is SHARPER than what the references express structurally
+A lint over the lowered IR cannot canonicalize a global load at all. The compiler's runs in the
+parser, which holds the tokens AND the declaration — so it can tell the two apart, and this is a case
+where the token-level design is SHARPER than an IR-level one
 rather than merely equivalent to it.
 
 ## Tests

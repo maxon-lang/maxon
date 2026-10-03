@@ -37,9 +37,8 @@ opens a block that nothing ever closes: the sweep's block-depth counter never re
 from the index rather than malformed, so the diagnostic is about whatever *uses* it:
 
 - a lost `union` made every `match` over it report **`E2015 Unsupported: a match pattern naming 'found'
-  (only literal, range, and 'or' patterns over a scalar are supported; enum-case patterns arrive in a
-  later wave)`** — an unimplemented-feature message for a feature that is implemented and works three
-  lines further up the same file;
+  (a match over a scalar takes only literal, range, and 'or' patterns)`** — a message about scalar
+  matching for a union that is declared and works three lines further up the same file;
 - a lost top-level binding took `ProgramSignatures.recordedDeclFor`'s drift guard down as a compiler
   **PANIC** (*"the declaration sweep never recorded top-level 'counter' … the sweep's block-depth gate
   and the parser's structure disagree about what is top level"*).

@@ -257,15 +257,40 @@ function main() returns ExitCode
 	var offset = 10
 	let addOffset = function(n Score) gives n + offset
 	offset = 20
-	print("{apply(addOffset, x: 5)}\n")     // 25: the closure sees the current offset
+	print("{apply(addOffset, x: 5)} {offset}\n")     // 15 20: the closure keeps the offset it captured
 	return 0
 end 'main'
 ```
 
-- **Captures are by reference.** A closure reads a captured variable's current value when it runs.
-- **A closure that captures cannot outlive its frame.** Returning one, or storing it in a field, a
-  global, a container or a union payload, is **E3099**. Passing it down to a function that calls it is fine.
-  A closure that captures nothing is a plain function reference and can go anywhere.
+**A closure owns what it captures.** What a capture does depends on what is captured:
+
+| Captured | Effect |
+|----------|--------|
+| a scalar | copied into the closure; writes on either side do not reach the other |
+| a local that holds a record, a `String`, an array or a promise | **moved** into the closure when the closure is created; reading the local afterwards is **E3102** (`its ownership moved to the closure that captures it`) |
+| a parameter, `self`, a field or a borrowed value | retained: the closure holds a counted reference to the same record, so a write through the receiver is what the closure reads |
+| a name an enclosing closure captured | taken from that closure's captures |
+
+Clone a local before the closure when the function still needs it (`let mine = word.clone()`). A local
+captured inside a loop is moved on the first trip, so the second is **E3102**. A capture moves its local
+before the call it is an argument of runs, so that call may not also consume the local, take it by
+reference or write it as its receiver (**E3102**); a call that only reads it may. Inside a closure, a captured name is the closure's own
+copy, so passing it to a parameter the callee writes is **E3019**.
+
+**A closure can go anywhere a value can.** A function value is one reference to a record holding the code
+and the captures, so a closure may be returned, stored in a field, a module-level variable, a container or
+a union payload, and passed to `async`, which moves it into the coroutine. A plain function is a record that
+lives for the whole program. Copies share: `var g = f` and `f.clone()` hold the same closure, and a function
+value is exempt from **E3078**. A module-level `let` or `var` may hold a function value, including a closure
+a factory call returns.
+
+**A closure may not be stored into what it captures.** The record would hold the closure and the closure the
+record, and neither would ever be released, so storing a closure — directly, or inside a value holding it —
+into a record it captures or a record that record reaches is **E3183**. The store is followed through fields,
+elements, payloads, tuples, literals, module variables, clones, returned values and the functions a
+closure is handed to, in the order the stores run, and each cycle is reported once, at the store that closes
+it. Two names for one record that only exist at run time are beyond what the compiler can follow.
+
 - A parameter's type may be omitted when the closure is written directly as a call argument whose parameter
   is declared with a function type: the closure's parameters take that type's parameter types, in order —
   `scores.sort(function(a, b) gives b.compare(a))`. A parameter past that function type's arity is **E2003**,

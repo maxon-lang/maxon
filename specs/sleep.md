@@ -83,7 +83,7 @@ Every `async` worker reaches this: a function that never yields cannot be spawne
 at all (`async-await.error.no-yield`), so an outstanding worker parked on I/O is
 the normal case rather than an unlucky interleaving.
 
-The assertion is a WIDE BAND, never an exact duration. The defect it pins returned
+The assertion is a WIDE BAND, never an exact duration. The defect it pins returns
 in **0 ms** against a 300 ms request, so a lower bound of 250 ms separates "slept"
 from "did not sleep" with 250 ms of margin, and the upper bound is loose enough to
 survive any scheduling delay a loaded host can add.
@@ -152,7 +152,7 @@ Verify that a `sleep` inside a green thread yields and resumes it, and that the 
 rather than an I/O operation.
 
 This is the pin for the `sleep_yield`/`sleep_resume` tags on a SPAWNED green thread. The only other case
-that names them, `/specs/http-client.md`'s `async-trace-interleave`, sleeps on `main` (`#0`), so without
+that names them, `specs/http-client.md`'s `async-trace-interleave`, sleeps on `main` (`#0`), so without
 this one a sleep that parks a spawned thread is emitted by the runtime and asserted by nothing.
 
 The shape is `async-await.trace-yield`'s, one operation over: a spawn, the yield, the resume, and the await

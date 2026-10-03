@@ -533,19 +533,16 @@ end 'main'
 
 <!-- test: byte-string-literal.detached-literal-drops-clean -->
 
-A detached literal's `capacity@16` is no longer the rdata sentinel, so its drop now legitimately frees
+A detached literal's `capacity@16` is not the rdata sentinel, so its drop legitimately frees
 the buffer — the one it allocated, never the blob. Five detach-and-drop rounds make either mistake loud:
 a missed free leaks (exit 101) and a freed blob corrupts the allocator.
 
-⚠ **ITS GOLDEN MOVED WHEN `stdlib/File.maxon` WAS FIRST LOADED (R4.7), IN A PROGRAM THAT NEVER MENTIONS
-`File` — AND THE MOVE IS A MISSING CHECK NOW EMITTED, NOT A CODEGEN CHANGE.** MEASURED by an A/B with one
-variable, `detachAndRead` textually identical in both: with `Byte` UNDECLARED the slot before `__managed_set`
-holds `movRegReg rcx, r12`; with `typealias Byte = int(0 to u8.max)` declared it holds
-`cmpRegImm32 rbx, 0` / `cmpRegImm32 rbx, 255` / `mrt_panic`. Loading `File.maxon` supplies
-`export typealias Byte = int(0 to u8.max)` (`:45`), so a `b"…"` literal's element has a DECLARED RANGE for
-the first time and `a.set(0, value: n)` — an `int` into a `Byte` slot — gets the narrowing guard it was
-silently missing. The golden diff is a PURE INSERTION: nothing is removed, nothing reordered, and the
-original `movRegReg rcx, r12` / `__managed_set` sequence survives verbatim under the new `__rc_ok` label.
+⚠ **ITS GOLDEN CARRIES A NARROWING GUARD IN A PROGRAM THAT NEVER MENTIONS `File`.** `stdlib/File.maxon`
+supplies `export typealias Byte = int(0 to u8.max)` (`:45`), so a `b"…"` literal's element has a DECLARED
+RANGE and `a.set(0, value: n)` — an `int` into a `Byte` slot — gets the narrowing guard. The slot before
+`__managed_set` holds `cmpRegImm32 rbx, 0` / `cmpRegImm32 rbx, 255` / `mrt_panic`, and the
+`movRegReg rcx, r12` / `__managed_set` sequence follows under the `__rc_ok` label; with `Byte` UNDECLARED
+the slot holds only `movRegReg rcx, r12`.
 ```maxon
 function detachAndRead(n Integer) returns Integer
 		var a = b"hi"
@@ -722,13 +719,13 @@ cannot rescue — detaching moves the write to a different allocation, it does n
 With the `__ManagedMemory` guard stubbed out, `resize(-2)` on a byte-string literal DOES detach (the detach
 at the head of the grow is unconditional), the growth check is then satisfied (`3 >= -2`) so nothing
 reallocates, and the shrink zeroes from `buffer + n·element_size` — two bytes BELOW the freshly allocated
-private buffer — over the allocation header. Measured that way: the process exits 0, the leak gate stays
+private buffer — over the allocation header. Then the process exits 0, the leak gate stays
 green, `capacity()` reads 3 and `count()` publishes -2.
 
-⚠ **TWO REFUSALS NOW STAND IN FRONT OF THAT, AND THE OUTER ONE IS THE ONE THAT FIRES.** `Array.resize` takes
+⚠ **TWO REFUSALS STAND IN FRONT OF THAT, AND THE OUTER ONE IS THE ONE THAT FIRES.** `Array.resize` takes
 an `ElementIndex`, declared `int(0 to i64.max)`, so a negative is refused at the DOOR — a literal at compile
 time, as below, and a laundered one at the callee-entry guard (exit **1**, not 73). The buffer-level abort
-is now unreachable from any spelling a program can write. It is kept deliberately, as defence in depth: it
+is unreachable from any spelling a program can write. It is kept deliberately, as defence in depth: it
 is the layer that would still be there if a future caller reached `__managed_memory` without passing through
 `Array`, and this line is why nothing can redden it.
 ```maxon
@@ -776,16 +773,15 @@ own source spells a one-byte newline constant.
 
 ⛔ **A `String` literal is the opposite, and the asymmetry is deliberate.** `"…"` carries interpolation
 and escape decoding and is line-oriented; a raw newline in one is `E1002 Unterminated string literal`
-which is what catches a missing closing quote. Measured,
+which is what catches a missing closing quote. In
 one program, both forms: the byte string compiles and holds the newline, the String literal does not.
 Do not "unify" the two scanners on this point.
 
-⚠ **AND A SCANNER THAT CONSUMES A NEWLINE OWES THE LINE COUNTER.** The compiler counted lines in exactly two
-places — the `newline` token and the block-comment body — so a body that swallowed newlines left `line`
-short for the whole rest of the file, and every diagnostic after it named somebody else's code. That
-defect costs twice over: wrong diagnostic
+⚠ **AND A SCANNER THAT CONSUMES A NEWLINE OWES THE LINE COUNTER.** A body that swallows newlines without
+counting them leaves `line` short for the whole rest of the file, and every diagnostic after it names
+somebody else's code. That defect costs twice over: wrong diagnostic
 lines, and `maxon fmt` silently DELETING comments, because it keys them by true source line and emits
-them against token lines. Counting now happens in the one mover every scan funnels through, so the
+them against token lines. Counting happens in the one mover every scan funnels through, so the
 second case below is what stands between this feature and that defect.
 
 <!-- test: byte-string-literal.raw-newline-spans-source-lines -->
@@ -832,7 +828,7 @@ count=1 byte=10
 <!-- test: error.raw-newline-keeps-diagnostic-lines-honest -->
 ⭐⭐ **THE DRIFT GUARD, AND IT IS THE ONLY OBSERVABLE THERE IS.** The literal above the error swallows
 TWO newlines, so a lexer that consumes them without counting reports this call two lines too early —
-measured at line 6 with the counting removed, against the line 8 it is written on. Nothing else in the
+at line 6 with the counting removed, against the line 8 it is written on. Nothing else in the
 suite can see that: the program compiles, runs and answers correctly either way, and only the POSITION
 in the diagnostic moves.
 ```maxon

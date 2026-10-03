@@ -504,7 +504,7 @@ end 'main'
 ### Arithmetic on a Character Is Still Refused
 
 The second NEGATIVE CONTROL. Ordering is not an integral reading: a `Character` is a POINTER to a byte
-record, not a magnitude, so `c - 1` stays refused exactly as it was before the ordering landed.
+record, not a magnitude, so `c - 1` is refused although a `Character` is ordered.
 
 ```maxon
 function main() returns ExitCode
@@ -740,11 +740,9 @@ end 'main'
 The two cases above rest on `asciiValue()` throwing `CharacterError.notAscii`, and the ordinal that reaches
 the failure edge is the COMPILER's: `Runtime/GraphemeRuntime.buildCharAscii` returns `notAscii`'s position as
 `__char_ascii`'s error flag, while `stdlib/Character.maxon:15-17` declares the position it encodes. The compiler has
-no namespace, so a user `enum CharacterError` lands in the same registry bucket — and the array family's
-`error.declare-array-error-enum` measured what that costs before its own reservation existed: the program
-compiled and the runtime's ordinal 0 routed into whichever case the user happened to write first, with no
-diagnostic anywhere. MEASURED here the same way at W135's review — this exact program compiled clean. Refused
-now, exactly as `ArrayError`, `StringError`, `MapError` and `IterationError` are; a REFERENCE to the name in a
+no namespace, so a user `enum CharacterError` would land in the same registry bucket, and the runtime's
+ordinal 0 would route into whichever case the user happened to write first, with no diagnostic anywhere.
+It is refused, exactly as `ArrayError`, `StringError`, `MapError` and `IterationError` are; a REFERENCE to the name in a
 `throws` clause stays legal, which is the whole reason the name is bare.
 ```maxon
 enum CharacterError

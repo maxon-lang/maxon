@@ -32,16 +32,6 @@
 // that shadows a loop-carried `var` would carry the SHADOW's value to the loop's
 // exit phi — a silent miscompile.
 //
-// OWNERSHIP SCAFFOLD (inert): the Own tier places `own.drop`/`own.release`
-// at scope exit for every NON-trivial (owned/borrow/shared) binding a frame declared
-// — a deterministic static-drop mechanism. `popScope` is where that happens,
-// and it needs no side list to
-// do it: draining a frame ALREADY resolves each of its declarations back to the
-// `VarInfo` being torn down, and that record carries both the `ownership` kind to test
-// and the type + slot a drop has to name. A parallel "owned names" array would be a
-// strict projection of `vars` kept in lockstep by hand — state that can drift, buying
-// nothing. Every binding is `trivial`, so the hook never fires.
-//
 // ⚠⚠ **THE SLOT HALF OF THIS API HAS NO CALLERS, AND SAYING SO IS THE POINT OF THIS PARAGRAPH.**
 // `declare`, `declareShadowing`, `bindExistingSlot`, `installVerbatim`, `lookup`, `getType`,
 // `allVars`, `nextSlot` and `setNextSlot` are called from nowhere outside this file. Everything the
@@ -134,7 +124,7 @@ export type Scope
 	// core for `declare`.
 	//
 	// ⚠ It is NOT an error-recovery path: no caller recovers from E3006. The E3006 that exists is
-	// `declareValueBinding`'s, and the parser turns it into a `ParseError` and stops. Nothing
+	// `declareValueBinding`'s, and the parser turns it into a `SourceParseError` and stops. Nothing
 	// consumes this member — see the header.
 	export function declareShadowing(name ByteArray, varType MaxonType, mutable bool) returns VarSlot
 		let slot = nextSlot
@@ -212,7 +202,7 @@ export type Scope
 		return try self.declareBinding(VarInfo.createParameterBinding(name, varType: varType, mutable: mutable, boundValue: value, brandId: brandId))
 	end 'declareParameterBinding'
 
-	// Declare a CELL-RESIDENT binding (PBR-2): `name` denotes the 8-byte heap cell `cell`, so a read is a
+	// Declare a CELL-RESIDENT binding: `name` denotes the heap cell `cell`, so a read is a
 	// `loadIndirect` through it and a rebind a `storeIndirect` — see `VarInfo.isCellBinding`. A named sibling
 	// to `declarePayloadValueBinding` rather than fields set on a returned `VarInfo`, because a binding that
 	// was installed as one kind and mutated into another is a kind no single site declares, and the parser's
@@ -220,8 +210,8 @@ export type Scope
 	//
 	// It shares `declareBinding` with the three above, so the self-field shadow rule stays the one rule for
 	// every name a scope installs.
-	export function declareCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, isParameter bool, crossesByReference bool, brandId TypeNameId) returns VarInfo throws ScopeError
-		return try self.declareBinding(VarInfo.createCellBinding(name, varType: varType, mutable: mutable, cell: cell, isParameter: isParameter, crossesByReference: crossesByReference, brandId: brandId))
+	export function declareCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, epoch ValueId, isParameter bool, crossesByReference bool, brandId TypeNameId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createCellBinding(name, varType: varType, mutable: mutable, cell: cell, epoch: epoch, isParameter: isParameter, crossesByReference: crossesByReference, brandId: brandId))
 	end 'declareCellBinding'
 
 	// The shared body of the four value-binding declarations above: refuse a name that would shadow a
@@ -366,25 +356,12 @@ export type Scope
 	// restoring each binding they displaced (see the header — reverse order is what
 	// unwinds a name declared twice in one frame through its own shadow chain).
 	// O(declarations-in-this-frame).
-	//
-	// THE OWNERSHIP HOOK LIVES HERE: each iteration already holds the `VarInfo`
-	// being torn down, so `ownedInFrame` classifies it in place and the Own tier emits
-	// its `own.drop`/`own.release` at exactly this point. Every binding is
-	// `trivial`, so the classifier is always false and nothing is emitted.
 	export function popScope()
 		let mark = try frameMarks.pop() otherwise panic("Scope.popScope: frameMarks is empty (unmatched popScope)")
 
 		while declNames.count() > mark 'drain'
 			let name = try declNames.pop() otherwise panic("Scope.popScope: declNames.pop failed above the frame mark {mark}")
 			let shadowed = try declShadowed.pop() otherwise panic("Scope.popScope: declShadowed.pop failed — it must stay parallel to declNames")
-
-			// Drained in reverse, so `name` still resolves to the binding THIS declaration
-			// installed — the one leaving scope, and the one a drop would be emitted for.
-			let leaving = try vars.get(name) otherwise panic("Scope.popScope: '{String.from(name)}' is in the frame's declaration list but not in `vars` — the two fell out of lockstep")
-
-			if not isTrivialOwnership(leaving.ownership) 'dropAtScopeExit'
-				panic("Scope.popScope: binding '{String.from(name)}' leaves scope owning a value, but the Own tier that emits its drop is not built yet (M6) — no binding is non-trivial before then")
-			end 'dropAtScopeExit'
 
 			if shadowed 'restoreOuter'
 				let outer = try shadowedInfos.pop() otherwise panic("Scope.popScope: shadowedInfos.pop failed — one entry per declaration marked as shadowing")
@@ -395,8 +372,3 @@ export type Scope
 		end 'drain'
 	end 'popScope'
 end 'Scope'
-
-// A stack of `Scope`s — held by the parser as it detects closure captures (see
-// `Parser.closureCaptureScopes`). A `Scope` is a reference type, so this stack holds pointers to the
-// live enclosing scopes a closure body is checked against, never copies of them.
-export typealias ScopeArray = Array with Scope

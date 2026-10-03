@@ -3,7 +3,6 @@ feature: division
 status: selfhosted
 keywords: [arithmetic, division, modulo, idiv, register-allocator, fixed-register]
 category: operators
-milestone: M5.4
 ---
 
 # Integer division and modulo
@@ -36,8 +35,7 @@ dividend that never reached `RAX` or a divisor colored into `RDX` computes the w
 quotient and the exit-code assertion catches it, and their committed `.test` goldens
 pin the emitted `mov rax` / `cqo` / `idiv` sequence itself against regression.
 
-⭐ **DIVIDE-BY-ZERO IS A LANGUAGE-LEVEL THROW, NOT A HARDWARE TRAP (A1)**, and this file used to say
-the opposite. `/` and `mod` are FALLIBLE: a divisor the compiler cannot prove non-zero makes the
+⭐ **DIVIDE-BY-ZERO IS A LANGUAGE-LEVEL THROW, NOT A HARDWARE TRAP.** `/` and `mod` are FALLIBLE: a divisor the compiler cannot prove non-zero makes the
 divide a throwing operation, so it must sit in a `try (a / b) otherwise …` or the program is refused
 with E3057; a divisor it holds as the constant 0 is refused outright with E3103; and a divisor it
 proves non-zero — a non-zero literal, or a ranged type whose range excludes 0 — compiles to the bare
@@ -59,7 +57,7 @@ is the divisor itself whenever it is non-zero (the flag is 0) and 1 when it is z
 described above; it is not a call, and the fixed-register cases below would still be testing that
 instruction if they were written with a `try`.
 
-⭐ **`mod`'s SECOND GUARD (A1x) COSTS FOUR MORE INSTRUCTIONS, ALSO WITHOUT A BRANCH, AND ONLY WHERE THE
+⭐ **`mod`'s SECOND GUARD COSTS FOUR MORE INSTRUCTIONS, ALSO WITHOUT A BRANCH, AND ONLY WHERE THE
 DIVISOR MIGHT BE `-1`.** `cmp divisor, -1` · a `setcc` · `add mask, isNegOne, -1` (so `mask` is 0 when
 the divisor is `-1` and all-ones otherwise) · `and safeDividend, dividend, mask`. The `idiv` then
 divides **0** whenever the divisor is `-1`, whose remainder is the `0` the language promises and whose
@@ -67,8 +65,8 @@ quotient cannot overflow. It masks the DIVIDEND rather than fixing up the diviso
 is dividend-independent, and it reuses the one `-1` constant for both the compare and the decrement —
 which is why the third instruction is an `add` and not a `sub`.
 
-⚠ **THE PROOF IS WHAT KEEPS IT OFF THE COMMON PATH, and every divide in this file is evidence: not one
-of their goldens moved when A1x landed.** A divisor that is a literal OTHER THAN `-1`, or a variable the
+⚠ **THE PROOF IS WHAT KEEPS IT OFF THE COMMON PATH, and every divide in this file is evidence: none
+of their goldens carries it.** A divisor that is a literal OTHER THAN `-1`, or a variable the
 parser folded to one, or a ranged type whose range excludes `-1` — `int(1 to 1000)` included — emits none
 of those four instructions. `/` never emits them at all.
 
@@ -191,8 +189,8 @@ register that is neither `RAX` (the dividend) nor `RDX` (clobbered by `cqo`/`idi
 — the fixed-register constraint under real pressure. Sum of `100 / i` for
 `i = 1..6`: 100 + 50 + 33 + 25 + 20 + 16 = 244.
 
-⚠ The counter is cast into `Positive` at the divide (A1). A loop-carried phi is not a
-constant the compiler can fold, so an unguarded `100 / i` is now E3057 — and the point of
+⚠ The counter is cast into `Positive` at the divide. A loop-carried phi is not a
+constant the compiler can fold, so an unguarded `100 / i` is E3057 — and the point of
 this case is a BARE `idiv` whose divisor is loop-carried, which is exactly what a range
 that excludes 0 buys back. The cast costs one `cmp`/branch against the lower bound
 (`int(1 to i64.max)` needs no upper check) plus the `lea` that mints the retagged value, and
@@ -214,7 +212,7 @@ end 'main'
 244
 ```
 
-### The fallible-division rule, at the instruction level (A1)
+### The fallible-division rule, at the instruction level
 
 `specs/safety.md` owns the RULE — what throws, what is refused, what is caught. These own its
 CODE, because the exemption's whole claim is about what is emitted and an exit code cannot see the
@@ -352,7 +350,7 @@ caught divisionByZero
 ```
 
 <!-- test: ranged-divisor-excluding-minus-one-is-still-a-bare-idiv -->
-⭐ **THE `mod` OVERFLOW GUARD IS ABSENT WHEN THE RANGE RULES `-1` OUT (A1x)**, and only a golden can
+⭐ **THE `mod` OVERFLOW GUARD IS ABSENT WHEN THE RANGE RULES `-1` OUT**, and only a golden can
 say so — an exit code cannot tell four elided instructions from four emitted ones.
 `ranged-divisor-is-a-bare-idiv` above already covers a POSITIVE range; this one is wholly NEGATIVE
 (`int(i64.min to -2)`), which is the case that would fall to the guard if the proof had been written
@@ -401,28 +399,28 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: divide-a-value-whose-declared-type-is-narrower-than-a-machine-word -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⚠ **A WINDOWS-LANE READING SINCE BATCH27.** `return 4000000000` is E3005 on every other target —
+⚠ **A WINDOWS-LANE READING.** `return 4000000000` is E3005 on every other target —
 `ExitCode` is `int(0 to 255)` there — so those lanes cannot express this program, which is what the
 `unsupported-targets:` restriction says. It cannot be re-pinned on wasm through any other type, and the reason it
 cannot (plus the array-element route that looks like a substitute and measurably is not) is stated once,
 in `exit-code-range.md`'s *"What the narrowing costs the other lanes"*.
 
-⭐⭐ **THE OPERANDS' STORAGE WIDTH IS NOT THE DIVISION'S WIDTH (X5).** `div`/`mod` are the two Std ops
+⭐⭐ **THE OPERANDS' STORAGE WIDTH IS NOT THE DIVISION'S WIDTH.** `div`/`mod` are the two Std ops
 that carry no operand type, so a backend has to take the width from somewhere — and taking it from the
 LEFT OPERAND is what this case refuses. An `ExitCode` is a **u32** (`valueTagToStdType`), an int→int
 promotion emits NO conversion op (the value keeps the width its DEFINING op gave it while its consumer
-treats it as a machine word), and on a target whose locals are typed the two disagree: `wasm32-wasi`
-divided at 32 bits and SIGNED, so `4000000000 / 7` answered `4252829111` where x64 — which divides in
-64-bit registers whatever the Std type says — answered `571428571`. Every narrow value the compiler mints is
+treats it as a machine word), and on a target whose locals are typed the two disagree: taking the width
+from the operand, `wasm32-wasi` would divide at 32 bits and SIGNED, so `4000000000 / 7` would answer
+`4252829111` where x64 — which divides in 64-bit registers whatever the Std type says — answers
+`571428571`. Every narrow value the compiler mints is
 UNSIGNED and zero-extended (see `coerceOnStack`), so the machine-word answer is the language's one.
 
-⚠ **THE REMAINDER WAS ALREADY RIGHT, AND FOR A REASON WORTH KEEPING IN THE CASE.** Measured before the
-fix: `q=4252829111` (wrong) beside `r=3` (right). The `mod` reads the OVERFLOW GUARD's `safe = dividend
-and mask` (A1x), a `binOp` that carries its own i64 operand type — so the guard hands the `mod` a
-full-width value and the width was never taken from the u32. The `/` has no such op in front of it and
-read the u32 directly. Both are asserted because that asymmetry is the whole shape of the defect: a fix
-keyed on the `mod` path would have changed nothing, and one that only widened the operands of ops that
-happen to sit behind a guard would leave `q` red.
+⚠ **THE REMAINDER IS RIGHT EVEN UNDER THAT READING, AND FOR A REASON WORTH KEEPING IN THE CASE.** The
+`mod` reads the OVERFLOW GUARD's `safe = dividend and mask`, a `binOp` that carries its own i64 operand
+type — so the guard hands the `mod` a full-width value and its width is never taken from the u32, while
+the `/` has no such op in front of it and would read the u32 directly. Both are asserted because that
+asymmetry is the whole shape of the defect: a rule keyed on the `mod` path would change nothing, and one
+that only widened the operands of ops that happen to sit behind a guard would leave `q` wrong.
 ```maxon
 function big() returns ExitCode
 	return 4000000000
@@ -490,8 +488,8 @@ z=111
 ```
 
 <!-- test: an-unsigned-remainder-at-u64-max-is-not-the-overflow-case -->
-⭐⭐ **THE `-1` OVERFLOW GUARD MUST NOT FIRE ON AN UNSIGNED `mod`, AND IT ANSWERS `0` IF IT DOES.** A1x
-gave `mod` a guard because `idiv` raises `#DE` on `i64.min mod -1`, and the guard's answer at that
+⭐⭐ **THE `-1` OVERFLOW GUARD MUST NOT FIRE ON AN UNSIGNED `mod`, AND IT ANSWERS `0` IF IT DOES.** `mod`
+has a guard because `idiv` raises `#DE` on `i64.min mod -1`, and the guard's answer at that
 divisor is `0` — correct, because `a mod -1` is `0` for every signed `a`. Read UNSIGNED the same bit
 pattern is `u64.max`, and `5 mod u64.max` is **5**: the divisor is simply larger than the dividend.
 So the guard is not merely unnecessary there — applying it is a WRONG ANSWER, which is why an unsigned

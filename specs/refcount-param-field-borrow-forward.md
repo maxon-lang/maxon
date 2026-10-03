@@ -1,7 +1,6 @@
 ---
 feature: refcount-param-field-borrow-forward
 status: selfhosted
-status-reason: its one case does not compile here (E2003: unknown type `i64`), a type name this compiler does not have (measured 2026-08-06, BATCH29/A3a). The compiler cannot take it either: E2015 for an `Array` member `cursor` outside P1.7's surface.
 keywords: [refcount, borrow, param, self, field, iterator, forward, memory, leak]
 category: memory-safety
 ---
@@ -30,11 +29,9 @@ returned-borrow retain that a **torn-down-local** element forward needs
 (`CommandLine.optionValue`'s `return parts.get(1)`, whose local `parts` dies at
 return) fires here too. That retain is a stranded `+1`: the caller borrows the
 param-owned container and never releases it, so every forwarded element leaks at
-`rc>0`. On the self-hosted compiler's `Parser` this leaked ~4.1k tokens (plus their
-backing) on every hello self-compile — the tokens' owning array outlives the parse,
-so the exit-time array teardown reached only `rc1` and every token survived.
+`rc>0`.
 
-The fix classifies such wrappers (`funcReturnsParamBorrow`, a strict subset of the
+The compiler classifies such wrappers (`funcReturnsParamBorrow`, a strict subset of the
 borrow set whose every return roots in a PARAMETER's interior — a param-rooted load,
 or a forward of a borrow call whose receiver roots in a param) and suppresses the
 forward's retain, so the whole chain stays a clean borrow. A torn-down-local element

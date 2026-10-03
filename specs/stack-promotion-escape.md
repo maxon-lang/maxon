@@ -7,25 +7,23 @@ category: optimization
 
 # Stack Promotion — the escape routes, as behaviour
 
-**This spec is the compiler's own, and it exists because `stack-promotion.md` cannot see its own subject.**
+**This spec exists because `stack-promotion.md` cannot see its own subject.**
 
-That file is a byte-identical copy of the canonical `/specs/stack-promotion.md`, and every one of its six
-cases pins nothing but an `exitcode`. Those exit codes were **identical before the escape analysis existed**
-— all six were green against a compiler that promoted nothing — and they would be green again if the pass
-regressed to a no-op. Its Documentation claims the cases use `MmTrace: true` to check that a promoted struct
+Every one of that file's six cases pins nothing but an `exitcode`. All six are **green against a compiler that promotes nothing**, so
+they cannot tell the escape analysis from a no-op. Its Documentation claims the cases use `MmTrace: true` to check that a promoted struct
 produces no heap-allocation trace; no case carries that marker and the compiler's `SpecParser` does not know it.
-So the canonical file pins that promotion is *harmless*, and nothing anywhere pins that it is *correct*.
+So that file pins that promotion is *harmless*, and nothing anywhere pins that it is *correct*.
 
 **A wrong promotion is not a slow program — it is a dangling pointer**, and the compiler has no diagnostic
 to fall back on. So the cases below are built the other way round: each one is a program whose **exit code
-changes** if a specific escape route stops being detected. Every one of them was MEASURED against a
-deliberately sabotaged compiler and observed to fail:
+changes** if a specific escape route stops being detected, and each one fails against a compiler with
+that rule removed:
 
-| the rule that is removed | what the sabotaged compiler did |
+| the rule that is removed | what the compiler without it does |
 |---|---|
-| the local-escape verdict (a record reaching a phi) | **exit 101** — the drop ran `__mm_free` over stack memory |
-| the callee-retains verdict | **a silent wrong answer, 19 where 18 is right** — the callee's `__mm_retain` wrote a refcount into the neighbouring record's payload |
-| the spill-slot reservation | **an access violation** — a spilled value was given the slot a live record occupied |
+| the local-escape verdict (a record reaching a phi) | **exit 101** — the drop runs `__mm_free` over stack memory |
+| the callee-retains verdict | **a silent wrong answer, 19 where 18 is right** — the callee's `__mm_retain` writes a refcount into the neighbouring record's payload |
+| the spill-slot reservation | **an access violation** — a spilled value is given the slot a live record occupies |
 
 ⚠ **Every case pins `exitcode`, never stdout alone.** An unpinned exit code leaves the leak gate disarmed,
 and a leak is exactly how a mis-promotion shows up when it does not corrupt anything outright.
@@ -33,15 +31,10 @@ and a leak is exactly how a mis-promotion shows up when it does not corrupt anyt
 The first group must promote and still be right; the second group names one escape route each, and each is a
 route the analysis must refuse.
 
-⚠ **ONE ROUTE HAS NO CASE HERE, AND THE REASON IS THE INTERESTING PART: CLOSURE CAPTURE.** The analysis
-refuses a record captured by a closure, and that refusal is **currently unobservable** — MEASURED: with the
-refusal removed the record is promoted into the closure's environment and every program still answers
-correctly. It cannot be otherwise today, because the compiler already refuses a capturing closure that ESCAPES its
-frame (`capturingClosureEscapes` — it may not be returned, stored, or passed to anything that keeps it), so
-the environment can never outlive the frame the record lives in. The refusal is therefore belt-and-braces
-over a rule a different subsystem enforces, and a case pinning it could only pass. It is named here so the
-absence is a decision on the record rather than a gap — **if that refusal is ever relaxed, this route
-becomes live and needs a case.**
+⚠ **CLOSURE CAPTURE IS A STORE.** A record captured by a closure is written into the closure's own record
+with a `storeIndirect` whose VALUE is the captured record, so the analysis refuses it by the same rule as a
+store into another record. The closure owns its environment and may be returned or stored, so the captured
+record can outlive the frame that built it.
 
 ## Tests
 
@@ -157,7 +150,7 @@ end 'main'
 <!-- test: escape-across-a-branch-merge -->
 Two records merged by a branch reach the same binding, so neither may be promoted: the merged value is
 dropped once, and the drop cannot know which of the two it holds. Promote either and `__mm_decref` runs over
-a frame address — MEASURED as exit 101, the leak gate firing on a corrupted allocation count.
+a frame address — exit 101, the leak gate firing on a corrupted allocation count.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -188,8 +181,8 @@ end 'main'
 
 <!-- test: escape-into-a-retaining-callee -->
 A record handed to a callee that RETAINS it — here by returning it, which makes the caller's reference
-outlive the call — may not be promoted. This is the worst failure mode the analysis has: the sabotaged
-compiler did not crash, it answered **19 where 18 is right**, because the callee's `__mm_retain` wrote a
+outlive the call — may not be promoted. This is the worst failure mode the analysis has: a compiler that
+promotes it does not crash, it answers **19 where 18 is right**, because the callee's `__mm_retain` writes a
 refcount into the frame bytes just below the record's address, which is the neighbouring record's payload.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -227,7 +220,7 @@ another record's field.
 ⚠ **`churn` is what makes this case DECISIVE, and it is not decoration.** Without a call between the store
 and the read, a wrongly promoted record still answers correctly: `stash`'s frame is dead but nobody has
 written over it yet. `churn` holds enough values live to spill, so it writes exactly the frame bytes the
-dead record occupied. MEASURED against the sabotaged compiler: 101 with the call, and a correct 11 without
+dead record occupied. Against a compiler that promotes it: 101 with the call, and a correct 11 without
 it — the difference between a test and a test that can fail.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -332,6 +325,57 @@ end 'main'
 42
 ```
 
+<!-- test: escape-into-a-returned-closure -->
+A record captured by a closure is stored into the closure's own record, and a returned closure outlives the
+frame that built both. Promoting the record would leave the closure reading a frame slot `churn` has since
+reused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Reader = function() returns Integer
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+function churn(seed Integer) returns Integer
+	let v0 = seed + 1
+	let v1 = seed + 2
+	let v2 = seed + 3
+	let v3 = seed + 4
+	let v4 = seed + 5
+	let v5 = seed + 6
+	let v6 = seed + 7
+	let v7 = seed + 8
+	let v8 = seed + 9
+	let v9 = seed + 10
+	let v10 = seed + 11
+	let v11 = seed + 12
+	let v12 = seed + 13
+	let v13 = seed + 14
+	let v14 = seed + 15
+	let v15 = seed + 16
+	return v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15
+end 'churn'
+
+function makeReader(seed Integer) returns Reader
+	let item = Item.create(seed)
+	return function() gives item.value
+end 'makeReader'
+
+function main() returns ExitCode
+	let read = makeReader(42)
+	let noise = churn(1000)
+	return read() as ExitCode if noise > 0 else 1
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: reference-identity-is-never-promoted -->
 `is` compares record ADDRESSES, so it is the one operator that can tell a frame slot from a heap box. A
 record reaching an `is` is never promoted, which is what makes the two storage shapes indistinguishable
@@ -373,9 +417,9 @@ frame ADDRESS already materialized into a register does not, and nothing enumera
 program that runs green threads promotes nothing at all.
 
 ⚠ **THE RECURSION IS WHAT MAKES THIS CASE DECISIVE.** A shallow green thread never outgrows its initial 2 KB
-stack, so a wrongly promoted record is never relocated and answers correctly — MEASURED, 42 either way.
-`deep(400)` forces several relocations while the record is live across the call. MEASURED with the gate
-removed: **a segmentation fault**, the record's address left pointing into freed pages.
+stack, so a wrongly promoted record is never relocated and answers correctly — 42 either way.
+`deep(400)` forces several relocations while the record is live across the call. With the gate
+removed it is **a segmentation fault**, the record's address left pointing into freed pages.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

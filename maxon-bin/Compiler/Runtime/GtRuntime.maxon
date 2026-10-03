@@ -17,8 +17,8 @@
 // machines goes through `__sched_lock`.
 //
 // ⇒ **every refcount read-modify-write on a COUNTED box happens on the machine running that box's strand, one
-// machine at a time**; a box a lend marked shared steps atomically instead. `SchedRuntime.maxon`'s header
-// states the invariant in full.
+// machine at a time**; a box a share walk marked shared steps atomically instead.
+// `SchedRuntime.maxon`'s header states the invariant in full.
 //
 // `SchedRuntime.maxon` beside this file owns the PROCESSOR (P), the MACHINE (M), the TLS door that finds
 // them and the scheduler loop every machine runs. The running GT is `M->currentGt`; the syscall stack is
@@ -894,17 +894,6 @@ export let ProcInfoHThreadOffset = 8
 // and not `i64`: the `dwThreadId` beside it would otherwise ride in the high half of the answer.
 export let ProcInfoDwProcessIdOffset = 16
 
-// ⭐⭐ **WHICH STEP OF A SPAWN FAILED, WHEN IT WAS NOT THE LAUNCH.** A spawn opens its standard streams and, on
-// a POSIX lane, its working directory before it launches anything, and each of those fails with the same
-// not-found codes a missing executable does — so only the runtime can say which step a code belongs to, and
-// `stdlib/Subprocess.maxon`'s `SpawnPreparation` decodes these raw values to tell `executableNotFound` from
-// `spawnFailed`. `none` is every failure that is not a preparation step's, the launch's included.
-export enum SpawnPreparation
-	none = 0
-	standardStream = 1
-	workingDirectory = 2
-end 'SpawnPreparation'
-
 // Where a spawn chunk that failed before launching stores its `SpawnPreparation`: the word after
 // PROCESS_INFORMATION. A record the spawn fills is slab-zeroed, so a launch failure leaves `none` here.
 export let SpawnFailedPreparationOffset = 0x18
@@ -952,32 +941,26 @@ export let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL ter
 // and the host reports it by refusing to mint the source — `netpollFailed`, the same stop a socket the poller
 // will not take gets, not a case of this error.
 //
-// The throws-type NAME is a bare label on the clause (like `ManagedMemoryRuntime.ArrayErrorTypeName`) — the compiler
-// recognizes `__gt_process_run` as a throwing runtime callee by CALLEE name (not by this label), and recovery
-// today is via `otherwise <value>` (any nonzero flag routes to the handler). Binding `otherwise (e)` to a case
-// and `match e`ing it is deferred exactly as it is for `ArrayError` (a P1.7 enum-case-pattern feature).
+// `stdlib/Subprocess.maxon` declares `RunProcessError`, so an `otherwise (e)` binding is typed from it
+// (`runtimeThrowsClause`) and `verifyRunProcessErrorOrdinals` holds the ordinal below to that declaration.
 //
 // ⚠ **THE NAME IS `"RunProcessError"`, DELIBERATELY *NOT* `"SubprocessError"` — DO NOT "FIX" IT BACK.**
-// `stdlib/Subprocess.maxon` already declares `export union SubprocessError implements Error`, a BOXED,
+// `stdlib/Subprocess.maxon` declares `public union SubprocessError implements Error`, a BOXED,
 // String-carrying union with a DIFFERENT case set (`executableNotFound`/`spawnFailed`/`ioFailed`/`timeout`/
-// `inputTooLarge`), and the compiler COMPILES it (it is in the stdlib cone). That union is the
-// eventual USER-FACING subprocess error type (`Subprocess.run` throws it), reachable only once managed-error
-// async lands (Design B, deferred). This seed's error is a SCALAR stand-in with its OWN ordinal; sharing
-// the union's name would be the project's signature ONE-NAME-TWICE bug AND a wild-free trap — the day an
-// `otherwise (e)` binding resolved a builtin's throws-label `"SubprocessError"` to that boxed union it would
-// bind the R10 flag (1/2) as a heap pointer and free `0x1`/`0x2`. A distinct name that names NO declared union
-// makes that unrepresentable: `throwsTypeIsBoxedUnion("RunProcessError")` is false, so an `otherwise (e)`
-// decode lands on the scalar ordinals below (correct), never a box. Reconciling `runProcess` onto the real
-// `SubprocessError` union is the full-Subprocess-API / managed-error rung.
-let RunProcessErrorTypeName = "RunProcessError"
+// `inputTooLarge`/`endOfStream`), which `Subprocess.run` throws. This error is a SCALAR with its
+// OWN ordinal; sharing the union's name would be the project's signature ONE-NAME-TWICE bug AND a
+// wild-free trap — the day an `otherwise (e)` binding resolved a builtin's throws-label
+// `"SubprocessError"` to that boxed union it would bind the R10 flag (1/2) as a heap pointer and
+// free `0x1`/`0x2`. A distinct name that names NO declared union makes that unrepresentable:
+// `throwsTypeIsBoxedUnion("RunProcessError")` is false, so an `otherwise (e)` decode lands on the
+// scalar ordinals below (correct), never a box.
+let RunProcessErrorOrdinalInstaller = b"the green-thread runtime (RunProcessError)"
+let RunProcessSpawnFailedCaseName = b"spawnFailed"
 
 // The `RunProcessError` case ORDINAL — it rides R10 as `ordinal + ErrorFlagOrdinalBias`, the SAME scalar-error
-// encoding a source `throw E.case` uses (`LowerMaxonToStd.lowerThrowError`), so the day an `otherwise (e)` binding
-// lands its decode (`e = flag - bias`, `parseOtherwiseBlock`) recovers the right case with no third copy of the
-// bias. `0` is reserved by the bias for "no error in flight".
-//
-// ⚠ **ORDINAL 1 IS SPENT — DO NOT HAND IT TO A NEW CASE.** An ordinal is the wire number an `otherwise (e)`
-// decode matches on, so ordinals are allocated once and never recycled: a second case takes 2.
+// encoding a source `throw E.case` uses (`LowerMaxonToStd.lowerThrowError`), so the `otherwise (e)` decode
+// (`e = flag - bias`, `parseOtherwiseBlock`) needs no third copy of the bias. `0` is reserved by the bias for
+// "no error in flight".
 let RunProcessSpawnFailedOrdinal = 0 as ParsedInt
 
 // The R10 error-flag VALUE the throw emits and a successful `runProcess` clears — the ordinal biased by the
@@ -985,6 +968,23 @@ let RunProcessSpawnFailedOrdinal = 0 as ParsedInt
 // and the shared `MaxonDialect.NoErrorFlag` alongside a real exit code — the success value the bias reserves,
 // read from its one declaration rather than re-spelled `0` here.
 let RunProcessSpawnFailedFlag = RunProcessSpawnFailedOrdinal + ErrorFlagOrdinalBias
+
+function runProcessErrorThrows() returns ThrowsClause
+	return ThrowsClause.throwing(String.from(RunProcessErrorTypeName))
+end 'runProcessErrorThrows'
+
+export function verifyRunProcessErrorOrdinals(project Project)
+	match declaredBuiltinErrorEnum(project, typeName: RunProcessErrorTypeName, installer: RunProcessErrorOrdinalInstaller) 'declaration'
+		notDeclared then return
+		found(declaration) then claimRunProcessErrorOrdinals(project, declaration: declaration)
+	end 'declaration'
+end 'verifyRunProcessErrorOrdinals'
+
+function claimRunProcessErrorOrdinals(project Project, declaration EnumLayout)
+	var errors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: RunProcessErrorOrdinalInstaller)
+	errors.claim(RunProcessSpawnFailedCaseName, ordinal: RunProcessSpawnFailedOrdinal)
+	errors.requireTotal()
+end 'claimRunProcessErrorOrdinals'
 
 // --- Monotonic clock ---
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
@@ -1176,7 +1176,7 @@ let GtRunnerDoneName = b"__gt_runner_done"
 export let GtOwnerDoneName = b"__gt_owner_done"
 let GtReclaimName = b"__gt_reclaim"
 
-// ⭐⭐ **THE NON-BLOCKING PEEK (G17).** `__gt_is_complete(gt) -> 1 if that green thread has reached
+// ⭐⭐ **THE NON-BLOCKING PEEK.** `__gt_is_complete(gt) -> 1 if that green thread has reached
 // `completed`, 0 otherwise` — the floor of `__Builtins.gtIsComplete(promise.inner)`, and the ONE thing an
 // N-slot dispatcher needs that `await` cannot give it: `await` waits for ONE named promise, so serving slot 0
 // while slot 3 has already answered is head-of-line blocking.
@@ -1235,7 +1235,7 @@ export let GtSleepName = b"__gt_sleep"
 // which is what keeps a parked thread undiscoverable until its registers are saved (`GtOffParkKind`).
 let GtParkName = b"__gt_park"
 
-// ⭐⭐⭐ **`__gt_await_any(record) -> index` — the front-end target for `__Builtins.awaitAny(promises)` (SV3).**
+// ⭐⭐⭐ **`__gt_await_any(record) -> index` — the front-end target for `__Builtins.awaitAny(promises)`.**
 // `record` is the argument array's `__ManagedMemory` record (an `Array with Promise with …` IS its record);
 // the answer is the INDEX of the first element found `completed`.
 //
@@ -1355,8 +1355,8 @@ let GtTraceIoResumeText = b"io_resume #"
 // spellings to the byte: `main`'s own `sleep_yield #0` among the `[net_*]` pairs of the task it spawned.
 //
 // ⚠ **NO SUFFIX, WHERE AN I/O PARK HAS ONE.** `[net_connect]` answers "which operation" — a question a
-// sleep does not have, because a sleep IS the operation. So the sleep lines take `GtTraceTag.absent()`, the
-// same no-suffix signal `spawn #` takes.
+// sleep does not have, because a sleep IS the operation. So the sleep lines take `GtTraceSuffix.none`, as
+// `spawn #` does.
 let GtTraceSleepYieldText = b"sleep_yield #"
 let GtTraceSleepResumeText = b"sleep_resume #"
 let GtTraceYieldSuffixText = b" [yield]"
@@ -1429,13 +1429,12 @@ export type GtTraceTag
 	export static function create(label ByteArray, length ParsedInt) returns GtTraceTag
 		return Self{label: label, length: length}
 	end 'create'
-
-	// The absent tag — what a trace line with no suffix carries. A zero-length label is the "no suffix" signal
-	// the emitter tests, so no site needs a second parameter to say "and this one has none".
-	export static function absent() returns GtTraceTag
-		return Self{label: b"", length: 0}
-	end 'absent'
 end 'GtTraceTag'
+
+union GtTraceSuffix
+	none
+	tagged(tag GtTraceTag)
+end 'GtTraceSuffix'
 
 export typealias GtTraceTagArray = Array with GtTraceTag
 
@@ -1474,32 +1473,35 @@ export type GtTraceTags
 		}
 	end 'register'
 
-	// The tags an UNTRACED build carries: none. No rdata is registered and no site emits.
-	export static function none() returns GtTraceTags
-		return Self{spawn: GtTraceTag.absent(), awaitTag: GtTraceTag.absent(), tryAwaitTag: GtTraceTag.absent(), ioYield: GtTraceTag.absent(), ioResume: GtTraceTag.absent(), sleepYield: GtTraceTag.absent(), sleepResume: GtTraceTag.absent(), yieldSuffix: GtTraceTag.absent(), immediateSuffix: GtTraceTag.absent(), ioOperations: GtTraceTagArray.create(), newline: GtTraceTag.absent()}
-	end 'none'
-
-	// ⭐ **THE ONE ANSWER TO "WHAT SUFFIX DOES THIS PARK PRINT?"** — and it is also how a park site asks
-	// whether the build is traced at all: an untraced build registered no operation tags, so the ABSENT tag
-	// comes back, and `GtTraceTag.absent()`'s zero length is already this file's "no suffix" signal
-	// (`emitGtTraceLine` tests exactly it). No suffix text is empty, so the two can never be confused.
+	// ⭐ **THE ONE ANSWER TO "WHAT SUFFIX DOES THIS PARK PRINT?"**
 	export function ioTag(operation GtIoOperation) returns GtTraceTag
-		if not self.tracesIoOperations() 'untracedBuild'
-			return GtTraceTag.absent()
-		end 'untracedBuild'
-
 		return try self.ioOperations.get(operation.ordinal) otherwise panic("GtTraceTags.ioTag: no registered tag at ordinal {operation.ordinal} for '{operation.name}' — registerIoOperationTags walks GtIoOperation.allCases, so a gap here means the array was built somewhere else")
 	end 'ioTag'
-
-	// ⭐⭐ **THE ONE FACT `__gt_io_park`'s SIGNATURE AND ITS CALL SITES BOTH READ.** The park takes a suffix
-	// pair exactly when there is a suffix to hand it, so the builder's ARITY and the sites' ARGUMENT COUNT
-	// are the same question asked twice — and asked of one place, they cannot disagree. Answered twice (a
-	// `asyncTrace` bool over here, a registered-tag test over there) a build could emit argument-less calls
-	// into a two-parameter park, which is not a wrong trace but a wrong FRAME.
-	export function tracesIoOperations() returns bool
-		return self.ioOperations.count() != 0
-	end 'tracesIoOperations'
 end 'GtTraceTags'
+
+// ⭐⭐ **THE ONE FACT `__gt_io_park`'s SIGNATURE AND ITS CALL SITES BOTH READ.** The park takes a suffix
+// pair exactly when there is a suffix to hand it, so the builder's ARITY and the sites' ARGUMENT COUNT
+// are the same question asked twice — and asked of one place, they cannot disagree. Answered twice (a
+// `asyncTrace` bool over here, a registered-tag test over there) a build could emit argument-less calls
+// into a two-parameter park, which is not a wrong trace but a wrong FRAME.
+export union GtTracing
+	untraced
+	traced(tags GtTraceTags)
+
+	export function isTraced() returns bool
+		return match self 'tracing'
+			untraced gives false
+			traced gives true
+		end 'tracing'
+	end 'isTraced'
+
+	export function tags() returns GtTraceTags throws AbsentError
+		match self 'tracing'
+			untraced then throw AbsentError.absent
+			traced(tags) then return tags
+		end 'tracing'
+	end 'tags'
+end 'GtTracing'
 
 // One tag's bytes, interned in `.rdata` and deduped by content like every other rdata constant.
 function registerGtTraceTag(globalData GlobalDataTable, text ByteArray) returns GtTraceTag
@@ -1510,22 +1512,11 @@ end 'registerGtTraceTag'
 // declaration order is the array's index order by construction, so the two cannot drift the way a hand-written
 // list of pushes beside a hand-written enum can. Adding an operation is one case plus one arm of
 // `ioOperationSuffixText`; nothing here has to be remembered as well.
-//
-// ⛔ **AN EMPTY SUFFIX TEXT IS REFUSED HERE, BECAUSE ZERO LENGTH ALREADY MEANS SOMETHING ELSE.**
-// `GtTraceTag.absent()` spells "this line has no suffix" as a zero length, and `emitGtTraceLine` tests exactly
-// that — so a registered empty suffix would be a tag that IS registered and reads as absent. The panic keeps
-// that collision impossible instead of leaving it to every future operation's author to notice.
 function registerIoOperationTags(globalData GlobalDataTable) returns GtTraceTagArray
 	var tags = GtTraceTagArray.create()
 
 	for operation in GtIoOperation.allCases 'eachOperation'
-		let text = ioOperationSuffixText(operation)
-
-		if text.count() == 0 'emptySuffix'
-			panic("registerIoOperationTags: '{operation.name}' registers an EMPTY suffix text — a zero length is `GtTraceTag.absent()`'s no-suffix signal, so a registered empty suffix is a tag that reads as absent")
-		end 'emptySuffix'
-
-		tags.push(registerGtTraceTag(globalData, text: text))
+		tags.push(registerGtTraceTag(globalData, text: ioOperationSuffixText(operation)))
 	end 'eachOperation'
 
 	return tags
@@ -1892,7 +1883,7 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return managedFileThrows()
 	end 'fileFamily'
 
-	// ⭐ **THE DIRECTORY FAMILY (R4.3), ADDED WITH THE CASES THAT NEED IT.**
+	// ⭐ **THE DIRECTORY FAMILY, ADDED WITH THE CASES THAT NEED IT.**
 	// `specs/managed-directory.md`'s `open-search-not-found-variant` discriminates `notFound` from the
 	// `openSearchFailed` catch-all, so this family's ordinals are a checked claim rather than an untested one.
 	//
@@ -1909,8 +1900,7 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	// `specs/managed-socket.md`'s `connect-bad-host` and `connect-refused` BIND the error and
 	// discriminate `resolveFailed` from `connectFailed`, so this family's ordinals are a checked claim rather
 	// than an untested one. Without this arm `throwsOf` answers `none`, `tryErrorEnumType` types the `(e)`
-	// binding `integer`, and `match e` reports a MISSING FEATURE for a program whose feature is present - the
-	// defect R4.1 and R4.2 each paid for once.
+	// binding `integer`, and `match e` reports a MISSING FEATURE for a program whose feature is present.
 	//
 	// It asks the THROWING predicate rather than `isManagedSocketRuntimeCallee`, for the directory arm's
 	// reason: `__ms_close` is `__ms_`-prefixed and does not throw, and typing a non-throwing callee's clause
@@ -1942,15 +1932,7 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return managedMemoryThrows()
 	end 'cursorFamily'
 
-	// ⚠ **THE `String` FAMILY HAD AN ARM HERE UNTIL W49 WAVE 7, AND IT COLLAPSED INTO THE MEMORY ARM ABOVE
-	// RATHER THAN VANISHING.** Its one member was `__str_byte_at`, and it answered `managedMemoryThrows()` —
-	// the SAME clause the memory family answers — because `String.byteAt` is declared
-	// `throws __ManagedMemoryError` by the corpus (`stdlib/String.maxon:282`) for the stated reason that the
-	// reference INLINES it to the `managed.byteAt` it forwards to. Retiring the member makes that forwarding
-	// REAL rather than notional: the corpus body's `try managed.byteAt(index)` is a call to
-	// `__ManagedMemory.byteAt`, which the memory arm already types. Two families that shared an error type
-	// became one family, which is what the corpus declaration meant all along.
-	// ⭐ **THE ARRAY FAMILY, ADDED WITH THE CASE THAT NEEDED IT (R4.4)** — precisely as the note above
+	// ⭐ **THE ARRAY FAMILY, ADDED WITH THE CASE THAT NEEDED IT** — precisely as the note above
 	// prescribes. `specs/array-slots.md` discriminates `ArrayError.emptySlot` from
 	// `ArrayError.indexOutOfBounds` on an `arr.get` failure, so this family's ordinals are now a checked claim
 	// rather than an untested one.
@@ -1967,8 +1949,7 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	// `specs/safety.md`'s `divide-by-zero-expression-form` and `float-divide-by-zero-expression-form` BIND
 	// the error and discriminate `divisionByZero` in a `match`, so this family's one ordinal is a checked claim
 	// rather than an untested one. Without this arm `throwsOf` answers `none`, `tryErrorEnumType` types the `(e)`
-	// binding `integer`, and `match e` reports a MISSING FEATURE for a program whose feature is present — the
-	// defect R4.1 and R4.2 each paid for once.
+	// binding `integer`, and `match e` reports a MISSING FEATURE for a program whose feature is present.
 	//
 	// ⚠ It asks the THROWING predicate, which for this family is the WHOLE family: a checked divide exists only
 	// because its divisor might be zero, so there is no non-throwing member the wide test could wrongly claim.
@@ -2002,6 +1983,10 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return enumLookupThrows()
 	end 'enumLookupFamily'
 
+	if isThrowingGtRuntimeCallee(callee) 'processRun'
+		return runProcessErrorThrows()
+	end 'processRun'
+
 	return ThrowsClause.none
 end 'runtimeThrowsClause'
 
@@ -2013,13 +1998,12 @@ end 'runtimeThrowsClause'
 export union RuntimeCalleeSourceMethod
 	found(method ByteArray)
 
-	// ⚠⚠ **TWO SOURCE SPELLINGS, ONE CALLEE — AND THAT IS THE SAME DEFECT D12 EXISTS TO REMOVE, one level
-	// in.** `__mf_open_write` is what BOTH `__ManagedFile.openWrite` and `__ManagedFile.openWriteExecutable`
-	// emit (one parser arm, one runtime entry — a Unix 0755 bit is the whole difference and the compiler's file IO
-	// is host-only Windows by the R4.1 ruling), so the callee is a LOSSY KEY and no map over it can be
-	// injective. Quoting ONE of the two is a false statement about a program that contains only the other —
-	// exactly "the right code naming a construct the program does not contain". So the answer names BOTH,
-	// which is true whichever was written, and the message says why the compiler cannot narrow it.
+	// ⚠⚠ **TWO SOURCE SPELLINGS, ONE CALLEE.** Where one runtime entry serves two source methods the
+	// callee is a LOSSY KEY and no map over it can be injective. Quoting ONE of the two is a false
+	// statement about a program that contains only the other — exactly "the right code naming a
+	// construct the program does not contain". So the answer names BOTH, which is true whichever was
+	// written, and the message says why the compiler cannot narrow it. No family produces it (see
+	// `ManagedFileRuntime`'s source-method map).
 	sharedByTwoSpellings(spelling ByteArray, alsoSpelled ByteArray)
 	notFound
 end 'RuntimeCalleeSourceMethod'
@@ -2030,18 +2014,13 @@ end 'RuntimeCalleeSourceMethod'
 // ONE sentence from the answer, so the five families that name a method share a single spelling of it rather
 // than an inline copy each.
 //
-// ⚠ **A FAMILY WITHOUT A MAP ANSWERS `notFound`, AND THAT IS THE POINT.** Before D12 the wording chain ended
-// in the array-accessor sentence, so three families that never added an arm (`__strix_*`, `__mf_*` and the
-// `__ManagedMemory` members) silently inherited a noun for a construct their programs did not contain — while
-// the comment above that chain claimed the last arm "names the callee rather than pretending to know what it
-// is". It does now: `notFound` is what makes that true, and a sixth family joining without a map gets its own
-// callee named rather than another family's word.
+// ⚠ **A FAMILY WITHOUT A MAP ANSWERS `notFound`, AND THAT IS THE POINT:** the message then names
+// the callee itself rather than borrowing another family's noun for a construct the program does
+// not contain.
 //
-// ⭐⭐ **AND THE THIRD LIST IS HELD TO THE SECOND AT INSTALL TIME — THE ONE HOME OF WHY (D12 review).**
-// A family now writes its throwing callees down TWICE: once in `isThrowingXRuntimeCallee`, once as the arms
-// of its source-method map. Nothing in the language ties them, and D12 took that pairing from ONE instance
-// (R4.3's directory map) to FOUR, and D11c to FIVE. The divergence is the shape this project keeps being
-// bitten by — a name
+// ⭐⭐ **AND THE THIRD LIST IS HELD TO THE SECOND AT INSTALL TIME — THE ONE HOME OF WHY.**
+// A family writes its throwing callees down TWICE: once in `isThrowingXRuntimeCallee`, once as the arms
+// of its source-method map. Nothing in the language ties them, and a name
 // added to the predicate and not to the map compiles clean, passes every green suite, and then **panics the
 // compiler in front of a user who merely forgot a `try` on that one callee**. A latent crash shipped in a
 // binary, triggered by source nobody has written yet.
@@ -2055,32 +2034,27 @@ end 'RuntimeCalleeSourceMethod'
 //
 // ⚠ **NO SECOND LIST, AND THAT IS THE POINT OF THE SHAPE.** The names come from `module.functions` — what
 // was actually installed — and the map is interrogated directly rather than described by a parallel column
-// of names. `Project.BuiltinErrorOrdinalCheck`'s header (7b) records what the column costs: its first cut
-// took two parallel arrays and thereby reintroduced, in the guard's own call shape, the drift the guard
-// existed to catch.
+// of names: a parallel column reintroduces, in the guard's own call shape, the drift the guard
+// exists to catch (`Project.BuiltinErrorOrdinalCheck`'s header).
 //
 // ⚠ **FORWARD ONLY — "every throwing callee has a spelling" — and the backward arm is deliberately absent
-// rather than forgotten**, for 7b's reason one step over. "Every name the map answers for is throwing"
-// cannot be asked without enumerating the map's DOMAIN, which is exactly the name column above; and it would
-// guard nothing, because a map is only ever reached through its family's throwing predicate, so an arm for a
-// non-throwing callee is unreachable rather than wrong.
+// rather than forgotten**, for the same reason one step over. "Every name the map answers for is
+// throwing" cannot be asked without enumerating the map's DOMAIN, which is exactly the name column
+// above; and it would guard nothing, because a map is only ever reached through its family's
+// throwing predicate, so an arm for a non-throwing callee is unreachable rather than wrong.
 //
-// ⭐⭐ **AND AS OF D11c THE FORWARD ARM IS TOTAL — file (8), directory (4), string-search (2), buffer (7) AND
-// the nine genuine `Array`-surface accessors.** D12 left the array family out and recorded it as a design fact: those
-// nine are worded AS A FAMILY by E3057, so its composer never wanted a per-method noun. But that is a
-// SENTENCE's policy, and this function answers a different question — *"what did the author write?"*, which
-// has an answer for all nine. **The gap was paid for by the only OTHER consumer**: E3059 needs a NOUN
-// (*"'array accessor' does not return a value"* is not a sentence), found `notFound`, and printed
-// `''__managed_set' does not return a value'` at authors — a symbol E2051 forbids them to type. The family
-// wording now lives where the policy belongs, in `SemanticCheck.throwingRuntimeCalleeMessage`, which asks
+// ⭐⭐ **THE FORWARD ARM COVERS THE NINE GENUINE `Array`-SURFACE ACCESSORS TOO.** E3057 words those
+// nine AS A FAMILY, but that is a SENTENCE's policy, and this function answers a different question
+// — *"what did the author write?"*, which has an answer for all nine. E3059 needs that NOUN
+// (*"'array accessor' does not return a value"* is not a sentence); `notFound` would print a
+// `__managed_` symbol at authors, one E2051 forbids them to type. The family wording lives where
+// the policy belongs, in `SemanticCheck.throwingRuntimeCalleeMessage`, which asks
 // `isThrowingArrayAccessorCallee` for its own sentence before reaching this map.
 //
-// ⭐ **THE ARMS ARE NOW ORDER-INDEPENDENT, AND THE PREVIOUS NOTE HERE DEMANDED AN ORDER.** It read *"the
-// memory arm must stay above any array test"*, because `isThrowingManagedMemoryRuntimeCallee` COMPOSES
-// `isManagedMemoryMemberCallee` — so a wide array test swallowed all seven buffer members and answered
-// them with the array family's word. The array arm below asks `isThrowingArrayAccessorCallee`, the narrow
-// factoring, so the two domains are disjoint BY CONSTRUCTION and swapping any two `if`s here changes no
-// answer. A comment demanding an order is a test nobody wrote; disjointness is the test.
+// ⭐ **THE ARMS ARE ORDER-INDEPENDENT.** `isThrowingManagedMemoryRuntimeCallee` COMPOSES
+// `isManagedMemoryMemberCallee`, so a wide array test would swallow all seven buffer members; the
+// array arm below asks `isThrowingArrayAccessorCallee`, the narrow factoring, so the two domains
+// are disjoint BY CONSTRUCTION and swapping any two `if`s here changes no answer.
 export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalleeSourceMethod
 	if isThrowingManagedDirectoryRuntimeCallee(callee) 'directoryFamily'
 		return RuntimeCalleeSourceMethod.found(managedDirectorySourceMethodName(callee))
@@ -2106,13 +2080,6 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 		return managedFileSourceMethod(callee)
 	end 'fileFamily'
 
-	// ⚠ **THE `StringIndex` FAMILY HAD AN ARM HERE UNTIL W49 WAVE 3, AND IT WENT WITH ITS MEMBERS.**
-	// `__strix_first`/`__strix_last`/`__strix_after` were the throwing callees behind
-	// `findFirst`/`findLast`/`indexAfter`, and D12 added `stringIndexSourceMethodName` so a missing `try`
-	// named the author's own search rather than "a throwing array accessor". All three members are
-	// `stdlib/String.maxon`'s now: an E3057 against one is raised against an ordinary DECLARED function,
-	// whose name the diagnostic already has, so the map that translated a synthesized callee back into a
-	// source spelling has nothing left to translate.
 	if isManagedMemoryMemberCallee(callee) 'memoryFamily'
 		return RuntimeCalleeSourceMethod.found(managedMemorySourceMethodName(callee))
 	end 'memoryFamily'
@@ -2175,19 +2142,31 @@ end 'runtimeCalleeSourceMethod'
 // language declining to let a guard be written as a call whose value nobody reads.
 //
 // ⚠ The emptiness test is not a formality bolted on to satisfy E3064: an empty spelling would put `''` in
-// front of an author in place of the method they wrote, which is the same class of wrong answer D12 exists
-// to remove — just spelled with no characters. One home for the rule, so five families cannot word it five
-// ways.
+// front of an author in place of the method they wrote, which is the same class of wrong answer the map
+// exists to prevent — just spelled with no characters. One home for the rule, so five families
+// cannot word it five ways.
 export function requireQuotableSourceSpelling(spelling ByteArray, callee ByteArray)
 	if spelling.count() == 0 'unquotable'
 		panic("requireQuotableSourceSpelling: the source-method map answers an EMPTY spelling for '{String.from(callee)}' — an E3057 would quote '' at an author in place of the method they actually wrote")
 	end 'unquotable'
 end 'requireQuotableSourceSpelling'
 
+export function requireThrowsStampMatchesPredicate(installer String, predicate String, callee ByteArray, stamped bool, named bool)
+	if stamped and not named 'stampedNotNamed'
+		let drift = "{installer}: '{String.from(callee)}' stamps a `throws` clause but {predicate} does NOT name it — the throwing-builder set and the predicate have drifted"
+		panic("{drift}")
+	end 'stampedNotNamed'
+
+	if named and not stamped 'namedNotStamped'
+		let drift = "{installer}: {predicate} names '{String.from(callee)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted, and a caller's `try` would stop being required"
+		panic("{drift}")
+	end 'namedNotStamped'
+end 'requireThrowsStampMatchesPredicate'
+
 // The `sharedByTwoSpellings` half of the same check — BOTH names reach the message, so both must be
-// quotable. Separate from the single-name form because a `match` arm binds two values and may not drop one:
-// a check that read only the first would leave the second — the very spelling the case exists to carry —
-// unverified.
+// quotable. Separate from the single-name form because a `match` arm binds two values and may not
+// drop one: a check that read only the first would leave the second — the very spelling the case
+// exists to carry — unverified.
 export function requireQuotableSharedSpellings(spelling ByteArray, alsoSpelled ByteArray, callee ByteArray)
 	requireQuotableSourceSpelling(spelling, callee: callee)
 	requireQuotableSourceSpelling(alsoSpelled, callee: callee)
@@ -2290,16 +2269,16 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	let firstFuncIndex = module.funcCount()
 
 	// The tag records exist only in a traced build; an untraced one registers no rdata and emits no calls.
-	let tags = GtTraceTags.register(globalData) if asyncTrace else GtTraceTags.none()
+	let tracing = GtTracing.traced(GtTraceTags.register(globalData)) if asyncTrace else GtTracing.untraced
 
 	// ⭐ Published on the MODULE before anything is built, because the nineteen `__gt_io_park` CALL SITES
 	// live in three other files and cannot be handed the table: `emitIoPark` asks the module for the suffix its
 	// operation prints, and `buildGtIoPark` asks the same field for the arity to receive it in. Threaded as an
 	// argument instead, a park site added later that did not pass it along would emit a call with the WRONG
 	// ARGUMENT COUNT rather than a compile error — the same reasoning `IrModule.debugStream` records.
-	module.asyncTraceTags = tags
+	module.asyncTracing = tracing
 
-	if asyncTrace 'traceEmitter'
+	if let tags = try tracing.tags() 'traceEmitter'
 		buildGtTraceEmit(module, tags: tags)
 	end 'traceEmitter'
 
@@ -2313,9 +2292,9 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 
 	// ⭐ ALL THREE spawn doors, from one body. Whether a program can REACH one is `DeadFunctionElimination`'s
 	// question, and answering it here would be a second reachability analysis that could disagree with it.
-	buildGtSpawn(module, kind: GtSpawnKind.coroutine, asyncTrace: asyncTrace, tags: tags, target: target)
-	buildGtSpawn(module, kind: GtSpawnKind.greenThread, asyncTrace: asyncTrace, tags: tags, target: target)
-	buildGtSpawn(module, kind: GtSpawnKind.mainThread, asyncTrace: asyncTrace, tags: tags, target: target)
+	buildGtSpawn(module, kind: GtSpawnKind.coroutine, tracing: tracing, target: target)
+	buildGtSpawn(module, kind: GtSpawnKind.greenThread, tracing: tracing, target: target)
+	buildGtSpawn(module, kind: GtSpawnKind.mainThread, tracing: tracing, target: target)
 	buildGtReady(module)
 	buildGtReadyLocked(module)
 	buildGtEnqueue(module)
@@ -2337,9 +2316,9 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAwaitAny(module)
 	buildGtDrainAtExit(module, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals)
 	buildGtRunMain(module, target: target)
-	buildGtAwait(module, name: GtAwaitName, throwing: false, arrival: GtAwaitArrival.inTheAwait, asyncTrace: asyncTrace, tags: tags)
-	buildGtAwait(module, name: GtTryAwaitName, throwing: true, arrival: GtAwaitArrival.inTheAwait, asyncTrace: asyncTrace, tags: tags)
-	buildGtAwait(module, name: GtTryAwaitHoldingName, throwing: true, arrival: GtAwaitArrival.inReplyWitness, asyncTrace: asyncTrace, tags: tags)
+	buildGtAwait(module, name: GtAwaitName, throwing: false, arrival: GtAwaitArrival.inTheAwait, tracing: tracing)
+	buildGtAwait(module, name: GtTryAwaitName, throwing: true, arrival: GtAwaitArrival.inTheAwait, tracing: tracing)
+	buildGtAwait(module, name: GtTryAwaitHoldingName, throwing: true, arrival: GtAwaitArrival.inReplyWitness, tracing: tracing)
 	buildGtReplyWitness(module)
 	buildGtPromiseDrop(module)
 	buildGtPromiseFieldRelease(module)
@@ -2358,7 +2337,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// The reply cell's two doors, beside the rendezvous they step and the drop that renounces them.
 	buildGtCellAlloc(module)
 	buildGtCellComplete(module)
-	buildGtSleep(module, asyncTrace: asyncTrace, tags: tags)
+	buildGtSleep(module, tracing: tracing)
 
 	// The park's registrar, beside the store doors it dispatches to.
 	buildGtRegisterPark(module)
@@ -2398,7 +2377,7 @@ end 'installGtRuntime'
 // before `main`'s green thread exists. Every later scheduler call can therefore take the P/M structure, the
 // stores and the run-queue lock as given.
 function buildGtInit(module StdModule)
-	var func = IrFunction.createFromStd(GtInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2467,8 +2446,8 @@ end 'gtSpawnNameOf'
 // `GtSpawnKind` SAYS.** Everything else a spawn does — the struct, the seed stack, the guard, the TIB bounds,
 // the initial context-switch frame — is identical for the three, so building them from three bodies would be
 // one algorithm written three times with nothing making the copies agree.
-function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags GtTraceTags, target Target)
-	var func = IrFunction.createFromStd(gtSpawnNameOf(kind), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, target Target)
+	var func = IrFunction.createFromStd(gtSpawnNameOf(kind), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var initBlock = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2553,7 +2532,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 
 	match kind 'countedAndNamed'
 		coroutine or
-			greenThread then seeded = emitGtSpawnCountAndTraceId(module, func: func, block: seeded, gt: gt, asyncTrace: asyncTrace, tags: tags, ids: ids)
+			greenThread then seeded = emitGtSpawnCountAndTraceId(module, func: func, block: seeded, gt: gt, tracing: tracing, ids: ids)
 		mainThread then break 'countedAndNamed'
 	end 'countedAndNamed'
 
@@ -2585,13 +2564,17 @@ end 'emitGtStackRefused'
 // by one per promise so a clean exit balances it to zero; and the trace id, pre-incremented off the dispenser
 // so ids run 1, 2, 3 in SPAWN order. The id is stored unconditionally — the FIELD is not gated, only the
 // trace CALL is (see `GtOffTraceId`). Returns the block to continue in, because the DebugStream event splits it.
-function emitGtSpawnCountAndTraceId(module StdModule, func IrFunction, block IrBlock, gt ValueId, asyncTrace bool, tags GtTraceTags, ids ValueMinter) returns IrBlock
+function emitGtSpawnCountAndTraceId(module StdModule, func IrFunction, block IrBlock, gt ValueId, tracing GtTracing, ids ValueMinter) returns IrBlock
 	let spawnCredit = emitConst(module, block: block, value: OneMore, ids: ids)
 	_ = emitGlobalAccumulate(module, block: block, label: GtLiveCountLabel, delta: spawnCredit, multiM: true, ids: ids)
 	let traceSeen = emitGlobalAccumulate(module, block: block, label: GtTraceCounterLabel, delta: spawnCredit, multiM: true, ids: ids)
 	let traceId = emitBin(module, block: block, a: traceSeen, b: spawnCredit, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(block, op: StdOp.storeIndirect(gt, offset: GtOffTraceId, valueId: traceId, valueType: StdType.i64))
-	emitGtTraceLine(module, block: block, traced: asyncTrace, tag: tags.spawn, gtId: traceId, suffix: GtTraceTag.absent(), ids: ids)
+
+	if let tags = try tracing.tags() 'traceTheSpawn'
+		emitGtTraceLine(module, block: block, tag: tags.spawn, gtId: traceId, suffix: GtTraceSuffix.none, ids: ids)
+	end 'traceTheSpawn'
+
 	return emitSchedEventOf(module, func: func, block: block, eventType: DsEvSchedSpawn, gt: gt, ids: ids)
 end 'emitGtSpawnCountAndTraceId'
 
@@ -2651,7 +2634,7 @@ end 'emitGtSeedX64ReturnWord'
 // owner's strand queue, where the strand's machine finds it, and a green thread heads a new strand whose token
 // goes to this processor's `runnext` slot.
 function buildGtReady(module StdModule)
-	var func = IrFunction.createFromStd(GtReadyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtReadyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2687,7 +2670,7 @@ end 'emitGtReadyLocked'
 // release (`__gt_strand_next`), which is what makes `GtOffStrandHolder`'s exclusivity argument hold: the
 // member is on the strand queue before either this call or the releaser can look at the holder word.
 function buildGtReadyLocked(module StdModule)
-	var func = IrFunction.createFromStd(GtReadyLockedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtReadyLockedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3072,7 +3055,7 @@ export let GtUnpinMachineName = b"__gt_unpin_m"
 export let GtCurrentMachineName = b"__gt_current_m"
 
 function buildGtCurrentMachine(module StdModule)
-	var func = IrFunction.createFromStd(GtCurrentMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtCurrentMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3100,7 +3083,7 @@ end 'emitGtReleasePin'
 // A driver asks for it from a coroutine, and `__sched_find_runnable` hands the gate an owner token, so a pin
 // on the member would be invisible there and the session's thread would migrate anyway.
 function buildGtPinMachine(module StdModule)
-	var func = IrFunction.createFromStd(GtPinMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtPinMachineName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3136,7 +3119,7 @@ function buildGtPinMachine(module StdModule)
 end 'buildGtPinMachine'
 
 function buildGtUnpinMachine(module StdModule)
-	var func = IrFunction.createFromStd(GtUnpinMachineName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtUnpinMachineName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3235,7 +3218,7 @@ end 'emitGtAllGAppend'
 // `__sched_global_pushes` is stepped here for the same reason and on this side only: it counts arrivals, so
 // nothing a dequeue does may take it back down.
 function buildGtEnqueue(module StdModule)
-	var func = IrFunction.createFromStd(GtEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3253,7 +3236,7 @@ end 'buildGtEnqueue'
 // `__gt_dequeue() -> g` — pop the head token off the global FIFO run queue, or 0 if empty. The caller holds
 // `__sched_lock`. The count comes down on the arm that really popped, which `popBlock` is.
 function buildGtDequeue(module StdModule)
-	var func = IrFunction.createFromStd(GtDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3273,7 +3256,7 @@ end 'buildGtDequeue'
 // ⚠ **THE OWNER IS READ OFF THE GT AND NOT FROM TLS**, because a waker may be an OS thread with no M — a
 // machine draining the poller with no processor — and the GT it recovered knows which strand it belongs to.
 function buildGtCoroEnqueue(module StdModule)
-	var func = IrFunction.createFromStd(GtCoroEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtCoroEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3293,7 +3276,7 @@ end 'buildGtCoroEnqueue'
 // `__gt_coro_dequeue(owner) -> gt | 0` — pop the head of `owner`'s strand queue, clearing the tail when the
 // queue empties. `__gt_dequeue`'s body, off the owner struct. The caller holds `__sched_lock`.
 function buildGtCoroDequeue(module StdModule)
-	var func = IrFunction.createFromStd(GtCoroDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtCoroDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3317,7 +3300,7 @@ end 'buildGtCoroDequeue'
 // dropped after the release (`emitGtStrandUnref`), which may reclaim `owner` — so the caller touches `owner`
 // no more once this answers 0.
 function buildGtStrandNext(module StdModule)
-	var func = IrFunction.createFromStd(GtStrandNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtStrandNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3388,7 +3371,7 @@ end 'emitGtStrandUnref'
 // `emitGtFifoSweepDropped`. `sched-runqueue.a-spawn-drop-loop-stays-bounded` is the measurement that it is not
 // optional.
 function buildGtCoroSweepDropped(module StdModule)
-	var func = IrFunction.createFromStd(GtCoroSweepDroppedName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtCoroSweepDroppedName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3419,7 +3402,7 @@ end 'emitGtNowNs'
 // inside i64 for any realistic QPF (Windows fixes it at 10 MHz; even a TSC-derived few-GHz value keeps
 // `(freq-1)*1e9 < 2^63`) and centuries of uptime — so no 128-bit MUL/DIV, and no new Target op, is needed.
 function buildGtNowNs(module StdModule)
-	var func = IrFunction.createFromStd(GtNowNsName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtNowNsName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3639,7 +3622,7 @@ end 'emitTimerSiftDown'
 // `__gt_timer_heap_base` under the lock, which is what makes the base a `.data` word rather than a value
 // anybody caches.
 function buildGtTimerAdd(module StdModule)
-	var func = IrFunction.createFromStd(GtTimerAddName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtTimerAddName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3791,7 +3774,7 @@ end 'emitGtBranchOnTimerDue'
 // token a fire published is normally taken by the machine that fired it; the caller decides whether anyone
 // else needs waking.
 function buildGtTimerCheck(module StdModule)
-	var func = IrFunction.createFromStd(GtTimerCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtTimerCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3927,7 +3910,7 @@ let NoCompletedPromise = -1
 // apart; that assertion is what keeps this constant honest.
 export let PromiseSlotBytes = PointerFieldBytes
 
-// ⭐⭐⭐ **`__gt_any_completed(record) -> index | NoCompletedPromise` — THE `awaitAny` SCAN (SV3).** It walks
+// ⭐⭐⭐ **`__gt_any_completed(record) -> index | NoCompletedPromise` — THE `awaitAny` SCAN.** It walks
 // `[0, length)` of the caller's `__ManagedMemory` record and answers the FIRST slot whose GT has reached
 // `completed`. `__gt_await_any` asks it before it parks and after every wake, and the registration asks it
 // under `__sched_lock`, which is what closes the window between the first scan and the registration.
@@ -3946,7 +3929,7 @@ export let PromiseSlotBytes = PointerFieldBytes
 // the slot-level linearity gap that makes `awaitAny` a function answering an INDEX rather than a `select`
 // statement consuming a slot.
 function buildGtAnyCompleted(module StdModule)
-	var func = IrFunction.createFromStd(GtAnyCompletedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtAnyCompletedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4094,7 +4077,7 @@ end 'emitGtAwaitAnyWithdrawSlot'
 // ⚠ **AN EMPTY ARRAY PARKS ON NOTHING**: awaiting any of zero promises can never complete, and
 // `__sched_checkdead` answers it with `schedulerDeadlock` exactly as Go's `select {}` answers its detector.
 function buildGtAwaitAny(module StdModule)
-	var func = IrFunction.createFromStd(GtAwaitAnyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtAwaitAnyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4143,7 +4126,7 @@ end 'buildGtAwaitAny'
 // ⚠ **`__mm_leak_check` IS UNTOUCHED BY ANY OF IT.** A count still non-zero after the drain is a real leak —
 // a green thread neither awaited nor dropped — and still reports 75.
 function buildGtDrainAtExit(module StdModule, releasesRegistry bool, releasesGlobals bool)
-	var func = IrFunction.createFromStd(GtDrainAtExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtDrainAtExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4202,7 +4185,7 @@ end 'emitOwnerReleaseCalls'
 // ⚠ **THE RESULT IS READ BEFORE THE ARRIVAL.** The second of the two parties puts the struct on a free list,
 // where the next spawn may zero it (`emitGtTeardownArrive`).
 function buildGtRunMain(module StdModule, target Target)
-	var func = IrFunction.createFromStd(GtRunMainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtRunMainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4235,6 +4218,26 @@ function buildGtRunMain(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildGtRunMain'
 
+union AwaitTraceState
+	untraced
+	read(tags GtTraceTags, traceId ValueId, alreadyDone ValueId)
+end 'AwaitTraceState'
+
+// ⭐ **THE TAG FOLLOWS `throwing`**: `await` prints `await #` and `try await` prints `try_await #`
+// (`specs/async-tcp.md`'s cases pin the second spelling against `async-await.md`'s first).
+function emitAwaitTraceLines(module StdModule, func IrFunction, cur IrBlock, tags GtTraceTags, throwing bool, traceId ValueId, alreadyDone ValueId, ids ValueMinter) returns IrBlock
+	let awaitTag = tags.tryAwaitTag if throwing else tags.awaitTag
+	var immediateBlock = module.addBlock(func, label: b"awaitimm", heat: BlockHeat.normal)
+	var yieldedBlock = module.addBlock(func, label: b"awaityield", heat: BlockHeat.normal)
+	let joinBlock = module.addBlock(func, label: b"awaitjoin", heat: BlockHeat.normal)
+	module.setTerminator(cur, op: StdOp.condBranch(alreadyDone, thenBlockId: immediateBlock.id, elseBlockId: yieldedBlock.id))
+	emitGtTraceLine(module, block: immediateBlock, tag: awaitTag, gtId: traceId, suffix: GtTraceSuffix.tagged(tags.immediateSuffix), ids: ids)
+	module.setTerminator(immediateBlock, op: StdOp.branch(joinBlock.id))
+	emitGtTraceLine(module, block: yieldedBlock, tag: awaitTag, gtId: traceId, suffix: GtTraceSuffix.tagged(tags.yieldSuffix), ids: ids)
+	module.setTerminator(yieldedBlock, op: StdOp.branch(joinBlock.id))
+	return joinBlock
+end 'emitAwaitTraceLines'
+
 // `__gt_await(promise) -> result` (when `throwing` is false) / `__gt_try_await(promise) -> (result, threw)`
 // (when true): park until the promise's GT is `completed`, then extract the awaited scalar. The two differ
 // ONLY in the exit terminator (a plain `ret` vs the dual-register `errorReturn` for `try await`).
@@ -4243,8 +4246,8 @@ end 'buildGtRunMain'
 // ⭐ **THE WAIT IS A LOOP ON THE STATUS**, so a wake that finds the promise still pending parks again rather
 // than reading a result nobody wrote. The registration (`__gt_register_park`'s await arm) re-reads the status
 // under `__sched_lock` and resumes at once if the promise completed after this read.
-function buildGtAwait(module StdModule, name ByteArray, throwing bool, arrival GtAwaitArrival, asyncTrace bool, tags GtTraceTags)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+function buildGtAwait(module StdModule, name ByteArray, throwing bool, arrival GtAwaitArrival, tracing GtTracing)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4259,16 +4262,16 @@ function buildGtAwait(module StdModule, name ByteArray, throwing bool, arrival G
 	// promise already `completed` when we arrived is `[immediate]`; anything else had to wait and is `[yield]`.
 	// ⚠ MINTED INSIDE THE GUARD, THOUGH BOTH ARE READ BY THE SECOND `asyncTrace` BLOCK BELOW — hence the two
 	// `var`s. Minted outside it, an UNTRACED build would burn two ids on values it never defines.
-	var awaitedTraceId = 0 as ValueId
-	var alreadyDone = 0 as ValueId
+	var awaitTrace = AwaitTraceState.untraced
 
-	if asyncTrace 'readAwaitTraceState'
-		awaitedTraceId = ids.mint()
-		alreadyDone = ids.mint()
+	if let tags = try tracing.tags() 'readAwaitTraceState'
+		let awaitedTraceId = ids.mint()
+		let alreadyDone = ids.mint()
 		module.appendOp(entry, op: StdOp.loadIndirect(awaitedTraceId, addrId: promise, offset: GtOffTraceId, valueType: StdType.i64))
 		let statusOnEntry = emitGtLoadPublishedStatus(module, block: entry, gt: promise, ids: ids)
 		let completedConst = emitConst(module, block: entry, value: GtStatusCompleted, ids: ids)
 		module.appendOp(entry, op: StdOp.cmp(alreadyDone, lhs: statusOnEntry, rhs: completedConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+		awaitTrace = AwaitTraceState.read(tags, traceId: awaitedTraceId, alreadyDone: alreadyDone)
 	end 'readAwaitTraceState'
 
 	entry = emitSchedEventOf(module, func: func, block: entry, eventType: DsEvSchedAwait, gt: promise, ids: ids)
@@ -4280,25 +4283,14 @@ function buildGtAwait(module StdModule, name ByteArray, throwing bool, arrival G
 
 	emitGtPark(module, ids: ids, cur: wait, kind: GtParkKindAwait, arg: promise, cont: check)
 
-	// ⭐ **THE TAG FOLLOWS `throwing`**: `await` prints `await #` and `try await` prints `try_await #`
-	// (`specs/async-tcp.md`'s cases pin the second spelling against `async-await.md`'s first).
-	let awaitTag = tags.tryAwaitTag if throwing else tags.awaitTag
-
 	// ⚠ **FROM HERE `cur` IS THE ONLY NAME FOR THE AWAITED BLOCK.** Both bindings are mutable and mutability is
 	// what decides move-vs-alias, so this bind MOVES — naming `awaited` again below is use-after-move (E3102).
 	var cur = awaited
 
-	if asyncTrace 'emitAwaitTrace'
-		var immediateBlock = module.addBlock(func, label: b"awaitimm", heat: BlockHeat.normal)
-		var yieldedBlock = module.addBlock(func, label: b"awaityield", heat: BlockHeat.normal)
-		let joinBlock = module.addBlock(func, label: b"awaitjoin", heat: BlockHeat.normal)
-		module.setTerminator(cur, op: StdOp.condBranch(alreadyDone, thenBlockId: immediateBlock.id, elseBlockId: yieldedBlock.id))
-		emitGtTraceLine(module, block: immediateBlock, traced: asyncTrace, tag: awaitTag, gtId: awaitedTraceId, suffix: tags.immediateSuffix, ids: ids)
-		module.setTerminator(immediateBlock, op: StdOp.branch(joinBlock.id))
-		emitGtTraceLine(module, block: yieldedBlock, traced: asyncTrace, tag: awaitTag, gtId: awaitedTraceId, suffix: tags.yieldSuffix, ids: ids)
-		module.setTerminator(yieldedBlock, op: StdOp.branch(joinBlock.id))
-		cur = joinBlock
-	end 'emitAwaitTrace'
+	match awaitTrace 'awaitTrace'
+		untraced then break 'awaitTrace'
+		read(tags, traceId, alreadyDone) then cur = emitAwaitTraceLines(module, func: func, cur: cur, tags: tags, throwing: throwing, traceId: traceId, alreadyDone: alreadyDone, ids: ids)
+	end 'awaitTrace'
 
 	// extract: result = promise.result. `__gt_await` never reads `threw` — a throwing promise is only ever
 	// `try await`ed (E3057), so a non-throwing thunk's garbage R10 never reaches a reader.
@@ -4334,7 +4326,7 @@ end 'buildGtAwait'
 // `__gt_reply_witness(cell) -> witness` — see `GtTryAwaitHoldingName`. The load precedes the arrival, which
 // may free the cell.
 function buildGtReplyWitness(module StdModule)
-	var func = IrFunction.createFromStd(GtReplyWitnessName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtReplyWitnessName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4482,7 +4474,7 @@ end 'emitGtArriveAndReclaimIfSecond'
 // ⚠ **`__gt_free_put` IS THE LAST USE OF `gt`.** It threads the struct onto a list through `GtOffNext`, and
 // the next spawn may take it from there at once, so nothing below the put reads the struct.
 function buildGtReclaim(module StdModule)
-	var func = IrFunction.createFromStd(GtReclaimName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtReclaimName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4520,7 +4512,7 @@ end 'buildGtReclaim'
 // the drain's phase and signals, or the main machine's read sees the zero and leaves without waiting. A
 // completion racing the move is covered by the same pair.
 function buildGtOwnerDone(module StdModule)
-	var func = IrFunction.createFromStd(GtOwnerDoneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtOwnerDoneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4615,16 +4607,16 @@ end 'emitGtIsGreenThread'
 // ⚠ **THE SHAPE IS THE SINGLE-HOMED FACT HERE, beside the constant and the offset (`GtStatusCompleted`,
 // `GtOffStatus`).** Emitting `const` then `cmp` in that order, minting in that order, is what keeps every
 // call site byte-identical to the sequence it stands for.
-// ⚠ NOT exported, and its three callers are all in this file. The scheduler's dropped-thread askers do NOT
-// come through here: `emitGtIsDropped` reads the TEARDOWN word, which is a different question about a
-// different field, and folding the two would put a status offset behind a name that no longer names one.
-function emitGtStatusEquals(module StdModule, block IrBlock, status ValueId, want ParsedInt, ids ValueMinter) returns ValueId
+// ⚠ The scheduler's dropped-thread askers do NOT come through here: `emitGtIsDropped` reads the TEARDOWN
+// word, which is a different question about a different field, and folding the two would put a status
+// offset behind a name that no longer names one.
+module function emitGtStatusEquals(module StdModule, block IrBlock, status ValueId, want ParsedInt, ids ValueMinter) returns ValueId
 	let wantConst = emitConst(module, block: block, value: want, ids: ids)
 	return emitCmp(module, block: block, a: status, b: wantConst, pred: StdCmpPred.eq, ids: ids)
 end 'emitGtStatusEquals'
 
 // ⭐⭐⭐ **PUBLISH `completed` — THE ONE STORE IN THIS RUNTIME A SECOND OS THREAD RACES, AND THE ONLY
-// SPELLING OF IT (G3).**
+// SPELLING OF IT.**
 //
 // A finishing green thread writes THREE words: `gt.result`, `gt.threw`, and then `gt.status = completed`.
 // The first two are the DATA and the third is the FLAG that announces them, with no lock and no atomic
@@ -4632,13 +4624,11 @@ end 'emitGtStatusEquals'
 // before the two words it announces. The awaiter would then read `gt.result` before it was written: **a
 // WRONG AWAITED VALUE, not a crash**, on a lane no golden can see.
 //
-// ⛔⛔ **IT WAS LATENT UNTIL THE SCHEDULER GREW A SECOND OS THREAD THAT RUNS MAXON CODE, AND IT IS NOT ANY
-// MORE.** `StdDialect`'s atomics note tracked this for two rungs as "a store-load pair with no CAS between
-// them … there is no second observer". There is now: `osThreadCreate` is a real `pthread_create` on
-// arm64-macOS and a real `clone` on arm64-linux, and a `spawn` program measures six to seven concurrently
-// active worker Ms on this host. ⇒ the release half is HERE and the acquire half is
-// `emitGtLoadPublishedStatus` below; **neither is a fix on its own** — a barrier on one side orders one
-// thread's accesses against nothing.
+// ⛔⛔ **A SECOND OS THREAD RUNS MAXON CODE.** `osThreadCreate` is a real `pthread_create` on
+// arm64-macOS and a real `clone` on arm64-linux, and a `spawn` program runs several worker Ms at
+// once. ⇒ the release half is HERE and the acquire half is `emitGtLoadPublishedStatus` below;
+// **neither is a fix on its own** — a barrier on one side orders one thread's accesses against
+// nothing.
 //
 // ⚠ **THE STORE ORDER IS STILL LOAD-BEARING AND THE RELEASE DOES NOT REPLACE IT.** A release orders the
 // EARLIER accesses before itself; it says nothing about accesses that come after. So `result` and `threw`
@@ -4654,7 +4644,7 @@ function emitGtPublishCompleted(module StdModule, block IrBlock, gt ValueId, ids
 end 'emitGtPublishCompleted'
 
 // ⭐⭐⭐ **OBSERVE A GREEN THREAD'S STATUS — the ACQUIRE half of the publication above, and the only
-// spelling of a read that a `completed` answer can come out of (G3).**
+// spelling of a read that a `completed` answer can come out of.**
 //
 // Every reader of this word that can see another M's `completed` reads it through here: the awaits' test and
 // their registration, the select's scan, the runner's hand-off gate and the `gtIsComplete` peek. The acquire
@@ -4853,7 +4843,7 @@ function requireOrderedObservation(func IrFunction, lhs ValueId, rhs ValueId, pr
 end 'requireOrderedObservation'
 
 function buildGtPromiseFieldRelease(module StdModule)
-	var func = IrFunction.createFromStd(GtPromiseFieldReleaseName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtPromiseFieldReleaseName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4880,7 +4870,7 @@ end 'buildGtPromiseFieldRelease'
 // See `GtPromiseFieldVacateName` for the contract, and `emitPromiseSlotVacateTail` for the check it shares
 // with `__managed_vacate`.
 function buildGtPromiseFieldVacate(module StdModule)
-	var func = IrFunction.createFromStd(GtPromiseFieldVacateName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtPromiseFieldVacateName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4915,7 +4905,7 @@ end 'buildGtPromiseFieldVacate'
 // stores for every async program, each far larger than this), and this entry is four ops that reference
 // nothing. A bit for it would be a mechanism whose whole yield is a few bytes.
 function buildGtIsComplete(module StdModule)
-	var func = IrFunction.createFromStd(GtIsCompleteName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtIsCompleteName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4960,7 +4950,7 @@ end 'emitGtIsReplyCell'
 // exactly one promise, so the exit gate counts it exactly as it counts a coroutine — and a cell whose
 // awaiter never arrives is therefore a `greenThreadLeak` (75) with the count in it, not a silent exit.
 function buildGtCellAlloc(module StdModule)
-	var func = IrFunction.createFromStd(GtCellAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtCellAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4986,7 +4976,7 @@ end 'buildGtCellAlloc'
 // ⭐⭐ **`__gt_cell_complete(cell, result, threw)` — ANSWER A REPLY.** See `GtCellCompleteName` for the
 // store order and for why nothing may read the cell after the arrival below.
 function buildGtCellComplete(module StdModule)
-	var func = IrFunction.createFromStd(GtCellCompleteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtCellCompleteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5067,7 +5057,7 @@ end 'buildGtCellComplete'
 // says `waiting`; whichever party got the lock first decides, exactly, and the tombstone the fall-through
 // leaves is reclaimed by whoever pops it.
 function buildGtPromiseDrop(module StdModule)
-	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5345,7 +5335,7 @@ end 'bytesWithSuffix'
 //
 // ⚠ **IT DOES NOT TOUCH `__gt_live_count`.** That count is stepped once per PROMISE, by `__gt_owner_done`.
 function buildGtRunnerDone(module StdModule, target Target)
-	var func = IrFunction.createFromStd(GtRunnerDoneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtRunnerDoneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5580,8 +5570,8 @@ end 'emitGtTimerStoreRemove'
 
 // `__gt_sleep(ms)` — suspend the current GT for `ms` milliseconds: compute the absolute deadline and park on
 // the timer store (`__gt_park`).
-function buildGtSleep(module StdModule, asyncTrace bool, tags GtTraceTags)
-	var func = IrFunction.createFromStd(GtSleepName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+function buildGtSleep(module StdModule, tracing GtTracing)
+	var func = IrFunction.createFromStd(GtSleepName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5600,10 +5590,17 @@ function buildGtSleep(module StdModule, asyncTrace bool, tags GtTraceTags)
 
 	// The trace pair BRACKETS the park, exactly as `__gt_io_park`'s does — same exit, different tag, and the
 	// tag is the only thing that tells a reader which kind of wait this green thread is in.
-	emitCurrentGtTraceLine(module, block: entry, traced: asyncTrace, tag: tags.sleepYield, ids: ids)
+	if let tags = try tracing.tags() 'traceTheYield'
+		emitCurrentGtTraceLine(module, block: entry, tag: tags.sleepYield, ids: ids)
+	end 'traceTheYield'
+
 	entry = emitCurrentGtSchedEvent(module, func: func, block: entry, eventType: DsEvSchedYield, ids: ids)
 	var resumed = emitGtParkOnDeadline(module, func: func, cur: entry, deadline: deadline, ids: ids)
-	emitCurrentGtTraceLine(module, block: resumed, traced: asyncTrace, tag: tags.sleepResume, ids: ids)
+
+	if let tags = try tracing.tags() 'traceTheResume'
+		emitCurrentGtTraceLine(module, block: resumed, tag: tags.sleepResume, ids: ids)
+	end 'traceTheResume'
+
 	resumed = emitCurrentGtSchedEvent(module, func: func, block: resumed, eventType: DsEvSchedResume, ids: ids)
 	module.setTerminator(resumed, op: StdOp.retVoid)
 
@@ -5647,7 +5644,7 @@ end 'emitGtPark'
 // the next thing to run; the runner's completion gate gives up only a `completed` GT, and a
 // `__gt_promise_drop` that lands in the window reads `ready` and takes its queued arm.
 function buildGtPark(module StdModule)
-	var func = IrFunction.createFromStd(GtParkName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtParkName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5722,7 +5719,7 @@ end 'emitLoadCurrentGtCpuOffset'
 // The timer arm leaves by its own release, because it may owe the poller a look; every other arm that takes
 // the lock leaves through `unlockAndPay`, carrying the wake debt its ready answered or none.
 function buildGtRegisterPark(module StdModule)
-	var func = IrFunction.createFromStd(GtRegisterParkName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtRegisterParkName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5932,7 +5929,7 @@ end 'emitGtPollStores'
 // keep this processor, so one service's coroutines could hold it for ever. The machine returns to its scheduler
 // loop, which fires what is due before it searches.
 function buildGtRunStrand(module StdModule, target Target)
-	var func = IrFunction.createFromStd(GtRunStrandName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtRunStrandName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6083,7 +6080,7 @@ end 'buildGtRunStrand'
 //
 // ⚠ **A REFUSED ALLOCATION KEEPS THE STACK THE THREAD HAS**, which is still whole: a shrink only gives memory back.
 function buildGtStackShrink(module StdModule, target Target)
-	var func = IrFunction.createFromStd(GtStackShrinkName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtStackShrinkName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6168,7 +6165,7 @@ function buildGtSeedAdapt(module StdModule, target Target)
 		panic("buildGtSeedAdapt: GtSeedMaxBytes ({GtSeedMaxBytes}) is below this target's seed floor ({gtSeedStackBytes(target)}) — the adaptive seed would have no size to choose")
 	end 'ceilingBelowFloor'
 
-	var func = IrFunction.createFromStd(GtSeedAdaptName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtSeedAdaptName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6229,7 +6226,7 @@ function buildGtTraceEmit(module StdModule, tags GtTraceTags)
 		paramTypes.push(StdType.i64)
 	end 'eachParam'
 
-	var func = IrFunction.createFromStd(GtTraceEmitName, returnType: StdReturnType.void, paramCount: GtTraceEmitArity as ParamCount, paramTypes: paramTypes, returnLine: 0)
+	var func = IrFunction.createFromStd(GtTraceEmitName, returnType: StdReturnType.void, paramCount: GtTraceEmitArity as ParamCount, paramTypes: paramTypes)
 	var ids = ValueMinter.create(GtTraceEmitArity as ParamCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6284,21 +6281,21 @@ end 'buildGtTraceEmit'
 // Emit one trace line at a call site: `<tag><gtId><suffix?>`. An ABSENT suffix (zero length) means no suffix.
 // A no-op when the build is untraced, so every call site reads as an unconditional statement and the gating
 // lives in exactly one place.
-function emitGtTraceLine(module StdModule, block IrBlock, traced bool, tag GtTraceTag, gtId ValueId, suffix GtTraceTag, ids ValueMinter)
-	if not traced 'untracedBuild'
-		return
-	end 'untracedBuild'
-
+function emitGtTraceLine(module StdModule, block IrBlock, tag GtTraceTag, gtId ValueId, suffix GtTraceSuffix, ids ValueMinter)
 	let suffixAddr = ids.mint()
 	let suffixLen = ids.mint()
 
-	if suffix.length == 0 'noSuffix'
-		module.appendOp(block, op: StdOp.const(suffixAddr, value: 0, valueType: StdType.i64))
-	end 'noSuffix' else 'haveSuffix'
-		module.appendOp(block, op: StdOp.rdataAddr(suffixAddr, label: suffix.label))
-	end 'haveSuffix'
+	match suffix 'suffix'
+		none then module.appendOp(block, op: StdOp.const(suffixAddr, value: 0, valueType: StdType.i64))
+		tagged(suffixTag) then module.appendOp(block, op: StdOp.rdataAddr(suffixAddr, label: suffixTag.label))
+	end 'suffix'
 
-	module.appendOp(block, op: StdOp.const(suffixLen, value: suffix.length, valueType: StdType.i64))
+	let suffixLength = match suffix 'suffixLength'
+		none gives 0 as ParsedInt
+		tagged(suffixTag) gives suffixTag.length
+	end 'suffixLength'
+
+	module.appendOp(block, op: StdOp.const(suffixLen, value: suffixLength, valueType: StdType.i64))
 	emitGtTraceLineOfSuffix(module, block: block, tag: tag, gtId: gtId, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
 end 'emitGtTraceLine'
 
@@ -6343,13 +6340,9 @@ end 'emitCurrentGtTraceId'
 // reads, so emitting them unconditionally would put three new ops into every untraced program that sleeps.
 // The `traced` it hands on to `emitGtTraceLine` is that same value travelling on, not a second answer to the
 // question — the two guards gate different things (a STRUCT READ here, a LINE there) off one fact.
-function emitCurrentGtTraceLine(module StdModule, block IrBlock, traced bool, tag GtTraceTag, ids ValueMinter)
-	if not traced 'untracedBuild'
-		return
-	end 'untracedBuild'
-
+function emitCurrentGtTraceLine(module StdModule, block IrBlock, tag GtTraceTag, ids ValueMinter)
 	let gtId = emitCurrentGtTraceId(module, block: block, ids: ids)
-	emitGtTraceLine(module, block: block, traced: traced, tag: tag, gtId: gtId, suffix: GtTraceTag.absent(), ids: ids)
+	emitGtTraceLine(module, block: block, tag: tag, gtId: gtId, suffix: GtTraceSuffix.none, ids: ids)
 end 'emitCurrentGtTraceLine'
 
 // ⭐ **ONE DebugStream sched event about the green thread `gt`, carrying its trace id.** The sites are the
@@ -6385,9 +6378,9 @@ end 'emitCurrentGtSchedEvent'
 function buildGtIoPark(module StdModule)
 	// ⭐ The tags are asked of the MODULE rather than taken as a parameter, because the park's call sites, in
 	// other files, have no way to be handed them and must ask the same question there (see `emitIoPark` and
-	// `GtTraceTags.tracesIoOperations`). One reader, one answer.
-	let tags = module.asyncTraceTags
-	let traced = tags.tracesIoOperations()
+	// `GtTracing`). One reader, one answer.
+	let tracing = module.asyncTracing
+	let traced = tracing.isTraced()
 
 	// The arity IS the gating: a traced park is handed its operation's suffix by the site that called it, an
 	// untraced one takes nothing and is byte-identical to the park built before the suffix existed.
@@ -6399,7 +6392,7 @@ function buildGtIoPark(module StdModule)
 		paramTypes = twoI64Params()
 	end 'suffixParams'
 
-	var func = IrFunction.createFromStd(GtIoParkName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var func = IrFunction.createFromStd(GtIoParkName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6444,7 +6437,7 @@ function buildGtIoPark(module StdModule)
 	// scheduler has switched back into us. Both read the id afresh — see `emitCurrentGtTraceId`.
 	let traceIdBefore = emitCurrentGtTraceId(module, block: yielding, ids: ids)
 
-	if traced 'yieldLine'
+	if let tags = try tracing.tags() 'yieldLine'
 		emitGtTraceLineOfSuffix(module, block: yielding, tag: tags.ioYield, gtId: traceIdBefore, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
 	end 'yieldLine'
 
@@ -6454,7 +6447,7 @@ function buildGtIoPark(module StdModule)
 
 	let traceIdAfter = emitCurrentGtTraceId(module, block: resumed, ids: ids)
 
-	if traced 'resumeLine'
+	if let tags = try tracing.tags() 'resumeLine'
 		emitGtTraceLineOfSuffix(module, block: resumed, tag: tags.ioResume, gtId: traceIdAfter, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
 	end 'resumeLine'
 
@@ -6564,16 +6557,12 @@ function emitIoParkCall(module StdModule, block IrBlock, operation GtIoOperation
 	// The suffix travels as `(rdata address, byte length)`, and an untraced build's park has no suffix
 	// parameters to fill, so the call carries no arguments at all.
 	//
-	// ⛔ **THE ARITY IS DECIDED BY `tracesIoOperations()` AT BOTH ENDS — THE SAME QUESTION, NOT MERELY THE
-	// SAME FIELD.** Branching on `tag.length != 0` here while `buildGtIoPark` branches on
-	// `tracesIoOperations()` is not asking one question, and the two agree only for as long as every registered
-	// suffix text happens to be non-empty. A zero-length suffix would put an argument-less call into a
-	// two-parameter park — a wrong FRAME, not a wrong trace. `registerIoOperationTags` panics on an empty
-	// suffix, and this site asks the same question the park does rather than relying on that.
-	let tags = module.asyncTraceTags
+	// ⛔ **THE ARITY IS DECIDED BY `module.asyncTracing` AT BOTH ENDS — THE SAME QUESTION, NOT MERELY THE
+	// SAME FIELD.** A different question here than the one `buildGtIoPark` asks could put an argument-less
+	// call into a two-parameter park — a wrong FRAME, not a wrong trace.
 	var args = ValueIdArray.create()
 
-	if tags.tracesIoOperations() 'tracedBuild'
+	if let tags = try module.asyncTracing.tags() 'tracedBuild'
 		let tag = tags.ioTag(operation)
 		let suffixAddr = ids.mint()
 		module.appendOp(block, op: StdOp.rdataAddr(suffixAddr, label: tag.label))
@@ -6591,7 +6580,7 @@ end 'emitIoParkCall'
 // `__gt_resched()` — the cooperative yield: a park the strand runner places rather than registers. See
 // `GtReschedName`.
 function buildGtResched(module StdModule)
-	var func = IrFunction.createFromStd(GtReschedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtReschedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6620,7 +6609,7 @@ end 'buildGtResched'
 // The guard word is restored before anything else, so the request is answered once; the count is stepped on
 // the processor this thread is leaving.
 function buildGtPreempt(module StdModule, target Target)
-	var func = IrFunction.createFromStd(GtPreemptName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(GtPreemptName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6648,7 +6637,7 @@ end 'buildGtPreempt'
 // `CreateProcessA` failure returns `(0, RunProcessSpawnFailedFlag)`. The front end recognizes `__gt_process_run` as a
 // throwing runtime callee (`isThrowingGtRuntimeCallee`), so a `runProcess` call must be a `tryCall`.
 function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape)
-	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(RunProcessErrorTypeName))
+	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: runProcessErrorThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6953,7 +6942,7 @@ end 'buildPipeName'
 //     suspended. It rides this frame and is freed after the yielding read returns, on the dropped road as
 //     well: a dropped reader is renounced rather than abandoned, so it comes back here to free it.
 function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
-	var func = IrFunction.createFromStd(IoReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(IoReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7339,7 +7328,7 @@ export function subpRuntimeGlobals() returns DataSectionEntryArray
 	// once make one of them the loser. Its contract is already process-wide rather than per-caller
 	// (`__Builtins.subprocessLastErrorMessage()` names no operation), so no promise breaks — the message can
 	// simply be the other failure's. Making it exact needs per-GREEN-THREAD storage, since a green thread may
-	// migrate between the failure and the read, and that is a GT-layout change and a rung of its own.
+	// migrate between the failure and the read, and that is a GT-layout change.
 	pushRuntimeGlobal(out, label: SubpLastErrorLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 	return out
 end 'subpRuntimeGlobals'
@@ -7548,7 +7537,7 @@ end 'emitEnsureSlotBuffer'
 // merely-empty pipe would latch a stream the child is still writing to — a wrong answer that looks green on a
 // fast child.
 function buildSubpYieldRead(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SubpYieldReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SubpYieldReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
 	var ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7715,7 +7704,7 @@ end 'emitGtWaitReadable'
 // `singleByteGraphemes@48` is left 0 (the slab zeroes it) — child output is arbitrary bytes, and false is always the safe
 // classification. Used by the line reader to hand a caller-droppable String back across the builtin boundary.
 function buildSubpStrFromBytes(module StdModule)
-	var func = IrFunction.createFromStd(SubpStrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SubpStrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -7923,7 +7912,7 @@ let SubpPosixNullDeviceName = b"/dev/null"
 // copy loop would carry four values across itself here, so each caller builds the buffer before any handle
 // exists.
 function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShape, streamState EnumLayout)
-	var func = IrFunction.createFromStd(SubpSpawnCoreName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SubpSpawnCoreName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8409,7 +8398,7 @@ end 'emitSubpOutputSetup'
 // `argv[0]`. The facility table says `subprocess gives true` there, so nothing refuses the program;
 // `streaming-subprocess`'s POSIX cases are what hold this door shut.
 function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
-	var func = IrFunction.createFromStd(SubpSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SubpSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8695,7 +8684,7 @@ end 'emitSubpPeekBeforeRefill'
 // fresh OWNED String the caller drops (the parser marks it a pending owned temp). `i` (the scan resume index)
 // is `scanHdr`'s loop arg; everything else flows by dominance.
 function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffset, streamState EnumLayout, wait LineReadWait)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8835,7 +8824,7 @@ end 'buildSubpReadLine'
 // the language asks stderr for a byte COUNT, and an uninstalled twin is a second body to keep right with no
 // caller to say when it stopped being right.
 function buildSubpReadExact(module StdModule, streamState EnumLayout)
-	var func = IrFunction.createFromStd(SubpReadExactName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SubpReadExactName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8923,7 +8912,7 @@ end 'buildSubpReadExact'
 // handle that names nothing at all: a released slot, an out-of-range index, or a table never allocated.
 // It is the ONLY case never stored (`emitSubpTopUpStream` latches the other two, the spawn writes `open`).
 function buildSubpStreamStateQuery(module StdModule, name ByteArray, streamBase ByteOffset, streamState EnumLayout)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -8949,7 +8938,7 @@ end 'buildSubpStreamStateQuery'
 // WriteFile on the sync outbound pipe). Uses the per-handle write buffer (grown on demand, reused across writes) so
 // a line's bytes + the newline are one contiguous WriteFile. Returns 0 on success, 1 on a broken pipe.
 function buildSubpWriteLine(module StdModule)
-	var func = IrFunction.createFromStd(SubpWriteLineName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(SubpWriteLineName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -9016,7 +9005,7 @@ end 'buildSubpWriteLine'
 // `__gt_subp_close_stdin(handle)` — close the parent's stdin write end so the child sees EOF. Idempotent: it
 // zeroes the field after closing, so a second call (or release) does not double-close.
 function buildSubpCloseStdin(module StdModule)
-	var func = IrFunction.createFromStd(SubpCloseStdinName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SubpCloseStdinName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -9051,7 +9040,7 @@ end 'buildSubpCloseStdin'
 // WaitForSingleObject (the harness waits after draining output, so the child is already exiting); GetExitCodeProcess
 // writes the code into the handle's reusable bytesOut slot.
 function buildSubpWait(module StdModule)
-	var func = IrFunction.createFromStd(SubpWaitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SubpWaitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -9084,7 +9073,7 @@ end 'buildSubpWait'
 // Idempotent via the `inUse` guard; every closed handle field is zeroed so a stale/duplicate close cannot hit a
 // reused OS handle.
 function buildSubpRelease(module StdModule)
-	var func = IrFunction.createFromStd(SubpReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(SubpReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

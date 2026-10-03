@@ -3,7 +3,6 @@ feature: functions
 status: selfhosted
 keywords: [functions, parameters, calls, arguments, labels, recursion, calling-convention, callee-saved, register-allocator]
 category: functions
-milestone: M5.5-M5.6
 ---
 
 # Functions, parameters, and calls
@@ -13,8 +12,8 @@ milestone: M5.5-M5.6
 Functions may declare parameters (`name type`, comma-separated) and be called with
 arguments. The compiler passes arguments in registers under a custom ABI: the first six
 arguments occupy `rcx`, `rdx`, `rax`, `r9`, `rsi`, `rdi` (all caller-saved), and the
-return value comes back in `R8`. A seventh parameter would need a stack slot — a later
-milestone — so the parser rejects more than six.
+return value comes back in `R8`. A seventh integer argument travels in a stack slot
+(`stack-arguments.md`).
 
 ### Argument labels
 

@@ -36,15 +36,14 @@ disagree about a slot, which is the exact failure `drainHasAnswered` exists as o
 
 ### ⛔ `promise.inner` IS NOT A FIELD LOAD IN the compiler, AND READING IT AS ONE WAS A SILENT WRONG ANSWER
 
-The bootstrap BOXES a promise: `BoxPromiseIntoStruct` allocates a real `Promise` record at the storage
-site, so `inner` there is a genuine field of a genuine box. **The compiler does not box** — `PromiseType.maxon`
+**The compiler does not box a promise** — `PromiseType.maxon`
 carries the argument in full: a promise handle owns no `__mm_alloc` record, so a `Promise with T` value
 IS the green-thread pointer.
 
-Those two facts do not compose. A promise's value being the handle means the ordinary field-read
-lowering — *load the word at the field's offset* — DEREFERENCES the handle, and `inner` is at offset 0,
-where the green thread keeps its saved stack pointer. MEASURED before the cure, on
-`function peek(p IntPromise) returns Integer { return p.inner }`:
+A promise's value being the handle means the ordinary field-read
+lowering — *load the word at the field's offset* — would DEREFERENCE the handle, and `inner` is at offset 0,
+where the green thread keeps its saved stack pointer. That lowering, on
+`function peek(p IntPromise) returns Integer { return p.inner }`, would be:
 
 ```text
 func @peek {
@@ -53,16 +52,11 @@ func @peek {
 }
 ```
 
-⇒ every peek asked about a word 16 bytes into the green thread's own STACK. It never faulted (the stack
-is committed and readable) and it never crashed — it simply answered a plausible number, which is the
-worst shape a defect can have. Reading `inner` is now the identity: a fresh value, typed as the field
+⇒ every peek would ask about a word 16 bytes into the green thread's own STACK. It would never fault (the
+stack is committed and readable) and never crash — it would simply answer a plausible number, which is the
+worst shape a defect can have. Reading `inner` is the identity: a fresh value, typed as the field
 declares, carrying the handle itself — the same answer `emitFieldLoad` already gives a fused wrapper's
 inline `managed`, for the same reason (the record IS the field).
-
-⚠ `PromiseType.maxon` used to state the opposite as settled — *"NOTHING OBSERVABLE DEPENDS ON THE BOX …
-a reader of it gets the same number either way"*. The premise was right (the unboxed value IS the raw
-GT pointer the stdlib doc-comment promises) and the conclusion did not follow, because nothing had told
-the field-read door.
 
 ### Targets — the peek itself is target-NEUTRAL; what gates these cases is the yield point
 
@@ -72,8 +66,8 @@ lowers on every backend, so it deliberately names no `HostFacility` in `TargetFa
 well.
 
 What restricts the cases below is what restricts every async case in this suite: a legal `async` spawn
-needs a callee that YIELDS, and the only yield primitives are x64-windows-only at this rung. So the
-E3104 a peeking program earns on another target names `__gt_resched` — the thunk's yield — and never
+needs a callee that YIELDS, and a target without the yield primitives cannot have one. So the
+E3104 a peeking program earns on such a target names `__gt_resched` — the thunk's yield — and never
 the peek. `rejected-on-wasm` pins that attribution rather than assuming it, and the two front-end cases
 (`arity-checked`, `error.operand-type`) reach no substrate at all and carry no marker.
 
@@ -166,14 +160,13 @@ end 'main'
 <!-- test: promise-peek.a-peek-through-a-function-leaves-the-promise-alone -->
 ⭐⭐ **THE PEEK BEHIND A FUNCTION, WHICH IS THE ONLY SHAPE THE HARNESS ACTUALLY WRITES.** Every case above
 peeks inline in `main`; `SpecWorkerPool.drainHasAnswered` does not — it takes the promise as a BY-VALUE
-PARAMETER and reads `.inner` out of it, which is also the shape this file's own prose measures
+PARAMETER and reads `.inner` out of it, which is also the shape this file's own prose uses
 (`function peek(p IntPromise) returns Integer`).
 
-⛔⛔ **A PROMISE PARAMETER USED TO BE OWNED BY THE CALLEE BY TYPE, SO EVERY SUCH PEEK CANCELLED THE
-CALLER'S THREAD.** The callee's scope exit ran `__gt_promise_drop`, the reclaim took the green thread back
-while the caller went on naming it, and the promise then never completed — so `before` and `after` both
-read 0 and the poll spun to its bound. It was invisible to every case here because none of them passed a
-promise anywhere. A callee OWNS a promise exactly when it CONSUMES it, which is what
+⛔⛔ **A PROMISE PARAMETER IS NOT OWNED BY THE CALLEE BY TYPE, OR EVERY SUCH PEEK WOULD CANCEL THE
+CALLER'S THREAD.** The callee's scope exit would run `__gt_promise_drop`, the reclaim would take the green
+thread back while the caller went on naming it, and the promise would never complete — so `before` and
+`after` would both read 0 and the poll would spin to its bound. A callee OWNS a promise exactly when it CONSUMES it, which is what
 `the-handle-survives-a-field-chain` below pins from the other side.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -221,8 +214,8 @@ end 'main'
 property a dispatcher holding N slots leans on — it peeks each slot in turn, and a handle that named
 the same thread for every slot would serve the first answer to every job.
 
-⚠ **IT IS A COMPANION AND NOT THE DISCRIMINATOR, and it was measured green BEFORE the cure.** Two green
-threads have two stacks, so the dereferencing read answered two distinct non-null numbers as well — this
+⚠ **IT IS A COMPANION AND NOT THE DISCRIMINATOR.** Two green
+threads have two stacks, so a dereferencing read would answer two distinct non-null numbers as well — this
 case cannot tell the handle from `gt->sp`. It is kept because the property is real and nothing else pins
 it (a `for` over the array still awaits both, so it is also the leak gate on that shape). What separates
 the two readings is `completes-under-the-drive`.
@@ -359,7 +352,7 @@ error E3005: <fragment>:3:24: '__Builtins.gtIsComplete' requires a int, but its 
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⭐ **THE REFUSAL NAMES THE YIELD POINT, NOT THE PEEK.** `__gt_is_complete` is a load and a compare and
 lowers on every backend, so it is not in the Win32-substrate set; what a peeking program cannot have on
-another target is a THUNK, because the only yield primitive at this rung is `__gt_resched`. This case
+another target is a THUNK, because the only yield primitive is `__gt_resched`. This case
 exists to pin that attribution — an E3104 quoting `__gt_is_complete` here would mean the peek had been
 gated by reflex rather than by need.
 ```maxon

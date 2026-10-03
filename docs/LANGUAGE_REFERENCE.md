@@ -885,8 +885,9 @@ Because every alias is its own type, a quantity crossing from one module's alias
 the crossing.
 
 A non-exported ranged alias is private to its file: two files may declare one name over different ranges,
-or one over `int` and the other over `float`, and each file's uses mean its own declaration. Two `export`ed
-or `public` declarations of one name in different files over different primitives are **E3105**.
+or one over `int` and the other over `float`, and each file's uses mean its own declaration. Exported
+declarations of one name live in different directories, whatever their ranges, and a file that sees more
+than one names the one it means by its directory (see [Bare Names and Ambiguity](#bare-names-and-ambiguity)).
 
 ### Generic-Instance and Function-Type Aliases Are Brands
 
@@ -1568,8 +1569,9 @@ checked against that type. Every integer and float type, every alias of one, `St
 and a record that implements `Comparable` is ordered by `<`, `>`, `<=` and `>=` through its `compare`.
 
 A copy may call its argument type's `where` requirements — `compare`, `equals`, any method of the
-constraining interface — whatever their visibility, because the caller granted the conformance by passing
-the type. Every other method of the type needs ordinary visibility from the declaring file. A generic
+constraining interface, and a method an extension of that interface declares — whatever their visibility,
+because the caller granted the conformance by passing the type. The grant reaches a closure written inside
+the copy too. Every other member of the type needs ordinary visibility from the declaring file. A generic
 function is itself visible like any function: a private one called from another file is **E3008**.
 
 A non-generic declaration of the same name is chosen when its parameter types are exactly the argument
@@ -1577,9 +1579,8 @@ types. Two generic declarations that both infer a type for one call are **E3007*
 
 A generic function may reassign a parameter declared `T`, and the argument is then passed by reference, as
 for any function (see [Parameter Passing](#parameter-passing)). When a call's name reaches more than one
-declaration visible here — generic or not — and one of them reassigns a parameter, the call is **E2015**:
-the declaration is chosen from the arguments' types after they are read, while a by-reference parameter
-decides how an argument is read. Give the declaration that reassigns its parameter a name of its own.
+declaration — generic or not — and they disagree about which parameters they reassign, each call passes
+its arguments the way the declaration it resolves to takes them.
 
 ### Associated Types
 
@@ -1689,7 +1690,8 @@ extension Shape
 end 'Shape'
 ```
 
-- `self` is the conforming value; the extension may call any requirement of the interface.
+- `self` is the conforming value; the extension may call any requirement of the interface, including one a
+  conformer implements with a file-private function.
 - Associated types resolve to each conformer's binding.
 - Extensions of a parent interface apply to types conforming to a derived one.
 
@@ -1803,6 +1805,9 @@ end 'main'
 - Elements are read and written by position: `t.0`, `t.1`, `t.2`.
 - A tuple type in a signature is a parenthesized type list: `(Amount, String)`. It can also be named:
   `typealias Span = (Amount, Amount)`.
+- A tuple literal written where a tuple type is declared — a parameter, a field, a variable, a return, an
+  element of a typed array literal, a `match` or ternary arm, or an element of an enclosing tuple — takes
+  that type's element types, so a closure literal as an element takes the declared function type.
 
 ### Destructuring Declarations
 
@@ -1906,7 +1911,8 @@ end 'main'
 
 - A method carries its own visibility — `export`, `module` or `public` — and is file-private without one,
   whatever the enum's own visibility. Calling a private method from another file is **E3008**.
-- An enum declares no fields, so `self.something` inside a method is **E2015**; use `match self`.
+- An enum declares no fields, so `self.something` inside a method is **E2015** — `self.name`,
+  `self.ordinal` and `self.rawValue` included; use `match self`.
 - `static function` is not supported on an enum (**E2015**).
 
 ### Enum Properties
@@ -2557,9 +2563,11 @@ end 'main'
 
 - `var` declares module state any function in the file can reassign; `let` declares a constant.
 - An initializer is a literal, a constant expression, an enum case, an array or dictionary literal,
-  `Type from "literal"`, a static factory call (`let shared = Cache.create()`), or a free function call that
-  returns a record (`let shared = makeCache()`). A free function call returning a scalar, and any other call,
-  is **E2045** (`Function calls are not allowed in global variable initializers`).
+  `Type from "literal"` or `ArrayAlias from [...]`, a static factory call (`let shared = Cache.create()`), a
+  free function call that returns a record or a function value (`let shared = makeCache()`), or a function
+  name (`let step = countdown`). The type at the head may be qualified (`lib.Cache.create()`). A free function
+  call returning a scalar, and any other call, is **E2045** (`Function calls are not allowed in global
+  variable initializers`).
 - Every initializer runs **before `main`**, once, in dependency order, whether or not anything reads the
   binding. Initializers that depend on each other in a cycle are **E2012**. A `let` whose value is decided at
   compile time is image data, laid down in read-only memory with nothing to run; anything else runs in the
@@ -2843,15 +2851,40 @@ function main() returns ExitCode
 	var offset = 10
 	let addOffset = function(n Score) gives n + offset
 	offset = 20
-	print("{apply(addOffset, x: 5)}\n")     // 25: the closure sees the current offset
+	print("{apply(addOffset, x: 5)} {offset}\n")     // 15 20: the closure keeps the offset it captured
 	return 0
 end 'main'
 ```
 
-- **Captures are by reference.** A closure reads a captured variable's current value when it runs.
-- **A closure that captures cannot outlive its frame.** Returning one, or storing it in a field, a
-  global, a container or a union payload, is **E3099**. Passing it down to a function that calls it is fine.
-  A closure that captures nothing is a plain function reference and can go anywhere.
+**A closure owns what it captures.** What a capture does depends on what is captured:
+
+| Captured | Effect |
+|----------|--------|
+| a scalar | copied into the closure; writes on either side do not reach the other |
+| a local that holds a record, a `String`, an array or a promise | **moved** into the closure when the closure is created; reading the local afterwards is **E3102** (`its ownership moved to the closure that captures it`) |
+| a parameter, `self`, a field or a borrowed value | retained: the closure holds a counted reference to the same record, so a write through the receiver is what the closure reads |
+| a name an enclosing closure captured | taken from that closure's captures |
+
+Clone a local before the closure when the function still needs it (`let mine = word.clone()`). A local
+captured inside a loop is moved on the first trip, so the second is **E3102**. A capture moves its local
+before the call it is an argument of runs, so that call may not also consume the local, take it by
+reference or write it as its receiver (**E3102**); a call that only reads it may. Inside a closure, a captured name is the closure's own
+copy, so passing it to a parameter the callee writes is **E3019**.
+
+**A closure can go anywhere a value can.** A function value is one reference to a record holding the code
+and the captures, so a closure may be returned, stored in a field, a module-level variable, a container or
+a union payload, and passed to `async`, which moves it into the coroutine. A plain function is a record that
+lives for the whole program. Copies share: `var g = f` and `f.clone()` hold the same closure, and a function
+value is exempt from **E3078**. A module-level `let` or `var` may hold a function value, including a closure
+a factory call returns.
+
+**A closure may not be stored into what it captures.** The record would hold the closure and the closure the
+record, and neither would ever be released, so storing a closure — directly, or inside a value holding it —
+into a record it captures or a record that record reaches is **E3183**. The store is followed through fields,
+elements, payloads, tuples, literals, module variables, clones, returned values and the functions a
+closure is handed to, in the order the stores run, and each cycle is reported once, at the store that closes
+it. Two names for one record that only exist at run time are beyond what the compiler can follow.
+
 - A parameter's type may be omitted when the closure is written directly as a call argument whose parameter
   is declared with a function type: the closure's parameters take that type's parameter types, in order —
   `scores.sort(function(a, b) gives b.compare(a))`. A parameter past that function type's arity is **E2003**,
@@ -4015,6 +4048,9 @@ FAIL  users/lookup.maxtest > a missing user throws
   at lookup.maxtest:2
 ```
 
+The error is named as the test's file would write it, so a library error whose name the project also
+declares is reported as `stdlib.ParseError.invalidFormat`.
+
 - A bare `try` means the same thing, and an `otherwise` clause you write always takes precedence. An
   explicit `try` covers only the operation that produces its value; a throwing argument or operand inside it
   is handled by the test. A [`try` block](#try-blocks) inside the test handles its own body's errors first.
@@ -4072,11 +4108,18 @@ file** unless marked. Three modifiers widen that:
 | `export` | every file | yes (**E3092**, **E3093**) |
 | `public` | every file | no |
 
-The same modifiers apply to members inside a type, independently of the type's own visibility. An unmarked
-field is private to the type: reading or writing it anywhere else is **E3014**. An unmarked method or
-static member is private to the file, like a top-level declaration: calling it from another file is
-**E3008**. At most one modifier may be written;
+The same modifiers apply to members inside a type. An unmarked field is private to the type: reading or
+writing it anywhere else is **E3014**. An unmarked method or static member is private to the file, like a
+top-level declaration: calling it from another file is **E3008**. At most one modifier may be written;
 combining two is **E2001** (`'export' and 'public' cannot be combined`).
+
+**A type hides its members.** Where a type is not visible, nothing of it is: naming it is **E3008**
+(**E3088** for a `module` type), and so is reaching a member through a value of it — a value an exported
+function returns included. That covers its fields, methods, extension methods, accessors and statics, and
+the calls the language makes on the author's behalf: `toString` in an interpolation, `==` and `<`, the
+iteration a `for` performs, and a `match` over an enum or union value. A value held at an interface type that
+is visible answers that interface's requirements. The standard library follows the same rule: a library type
+or interface without `public` is hidden from a program.
 
 **A signature may not name a type less visible than the function itself.** Whoever may call a function has to
 be able to name what the call takes and gives back, so every type its parameters, its return type and its
@@ -4166,8 +4209,16 @@ function main() returns ExitCode
 end 'main'
 ```
 
-Qualification works for functions and typealiases (`lib.fmt.format(x)`, `50 as api.Score`). It never
-bypasses visibility. Types are referred to by their bare name.
+Qualification works for functions and for every kind of type name — typealiases, types, enums, unions and
+interfaces (`lib.fmt.format(x)`, `50 as api.Score`, `api.Point.origin()`) — at every position a type name
+is written: a declaration, a cast, a construction, a static call's base, a `throws`, `implements`, `where`
+or `extends` clause, and the head of a top-level constant's initializer. It never bypasses visibility: a
+type the referring file may not name is refused qualified exactly as it is bare.
+
+Two qualifiers are reserved. `export.X` names a declaration at the project root, and `stdlib.X` one in the
+standard library. A source directory that cannot be written as a qualifier is refused when the program is
+loaded, **E3182**: one whose name is not an identifier, such as `my-dir`, and a top-level one named
+`export`, `stdlib`, `runtime` or a keyword.
 
 ### Bare Names and Ambiguity
 
@@ -4176,24 +4227,40 @@ name is a candidate: a file-private function counts only in its own file and a `
 inside its subtree, and the candidate list an error prints names only visible ones. A bare call or a bare
 function value takes the type of the declaration it resolves to, and a function-backed enum case's function
 is resolved from the file that declares the enum, whichever file reads the case; a case that resolves to no
-single declaration is reported in that file. When several do:
+single declaration is reported in that file.
 
-- a declaration at the project root, or in an enclosing directory, takes precedence over one in a nested
-  directory, and a project declaration takes precedence over a standard-library one;
-- otherwise the reference is ambiguous. A function call is **E3095** in every form it takes — plain, under
-  `try`, or spawned with `async` (`Ambiguous bare-name call to 'describe':
-  multiple visible definitions found. Qualify with a directory name. Candidates: alpha.describe,
-  beta.describe`) — worded for a function value or an enum case's backing where the name is one, and a
-  typealias is **E3063** — in every alias form, including `export typealias Step = function(…) returns …`.
-  Qualify the name to resolve it — a call (`api.format(...)`), a function value
-  (`let f = api.format`) and a function-backed enum case (`plain = api.format`) all accept the qualified form.
+**A type name** — a typealias of any form, a type, an enum, a union or an interface — that reaches more than
+one declaration is ambiguous, **E3063**, unless the referring file declares the name itself: a file's own
+declaration always wins its bare name in that file. The standard library counts as one candidate and each
+project declaration as another, so a project's `export typealias StringArray` makes a bare `StringArray`
+ambiguous in every other file that sees both. The message lists the spellings that resolve it, a
+declaration at the project root as `export.Name`:
 
-Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.
+```text
+error E3063: app/main.maxon:7:11: Ambiguous type name 'StringArray': more than one visible declaration matches it. Qualify it as one of: lib.StringArray, stdlib.StringArray
+```
+
+The standard library's own files see only the library's declarations, and a type the compiler supplies — a
+byte-string literal's element type, for one — is always the library's.
+
+**A function name** that reaches several declarations resolves to one at the project root, or in an
+enclosing directory, over one in a nested directory, and to a project function over a standard-library one.
+Otherwise the call is ambiguous, **E3095**, in every form it takes — plain, under `try`, or spawned with
+`async` (`Ambiguous bare-name call to 'describe': more than one visible declaration matches it. Qualify it
+as one of: alpha.describe, beta.describe`) — worded for a function value or an enum case's backing where
+the name is one. A call (`api.format(...)`), a function value (`let f = api.format`) and a function-backed
+enum case (`plain = api.format`) all accept the qualified form.
+
+**Every candidate is nameable.** Two type declarations of one name that can both be named from outside
+their files may not share a directory: two typealiases are **E3061** and a pair involving a type, enum,
+union or interface is **E3006**, reported at the declaration. Two typealiases of one name in one file are
+**E3061** too. Declarations in different directories coexist — a typealias in one and a type in another
+included — and a file-private declaration coexists with anything, since only its own file can name it.
 
 Every typealias a `public` standard-library signature names is itself `public`, so a value can always be cast
 to the alias a library signature asks for (`x as ElementIndex`). A standard-library typealias with no modifier
 is private to its declaring file exactly as anyone's is — `Math.maxon`'s `SeriesTermLimit` is one — and
-naming it from another file is **E2003**.
+naming it from another file is **E3008**.
 
 ### Multi-Project Workspaces
 
@@ -4233,7 +4300,7 @@ Maxon has two concurrency tools:
 
 Both run on the runtime's scheduler, which maps green threads onto a pool of OS threads. There are no
 locks or atomics in user code: a value is only ever reachable from one green thread at a time, except
-where it is shared read-only — lent by a service send, held by a module-level `let`, or published through a
+where it is shared read-only — held by a module-level `let`, or published through a
 [`default`](#program-wide-defaults--default) or a [`SharedValue`](#sharedvalue--a-live-value-made-at-run-time)
 (below).
 
@@ -4271,7 +4338,24 @@ not 80.
 
 - `sleep(milliseconds)` parks the current green thread; it takes a `Milliseconds` value.
 - `async` applies to a direct call of a function or a static method. It cannot start a closure, an
-  indirect call or an instance method (**E2015**).
+  indirect call or an instance method (**E2015**). A generic function is started at the instance its
+  arguments infer, as a call would be.
+- An argument travels as one integer word: an integer, a `bool`, or a managed value's reference. A `float`
+  or a value held at an interface type is **E2015**, unless the callee reassigns that parameter — then the
+  argument rides a cell the coroutine owns.
+- A callee may keep an argument it is handed (move it into a record it returns, for one); a coroutine
+  dropped before it runs releases what it was handed instead.
+- **The arguments move into the coroutine**, because it can outlive the caller's frame. A local `let` or
+  `var` passed to `async` is consumed: reading it afterwards is **E3102**, and so is handing one binding twice
+  to one call. A scalar is copied. A parameter the callee reassigns writes storage the coroutine owns, and
+  nothing is written back to the caller, so a coroutine may write an argument it was given as a `let`.
+  Clone a value the caller still needs (`async work(data.clone())`).
+- **A parameter or a field of `self` is shared, not moved**: the coroutine takes its own reference and the
+  function goes on using it. Passing a handle through a parameter is how a socket or a server is shared with
+  a coroutine. A module-level `let` is shared too.
+- A value the caller can also read through a second name that holds no reference of its own is **E3138**;
+  pass a `.clone()`. A value something still borrows — a field read out of it is read after the call — is
+  **E3070**, and a match payload of a `let` union handed to a parameter the coroutine writes is **E3019**.
 - The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, or perform file, socket or
   process I/O, directly or through its callees. A function that never yields is **E3073** (`function never
   yields; 'async' is for I/O-concurrent work only`): there is nothing to overlap.
@@ -4484,21 +4568,17 @@ end 'main'
 **What crosses a message.** A value sent to a service must not stay reachable from the sender in a way
 either side could write, because the two green threads may run at the same time on different processors:
 
-- A `var`, a temporary or a literal argument is **moved** into the service; reading the sender's variable
-  afterwards is **E3102**. Factory arguments and replies are moved too.
-- A `let` argument that owns its value outright is **lent**: the sender keeps reading it, and from the send
-  onwards neither side may store it anywhere writable, return it, capture it or pass it to anything that
-  writes it (**E3160**). A handler that writes its parameter's graph at any depth — a method that writes its
-  own receiver, called on a record within the parameter, included — refuses every send that lends to it
-  (**E3019**).
-- A value the sender does not solely own — captured by a closure, held in a container, borrowed from a
-  parameter — is **E3138**; send a `.clone()`.
+- A `let` or `var`, a temporary or a literal argument is **moved** into the service; reading the sender's
+  variable afterwards is **E3102**. Factory arguments and replies are moved too. The handler owns what it was
+  sent, so it may keep it or write it.
+- A value the sender does not solely own — held in a container, borrowed from a parameter — is **E3138**;
+  send a `.clone()`.
 - A parameter type that cannot cross at all — a promise, a function value, an opaque type parameter — is
   **E3135**. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
   service the reply is judged at the `spawn` that fixes `T`, and a `returns T` message that hands back the
   state is **E3137** there whenever `T` resolves to a managed type; a scalar `T` crosses.
 - A value held at an interface type crosses as a message argument, in a service's state and as a reply,
-  moved or lent like any other value. A conformer sent at its own type whose graph the runtime cannot walk
+  moved like any other value. A conformer sent at its own type whose graph the runtime cannot walk
   (an OS handle) is **E3138**; once it is held at the interface type it is checked through its witness at
   the send, and such a conformer aborts with exit code **96**.
 - Before a send, the runtime also checks the value's whole object graph. The graph may reach one record
@@ -5022,8 +5102,8 @@ Some consequences:
   then `acc.add(10)` is legal.
 - A record whose type declares every field `let` can never be written, so none of these checks apply to it.
 - `String` and `Character` values a name does not own are copied when bound to a `var` or stored.
-- A `let` lent to a [service](#services--spawn) is frozen from the send onwards
-  (**E3160**).
+- A `let` or `var` sent to a [service](#services--spawn), passed to [`async`](#starting-a-coroutine) or
+  captured by a [closure](#closures) is moved, and reading it afterwards is **E3102**.
 - The analysis tracks records made and used within one function. Two fields of a record received from
   elsewhere — a parameter, module storage — are assumed to hold different records.
 
@@ -5084,6 +5164,10 @@ end 'main'
 ```
 
 Borrows end at the borrowing variable's **last use**, not at the end of its scope.
+
+A field read into a binding borrows from its record the same way. While a borrow is still read, the record
+it came from may not be moved — into a message argument, an `async` call, or the value a `match` or ternary
+branch gives — and a binding it was moved into may not be dropped at the end of its block (**E3070**).
 
 ### Stack Promotion
 
@@ -5468,13 +5552,20 @@ arr.push("world")             // E3070: cannot mutate 'arr' via 'push' while it 
 print("{s}\n")
 ```
 
-**A closure escaping its frame**
+**Reading a local a closure captured**
 
 ```maxon
-function makeAdder(bump Score) returns UnaryOp
-	let f = function(n Score) gives n + bump
-	return f                  // E3099: cannot return a closure that captures
-end 'makeAdder'
+let word = "a word padded long enough to heap allocate {1}"
+let f = function() gives word.byteLength() as Tally
+print("{word}\n")             // E3102: use of moved value 'word': its ownership moved to the closure that captures it
+```
+
+**Storing a closure into what it captures**
+
+```maxon
+export function arm()
+	self.read = function() gives self.n   // E3183: this closure captures 'self' and is stored into a record 'self' holds, …
+end 'arm'
 ```
 
 **A bare primitive type**

@@ -25,15 +25,12 @@
 // below are derived from, and the two roots are one population here because they are one population to
 // every consumer: code the compile loads that the program's author did not write.
 //
-// ⚠ **THE ALTERNATIVE WAS MEASURED AND IS EXPENSIVE.** Re-deriving it by resolving each of the
-// program's source paths against the working directory and asking `FilePath.isInside` costs on the
-// order of a HUNDRED allocations a question — `resolve` and `isInside` build a String per path
-// component, and on Windows `canonicalForCompare` clones and lower-cases both sides — so it puts a term
-// into every compile that grows with the number of files the user wrote. MEASURED by memoizing that
-// derivation per path (`Queries.fileProvenanceOf`): −7,129 in `phase:signatures`, −4,296 in
-// `phase:parse` and −9,514 in `phase:checkUnusedExports` at the scale ladder's rung 0, 88 source files.
-// Asking it per FUNCTION instead of per file is worse again (+3,633 rising to +48,273 across the
-// ladder). `isLibraryFunction` answers the per-function form from a set built once.
+// ⚠ **THE ALTERNATIVE IS EXPENSIVE.** Re-deriving it by resolving each of the program's source paths
+// against the working directory and asking `FilePath.isInside` costs on the order of a HUNDRED
+// allocations a question — `resolve` and `isInside` build a String per path component, and on Windows
+// `canonicalForCompare` clones and lower-cases both sides — so it puts a term into every compile that
+// grows with the number of files the user wrote. Asking it per FUNCTION instead of per file is worse
+// again. `isLibraryFunction` answers the per-function form from a set built once.
 //
 // ⭐ **IS THIS FUNCTION LIBRARY SOURCE?** A `ByteArray` hash against that set. This is the question every
 // pass asks, and it stays true as the library grows from one module to all of it — nothing here depends
@@ -47,7 +44,7 @@ end 'isLibraryFunction'
 // `<root>`), so 64 is far more than enough while still terminating on a pathological path rather than
 // looping forever.
 //
-// ⚠ **EXPORTED BECAUSE IT IS ALSO THE STDLIB'S MODULE DIRECTORY (N1c)** — `Queries.namespaceAnchorFor`
+// ⚠ **EXPORTED BECAUSE IT IS ALSO THE STDLIB'S MODULE DIRECTORY** — `Queries.namespaceAnchorFor`
 // anchors a stdlib file at this directory's PARENT, so every stdlib file's module directory is this name
 // or a descendant of it. `Project.isStdlibModuleDirectory` is the one reader, and it reads this rather
 // than a second `"stdlib"` literal so a rename cannot leave the two disagreeing about where the library
@@ -56,8 +53,8 @@ export let StdlibDirName = "stdlib"
 let MaxStdlibSearchDepth = 64
 
 // The second library root, `runtime/` — the language runtime, loaded by every compile exactly as
-// `stdlib/` is. Not exported: `locateRuntimeDir` below is the only thing that spells it.
-let RuntimeDirName = "runtime"
+// `stdlib/` is.
+module let RuntimeDirName = "runtime"
 
 // Anchored on the executable, not `Directory.currentPath()`: the compiler may run from any
 // directory (the spec runner compiles in a throwaway temp dir), while its binary always lives inside
@@ -138,9 +135,8 @@ export typealias FunctionNameSet = Set with ByteArray
 //     is provisional"). A per-FILE demand never asks about a name at all.
 //   • **COST.** The demand is discovered round by round, so a per-function demand re-parses a file once per
 //     function of it that is reached — and, because a memo key built from the whole-program demand moves
-//     for EVERY file whenever ANY name is added, it re-parses all twenty-one of them each round. MEASURED
-//     at per-function granularity: `Math.exp(0.0)` spends **125.9 ms in `parse`** against 54.2 ms per
-//     file — a REGRESSION on the very programs this exists to speed up.
+//     for EVERY file whenever ANY name is added, it re-parses every listed file each round — a cost that
+//     lands on the very programs this exists to speed up.
 //
 // The cost of the coarser unit is building the unreached bodies of a file that is already being used, and
 // `DeadFunctionElimination` drops those like any other unreached body.
@@ -503,13 +499,13 @@ end 'collectOneLibraryFile'
 // run and into a module that is not the Maxon one — so the walk holds no evidence about them at all, and
 // every one of their entries would be filed `unreachedRuntimeTier` while the bodies ship. The slab's two
 // are minted by `installSlabRuntime`; `ManagedGeometry.maxon`'s three are minted by the managed-memory,
-// file and socket builders, which emit a `__mg_*` call where they used to splice the arithmetic inline.
+// file and socket builders, which emit a `__mg_*` call.
 //
 // ⛔⛔ **A FILE LISTED HERE IS WALKED BY `scanRuntimeUsage` IN EVERY PROGRAM, SO THE BAND ITS ENTRIES WEAR
 // IS A USAGE DECISION.** The scan reads a listed body's calls and sets the bits their NAMES ask for —
 // `MmRuntime.isRuntimeCallee` turns a `__mm_` callee into `usesHeap`. A geometry helper named `__mm_*`
-// therefore set `usesHeap` in a program that allocates nothing, shipping the allocator's `.data` state
-// word. MEASURED. ⇒ **A TIER FAMILY ADDED HERE MUST WEAR A BAND NO `recordCallUsage` ARM CLAIMS**, unless
+// would therefore set `usesHeap` in a program that allocates nothing, shipping the allocator's `.data`
+// state word. ⇒ **A TIER FAMILY ADDED HERE MUST WEAR A BAND NO `recordCallUsage` ARM CLAIMS**, unless
 // it really does need what that arm installs.
 //
 // ⛔⛔ **IT IS BY FILE AND NOT BY NAME, AND THAT IS WHAT MAKES IT SOUND ON *BOTH* PATHS.** An installer's
@@ -640,25 +636,17 @@ end 'classifyLibraryReach'
 // helper, which is added only during/after lowering — is simply not queued, exactly as
 // `DeadFunctionElimination.markLiveFunction` handles the same case.
 //
-// ⛔⛔ **"REACHABILITY BY DIRECT `call`/`funcAddr` EDGES IS EXACT FOR STDLIB SOURCE ... BECAUSE NO STDLIB
-// FUNCTION IS REACHED BY A WITNESS DISPATCH OR AN `.rdata` RELOC" IS WHAT THIS PARAGRAPH SAID, AND W35
-// MADE IT FALSE.** That premise held only while `print` was a compiler-recognized BARE NAME rather than
-// `stdlib/Print.maxon`'s declaration. The moment it became ordinary stdlib source, an interface method
-// implementation that prints put a stdlib function behind a DATA edge — and
-// `specs/interface-dispatch.md`'s `dispatch-void-method` (a `Thing.show()` whose body is
-// `print("{label}\n")`, reached only through `__witness_Thing.Printer`) went from passing to a COMPILER
-// PANIC: `requireUnreachableLibraryStayedDead: 'print' is in LibraryFacts.unreachable`. The guard was right
-// and the walk was wrong, which is what a guard stating a premise is for.
+// ⛔⛔ **DIRECT `call`/`funcAddr` EDGES ARE NOT THE WHOLE OF STDLIB REACHABILITY: A STDLIB FUNCTION CAN
+// SIT BEHIND A WITNESS DISPATCH.** An interface method implementation that prints reaches
+// `stdlib/Print.maxon`'s `print` only through `__witness_<Type>.<Iface>`, a DATA edge, and missing it is a
+// `requireUnreachableLibraryStayedDead` panic on a correct program (`specs/interface-dispatch.md`'s
+// `dispatch-void-method`).
 //
 // ⇒ **THE WITNESS EDGE IS CREDITED AT THE CONFORMER THIS WALK REACHES** — `markConformerWitnessImpls`,
-// below, which carries the whole argument and the two cuts that were wrong before it. ⚠ This paragraph
-// named a `markWitnessTableImpls` keyed on the DISPATCH OP for one commit, and that function is gone: it
-// covered one of the three `ensureWitnessTable` routes and left the other two panicking on programs the
-// merge base compiles. **If you are reading a description of the design here rather than at the function,
-// distrust it** — this is the copy that rots.
+// below, which carries the whole argument. **If you are reading a description of the design here rather
+// than at the function, distrust it** — this is the copy that rots.
 //
-// ⚠⚠ **THE CONFORMER KEY RESTS ON TWO PREMISES, NOT ONE, AND ONLY THE FIRST IS SELF-EVIDENT. BOTH WERE
-// PROBED AT THE W35 REVIEW.**
+// ⚠⚠ **THE CONFORMER KEY RESTS ON TWO PREMISES, NOT ONE, AND ONLY THE FIRST IS SELF-EVIDENT.**
 //
 //   • **P1 — a conformer whose values are built by a CALL implies a reached function OF it.** This is E3076,
 //     and it is enforced: `Thing{tag: 1}` written outside `Thing` is *"type 'Thing' can only be constructed
@@ -670,26 +658,23 @@ end 'classifyLibraryReach'
 //     is still REFUSED at the widening (`Box with ExitCode` into a `Printer` place is E3005), so it owes
 //     nothing. ⇒ P1 holds for the conformers E3076 governs, and the seed stands in for the ones it does not.
 //
-//   • **P2 — a BUILTIN conformer's requirement impls are never stdlib SOURCE. IT HAS EXPIRED TWICE AND IS NO
-//     LONGER A PREMISE AT ALL; the seed below is what stands in its place.** The conformer key structurally
-//     CANNOT credit a builtin: no `String.<method>` or `int.<method>` module function is ever reached, since
-//     those calls lower to `__str_*`/inline ops. MEASURED that builtin conformers really do reach tables, and
-//     not only through the container route `markConformerWitnessImpls`'s last paragraph covers:
-//     `type Keyed uses T where T is Hashable` instantiated at `String` and at `int` compiles and runs
-//     (exit 14 = `9 + 5`), building `__witness_String.Hashable` and `__witness_int.Hashable`. That was
-//     harmless only while `BuiltinConformanceRuntime` SYNTHESIZED every such impl. ⇒ **The day a LISTED
-//     module declares `extension <builtin> implements <Iface>` with a corpus body, this key misses it** —
-//     W17 was that day for `String`/`Character`, and the `stdlib/Array.maxon:632` case this paragraph named
-//     in advance (`extension Array implements Hashable, Equatable where Element is Hashable and Equatable`)
-//     is the second. Both are carried by `conformersMintedWithoutTheirOwnMethods`, whose membership rule and
-//     loudness argument live at that function.
+//   • **P2 — a BUILTIN conformer's requirement impls are never stdlib SOURCE. IT DOES NOT HOLD, so it is
+//     not a premise at all; the seed below stands in its place.** The conformer key structurally CANNOT
+//     credit a builtin: no `String.<method>` or `int.<method>` module function is ever reached, since those
+//     calls lower to `__str_*`/inline ops. Builtin conformers really do reach tables, and not only through
+//     the container route `markConformerWitnessImpls`'s last paragraph covers: `type Keyed uses T where T
+//     is Hashable` instantiated at `String` and at `int` builds `__witness_String.Hashable` and
+//     `__witness_int.Hashable`. That is harmless only for an impl `BuiltinConformanceRuntime` SYNTHESIZES.
+//     ⇒ **Where a LISTED module declares `extension <builtin> implements <Iface>` with a corpus body, this
+//     key misses it.** Those conformers are carried by `conformersMintedWithoutTheirOwnMethods`, whose
+//     membership rule and loudness argument live at that function.
 //
 // ⭐⭐ **AND THIS IS WHY A RESIDUAL HERE IS TOLERABLE: AN UNDER-APPROXIMATION IS LOUD, ALWAYS.** The same
 // walk decides both what is BUILT (`growStdlibBodyDemand`) and what is filed `unreachable`, so the two can
 // never disagree in the silent direction — a function this walk misses is unbuilt AND in that set, and
 // `requireUnreachableLibraryStayedDead` panics the moment elimination reaches it through the reloc. The
 // SILENT failure — filed reachable, body never built, an empty function the program calls — is a different
-// mistake, it was the `witnessSlotImpls` cut, and this key cannot make it. Treat a panic from that guard as
+// mistake, and this key cannot make it. Treat a panic from that guard as
 // this premise list having acquired a third entry, and add it here.
 //
 // ⚠ **A NARROWER GATE EXISTS AND IS NAMED RATHER THAN DENIED — it is not taken, and the reason is not
@@ -698,10 +683,10 @@ end 'classifyLibraryReach'
 // container key/element's `Hashable`/`Equatable`. Gating on the PAIR — a reached conformer `T` AND an
 // interface the program can statically name — would drop the over-approximation
 // `markConformerWitnessImpls`'s last paragraph measures (a `FilePath` program crediting four impls it never
-// boxes) to nothing. Taking it re-introduces predicting the CALL SITES, which is the shape the measured
-// `+81%` cut got wrong, for +1.1% allocations and zero emitted bytes; and the `extends` case needs care (a
-// `Base`-typed place against `T implements Derived` builds `__witness_T.Base`, so the filter must walk
-// `extends` rather than test set membership). It is a rung, with the ladder read, not a review edit.
+// boxes) to nothing. Taking it re-introduces predicting the CALL SITES, the shape the too-broad cut in
+// `markConformerWitnessImpls`' header gets wrong, and its gain is no emitted bytes; and the `extends` case
+// needs care (a `Base`-typed place against `T implements Derived` builds `__witness_T.Base`, so the filter
+// must walk `extends` rather than test set membership).
 //
 // ⭐ The name index is the shared, CHECKED one (`FunctionNameIndex`). A last-wins, unchecked resolution
 // would walk ONE of two same-named bodies and credit the callees of whichever it picked; a walk that
@@ -719,9 +704,8 @@ end 'classifyLibraryReach'
 // both directions. `DeadFunctionElimination.seedRoots` roots it unconditionally (its kind 2), so leaving
 // the edge out is not conservative: the two derivations disagree, `lowerMaxonToStd` lowers no body for a
 // stdlib factory named only by an initializer, and the elimination walk reaches the empty function it
-// left. MEASURED before the fix, on `var sep = FilePath.separator()`: a `requireUnreachableLibraryStayedDead`
-// panic on a program with nothing wrong with it (`specs/top-level-factory-globals.md`'s
-// `stdlib-factory-reached-from-the-initializer`).
+// left: `var sep = FilePath.separator()` would be a `requireUnreachableLibraryStayedDead` panic on a
+// correct program (`specs/top-level-factory-globals.md`'s `stdlib-factory-reached-from-the-initializer`).
 //
 // ⚠⚠ **AND IT RUNS BEFORE OVERLOAD RESOLUTION, SO A CALLEE NAME HERE IS PROVISIONAL — WHICH IS WHY THE
 // OVERLOAD SET IS CREDITED WHOLE.** `SemanticCheck.resolveOverloadedCalls` rewrites `call FilePath.join`
@@ -730,19 +714,19 @@ end 'classifyLibraryReach'
 // screen ABOVE that call in `compileToCodeResult`. So this walk is the one reader that precedes it, and
 // the bare name it sees is the registration name of the FIRST member only.
 //
-// MEASURED, and it is a compiler PANIC on a correct program, not a size regression:
+// Crediting that member alone is a compiler PANIC on a correct program, not a size regression:
 // `specs/filepath.md`'s `filepath-join-filepath` writes `base.join(child)` against
-// `stdlib/FilePath.maxon:357/371`'s two `join` overloads. The walk credited `FilePath.join` (the `String`
-// member, declared first), filed `FilePath.join#FilePath` as unreachable, `lowerMaxonToStd` skipped its
-// body — and then dead-function elimination, which runs AFTER resolution and sees the real callee,
-// reached it and tripped `requireUnreachableLibraryStayedDead`.
+// `stdlib/FilePath.maxon`'s two `join` overloads. Crediting only `FilePath.join` (the `String` member,
+// declared first) files `FilePath.join#FilePath` as unreachable, `lowerMaxonToStd` skips its body — and
+// then dead-function elimination, which runs AFTER resolution and sees the real callee, reaches it and
+// trips `requireUnreachableLibraryStayedDead`.
 //
 // ⇒ A provisional callee names a SET, and this walk answers "might this be reached?", so every member is
 // credited. That is exact for the question asked and cannot make the assert fire: an OVER-approximation
 // only ever removes names from `unreachable`, and every consumer of that set (`lowerMaxonToStd`,
 // `insertRangeChecks`, `scanRuntimeUsage`, `checkCalls`) treats absence as "compile it normally".
-// ⚠ Moving `resolveOverloadedCalls` above this instead was considered and REJECTED: it sits after
-// `resolveTypes` today, so hoisting it would hand overload selection the UNRESOLVED parameter spellings
+// ⚠ Moving `resolveOverloadedCalls` above this instead is wrong: it sits after `resolveTypes`, so hoisting
+// it would hand overload selection the UNRESOLVED parameter spellings
 // and could change which member a call picks — trading a loud panic for a silent misdispatch.
 //
 // The unused member is still dropped from the emitted image: dead-function elimination runs after
@@ -776,7 +760,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	end 'eachInitializerRoot'
 
 	// ⭐⭐ **A CORPUS SLOT READ FROM A USER FUNCTION NOTHING CALLS IS STILL BUILT, SO ITS INITIALIZER'S
-	// CALLEES ARE SEEDED FROM EVERY USER BODY AND NOT ONLY FROM THE REACHED ONES (W115).** This asymmetry is
+	// CALLEES ARE SEEDED FROM EVERY USER BODY AND NOT ONLY FROM THE REACHED ONES.** This asymmetry is
 	// not this walk's invention — it is `DeadGlobalElimination.liveGlobalLabels`', stated in its own header:
 	// *"A USER function is still credited whether or not anything calls it … but a stdlib function
 	// `LibraryFacts.unreachable` names is skipped"*. That is the rule that decides whether the slot EXISTS,
@@ -787,18 +771,17 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	seedCorpusSlotInitCalleesOfUserCode(module, project: project, signatures: signatures, stdlib: stdlib, byName: byName, reached: reached, worklist: worklist, names: names)
 
 	// ⭐⭐⭐ **A WITNESS IMPL IS CREDITED FOR A PAIR — A CONFORMER THE WALK HAS EVIDENCE OF, AND AN INTERFACE
-	// THE REACHED CODE CAN NAME (W188).** Both halves were already here and each was asked ALONE:
-	// `markConformerWitnessImpls` credited every conformance a reached type DECLARES (evidence about the
-	// type, none about the interface), and the corpus seed credited every conformance the six roster
-	// conformers declare (evidence about the interface's existence, none about which one). Neither is wrong;
-	// together they are a cross product, and it is the CROSS that is exact — `ensureWitnessTable` is called
-	// with a conformer AND an interfaceName, and its `interfaceName` is always statically known.
+	// THE REACHED CODE CAN NAME.** Each half asked ALONE over-credits: the conformer key credits every
+	// conformance a reached type DECLARES (evidence about the type, none about the interface), and the corpus
+	// seed credits every conformance the roster conformers declare (evidence about the interface's existence,
+	// none about which one). Neither is wrong; together they are a cross product, and it is the CROSS that is
+	// exact — `ensureWitnessTable` is called with a conformer AND an interfaceName, and its `interfaceName` is
+	// always statically known.
 	//
-	// ⛔ **THE COST OF ASKING THEM SEPARATELY, MEASURED (W188):** with `int`/`float`/`bool` on the roster, a
-	// program whose only constraint is `Hashable` seeded `int.hash`, then the conformer key saw a REACHED
-	// `int.*` and credited every other `int`/`float` impl — including `Stringable`'s `return "{self}"`, whose
-	// float arm drags `stdlib/Builtins.maxon`'s decimal bignum cone. **Image 12,117 → 21,333 bytes (+76%),
-	// emitted CODE byte-identical at 2,783**: 91 `.rdata` panic literals for bodies the program cannot call.
+	// ⛔ **THE COST OF ASKING THEM SEPARATELY:** a program whose only constraint is `Hashable` would seed
+	// `int.hash`, then the conformer key would see a REACHED `int.*` and credit every other `int`/`float` impl
+	// — including `Stringable`'s `return "{self}"`, whose float arm drags `stdlib/Builtins.maxon`'s decimal
+	// bignum cone — so the image carries `.rdata` panic literals for bodies the program cannot call.
 	//
 	// ⚠ **IT IS A FIXPOINT BECAUSE BOTH COORDINATES GROW DURING THE WALK**, and either one growing owes the
 	// other's whole list: a newly NAMED interface must be crossed with every conformer already reached, and a
@@ -807,8 +790,6 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// ⚠ **BUILT ONCE PER WALK, NOT ONCE PER REACHED FUNCTION.** `markEveryDeclaredWitnessImplOf` asks whether
 	// a conformer is the seed's, and it is asked of EVERY qualified function the drain reaches — so a roster
 	// rebuilt at the ask is a seven-push array plus its doubling reallocations per reached stdlib function.
-	// That is `Parser.arraySurfaceMemberNames`' measured lesson (**+1,023 allocations at rung 0 rising to
-	// +26,009 at rung 5** when its roster was per-call), and the same shape is refused here in advance.
 	let seedConformers = conformersMintedWithoutTheirOwnMethods(signatures)
 	let enumConformers = enumConformersByInterface(project)
 	var witnessInterfaces = InterfaceNameSet.create()
@@ -852,50 +833,27 @@ end 'reachableMaxonFunctionNames'
 // `markConformerWitnessImpls` credits a type's requirement impls once the walk reaches ANY function OF that
 // type, which is exact for a type E3076 governs (P1). It is EMPTY for a type the COMPILER MINTS VALUES OF: a
 // `String` and a `Character` are born from literals and every operation on one lowers to `__str_*`, and an
-// `Array` is born from an array literal or `Array.create()` and every operation on one lowers to `__managed_*` —
-// MEASURED, on `Key.create()` + `k.push(1)` + `k.count()` with `stdlib/Array.maxon` listed, the emitted module
-// holds `@main` and `@print` and NO `Array.<method>` at all. So no reached function is ever qualified by one
+// `Array` is born from an array literal or `Array.create()` and every operation on one lowers to
+// `__managed_*`. So no reached function is ever qualified by one
 // of these names and the key has nothing to fire on.
 //
 // ⚠ **MEMBERSHIP IS TWO CLAUSES AND BOTH ARE NARROWING, so "it is a builtin" is neither of them.**
 //
 //   • **The compiler mints its values without a call of its own** — as above. `Map` is a builtin container
 //     and is deliberately ABSENT on this clause: a dictionary literal lowers to `Map.create` + `Map.upsert`
-//     (`Parser.emitContainerLiteralCreate`), ordinary reached calls, so the conformer key fires for it. MEASURED —
-//     a `where T is Iterable` program instantiated at `Map with (Num, Num)` emits `@Map.createIterator` and
-//     compiles clean with `Map` on no seed.
+//     (`Parser.emitContainerLiteralCreate`), ordinary reached calls, so the conformer key fires for it.
+//     `Vector` is absent for the same reason: `create`, `count`, `get` and `set` are `stdlib/Vector.maxon`'s,
+//     so any program holding a vector reaches a `Vector.<method>`.
 //   • **A LISTED module declares its conformance**, so a witness slot can name a CORPUS body. This is what
-//     keeps `int`/`float`/`bool`/`Set` off the list although they satisfy the first clause: their impls are
+//     keeps `Set` off the list although it satisfies the first clause: its impls are
 //     `BuiltinConformanceRuntime`'s synthesized ones, and a synthesized body is not stdlib source, so there
-//     is nothing `unreachable` could hold and nothing to seed. The day one of them acquires a listed
-//     declaring module is the day it joins — by the same route `Array` did, below.
+//     is nothing `unreachable` could hold and nothing to seed.
 //
-// ⭐⭐ **THAT DAY CAME FOR `int`, `float` AND `bool` (W188): `stdlib/PrimitiveExtensions.maxon` IS LISTED,
-// AND ITS `extension int implements Hashable, Equatable, Comparable, Stringable, Cloneable` IS THE LISTED
-// DECLARING MODULE THE CLAUSE ABOVE NAMES.** `undefinedImplNames` therefore stops synthesizing
-// `int.hash`/`int.equals`/`int.compare` (and their `float`/`bool` siblings) and a witness slot's `funcAbs64`
+// ⭐⭐ **`int`, `float` AND `bool` MEET THE SECOND CLAUSE THROUGH `stdlib/PrimitiveExtensions.maxon`, WHOSE
+// `extension int implements Hashable, Equatable, Comparable, Stringable, Cloneable` IS THE LISTED
+// DECLARING MODULE IT NAMES.** `undefinedImplNames` therefore does not synthesize
+// `int.hash`/`int.equals`/`int.compare` (or their `float`/`bool` siblings), and a witness slot's `funcAbs64`
 // reloc names the CORPUS body instead — a DATA edge this Maxon-tier walk cannot see.
-//
-// ⚠ **MEASURED, BEFORE THE THREE LINES BELOW EXISTED, THE MOMENT THE MODULE WAS LISTED: 124
-// `requireUnreachableLibraryStayedDead` panics** — `int.hash` (83), `int.equals` (23), `int.compare` (18) —
-// which is `String`/`Character`'s 130 at W17 and `Array.hash`'s panic at ARR5b, a third time, on the roster
-// this function IS. **The omission is loud by construction, which is the whole reason a roster is tolerable
-// here**, and the previous two entries were each found by exactly this panic naming the missing name.
-//
-// ⭐⭐ **`Vector` JOINED AT `W189` AND LEFT AT `W190`, AND THE ENTRY AND ITS REMOVAL ARE ONE ARGUMENT READ IN
-// TWO DIRECTIONS.** It was admitted as the first clause in its purest form — **NOT ONE of its members was
-// ever reached**, because every one of them was compiler-served (`Parser.vectorSurfaceMemberNames`,
-// `gateAndEmitContainerCreate`), so the conformer key had nothing whatever to fire on. **W190 falsified
-// exactly that premise**: `create`, `count`, `get` and `set` are `stdlib/Vector.maxon`'s now, so any program
-// holding a vector reaches a `Vector.<method>` and the conformer key fires for it like any other type's —
-// which is the ONE clause `Map`'s deliberate absence rests on, one container over.
-//
-// ⚠ **MEASURED at W189, before the members retired: `requireUnreachableLibraryStayedDead` panicking on
-// `ArrayIterator.current`** — the cascade one step past the witness slot, since the corpus `createIterator`
-// returns an `ArrayIterator` whose own `Iterator` table is reached from there. **RE-MEASURED at W190 with the
-// line struck: the suite is green**, which is what says the key now reaches that cascade by the ordinary
-// road. An omission here is loud by construction (see the ⭐ block below), so the removal is checkable in the
-// one direction that matters.
 //
 // ⚠ **THE THREE PRIMITIVE ENTRIES ARE THE BARE NAMES AND NEED NO `arrayRecordBaseName` TREATMENT**, because a
 // primitive's spelling cannot be contested: `int`/`float`/`bool` are KEYWORDS, so no user `type int` exists
@@ -905,12 +863,9 @@ end 'reachableMaxonFunctionNames'
 // ⭐ **AN OMISSION HERE IS LOUD, ALWAYS, WHICH IS WHY A ROSTER IS TOLERABLE WHERE A PREDICTION WOULD NOT BE.**
 // This walk decides both what is BUILT and what is filed `unreachable`, so a conformer missing from this list
 // is a function `DeadFunctionElimination.requireUnreachableLibraryStayedDead` PANICS on BY NAME the moment a
-// witness slot reaches it. That is how `Array` was found: `markConformerWitnessImpls`' header had predicted it
-// in so many words — *"the day a LISTED module declares `extension <builtin> implements <Iface>` with a corpus
-// body, this key misses it … `stdlib/Array.maxon:632` … listing it is the change that would need this
-// revisited"* — and listing the module produced exactly that panic on `Array.hash`.
+// witness slot reaches it.
 //
-// ⚠⚠ **THE ARRAY ENTRY IS THE CORPUS DECLARATION'S *COMPILED* NAME AND NOT THE BARE ONE (ARR5b).** This
+// ⚠⚠ **THE ARRAY ENTRY IS THE CORPUS DECLARATION'S *COMPILED* NAME AND NOT THE BARE ONE.** This
 // seed names the qualifier a corpus body is registered under, and under a contest that is the mint
 // (`__Array.hash`, `Parser.shadowRenamedTokens`): the bare `Array` there is the USER's own container, which
 // declares no witness impl and so seeds nothing — leaving exactly the omission the paragraph above says
@@ -977,16 +932,11 @@ function recordEnumWitnessCredit(byInterface EnumConformersByInterface, project 
 	byInterface.upsert(interfaceName, value: conformers)
 end 'recordEnumWitnessCredit'
 
-// Drain the worklist to a fixpoint, answering whether anything it reached DEMANDS a witness table. Split out
-// of `reachableMaxonFunctionNames` because the walk runs twice — once to find the demand, once for the
-// bodies the seed adds — and a second copy of the drain is a second place for a marking to be added to one
-// side only, which is the exact defect this rung repairs one screen down.
-// ⚠ **THE COST GUARD THAT STOOD HERE WENT WITH THE BOOL (W188).** It skipped the
-// `witnessConstraintsOfMethod` ask once the answer was known, on the ground that *"once the answer is known
-// it cannot change, and `or` is monotone"*. A SET of names is not monotone in that sense — the interface a
-// later function names is one the seed still owes — so every reached function is asked. The ask is a
-// qualified-name split and a handful of map lookups, and it is now the only thing standing between a
-// `Hashable` program and 9 KB of `.rdata` it cannot reach.
+// Drain the worklist to a fixpoint, answering whether anything it reached DEMANDS a witness table. Its own
+// function because the walk runs twice — once to find the demand, once for the bodies the seed adds — and a
+// second copy of the drain is a second place for a marking to be added to one side only.
+// ⚠ **EVERY REACHED FUNCTION IS ASKED, WITH NO SKIP ONCE AN ANSWER IS KNOWN**: the interface a later
+// function names is one the seed still owes. The ask is a qualified-name split and a handful of map lookups.
 function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder ByteArrayArray, creditedServices CreditedServiceSet)
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
@@ -1002,9 +952,6 @@ end 'drainReachableWorklist'
 // `hash`/`equals`/`compare` a witness slot names. `BuiltinConformanceRuntime` synthesizes an impl only for
 // a name the module does not already define (`undefinedImplNames`), so the witness slot's `funcAbs64` reloc
 // names a CORPUS body.
-//
-// ⚠ MEASURED without this seed: **130 `requireUnreachableLibraryStayedDead` panics** — `Character.hash`
-// (87), `String.hash` (40), `String.equals` (2), `Character.compare` (1).
 //
 // ⭐ **WHY THE CONFORMER KEY CANNOT REACH THESE, AND SO WHY A SEED IS NEEDED AT ALL.**
 // `markConformerWitnessImpls` credits a type's requirement impls once the walk reaches ANY function OF that
@@ -1026,7 +973,7 @@ end 'drainReachableWorklist'
 // ⭐⭐⭐ **SO THE SEED IS GATED ON THE QUESTION IT IS THE ANSWER TO: CAN THE REACHED CODE NAME A WITNESS
 // TABLE?** Every table in the emitted image is registered by `LowerMaxonToStd.ensureWitnessTable`, and it has
 // exactly TWO routes in. This asks for the evidence each route needs, of REACHED code only — never for a
-// prediction of which call sites will fire, which is the shape the measured `+81%` cut got wrong (see
+// prediction of which call sites will fire, which is the shape the too-broad cut gets wrong (see
 // `markConformerWitnessImpls`):
 //
 //   • **A `where T is I` CONSTRAINT witness** (`materializeWitnessArg`), carried by every call to a method of
@@ -1055,9 +1002,7 @@ end 'drainReachableWorklist'
 // warns that a root kind which is *"a marking pass"* must not be added to one side only: a seed only this
 // side knows leaves a program whose user code names no stdlib function taking the short-circuit, filing
 // every stdlib name `unreachable` INCLUDING these, and `requireUnreachableLibraryStayedDead` panicking on
-// the witness slot (MEASURED with the cone listed: 33 cases, every one a `Map`/`Set` with `String` keys or a
-// `String` conformance — `let m = ["a": 1]` panics on `String.hash`, while the same program with one `print`
-// line added compiles, because the `print` drags it onto the precise path). So the two sides ask ONE
+// the witness slot. So the two sides ask ONE
 // PREDICATE — `functionDeclaresAWitnessPosition` — and the short-circuit's exactness argument carries it: if
 // user code names no stdlib callee then NO stdlib function is reachable, so the reached set is a subset of
 // user code, and a user function is the only place a demand can be.
@@ -1082,11 +1027,9 @@ end 'drainReachableWorklist'
 // `stdlib/Builtins.maxon`'s entire decimal bignum cone (`__bigMulSmall`, `__bigShiftLeft`,
 // `__float_bitsFromText`, …) behind it.
 //
-// ⛔ **MEASURED, on a program that names `Hashable` and no other interface and touches no primitive:
-// image 12,117 → 21,333 bytes (+9,216, +76%), with the emitted CODE byte-identical at 2,783** — the whole
-// growth is `.rdata`: **91 panic literals** none of that program's code can reach. A `String`-keyed twin
-// grows identically (13,335 → 22,551). `DeadFunctionElimination` drops the BODIES, and nothing drops the
-// literals a lowered body registered.
+// ⛔ A yes/no would grow the image of a program that names only `Hashable` by every `.rdata` panic literal
+// those bodies register, none of which its code can reach: `DeadFunctionElimination` drops the BODIES, and
+// nothing drops the literals a lowered body registered.
 //
 // ⇒ **The seed is keyed on the interfaces the reached code can actually NAME**, which is the narrower
 // gate this walk's own header describes and declines: *“`ensureWitnessTable`'s `interfaceName` argument is
@@ -1137,8 +1080,7 @@ end 'noteWitnessPositionInterfaceIfExistential'
 // ⭐ **THE SHORT-CIRCUIT SCAN'S HALF OF THE PAIR — THE SAME SOURCES, ASKED AS A YES/NO.**
 // `userCodeDemandsAWitnessTable` walks EVERY user function before the demand walk runs and needs no names,
 // so it must not pay for a set and an array per function. The two readers stay one answer by construction:
-// every source below is one of the collector's, and neither may grow a source alone (W17's measured defect
-// is exactly a source added to one side).
+// every source below is one of the collector's, and neither may grow a source alone.
 function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSignatures, funcSignatures FuncSignatureMap) returns bool
 	for paramType in func.maxonParamTypes 'eachParam'
 		if maxonTypeTag(paramType) == ValueTypeTag.interfaceRef 'existentialParam'
@@ -1173,7 +1115,7 @@ end 'noteInterfaceName'
 // map is `functionDeclaresAWitnessPosition`'s own — see the paragraphs above.
 function witnessConstraintsOfReachedFunction(func IrFunction, signatures ProgramSignatures, funcSignatures FuncSignatureMap) returns WhereConstraintArray
 	// ⭐ **THE EXTENSION HALF IS READ OFF THE REGISTRATION NAME'S OWN SIGNATURE**, because the
-	// declaration-sweep map is keyed by the DECLARED name and a D7 overload member does not wear it — see
+	// declaration-sweep map is keyed by the DECLARED name and an overload member does not wear it — see
 	// `FuncSignature.extensionConstraints`. A function with no recorded signature (a synthesized graph, a
 	// witness adapter) has no registration name to read one off, so it falls back to the DECLARATION-SWEEP
 	// clause, which cannot be wrong for a name no declaration wears. Over-answering here costs a walk;
@@ -1192,7 +1134,7 @@ module function markReachable(name ByteArray, project Project, byName FuncIndexB
 	markOneReachable(name, byName: byName, reached: reached, worklist: worklist, names: names)
 
 	// ⭐⭐ **A MINTED PARAMETER-DEFAULT HELPER IS PROVISIONAL FOR THE SAME REASON THE BASE CALLEE BESIDE IT
-	// IS, AND ONLY THE BASE WAS WIDENED (W81).** The two names are emitted by one act: filling a short call
+	// IS.** The two names are emitted by one act: filling a short call
 	// appends `f(x, m: __paramDefault#f#2())`, both spellings taken from the sweep's by-name registry, and
 	// `SemanticCheck.resolveOverloadedCalls` then re-points BOTH — the call at `commitOverloadChoice`, the
 	// helper at `repointDefaultedArgHelpers`, at the resolved member's own
@@ -1221,25 +1163,18 @@ module function markReachable(name ByteArray, project Project, byName FuncIndexB
 	// and asked in the two shapes Maxon cannot fold into one — there is no way to hand a function the
 	// action to take per member, which is the argument `Parser.surfaceMemberNames` makes about its arms.
 	//
-	// ⛔⛔ **ONLY THIS SIDE WIDENED UNTIL X-array-retire, AND THE OTHER SIDE'S MISS WAS A PANIC.** For most
+	// ⛔⛔ **THE OTHER SIDE MUST WIDEN TOO, AND ITS MISS IS A PANIC.** For most
 	// sets the narrow reader is accidentally right, because the FIRST declaration KEEPS the bare spelling
 	// and the base therefore IS a function name (`String.contains`). For a CONTESTED extension method
 	// **nobody keeps the bare spelling** (`Parser.overloadRegistrationNameFor`) — `Array.contains` is
 	// declared by `stdlib/Array.maxon`'s `where Element is Equatable` extension AND published onto `Array`
 	// by `stdlib/Interfaces.maxon`'s `extension Iterable`, so its members register as
 	// `Array.contains#type parameter` / `Array.contains#struct` and NOTHING is named `Array.contains`.
-	// See `nameReachesStdlib` for what that cost.
+	// See `nameReachesStdlib` for what a miss costs.
 	//
-	// ⚠ **`contains` BEFORE `get`, AND THE HONEST STATUS OF THAT IS: NOT MEASURED TO MATTER HERE.** The
-	// reasoning is that this runs once per CALL EDGE and a miss is what nearly every edge is, so a
-	// `try map.get(k) otherwise return` would be an error construction per edge on the common path. That
-	// reasoning is why it is spelled this way — and why the reader below spells it the same. **It is NOT
-	// why the ladder moved**: it was X-contains's first hypothesis for a measured +0.101 allocations per
-	// source byte, it was built, and re-running the ladder showed **not one allocation changed at any of
-	// the six rungs** — the real term was `SemanticCheck.resolveOverloadedCalls` (see `maxonOpCalleeKind`).
-	// Kept because a `contains`/`get` pair cannot be worse than a throwing `get` and it lets the miss be a
-	// `panic` rather than a silent `return`; recorded this way because a comment claiming a measurement its
-	// own instrument refuted is exactly the false prose this project keeps finding.
+	// ⚠ **`contains` BEFORE `get` IS NOT A MEASURED COST.** This runs once per CALL EDGE and a miss is what
+	// nearly every edge is; the pair cannot be worse than a throwing `get`, and it lets a miss after the
+	// `contains` be a `panic` rather than a silent `return`. The reader below spells it the same way.
 	if not project.overloadSets.contains(name) 'notAnOverloadSet'
 		return
 	end 'notAnOverloadSet'
@@ -1290,9 +1225,9 @@ end 'markEveryMembersOwnDefaultHelper'
 // member the resolver bound and PANICS. That guard is the only thing standing between this and
 // an EMPTY function the program calls, with no diagnostic anywhere.
 //
-// ⚠ MEASURED: adding one non-overloaded stdlib call (`"a".isAscii()`) to such a program makes it compile,
-// because that edge is visible to this scan and the precise walk's widening then covers the members — which
-// is what puts the fault in the SHORT-CIRCUIT rather than in the walk.
+// ⚠ One non-overloaded stdlib call (`"a".isAscii()`) added to such a program makes it compile, because that
+// edge is visible to this scan and the precise walk's widening then covers the members — which puts the
+// fault in the SHORT-CIRCUIT rather than in the walk.
 //
 // ⛔ **THE RULE ABOVE IS ARGUED HERE AND PINNED BY NO CASE.** A program built on `Array.contains` —
 // the ONLY contested `<Conformer>.<method>` in the corpus — would prove nothing: the `Array` roster
@@ -1301,7 +1236,7 @@ end 'markEveryMembersOwnDefaultHelper'
 //
 // ⚠ Over-answering is SAFE here and under-answering is the bug — a false TRUE costs the exact walk,
 // where a false FALSE skips a body the back end calls. `contains` before `get` for `markReachable`'s
-// measured reason.
+// reason.
 function nameReachesStdlib(name ByteArray, project Project, stdlib FunctionNameSet) returns bool
 	if stdlib.contains(name) 'aStdlibFunction'
 		return true
@@ -1414,7 +1349,7 @@ function markServiceLoopHandlers(op MaxonOp, project Project, signatures Program
 end 'markServiceLoopHandlers'
 
 // ⭐⭐⭐ **THE DATA EDGE THIS WALK CANNOT SEE — A WITNESS TABLE'S METHOD SLOTS — CREDITED AT THE CONFORMER
-// THE WALK REACHES (W35).** `__witness_<Type>.<Iface>`'s slots are `.rdata` relocations, so the
+// THE WALK REACHES.** `__witness_<Type>.<Iface>`'s slots are `.rdata` relocations, so the
 // implementation each one names is named by no `call` anywhere in the module. Without this, an interface
 // method whose body calls a stdlib function leaves that function filed `unreachable` while
 // `DeadFunctionElimination` — which DOES follow those relocations — reaches it, and the two derivations
@@ -1432,71 +1367,54 @@ end 'markServiceLoopHandlers'
 //
 // ⇒ Reaching any function of a conforming type credits THAT type's requirement impls, and no others.
 //
-// ⛔⛔ **THE FIRST TWO CUTS WERE BOTH WRONG, IN OPPOSITE DIRECTIONS, AND BOTH ARE WORTH KEEPING HERE.**
-//   • **TOO NARROW:** keyed on a `witnessDispatch` OP. It fixed the dispatched case and left the other two
-//     `ensureWitnessTable` callers panicking — a `Thing` boxed into an interface-typed field and never
-//     dispatched, and a `where T is Digest` method that never touches `T`. Both compile on the merge base,
-//     so the reachable-program set REGRESSED.
-//   • **TOO BROAD:** keyed on a signature predicate, crediting EVERY conformance in the program. MEASURED
-//     on one interface-boxing program, same binary both ways: allocations **370,345 ⇒ 671,836 (+81%)**,
-//     bytes +20.9 MB, and the emitted code moved **3,388 ⇒ 3,788** — because `project.conformances` holds
-//     every LISTED STDLIB module's conformances too, so `URL.equals`/`FilePath.hash` and their whole files'
-//     bodies were demanded by a program that names neither. That is the blanket-seed trap
-//     `seedCorpusSlotInitCalleesOfUserCode`'s header records at 2223 moved fragments, by a second road.
+// ⛔⛔ **THE TWO SIMPLER CUTS ARE BOTH WRONG, IN OPPOSITE DIRECTIONS.**
+//   • **TOO NARROW:** keyed on a `witnessDispatch` OP. It covers the dispatched case and leaves the other
+//     two `ensureWitnessTable` callers panicking — a `Thing` boxed into an interface-typed field and never
+//     dispatched, and a `where T is Digest` method that never touches `T`.
+//   • **TOO BROAD:** keyed on a signature predicate, crediting EVERY conformance in the program.
+//     `project.conformances` holds every LISTED STDLIB module's conformances too, so `URL.equals`/
+//     `FilePath.hash` and their whole files' bodies would be demanded by a program that names neither.
 //   ⇒ The conformer key is what makes it exact: a program that never reaches `URL` credits nothing of it.
 //
-// ⚠ **IT JOINS `<Type>.<requirement>` RATHER THAN READING `project.witnessSlotImpls`, AND A CUT THAT READ
-// THAT MAP WAS WRONG. MEASURED:** the map is filled by `checkConformance`, which runs AFTER `queryAllModule`
-// — and `growStdlibBodyDemand`'s fixpoint, which decides which stdlib bodies are BUILT AT ALL, runs INSIDE
-// it. So the map is empty for every round of the fixpoint and full only by the time `deriveLibraryFacts`
-// asks: the panic went away (the facts were right) and the emitted `@print` was an EMPTY function the
-// program called — a silent wrong answer in place of a loud one, which is strictly worse.
+// ⚠ **IT JOINS `<Type>.<requirement>` RATHER THAN READING `project.witnessSlotImpls`, BECAUSE THAT MAP IS
+// EMPTY WHEN IT MATTERS.** The map is filled by `checkConformance`, which runs AFTER `queryAllModule` — and
+// `growStdlibBodyDemand`'s fixpoint, which decides which stdlib bodies are BUILT AT ALL, runs INSIDE it. So
+// the map is empty for every round of the fixpoint and full only by the time `deriveLibraryFacts` asks: the
+// facts come out right and the emitted `@print` is an EMPTY function the program calls — a silent wrong
+// answer in place of a loud one, which is strictly worse.
 // `conformances`/`interfaces` are merge-time stores (`Queries.resetMergeTargets` resets all three
 // together), so they answer the same in both askers, which is the property this walk's header demands.
-// ⇒ The `<Type>.<method>` join `ensureWitnessTable` is forbidden to make (R10) is correct HERE for the
+// ⇒ The `<Type>.<method>` join `ensureWitnessTable` is forbidden to make is correct HERE for the
 // reason it is wrong there: a name no module function carries is silently skipped by `markReachable`, so a
 // join that names nothing costs nothing, where a RELOCATION that names nothing is a wrong code pointer.
 // Overloads are covered because `markReachable` credits the whole set.
 //
-// ⚠ **A CONTAINER'S KEY WITNESS NEEDS NOTHING EXTRA HERE, AND THAT IS MEASURED RATHER THAN ASSUMED.** Its
-// conformer is the container's KEY, and a USER type there is
-// refused: *"E2015: `Set` hashes and compares its keys through their `Hashable`/`Equatable` witnesses, so a
-// key must be one of `int`, `String`, `Character`, `Array` — a 'Point' key is a later slice"*. So every such
-// conformer is a BUILTIN whose impls `BuiltinConformanceRuntime` SYNTHESIZES, and a synthesized body calls no
-// stdlib source, so nothing behind that table can be filed unreachable. The day user-type keys land, the
-// conformer key above already covers them — reaching `Point.create` to put one in a `Set` credits
-// `Point.hash` — which is a third reason to key on the conformer rather than on the call sites.
-// ⚠ **THE KEY ARRIVES BY THE CONSTRAINT ROUTE AND NOT BY A CONTAINER ONE OF ITS OWN.** A corpus
-// container's key witness is an ordinary dictionary parameter, not a hidden trailing argument into a
-// compiler-owned `__set_*`/`__map_*` entry, so the premise below reaches the CONSTRAINT route. It is
-// load-bearing for that route in its own right, which this walk's header states as P2
-// with the measurement (`Keyed with String` under `where T is Hashable` builds `__witness_String.Hashable`
-// while no `String.<method>` is ever reached). Read it as one premise with two customers, not two.
+// ⚠ **A CONTAINER'S KEY WITNESS NEEDS NOTHING EXTRA HERE.** A corpus container's key witness is an
+// ordinary dictionary parameter, so it arrives by the CONSTRAINT route like any other: a builtin key is
+// credited by the seed (P2 in this walk's header — `Keyed with String` under `where T is Hashable` builds
+// `__witness_String.Hashable` while no `String.<method>` is ever reached), and a USER-type key by the
+// conformer key above — reaching `Point.create` to put one in a `Set` credits `Point.hash`.
 //
-// ⚠ **THE PRICE IT DOES PAY, MEASURED AND KEPT HERE RATHER THAN IN A REPORT.** Reaching a conformer is
-// weaker than boxing one, so a program that merely USES a conforming stdlib type credits impls it can never
-// jump to: a `Directory`/`FilePath` program pays `FilePath`'s four requirement impls though it widens
-// nothing — **+15,444 allocations (+1.1%), emitted code size UNCHANGED, and 11 committed fragments permute
-// an `.rdata` label INDEX** (`__str_blob_44` ⇒ `__str_blob_54` and the like: more stdlib bodies are lowered,
-// so the pool numbers differently). Verified meaning-free the only way a spec can verify it — the
-// behavioural assertions in those same fragments still pass (`--filter=filepath` 40/0, `directory` 61/0,
-// `url` 47/0), so no `lea` came to name a different string. The narrower gate that would remove this cost
-// is named in this walk's header; it was weighed and not taken.
+// ⚠ **THE PRICE IT DOES PAY.** Reaching a conformer is weaker than boxing one, so a program that merely USES
+// a conforming stdlib type credits impls it can never jump to: a `Directory`/`FilePath` program pays
+// `FilePath`'s four requirement impls though it widens nothing. Those bodies are lowered and then dropped, so
+// emitted code is unchanged while the `.rdata` label pool numbers differently. The narrower gate that would
+// remove this cost is named in this walk's header and is not taken.
 // ⚠⚠ **IT CREDITS EVERY CONFORMANCE A REACHED TYPE DECLARES — EXCEPT FOR THE SEED'S OWN CONFORMERS, WHICH
-// ARE CREDITED PER NAMED INTERFACE INSTEAD (W188/W189).** The two routes answer from different evidence and
+// ARE CREDITED PER NAMED INTERFACE INSTEAD.** The two routes answer from different evidence and
 // the split is exactly where that evidence runs out:
 //
 //   • **A type the walk REACHED A FUNCTION OF** is evidence about the TYPE and none about which interface a
 //     table will be built for, so every conformance it declares is credited. That total credit is what covers
 //     the shape the interface key CANNOT see: an interface implied by a construct rather than named by a
-//     declaration. **MEASURED (W189): a `where S is Iterable` at a `Vector with 3 Int` names `Iterable` and
-//     NOTHING ELSE, while the loop it lowers to calls `Iterator`'s methods on the `ArrayIterator` the corpus
-//     `createIterator` returns** — so keying `ArrayIterator` on the named set alone left `ArrayIterator.current`
-//     unmarked and `requireUnreachableLibraryStayedDead` panicked on it.
+//     declaration. **A `where S is Iterable` at a `Vector with 3 Int` names `Iterable` and NOTHING ELSE,
+//     while the loop it lowers to calls `Iterator`'s methods on the `ArrayIterator` the corpus
+//     `createIterator` returns** — so keying `ArrayIterator` on the named set alone would leave
+//     `ArrayIterator.current` unmarked, and `requireUnreachableLibraryStayedDead` would panic on it.
 //   • **A SEED conformer is one no reached function can ever belong to** (that is its membership rule), so
 //     the total credit has nothing to fire on and the seed supplies the crediting instead — keyed on the
 //     interfaces the reached code names, which is what keeps `float.toString` and its decimal bignum cone out
-//     of a program whose only constraint is `Hashable` (the +76% image this pair of rules exists to prevent).
+//     of a program whose only constraint is `Hashable`.
 //     Crediting them HERE as well would undo exactly that: the seed marks `int.hash`, the drain reaches it,
 //     and a total credit on `int` pulls in every other impl the type declares.
 module function markConformerWitnessImpls(func IrFunction, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
@@ -1532,16 +1450,16 @@ end 'markEveryDeclaredWitnessImplOf'
 // argument list.** The conformer alone answers *"everything this type promises"*, while a table is built
 // for an interface the reached code can NAME, and it is the pair that decides which slots exist. See
 // `reachableMaxonFunctionNames`' fixpoint for where the two lists come from and what asking them separately
-// measures.
+// costs.
 //
 // ⛔⛔ **THE CONFORMANCE TEST IS NOT AN OPTIMIZATION — WITHOUT IT THE WALK MINTS NAMES NO DECLARATION COULD
 // WEAR, AND `markReachable` DOES MORE THAN LOOK ONE UP.** It also widens a callee to its minted
 // parameter-default helper, so a crossed pair like (`File`, `Hashable`) — a type that declares no `hash` —
-// reaches `splitMintedHelperName('__paramDefault#File.hash')` and **PANICS on 8 cases**
-// (`file-io`, `file-info`, `bytearray-element-size`). *"A name nothing declares is simply not found"* is
-// true of `markOneReachable` and false of its caller. `typeConformsTo` is the right gate rather than a bare
-// membership test because it walks `extends` and admits an INTRINSIC conformance — the two ways a slot can
-// exist without the type's own declaration naming this interface.
+// reaches `splitMintedHelperName('__paramDefault#File.hash')` and **PANICS**. *"A name nothing
+// declares is simply not found"* is true of `markOneReachable` and false of its caller.
+// `typeConformsTo` is the right gate rather than a bare membership test because it walks `extends` and
+// admits an INTRINSIC conformance — the two ways a slot can exist without the type's own declaration
+// naming this interface.
 function markWitnessImplsOfConformer(typeName ByteArray, interfaceName ByteArray, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if not typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: typeName, interfaceName: interfaceName, discovered: signatures.discoveredConformerOf(typeName)) 'thisPairHasNoTable'
 		return
@@ -1562,28 +1480,6 @@ function markWitnessImplsOfConformer(typeName ByteArray, interfaceName ByteArray
 	end 'eachSlot'
 end 'markWitnessImplsOfConformer'
 
-// ⚠⚠⚠ **A SECOND SEED, `markCorpusCalleesOfSynthesizedRuntime`, STOOD HERE AND WENT AT W129 WITH ITS LAST
-// SUBJECT.** It rooted the corpus segmenter and the corpus `Set.contains` for the SYNTHESIZED Std bodies that
-// call them — bodies appended after the pipeline, whose calls are therefore not edges of the MAXON call graph
-// this walk reads. Its term list shrank to one (`__cs_contains`) and then to none. Two things it paid for are
-// kept, because they are what the NEXT synthesized body calling corpus code must not re-learn:
-//
-//   * ⛔ **SEED AT THE REACHED OP, NEVER BY A PRE-PASS OVER THE MODULE.** The first version scanned every
-//     function of the merged module up front — which includes STDLIB's OWN bodies, and a listed module calls
-//     `.codepoints()`. So the seed fired on EVERY program: `return 1 + 1` lowered the whole corpus segmenter,
-//     registered its eleven panic literals in `.rdata`, and shifted `__str_blob_0` to `__str_blob_11` in
-//     **2223 committed fragments** of programs containing no string at all. (DFE then dropped the code, so it
-//     was numbering and lowering work, never emitted bytes — which is exactly why a golden count was the only
-//     thing that could see it.) It is `userCodeReachesStdlib`'s own trap — *"stdlib is internally connected,
-//     so scanning its bodies would find an intra-stdlib edge on EVERY compile"* — and skipping stdlib bodies
-//     would NOT have been the fix: a REACHED stdlib body naming such an entry needs the seed as much as a user
-//     body does. Asked at the op, inside the walk, it is exact for both.
-//   * ⛔ **SHEDDING A TERM EARLY IS THE FAILURE MODE.** A corpus function the seed named would be filed
-//     unreachable, `skipUnreachedFunctionBody` would leave a bare `retVoid` behind, and a synthesized body's
-//     call would land on it. A term goes only when nothing can emit its callee any more — which is the
-//     evidence W129 carried for the last one: the `__cs_*` runtime is deleted, so no module can name it.
-//
-// The seed below is the one that remains, over the bodies the reachability walk is not the authority for.
 // Stdlib's own bodies are skipped for `userCodeReachesStdlib`'s reason and for `liveGlobalLabels`': an access
 // inside an unreachable stdlib body decides nothing, because that body reaches no back end and its slot is
 // not kept for it.
@@ -1605,21 +1501,19 @@ function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, project Project
 end 'seedCorpusSlotInitCalleesOfUserCode'
 
 // ⭐⭐⭐ **THE OTHER EDGE THIS WALK CANNOT SEE — A CORPUS SLOT'S INITIALIZER — CREDITED AT THE READ THAT
-// KEEPS THE SLOT (W115).** `installManagedGlobalInit` builds `__module_init` AFTER this walk, so the calls a
+// KEEPS THE SLOT.** `installManagedGlobalInit` builds `__module_init` AFTER this walk, so the calls a
 // global's initializer makes exist in no op the walk can read. What the walk CAN see is the `globalAddr` on
 // that slot — which is precisely what decides the slot survives at all (`contributesStorage` keeps a corpus
 // slot on liveness alone) — so the edge is credited there. Exact in both directions rather than
 // approximated: keeping the slot is running the initializer, and dropping it is not.
 //
-// ⛔ **THE ALTERNATIVE WAS TO ROOT THEM BESIDE `main`, WHICH IS WHAT `globalInitCallees` DOES FOR THE
-// PROGRAM'S OWN DECLARATIONS AND WHAT W115 MEASURED FOR THE CORPUS'.** See
-// `TopLevelDecl.declaredByTheCorpus` for the two symptoms — an allocator and an orphan `.rdata` blob in
-// every program in the language, the same pair W17 repaired for the witness seed.
+// ⛔ **ROOTING THEM BESIDE `main`, AS `globalInitCallees` DOES FOR THE PROGRAM'S OWN DECLARATIONS, IS
+// WRONG FOR THE CORPUS'.** See `TopLevelDecl.declaredByTheCorpus` for the two symptoms — an allocator and
+// an orphan `.rdata` blob in every program in the language.
 //
 // ⚠ **OVER-CREDITING IS THE SAFE DIRECTION AND THIS DOES IT ONCE:** a read the program never executes
 // still credits the callees, whose bodies are then lowered and dropped by dead-function elimination. A
-// MISSING root is `requireUnreachableLibraryStayedDead` — the standing warning the retired synthesized-runtime
-// seed carried, kept in this function's own header block one screen up.
+// MISSING root is a `requireUnreachableLibraryStayedDead` panic.
 function markCorpusSlotInitCallees(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
 		return
@@ -1647,11 +1541,10 @@ end 'markCorpusSlotInitCallees'
 // unreachable for a program that reaches it — the direction that empties a body the back end then calls —
 // so a new ROOT KIND owes that argument again rather than inheriting it.
 //
-// ⚠⚠ **AND ONE ARRIVED WITHOUT PAYING IT.** W17 rooted the corpus-defined intrinsic conformance impls in
-// the precise walk and not here, so a program that took the short-circuit filed `String.hash` unreachable
-// while its witness table still named it. It is now a MARKING on both sides, driven by the pair of
-// predicates this scan asks below and the drain asks of reached code — see `functionDeclaresAWitnessPosition`,
-// which carries the argument in full and the measurement of both failures.
+// ⚠⚠ **THE WITNESS-IMPL SEED IS SUCH A ROOT KIND.** Rooted in the precise walk alone, a program that took
+// the short-circuit would file `String.hash` unreachable while its witness table still named it. It is a
+// MARKING on both sides, driven by the pair of predicates this scan asks below and the drain asks of reached
+// code — see `functionDeclaresAWitnessPosition`, which carries the argument in full.
 function userCodeReachesStdlib(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees ByteArrayArray, initWitnessInterfaces ByteArrayArray) returns bool
 	// ⭐ **A ROOT THE PRECISE WALK SEEDS IS A CROSSING NO BODY CARRIES, WHICH IS WHY IT CANNOT BE FOUND BY THE
 	// OP SCAN BELOW.** `var sep = FilePath.separator()` reaches stdlib without any function of this module
@@ -1702,10 +1595,8 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("userCodeReachesStdlib: opRef {opIdx} not in module.ops")
 
-				// ⚠ A THIRD term stood here — an op naming a SYNTHESIZED body that in turn calls corpus code —
-				// and it went at W129 with `markCorpusCalleesOfSynthesizedRuntime`, whose roster it shared. The
-				// PAIRING is the invariant, not the term: this short-circuit must answer TRUE for every edge that
-				// seed roots, or the precise walk it skips would have rooted a name this scan called unreachable.
+				// ⚠ This short-circuit must answer TRUE for every edge a precise-walk seed roots, or the walk it
+				// skips would have rooted a name this scan called unreachable.
 				if opNamesStdlibCallee(op, project: project, stdlib: stdlib) or opReadsACorpusSlotRootedInStdlib(op, signatures: signatures, stdlib: stdlib) 'found'
 					return true
 				end 'found'
@@ -1725,11 +1616,8 @@ end 'userCodeReachesStdlib'
 // It over-answers only by ignoring reachability — a user function nothing calls still counts — which is the
 // direction that costs a walk rather than a wrong answer.
 //
-// ⚠ **AN OP-BORNE HALF STOOD BESIDE THE DECLARATION HALF AND WENT AT W129** with the last compiler-owned
-// callee that threaded witness tables (see `functionDeclaresAWitnessPosition`'s header for the two routes
-// that remain). The pairing with the drain is what matters and is unchanged: **this scan and
-// `drainReachableWorklist` must ask the SAME predicates**, or the short-circuit would skip a walk that would
-// have found a demand — the defect W17 measured, arriving from the other side.
+// ⚠ **This scan and `drainReachableWorklist` must ask the SAME predicates**, or the short-circuit would skip
+// a walk that would have found a demand.
 function userCodeDemandsAWitnessTable(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
 	for func in module.functions 'eachFunc'
 		// Stdlib's own declarations are skipped for `userCodeReachesStdlib`'s reason: a demand inside a stdlib
@@ -1754,17 +1642,15 @@ end 'userCodeDemandsAWitnessTable'
 // than off a second reading of `project.conformances`, so the gate and the marking cannot disagree about
 // whether there is anything to credit.
 //
-// ⚠⚠ **IT ASKS THE SEED'S OWN LIST, AND IT SPELLED `String`/`Character` ITSELF UNTIL THIS RUNG — WHICH IS THE
-// SHORT-CIRCUIT HALF OF EXACTLY THE DEFECT THE SEED REPAIRS.** `userCodeReachesStdlib`'s header records the
-// obligation in so many words: a root kind added to the precise walk alone lets a program whose user code
-// names no stdlib callee take the short-circuit and file the impl `unreachable` while its witness table still
-// names it. A conformer added to the seed and not here would be that omission wearing a gate's clothes.
+// ⚠⚠ **IT ASKS THE SEED'S OWN LIST, BECAUSE A SECOND SPELLING OF THAT LIST IS THE SHORT-CIRCUIT HALF OF
+// EXACTLY THE DEFECT THE SEED REPAIRS.** `userCodeReachesStdlib`'s header records the obligation: a root
+// kind added to the precise walk alone lets a program whose user code names no stdlib callee take the
+// short-circuit and file the impl `unreachable` while its witness table still names it. A conformer added to
+// the seed and not here would be that omission wearing a gate's clothes.
 //
-// ⚠ **NO PROGRAM'S ANSWER MOVES TODAY, and saying so is the point rather than a caveat.** `stdlib/String.maxon`
-// and `stdlib/Character.maxon` are listed UNCONDITIONALLY and each declares a conformance, so this gate is
-// already TRUE in every compile and adding `Array` to the list it reads cannot change one. What the shared
-// list buys is that the gate stays right for the reason it is written — the seed and its gate are ONE roster —
-// rather than staying right by accident of which two modules happen to be unconditionally listed.
+// ⚠ `stdlib/String.maxon` and `stdlib/Character.maxon` are listed UNCONDITIONALLY and each declares a
+// conformance, so this gate is TRUE in every compile. The shared list keeps it right for the reason it is
+// written — the seed and its gate are ONE roster — rather than by accident of which modules are listed.
 function corpusDeclaresASeededConformance(project Project, signatures ProgramSignatures) returns bool
 	let index = declaredConformanceIndex(project)
 
@@ -1816,8 +1702,8 @@ function opNamesStdlibCallee(op MaxonOp, project Project, stdlib FunctionNameSet
 	end 'kind'
 end 'opNamesStdlibCallee'
 
-// ⭐⭐ **THE THIRD CROSSING NO BODY CARRIES: A USER READ OF A CORPUS SLOT WHOSE INITIALIZER CALLS STDLIB
-// (W115).** `type Cache / static let table = StrMap.create()` in a listed module reaches `Map.create` from
+// ⭐⭐ **THE THIRD CROSSING NO BODY CARRIES: A USER READ OF A CORPUS SLOT WHOSE INITIALIZER CALLS
+// STDLIB.** `type Cache / static let table = StrMap.create()` in a listed module reaches `Map.create` from
 // `__module_init`, which `installManagedGlobalInit` has not built yet, so the op scan above sees only the
 // `globalAddr` — and answering "all of stdlib is unreachable" there is the direction that skips a body the
 // back end then calls.
@@ -2064,7 +1950,7 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		throwError or
 			propagateError or
 			panicAbort then break 'op'
-		functionRef(_, funcName) then noteSubstrateCallee(funcName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		functionRef(_, funcName, _) then noteSubstrateCallee(funcName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		indirectCall then break 'op'
 		asyncCall(_, callee, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		await or

@@ -182,6 +182,7 @@ let X64LinuxSyscallDup3 = 292
 let X64LinuxSyscallExecve = 59
 let X64LinuxSyscallWait4 = 61
 export let X64LinuxSyscallKill = 62
+let X64LinuxSyscallGetRandom = 318
 let X64LinuxSyscallPpoll = 271
 
 // `tgkill(tgid, tid, sig)` — the one delivery that names a THREAD. `kill` names a process and lets the
@@ -660,10 +661,15 @@ end 'x64LinuxEmitZeroSlots'
 // operation still in flight, the arm `__gt_subp_yield_read` parks on rather than classifying as a
 // fault. `ENOTEMPTY` answers `ERROR_DIR_NOT_EMPTY`, which tells a `Directory.delete` caller the
 // directory is occupied, not missing.
+//
+// `EBUSY` and `ETXTBSY` answer `ERROR_SHARING_VIOLATION`, the code the file surface classifies as
+// busy (`ManagedFileRuntime`), so a busy file throws the same case on every lane.
 function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	let notFound = asm.newLabel()
 	let pathNotFound = asm.newLabel()
 	let denied = asm.newLabel()
+	let exists = asm.newLabel()
+	let busy = asm.newLabel()
 	let notEmpty = asm.newLabel()
 	let noMoreFiles = asm.newLabel()
 	let stillInFlight = asm.newLabel()
@@ -683,6 +689,12 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: denied)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.operationNotPermitted.rawValue as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: denied)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.fileExists.rawValue as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: exists)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.deviceBusy.rawValue as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: busy)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.textFileBusy.rawValue as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: busy)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorGenericFailure as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
@@ -696,6 +708,14 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 
 	asm.placeLabel(denied)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorAccessDenied as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(exists)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorFileExists as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(busy)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorSharingViolation as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
 	asm.placeLabel(notEmpty)
@@ -847,17 +867,19 @@ export function x64LinuxThreadCpuStackBytes() returns StackSize
 end 'x64LinuxThreadCpuStackBytes'
 
 // ==========================================================================
-// mrt_host_exe_path(rcx = bufPtr, rdx = bufLen) -> rax = bytes written
+// mrt_host_exe_path / mrt_host_proc_ns(rcx = bufPtr, rdx = bufLen) -> rax = bytes written
 // ==========================================================================
 
-// ⭐⭐ **THE RUNNING IMAGE'S PATH, WHICH ON THIS LANE IS NOT A CALL BUT A SYMLINK.** `GetModuleFileNameA` has
-// no Linux counterpart; the kernel publishes `/proc/self/exe`, a symbolic link whose TARGET is the path, so
-// this chunk is one `readlinkat(AT_FDCWD, "/proc/self/exe", buf, bufLen)`.
+// ⭐⭐ **ON THIS LANE THE ANSWER IS NOT A CALL BUT A SYMLINK.** The kernel publishes
+// `/proc/self/exe`, whose TARGET is the running image's path (`GetModuleFileNameA` has no Linux
+// counterpart), and `/proc/self/ns/pid`, whose target names the pid namespace — so each chunk is
+// one `readlinkat(AT_FDCWD, link, buf, bufLen)`.
 //
 // ⛔⛔ **`readlinkat` DOES NOT NUL-TERMINATE AND DOES NOT REPORT TRUNCATION**, and those are the two facts
 // this chunk exists for. It answers the byte count it wrote, writes no terminator, and — when the link does
 // not fit — SILENTLY TRUNCATES and answers exactly `bufLen`. Both are handled in the vocabulary
-// `osExecutablePath` already speaks (`ManagedDirectoryRuntime.emitFilledBufferVerdict`):
+// `osExecutablePath` and `osProcessNamespace` speak
+// (`ManagedDirectoryRuntime.emitFilledBufferVerdict`):
 //
 //   * `n < 0` ⇒ answer **0**, which the Std verdict reads as "refused" and `__proc_exe_path` turns into
 //     `pathUnavailable`. ⚠ No errno is stashed, deliberately: nothing consumes an `osLastError` after this
@@ -866,7 +888,7 @@ end 'x64LinuxThreadCpuStackBytes'
 //     and asks again. That is precisely why the terminator is written only on the fitting path: a `buf[n]`
 //     store at `n == bufLen` is a one-byte overrun of a buffer the caller is about to throw away.
 //   * otherwise ⇒ terminate at `buf[n]` and answer `n`.
-function buildX64LinuxExePathChunk() returns FunctionCodeChunk
+function buildX64LinuxReadLinkChunk(link ByteArray, name ByteArray) returns FunctionCodeChunk
 	let SlotBufPtr = 0 as StackSize
 	let SlotBufLen = 1 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(2)
@@ -878,7 +900,7 @@ function buildX64LinuxExePathChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.rdx, wide: true)
 
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
-	emitLeaString(asm, dest: X64Register.rsi, bytes: LinuxProcSelfExe)
+	emitLeaString(asm, dest: X64Register.rsi, bytes: link)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rcx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallReadlinkat)
@@ -900,8 +922,48 @@ function buildX64LinuxExePathChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
 
 	asm.placeLabel(finish)
-	return asm.finishFunction(HostExePathName)
-end 'buildX64LinuxExePathChunk'
+	return asm.finishFunction(name)
+end 'buildX64LinuxReadLinkChunk'
+
+function buildX64LinuxRandomFillChunk() returns FunctionCodeChunk
+	let SlotCursor = 0 as StackSize
+	let SlotRemaining = 1 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(2)
+
+	let issue = asm.newLabel()
+	let progressed = asm.newLabel()
+	let finish = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), srcReg: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRemaining), srcReg: X64Register.rdx, wide: true)
+
+	asm.placeLabel(issue)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotRemaining), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxGetRandomFlags as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetRandom)
+	x64LinuxEmitBranchIfEintr(asm, whenInterrupted: issue)
+
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greater, targetBlockId: progressed)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: finish)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxRandomFillNoProgress as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finish)
+
+	asm.placeLabel(progressed)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCursor), srcReg: X64Register.rcx, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotRemaining), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRemaining), srcReg: X64Register.rdx, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greater, targetBlockId: issue)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+
+	asm.placeLabel(finish)
+	return asm.finishFunction(HostRandomFillName)
+end 'buildX64LinuxRandomFillChunk'
 
 // ==========================================================================
 // mrt_host_cpu_count() -> rax = usable processors | -1
@@ -4160,8 +4222,16 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	end 'threadCpu'
 
 	if usage.usesExecutablePath 'executablePath'
-		chunks.push(buildX64LinuxExePathChunk())
+		chunks.push(buildX64LinuxReadLinkChunk(LinuxProcSelfExe, name: HostExePathName))
 	end 'executablePath'
+
+	if usage.usesProcessNamespace 'processNamespace'
+		chunks.push(buildX64LinuxReadLinkChunk(LinuxProcSelfPidNamespace, name: HostProcessNamespaceName))
+	end 'processNamespace'
+
+	if usage.usesEntropy 'entropy'
+		chunks.push(buildX64LinuxRandomFillChunk())
+	end 'entropy'
 
 	// ⚠ **THE PROCESSOR COUNT RIDES A UNION.** Every green-thread program reads the machine's count as the
 	// default for `MAXON_MAX_PROCS` (`SchedRuntime.emitResolveMaxProcs`), so `usesGt` is a second producer of

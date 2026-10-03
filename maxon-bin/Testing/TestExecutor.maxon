@@ -143,15 +143,7 @@ end 'launchTests'
 // A deadline is not a launch failure: the process ran, and one of its tests is the reason it was
 // killed.
 function launchFailureOf(error SubprocessError) returns TestLaunchResult
-	let killedAtTheDeadline = match error 'kind'
-		timeout gives true
-		executableNotFound or
-			spawnFailed or
-			ioFailed or
-			inputTooLarge gives false
-	end 'kind'
-
-	if killedAtTheDeadline 'outlivedItsBudget'
+	if error.timedOut() 'outlivedItsBudget'
 		return TestLaunchResult.deadlineExpired
 	end 'outlivedItsBudget'
 
@@ -168,19 +160,19 @@ type AttributableLaunch
 	// reader that decided something else from the same number.
 	export let leaked as bool
 
-	// What to say when the LAUNCH itself was the failure — empty for a process that ran.
-	export let launchProblem as String
+	// What to say when the LAUNCH itself was the failure.
+	export let launchProblem as StatedText
 
-	static function create(stderr String, leaked bool, launchProblem String) returns AttributableLaunch
+	static function create(stderr String, leaked bool, launchProblem StatedText) returns AttributableLaunch
 		return Self{stderr: stderr, leaked: leaked, launchProblem: launchProblem}
 	end 'create'
 end 'AttributableLaunch'
 
 function attributableLaunch(launch TestLaunchResult) returns AttributableLaunch
 	match launch 'how'
-		ran(exitCode, stderr) then return AttributableLaunch.create(stderr, leaked: isLeakDetectedExit(exitCode as ExitCode), launchProblem: "")
+		ran(exitCode, stderr) then return AttributableLaunch.create(stderr, leaked: isLeakDetectedExit(exitCode as ExitCode), launchProblem: StatedText.unstated)
 		deadlineExpired then panic("attributableLaunch: a launch killed at its deadline never reaches attribution — `executeShard` answers that arm first, because a killed process leaves no stream to attribute from")
-		couldNotStart(reason) then return AttributableLaunch.create("", leaked: false, launchProblem: "{CouldNotLaunchPrefix}{reason}")
+		couldNotStart(reason) then return AttributableLaunch.create("", leaked: false, launchProblem: StatedText.stated("{CouldNotLaunchPrefix}{reason}"))
 	end 'how'
 end 'attributableLaunch'
 
@@ -206,9 +198,9 @@ type ObservedTest
 	export let passed as bool
 	export let nanos as DurationNanos
 	export let thrown as ThrownReport
-	export let output as String
+	export let output as StreamLines
 
-	static function create(index ElementIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output String) returns ObservedTest
+	static function create(index ElementIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output StreamLines) returns ObservedTest
 		return Self{index: index, ended: ended, passed: passed, nanos: nanos, thrown: thrown, output: output}
 	end 'create'
 end 'ObservedTest'
@@ -225,7 +217,7 @@ type TestStreamWalk
 	// Output and `threw` reports that belonged to NO test. Kept rather than dropped: a discarded
 	// report is the one thing a reader would most want back when trying to explain a run that made no
 	// sense.
-	var stray as String
+	var stray as StreamLines
 
 	// ⚠ **`inFlight` GATES EVERY FIELD BELOW IT**, which are meaningless when it is false. There is
 	// exactly ONE reader of them (`closeInFlight`) and exactly one writer of the set (`began`), so
@@ -236,10 +228,10 @@ type TestStreamWalk
 	var inFlightPassed as bool
 	var inFlightNanos as DurationNanos
 	var inFlightThrown as ThrownReport
-	var inFlightOutput as String
+	var inFlightOutput as StreamLines
 
 	static function create() returns TestStreamWalk
-		return Self{observed: ObservedTestArray.create(), stray: "", inFlight: false, inFlightIndex: 0, inFlightEnded: false, inFlightPassed: false, inFlightNanos: 0, inFlightThrown: ThrownReport.absent, inFlightOutput: ""}
+		return Self{observed: ObservedTestArray.create(), stray: StreamLines.create(), inFlight: false, inFlightIndex: 0, inFlightEnded: false, inFlightPassed: false, inFlightNanos: 0, inFlightThrown: ThrownReport.absent, inFlightOutput: StreamLines.create()}
 	end 'create'
 
 	// A begin marker. Whatever was already running is closed first — a begin with no matching end is
@@ -253,7 +245,7 @@ type TestStreamWalk
 		inFlightPassed = false
 		inFlightNanos = 0
 		inFlightThrown = ThrownReport.absent
-		inFlightOutput = ""
+		inFlightOutput = StreamLines.create()
 	end 'began'
 
 	// An end marker. One for a test that did not begin — or for the wrong one — is IGNORED: the
@@ -272,7 +264,7 @@ type TestStreamWalk
 
 	function threw(errorType String, errorCase String, file String, line ReportedSourceLine)
 		if not inFlight 'belongsToNoTest'
-			appendStray("{errorType}.{errorCase} reported at {file}:{line} outside any test")
+			stray.add("{errorType}.{errorCase} reported at {file}:{line} outside any test")
 			return
 		end 'belongsToNoTest'
 
@@ -281,22 +273,18 @@ type TestStreamWalk
 
 	function wrote(text String)
 		if not inFlight 'belongsToNoTest'
-			appendStray(text)
+			stray.add(text)
 			return
 		end 'belongsToNoTest'
 
-		if not inFlightOutput.isEmpty() 'notTheFirstLine'
-			inFlightOutput.append("\n")
-		end 'notTheFirstLine'
-
-		inFlightOutput.append(text)
+		inFlightOutput.add(text)
 	end 'wrote'
 
 	// The stream ended, and this is the walk's PRODUCT. Whatever was still running is closed
 	// unfinished, which is what makes it a crash.
 	function finish() returns TestStreamResult
 		closeInFlight()
-		return TestStreamResult.create(observed, stray: stray)
+		return TestStreamResult.create(observed, stray: stray.text())
 	end 'finish'
 
 	function closeInFlight()
@@ -307,15 +295,29 @@ type TestStreamWalk
 		observed.push(ObservedTest.create(inFlightIndex, ended: inFlightEnded, passed: inFlightPassed, nanos: inFlightNanos, thrown: inFlightThrown, output: inFlightOutput))
 		inFlight = false
 	end 'closeInFlight'
-
-	function appendStray(text String)
-		if not stray.isEmpty() 'notTheFirstLine'
-			stray.append("\n")
-		end 'notTheFirstLine'
-
-		stray.append(text)
-	end 'appendStray'
 end 'TestStreamWalk'
+
+let StreamLineSeparator = "\n"
+
+type StreamLines
+	var lines as StringArray
+
+	static function create() returns StreamLines
+		return Self{lines: StringArray.create()}
+	end 'create'
+
+	function add(line String)
+		lines.push(line)
+	end 'add'
+
+	export function wroteAny() returns bool
+		return lines.count() > 0
+	end 'wroteAny'
+
+	export function text() returns String
+		return joinedWith(lines, separator: StreamLineSeparator)
+	end 'text'
+end 'StreamLines'
 
 // What one walk of a launch's stream produced. A record rather than two fields read off the walk, so
 // the walk hands back a finished answer instead of being interrogated for one.
@@ -382,7 +384,10 @@ function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected Test
 
 	// A launch that never started REPLACES the stream's own text rather than adding to it: there is no
 	// stream, and the reason nothing ran is the only thing worth reporting.
-	let stray = attributable.launchProblem if not attributable.launchProblem.isEmpty() else observed.stray
+	let stray = match attributable.launchProblem 'launch'
+		unstated gives observed.stray
+		stated(problem) gives problem
+	end 'launch'
 
 	var settled = UnitTestResultArray.create()
 	var unobserved = TestRunIndexArray.create()
@@ -404,13 +409,13 @@ function resultFor(group TestFileGroup, observation ObservedTest, stray String) 
 
 	if observation.ended 'finishedUnderItsOwnPower'
 		let outcome = UnitTestOutcome.passed if observation.passed else UnitTestOutcome.failed
-		return UnitTestResult.create(observation.index, test: test, outcome: outcome, nanos: observation.nanos, thrown: observation.thrown, output: observation.output)
+		return UnitTestResult.create(observation.index, test: test, outcome: outcome, nanos: observation.nanos, thrown: observation.thrown, output: observation.output.text())
 	end 'finishedUnderItsOwnPower'
 
 	// ⚠ THE FALLBACK IS THE SHARD'S STRAY TEXT AND NEVER THE RAW STREAM. Falling back to the stream
 	// would put the wire protocol itself into a user's report, so a silently-crashing test would be
 	// reported as its own begin marker.
-	let output = observation.output if not observation.output.isEmpty() else stray
+	let output = observation.output.text() if observation.output.wroteAny() else stray
 	return UnitTestResult.create(observation.index, test: test, outcome: UnitTestOutcome.crashed, nanos: 0, thrown: observation.thrown, output: output)
 end 'resultFor'
 

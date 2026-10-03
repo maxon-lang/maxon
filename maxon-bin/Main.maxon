@@ -299,6 +299,11 @@ function main() returns ExitCode
 		return refusedCommandLineExit(args.command)
 	end 'badOption'
 
+	if args.hasAnEmptyWord() 'emptyWord'
+		printError("error: invalid argument: an empty word names nothing\n")
+		return refusedCommandLineExit(args.command)
+	end 'emptyWord'
+
 	return match args.command 'cmd'
 		build gives runBuild(args)
 		cache gives runCache(args)
@@ -366,16 +371,50 @@ function supportedTargetList() returns String
 	return out
 end 'supportedTargetList'
 
+module let SolePositionalIndex = 0 as ElementIndex
+let FirstWordCount = 1 as ElementIndex
+
+module function optionValueOf(arg String) returns String
+	return try CommandLine.optionValue(arg) otherwise panic("optionValueOf: '{arg}' was matched by a prefix ending in '=', so it carries one")
+end 'optionValueOf'
+
+// The commands answering false pass the words after their first to a program they launch, and an
+// empty word is an argument that program may legitimately be handed.
+function commandReadsEveryWord(command MaxonCommand) returns bool
+	return match command 'whichCommand'
+		coverage or
+			debug or
+			execute or
+			monitor or
+			profile or
+			run gives false
+		build or
+			cache or
+			dapServer or
+			fmt or
+			help or
+			init or
+			lspServer or
+			mcpServer or
+			scaleTest or
+			specTest or
+			test or
+			upgrade or
+			verifyRecheck or
+			verifyWarmRebuild or
+			version or
+			unknown gives true
+	end 'whichCommand'
+end 'commandReadsEveryWord'
+
 module enum TargetFlagError implements Error
 	unrecognized
 end 'TargetFlagError'
 
 // One reader for every command that takes `--target`, so none can drift on what no `--target`
 // means. An unrecognized spelling is reported here, so a caller only has to stop.
-module function commandLineTarget(spec String) returns Target throws TargetFlagError
-	if spec.isEmpty() 'host'
-		return detectHostTarget()
-	end 'host'
+module function commandLineTarget(stated StatedText) returns Target throws TargetFlagError
+	let spec = try stated.text() otherwise return detectHostTarget()
 
 	match parseBuildTarget(spec) 'targetSel'
 		resolved(t) then return t
@@ -440,11 +479,11 @@ end 'ProjectRun'
 
 union TargetChoice
 	named(name String)
-	notDeclared(offered TaskNameArray)
+	notDeclared(word String, offered TaskNameArray)
 	refused(code ExitCode)
 end 'TargetChoice'
 
-function runProjectBuild(args MaxonArgs, targetWord String) returns ProjectRun
+function runProjectBuild(args MaxonArgs, targetWord StatedText) returns ProjectRun
 	let search = try driverFileIn(Directory.currentPath(), extension: ProjectFileExtension) otherwise (e) 'unreadableLayout'
 		reportCompileError(e)
 		return ProjectRun.ran(1)
@@ -456,9 +495,10 @@ function runProjectBuild(args MaxonArgs, targetWord String) returns ProjectRun
 	end 'search'
 end 'runProjectBuild'
 
-function withoutAProjectFile(targetWord String) returns ProjectRun
-	if not targetWord.isEmpty() 'nameWithoutAProject'
-		return ProjectRun.noSuchTarget
+function withoutAProjectFile(targetWord StatedText) returns ProjectRun
+	match targetWord 'nameWithoutAProject'
+		stated then return ProjectRun.noSuchTarget
+		unstated then break 'nameWithoutAProject'
 	end 'nameWithoutAProject'
 
 	printError("Usage: maxon build <file|directory|target>... [{OutputFlagPrefix}<output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
@@ -467,7 +507,7 @@ function withoutAProjectFile(targetWord String) returns ProjectRun
 	return ProjectRun.ran(1)
 end 'withoutAProjectFile'
 
-function buildNamedTarget(projectFile FilePath, word String, args MaxonArgs) returns ProjectRun
+function buildNamedTarget(projectFile FilePath, word StatedText, args MaxonArgs) returns ProjectRun
 	match chosenTarget(projectFile, word: word) 'chosen'
 		named(name) then return ProjectRun.ran(buildThroughProject(projectFile, target: name, args: args, base: ManifestBase.workingDirectory, depth: 0))
 		notDeclared then return ProjectRun.noSuchTarget
@@ -477,15 +517,15 @@ end 'buildNamedTarget'
 
 // Several targets and no name are listed rather than guessed at: picking the first would report
 // success for a build nobody asked for.
-function chosenTarget(projectFile FilePath, word String) returns TargetChoice
+function chosenTarget(projectFile FilePath, word StatedText) returns TargetChoice
 	let declared = try entryNamesDeclaredIn(projectFile) otherwise (e) 'noRoster'
 		reportEntryRosterError(e)
 		return TargetChoice.refused(OwnFailureExit)
 	end 'noRoster'
 
-	if not word.isEmpty() 'aTargetNamed'
-		let named = entryNameOf(word)
-		return TargetChoice.named(named) if declared.contains(named) else TargetChoice.notDeclared(declared)
+	match word 'aTargetNamed'
+		stated(spelled) then return declaredTargetNamed(spelled, declared: declared)
+		unstated then break 'aTargetNamed'
 	end 'aTargetNamed'
 
 	if declared.count() == 0 'noTargets'
@@ -501,6 +541,11 @@ function chosenTarget(projectFile FilePath, word String) returns TargetChoice
 
 	return TargetChoice.named(try declared.get(0) otherwise panic("chosenTarget: the count was just held to one"))
 end 'chosenTarget'
+
+function declaredTargetNamed(word String, declared TaskNameArray) returns TargetChoice
+	let named = entryNameOf(word)
+	return TargetChoice.named(named) if declared.contains(named) else TargetChoice.notDeclared(word, offered: declared)
+end 'declaredTargetNamed'
 
 function buildThroughProject(projectFile FilePath, target String, args MaxonArgs, base ManifestBase, depth DelegationDepth) returns ExitCode
 	let outcome = runManifestProgram(projectFile, entry: target.toByteArray(), speaker: BuildSubcommandName, base: base, arguments: StringArray.create(), args: args, announce: true)
@@ -618,12 +663,11 @@ function reportBuildRunner(compiled bool, manifest FilePath)
 end 'reportBuildRunner'
 
 // A function rather than a reassignment, which would clone a `String` neither branch changes.
-function chosenOutput(fromManifest String, fromFlag String) returns String
-	if fromFlag.isEmpty() 'manifestDecides'
-		return fromManifest
-	end 'manifestDecides'
-
-	return fromFlag
+function chosenOutput(fromManifest String, fromFlag StatedText) returns StatedText
+	return match fromFlag 'flag'
+		unstated gives StatedText.stated(fromManifest)
+		stated(path) gives StatedText.stated(path)
+	end 'flag'
 end 'chosenOutput'
 
 function refuseWhatIsNotABuild(described String, manifest FilePath) returns ExitCode
@@ -633,12 +677,8 @@ function refuseWhatIsNotABuild(described String, manifest FilePath) returns Exit
 	return OwnFailureExit
 end 'refuseWhatIsNotABuild'
 
-function statedOrDefaultOutput(stated String, manifest FilePath) returns String
-	if not stated.isEmpty() 'stated'
-		return stated
-	end 'stated'
-
-	return "{ProjectProductsDirName}{ProductPathSeparator}{manifest.stem()}"
+function statedOrDefaultOutput(stated StatedText, manifest FilePath) returns String
+	return try stated.text() otherwise "{ProjectProductsDirName}{ProductPathSeparator}{manifest.stem()}"
 end 'statedOrDefaultOutput'
 
 // A field the description states and this cannot use is an error, never a default: a guess is how a
@@ -654,7 +694,7 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 
 	let chosen = try doc.arrayAt(doc.root, index: 0) otherwise return refuseWhatIsNotABuild(described, manifest: manifest)
 
-	let delegateDirectory = try manifestDelegateDirectory(doc, build: chosen) otherwise (e) 'badDirectory'
+	let delegateDirectory = try manifestStatedText(doc, build: chosen, key: ManifestDirectoryKey) otherwise (e) 'badDirectory'
 		return reportMalformedManifestField(ManifestDirectoryKey, error: e, manifest: manifest)
 	end 'badDirectory'
 
@@ -670,22 +710,9 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 		return reportMalformedManifestField(ManifestRebuildWithOutputKey, error: e, manifest: manifest)
 	end 'badRebuildWithOutput'
 
-	if not delegateDirectory.isEmpty() 'delegated'
-		if statedSources.count() != 0 'bothWays'
-			return refuseDelegatedWith(ManifestSourcesKey, manifest: manifest)
-		end 'bothWays'
-
-		// Only the delegated project knows the output path, so at this level there is no program to
-		// repeat and an ignored key would drop the request silently.
-		if rebuildWithOutput 'delegatedRebuild'
-			return refuseDelegatedWith(ManifestRebuildWithOutputKey, manifest: manifest)
-		end 'delegatedRebuild'
-
-		let delegateTarget = try manifestDelegateTarget(doc, build: chosen) otherwise (e) 'badDelegateTarget'
-			return reportMalformedManifestField(ManifestDelegateTargetKey, error: e, manifest: manifest)
-		end 'badDelegateTarget'
-
-		return delegateBuild(delegateDirectory, args: args, targetWord: delegateTarget, manifest: manifest, base: base, depth: depth)
+	match delegateDirectory 'delegated'
+		unstated then break 'delegated'
+		stated(directory) then return buildDelegatedManifest(doc, build: chosen, directory: directory, statedSources: statedSources, rebuildWithOutput: rebuildWithOutput, args: args, manifest: manifest, base: base, depth: depth)
 	end 'delegated'
 
 	let inputPaths = statedSources
@@ -731,6 +758,24 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 		failed(code) gives code
 	end 'outcome'
 end 'buildFromManifestOutput'
+
+function buildDelegatedManifest(doc JsonDoc, build JsonNodeId, directory String, statedSources MaxonSourcePathArray, rebuildWithOutput bool, args MaxonArgs, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
+	if statedSources.count() != 0 'bothWays'
+		return refuseDelegatedWith(ManifestSourcesKey, manifest: manifest)
+	end 'bothWays'
+
+	// Only the delegated project knows the output path, so at this level there is no program to
+	// repeat and an ignored key would drop the request silently.
+	if rebuildWithOutput 'delegatedRebuild'
+		return refuseDelegatedWith(ManifestRebuildWithOutputKey, manifest: manifest)
+	end 'delegatedRebuild'
+
+	let delegateTarget = try manifestStatedText(doc, build: build, key: ManifestDelegateTargetKey) otherwise (e) 'badDelegateTarget'
+		return reportMalformedManifestField(ManifestDelegateTargetKey, error: e, manifest: manifest)
+	end 'badDelegateTarget'
+
+	return delegateBuild(directory, args: args, targetWord: delegateTarget, manifest: manifest, base: base, depth: depth)
+end 'buildDelegatedManifest'
 
 function refuseDelegatedWith(key String, manifest FilePath) returns ExitCode
 	printError("error: {manifest.filename()} states both a `{ManifestDirectoryKey}` and `{key}`.\n")
@@ -788,6 +833,7 @@ end 'invocationArguments'
 // caller says nothing.
 union ManifestFieldError implements Error
 	missing
+	empty
 	notABool
 	notAString
 	notAListOfStrings
@@ -799,6 +845,7 @@ end 'ManifestFieldError'
 function reportMalformedManifestField(key String, error ManifestFieldError, manifest FilePath) returns ExitCode
 	let problem = match error 'whatIsWrong'
 		missing gives "is missing"
+		empty gives "is empty"
 		notABool gives "is not true or false"
 		notAString gives "is not a string"
 		notAListOfStrings gives "is not a list of strings"
@@ -814,10 +861,22 @@ end 'reportMalformedManifestField'
 // The readers below look a key up with `getChild`, whose one failure besides an absent key is a
 // description that is not an object, which has none of the keys either.
 
-function manifestOutput(doc JsonDoc, build JsonNodeId) returns String throws ManifestFieldError
+function manifestOutput(doc JsonDoc, build JsonNodeId) returns StatedText throws ManifestFieldError
 	let valueId = try doc.getChild(build, key: ManifestOutputKey) otherwise throw ManifestFieldError.missing
-	return try manifestString(doc.get(valueId))
+	let output = try manifestString(doc.get(valueId))
+	return StatedText.unstated if output.isEmpty() else StatedText.stated(output)
 end 'manifestOutput'
+
+function manifestStatedText(doc JsonDoc, build JsonNodeId, key String) returns StatedText throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: key) otherwise return StatedText.unstated
+	let text = try manifestString(doc.get(valueId))
+
+	if text.isEmpty() 'statedEmpty'
+		throw ManifestFieldError.empty
+	end 'statedEmpty'
+
+	return StatedText.stated(text)
+end 'manifestStatedText'
 
 function manifestSources(doc JsonDoc, build JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
 	let listId = try doc.getChild(build, key: ManifestSourcesKey) otherwise throw ManifestFieldError.missing
@@ -831,19 +890,9 @@ function manifestSources(doc JsonDoc, build JsonNodeId, base ManifestBase) retur
 	return sources
 end 'manifestSources'
 
-function manifestDelegateDirectory(doc JsonDoc, build JsonNodeId) returns String throws ManifestFieldError
-	let valueId = try doc.getChild(build, key: ManifestDirectoryKey) otherwise return ""
-	return try manifestString(doc.get(valueId))
-end 'manifestDelegateDirectory'
-
-function manifestDelegateTarget(doc JsonDoc, build JsonNodeId) returns String throws ManifestFieldError
-	let valueId = try doc.getChild(build, key: ManifestDelegateTargetKey) otherwise return ""
-	return try manifestString(doc.get(valueId))
-end 'manifestDelegateTarget'
-
 // The depth bound is what ends a cycle: two manifests delegating to each other would otherwise
 // recurse until the process died with nothing said.
-function delegateBuild(directory String, args MaxonArgs, targetWord String, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
+function delegateBuild(directory String, args MaxonArgs, targetWord StatedText, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
 	if depth >= MaxDelegationDepth 'tooDeep'
 		printError("error: {manifest.filename()} delegates more than {MaxDelegationDepth} deep, which is a cycle.\n")
 		return OwnFailureExit
@@ -870,10 +919,10 @@ function refuseDelegationToNoProject(manifest FilePath, directory String) return
 	return OwnFailureExit
 end 'refuseDelegationToNoProject'
 
-function buildDelegatedTarget(projectFile FilePath, word String, args MaxonArgs, directory FilePath, depth DelegationDepth) returns ExitCode
+function buildDelegatedTarget(projectFile FilePath, word StatedText, args MaxonArgs, directory FilePath, depth DelegationDepth) returns ExitCode
 	match chosenTarget(projectFile, word: word) 'chosen'
 		named(name) then return buildThroughProject(projectFile, target: name, args: args, base: ManifestBase.directory(directory), depth: depth + 1)
-		notDeclared(offered) then return refuseUndeclaredDelegatedTarget(projectFile, word: word, offered: offered)
+		notDeclared(spelled, offered) then return refuseUndeclaredDelegatedTarget(projectFile, word: spelled, offered: offered)
 		refused(code) then return code
 	end 'chosen'
 end 'buildDelegatedTarget'
@@ -960,7 +1009,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	printVersionHeader()
 
 	if args.paths.count() == 0 'noPath'
-		match runProjectBuild(args, targetWord: "") 'bareBuild'
+		match runProjectBuild(args, targetWord: StatedText.unstated) 'bareBuild'
 			ran(code) then return code
 			noSuchTarget then panic("runBuild: the project was asked for no target and cannot answer noSuchTarget")
 		end 'bareBuild'
@@ -972,7 +1021,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	if args.paths.count() == 1 'maybeTargetName'
 		let only = try args.paths.get(0) otherwise panic("runBuild: paths.get OOB — count is 1")
 
-		match runProjectBuild(args, targetWord: only) 'namedBuild'
+		match runProjectBuild(args, targetWord: StatedText.stated(only)) 'namedBuild'
 			ran(code) then return code
 			noSuchTarget then return runBuildPaths(args)
 		end 'namedBuild'
@@ -1005,7 +1054,7 @@ end 'runBuildPaths'
 
 // The lock is asked of the command line's `--output=`: `outputOverride` may be a manifest's own
 // `output`, which says nothing about who else writes the tree.
-function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns BuildOutcome
+function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride StatedText, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns BuildOutcome
 	if refusedBuildOptions(args, target: target, debugInfo: debugInfo) 'refusedOptions'
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'refusedOptions'
@@ -1037,7 +1086,7 @@ function refusedBuildOptions(args MaxonArgs, target Target, debugInfo bool) retu
 	end 'unsupportedDebugStream'
 
 	if args.coverage and not debugInfo 'coverageNeedsDebugInfo'
-		printError("{Diagnostic.create(ErrorCode.codeEmitterCoverageNeedsDebugInfo, message: coverageNeedsDebugInfoMessage()).render()}\n")
+		printError("{Diagnostic.programWide(ErrorCode.codeEmitterCoverageNeedsDebugInfo, message: coverageNeedsDebugInfoMessage()).render()}\n")
 		return true
 	end 'coverageNeedsDebugInfo'
 
@@ -1062,8 +1111,8 @@ end 'refusedBuildOptions'
 // The root comes from `commonAncestorOf`, the function `loadProject` roots the project at, so the
 // lock and the compile cannot disagree about which tree is written. A root with no `stdlib/` above
 // it takes no lock: `acquireTreeLock` answers that itself.
-function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride String, into TreeLockHold) returns ExitCode
-	if not outputOverride.isEmpty() 'callerOwnsTheOutput'
+function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride StatedText, into TreeLockHold) returns ExitCode
+	if outputOverride.isStated() 'callerOwnsTheOutput'
 		return SucceededExit
 	end 'callerOwnsTheOutput'
 
@@ -1082,8 +1131,8 @@ function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride St
 end 'acquireBuildTreeLock'
 
 // Separate from `buildAndReport` so the tree lock has one release: Maxon has no `defer`.
-function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray, session CompileSession) returns BuildOutcome
-	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, censusByTag: args.censusByTag, censusPhase: args.censusPhase, allocationsByTag: args.allocationsByTag, allocationsPhase: args.allocationsPhase, productVersion: productVersion, defines: defines, session: session) otherwise (e) 'compileErr'
+function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride StatedText, debugInfo bool, productVersion VersionComponentArray, defines DefineArray, session CompileSession) returns BuildOutcome
+	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metrics: args.metrics, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, censusByTag: args.censusByTag, censusPhase: args.censusPhase, allocationsByTag: args.allocationsByTag, allocationsPhase: args.allocationsPhase, productVersion: productVersion, defines: defines, session: session) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'compileErr'
@@ -1105,9 +1154,7 @@ function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
 		return OwnFailureExit
 	end 'tooManyPaths'
 
-	let spelling = args.solePositional()
-
-	if spelling.isEmpty() 'noPath'
+	let spelling = try args.positionalAt(SolePositionalIndex) otherwise 'noPath'
 		printError("Usage: {usage}\n")
 		return OwnFailureExit
 	end 'noPath'
@@ -1137,9 +1184,7 @@ function runVerifyRecheck(args MaxonArgs) returns ExitCode
 		return OwnFailureExit
 	end 'tooManyPaths'
 
-	let spelling = args.solePositional()
-
-	if spelling.isEmpty() 'noPath'
+	let spelling = try args.positionalAt(SolePositionalIndex) otherwise 'noPath'
 		printError("Usage: {usage}\n")
 		return OwnFailureExit
 	end 'noPath'
@@ -1173,7 +1218,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	end 'tooManyPaths'
 
 	let specDir = try resolveSpecDir(args) otherwise 'badSpecDir'
-		printError("error: invalid spec directory: {args.solePositional()}\n")
+		printError("error: invalid spec directory: {specDirSpelling(args)}\n")
 		return OwnFailureExit
 	end 'badSpecDir'
 
@@ -1258,8 +1303,8 @@ end 'runSpecTest'
 // spelled here rather than through `refusedPositionalBeyond`, whose wording `fmt` does not use. A
 // `-`-leading argument never reaches the walk; see `FmtCommandName`.
 function runFmt(args MaxonArgs) returns ExitCode
-	if not args.anyOption().isEmpty() 'refusedOption'
-		printError("fmt: unrecognized option: {args.anyOption()}\n")
+	if let option = try args.anyOption() 'refusedOption'
+		printError("fmt: unrecognized option: {option}\n")
 		printError("{FmtUsageLine}\n")
 		return OwnFailureExit
 	end 'refusedOption'
@@ -1269,7 +1314,8 @@ function runFmt(args MaxonArgs) returns ExitCode
 		return OwnFailureExit
 	end 'refusedSecondPath'
 
-	let spelling = args.solePositional()
+	let spelling = try args.positionalAt(SolePositionalIndex) otherwise return formatEachFile(collectFormattableFiles(Directory.currentPath()))
+
 	return match fmtSelection(spelling) 'selection'
 		files(paths) gives formatEachFile(paths)
 		notFound gives refusedFmtPath(spelling)
@@ -1285,10 +1331,6 @@ end 'FmtSelection'
 // A named file is formatted whatever it is called and wherever it sits, as `maxon build` does: the
 // exclusions belong to the walk (`Formatter.collectFormattableFiles`).
 function fmtSelection(spelling String) returns FmtSelection
-	if spelling.isEmpty() 'noPathGiven'
-		return FmtSelection.files(collectFormattableFiles(Directory.currentPath()))
-	end 'noPathGiven'
-
 	let target = try FilePath.from(spelling) otherwise return FmtSelection.notFound
 
 	if Directory.isDirectory(target) 'aDirectory'
@@ -1459,13 +1501,7 @@ function resolveSpecDir(args MaxonArgs) returns FilePath throws FilePathError
 end 'resolveSpecDir'
 
 function specDirSpelling(args MaxonArgs) returns String
-	let spelled = args.solePositional()
-
-	if spelled.isEmpty() 'useDefault'
-		return DefaultSpecDir
-	end 'useDefault'
-
-	return spelled
+	return try args.positionalAt(SolePositionalIndex) otherwise DefaultSpecDir
 end 'specDirSpelling'
 
 // True when it refused, having printed why. A command reading at most `allowed` positionals refuses
@@ -2324,9 +2360,7 @@ function runHelp(args MaxonArgs) returns ExitCode
 		return OwnFailureExit
 	end 'unexpectedArgument'
 
-	let named = args.solePositional()
-
-	if named.isEmpty() 'theWholeReference'
+	let named = try args.positionalAt(SolePositionalIndex) otherwise 'theWholeReference'
 		printFullReference()
 		return SucceededExit
 	end 'theWholeReference'
@@ -2347,15 +2381,15 @@ end 'runHelp'
 // exits 0. A word naming no command, or an option with no command, is a mistake: the same list
 // under an error on stderr, exit 1.
 function noCommandGiven(args MaxonArgs) returns ExitCode
-	if args.paths.isEmpty() and args.anyOption().isEmpty() 'nothingWasTyped'
-		printOverview()
-		return SucceededExit
-	end 'nothingWasTyped'
+	if args.paths.isEmpty() 'noWord'
+		let option = try args.anyOption() otherwise 'nothingWasTyped'
+			printOverview()
+			return SucceededExit
+		end 'nothingWasTyped'
 
-	if args.paths.isEmpty() 'anOptionWithNoCommand'
-		printError("error: no command given; {args.anyOption()} names an option rather than one\n")
-	end 'anOptionWithNoCommand' else 'aWordThatNamesNoCommand'
-		printError("error: unknown command: {args.solePositional()}\n")
+		printError("error: no command given; {option} names an option rather than one\n")
+	end 'noWord' else 'aWordThatNamesNoCommand'
+		printError("error: unknown command: {try args.paths.get(0) otherwise panic("noCommandGiven: this branch is taken only with a word on the command line")}\n")
 	end 'aWordThatNamesNoCommand'
 
 	printCommandList()
@@ -2419,7 +2453,7 @@ export type MaxonArgs
 	// registers sources in this order, which is how a caller states which of two sibling files
 	// declares first. Every other command refuses beyond its count (`refusedPositionalBeyond`).
 	export var paths as SourcePathSpellingArray
-	export var outputOverride as String
+	export var outputOverride as StatedText
 	export var emitIr as bool
 
 	export var asyncTrace as bool
@@ -2463,23 +2497,23 @@ export type MaxonArgs
 	// the last.
 	export var defines as DefineArray
 
-	export var metricsPath as String
+	export var metrics as StatedText
 
-	export var emitCorpus as String
+	export var emitCorpus as StatedText
 
 	export var rungs as RungCount
 
-	export var repeat as RepeatCount
+	export var repeat as ScaleRepeatCount
 
 	// A run without it records nothing: scale-test runs dozens of times a day against dirty trees. See
 	// `Testing/ScaleHistory.maxon`.
-	export var note as String
+	export var note as StatedText
 
 	// So the MCP tool gets data rather than scraping the padded human report, which would mis-parse
 	// silently the day a phase name outgrows its column.
-	export var resultJson as String
+	export var resultJson as StatedText
 
-	export var targetSpec as String
+	export var targetSpec as StatedText
 
 	export var includeNetwork as bool
 
@@ -2528,12 +2562,12 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	module static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), goldenWrites: GoldenWrites.mintMissing, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), goldenWrites: GoldenWrites.mintMissing, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
-	module function anyOption() returns String
-		return try self.optionsSeen.get(0) otherwise ""
+	module function anyOption() returns String throws AbsentError
+		return try self.optionsSeen.get(0) otherwise throw AbsentError.absent
 	end 'anyOption'
 
 	function refusedAsUnknown(spelling String) returns bool
@@ -2556,11 +2590,33 @@ export type MaxonArgs
 		self.goldenWrites = typed
 	end 'selectGoldenWrites'
 
-	// A second positional never reaches this: its callers call `refusedPositionalBeyond` first, so
-	// empty means only absent.
-	module function solePositional() returns String
-		return try self.paths.get(0) otherwise ""
-	end 'solePositional'
+	module function positionalAt(index ElementIndex) returns String throws AbsentError
+		return try self.paths.get(index) otherwise throw AbsentError.absent
+	end 'positionalAt'
+
+	function statedValueOf(arg String) returns StatedText
+		let value = optionValueOf(arg)
+
+		if value.isEmpty() 'statedEmpty'
+			self.refusedOptions.push(OptionRefusal.badValue(arg))
+			return StatedText.unstated
+		end 'statedEmpty'
+
+		return StatedText.stated(value)
+	end 'statedValueOf'
+
+	function hasAnEmptyWord() returns bool
+		let wordCount = self.paths.count()
+		let readWords = wordCount if commandReadsEveryWord(self.command) or wordCount < FirstWordCount else FirstWordCount
+
+		for position in 0 upto readWords 'eachWord'
+			if (try self.paths.get(position) otherwise panic("MaxonArgs.hasAnEmptyWord: index {position} is below paths.count()")).isEmpty() 'empty'
+				return true
+			end 'empty'
+		end 'eachWord'
+
+		return false
+	end 'hasAnEmptyWord'
 
 	// argv[0] is the executable path. The first command word selects the command and a later one is a
 	// positional (see `laterCommandWordIsAPath`). An unrecognized `-`-leading argument is recorded as
@@ -2644,7 +2700,7 @@ export type MaxonArgs
 			if named != MaxonCommand.unknown 'commandWord'
 				parsed.command = named
 			end 'commandWord' else if arg.startsWith(OutputFlagPrefix) 'longOutput'
-				parsed.outputOverride = try CommandLine.optionValue(arg) otherwise ""
+				parsed.outputOverride = parsed.statedValueOf(arg)
 			end 'longOutput' else if arg == EmitIrFlag 'emitIrFlag'
 				parsed.emitIr = true
 			end 'emitIrFlag' else if arg == AsyncTraceFlag 'asyncTraceFlag'
@@ -2654,7 +2710,7 @@ export type MaxonArgs
 			end 'debugStreamFlag' else if arg == CensusByTagFlag 'censusByTagFlag'
 				parsed.censusByTag = true
 			end 'censusByTagFlag' else if arg.startsWith(CensusByTagFlagPrefix) 'censusByTagPhaseFlag'
-				let wanted = try CommandLine.optionValue(arg) otherwise ""
+				let wanted = optionValueOf(arg)
 
 				if let phase = try CompilePhase.fromName(wanted) 'namesAPhase'
 					parsed.censusByTag = true
@@ -2665,7 +2721,7 @@ export type MaxonArgs
 			end 'censusByTagPhaseFlag' else if arg == AllocationsByTagFlag 'allocationsByTagFlag'
 				parsed.allocationsByTag = true
 			end 'allocationsByTagFlag' else if arg.startsWith(AllocationsByTagFlagPrefix) 'allocationsByTagPhaseFlag'
-				let wanted = try CommandLine.optionValue(arg) otherwise ""
+				let wanted = optionValueOf(arg)
 
 				if let phase = try CompilePhase.fromName(wanted) 'namesAPhase'
 					parsed.allocationsByTag = true
@@ -2683,7 +2739,7 @@ export type MaxonArgs
 				// Checked on the parsed names, not the raw value: `--emit-ir-runtime=,` carries a non-empty
 				// value naming no function, and an empty list would render a sidecar with no runtime body under
 				// a command line that asked for one. Every such spelling is a bad option.
-				let named = splitRuntimeNames(try CommandLine.optionValue(arg) otherwise "")
+				let named = splitRuntimeNames(optionValueOf(arg))
 
 				if named.count() == 0 'noRuntimeNames'
 					parsed.refusedOptions.push(OptionRefusal.badValue(arg))
@@ -2695,7 +2751,7 @@ export type MaxonArgs
 					parsed.emitIr = true
 				end 'hasRuntimeNames'
 			end 'emitIrRuntimeFlag' else if arg.startsWith(FilterFlagPrefix) 'filterFlag'
-				let pattern = try CommandLine.optionValue(arg) otherwise ""
+				let pattern = optionValueOf(arg)
 
 				// Every label contains the empty string, so one empty member would widen a union to the
 				// whole suite.
@@ -2711,7 +2767,7 @@ export type MaxonArgs
 			end 'rewriteDriftedGoldensFlag' else if arg == NetworkFlag 'networkFlag'
 				parsed.includeNetwork = true
 			end 'networkFlag' else if arg.startsWith(WorkersFlagPrefix) 'workersFlag'
-				let raw = try CommandLine.optionValue(arg) otherwise ""
+				let raw = optionValueOf(arg)
 
 				// Recorded whatever the value parses to; see `workersOverridden`.
 				parsed.workersOverridden = true
@@ -2725,9 +2781,9 @@ export type MaxonArgs
 			end 'workersFlag' else if arg == WorkerPersistentFlag 'workerPersistentFlag'
 				parsed.workerPersistent = true
 			end 'workerPersistentFlag' else if arg.startsWith(MetricsFlagPrefix) 'metricsFlag'
-				parsed.metricsPath = try CommandLine.optionValue(arg) otherwise ""
+				parsed.metrics = parsed.statedValueOf(arg)
 			end 'metricsFlag' else if arg.startsWith(DefineFlagPrefix) 'defineFlag'
-				let pair = try CommandLine.optionValue(arg) otherwise ""
+				let pair = optionValueOf(arg)
 
 				if let define = try defineFromPair(pair) 'nameAndValue'
 					parsed.defines.push(define)
@@ -2735,9 +2791,9 @@ export type MaxonArgs
 					parsed.refusedOptions.push(OptionRefusal.badValue(arg))
 				end 'noValueGiven'
 			end 'defineFlag' else if arg.startsWith(EmitCorpusFlagPrefix) 'emitCorpusFlag'
-				parsed.emitCorpus = try CommandLine.optionValue(arg) otherwise ""
+				parsed.emitCorpus = parsed.statedValueOf(arg)
 			end 'emitCorpusFlag' else if arg.startsWith(RungsFlagPrefix) 'rungsFlag'
-				let raw = try CommandLine.optionValue(arg) otherwise ""
+				let raw = optionValueOf(arg)
 
 				// A bad value is a bad option, not a clamp: each rung doubles the program, and quietly climbing
 				// a different ladder answers a question nobody asked. See `ScaleCorpus.parseRungCount`.
@@ -2746,7 +2802,7 @@ export type MaxonArgs
 					invalid then parsed.refusedOptions.push(OptionRefusal.badValue(arg))
 				end 'rungsArg'
 			end 'rungsFlag' else if arg.startsWith(RepeatFlagPrefix) 'repeatFlag'
-				let raw = try CommandLine.optionValue(arg) otherwise ""
+				let raw = optionValueOf(arg)
 
 				// A bad value is a bad option, as for `--rungs`. See `ScaleTestRunner.parseRepeatCount`.
 				match parseRepeatCount(raw) 'repeatArg'
@@ -2754,11 +2810,11 @@ export type MaxonArgs
 					invalid then parsed.refusedOptions.push(OptionRefusal.badValue(arg))
 				end 'repeatArg'
 			end 'repeatFlag' else if arg.startsWith(NoteFlagPrefix) 'noteFlag'
-				parsed.note = try CommandLine.optionValue(arg) otherwise ""
+				parsed.note = parsed.statedValueOf(arg)
 			end 'noteFlag' else if arg.startsWith(ResultJsonFlagPrefix) 'resultJsonFlag'
-				parsed.resultJson = try CommandLine.optionValue(arg) otherwise ""
+				parsed.resultJson = parsed.statedValueOf(arg)
 			end 'resultJsonFlag' else if arg.startsWith(TargetFlagPrefix) 'targetFlag'
-				parsed.targetSpec = try CommandLine.optionValue(arg) otherwise ""
+				parsed.targetSpec = parsed.statedValueOf(arg)
 			end 'targetFlag' else if arg == TestListFlag 'listFlag'
 				parsed.listOnly = true
 			end 'listFlag' else if arg == TestBuildFlag 'buildFlag'
@@ -2773,22 +2829,22 @@ export type MaxonArgs
 				parsed.bail = BailPolicy.after(DefaultBailAfter)
 			end 'bailFlag' else if arg.startsWith(TestBailFlagPrefix) 'bailCountFlag'
 				// A bad value is a bad option, as for `--workers`.
-				match parsePositiveFlagValue(try CommandLine.optionValue(arg) otherwise "") 'bailArg'
+				match parsePositiveFlagValue(optionValueOf(arg)) 'bailArg'
 					valid(failures) then parsed.bail = BailPolicy.after(failures as ReportedTestCount)
 					invalid then parsed.refusedOptions.push(OptionRefusal.badValue(arg))
 				end 'bailArg'
 			end 'bailCountFlag' else if arg.startsWith(TestTimeoutFlagPrefix) 'timeoutFlag'
-				match parsePositiveFlagValue(try CommandLine.optionValue(arg) otherwise "") 'timeoutArg'
+				match parsePositiveFlagValue(optionValueOf(arg)) 'timeoutArg'
 					valid(ms) then parsed.testTimeoutMs = ms as DurationMs
 					invalid then parsed.refusedOptions.push(OptionRefusal.badValue(arg))
 				end 'timeoutArg'
 			end 'timeoutFlag' else if arg.startsWith(TestColorFlagPrefix) 'colorFlag'
-				match parseReportColorMode(try CommandLine.optionValue(arg) otherwise "") 'colorArg'
+				match parseReportColorMode(optionValueOf(arg)) 'colorArg'
 					valid(mode) then parsed.colorMode = mode
 					invalid then parsed.refusedOptions.push(OptionRefusal.badValue(arg))
 				end 'colorArg'
 			end 'colorFlag' else if arg.startsWith(LogFlagPrefix) 'logFlag'
-				let spec = try CommandLine.optionValue(arg) otherwise ""
+				let spec = optionValueOf(arg)
 
 				if not parseLogOption(spec) 'badSpec'
 					parsed.refusedOptions.push(OptionRefusal.badValue(arg))

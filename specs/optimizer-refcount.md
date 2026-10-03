@@ -1,7 +1,6 @@
 ---
 feature: optimizer-refcount
 status: selfhosted
-status-reason: 8 of its 9 cases pass here; the 9th pins the whole-program refcount baseline through a RequiredIR block in v1's dump format this runner's section comparer cannot read (measured 2026-08-06, BATCH29/A3a). The compiler also runs 8 of 9, failing that same case on E3102 (use of moved value), so the baseline itself needs a rung.
 keywords: [refcount, incref, decref, optimization, mm-trace, managed-memory, whole-program]
 category: compiler
 ---
@@ -24,17 +23,16 @@ patterns known to produce `mm_incref` / `mm_decref` traffic:
 - union-with-managed-payload matching
 - closure capturing a managed value
 
-The committed `stderr` block is the full `--mm-trace` output at the time the
-baseline was generated; the `RequiredIR:x64-windows` block is the full IR
-dump at every pipeline stage. Neither block should be hand-written — both are
-regenerated via `maxon spec-test --filter=optimizer-refcount --update-required`.
+The scoreboard is each case's minted fragment golden: the emitted code, with
+every `__mm_incref` / `__mm_decref` the compiler places. It is never
+hand-written — it is regenerated via
+`maxon spec-test --filter=optimizer-refcount --update-required`.
 
-When a refcount optimization lands, both blocks will change. The diff **is**
-the measured impact: fewer lines in `stderr` means fewer runtime
-increfs/decrefs; fewer `mm_incref` / `mm_decref` ops in the IR confirms the
-optimizer (not just runtime folding) was responsible. Reviewing the diff is
-how we keep the pass correct — the set of `mm_alloc` / `mm_free` must stay
-identical, and every object must still reach `rc=0`.
+When a refcount optimization fires, the golden changes. The diff **is** the
+measured impact: fewer `__mm_incref` / `__mm_decref` calls means less runtime
+refcount traffic. Reviewing the diff is how the optimization is kept correct —
+the allocations must stay the same, and the suite's leak gate (exit 101) fails
+any case whose objects are not all freed exactly once.
 
 The program is deliberately larger than a typical spec test: future
 whole-program / interprocedural passes need multi-function call graphs,
@@ -224,28 +222,21 @@ end 'main'
 0
 ```
 
-⚠ THE `/specs` ORIGINAL PINS TWO `RequiredIR:<target>` BLOCKS HERE — one `x64-windows`, one
-`wasm32-wasi` — AND NEITHER SURVIVES THE PORT. the compiler's spec parser has an arm for neither, so both
-would be read by nobody while reading as coverage — the shape BATCH29 exists to remove, and
+⚠ THIS CASE CARRIES NO `RequiredIR:<target>` BLOCK. The compiler's spec parser has an arm for neither
+`x64-windows` nor `wasm32-wasi`, so such a block would be read by nobody while reading as coverage, and
 `SpecParser.isUnimplementedFenceOpen` refuses the fence rather than walking past it. What pins the
-emitted code here is this case's minted fragment golden, which records what THIS compiler emits
-rather than what v1 did.
+emitted code here is this case's minted fragment golden, which records what this compiler emits.
 
-## Phase 3 regression tests — aliasFromStore prefix-kill relaxation
+## Regression tests — sibling aliases cleaned up in one block
 
-These fragments guard the relaxation in
-`IsCrossBlockPairSafe` / `TryPrefixIsBenignSiblingCleanup` that accepts
-a prefix containing sibling scope-end cleanup ops (load + decref of
-unrelated slots, plus optionally a decref of srcVar) as safe under
-Maxon's borrow convention. The relaxation unlocks for-in tuple
-brackets and similar shapes where srcVar's own scope-end decref fires
-in the same block before varName's decref.
+An immutable `let` of an immutable binding is an ALIAS: it borrows the
+source and takes no reference of its own, so no incref/decref bracket
+surrounds its scope. These fragments pin that when several such aliases
+end in the same block.
 
 <!-- test: prefix-kill-sibling-cleanup -->
-Two aliased struct slots both scope-end-decreffed in the same block.
-When `b`'s decref comes first in the prefix, the alias anchor for `a`
-is already "killed" in the legacy sense — the relaxation recognises
-this as sibling cleanup and eliminates the alias bracket.
+Two aliases, `b` of `a` and `d` of `c`, whose scopes end in the same
+block. Neither takes a reference, so neither needs a bracket.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -273,18 +264,15 @@ end 'main'
 18
 ```
 
-## Phase 2 regression tests — multi-exit bracket elimination
+## Regression tests — an alias read on mutually-exclusive exits
 
-These fragments guard the relaxation in `CancelCrossBlockRedundantRefcounts`
-that allows an incref to pair with more than one reachable decref block
-when the matched decrefs are on mutually-exclusive paths (e.g. match arms
-that both scope-clean the same slot at their exits).
+An alias read on several mutually-exclusive paths (e.g. match arms) still
+takes no reference, so none of the paths owes a decref for it.
 
 <!-- test: multi-exit-match-arm-brackets -->
-An aliased slot whose scope-end decrefs sit on two mutually-exclusive
-match arms. The incref in the pre-match block dominates both decref
-blocks; each iteration from the incref hits exactly one of them. Phase 2
-eliminates the bracket as a group.
+An alias read on two mutually-exclusive match arms. It takes no
+reference, so neither arm carries a decref for it; the source's own
+single decref is the only one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -320,9 +308,8 @@ end 'main'
 ```
 
 <!-- test: multi-exit-three-way-split -->
-Three-way exit (three match arms, each decrefing the aliased slot at
-its scope end). Phase 2 eliminates the shared-source bracket across all
-three.
+Three-way exit: the alias is read on three match arms, and none of
+them carries a decref for it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -359,22 +346,19 @@ end 'main'
 14
 ```
 
-## Phase 1 regression tests — try-call borrow-awareness
+## Regression tests — try-call borrow-awareness
 
-These fragments are regression guards for the try-call relaxation of
-`RefcountOptimizationPass.ClassifyAliasingOp`. Before Phase 1 they would
-leave an incref/decref bracket on the aliased slot intact; after Phase 1
-the bracket is eliminated because the try-call's callee is proven
-borrow-only on every argument. The scoreboard stderr block is the
-authoritative assertion — reviewing its diff after a future change
-catches accidental regression of this optimization.
+An alias passed to a throwing callee through `try` stays a borrow: the
+call does not make it take a reference, so no incref/decref bracket
+surrounds the alias. A callee that stores its argument durably takes its
+own reference instead. The fragment golden is the authoritative
+assertion — its diff after a future change catches an accidental
+bracket.
 
 <!-- test: try-call-borrow-only-window -->
 Alias assignment `let b = a` in an inner block, followed by a try-call
-on a borrow-only callee inside the same block. The bracket on `b`
-spans the try-call and `b`'s scope-end decref fires before `a`'s outer
-scope-end decref — so `a`'s decref is not inside `b`'s window and the
-firstStoreOf-safety check passes. Phase 1 eliminates `b`'s bracket.
+on a borrow-only callee inside the same block. `b` takes no reference,
+so the only decref is `a`'s own at its scope end.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -413,9 +397,10 @@ end 'main'
 ```
 
 <!-- test: try-call-retaining-callee-preserved -->
-Negative: same shape but the callee retains its argument (stores it
-into a container field). The bracket must be preserved — the callee
-holds its own ref independently and could outlive the caller's window.
+Same shape, but the callee retains its argument (pushes it into an
+array). A durable store co-owns, so the callee takes its own reference
+(`__mm_own`) and the array's drop releases it, independently of the
+caller's single decref.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -454,11 +439,9 @@ end 'main'
 ```
 
 <!-- test: try-call-aliasfromstore-window -->
-The firstStoreOf alias shape (same SSA heap pointer stored into two
-slots with a try-call between). Mirrors the for-in lowering that
-stores `iter.current()` into both `__forin_result` and the user's
-loop variable. Phase 1 eliminates the second slot's incref/decref
-pair.
+The same heap pointer held by two bindings — a function's result and an
+alias of it — with a try-call between. The alias takes no reference, so
+there is no second incref/decref pair.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -502,10 +485,8 @@ end 'main'
 
 <!-- test: try-call-inside-loop-body -->
 Try-call inside a loop body where the alias source is stable across
-iterations. The loop-invariant sub-pass eliminates the per-iteration
-incref/decref on the alias slot. Mirrors the
-`__ListIterator_OpIndex.advance` hot spot surfaced by the whole-compiler
-baseline.
+iterations. The alias takes no reference, so no iteration carries an
+incref/decref for it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -543,21 +524,16 @@ end 'main'
 21
 ```
 
-## Phase 4 regression tests — global-load anchor elimination
+## Regression tests — a module-global read borrow-only
 
-These fragments guard `CancelGlobalLoadOrphanBrackets` in
-`RefcountOptimizationPass`. The sub-pass removes the `mm_incref` +
-`mm_decref_if_nonnull` bracket emitted around a module-global load into
-an orphan temp, when the function is proven borrow-only on that global
-(no tainted-from-global SSA value reaches a retention event in the body).
+A module-global load that a function only reads — no value derived from
+it reaches a retention — borrows the global and takes no reference.
 
 <!-- test: global-struct-load-borrow -->
 A module-level managed struct global is read borrow-only inside a
-function — it reads a single field via `load_indirect` and returns a
-scalar comparison. The emitter wraps the global load in incref+decref
-brackets (orphan-temp pattern). After Phase 4, the brackets are gone:
-`mm_incref Config [check]` and `mm_decref Config [check]` do not appear
-in the trace.
+function — it reads a single field and returns a scalar comparison. The
+load carries no incref/decref bracket: neither call appears in the
+golden.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

@@ -21,14 +21,7 @@ reached both by the binding door (`dispatchMethodOnBinding`, which additionally 
 live-binding guard, the self-field materialization, the E3019 blame name and the E3070 subject) and
 by the postfix loop.
 
-⚠ **Before this, the two were separate chains and the difference between them was not a design.** It
-was whichever receiver types someone had happened to need from a value: `[1,2].get(0)` worked and
-`"ab".byteLength()` did not; `a.get().compare(b)` worked and `Inner.make(9).get()` did not. Anything
-with no arm fell out of the postfix loop with the cursor still sitting on the `.`, which then
-reached the statement dispatcher's catch-all and printed the nonsensical
-`E2015: Unsupported: . statement`.
-
-A chain of FIELDS still walks as a chain (`o.inner.x`); the walk stops one hop short of a
+A chain of FIELDS walks as a chain (`o.inner.x`); the walk stops one hop short of a
 `.member(`, so the receiver of the call is an ordinary value and the same dispatcher decides what
 the member is.
 
@@ -48,8 +41,8 @@ end 'main'
 ```
 
 <!-- test: postfix.method-on-a-call-result -->
-A method on a STRUCT a call just returned. `a.get().compare(b.get())` already worked because an
-`Integer` result rides the builtin-conformer arm; a struct result had no arm at all.
+A method on a STRUCT a call just returned. `a.get().compare(b.get())` rides the builtin-conformer arm
+an `Integer` result takes; a struct result is dispatched on its own type.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -101,9 +94,9 @@ end 'main'
 ```
 
 <!-- test: postfix.method-after-a-struct-field -->
-A method whose receiver is a struct-typed FIELD — `o.inner.get()`. The chain walk used to consume
-`get` as the chain's last FIELD and report `E3018 type 'Inner' has no field named 'get'`; it now
-stops at `inner`, loads it, and the loaded value's own type decides what `get` is.
+A method whose receiver is a struct-typed FIELD — `o.inner.get()`. The chain walk stops at `inner`,
+loads it, and the loaded value's own type decides what `get` is; consuming `get` as the chain's last
+FIELD would report `E3018 type 'Inner' has no field named 'get'`.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -220,9 +213,8 @@ end 'main'
 ```
 
 <!-- test: postfix.method-on-a-set-call-result -->
-A `Set` method on a `Set` a static call returned. The `Array` arm had a value form and the `Set` arm
-did not, which is the whole shape of the gap this rung closes: the set is not a different question,
-it just had not been asked from a value yet.
+A `Set` method on a `Set` a static call returned. The `Set` arm has a value form exactly as the `Array`
+arm does: the set is not a different question.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 typealias WideSet = Set with Wide
@@ -250,9 +242,8 @@ end 'main'
 ```
 
 <!-- test: postfix.enum-method-on-a-call-result -->
-D1 gave an `enum`/`union` receiver its methods off a BINDING. Routing the enum arm through the one
-dispatcher gives it a VALUE receiver at no extra cost — the oracle accepts `pick().score()` and the compiler
-answered `E2015: Unsupported: . statement`.
+An `enum`/`union` receiver has its methods off a BINDING, and routing the enum arm through the one
+dispatcher gives it a VALUE receiver at no extra cost: `pick().score()` is a method call on a call result.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -308,9 +299,9 @@ end 'main'
 
 <!-- test: postfix.union-method-on-a-call-result -->
 The enum arm is reached on the `named` tag plus an ENUM registration, and a `union` registers the
-same way — so routing the arm through the one dispatcher gave a union receiver its value spellings at
-the same moment it gave them to an enum. Every committed union-receiver case binds its receiver to a
-name first (`let o = …; o.isPass()`), so the value door had no union witness at all until this case:
+same way — so routing the arm through the one dispatcher gives a union receiver its value spellings
+exactly as it gives them to an enum. Every other union-receiver case binds its receiver to a
+name first (`let o = …; o.isPass()`), so this case is the value door's only union witness:
 the whole of `enum-union-method-receiver.md` survives deleting `parsePostfix`'s member arm.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
@@ -402,9 +393,7 @@ end 'main'
 
 <!-- test: error.member-on-a-value-with-no-members -->
 A receiver whose type carries no members at all is a POSITIONED refusal naming the member and the
-type — never the `. statement` catch-all that a `break`ing postfix loop used to leave behind. The
-oracle refuses the same program at the same column (`E4006 Cannot access field on non-struct
-value`, at the member token).
+type — never a `. statement` catch-all.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 typealias UnaryOp = function(Wide) returns Wide
@@ -432,23 +421,18 @@ its `+1` and drops what the read points at **at the box's own scope exit**. Ever
 the language rests on that, and it holds because a box is reached through a NAME that outlives the
 read.
 
-⚠ **A receiver bound to no name broke it, and this rung was the first door that could hand one over.**
-`Box.make("hello")` was enrolled as a STATEMENT-scoped owned temporary; the statement's pending drops
-freed it at the semicolon. A MANAGED field read out of it therefore handed back a pointer into freed
-memory the moment the result outlived the statement. Measured, on every managed field kind — each of
-them a program the C# oracle runs and prints:
+⚠ **A receiver bound to no name has no NAME to outlive the read.** Freed by the statement's pending
+drops at the semicolon, `Box.make("hello")` would hand a MANAGED field read out of it back as a pointer
+into freed memory the moment the result outlived the statement — on every managed field kind:
 
-| written | the compiler |
+| written | freed at the statement's end |
 |---|---|
 | `let s = Box.make("hello").name` (String field) | **0xC0000005**, no diagnostic |
 | `let o = Box.make().ops` then `o.get(0)` (Array field) | **0xC0000005**, no diagnostic |
 | `let i = Outer.make(Inner.make(3)).inner` (struct field) | exit **0x3F3F3F3F** — the freed-fill byte read back as user data: a **wrong answer with no crash** |
 | `let s = makePair().1` (tuple element) | **0xC0000005**, no diagnostic |
 
-⚖ **THE RULING CAME, AND IT WAS TO EXTEND THE TEMPORARY'S LIFETIME (A3h, 2026-08-01).** It used to
-be **refused**, and the refusal's own message named the rung that would lift it — *"keeping a
-temporary alive for a borrow taken out of it is the ownership rung's"*. That rung landed: the box is
-now promoted to a nameless owned binding of the enclosing scope (`giveTemporaryScopeLifetime`), so it
+⚖ **THE RULING IS TO EXTEND THE TEMPORARY'S LIFETIME.** The box is promoted to a nameless owned binding of the enclosing scope (`giveTemporaryScopeLifetime`), so it
 is freed once at the frame's exit, after every read of what was borrowed out of it. The full argument,
 and the array-element half of the same fact, is `temporary-borrow-lifetime.md`. A **SCALAR** field is
 copied rather than borrowed, so `Leaf.make(4).tally` above needs none of this — the gate is the
@@ -477,9 +461,9 @@ end 'main'
 ```
 
 <!-- test: struct-field-read-out-of-a-temporary -->
-⭐ **The one of the four that a suite of exit codes would never have caught**: a STRUCT field read
-out of a temporary did not crash, it returned `0x3F3F3F3F` — the freed-memory fill byte — as the
-program's answer. It answers **3** now, and a temporary freed early would still answer the poison.
+⭐ **The one of the four that a suite of exit codes would never catch**: a STRUCT field read out of a
+temporary freed early does not crash, it returns `0x3F3F3F3F` — the freed-memory fill byte — as the
+program's answer. It answers **3**.
 ```maxon
 
 typealias Wide = int(i64.min to i64.max)
@@ -535,9 +519,8 @@ end 'main'
 ```
 
 <!-- test: managed-field-read-off-a-binding-is-unaffected -->
-**The CONTROL, and it is the half that keeps the refusal honest.** The identical field read through
-a NAME is the ordinary borrow it has always been: the binding owns the box, the box outlives the
-read. A guard that refused this too would have "fixed" the crash by deleting the feature.
+**The CONTROL.** The identical field read through a NAME is the ordinary borrow: the binding owns
+the box, the box outlives the read, and `keepFieldSourceAliveForItsRead` promotes nothing.
 ```maxon
 
 type Box
@@ -559,9 +542,9 @@ end 'main'
 ```
 
 <!-- test: method-on-a-temporary-may-still-return-its-managed-field -->
-The refusal is scoped to the READ, not to the temporary. A METHOD on the same temporary that reads
-the same field is fine, because the callee borrows the receiver only for the duration of the call —
-which ends before the statement does. Measured against the oracle; a leak here would be exit 101.
+The promotion belongs to the field READ, not to the temporary. A METHOD on the same temporary that
+reads the same field needs none, because the callee borrows the receiver only for the duration of the
+call — which ends before the statement does. A leak here would be exit 101.
 ```maxon
 
 type Box

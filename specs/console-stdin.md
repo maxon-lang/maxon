@@ -10,9 +10,9 @@ category: stdlib
 ## Documentation
 
 `stdlib/Console.maxon` gives a program its standard input as a `Stdin` reader that buffers OS
-reads. `Console.stdin()` constructs one; `readLine()` returns one line at a time with the
-terminator stripped (`\r\n` and `\n` both), `readBytes(n)` drains up to `n` bytes, and `eof()`
-answers whether there is genuinely nothing left.
+reads. `Console.stdin()` constructs one, and `readLine()` returns one line at a time with the
+terminator stripped (`\r\n` and `\n` both). Those two are the public surface; the reader's other
+methods are the module's own.
 
 The whole module bottoms out in ONE compiler intrinsic:
 
@@ -20,7 +20,7 @@ The whole module bottoms out in ONE compiler intrinsic:
 |---|---|
 | `__Builtins.readStdin(maxBytes)` | read up to `maxBytes` bytes from stdin into a FRESH owned `__ManagedMemory`; its `length()` is the count actually read, and **0 means EOF** |
 
-`/specs/builtins-type.md` states that contract in the same words — *"length reflects bytes
+`specs/builtins-type.md` states that contract in the same words — *"length reflects bytes
 actually read; 0 on EOF"* — and it is the whole reason `Stdin` can tell "nothing yet" from "nothing
 ever": a NUL scan could not, because stdin is binary and a NUL is a legal byte.
 
@@ -29,39 +29,32 @@ ever": a NUL scan could not, because stdin is binary and a NUL is a legal byte.
 `Testing/SpecParser.maxon` has no `stdin` block: a case supplies a source, an argv (`Args:`) and an
 expectation, and nothing else. A spec-test binary is spawned through
 `SpecTestRunner.runProcess` → `Subprocess.Configuration.create`, whose `standardInput` defaults to
-`InputSource.none` — **stdin closed immediately** (`stdlib/Subprocess.maxon:150`, `:313`). So every
+`InputSource.none` — **stdin closed immediately** (`stdlib/Subprocess.maxon`'s `Configuration.create`). So every
 case below reads EOF on its first syscall, deterministically, on every run.
 
 That is a real bound on what can be tested here and it is stated rather than hidden: the LINE
 SPLITTER (CRLF stripping, a partial final line, the `pending` carry across two chunks) has no
 reachable input in this harness and is not pinned by this file. What IS pinned is the half a
 closed stdin can reach, and it is the half every consumer hits first — including the compiler's own
-`Testing/SpecWorkerPool.maxon:401`, whose worker loop treats "EOF on stdin" as *"the parent
+`Testing/SpecWorkerPool.maxon`, whose worker loop treats "EOF on stdin" as *"the parent
 vanished, shut down"*. A `readLine()` that returned `""` instead of throwing there would spin a
 worker forever.
 
-### ⚠ The PUBLIC surface is exactly two functions, and the module's own comment says otherwise
+### ⚠ Most of `Stdin`'s methods are NOT public
 
-`stdlib/Console.maxon:35-39` states that *"The instance methods don't need export — Maxon resolves
-method calls through inferred receiver types regardless of the type's own export status."* **That is
-FALSE.** Only `Console.stdin()` and `Stdin.readLine()` carry `export`;
-`eof()`, `readBytes()`, `fillOnce()` and the four buffer helpers do not, and a user program naming
-one is refused:
-
-```text
-the compiler:      error E3008: <fragment>:4:9:  function 'Stdin.eof' is not exported
-bootstrap: error E3008: main.maxon:4:15: function 'stdlib.Stdin.eof' is not exported
-```
+Of `Stdin`'s methods only `create()` and `readLine()` carry `public`; `eof()`, `readBytes()`,
+`fillOnce()` and the four buffer helpers do not, and a user program naming one is refused with E3008
+(`function 'Stdin.eof' is not exported`).
 
 ⇒ **So `eof()`'s BEHAVIOUR is not directly pinnable from a spec case, and no case below pretends to
 be pinning it.** What the public surface CAN reach, it reaches through `readLine()`'s throw: the
 state machine under it is exercised, and its observable consequence is asserted.
 
-**The REFUSAL is pinnable, though, and it is now pinned** (`error.a-non-exported-method-is-refused`),
+**The REFUSAL is pinnable, though, and it is pinned** (`error.a-non-exported-method-is-refused`),
 because it is the only case in the suite that asks the visibility question of an INSTANCE METHOD.
 Every other E3008 case names a free function or a static, and those reach the check by a different
 door: a method dispatch's callee head is the RECEIVER'S RESOLVED TYPE, so it carries
-`CalleeMint.resolvedTypeQualifier` (F31) and `SemanticCheck.mintSpellsTheWholeCallee` is what keeps
+`CalleeMint.resolvedTypeQualifier` and `SemanticCheck.mintSpellsTheWholeCallee` is what keeps
 it answerable — a minted callee is otherwise exempt from the export rule, and read as "minted,
 therefore the compiler's" that arm would have exempted every method call in every program.
 
@@ -79,7 +72,7 @@ Once `eofSeen` is set, `fillOnce` returns without a syscall, so repeated `readLi
 each throw `ConsoleError.endOfFile` rather than the second one blocking, faulting, or answering a
 stale buffer. `repeat-reads-at-eof-are-idempotent` drives it three times.
 
-### The substrate is x64-windows and arm64-macOS at this rung
+### The substrate is x64-windows and arm64-macOS
 
 `__Builtins.readStdin` lowers to `__con_read_stdin`, which fetches the standard handle and reads it —
 `GetStdHandle` + `ReadFile` on Windows, and on arm64-macOS the same two ops with no handle call at all:
@@ -87,7 +80,7 @@ stale buffer. `repeat-reads-at-eof-are-idempotent` drives it three times.
 consecutive runs) and the read is `read(2)`. It shares the `TargetFacilities` gate with the file,
 directory and command-line families, so a program that reaches it on a lane that has neither is refused
 with `E3104` at the call's own span rather than panicking inside a backend — see
-`Compiler/Runtime/ConsoleRuntime.maxon`'s header for why a WASI `fd_read` lowering is still a rung: a
+`Compiler/Runtime/ConsoleRuntime.maxon`'s header for why wasm32-wasi has no `fd_read` lowering: a
 component holds an input-stream RESOURCE, which is neither a handle nor a descriptor, so there is no
 arithmetic that produces one.
 
@@ -113,8 +106,8 @@ end 'main'
 
 <!-- test: console-stdin.error.a-non-exported-method-is-refused -->
 ⭐ **THE ONE CASE IN THE SUITE THAT ASKS VISIBILITY OF AN INSTANCE METHOD.** `eof()` carries no
-`export`, and a user program holding a `Stdin` value is refused it — the fact the section above
-MEASURED and left unpinned. It is pinned here because the method-dispatch door
+`public`, and a user program holding a `Stdin` value is refused it — the fact the section above
+states. It is pinned here because the method-dispatch door
 is a different route into `SemanticCheck.calleeVisibleFrom` than the free function and static every
 other E3008 case takes, and nothing else would notice if that route stopped asking.
 ```maxon
@@ -218,7 +211,7 @@ end 'main'
 <!-- test: console-stdin.builtin-takes-a-ranged-count -->
 The byte budget may be spelled with a RANGED typealias, which carries the `named` tag until
 TypeResolution collapses it. The narrow `tag == integer` test would refuse this argument by naming
-one type twice; the operand check is `tagIsIntegral`, which is the measured-correct predicate for
+one type twice; the operand check is `tagIsIntegral`, which is the correct predicate for
 every builtin argument door.
 ```maxon
 typealias ByteBudget = int(0 to 65535)
@@ -262,7 +255,7 @@ error E3005: <fragment>:3:20: '__Builtins.readStdin' requires a int, but its arg
 
 <!-- test: console-stdin.rejected-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The stdin substrate is x64-windows and arm64-macOS at this rung. On a target with neither the call is
+The stdin substrate is x64-windows and arm64-macOS. On a target with neither the call is
 refused at its source span with `E3104`, naming the runtime entry that has no lowering there — never a
 panic from inside the wasm backend.
 ```maxon

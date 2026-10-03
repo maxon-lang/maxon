@@ -4,12 +4,15 @@ typealias DapFrameRefArray = Array with DapFrameRef
 typealias DapVariableRefArray = Array with DapVariableRef
 typealias DapSourceBreakpointsArray = Array with DapSourceBreakpoints
 typealias DapBreakpointAskArray = Array with DapBreakpointAsk
+typealias DapBreakpointRequestArray = Array with DapBreakpointRequest
 
 let DapPollSliceMs = 10 as Milliseconds
 let DapWalkYieldMs = 0 as Milliseconds
 let DapStopLookMs = 0 as StopTimeoutMs
 let DapWalkSliceMs = 10 as StopTimeoutMs
 let FirstReference = 1 as DapNumber
+let FirstSourceLine = 1 as DebugLineNumber
+let LastSourceLine = u32.max as DebugLineNumber
 let NoFramesAtAll = 0 as DapNumber
 
 let InitializeCommand = "initialize"
@@ -93,7 +96,7 @@ export function runDapServer() returns ExitCode
 	var adapter = DapAdapter.create()
 	let reader = spawn DapFrameReader.create()
 	var wakes = DapWakePromiseArray.create()
-	wakes.push(async dapNextFrame(reader))
+	wakes.push(async dapNextFrame(reader.clone()))
 
 	while adapter.isServing() 'pump'
 		if adapter.wantsASlice() 'aProgramToWatch'
@@ -417,17 +420,18 @@ type DapAdapter
 	function setSourceBreakpoints(request DapRequest, session DebugToolSession) throws DapArgumentError
 		let spelled = try (try request.arguments.object(SourceArgument)).text(PathArgument)
 		let path = try FilePath.from(spelled) otherwise throw DapArgumentError.wrongType(PathArgument)
-		var asked = DapBreakpointAskArray.create()
+		var asked = DapBreakpointRequestArray.create()
 
 		for breakpoint in try request.arguments.objects(BreakpointsArgument) 'eachBreakpoint'
 			let clientLine = try breakpoint.number(LineArgument)
 			let line = self.numbering.lineFromClient(clientLine)
 
-			if line < 0 or line > u32.max 'noSourceLineIsNumberedSo'
-				throw DapArgumentError.wrongType(LineArgument)
+			if line < FirstSourceLine or line > LastSourceLine 'noSourceLineIsNumberedSo'
+				asked.push(DapBreakpointRequest.unplaceable(dapUnnumberedLineMessage(clientLine, line: line, firstLine: self.numbering.lineToClient(DebugLineLookup.line(FirstSourceLine))), requested: DapRequestedLine.at(clientLine)))
+				continue
 			end 'noSourceLineIsNumberedSo'
 
-			asked.push(DapBreakpointAsk.create(DebugBreakTarget.fileLine(spelled, line: line as DebugLineNumber), condition: try breakpoint.textOr(ConditionArgument, fallback: ""), requested: DapRequestedLine.at(clientLine)))
+			asked.push(DapBreakpointRequest.ask(DapBreakpointAsk.create(DebugBreakTarget.fileLine(spelled, line: line as DebugLineNumber), condition: try dapBreakCondition(breakpoint), requested: DapRequestedLine.at(clientLine))))
 		end 'eachBreakpoint'
 
 		let armed = self.armReplacing(request, session: session, previous: self.sourceBreakpointsAt(path), asked: asked)
@@ -458,16 +462,16 @@ type DapAdapter
 	end 'holdSourceBreakpoints'
 
 	function setFunctionBreakpoints(request DapRequest, session DebugToolSession) throws DapArgumentError
-		var asked = DapBreakpointAskArray.create()
+		var asked = DapBreakpointRequestArray.create()
 
 		for breakpoint in try request.arguments.objects(BreakpointsArgument) 'eachBreakpoint'
-			asked.push(DapBreakpointAsk.create(DebugBreakTarget.named(try breakpoint.text(NameArgument)), condition: try breakpoint.textOr(ConditionArgument, fallback: ""), requested: DapRequestedLine.none))
+			asked.push(DapBreakpointRequest.ask(DapBreakpointAsk.create(DebugBreakTarget.named(try breakpoint.text(NameArgument)), condition: try dapBreakCondition(breakpoint), requested: DapRequestedLine.none)))
 		end 'eachBreakpoint'
 
 		self.functionBreakpoints = self.armReplacing(request, session: session, previous: self.functionBreakpoints, asked: asked)
 	end 'setFunctionBreakpoints'
 
-	function armReplacing(request DapRequest, session DebugToolSession, previous DapBreakpointAskArray, asked DapBreakpointAskArray) returns DapBreakpointAskArray
+	function armReplacing(request DapRequest, session DebugToolSession, previous DapBreakpointAskArray, asked DapBreakpointRequestArray) returns DapBreakpointAskArray
 		for breakpoint in previous 'eachPrevious'
 			_ = self.delivered(session, replies: session.conversation.perform(DebugCommand.disarm(breakpoint.target, owner: DebugBreakOwner.client)), announceResume: false)
 		end 'eachPrevious'
@@ -476,19 +480,26 @@ type DapAdapter
 		var nodes = JsonNodeIdArray.create()
 		var armed = DapBreakpointAskArray.create()
 
-		for breakpoint in asked 'eachBreakpoint'
-			let answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.arm(breakpoint.target, condition: breakpoint.condition, owner: DebugBreakOwner.client)), announceResume: false)
-
-			match dapBreakpointOutcome(answers) 'outcome'
-				armed(answer) then self.notedArmed(armed, nodes: nodes, doc: doc, breakpoint: breakpoint, answer: answer)
-				unverified(message) then nodes.push(dapUnverifiedBreakpointNode(doc, message: message, requested: breakpoint.requested))
-			end 'outcome'
+		for requested in asked 'eachBreakpoint'
+			match requested 'placeable'
+				ask(breakpoint) then self.armOne(session, breakpoint: breakpoint, armed: armed, nodes: nodes, doc: doc)
+				unplaceable(message, line) then nodes.push(dapUnverifiedBreakpointNode(doc, message: message, requested: line))
+			end 'placeable'
 		end 'eachBreakpoint'
 
 		self.writer.respond(request, doc: doc, body: DapBody.object(dapBreakpointsBody(doc, nodes: nodes)))
 
 		return armed
 	end 'armReplacing'
+
+	function armOne(session DebugToolSession, breakpoint DapBreakpointAsk, armed DapBreakpointAskArray, nodes JsonNodeIdArray, doc JsonDoc)
+		let answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.arm(breakpoint.target, condition: breakpoint.condition, owner: DebugBreakOwner.client)), announceResume: false)
+
+		match dapBreakpointOutcome(answers) 'outcome'
+			armed(answer) then self.notedArmed(armed, nodes: nodes, doc: doc, breakpoint: breakpoint, answer: answer)
+			unverified(message) then nodes.push(dapUnverifiedBreakpointNode(doc, message: message, requested: breakpoint.requested))
+		end 'outcome'
+	end 'armOne'
 
 	function notedArmed(armed DapBreakpointAskArray, nodes JsonNodeIdArray, doc JsonDoc, breakpoint DapBreakpointAsk, answer DebugBreakpointAnswer)
 		armed.push(breakpoint)
@@ -501,7 +512,7 @@ type DapAdapter
 			self.writer.respond(request, doc: JsonDoc.create(), body: DapBody.none)
 
 			var doc = JsonDoc.create()
-			self.writer.event(StoppedEvent, doc: doc, body: DapBody.object(dapStoppedBody(doc, reason: DapEntryReason, threadId: DapMainThreadId, fault: DebugNoFault)))
+			self.writer.event(StoppedEvent, doc: doc, body: DapBody.object(dapStoppedBody(doc, reason: DapEntryReason, threadId: DapMainThreadId, fault: StatedText.unstated)))
 
 			return
 		end 'parkAtEntry'
@@ -635,12 +646,11 @@ type DapAdapter
 	end 'held'
 
 	function respondValues(request DapRequest, tree ElementIndex, indices DebugValueIndexArray)
-		let values = try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondValues: the tree was registered before its values were asked for")
 		var doc = JsonDoc.create()
 		var nodes = JsonNodeIdArray.create()
 
 		for index in indices 'eachValue'
-			let value = values.nodeAt(index)
+			let value = (try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondValues: the tree was registered before its values were asked for")).nodeAt(index)
 			nodes.push(dapVariableNode(doc, value: value, reference: self.childReference(tree, node: index, value: value)))
 		end 'eachValue'
 
@@ -919,10 +929,32 @@ end 'dapMovedBody'
 
 type DapBreakpointAsk
 	export let target as DebugBreakTarget
-	export let condition as String
+	export let condition as DebugBreakCondition
 	export let requested as DapRequestedLine
 
-	static function create(target DebugBreakTarget, condition String, requested DapRequestedLine) returns DapBreakpointAsk
+	static function create(target DebugBreakTarget, condition DebugBreakCondition, requested DapRequestedLine) returns DapBreakpointAsk
 		return Self{target: target, condition: condition, requested: requested}
 	end 'create'
 end 'DapBreakpointAsk'
+
+union DapBreakpointRequest
+	ask(breakpoint DapBreakpointAsk)
+	unplaceable(message String, requested DapRequestedLine)
+end 'DapBreakpointRequest'
+
+function dapUnnumberedLineMessage(clientLine DapNumber, line DapNumber, firstLine DapNumber) returns String
+	if line < FirstSourceLine 'beforeTheFirstLine'
+		return "line {clientLine} names no source line: lines are numbered from {firstLine}"
+	end 'beforeTheFirstLine'
+
+	return "line {clientLine} names no source line: no source file holds more than {LastSourceLine} lines"
+end 'dapUnnumberedLineMessage'
+
+function dapBreakCondition(breakpoint DapObject) returns DebugBreakCondition throws DapArgumentError
+	if not breakpoint.has(ConditionArgument) 'noCondition'
+		return DebugBreakCondition.unconditional
+	end 'noCondition'
+
+	let text = try breakpoint.text(ConditionArgument)
+	return DebugBreakCondition.unconditional if text.isEmpty() else DebugBreakCondition.when(text)
+end 'dapBreakCondition'

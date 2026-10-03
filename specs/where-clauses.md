@@ -285,11 +285,10 @@ end 'main'
 <!-- test: where-clauses.int-actual-for-float-formal -->
 An INTEGRAL actual supplied for a `float` interface FORMAL is widened at the witness dispatch, exactly as a
 direct call's argument is (`LowerMaxonToStd.widenIntArgsToFloatParams`). A witness dispatch has no callee
-signature to look the parameter up in, so nothing used to widen it and the fused `witnessCall`'s
-`argFloatMask` — read off the already-typed argument VALUES — declared the argument a GPR/i64 against an
-impl declaring XMM/f64. **x64 compiled clean and answered WRONG** (`movRegImm32 rdx, 2` ahead of
-`callMem [rbx + 24]`, so `k * 2.0` multiplied whatever was left in xmm0) and **wasm trapped `indirect call
-type mismatch`**. `scale(2)` must therefore read `4.0`, and the second dispatch pins that a genuine `float`
+signature to look the parameter up in, and unwidened, the fused `witnessCall`'s `argFloatMask` — read off
+the already-typed argument VALUES — would declare the argument a GPR/i64 against an impl declaring XMM/f64:
+**x64 would compile clean and answer WRONG** (`movRegImm32 rdx, 2` ahead of `callMem [rbx + 24]`, so
+`k * 2.0` multiplies whatever is left in xmm0) and **wasm would trap `indirect call type mismatch`**. `scale(2)` must therefore read `4.0`, and the second dispatch pins that a genuine `float`
 actual is still passed through untouched (`promoteToFloat` is idempotent).
 ```maxon
 typealias Coord = int(0 to 1000)
@@ -388,9 +387,9 @@ typealias Real = float(f64.min to f64.max)
 
 <!-- test: where-clauses.witness-multi-arg-labelled -->
 The headline unlock: a witness dispatch of a TWO-parameter interface method, spelled the way every other
-Maxon call is spelled — first argument positional, second labelled. Before this rung the dispatch parsed its
-argument list as a bare comma loop with no label grammar at all, so `b: 2` was read as an expression and
-reported `E2004: Undefined variable 'b'`. `7 + 1 + 2` reads 10.
+Maxon call is spelled — first argument positional, second labelled. The dispatch parses its argument list
+with the label grammar, so `b: 2` is a label and not an expression (which would report `E2004: Undefined
+variable 'b'`). `7 + 1 + 2` reads 10.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -525,11 +524,10 @@ end 'main'
 ```
 
 <!-- test: where-clauses.witness-multi-arg-ranged-return -->
-Regression pin for the garbage-read this rung closed, in the shape that made it LOUD rather than silent.
-With a NARROW ranged return (`int(0 to 1000)`) the only spelling the old parser accepted for a two-parameter
-method was the under-supplied `self.item.add(1)` — whose missing second actual left an uninitialised
-register, so `7 + 1 + <garbage>` left the alias's range and the correct program died in the impl with
-`panic: Range check failed`. The labelled call is exact by construction: `7 + 1 + 2` reads 10, in range.
+Regression pin for the under-supplied garbage-read, in the shape that makes it LOUD rather than silent.
+With a NARROW ranged return (`int(0 to 1000)`), an under-supplied `self.item.add(1)` would leave its
+missing second actual in an uninitialised register, so `7 + 1 + <garbage>` would leave the alias's range
+and the program would die in the impl with `panic: Range check failed`. The labelled call is exact by construction: `7 + 1 + 2` reads 10, in range.
 ```maxon
 typealias Small = int(0 to 1000)
 
@@ -573,14 +571,14 @@ end 'main'
 
 <!-- test: where-clauses.witness-exitcode-return-high -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⚠ **A WINDOWS-LANE READING SINCE BATCH27, WHICH IS A REAL LOSS ON THE ONE LANE THIS CASE WAS ABOUT.**
+⚠ **THIS CASE RUNS ON WINDOWS ONLY, WHICH LOSES THE ONE LANE ITS DEFECT LIVES ON (wasm).**
 `return 4000000000` is E3005 on every other target — `ExitCode` is `int(0 to 255)` there — so those lanes
 cannot express this program, which is what the `unsupported-targets:` restriction says. It cannot be re-pinned on
 wasm through any other type, and the reason it cannot (plus the array-element route that looks like a
 substitute and measurably is not) is stated once, in `exit-code-range.md`'s *"What the narrowing costs
 the other lanes"*.
 
-⭐⭐ **AN `ExitCode` RETURNED THROUGH A WITNESS, ABOVE 2^31 (W1 review).** `ExitCode` is the only builtin
+⭐⭐ **AN `ExitCode` RETURNED THROUGH A WITNESS, ABOVE 2^31.** `ExitCode` is the only builtin
 type NAME whose tag carries a sub-64 width — a **u32** (`valueTagToStdType`) — and an interface stores its
 method return type as a rendered source STRING, so a witness dispatch RE-DERIVES that width from the name.
 `where-clauses.witness-multi-arg-ranged-return` above already pins that a compiler-owned name survives the
@@ -588,11 +586,10 @@ round trip; what it cannot pin is the VALUE, because every case in this file ret
 small number is the same under either extension rule.
 
 On wasm the recovered u32 lives in an `i32` and must be widened back to the `i64` world every Maxon value
-inhabits. MEASURED, before the fix: the host printed `4000000000` and wasm printed **-294967296** — the
-widen was `i64.extend_i32_s`, reading a u32's top bit as a sign. Silent on every register target, where the
-value never leaves its 64-bit GPR, which is why it needed a case that reads the number back rather than
-returning it as a process status (the OS truncates an exit code, so `exitcode` alone could never have
-caught this).
+inhabits. Widened with `i64.extend_i32_s`, reading a u32's top bit as a sign, wasm prints **-294967296**
+where the host prints `4000000000`. That is silent on every register target, where the value never leaves
+its 64-bit GPR, which is why it needs a case that reads the number back rather than returning it as a
+process status (the OS truncates an exit code, so `exitcode` alone could never catch this).
 ```maxon
 typealias Num = int(0 to 10)
 
@@ -670,14 +667,14 @@ error E3017: <fragment>:22:11: Type 'Plain' does not satisfy constraint 'Digest'
 ```
 
 <!-- test: error.a-where-constraint-is-checked-at-an-INFERRED-instantiation -->
-⭐⭐ **AN INSTANTIATION NEED NOT BE SPELLED, AND THE ONE THAT IS NOT WAS GOING UNCHECKED.**
+⭐⭐ **AN INSTANTIATION NEED NOT BE SPELLED, AND THE ONE THAT IS NOT IS CHECKED TOO.**
 `checkWhereConstraints` walks the instantiation SITES a program records, and a `typealias` is only one of
 the provenances that mints one — a bare generic factory binding `T` from its own argument mints another.
-An instance with no recorded site is invisible to this check, and the measured consequence was not a
+An instance with no recorded site would be invisible to this check, and the consequence would not be a
 missed diagnostic but a COMPILER PANIC two tiers down: *"witnessSlotImpl: no conformance selected a member
 for slot 'int.Sized.size' — this table is being built for a conformance that was never validated"*. The
-same program spelled `typealias IntBox = Box with Whole` was refused correctly all along, which is what
-makes this case about the PROVENANCE and not about the rule.
+same program spelled `typealias IntBox = Box with Whole` is refused the same way, which is what makes
+this case about the PROVENANCE and not about the rule.
 ```maxon
 typealias Whole = int(i64.min to i64.max)
 
@@ -708,8 +705,8 @@ error E3017: <fragment>:21:14: Type 'int' does not satisfy constraint 'Sized' re
 
 <!-- test: where-clauses.error.witness-arg-missing-label -->
 The label grammar is the SAME rule at a witness dispatch as anywhere else: arguments 2 and later must carry
-a `name:` label. `parseWitnessMethodOnValue` used to parse its arguments with a bare comma loop that consulted
-no label rule at all, so this call was silently accepted. E2053 is raised by `consumeArgLabel` — the one copy
+a `name:` label. `parseWitnessMethodOnValue` parses its arguments through the label rule rather than a bare
+comma loop that would silently accept this call. E2053 is raised by `consumeArgLabel` — the one copy
 of the syntactic rule — and anchored on the offending argument, exactly as a direct call's is.
 ```maxon
 typealias Code = int(0 to u32.max)
@@ -754,8 +751,8 @@ error E2053: <fragment>:24:27: the second and later arguments must be named ('na
 
 <!-- test: where-clauses.error.witness-too-few-args -->
 An UNDER-SUPPLIED witness dispatch is E3036, from the same `slotCallArgs` a direct call is checked by.
-Before this rung the dispatch performed no arity check at all: the missing actual left an uninitialised
-register in the argument slot and the call returned it, so the program compiled clean and exited on garbage.
+Without an arity check the missing actual would leave an uninitialised register in the argument slot and
+the call would return it, so the program would compile clean and exit on garbage.
 The arity error anchors on the call itself (the method name), matching `SemanticCheck.validateCall`.
 ```maxon
 typealias Code = int(0 to u32.max)
@@ -935,11 +932,11 @@ error E3038: <fragment>:24:27: duplicate argument for parameter 'a' of 'Adder.ad
 <!-- test: where-clauses.error.operator-witness-wrong-arity -->
 A constraint whose method has the protocol's NAME and the protocol's RESULT but the wrong ARITY is not the
 protocol, and `==` may not dispatch it. An operator has exactly one operand to give, so the formal count is
-as much a part of "is this `Equatable`?" as the result type and the (absent) `throws` clause already were —
-the third hole in the same wall, and the only one left open once the `.method()` form began checking its
-arity against the interface. ⚠ **MEASURED before the check existed: this program compiled CLEAN and the
-impl read its unsupplied second `Self` formal out of an uninitialised argument register, dereferencing it**
-(exit 7 from `b.x == 3` on a formal that was never passed) — a silent wrong answer one page fault from a
+as much a part of "is this `Equatable`?" as the result type and the (absent) `throws` clause are —
+the third hole in the same wall, beside the `.method()` form's own arity check against the interface.
+⚠ **Unchecked, this program compiles CLEAN and the impl reads its unsupplied second `Self` formal out of
+an uninitialised argument register, dereferencing it** (exit 7 from `b.x == 3` on a formal that was never
+passed) — a silent wrong answer one page fault from a
 crash. It reports the same E3005 as no constraint at all, because the author's cure is the same sentence.
 Target-independent.
 ```maxon
@@ -986,10 +983,9 @@ declares its formal as something other than `Self` is not the protocol either �
 wall, and the twin of `operator-witness-wrong-arity` above. An operator's one operand is a value of `T`, so
 what the formal is TYPED is as much a part of "is this `Equatable`?" as how many there are.
 `requireGenuineSelfArgs` cannot cover it: it validates the actuals sitting at `Self` formals, and an
-interface like this one declares none. ⚠ **MEASURED before the check existed: this program compiled CLEAN
-and `self.a == self.b` handed the RECEIVER'S `T` POINTER to a formal the impl reads as an `int`, so
-`equals` compared a pointer against `7` and answered `false` for two equal values** — a silent wrong
-answer, on `main` as well as on the branch that added the arity half. The `float` twin is worse (the
+interface like this one declares none. ⚠ **Unchecked, this program compiles CLEAN and `self.a == self.b`
+hands the RECEIVER'S `T` POINTER to a formal the impl reads as an `int`, so `equals` compares a pointer
+against `7` and answers `false` for two equal values** — a silent wrong answer. The `float` twin is worse (the
 witness float-widening `cvtsi2sd`s that pointer) and a `String` formal is an outright type confusion, an
 unmanaged struct pointer read through a managed header. Same E3005, because the author's cure is the same
 sentence. Target-independent.
@@ -1033,7 +1029,7 @@ error E3005: <fragment>:25:17: Operator '==' requires type parameter 'T' to be c
 
 <!-- test: where-clauses.error.operator-witness-wrong-formal-type-comparable -->
 The `Comparable` half of `operator-witness-wrong-formal-type`, so the check is pinned for BOTH protocols
-rather than only the one it was found through — `<`/`>`/`<=`/`>=` read the same formals off the same
+rather than only one — `<`/`>`/`<=`/`>=` read the same formals off the same
 synthesized interface, and a `compare` taking anything but `Self` is no more `Comparable` than a
 non-`Self` `equals` is `Equatable`. Target-independent.
 ```maxon
@@ -1082,9 +1078,9 @@ which bodies fill that slot is fixed whole-program by the conformance check, so 
 over the union of `Grower`'s conformers (`SemanticCheck.addWitnessParamEdges`). `Pusher.grow` writes its
 `dest`, therefore `Box.run` writes its `dest`, therefore `b.run(a)` over a `let`-bound array is refused.
 
-⚠ **THE TWO NON-GENERIC SPELLINGS OF THE SAME PUSH WERE ALREADY REFUSED** —
+⚠ **THE TWO NON-GENERIC SPELLINGS OF THE SAME PUSH ARE REFUSED TOO** —
 a free `grow(a)` and an interface-method `p.grow(a)` both answer this diagnostic. This case is the third
-route to it, and it was the one that compiled clean and silently pushed into an immutable array.
+route to it, and the one that, unchecked, would compile clean and silently push into an immutable array.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -1218,10 +1214,10 @@ end 'main'
 ```
 
 <!-- test: where-clauses.constraint-interface-declared-below -->
-A `where` constraint's interface is resolved WHOLE-PROGRAM (R8), so writing the `interface` BELOW the
+A `where` constraint's interface is resolved WHOLE-PROGRAM, so writing the `interface` BELOW the
 generic type it constrains is legal — the identical program with the interface written above compiles
-and returns the identical answer. Before R8 this was `E2015 … not declared before its constrained use`:
-the resolution walked THIS FILE's interfaces as the linear parse had recorded them so far.
+and returns the identical answer. A resolution that walked only THIS FILE's interfaces as the linear parse
+had recorded them so far would refuse it with `E2015 … not declared before its constrained use`.
 ```maxon
 typealias Code = int(0 to u32.max)
 typealias Coord = int(0 to 1000)
@@ -1317,36 +1313,34 @@ end 'Digest'
 42
 ```
 
-⚠⚠ **THE PLACEMENT GUARD (R8 review), AND IT PINS A LIMITATION ON PURPOSE.** This program SHOULD compile and
-return 42; it does not, and the E3011 below is a PRE-EXISTING false reject that R8 neither introduced nor
-widens (`Parser.interfaceReturnMaxonType` has no generic-instance arm — see the note under the code). It is
-pinned as an ENABLED error case anyway, because **the diagnostic is the only thing in the whole suite that
-can see WHERE `Queries.foldInterfaceDeclarations` runs**, and that placement is this rung's entire
-correctness thesis.
+⚠⚠ **THE PLACEMENT GUARD, AND IT PINS A LIMITATION ON PURPOSE.** This program SHOULD compile and
+return 42; it does not, and the E3011 below is a false reject (`Parser.interfaceReturnMaxonType` has no
+generic-instance arm — see the note under the code). It is pinned as an ENABLED error case anyway, because
+**the diagnostic is the only thing in the whole suite that can see WHERE
+`Queries.foldInterfaceDeclarations` runs**, and that placement is a correctness property.
 
-MEASURED THREE WAYS on this one program, each leg a separate build of the compiler in this worktree:
+Three placements of the interface read give three answers on this one program:
 
-| compiler | result |
+| placement | result |
 |---|---|
-| pre-R8, reading the interface out of the REAL PARSE's `artifact.interfaces` | `E3011 … Unknown type 'Array_Integer'` |
-| R8 as shipped — the read after `allFilesFolded`, before `deriveInstanceNames` | `E3011 … Unknown type 'Array_Integer'`, byte-identical |
-| R8 with the read moved INTO the per-file sweep | **COMPILES, exit 42** |
+| reading the interface out of the REAL PARSE's `artifact.interfaces` | `E3011 … Unknown type 'Array_Integer'` |
+| the read after `allFilesFolded`, before `deriveInstanceNames` (the placement in use) | `E3011 … Unknown type 'Array_Integer'`, byte-identical |
+| the read moved INTO the per-file sweep | **COMPILES, exit 42** |
 
-The third row is the trap, and it is why this case exists: the sabotage looks like an improvement and is
-not. An incomplete index makes `signatures.isGenericAlias` answer "no", so the requirement's return type
-renders as the RAW ALIAS `IntArray` — which happens to resolve — while the real parse renders the same type
-as the canonical `Array_Integer`. Two spellings of one type inside one index is the false-ACCEPT shape the
-R5 review measured, and the accept it buys here is an accident, not a fix.
+The third row is the trap, and it is why this case exists: it looks like an improvement and is not. An
+incomplete index makes `signatures.isGenericAlias` answer "no", so the requirement's return type renders as
+the RAW ALIAS `IntArray` — which happens to resolve — while the real parse renders the same type as the
+canonical `Array_Integer`. Two spellings of one type inside one index is a false-ACCEPT shape, and the
+accept it buys here is an accident, not a fix.
 
-⚠ **AND THE REST OF THE SUITE CANNOT SEE THAT — MEASURED.** With the recording moved into the per-file
-sweep the full suite ran **2837 passed / 0 failed, exit 0, no leak**, `constraint-interface-generic-alias-formal`
-included: a FORMAL's rendered string is only ever COMPARED (against `Self`, against `float`), never
+⚠ **AND THE REST OF THE SUITE CANNOT SEE THAT.** With the recording moved into the per-file sweep the rest
+of the suite stays green, `constraint-interface-generic-alias-formal` included: a FORMAL's rendered string is only ever COMPARED (against `Self`, against `float`), never
 RESOLVED, so no formal-position case can go red. Only the RETURN position resolves the string, so this is
 the one shape where the two renderings are observable at all. Without this case the placement is guarded by
 nothing.
 
-⇒ **THE DAY `interfaceReturnMaxonType` GROWS ITS GENERIC-INSTANCE ARM, THIS CASE FLIPS TO `exitcode 42` —
-IT DOES NOT GET DELETED.** It has two jobs and only the first one retires.
+⇒ **WHEN `interfaceReturnMaxonType` HAS A GENERIC-INSTANCE ARM, THIS CASE FLIPS TO `exitcode 42` — IT
+DOES NOT GET DELETED.** It has two jobs and only the first one retires.
 
 <!-- test: where-clauses.error.witness-return-generic-instance -->
 ```maxon
@@ -1391,7 +1385,7 @@ error E3011: specs/fragments/where-clauses/where-clauses.error.witness-return-ge
 ```
 
 <!-- test: where-clauses.constraint-interface-generic-alias-formal -->
-⚠ THE RENDERING GUARD (R8). An interface requirement whose parameter type is a GENERIC-ALIAS instance
+⚠ THE RENDERING GUARD. An interface requirement whose parameter type is a GENERIC-ALIAS instance
 (`IntArray = Array with Integer`) is the one shape where the two renderings of a declared type can
 disagree: `renderDeclaredTypeName` spells a `genericInstance` as its CANONICAL instance name, and a
 reader asked before the whole-program alias table is complete would see a plain `named` type and spell
@@ -1444,16 +1438,16 @@ end 'main'
 42
 ```
 
-⚠ **WHAT R8 PAID FOR DELETING R7's SEPARATE ARITY STORE, PINNED (R8 review).** R7 read an interface's
-HEADER during the token sweep, so a broken BODY still recorded the name and its `uses` arity. R8 reads the
-WHOLE declaration through `Parser.readInterfaceDeclaration` — the one builder, which is the point — and that
-read is TOLERANT: an `interface` whose body will not parse records NOTHING, so its name resolves to nothing
-at every parse-time door.
+⚠ **THE COST OF ONE BUILDER FOR AN INTERFACE, PINNED.** The interface index reads the WHOLE declaration
+through `Parser.readInterfaceDeclaration` — the one builder, which is the point — rather than keeping a
+separate header-only arity store, and that read is TOLERANT: an `interface` whose body will not parse
+records NOTHING, not even its name and `uses` arity, so its name resolves to nothing at every parse-time
+door.
 
 The consequence is a DIAGNOSTIC one and only that. Every program that lands here is a program the real
 parse refuses on its own line, so no wrong program is ever accepted — but the reject below is raised at the
 DISPATCH, in a file that parses before the broken `interface` is reached, and the file's parse stops there.
-MEASURED: it is the ONLY diagnostic this program produces, which is why the sentence may not claim the
+It is the ONLY diagnostic this program produces, which is why the sentence may not claim the
 interface is undeclared (it is declared, eight lines down). It names both causes instead.
 
 The same shape with the broken `interface` in a LATER FILE reports both errors — the dispatch's reject from
@@ -1504,15 +1498,15 @@ error E2015: specs/fragments/where-clauses/where-clauses.error.constraint-interf
 A `where` constraint names ONE interface, but the requirements it supplies are that interface's TRANSITIVE
 set — its own and its `extends` parents'. `interfaceWitnessSlots` computes that list once, and both the
 witness-table BUILDER and the dispatch RESOLVER read it, so the slot a call compiles is the slot the blob
-fills. ⚠ **Before R10c only the CONFORMANCE CHECK walked the chain**: a conformer was required to supply
-`Base.label()` and there was no slot in any table to put it in, so calling it was refused outright with
-`E2015 … no `where` constraint on this type parameter declares a method 'label'` — a refusal of a legal
-program, on a constraint that does declare it.
+fills. ⚠ **The dispatch walks the chain as the CONFORMANCE CHECK does**: were only the check to walk it, a
+conformer would be required to supply `Base.label()` with no slot in any table to put it in, and calling it
+would be refused outright with `E2015 … no `where` constraint on this type parameter declares a method
+'label'` — a refusal of a legal program, on a constraint that does declare it.
 
 ⚠ **THE TWO RESULTS ARE COMBINED POSITIONALLY (`* 10 +`) AND NOT SUMMED, WHICH IS THE WHOLE ASSERTION.**
 `7 + 1` is `8` whichever slot each call reads, so a summed expectation would be satisfied by a compiler that
 resolved both requirements and numbered their slots the wrong way round — the silent wrong-function-pointer
-this rung exists to make unrepresentable, passing green. `71` is reached only by the correct pairing; the
+the shared slot list exists to make unrepresentable, passing green. `71` is reached only by the correct pairing; the
 swap reads `17`. Target-independent.
 
 <!-- test: where-clauses.inherited-requirement-dispatch -->
@@ -1574,8 +1568,8 @@ end 'main'
 ### A child interface OVERLOADING an inherited name: two requirements, two slots, two impls
 
 `Base.label()` and `Derived.label(width)` are DISTINCT requirements and take DISTINCT witness slots, so the
-argument COUNT is what tells a dispatch which one it means. ⚠ **A resolver that matched by NAME alone bound
-both calls to whichever requirement it reached first and then reported the OTHER one's arity against the
+argument COUNT is what tells a dispatch which one it means. ⚠ **A resolver that matched by NAME alone would
+bind both calls to whichever requirement it reached first and then report the OTHER one's arity against the
 call: `E3036 'Derived.label' expects 1 argument(s) but 0 were provided`** — a sentence that is false about an
 interface inheriting a zero-argument `label()`. The two calls below must reach DIFFERENT impls, which is what
 `7` and `21` prove: a single slot serving both would return one of them twice. Target-independent.
@@ -1645,7 +1639,7 @@ builder would have to agree on the same duplication to stay in step.
 
 ⚠ **THE FOUR RESULTS ARE A BASE-5 NUMERAL, NOT A SUM, AND THAT IS THE ASSERTION.** Any sum of the four is
 invariant under all 24 permutations of the slots, so it pins only that every requirement RESOLVES — never
-which slot each call reads, which is the failure this rung exists to prevent. As digits `1 2 3 4` of a
+which slot each call reads, which is the failure the shared slot list exists to prevent. As digits `1 2 3 4` of a
 positional numeral the answer is `194` for the correct numbering and a different value for every one of the
 other 23. Target-independent.
 
@@ -1723,8 +1717,9 @@ end 'main'
 The case above closes the diamond inside ONE interface, where `interfaceWitnessSlots`' `visited` set sees
 both arrivals. `where T is Left and Right` splits the same diamond across two CONSTRAINTS, and no `visited`
 set spans them — the name search walks each constraint's own slot list and collects `Root.base()` once from
-each. ⚠ **Read as two claimants that was E3114 on a legal program, and the message named the requirement as
-its own rival: `'base' … is provided by both Root.base() returns Code and Root.base() returns Code`.** The
+each. ⚠ **Read as two claimants that would be E3114 on a legal program, with a message naming the
+requirement as its own rival: `'base' … is provided by both Root.base() returns Code and Root.base() returns
+Code`.** The
 two entries are two ROUTES to one requirement: `ConformanceCheck` files the accepted member under
 (conformer, DECLARING interface, method name), and both `__witness_Widget.Left` and `__witness_Widget.Right`
 stamp their `base` slot from that one filing — so either route binds the same function pointer, and the
@@ -1797,8 +1792,8 @@ end 'main'
 
 The same shape on the operator path, which reaches it through a different filter — `witnessTargetIsProtocol`
 keeps every candidate shaped like `Equatable.equals`, and both routes to the inherited requirement are.
-⚠ **`Equatable.equals … and Equatable.equals` was the E3114 this produced**, one sentence naming one
-requirement twice. It must not be confused with `where-clauses.error.ambiguous-operator-witness` below,
+⚠ **Refused, this would produce the E3114 `Equatable.equals … and Equatable.equals`**, one sentence naming
+one requirement twice. It must not be confused with `where-clauses.error.ambiguous-operator-witness` below,
 which is two DISTINCT declaring interfaces (`Equatable` and `AlsoEquatable`) and stays refused: that pair
 files under two impl keys and can hold two different members. Target-independent.
 
@@ -1973,9 +1968,9 @@ error E3114: <fragment>:32:20: 'label' taking 0 argument(s) is provided by both 
 
 E3036 names ONE callee and ONE expected count, which cannot be written when several requirements of the name
 exist and the call matches none: blaming an arbitrary one prints a true sentence about the wrong
-requirement, which is exactly what the pre-R10c resolver did. E3115 lists them all instead. ⚠ With a SINGLE
-requirement of the name there is nothing to select between and the arity is still E3036's to report — that
-is what `where-clauses.error.witness-too-few-args` above pins, and it is unmoved. Target-independent.
+requirement. E3115 lists them all instead. ⚠ With a SINGLE requirement of the name there is nothing to
+select between and the arity is E3036's to report — that is what `where-clauses.error.witness-too-few-args`
+above pins. Target-independent.
 
 <!-- test: where-clauses.error.no-witness-requirement-of-that-arity -->
 ```maxon
@@ -2030,9 +2025,9 @@ error E3115: <fragment>:36:20: no requirement named 'label' provided by the cons
 ### The OPERATOR path refuses an ambiguity too, and for the same reason
 
 `==` searches the constraints for `equals` and then requires the hit to BE `Equatable` — result, `throws`
-and formals. That test is now a FILTER over every candidate rather than a verdict on the first name match,
-which is what lets a look-alike constraint stop MASKING a real one. Two constraints that are both genuinely
-protocol-shaped are the other half of the same change: they are two distinct witness slots holding two
+and formals. That test is a FILTER over every candidate rather than a verdict on the first name match,
+which is what keeps a look-alike constraint from MASKING a real one. Two constraints that are both genuinely
+protocol-shaped are the other half of the same rule: they are two distinct witness slots holding two
 distinct conformers' impls, so "both are `Equatable`" does not make them interchangeable, and the operator
 would silently take whichever was written first. Same E3114 as the `.method()` form. Target-independent.
 
@@ -2079,14 +2074,14 @@ end 'main'
 error E3114: <fragment>:29:17: 'equals' taking 1 argument(s) is provided by both Equatable.equals(other Self) returns bool and AlsoEquatable.equals(other Self) returns bool through the constraints on type parameter 'T' — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints
 ```
 
-### A `static` requirement is NOT reachable through a type parameter (A2w)
+### A `static` requirement is NOT reachable through a type parameter
 
-A `static` member has no receiver, so a value of `T` cannot dispatch one — and until this code existed the
-resolver matched a requirement by NAME ALONE and bound the static's slot anyway, prepending a receiver the
-callee has no parameter for. **MEASURED on the program below: x64-windows compiled clean and returned 7 (the
-right answer, by ABI luck — the spurious receiver landed in an argument register the zero-parameter callee
-never read), while `--target=wasm32-wasi` compiled clean and then trapped `indirect call type mismatch` at
-runtime.** `call_indirect` checks the declared functype against the target's own, so wasm caught what x64's
+A `static` member has no receiver, so a value of `T` cannot dispatch one — a resolver matching a requirement
+by NAME ALONE would bind the static's slot anyway, prepending a receiver the callee has no parameter for.
+**On the program below, x64-windows would then compile clean and return 7 (the right answer, by ABI luck —
+the spurious receiver lands in an argument register the zero-parameter callee never reads), while
+`--target=wasm32-wasi` would compile clean and then trap `indirect call type mismatch` at runtime.**
+`call_indirect` checks the declared functype against the target's own, so wasm caught what x64's
 registers let slide: the slot's signature genuinely disagrees with the callee's.
 
 Neither existing message could be reused. E3036's is about an argument COUNT (it is what the same call shape
@@ -2195,15 +2190,15 @@ end 'main'
 9
 ```
 
-### The OPERATOR path had the SAME hole, one door over
+### The OPERATOR path has the SAME hole, one door over
 
 `witnessTargetIsProtocol` decides whether a constraint's `equals` IS `Equatable` by comparing the result
-type, the `throws` clause and the formals — and it did not compare the RECEIVER KIND, so a `static equals`
-passed a shape test the protocol's own instance method defines. **MEASURED on the program below with the
-comparison reached (`a.seed` 7, `b.seed` 1, so the answer is `false`): x64-windows compiled clean and
-returned `true` — the static impl read the RECEIVER as its `other`, not the right operand, a SILENT WRONG
-ANSWER — and wasm trapped `indirect call type mismatch`.** A static look-alike is no more `Equatable` than a
-throwing one or a wrong-arity one, so it takes the same E3005 those already take: the author's cure is the
+type, the `throws` clause, the formals — and the RECEIVER KIND, without which a `static equals` would pass a
+shape test the protocol's own instance method defines. **On the program below with the comparison reached
+(`a.seed` 7, `b.seed` 1, so the answer is `false`), x64-windows would compile clean and return `true` — the
+static impl reads the RECEIVER as its `other`, not the right operand, a SILENT WRONG ANSWER — and wasm would
+trap `indirect call type mismatch`.** A static look-alike is no more `Equatable` than a throwing one or a
+wrong-arity one, so it takes the same E3005 those take: the author's cure is the
 same sentence. Target-independent.
 
 <!-- test: where-clauses.error.static-operator-witness -->
@@ -2249,15 +2244,15 @@ end 'main'
 error E3005: <fragment>:29:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
 ```
 
-### The refusal must be the message the author GETS — three shapes that used to answer something else
+### The refusal must be the message the author GETS — three shapes that would otherwise answer something else
 
-The refusal above first shipped as a RECORDED diagnostic that left the parse running and handed the rejected
-`static` candidates back to the arity/ambiguity selection. It looked right on the one program that has a
-single static requirement, a matching argument count and nothing else wrong in the file — and on nothing
-else. **MEASURED, all three:** a wrong-arity call printed E3036's argument COUNT alone; two same-named
-statics printed E3114's *"Rename one requirement, or drop one of the constraints"* alone; and an unrelated
-later error anywhere in the file printed alone, because an aborted parse salvages the type names and drops
-the recorded diagnostics. Each of those is the sentence E3116's own registry entry says must **not** be the
+A RECORDED diagnostic that left the parse running and handed the rejected `static` candidates back to the
+arity/ambiguity selection would look right on the one program that has a single static requirement, a
+matching argument count and nothing else wrong in the file — and on nothing else. **All three of these would
+go wrong:** a wrong-arity call would print E3036's argument COUNT alone; two same-named statics would print
+E3114's *"Rename one requirement, or drop one of the constraints"* alone; and an unrelated later error
+anywhere in the file would print alone, because an aborted parse salvages the type names and drops the
+recorded diagnostics. Each of those is the sentence E3116's own registry entry says must **not** be the
 answer, and following any of them does not fix the program. The reject therefore THROWS, and these pin it.
 
 The count is what tells the two apart from a real arity error: the requirement is unreachable whatever the
@@ -2632,11 +2627,11 @@ end 'main'
 
 ### A `Self`-returning static dispatches through the constraints on the value it builds
 
-A `static function` has no `self`, so it used to carry no witness tables at all — and a static that
-built a `Self{…}` and called a constraint-dispatching method on it aborted the compiler:
+A `static function` has no `self`, so without a witness source a static that builds a `Self{…}` and
+calls a constraint-dispatching method on it would abort the compiler:
 `forwardCallerWitness: caller 'Map.init' carries 0 witness parameter(s) and was asked to forward slot 0
 to 'Map.upsert'`. A static that RETURNS its own type has the same witness source the layout descriptor
-already used — the concrete instance it builds — so it carries the block on the same terms.
+uses — the concrete instance it builds — so it carries the block on the same terms.
 `stdlib/Map.maxon`'s `static function init(…) returns Self` is this program.
 
 <!-- test: where-clauses.self-returning-static-dispatches-on-its-own-value -->
@@ -2677,8 +2672,8 @@ end 'main'
 ### Error: a static that does NOT return `Self` has no witness source
 
 The other half of the rule above, stated as a refusal rather than an abort. Threading the dictionary
-from the static CALL SITE's alias — `H.digestOf(41)` knows `H = Holder with Integer` — is the same
-"later slice" the layout descriptor's own static rule names.
+from the static CALL SITE's alias — `H.digestOf(41)` knows `H = Holder with Integer` — is outside this
+rule, as it is for the layout descriptor's own static rule.
 
 <!-- test: where-clauses.error.static-without-self-return-cannot-dispatch -->
 ```maxon
@@ -2710,9 +2705,9 @@ error E2015: specs/fragments/where-clauses/where-clauses.error.static-without-se
 ### An INTERFACE EXTENSION's method over a constrained conformer reserves that conformer's witnesses
 
 An extension method is monomorphized for ONE conformer, so it carries that conformer's witness block
-exactly as the conformer's own methods do — and the supply side always passed it, because
+exactly as the conformer's own methods do — and the supply side passes it, because
 `witnessConstraintsOfMethod` resolves a callee by its TYPE name whatever door the method came through.
-The body reserved none, so it read two argument registers it had never declared. `stdlib/Interfaces.maxon`'s
+A body that reserved none would read two argument registers it never declared. `stdlib/Interfaces.maxon`'s
 `extension Iterator`'s `advanceBy` is the reaching method.
 
 <!-- test: where-clauses.interface-extension-over-a-constrained-conformer -->

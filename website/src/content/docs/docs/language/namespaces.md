@@ -33,11 +33,18 @@ file** unless marked. Three modifiers widen that:
 | `export` | every file | yes (**E3092**, **E3093**) |
 | `public` | every file | no |
 
-The same modifiers apply to members inside a type, independently of the type's own visibility. An unmarked
-field is private to the type: reading or writing it anywhere else is **E3014**. An unmarked method or
-static member is private to the file, like a top-level declaration: calling it from another file is
-**E3008**. At most one modifier may be written;
+The same modifiers apply to members inside a type. An unmarked field is private to the type: reading or
+writing it anywhere else is **E3014**. An unmarked method or static member is private to the file, like a
+top-level declaration: calling it from another file is **E3008**. At most one modifier may be written;
 combining two is **E2001** (`'export' and 'public' cannot be combined`).
+
+**A type hides its members.** Where a type is not visible, nothing of it is: naming it is **E3008**
+(**E3088** for a `module` type), and so is reaching a member through a value of it — a value an exported
+function returns included. That covers its fields, methods, extension methods, accessors and statics, and
+the calls the language makes on the author's behalf: `toString` in an interpolation, `==` and `<`, the
+iteration a `for` performs, and a `match` over an enum or union value. A value held at an interface type that
+is visible answers that interface's requirements. The standard library follows the same rule: a library type
+or interface without `public` is hidden from a program.
 
 **A signature may not name a type less visible than the function itself.** Whoever may call a function has to
 be able to name what the call takes and gives back, so every type its parameters, its return type and its
@@ -127,8 +134,16 @@ function main() returns ExitCode
 end 'main'
 ```
 
-Qualification works for functions and typealiases (`lib.fmt.format(x)`, `50 as api.Score`). It never
-bypasses visibility. Types are referred to by their bare name.
+Qualification works for functions and for every kind of type name — typealiases, types, enums, unions and
+interfaces (`lib.fmt.format(x)`, `50 as api.Score`, `api.Point.origin()`) — at every position a type name
+is written: a declaration, a cast, a construction, a static call's base, a `throws`, `implements`, `where`
+or `extends` clause, and the head of a top-level constant's initializer. It never bypasses visibility: a
+type the referring file may not name is refused qualified exactly as it is bare.
+
+Two qualifiers are reserved. `export.X` names a declaration at the project root, and `stdlib.X` one in the
+standard library. A source directory that cannot be written as a qualifier is refused when the program is
+loaded, **E3182**: one whose name is not an identifier, such as `my-dir`, and a top-level one named
+`export`, `stdlib`, `runtime` or a keyword.
 
 ## Bare Names and Ambiguity
 
@@ -137,24 +152,40 @@ name is a candidate: a file-private function counts only in its own file and a `
 inside its subtree, and the candidate list an error prints names only visible ones. A bare call or a bare
 function value takes the type of the declaration it resolves to, and a function-backed enum case's function
 is resolved from the file that declares the enum, whichever file reads the case; a case that resolves to no
-single declaration is reported in that file. When several do:
+single declaration is reported in that file.
 
-- a declaration at the project root, or in an enclosing directory, takes precedence over one in a nested
-  directory, and a project declaration takes precedence over a standard-library one;
-- otherwise the reference is ambiguous. A function call is **E3095** in every form it takes — plain, under
-  `try`, or spawned with `async` (`Ambiguous bare-name call to 'describe':
-  multiple visible definitions found. Qualify with a directory name. Candidates: alpha.describe,
-  beta.describe`) — worded for a function value or an enum case's backing where the name is one, and a
-  typealias is **E3063** — in every alias form, including `export typealias Step = function(…) returns …`.
-  Qualify the name to resolve it — a call (`api.format(...)`), a function value
-  (`let f = api.format`) and a function-backed enum case (`plain = api.format`) all accept the qualified form.
+**A type name** — a typealias of any form, a type, an enum, a union or an interface — that reaches more than
+one declaration is ambiguous, **E3063**, unless the referring file declares the name itself: a file's own
+declaration always wins its bare name in that file. The standard library counts as one candidate and each
+project declaration as another, so a project's `export typealias StringArray` makes a bare `StringArray`
+ambiguous in every other file that sees both. The message lists the spellings that resolve it, a
+declaration at the project root as `export.Name`:
 
-Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.
+```text
+error E3063: app/main.maxon:7:11: Ambiguous type name 'StringArray': more than one visible declaration matches it. Qualify it as one of: lib.StringArray, stdlib.StringArray
+```
+
+The standard library's own files see only the library's declarations, and a type the compiler supplies — a
+byte-string literal's element type, for one — is always the library's.
+
+**A function name** that reaches several declarations resolves to one at the project root, or in an
+enclosing directory, over one in a nested directory, and to a project function over a standard-library one.
+Otherwise the call is ambiguous, **E3095**, in every form it takes — plain, under `try`, or spawned with
+`async` (`Ambiguous bare-name call to 'describe': more than one visible declaration matches it. Qualify it
+as one of: alpha.describe, beta.describe`) — worded for a function value or an enum case's backing where
+the name is one. A call (`api.format(...)`), a function value (`let f = api.format`) and a function-backed
+enum case (`plain = api.format`) all accept the qualified form.
+
+**Every candidate is nameable.** Two type declarations of one name that can both be named from outside
+their files may not share a directory: two typealiases are **E3061** and a pair involving a type, enum,
+union or interface is **E3006**, reported at the declaration. Two typealiases of one name in one file are
+**E3061** too. Declarations in different directories coexist — a typealias in one and a type in another
+included — and a file-private declaration coexists with anything, since only its own file can name it.
 
 Every typealias a `public` standard-library signature names is itself `public`, so a value can always be cast
 to the alias a library signature asks for (`x as ElementIndex`). A standard-library typealias with no modifier
 is private to its declaring file exactly as anyone's is — `Math.maxon`'s `SeriesTermLimit` is one — and
-naming it from another file is **E2003**.
+naming it from another file is **E3008**.
 
 ## Multi-Project Workspaces
 

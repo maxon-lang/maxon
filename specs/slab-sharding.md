@@ -9,7 +9,7 @@ category: system
 
 ## Documentation
 
-Since S5 the allocator is **per-P sharded**. Each processor (`SchedRuntime`'s P) owns its own mcache
+The allocator is **per-P sharded**. Each processor (`SchedRuntime`'s P) owns its own mcache
 ROW and is the sole writer of every span cached there, so the allocation fast path takes no lock. Three
 mechanisms make that safe, and each of them is reachable — in part — from an ordinary single-processor
 program, which is what the cases below drive:
@@ -20,31 +20,25 @@ program, which is what the cases below drive:
 | **the ownership stamp** | every span carries the P that owns it; a cached span owned by somebody else is a MISS, not something to pop |
 | **the remote-free queue** | a free by a P that does not hold the slot's span cached CAS-pushes it onto the SPAN's own Treiber stack; the chain is collected when a P takes that span off its class's list, when an exhausted span is relisted, and by the scavenger |
 
-⛔⛔ **THIS PARAGRAPH SAID A SPEC CASE COULD NOT SET `MAXON_MAX_PROCS`, AND THAT HAS EXPIRED** — the harness
-gained a per-case processor marker (`specs/sched-default-procs.md` owns it), and the default is now the
-machine's processor count rather than 1, so an unmarked case is already multi-processor on any ordinary
-host. The last case in this file uses that marker to pin ONE processor, which is a deliberate choice and not
-the old limitation.
+⚠ **NOTHING HERE TESTS TWO PROCESSORS, BECAUSE A COMMITTED CASE CANNOT.** A case can set its processor
+count — the harness has a per-case processor marker (`specs/sched-default-procs.md` owns it), and the default
+is the machine's processor count, so an unmarked case is already multi-processor on any ordinary host; the
+last case in this file uses that marker to pin ONE processor. But the multi-M properties need the OS to
+actually run a second machine while twelve harness workers compete for the box, and it sometimes does not:
+a multi-processor version of the last case fails intermittently at eight messages, and so does a version
+that WAITS for the property across up to 500 waves. `pin-matrix.sh:100-137` hits the same wall from the
+other side.
 
-⚠ **BUT THE SENTENCE'S CONCLUSION SURVIVES ITS REASON, AND THAT IS THE USEFUL PART.** Nothing here tests two
-processors, because a committed case cannot: the multi-M properties need the OS to actually run a second
-machine while twelve harness workers compete for the box, and it sometimes does not. MEASURED, twice, on
-this tree — a multi-processor version of the last case failed **1 run in 6** at eight messages, and failed
-1 in 6 again in a version that WAITED for the property across up to 500 waves. `pin-matrix.sh:100-137` had
-already hit the same wall from the other side.
-
-⚠ **AND THE OLD SENTENCE NAMED THE WRONG GATE.** It called `multicore-stress/alloc-torture.maxon` "the
-multi-processor gate", which EC10 ended: its work is `async`, an `async` frame is a coroutine of its caller,
-and that program now reads `workers=1` at every count — a fact this file's own later paragraphs already
-record. The multi-processor readings come from the SPAWN family (`service-torture`, `service-fanin-torture`)
+⚠ **`multicore-stress/alloc-torture.maxon` IS NOT THE MULTI-PROCESSOR GATE.** Its work is `async`, an
+`async` frame is a coroutine of its caller, and that program reads `workers=1` at every count. The
+multi-processor readings come from the SPAWN family (`service-torture`, `service-fanin-torture`)
 driven by `multicore-stress/pin-matrix.sh`, which runs standalone and sweeps the count.
 
 What a ONE-processor program CAN reach, and what each case below is for:
 
 * **the P-owned row.** A green-thread program runs its main thread as P[0], so every allocation a green
   thread makes goes through row 0 with a real owner stamped on the span — the refill, the eviction of a
-  drained span and the return of an emptied one all run against `owning_p` rather than against the
-  degenerate constant they used before S5.
+  drained span and the return of an emptied one all run against `owning_p`.
 * **the RAW row and its lock.** Everything a program allocates *before* its first `async` is allocated
   with no P at all, so those spans are owned by nobody and live on the raw row. Freeing one of them
   AFTER the scheduler exists takes the serialised path — the one arm of the lock an ordinary
@@ -56,14 +50,14 @@ What a ONE-processor program CAN reach, and what each case below is for:
   (`slabFreeOfParkedSpan`, exit 89) rather than writing through a recycled record.
 
 ⚠ **WHAT IS NOT REACHABLE FROM HERE, STATED SO NOBODY READS SILENCE AS COVERAGE**: the ownership gate
-actually REJECTING a span, two threads contending for the raw row, and — since EC8 — whether the traffic
-counters are stepped ATOMICALLY. Those need a second OS thread crediting the same word, and were verified
-by measurement instead — see `multicore-stress/`.
+actually REJECTING a span, two threads contending for the raw row, and whether the traffic
+counters are stepped ATOMICALLY. Those need a second OS thread crediting the same word, and are
+covered by `multicore-stress/` instead.
 
-⭐ **THE REMOTE-FREE TREIBER PUSH IS NOW COUNTABLE, WHICH IS NOT THE SAME AS BEING PINNED HERE.**
+⭐ **THE REMOTE-FREE TREIBER PUSH IS COUNTABLE, WHICH IS NOT THE SAME AS BEING PINNED HERE.**
 `__Builtins.slabRemoteFreeCount()` sums a per-P counter, so the road that `service-torture` and
-`service-fanin-torture` have driven since SV1 finally moves a number instead of being believed. ⚠ **The
-non-zero reading is `multicore-stress`'s and not this file's** — see the last case for the measurement that says why.
+`service-fanin-torture` drive moves a number. ⚠ **The
+non-zero reading is `multicore-stress`'s and not this file's** — see the last case for why.
 What this file pins is the counter's other edge: at one processor it must be exactly **0**, because a
 counter that answers non-zero where no free can cross is counting the wrong frees.
 
@@ -162,10 +156,10 @@ scheduler starts, and is only released afterwards. That is what puts a whole pop
 in front of a running scheduler, which no other case here does.
 
 ⚠ **WHAT IT CATCHES AND WHAT IT ONLY EXERCISES, because the difference is not visible from a green
-result.** It CATCHES a refill that fails to establish a span's owner (MEASURED: with the owner stamp
+result.** It CATCHES a refill that fails to establish a span's owner (with the owner stamp
 removed from `__slab_refill`, this case exits 89). It only EXERCISES the serialised arm of the lock: with
 one OS thread there is no second writer to race, so a build that took no lock at all would still pass
-here. That half is verified by measurement, not by this case.
+here. That half is not this case's to verify.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -333,8 +327,8 @@ before they were emptied — the combination the single-threaded scavenger cases
 ⚠ Two calls, because the granule grace releases nothing on the first: that is `slab-scavenger`'s rule,
 and it is restated here only to say that sharding did not change it.
 
-⚠ **THIS ONE IS COVERAGE, NOT A DISCRIMINATOR, AND SAYING SO IS THE POINT.** MEASURED against a compiler
-whose refill had been stripped of its owner stamp, the three cases above exit 89 and this one still PASSES
+⚠ **THIS ONE IS COVERAGE, NOT A DISCRIMINATOR, AND SAYING SO IS THE POINT.** Against a compiler
+whose refill is stripped of its owner stamp, the three cases above exit 89 and this one still PASSES
 — its population is large enough that almost every span it touches is freshly CUT rather than taken back
 off mcentral, and a freshly cut span's header is zeroed, which reads as a valid "no owner". It earns its
 place by driving the destruction over spans a processor owned; it does not stand in for the cases above.
@@ -384,7 +378,7 @@ end 'main'
 
 <!-- test: slab-sharding.the-traffic-counters-are-exact-across-green-threads -->
 **THE COUNTERS, READ THROUGH THE SHARDED ALLOCATOR.** Every traffic column an emitted program keeps is
-stepped inside `__mm_alloc`/`__mm_free`, which since EC8 reach their slot through a `__slab_alloc` that
+stepped inside `__mm_alloc`/`__mm_free`, which reach their slot through a `__slab_alloc` that
 carries the class lookup, the processor read, the shard row, the state region and the pop in ONE body
 — and a SHARDED build's copy of that body is a different emission from the single-threaded one (it
 carries the ownership gate, the remote drain and the lock arm). This drives two waves of green-thread
@@ -399,32 +393,26 @@ inequality with a fudge factor.
 ⚠⚠ **WHAT THIS DOES NOT PIN, BECAUSE THE HARNESS CANNOT: THE `lock` PREFIX.** The traffic columns are
 per-row: a P steps its own row plainly and the shared raw row is stepped with an `atomicRmw` once a
 scheduler exists (`SlabRuntime.emitSlabTrafficCredit`), and telling a plain step from an atomic one needs
-a second P-less thread crediting the raw row at the same instant — which needs more than one processor. ⛔ This used to add *"which a spec case cannot set"*, and that expired when the
-per-case processor marker landed: a case CAN ask for four now, and the case at the end of this file does.
+a second P-less thread crediting the raw row at the same instant — which needs more than one processor. A case CAN ask for four, and the case at the end of this file does.
 At one processor the plain form
-is exact too, so this case passes either way and does not claim otherwise. That half is measured with
-`multicore-stress/alloc-torture.maxon` across `MAXON_MAX_PROCS ∈ {1, 2, 4, 12}`, where the leak gate (exit 101) IS
-the lost-update oracle — EC8 measured it clean with the atomic and exit 101 at 2, 4 and 12 with the
-atomic forced off, which is the positive control this case cannot be.
+is exact too, so this case passes either way and does not claim otherwise.
 
-⛔ **THAT MEASUREMENT STANDS AS HISTORY AND CANNOT BE RE-TAKEN ON THIS TREE (EC10).** `alloc-torture`
-reached a second M by spawning `async` tasks the scheduler handed to worker Ms; since `async` became a
-coroutine of its calling green thread its tasks never leave that one green thread, which runs on one M at a
+⛔ **`multicore-stress/alloc-torture.maxon` DOES NOT PIN IT EITHER.** An `async` task is a coroutine of its
+calling green thread, so its tasks never leave that one green thread, which runs on one M at a
 time — a preemption can move it to another, but never runs it on two — and a run as short as this one's
-reads `workers=1` at every `MAXON_MAX_PROCS`. It still proves determinism and leak-freedom; it no longer
-discriminates the `lock` prefix, because no column is ever credited by two machines at once. ⚠ **This does
-NOT mean the raw row went plain** — its step is atomic wherever the scheduler word is non-zero, and the
-system monitor steps it whatever `async` does. It means the ORACLE for that arm is waiting on
-`spawn`, which is where a second M comes back.
+reads `workers=1` at every `MAXON_MAX_PROCS`. It proves determinism and leak-freedom; it does not
+discriminate the `lock` prefix, because no column is ever credited by two machines at once. ⚠ **This does
+NOT mean the raw row is stepped plainly** — its step is atomic wherever the scheduler word is non-zero, and the
+system monitor steps it whatever `async` does. It means the ORACLE for that arm needs
+`spawn`, which is where a second M comes from.
 
-⚠⚠ **`spawn` HAS LANDED, AND THIS DEBT IS THEREFORE DISCHARGEABLE AND NOT DISCHARGED — SAID PLAINLY SO IT
-IS NOT READ AS PAID.** The condition the paragraph above names as missing is available today: a spawned
+⚠⚠ **THAT ORACLE IS DISCHARGEABLE AND NOT DISCHARGED — SAID PLAINLY SO IT
+IS NOT READ AS PAID.** A spawned
 program at four processors really does put two Ms on one column. What the case at the end of this file adds
 is NOT that — it observes that the remote-free ROAD IS TAKEN (`slabRemoteFreeCount() > 0`), which is a
 different subject from whether a contended column loses an update. ⇒ **the `lock`-prefix oracle is still
 owed**, and what it needs is this case's two waves driven by `spawn` rather than `async`, with the atomic
-forced off as the positive control that `alloc-torture` used to be. Whoever writes it should read EC8's
-measurement first: exit 101 at 2, 4 and 12 with the atomic off, clean with it on.
+forced off as the positive control, where the leak gate (exit 101) is the lost-update oracle.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Count = int(0 to 65536)
@@ -488,12 +476,11 @@ end 'main'
 
 <!-- test: slab-sharding.a-local-free-is-never-counted-as-a-remote-one -->
 <!-- procs: 1 -->
-⭐ **`__Builtins.slabRemoteFreeCount()` EXISTS BECAUSE THE CROSS-P FREE HAD PRODUCERS AND NO OBSERVER.** A
+⭐ **`__Builtins.slabRemoteFreeCount()` IS THE CROSS-P FREE'S OBSERVER.** A
 box `main` allocates and a `spawn`ed service drops is released by whichever machine ran that receiver —
 `SlabRuntime`'s remote-free road, a CAS push onto the SPAN's own Treiber stack, credited to the PUSHER. So
 what it counts is frees PERFORMED across processors rather than frees received. `service-torture` and
-`service-fanin-torture` drive thousands of those, and `multicore-stress/README.md` said what that was worth: the road
-was **exercised but not observed**. This counter is the observation; it is per-P and summed like
+`service-fanin-torture` drive thousands of those, and this counter is what observes them; it is per-P and summed like
 `schedStealCount()`, so it costs no `.data` word and no golden churn.
 
 ⭐⭐ **WHAT THIS CASE PINS IS THE HALF THAT IS DETERMINISTIC: AT ONE PROCESSOR THE ANSWER IS EXACTLY ZERO.**
@@ -502,14 +489,13 @@ counting the wrong frees — which is a real defect and the one this case exists
 spawn-and-move traffic the multi-processor reading uses, so the boxes genuinely travel between green
 threads; what they cannot do at one processor is travel between MACHINES.
 
-⛔⛔ **THE OTHER HALF — "a remote free ACTUALLY HAPPENS" — IS NOT A SPEC CASE, AND THAT WAS MEASURED RATHER
-THAN ASSUMED.** Two versions were written and both were flaky under suite load: eight messages failed 1 run
-in 6, and so did a version that **waited** for the property, sending up to 500 waves and stopping the instant
-a box crossed. The reason is structural, not a matter of scale: `main` sends and then awaits, so once `main`
+⛔⛔ **THE OTHER HALF — "a remote free ACTUALLY HAPPENS" — IS NOT A SPEC CASE.** A case for it is flaky
+under suite load, even one that **waits** for the property, sending up to 500 waves and stopping the instant
+a box crosses. The reason is structural, not a matter of scale: `main` sends and then awaits, so once `main`
 parks its own machine runs the receivers unless a worker M steals one first — and whether the OS
 schedules that worker while twelve harness workers are competing is not something the program decides.
-`pin-matrix.sh:100-137` had already measured the same wall from the other side: at total CPU saturation
-*both* 400 and 4,000 rounds failed 40 of 40, and *"no program-side change can fix that"*.
+`pin-matrix.sh:100-137` hits the same wall from the other side: at total CPU saturation
+*"no program-side change can fix that"*.
 
 ⇒ **A committed case that needs the OS to co-operate is a flake, so the multi-M reading lives in `multicore-stress/`**,
 which runs standalone rather than under a twelve-way load, sweeps the processor count, and already asserts

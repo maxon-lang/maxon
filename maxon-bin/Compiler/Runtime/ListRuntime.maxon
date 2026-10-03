@@ -56,7 +56,7 @@
 // `__list_node_decref` reads the NODE's copy, because a node can outlive the record (see the node block).
 //
 // ⭐ **AN OPAQUE `T` ELEMENT FILLS THE SAME WORD FROM THE ENCLOSING INSTANCE'S LAYOUT DESCRIPTOR AT RUN TIME**
-// (`destroyFunc@40`, W134) rather than from a compile-time stamp — one compiled body, a per-instantiation
+// (`destroyFunc@40`) rather than from a compile-time stamp — one compiled body, a per-instantiation
 // destructor, and 0 for a trivial instantiation, which is the very value the walk already skips on. Nothing
 // below reads the word differently: it was always a run-time read.
 //
@@ -145,9 +145,8 @@ export let ListNodeBytes = 40 as ParsedInt
 // ⚠ **NEITHER OF THE TWO SPANS THIS FILE ALLOCATES CARRIES AN `__mm_alloc` DESTRUCTOR**, and the reason is
 // the same for both: what each owns is reachable only from a walk this file writes, never from a generic
 // reclaim. A NODE's element is dropped by `__list_node_decref` at the node's LAST owner, which frees the
-// node span in the same block; the RECORD's chain is walked by `__list_decref`. So both pass the `Array`
-// element buffer's `0`, which is what `TrivialElementDestroy` names — a second local spelling of that same
-// zero would be one number with two homes.
+// node span in the same block; the RECORD's chain is walked by `__list_decref`. So both pass
+// `TrivialDestructor` — a second local spelling of that zero would be one number with two homes.
 //
 
 // The runtime entry points. `__`-prefixed (`isCompilerInternalCallee` routes their calls past the
@@ -268,7 +267,7 @@ export let ListNodeDecrefName = b"__list_node_decref"
 let ListFromName = b"__list_from"
 
 // ⭐⭐ **THE CHAIN'S DEEP COPY — `__list_clone(list) -> newList` and `__list_clone_managed(list, cloneFn) ->
-// newList` (W173).** The managed record's `__managed_clone` / `__managed_clone_managed` one STRUCTURE over: a
+// newList`.** The managed record's `__managed_clone` / `__managed_clone_managed` one STRUCTURE over: a
 // chain owns a record, a node per element and — when the element is managed — each node's element, and none of
 // that is reachable from a byte blit. So a copy of a chain is a WALK, for the same reason a managed-element
 // array's is: duplicating the record pointer would give `__list_decref` two owners for one chain and tear it
@@ -469,13 +468,7 @@ export function installListRuntime(module StdModule, usage RuntimeUsage)
 		let named = isThrowingListRuntimeCallee(func.name)
 		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
 
-		if stamped and not named 'stampedNotNamed'
-			panic("installListRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingListRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted")
-		end 'stampedNotNamed'
-
-		if named and not stamped 'namedNotStamped'
-			panic("installListRuntime: isThrowingListRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted")
-		end 'namedNotStamped'
+		requireThrowsStampMatchesPredicate("installListRuntime", predicate: "isThrowingListRuntimeCallee", callee: func.name, stamped: stamped, named: named)
 
 		if named 'hasSourceMethod'
 			requireQuotableSourceSpelling(listAccessorSourceMethodName(func.name), callee: func.name)
@@ -486,7 +479,7 @@ end 'installListRuntime'
 // `__list_create(elementDrop) -> listPtr` — an empty list carrying its per-element destructor. `head`/`tail`/
 // `count` come zeroed from `__mm_alloc`, so only the stamp is written.
 function buildListCreate(module StdModule)
-	var func = IrFunction.createFromStd(ListCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -494,7 +487,7 @@ function buildListCreate(module StdModule)
 	let elementDrop = 0 as ValueId
 
 	let recordSize = emitConst(module, block: entry, value: ListRecordBytes as ParsedInt, ids: ids)
-	let recordDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
+	let recordDtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
 	let record = ids.mint()
 	emitMmAllocCall(module, block: entry, result: record, size: recordSize, destructor: recordDtor, tag: mmTagIndex(MmTag.ListRecord), ids: ids)
 	emitStoreField(module, block: entry, record: record, offset: ListElementDropOffset, value: elementDrop)
@@ -516,7 +509,7 @@ end 'buildListCreate'
 // called by `__list_node_decref` — but the header slot is inert in the compiler (nothing dispatches it), so
 // passing it there would be a leak that compiles.
 function buildListNodeAlloc(module StdModule)
-	var func = IrFunction.createFromStd(ListNodeAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListNodeAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -525,7 +518,7 @@ function buildListNodeAlloc(module StdModule)
 	let value = 1 as ValueId
 
 	let nodeSize = emitConst(module, block: entry, value: ListNodeBytes, ids: ids)
-	let nodeDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
+	let nodeDtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
 	let node = ids.mint()
 	emitMmAllocCall(module, block: entry, result: node, size: nodeSize, destructor: nodeDtor, tag: mmTagIndex(MmTag.ListNode), ids: ids)
 	emitStoreField(module, block: entry, record: node, offset: ListValueOffset, value: value)
@@ -539,7 +532,7 @@ end 'buildListNodeAlloc'
 // complexity `/specs/list.md` states for indexed access. See its name's declaration for why it bounds-checks
 // nothing and why three entries share it rather than each carrying a walk.
 function buildListNodeAt(module StdModule)
-	var func = IrFunction.createFromStd(ListNodeAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListNodeAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -578,7 +571,7 @@ end 'buildListNodeAt'
 
 // `__list_count(list) -> i64` — the live element count, one field read.
 function buildListCount(module StdModule)
-	var func = IrFunction.createFromStd(ListCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -597,7 +590,7 @@ end 'buildListCount'
 // count is the field every other entry maintains and the one `__list_clear` zeroes, so a predicate reading a
 // second field would be a second definition of "empty" that nothing holds to the first.
 function buildListIsEmpty(module StdModule)
-	var func = IrFunction.createFromStd(ListIsEmptyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListIsEmptyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -619,11 +612,8 @@ function buildListIsEmpty(module StdModule)
 end 'buildListIsEmpty'
 
 // ⭐ **ONE MORE ELEMENT, OR ONE FEWER — the count read-modify-write every linking and unlinking entry ends
-// with.** It was written out longhand at THREE sites before spec-port `list` (the end-insertion publish,
-// `__list_remove_first` and the arbitrary-node unlink), which is one fact — *"`count@16` is the live element
-// count and every structural change adjusts it by one"* — transcribed once per operation. Homing it is what
-// let the entries that rung ADDED (`__list_remove_last`, which shares the removal shape, and the interior arm
-// of `__list_insert`, which shares nothing else) inherit the fact rather than restate it.
+// with.** One fact — *"`count@16` is the live element count and every structural change adjusts it
+// by one"* — homed once, so every linking and unlinking entry inherits it rather than restating it.
 function emitListCountDelta(module StdModule, block IrBlock, list ValueId, opcode StdBinOpcode, ids ValueMinter)
 	let count = emitLoadField(module, block: block, record: list, offset: ListCountOffset, ids: ids)
 	let one = emitConst(module, block: block, value: 1, ids: ids)
@@ -748,7 +738,7 @@ end 'emitListClearsNodeLinks'
 // `value` is MOVED in: a managed element's sole owner becomes this list, and `__list_decref` is what
 // eventually drops it. There is no incref here and none is owed: the element is move-only.
 function buildListEndInsert(module StdModule, name ByteArray, nearEnd ByteOffset, farEnd ByteOffset, outward ByteOffset, inward ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -790,7 +780,7 @@ end 'buildListEndInsert'
 // would have to answer for the element, and this is not one (`RuntimeAbort.managedListNodeNotInThisChain`
 // carries the reasoning and the open semantic question).
 function buildListInteriorInsert(module StdModule, name ByteArray, forward ByteOffset, backward ByteOffset, farEnd ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -872,7 +862,7 @@ end 'buildListPrepend'
 // ⚠ **`value` IS MOVED IN**, exactly as it is at either end — the parser's `parseContainerElementArg` has
 // already taken the reference, and the node is minted here by the same `__list_node_alloc`.
 function buildListInsert(module StdModule)
-	var func = IrFunction.createFromStd(ListInsertName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(ListInsertName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -893,12 +883,12 @@ function buildListInsert(module StdModule)
 	let outOfRange = emitBoundaryPositionOutOfRange(module, block: entry, position: index, length: count, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: inRange.id))
 
-	// ⛔⛔ **THE REFUSAL STILL OWNS THE ELEMENT IT WAS HANDED, AND SHIPPING THIS ARM WITHOUT THE DESTROY WAS
-	// A LEAK (found in review of spec-port `list`).** `parseArraySet` calls `moveElementIntoContainer` BEFORE
+	// ⛔⛔ **THE REFUSAL STILL OWNS THE ELEMENT IT WAS HANDED, AND THIS ARM WITHOUT THE DESTROY IS A
+	// LEAK.** `parseArraySet` calls `moveElementIntoContainer` BEFORE
 	// this call is emitted, so from that point the callee owns the value and the caller's scope-exit drop is
-	// suppressed; on this arm no node is ever linked, so nothing else would ever drop it. Exactly
-	// `__managed_set`'s R4.6 defect, in the entry that reached the same parser shape three containers later —
-	// which is why the cure is that entry's `emitDestroyRejectedElement`, called, and not a copy of it.
+	// suppressed; on this arm no node is ever linked, so nothing else would ever drop it. `__managed_set`
+	// has the same shape, which is why the cure is that entry's `emitDestroyRejectedElement`, called,
+	// and not a copy of it.
 	//
 	// ⚠ **THE SPEC'S OWN FOUR `insert` CASES CANNOT CATCH IT**: all four use `int` elements, where
 	// `moveElementIntoContainer` takes its trivial arm and the callee owns nothing. `list-refused-insert-
@@ -1026,7 +1016,7 @@ end 'emitListUnlinkNodeFrom'
 // the second call a no-op instead of a relink of stale neighbours. Where `remove_first` throws (an EMPTY
 // list has no head), this one is handed the node.
 function buildListUnlinkNode(module StdModule, name ByteArray, movesElementOut bool)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1129,7 +1119,7 @@ end 'buildListDetachNode'
 // cross-chain move well defined where `insertAfter`'s cross-chain SPLICE is not: this repairs the header of
 // the chain the node is actually in, and that chain is the one the node names.
 function buildListReinsert(module StdModule, name ByteArray, nearEnd ByteOffset, farEnd ByteOffset, outward ByteOffset, inward ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1187,7 +1177,7 @@ end 'buildListReinsertLast'
 // overwrites, so a store-then-drop would drop whatever was just written. `emitDropNodeElement` reads
 // `value@16` itself, so the ordering is not a rule to remember — the helper cannot see the new value at all.
 function buildListNodeSetValue(module StdModule)
-	var func = IrFunction.createFromStd(ListNodeSetValueName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListNodeSetValueName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1216,7 +1206,7 @@ end 'buildListNodeSetValue'
 // named for neither: a chain and a node are both one `i64` here, and the four instantiations below are the
 // only place the pairing of offset to receiver is written down.
 function buildListCheckedNavigator(module StdModule, name ByteArray, offset ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1273,7 +1263,7 @@ end 'buildListNodePrevChecked'
 // (`buildListNodeDecref`). A node a handle still holds walks out of here ALIVE, still holding its value —
 // which is what a `clear()` followed by a read through a surviving handle asserts.
 function buildListClear(module StdModule)
-	var func = IrFunction.createFromStd(ListClearName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListClearName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1322,7 +1312,7 @@ end 'buildListClear'
 // The result is a BORROW: the list keeps the element, and the NODE holding it destroys it when its last owner
 // goes (`__list_node_decref`) — exactly as `__managed_first` yields.
 function buildListEndAccessor(module StdModule, name ByteArray, endOffset ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1378,7 +1368,7 @@ end 'emitListCheckedNodeAt'
 // `__list_get(list, index) -> (value, flag)` — the element at `index`. A BORROW, like `first`/`last`: the
 // list keeps the element. Throws `indexOutOfBounds` for a negative index or one at/past `count`.
 function buildListGet(module StdModule)
-	var func = IrFunction.createFromStd(ListGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(ListGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1405,7 +1395,7 @@ end 'buildListGet'
 // It is also what gives this `List` entry the refcounted teardown and the `owner@32` gate for free, which is
 // what a second hand-written unlink here would have had to restate.
 function buildListRemoveAt(module StdModule)
-	var func = IrFunction.createFromStd(ListRemoveAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(ListRemoveAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1455,7 +1445,7 @@ end 'buildListRemoveAt'
 // arbitrary-node unlink must ask each side whether it exists and which chain owns it. What it does not know —
 // and what `__list_remove_node` does — is that the node is in the list at all, which is why this one throws.
 function buildListEndRemove(module StdModule, name ByteArray, nearEnd ByteOffset, farEnd ByteOffset, outward ByteOffset, inward ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1521,7 +1511,7 @@ end 'buildListRemoveLast'
 // field it reads. ⚠ **`__list_node_value` LEFT THIS SHAPE**: an element slot can be EMPTY where a link word
 // simply reads 0, so that entry is a guard and not a field read — see `buildListNodeValue`.
 function buildListFieldRead(module StdModule, name ByteArray, offset ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1564,7 +1554,7 @@ end 'buildListHead'
 // that answers on every element read of every list loop, and the drop slot is never loaded on the path
 // where it already holds something.
 function buildListNodeValue(module StdModule)
-	var func = IrFunction.createFromStd(ListNodeValueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListNodeValueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1612,7 +1602,7 @@ end 'buildListNodeNext'
 // ⚠ **THE ELEMENT DROP ITSELF IS `emitDropNodeElement`'s**, because `setValue` releases an element by the
 // same rule and through the same stamp — see that helper.
 function buildListNodeDecref(module StdModule)
-	var func = IrFunction.createFromStd(ListNodeDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListNodeDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1678,7 +1668,7 @@ end 'emitDropNodeElement'
 // assumption: a `List` element is a managed pointer or a machine-word int, and a narrower element (a `Byte`)
 // is refused at the construction with a positioned E2015.
 function buildListFrom(module StdModule)
-	var func = IrFunction.createFromStd(ListFromName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListFromName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1738,7 +1728,7 @@ function buildListClone(module StdModule, name ByteArray, clonesElements bool)
 		paramTypes.push(StdType.i64)
 	end 'perElementCloner'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramTypes.count() as ParamCount, paramTypes: paramTypes, returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramTypes.count() as ParamCount, paramTypes: paramTypes)
 
 	// ⚠ **BOTH ENTRIES RESERVE TWO PARAMETER ID SLOTS**, so `cloneFn` below is either parameter 1 or nothing at
 	// all. `ValueMinter.create(paramTypes.count())` would have made that id the trivial entry's FIRST MINTED
@@ -1906,7 +1896,7 @@ end 'emitListElementWalk'
 // thing a chain teardown cannot afford to get wrong. The last owner therefore empties the header it is
 // about to free — three stores it does not need, against a duplicated walk it would have had to maintain.
 function buildListDecref(module StdModule)
-	var func = IrFunction.createFromStd(ListDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ListDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

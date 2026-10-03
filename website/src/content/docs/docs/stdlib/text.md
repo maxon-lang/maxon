@@ -283,7 +283,7 @@ It is what the `String` trimming methods take.
 | `CharacterSet.punctuation()` | Punctuation (P\*) |
 | `CharacterSet.symbols()` | Symbols (S\*) |
 | `CharacterSet.controlCharacters()` | Control and format characters (Cc, Cf) |
-| `CharacterSet.from(chars Set with Character)` | Exactly the characters given |
+| `CharacterSet.from(chars CharSet)` | Exactly the characters given; `CharSet` is `Set with Character` |
 
 | Member | Returns | Description |
 |--------|---------|-------------|

@@ -11,9 +11,7 @@ category: type-system
 
 `Self` names the type whose body encloses it. `specs/self-keyword.md` covers it in a **type**
 position (`returns Self`, `other Self`) and every struct spec in the corpus covers `Self{…}`, the struct
-literal. This file pins the third position — `Self` as the **base of a dotted expression** — which no
-`/specs` file exercises at all: a search of the whole 284-file corpus for `Self.` finds **zero** hits,
-in either the reference corpus or `specs`.
+literal. This file pins the third position — `Self` as the **base of a dotted expression**.
 
 The rule is that there is no rule of its own: **`Self.<member>` means exactly what the enclosing type's
 own NAME means there.** Inside `enum Toggle`, `Self.off` IS `Toggle.off`; inside `type Gate`,
@@ -22,12 +20,8 @@ report the same diagnostic on the same token — the parser resolves the keyword
 the ONE place a type-named form reads its base (`Parser.typeBaseTokenAt`), and no arm downstream knows
 the keyword exists.
 
-⚠ **Before D9, `Self` in an expression could be exactly one thing — `Self{…}` — and `Self.` fell off
-that single expectation in two directions.** In a `type` body it surfaced as `E2010 Expected '{' but got
-'.'`; in an `enum` body it routed on into the struct literal's constructibility check and took the
-compiler down with a **panic** that named an `enum` a `type` and blamed a declaration-sweep
-disagreement that had not happened. Both programs are legal Maxon and the reference bootstrap runs both
-(measured: each returns 42).
+⚠ **`Self` in an expression is not only `Self{…}`.** `Self.` is legal Maxon in a `type` body and in an
+`enum` body alike, and neither is a struct literal with its `{` missing.
 
 ⚠ **A struct literal naming an `enum`/`union` is refused HERE rather than crashing**, and that is the
 second half of the same door: `Self{…}` (and the `Toggle{…}` spelling of it) inside `enum Toggle`'s own
@@ -35,21 +29,14 @@ body is the only place the struct-literal path can be asked for a layout no `typ
 no prior spelling to match, so the refusal names the cure instead.
 
 ⚠ **A static call in STATEMENT position stays refused, for `Self` exactly as for a type name.**
-`Gate.make(1)` on a line of its own discards a box nothing would then free; the reference bootstrap
-refuses the `Self` spelling too (`E2001 unexpected token: 'Self'`). Both spellings are pinned below so
-that a rung which opens one cannot leave the other behind.
-
-Every case below was a **hand probe first** (D9, 2026-07-30), and each was run against the reference
-bootstrap as well as against the compiler — the accepting ones agree with it on the exit code, and the two
-refusals it *also* refuses (`Self.nope` on an enum, `let Self = …`) agree with it character for
-character. The ones that found nothing are here for the reason `enum-union-method-receiver.md` gives:
-next rung, only a committed case still runs.
+`Gate.make(1)` on a line of its own discards a box nothing would then free. Both spellings are pinned
+below so that a change which opens one cannot leave the other behind.
 
 ## Tests
 
 <!-- test: enum-case-name-through-Self -->
 ### An enum CASE NAME through `Self`
-The panicking half of D9. `Self.off` is `Toggle.off`, in a comparison and in a `return`.
+`Self.off` is `Toggle.off`, in a comparison and in a `return`.
 ```maxon
 enum Toggle
 	off
@@ -77,7 +64,7 @@ end 'main'
 
 <!-- test: static-call-through-Self -->
 ### A qualified STATIC CALL through `Self`
-The `E2010` half of D9: `Self.make(self.n)` is `Gate.make(self.n)`.
+`Self.make(self.n)` is `Gate.make(self.n)`.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -194,8 +181,8 @@ end 'main'
 
 <!-- test: throwing-static-through-Self-under-try -->
 ### A THROWING static through `Self` as a `try` target
-A `try` target is its own dispatch position, and it admitted the type-named spelling only — so this
-program was `E2015 try must be applied to a call … (got 'Self')` for a call that is right there.
+A `try` target is its own dispatch position, so it must admit the `Self` spelling beside the type-named
+one — or this program is `E2015 try must be applied to a call … (got 'Self')` for a call that is right there.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -293,8 +280,8 @@ end 'main'
 
 <!-- test: Self-as-a-type-and-as-an-expression-base-in-one-body -->
 ### `Self` as a RETURN type, a PARAMETER type and an expression base, in one declaration
-The control for D9 and its widening in one program: the type positions must keep working unchanged
-while the expression position starts to.
+The control in one program: the type positions and the expression position must all work in one
+declaration.
 ```maxon
 enum Toggle
 	off
@@ -452,9 +439,8 @@ error E2015: <fragment>:3:10: Unsupported: 'Self' outside a type declaration (`S
 <!-- test: error.Self-static-call-as-a-statement -->
 ### A static call through `Self` on a line of its own is refused
 The `Self` base is not a statement shape at all — the parser's static-call door reads a plain identifier
-base, so the chain falls to the member-expression refusal. That is parity with the ORACLE, which has no
-grammar for this statement either (`E2001 unexpected token: 'Self'`), and not with the type-named
-spelling below, which IS a statement and is refused for its unused RESULT instead.
+base, so the chain falls to the member-expression refusal. The type-named spelling below differs: it IS
+a statement, and is refused for its unused RESULT instead.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -484,7 +470,7 @@ error E2015: <fragment>:12:3: Unsupported: Self statement
 The same call written `Gate.make(1)` IS claimed by the statement door, so what refuses it is the discard
 rule: `make` computes and returns without an effect, so its dropped result is E3064 — the anchor on the
 member the author wrote, and the callee named. The two spellings therefore earn two different refusals
-because they are two different mistakes, which is what the oracle says as well.
+because they are two different mistakes.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -511,7 +497,7 @@ error E3064: <fragment>:12:8: result of pure function 'Gate.make' must be used
 
 <!-- test: keyword-named-enum-case-through-Self -->
 ### A KEYWORD-named enum case through `Self`
-Where D9 crosses D8: a case may be spelled with a keyword, and `Self.while` has to read `while` as the
+Where `Self.` meets a keyword-named declaration: a case may be spelled with a keyword, and `Self.while` has to read `while` as the
 member name while `Self` is itself a keyword being read as a type name. Two keyword rewrites in one
 three-token expression.
 ```maxon
@@ -694,8 +680,6 @@ end 'main'
 ### `Self.` in a type declared in ANOTHER file
 The rewritten token's name is a slice of THIS file's source buffer and it feeds this file's own artifact
 interner, so a `Self.` resolved in one file must not leak an id the other file's merge cannot resolve.
-⚠ The reference bootstrap does not compile this program at all (`E4006 Unknown type 'Gate' in field
-access chain`) — a bootstrap gap in directory projects, not a divergence the compiler owes anything to.
 ```maxon
 // --- file: gate.maxon
 export typealias Num = int(0 to 1000)
@@ -723,8 +707,7 @@ end 'main'
 
 <!-- test: error.unknown-case-through-Self-on-an-enum -->
 ### A case that does not exist, named through `Self`
-The enum-side twin of the unknown-static refusal, and it is the reference bootstrap's diagnostic
-character for character — the `Self` spelling reaches the same `E3034` on the same column the
+The enum-side twin of the unknown-static refusal — the `Self` spelling reaches the same `E3034` on the same column the
 `Toggle.nope` spelling does.
 ```maxon
 enum Toggle
@@ -774,10 +757,8 @@ error E2015: <fragment>:9:10: Unsupported: a struct literal naming `enum`/`union
 
 <!-- test: error.bare-Self-in-an-expression -->
 ### A bare `Self` in an expression, with neither `{` nor `.`
-Now that `.` is handled, `{` genuinely IS the only continuation left — so the "Expected `{`" the D9 bug
-used to report for `Self.` becomes an honest message here rather than a misleading one. (The reference
-bootstrap reports `E3003 'Gate' is a type and cannot be used directly as a value` instead; both refuse,
-and the compiler's names the token it stopped at.)
+With `.` handled, `{` genuinely IS the only continuation left — so "Expected `{`" is an honest message
+here, and it names the token the compiler stopped at.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -800,14 +781,13 @@ error E2010: <fragment>:8:14: Expected '{' but got 'newline'
 <!-- test: error.Self-as-a-binding-name -->
 ### `Self` cannot be bound by a `let`
 A `let`/`var`, a `for … in` variable, a struct FIELD and a top-level binding each read their name with
-the strict identifier reader, so none of them can be spelled `Self`. The reference bootstrap's own words,
-character for character apart from its unquoted `identifier`.
+the strict identifier reader, so none of them can be spelled `Self`.
 
-⚠ **This is NOT what makes the arm order safe, and the D9 review had to correct that claim.** A function
-or closure PARAMETER *can* be named `Self` — a parameter's name may be spelled with a keyword (D8) — so a
+⚠ **This is NOT what makes the arm order safe.** A function
+or closure PARAMETER *can* be named `Self` — a parameter's name may be spelled with a keyword — so a
 binding named `Self` genuinely can exist and the scope test genuinely can find it. What makes `Self.`
 safe is the base position REFUSING to consult the value namespace about it
-(`Parser.baseNamesAValueInScope`); the cases below pin that, and the ones above pinned only the local
+(`Parser.baseNamesAValueInScope`); the cases below pin that, and the ones above pin only the local
 named after the enclosing type, which is a different question.
 ```maxon
 function main() returns ExitCode
@@ -821,19 +801,19 @@ error E2010: <fragment>:3:6: Expected identifier but got 'Self'
 
 <!-- test: parameter-named-Self-does-not-capture-a-static-call -->
 ### A PARAMETER named `Self` does not capture `Self.` — and `Self{…}` agrees with it
-⚠ **The D9 review's finding.** `Self` reached `parseDottedPrimary`'s value-based arms as a raw token, so a
-parameter named `Self` — which D8's keyword-as-a-declared-name rule admits — was found by the scope test
-and `Self.make(41)` was read as a METHOD CALL on that parameter: *"'int' has no method named 'make'"*. The
-same body's `Self{n: v}` meant the TYPE all along, because `parsePrimary`'s `selfType` arm claims `{`
-ahead of any scope test — so one function had `Self` meaning two different things three lines apart. The compiler
+⚠ **A parameter named `Self` — which the keyword-as-a-declared-name rule admits — is not consulted.**
+Were `Self` to reach `parseDottedPrimary`'s value-based arms as a raw token, the scope test would find the
+parameter and read `Self.make(41)` as a METHOD CALL on it: *"'int' has no method named 'make'"*. The same
+body's `Self{n: v}` means the TYPE, because `parsePrimary`'s `selfType` arm claims `{` ahead of any scope
+test — so that misread would have `Self` meaning two different things three lines apart. The compiler
 accepts `Gate{n: 1}.n` — a field access applied to a struct LITERAL — and reports
 `E3012 … unused variable: 'Self'`, exactly as on the two sibling cases below.
 
-⭐ **IT PINS `E3012`, AND THE MISREAD IT WAS WRITTEN FOR IS STILL WHAT IT TESTS.** A parameter named `Self`
+⭐ **IT PINS `E3012`, AND THE MISREAD IS WHAT IT TESTS.** A parameter named `Self`
 is never read — reading one is refused outright (`error.bare-Self-read-under-a-Self-named-parameter`) — so
 the NAME is the subject and `_` would delete the case. An unread parameter is `E3012` (see
 `unused-parameters`), a SEMANTIC error: reaching it proves both `Self.make(41)` and `Self{n: v}` resolved
-to the TYPE, because the misread was a refusal this program would never have got past.
+to the TYPE, because the misread would be a refusal this program could never get past.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -859,16 +839,16 @@ error E3012: <fragment>:11:16: unused variable: 'Self'
 
 <!-- test: parameter-named-Self-does-not-capture-an-enum-case -->
 ### A parameter named `Self` does not capture `Self.<case>` either
-The enum-side face of the same finding, and it took a different arm: an enum case reference is not a call,
-so it fell to the FIELD-ACCESS arm and reported *"a field access on 'Self', which is declared 'int' and
-not a struct type"* for a case that is right there in the enum.
+The enum-side face of the same rule, through a different arm: an enum case reference is not a call, so
+a misread would fall to the FIELD-ACCESS arm and report *"a field access on 'Self', which is declared
+'int' and not a struct type"* for a case that is right there in the enum.
 
-⭐ **IT NOW PINS `E3012`, AND THE MISREAD IT WAS WRITTEN FOR IS STILL WHAT IT TESTS.** A parameter named
+⭐ **IT PINS `E3012`, AND THE MISREAD IS WHAT IT TESTS.** A parameter named
 `Self` is never read — reading one is refused outright
 (`error.bare-Self-read-under-a-Self-named-parameter`) — so the NAME is the subject and `_` would delete the
 case. An unread parameter is `E3012` (see `unused-parameters`), a SEMANTIC error, so reaching it proves
-`Self.on` resolved to the enum case and not to the parameter: the old misread was a refusal this program
-would never have got past.
+`Self.on` resolved to the enum case and not to the parameter: the misread would be a refusal this program
+could never get past.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -928,15 +908,15 @@ error E3012: <fragment>:12:20: unused variable: 'Self'
 
 <!-- test: managed-payload-through-Self-under-a-Self-named-parameter -->
 ### A MANAGED payload through `Self` while a parameter shadows the name
-The refcount half: the misread base built the box through a different arm, so the drop site has to be
-confirmed under the shadow too.
+The refcount half: a misread base would build the box through a different arm, so the drop site has to
+be confirmed under the shadow too.
 
-⭐ **IT NOW PINS `E3012` RATHER THAN THE EXIT CODE, and the refcount half is what that costs.** A parameter
+⭐ **IT PINS `E3012` RATHER THAN AN EXIT CODE, and the refcount half is what that costs.** A parameter
 named `Self` is never read, so the name is the subject and `_` would delete the case; an unread parameter is
 `E3012` (see `unused-parameters`), and a program that does not compile cannot be run. What SURVIVES is the
 resolution under the shadow — E3012 is semantic, so reaching it proves `Self.text("hi")` bound the union
-case rather than the parameter. What is LOST is the drop-site confirmation, which needed the program to
-run: the managed-payload refcount under a `Self`-named parameter is now covered by no case at all.
+case rather than the parameter. What it cannot give is the drop-site confirmation, which needs the
+program to run: the managed-payload refcount under a `Self`-named parameter is covered by no case at all.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -964,11 +944,10 @@ error E3012: <fragment>:8:17: unused variable: 'Self'
 
 <!-- test: managed-payload-through-Self-runs-without-a-Self-named-parameter -->
 ### A MANAGED payload through `Self` — the RUNTIME half, with no shadowing parameter
-⭐ **THIS CASE EXISTS BECAUSE THE ONE ABOVE STOPPED RUNNING.** `managed-payload-through-Self-under-a-Self-named-parameter`
-now pins `E3012` (its parameter named `Self` is unread by construction, which is the whole subject), and a
-program that does not compile cannot check a refcount. That flip would otherwise have removed the LAST
-program reaching `Self.<case>(<managed payload>)` at run time — the exact way this repo has lost a
-mechanism's whole coverage before. The construction and the drop site are identical; only the shadowing
+⭐ **THIS CASE EXISTS BECAUSE THE ONE ABOVE DOES NOT RUN.** `managed-payload-through-Self-under-a-Self-named-parameter`
+pins `E3012` (its parameter named `Self` is unread by construction, which is the whole subject), and a
+program that does not compile cannot check a refcount. This is the program that reaches
+`Self.<case>(<managed payload>)` at run time. The construction and the drop site are identical; only the shadowing
 parameter is gone, so an unbalanced refcount here is still exit 101 rather than a wrong number.
 ```maxon
 typealias Num = int(0 to 100)
@@ -999,8 +978,7 @@ end 'main'
 ### A bare `Self` read is still refused when a parameter is named `Self`
 The other half of the rule, and the one that makes the parameter harmless rather than merely
 unreachable: `Self` alone is a TYPE in every expression position, so a parameter spelled that way can be
-declared and never read. The reference bootstrap refuses it too (`E3003 'Gate' is a type and cannot be
-used directly as a value`); The compiler names the token it stopped at.
+declared and never read. The compiler names the token it stopped at.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -1022,10 +1000,10 @@ error E2010: <fragment>:8:14: Expected '{' but got 'newline'
 
 <!-- test: enum-case-named-Self-through-Self -->
 ### An enum case NAMED `Self`, referenced through `Self`
-Where D8 and D9 cross at their sharpest: `Self.Self` reads the BASE as the enclosing type and the MEMBER
-as a case whose own name is the same keyword. Two different rules about one word in three tokens. Found
-nothing; committed because only a committed case still runs, and because a review that reserved `Self` at
-`requireUnreservedName` would have silently refused this program (it runs, exit 42).
+Where keyword-named declarations and `Self.` cross at their sharpest: `Self.Self` reads the BASE as the
+enclosing type and the MEMBER as a case whose own name is the same keyword. Two different rules about one
+word in three tokens. Reserving `Self` at `requireUnreservedName` would silently refuse this program (it
+runs, exit 42).
 ```maxon
 enum Kw
 	Self
@@ -1081,12 +1059,11 @@ end 'main'
 
 <!-- test: error.store-through-Self-is-not-captured-by-a-Self-named-parameter -->
 ### A STORE through `Self.` is refused the same way whether or not a parameter shadows the name
-The third door onto the shadowing rule, and the last one that was still shadowable: a chain store
-RESOLVES its base (it wants the binding's `VarInfo`, not a yes/no), so it carries its own copy of the
-scope test. With `bad(Self Gate)` in scope it resolved to the PARAMETER and reported *"cannot assign to
-immutable variable: 'Self'"*. No wrong answer was reachable through it — only a parameter may be named
-`Self` and a parameter is immutable, so the store could never have succeeded — but the rule then held at
-two doors of three. It now reports exactly what the `Gate.n = 5` spelling reports, on the same token.
+The third door onto the shadowing rule: a chain store RESOLVES its base (it wants the binding's
+`VarInfo`, not a yes/no), so it carries its own copy of the scope test. Resolved to the PARAMETER under
+`bad(Self Gate)`, it would report *"cannot assign to immutable variable: 'Self'"* — no wrong answer, since
+only a parameter may be named `Self` and a parameter is immutable, but the rule would hold at two doors of
+three. It reports exactly what the `Gate.n = 5` spelling reports, on the same token.
 ```maxon
 typealias Num = int(0 to 1000)
 

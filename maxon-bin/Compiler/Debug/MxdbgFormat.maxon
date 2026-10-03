@@ -23,7 +23,7 @@ let MxdbgMagicByte4 = 71
 // ⚠ A bump needs TWO self-compiles for the same reason an emitted-runtime change does: the first writes the
 // next compiler's sidecar stamped with the version it itself speaks, so between the two builds that
 // compiler's `--dump-info` refuses its own sidecar by name.
-module let MxdbgFormatVersion = 10
+module let MxdbgFormatVersion = 11
 
 // Appended to the binary's path WITH its extension still on: `foo.exe` -> `foo.exe.mxdbg`.
 export let MxdbgSidecarExtension = ".mxdbg"
@@ -184,6 +184,13 @@ export let MxdbgCovFlagArmImplicit = 8
 // counter, which means real code that never ran.
 module let MxdbgCovFlagEliminated = 16
 
+module let MxdbgEliminatedCoverageCodeOffset = 0 as MxdbgCodeOffset
+
+export union MxdbgCoverageCode
+	eliminated
+	at(offset MxdbgCodeOffset)
+end 'MxdbgCoverageCode'
+
 // One arm of a user `match`. ⛔ There is deliberately NO implicit counterpart: an `if` with no `else`
 // still takes a false edge, so that arm exists and is instrumented, whereas Maxon's `match` is
 // exhaustive and the fall-through past its last arm is unreachable. A flag that would always read the
@@ -291,7 +298,7 @@ export let MxdbgInlineSiteParent = 8
 
 export let MxdbgInlineSiteCallFileId = 12
 
-module let MxdbgInlineSiteCallLine = 16
+export let MxdbgInlineSiteCallLine = 16
 
 module let MxdbgInlineSiteCallCol = 20
 
@@ -307,9 +314,9 @@ export let MxdbgLineCodeOffset = 0
 
 module let MxdbgLineFileId = 4
 
-module let MxdbgLineLine = 8
+export let MxdbgLineLine = 8
 
-module let MxdbgLineCol = 12
+export let MxdbgLineCol = 12
 
 module let MxdbgLineFlags = 16
 
@@ -330,9 +337,10 @@ export typealias MxdbgRecordFigure = int(i32.min to i32.max)
 // to read the bytes at a local's location from this word alone, so a kind a reader does not know must
 // reach it as the raw number rather than be folded into one it does.
 //
-// `string` and `array` name the fused heap records; `managedRecord` is the 8-byte-pointer catch-all (an
-// interface value, a function value, an unresolved type parameter) that exists so a field or a local of
-// such a type has a valid `typeId` to point at.
+// `string` and `array` name the fused heap records; `function` is a function value's record, whose
+// fields are a closure's captures; `managedRecord` is the 8-byte-pointer catch-all (an interface
+// value, an unresolved type parameter) that exists so a field or a local of such a type has a valid
+// `typeId` to point at.
 export let MxdbgTypeKindPrimitive = 0 as MxdbgIndex
 export let MxdbgTypeKindIntRanged = 1 as MxdbgIndex
 export let MxdbgTypeKindFloatRanged = 2 as MxdbgIndex
@@ -343,6 +351,7 @@ export let MxdbgTypeKindString = 6 as MxdbgIndex
 
 export let MxdbgTypeKindArray = 7 as MxdbgIndex
 export let MxdbgTypeKindManagedRecord = 8 as MxdbgIndex
+export let MxdbgTypeKindFunction = 9 as MxdbgIndex
 
 export let MxdbgLocKindStackSlot = 0 as MxdbgIndex
 export let MxdbgLocKindRegister = 1 as MxdbgIndex
@@ -449,7 +458,7 @@ export function mxdbgFoldedAggregateWordCount(typeKind MxdbgIndex, fieldCount Mx
 end 'mxdbgFoldedAggregateWordCount'
 
 export function mxdbgTypeKindIsIndirect(kind MxdbgIndex) returns bool
-	return kind == MxdbgTypeKindStruct or kind == MxdbgTypeKindUnion or kind == MxdbgTypeKindString or kind == MxdbgTypeKindArray or kind == MxdbgTypeKindManagedRecord
+	return kind == MxdbgTypeKindStruct or kind == MxdbgTypeKindUnion or kind == MxdbgTypeKindString or kind == MxdbgTypeKindArray or kind == MxdbgTypeKindManagedRecord or kind == MxdbgTypeKindFunction
 end 'mxdbgTypeKindIsIndirect'
 
 // The word a type record's kind renders as. A kind this build does not know renders as its NUMBER, which
@@ -486,6 +495,10 @@ export function mxdbgTypeKindName(kind MxdbgIndex) returns String
 	if kind == MxdbgTypeKindArray 'array'
 		return "Array"
 	end 'array'
+
+	if kind == MxdbgTypeKindFunction 'functionValue'
+		return "Function"
+	end 'functionValue'
 
 	return "ManagedRecord" if kind == MxdbgTypeKindManagedRecord else "{kind}"
 end 'mxdbgTypeKindName'

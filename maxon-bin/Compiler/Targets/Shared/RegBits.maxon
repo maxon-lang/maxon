@@ -359,25 +359,22 @@ end 'popcountWord'
 // Physical-register masks (one bit per RegNum in the UNIFIED register file)
 // ==========================================================================
 
-// The width of the UNIFIED register file — one allocator serves both ISAs (USER RULING
-// 2026-07-17), so `RegNum`, the masks and the allocator's data structures are sized to the
-// WIDER of the two files. x64 has 32 registers (GPR 0..15, XMM 16..31); arm64 has 63 (GPR
-// x0..x30 = 0..30, SIMD d0..d31 = 31..62). So this is arm64's 63 — and, being one past the
-// last arm64 register AND above every x64 register, it is the "no register" SENTINEL that
-// `Uncolored` / `NoFixedHint` / `noRegister` share for BOTH ISAs.
+// The width of the UNIFIED register file — one allocator serves both ISAs (USER RULING), so
+// `RegNum`, the masks and the allocator's data structures are sized to the WIDER of the two
+// files. x64 has 32 registers (GPR 0..15, XMM 16..31); arm64 has 63 (GPR x0..x30 = 0..30, SIMD
+// d0..d31 = 31..62). So this is arm64's 63.
 //
 // ⚠ x64 uses only the low 32 of this file. It therefore OVER-SIZES a handful of allocator
-// scratch structures (the Hall census columns, `lowestClearRegister`'s scan) by a bounded
-// CONSTANT factor — the cost of one shared file. It changes NO x64 codegen: a value's pool is
-// its own class's registers (0..31 for x64), so `lowestClearRegister` never returns 32..62 and
-// no x64 op ever names one. Verified byte-identical against the committed x64 goldens.
+// scratch structures (the Hall census columns) by a bounded CONSTANT factor — the cost of one
+// shared file. It changes NO x64 codegen: a value's pool is its own class's registers (0..31 for
+// x64), so `lowestClearRegister` never returns 32..62 and no x64 op ever names one.
 //
 // ⚠ THIS IS NOT THE PER-TARGET FILE SIZE. The class masks and the enum-vs-file check ask a
 // SPECIFIC target's file (`RegisterFile.size` — 32 for x64, 63 for arm64), never this unified
 // width; using this here would put x64's XMM class mask at bits 16..62 and break the
 // caller-saved clobber assert. See `RegisterFile` and `classRegisterMask`.
 //
-// `RegNum`'s upper bound is this same 63, RESPELLED as a literal because a typealias range bound
+// `RegNum`'s upper bound is this minus one, RESPELLED as a literal because a typealias range bound
 // must be a literal (E2010) — a range cannot name a constant. It is the one copy NOTHING can
 // check: a range bound is erased into the range check itself and is readable by no expression, so
 // there is nothing to compare against. It moves BY HAND with this constant; the failure is at
@@ -471,17 +468,14 @@ export typealias RegCount = int(0 to u64.max) implements ElementIndex
 // A PHYSICAL REGISTER NUMBER: an `X64Register`'s raw value, and the key every register mask, the
 // coloring column and the parallel-move plans are stated in.
 //
-// BOUNDED BY THE UNIFIED REGISTER FILE, and the bound goes to `RegisterFileSize` INCLUSIVE — 63,
-// not 62 — because one-past-the-last-register is the "no register" value three sentinels share:
-// `lowestClearRegister`'s "every register is blocked", the colorer's `Uncolored`, and its
-// `NoFixedHint`. Admitting exactly that one extra value is what lets those sentinels live in the
-// same column as real registers without a second type. 63 covers arm64's SIMD d31 (62); x64 uses
-// only 0..31, and 63 is a valid sentinel for it too (no x64 register is that high).
+// BOUNDED BY THE UNIFIED REGISTER FILE: 62 is arm64's SIMD d31, the highest register either ISA
+// has, and x64 uses only 0..31. The range admits no "no register" value — that is an absent
+// `RegisterColumn` entry or a thrown `RegisterSearch`.
 //
-// It was `MachineWord` — the alias for a raw 64-bit word, which is also what a `movRegImm`
-// IMMEDIATE and a bitset WORD are. A register number and a 64-bit constant are not the same kind
-// of thing, and this is the narrowest range in the allocator, so it is the one worth stating.
-export typealias RegNum = int(0 to 63) implements ElementIndex
+// Not `MachineWord`, the alias for a raw 64-bit word, which is also what a `movRegImm` IMMEDIATE
+// and a bitset WORD are. A register number and a 64-bit constant are not the same kind of thing,
+// and this is the narrowest range in the allocator, so it is the one worth stating.
+export typealias RegNum = int(0 to 62) implements ElementIndex
 
 // The FIRST XMM's register number in the X64 file — its GPR/XMM boundary, and the bit that
 // classifies one x64 register. Named because `regClassOf` and `x64RegisterFile` would otherwise
@@ -524,12 +518,10 @@ export function assertRegisterFileMatchesEnum()
 		panic("assertRegisterFileMatchesEnum: x64RegisterFile().size is {x64File.size} but the X64Register enum has {X64Register.allCases.count()} cases — every x64 class mask is now the wrong width, so a register outside it is unaddressable and the caller-saved clobber assert drifts. Move x64RegisterFile().size and the enum together.")
 	end 'fileSize'
 
-	// The UNIFIED file must be wide enough to hold every target's registers AND the shared "no
-	// register" sentinel (`RegisterFileSize` itself). If it shrank below a target's file, that
-	// target's registers would be unaddressable by `fullRegisterMask` and its sentinel would collide
-	// with a real register.
+	// The UNIFIED file must be wide enough to hold every target's registers. If it shrank below a
+	// target's file, that target's registers would be unaddressable by `fullRegisterMask`.
 	if RegisterFileSize < x64File.size 'unifiedTooSmall'
-		panic("assertRegisterFileMatchesEnum: RegisterFileSize {RegisterFileSize} is smaller than the x64 file ({x64File.size}) — the unified register file must hold every target's registers plus the sentinel. Move RegisterFileSize and RegNum's bound together.")
+		panic("assertRegisterFileMatchesEnum: RegisterFileSize {RegisterFileSize} is smaller than the x64 file ({x64File.size}) — the unified register file must hold every target's registers, so a register above it is unaddressable by `fullRegisterMask`. Move RegisterFileSize and RegNum's bound (RegisterFileSize - 1) together.")
 	end 'unifiedTooSmall'
 
 	// ⭐ ASKED AS "THE REGISTER AT THE BOUNDARY IS xmm0", NOT AS A COMPARISON OF TWO NUMBERS — which is
@@ -662,20 +654,24 @@ export function regMaskLowest(mask RegMask) returns RegNum
 	return trailingZeroCount(mask as MachineWord) as RegNum
 end 'regMaskLowest'
 
-// The LOWEST register number (0..31) whose bit is CLEAR in `blocked`, or
-// `RegisterFileSize` (32) if every register is blocked. Picking a register is this
-// single call — no set iteration, no interference-graph neighbour walk.
+export enum RegisterSearch implements Error
+	everyRegisterBlocked
+end 'RegisterSearch'
+
+// Picking a register is this single call — no set iteration, no interference-graph neighbour walk.
 //
-// ⚠ It scans BOTH files, so `blocked` must already exclude the other class — the caller
+// ⚠ It reads BOTH files, so `blocked` must already exclude the other class — the caller
 // blocks everything outside the value's pool (`fullRegisterMask() and not pool`) and the
 // pool is class-filtered. Hand it a mask that does not, and it will hand back an XMM for
 // an int whose GPRs are all taken.
-export function lowestClearRegister(blocked RegMask) returns RegNum
-	for regNum in 0 upto RegisterFileSize 'scan'
-		if not regMaskContains(blocked, regNum: regNum) 'free'
-			return regNum
-		end 'free'
-	end 'scan'
+export function lowestClearRegister(blocked RegMask) returns RegNum throws RegisterSearch
+	if not hasAClearRegister(blocked) 'everyRegisterBlocked'
+		throw RegisterSearch.everyRegisterBlocked
+	end 'everyRegisterBlocked'
 
-	return RegisterFileSize
+	return regMaskLowest(fullRegisterMask() and not blocked)
 end 'lowestClearRegister'
+
+export function hasAClearRegister(blocked RegMask) returns bool
+	return (fullRegisterMask() and not blocked) != 0
+end 'hasAClearRegister'

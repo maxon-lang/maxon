@@ -33,9 +33,9 @@ two scratch cases ask two questions that only a reclaiming runtime answers toget
 | did the window take scratch from the allocator? | `mmRawAllocTotal` grew | yes — or it hid the population |
 | did it give the scratch back? | `mmRawAllocLive` did NOT grow | **no** — live tracks total exactly |
 
-Both halves are needed. `live` alone would pass against a runtime that allocated nothing in the
-window (the pre-S3 subprocess path, whose scratch was allocated once at init), and `total` alone
-would pass against the pre-S3 read probe, which allocated freely and released nothing.
+Both halves are needed. `live` alone would pass against a runtime that allocates nothing in the
+window (one whose scratch is allocated once at init), and `total` alone would pass against one that
+allocates freely and releases nothing.
 
 The GT-record case asks the recycling runtime's count instead: every spawn in the window was served
 from a free list rather than carving a fresh record, and the window took nothing from the allocator
@@ -59,9 +59,8 @@ through probes only x64-windows builds; the GT-struct case runs on every lane wi
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 **THE ~4.2 KB-PER-CALL DEBT.** `spawnReadLine` builds a pipe name, a `SECURITY_ATTRIBUTES`, a
 two-handle out-param block, a mutable command line, a `STARTUPINFOA`, a `PROCESS_INFORMATION` and a
-4 KiB read region — seven allocations, per call. Before S3 there were eight (the byte-count slot was
-its own) and not one of them was released, so a program that read from N children held N × ~4.2 KB it
-could never use again. Here three reads follow a warm-up: the allocator sees the traffic (`total`
+4 KiB read region — seven allocations, per call. Were they not released, a program that read from N
+children would hold N × ~4.2 KB it could never use again. Here three reads follow a warm-up: the allocator sees the traffic (`total`
 moves by at least three regions per read) and gets all of it back (`live` does not move by more than
 one region per read).
 
@@ -98,12 +97,11 @@ end 'main'
 
 <!-- test: runtime-scratch-reclaim.subprocess-scratch-returns -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-**THE THREE REUSED BUFFERS.** `__gt_process_run`'s scratch used to be three fixed regions taken at
-scheduler init and reused by every call, plus a grow-on-demand command-line buffer that abandoned
-its predecessor whenever a longer command appeared. The reuse was safe only because of an argument
-about the code — that a call writes and consumes its scratch inside a window with no yield in it —
-which is exactly the argument the read probe could not make and so did not use. With a free path
-each call takes its own and hands it back, and no two calls can share anything.
+**NO REUSED BUFFERS.** Fixed scratch regions taken at scheduler init and reused by every call
+would be safe only because of an argument about the code — that a call writes and consumes its
+scratch inside a window with no yield in it — which is exactly the argument the read probe cannot
+make. With a free path each `__gt_process_run` call takes its own scratch and hands it back, and no
+two calls can share anything.
 
 The two spawns in the window take their GT structs from the free list the warm-up filled, so every
 region the window counts is the runner's own scratch.

@@ -7,11 +7,11 @@
 // debuggers when debug symbols are present. `.data` is a WRITABLE section holding the
 // initial image of every top-level `var`. The `.rsrc` manifest opts every
 // produced binary out of Windows' UAC installer-detection heuristic (see buildRsrcSection).
-// The import table is MULTI-DLL — kernel32 and ws2_32, one thunk run,
+// The import table is MULTI-DLL — kernel32, ws2_32, ntdll and bcryptprimitives, one thunk run,
 // one directory entry and one Hint/Name region each, derived from `ImportDll` rather than from
 // a hard-coded count (see `ImportDll`, and `emittedDllCount` for the derivation). A `--coverage`
-// build's counters need no section of their own — they are a reserved run inside `.data`. The arm64
-// relocation paths are deferred to the arm64 milestone.
+// build's counters need no section of their own — they are a reserved run inside `.data`. The
+// writer is x64-only and takes no arm64 relocation.
 
 // A relative virtual address — an OFFSET from the image base, and a PE one is 32-bit, so it can
 // never carry bit 63. A coordinate, not a pattern.
@@ -114,10 +114,11 @@ enum ImportDll
 	ws2_32
 
 	// ⛔⛔ **`ntdll` IS A STATIC IMPORT AND THE RISK IS ACCEPTED — see `NtGetNextThread`'s own case for what
-	// that costs on a host whose ntdll lacks the export.** LAST, because the layout rule above is about the
-	// DLL BLOCK BOUNDARY: every slot of a DLL is contiguous, and a new DLL's run goes after every existing
-	// one so no existing slot changes its position within its own run.
+	// that costs on a host whose ntdll lacks the export.** A new DLL goes LAST, because the layout
+	// rule above is about the DLL BLOCK BOUNDARY: every slot of a DLL is contiguous, and a new DLL's
+	// run goes after every existing one so no existing slot changes its position within its own run.
 	ntdll
+	bcryptprimitives
 end 'ImportDll'
 
 let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
@@ -126,7 +127,7 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // The Win32 imports the emitted runtime needs. Each case is named EXACTLY as its Win32
 // symbol, so `.name` is the import string and `.ordinal` is the IAT slot index — the two
 // facets the call-site relocation and the import-table builder need, with no parallel
-// array to keep in lockstep. GROWS one appended case per new import at its milestone;
+// array to keep in lockstep. GROWS one appended case per new import;
 // everything downstream (the thunk table, the Hint/Name table, the IAT size) sizes itself
 // off `allCases`, so appending a case is the whole change.
 //
@@ -608,6 +609,7 @@ export enum IatSlot
 	ContinueDebugEvent = IatSlotMeta{dll: ImportDll.kernel32}
 	DebugBreakProcess = IatSlotMeta{dll: ImportDll.kernel32}
 	VirtualProtectEx = IatSlotMeta{dll: ImportDll.kernel32}
+	RegGetValueW = IatSlotMeta{dll: ImportDll.kernel32}
 
 	// The ws2_32 run sits after every kernel32 slot, which keeps kernel32's run contiguous so
 	// `iatSlotByteOffset` needs one gap term per DLL. A kernel32 import declared below this line would
@@ -660,6 +662,8 @@ export enum IatSlot
 	// thread snapshot ignores its pid argument; this call enumerates ONE process's threads and hands back
 	// handles that already carry the access mask asked for, so there is no `OpenThread` either.
 	NtGetNextThread = IatSlotMeta{dll: ImportDll.ntdll}
+
+	ProcessPrng = IatSlotMeta{dll: ImportDll.bcryptprimitives}
 end 'IatSlot'
 
 // Which DLL an import comes from. `IatSlotMeta` carries it, so this is the one reader of that field
@@ -791,7 +795,9 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 			listen or
 			getsockname or
 			shutdown or
-			NtGetNextThread gives ImportAnswer.signedDword
+			NtGetNextThread or
+			RegGetValueW or
+			ProcessPrng gives ImportAnswer.signedDword
 	end 'answer'
 end 'importAnswerOf'
 
@@ -801,6 +807,7 @@ function dllFileName(dll ImportDll) returns String
 		kernel32 gives "kernel32.dll"
 		ws2_32 gives "ws2_32.dll"
 		ntdll gives "ntdll.dll"
+		bcryptprimitives gives "bcryptprimitives.dll"
 	end 'name'
 end 'dllFileName'
 
@@ -822,8 +829,10 @@ type ImportGates
 	// risk a `true` here takes on.
 	export let threadWalk as bool
 
-	static function create(optionalImports bool, sockets bool, threadWalk bool) returns ImportGates
-		return Self{optionalImports: optionalImports, sockets: sockets, threadWalk: threadWalk}
+	export let entropy as bool
+
+	static function create(optionalImports bool, sockets bool, threadWalk bool, entropy bool) returns ImportGates
+		return Self{optionalImports: optionalImports, sockets: sockets, threadWalk: threadWalk, entropy: entropy}
 	end 'create'
 end 'ImportGates'
 
@@ -838,6 +847,7 @@ function dllIsEmitted(dll ImportDll, gates ImportGates) returns bool
 		kernel32 gives true
 		ws2_32 gives gates.sockets
 		ntdll gives gates.threadWalk
+		bcryptprimitives gives gates.entropy
 	end 'emitted'
 end 'dllIsEmitted'
 
@@ -918,7 +928,8 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			WaitForDebugEvent or
 			ContinueDebugEvent or
 			DebugBreakProcess or
-			VirtualProtectEx gives true
+			VirtualProtectEx or
+			RegGetValueW gives true
 
 		// The ws2_32 and ntdll slots in this arm answer `false` because `dllIsEmitted` gates each of
 		// those runs as a whole; this band decides membership within kernel32's. Answering `true` would
@@ -987,7 +998,8 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			accept or
 			getsockname or
 			shutdown or
-			NtGetNextThread gives false
+			NtGetNextThread or
+			ProcessPrng gives false
 	end 'band'
 end 'isOptionalTrailingImport'
 
@@ -1342,7 +1354,7 @@ function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArr
 				arm64Adrp or
 				arm64PageOff or
 				dataSectionArm64Adrp or
-				dataSectionArm64PageOff then panic("PeWriter: arm64 relocations arrive with the arm64 milestone — this writer is x64-only")
+				dataSectionArm64PageOff then panic("PeWriter: this writer is x64-only and takes no arm64 relocations")
 		end 'kind'
 	end 'patch'
 end 'patchRdataRelocationsX86'
@@ -1973,7 +1985,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// `GetEnvironmentVariableA` and the machine's processor count through `GetActiveProcessorCount`, and its
 	// TLS pair lives in this band too. It also answers for a spawning image, whose child-process bodies are
 	// installed only with the scheduler.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesProcessLiveness or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesProcessDebug
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesProcessLiveness or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesProcessDebug or codeResult.stdModule.usesProcessNamespace
 
 	// ⭐ **THE SAMPLER IS ntdll's ONLY PRODUCER**, and it feeds BOTH gates: the suspend/context/read/resume
 	// family, the timer pair and the module walk ride the optional kernel32 band above, while
@@ -1981,7 +1993,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// are read off `stdModule` AFTER `pipeline.run()` replaced it (`Compiler.maxon`'s build seam); a read
 	// taken before that measures a module the lowering discards and emits `iatCall`s at slot indices past
 	// the end of the table it actually writes.
-	let gates = ImportGates.create(optionalImports, sockets: codeResult.stdModule.usesSockets, threadWalk: codeResult.stdModule.usesProcessSampling)
+	let gates = ImportGates.create(optionalImports, sockets: codeResult.stdModule.usesSockets, threadWalk: codeResult.stdModule.usesProcessSampling, entropy: codeResult.stdModule.usesEntropy)
 	let idata = buildImportSection(idataRva as Rva, gates: gates)
 	let idataSize = idata.data.count()
 	let idataSizeAligned = alignUp(idataSize as BytePos, alignment: FileAlignment)

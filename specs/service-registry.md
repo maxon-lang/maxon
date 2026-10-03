@@ -2358,3 +2358,63 @@ typealias Integer = int(i64.min to i64.max)
 ```maxoncstderr
 error E3171: <fragment>:10:24: `Config` cannot be a registry value or a `SharedValue`: its field `n` is writable — every field must be a `let` of a type a share walk can mark
 ```
+
+<!-- test: a-cell-resident-var-is-published -->
+`next` lives in a cell because `refresh` reassigns its parameter; the publish takes the cell's record.
+```maxon
+type Config
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function refresh(c Config)
+	c = Config.create(c.n + 1)
+end 'refresh'
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	var next = Config.create(4)
+	refresh(next)
+	cell.publish(next)
+	return cell.current().n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+5
+```
+
+<!-- test: error.a-cell-resident-var-read-after-a-publish-is-use-after-move -->
+The same cell-resident `var`, read after the publish.
+```maxon
+type Config
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function refresh(c Config)
+	c = Config.create(c.n + 1)
+end 'refresh'
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	var next = Config.create(4)
+	refresh(next)
+	cell.publish(next)
+	return next.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3102: <fragment>:21:9: use of moved value 'next': its ownership moved to another binding at an earlier bind or assignment
+```

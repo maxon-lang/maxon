@@ -279,13 +279,13 @@ end 'main'
 
 <!-- test: map-literal-temporary-in-value-position -->
 
-⛔⛔ **EVERY CASE ABOVE BUILDS ITS TEMPORARY FROM AN *ARRAY* LITERAL, AND THAT GAP SHIPPED A DOUBLE FREE**
-(found at the `W105` review). A `[k: v]` literal is the other container born through a bracket, and
-`Parser.parseMapLiteralBody` tracked its create result as an owned temporary on top of the enrolment
-`emitCall` had already made — one record, two `__destruct_Map_<K>_<V>` calls. The program below exited
-**0xC0000005** where the answer is **3**.
+⛔⛔ **EVERY CASE ABOVE BUILDS ITS TEMPORARY FROM AN *ARRAY* LITERAL, AND A MAP LITERAL IS THE OTHER
+CONTAINER BORN THROUGH A BRACKET.** `Parser.parseMapLiteralBody` must not track its create result as an
+owned temporary on top of the enrolment `emitCall` has already made: that is one record and two
+`__destruct_Map_<K>_<V>` calls, a double free that faults with **0xC0000005** where the answer below is
+**3**.
 
-⚠ **IT HID BEHIND THE *BOUND* FORM, WHICH IS WHY THE WHOLE SUITE WAS GREEN OVER IT.**
+⚠ **ONLY THE *TEMPORARY* FORM REACHES IT; THE *BOUND* FORM HIDES IT.**
 `removeFromPendingTemps` strips ALL occurrences of a value, so `let m = [1: 10]` cancels both enrolments
 and answers correctly — and every map literal in `specs/map.md` is bound. Only a literal left as a
 TEMPORARY reaches scope exit still holding two. The three cases here are that shape, one per construct
@@ -322,8 +322,8 @@ end 'main'
 
 <!-- test: map-literal-temporary-with-managed-columns-does-not-leak -->
 
-⭐ **THE OTHER HALF OF THE SAME RULE, AND THE ONE A DOUBLE FREE CANNOT BE MISTAKEN FOR.** The fix must
-release the record ONCE — not twice (the crash above) and not zero times. Both columns are heap `String`s
+⭐ **THE OTHER HALF OF THE SAME RULE, AND THE ONE A DOUBLE FREE CANNOT BE MISTAKEN FOR.** The record is
+released ONCE — not twice (the crash above) and not zero times. Both columns are heap `String`s
 and the loop builds two hundred of them, so a missed release exits **101** and a second release faults;
 answering `4` is the only outcome that is neither.
 

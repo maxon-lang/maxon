@@ -213,7 +213,7 @@ end 'main'
 ```
 
 <!-- test: from-literal-dedup -->
-The oracle dedup case: `Set from ["a", "b", "a", "c"]` — the second `"a"` is a distinct allocation that
+The dedup case: `Set from ["a", "b", "a", "c"]` — the second `"a"` is a distinct allocation that
 duplicates the first by content, so it is dropped by the insert dup-path (and its source array slot nulled).
 Three unique members; no double-free between the set's key drops and the array's element drop.
 ```maxon

@@ -1,4 +1,4 @@
-// Runtime/ManagedDirectoryRuntime.maxon — the `__ManagedDirectory` box: one Win32 SEARCH, closed on drop (R4.3).
+// Runtime/ManagedDirectoryRuntime.maxon — the `__ManagedDirectory` box: one Win32 SEARCH, closed on drop.
 //
 // ⭐ **THE ORACLE IS `specs/managed-directory.md`**, exactly as `ManagedFileRuntime`'s header records for
 // the file family: the ten committed cases are the whole of what can be asked.
@@ -62,7 +62,7 @@ export let ManagedDirectoryBoxBytes = 8 as ParsedInt
 // `word64` and nothing between, so either would lower; a word costs the same 336 bytes and keeps every
 // access in this file at one width.
 //
-// ⚠⚠ **THE TWO TAIL NUMBERS ARE DERIVED, NOT TRANSCRIBED, AND THAT IS THE POINT** (review, R4.3). `328` and
+// ⚠⚠ **THE TWO TAIL NUMBERS ARE DERIVED, NOT TRANSCRIBED, AND THAT IS THE POINT.** `328` and
 // `336` are `8 + FindDataBytes` and that plus one word — so writing them as literals would be a THIRD copy
 // of "a `WIN32_FIND_DATAA` is 320 bytes", the first two being `ManagedFileRuntime.FindDataBytes` (which
 // `stat`/`exists` allocate by) and the Win32 header itself. Nothing would make the copies agree: correct
@@ -151,7 +151,7 @@ let PathGrowthShift = 1 as ParsedInt
 // iterator", and `filename()` is non-throwing in the spec. The case is DECLARED (the
 // ordinals after it depend on its slot) and deliberately unreachable — which is why its ORDINAL is here even
 // though its flag is not, and why `claimManagedDirectoryOrdinals` states it as `neverThrown` rather than
-// leaving a gap a corpus reorder could move in silence (W135).
+// leaving a gap a corpus reorder could move in silence.
 let ManagedDirectoryNotFoundOrdinal = 0 as ParsedInt
 let ManagedDirectoryAccessDeniedOrdinal = 1 as ParsedInt
 let ManagedDirectoryOpenSearchFailedOrdinal = 2 as ParsedInt
@@ -330,11 +330,9 @@ end 'emitLoadByte'
 
 // One byte INTO a raw buffer — `emitLoadByte`'s exact dual, and the one writer of a `u8` at this tier.
 //
-// ⚠ **IT LIVES BESIDE ITS DUAL RATHER THAN BESIDE ITS FIRST CALLER (W5).** It was file-private in
-// `CommandLineRuntime`, which made the pair "how wide is a raw byte, and is it zero-extended?" answerable
-// from two files with only one of the two answers exported — so the second family that needed to WRITE a
-// byte (`__proc_exe_path`, NUL-terminating an unavailable path) would have had to copy it. The load and the
-// store are one fact about one representation; they are now one paragraph.
+// ⚠ **IT LIVES BESIDE ITS DUAL RATHER THAN BESIDE A CALLER.** The load and the store are one fact
+// about one representation — how wide a raw byte is, and whether it is zero-extended — so both
+// answers are exported from one place.
 export function emitStoreByte(module StdModule, block IrBlock, base ValueId, index ValueId, value ValueId, ids ValueMinter)
 	let addr = emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0 as ByteOffset, valueId: value, valueType: StdType.u8))
@@ -350,7 +348,7 @@ end 'emitStoreByte'
 // `String.init(dir.filename())` reads its `length@8`/`buffer@0`, which a cstring pointer does not have.
 //
 // The record and its buffer come from `ManagedMemoryRuntime.emitManagedByteBuffer`, which is where the
-// `__managed_create` + `__managed_reserve` pair and the reason for it now live — `__con_read_stdin` (W5) fills the
+// `__managed_create` + `__managed_reserve` pair and the reason for it now live — `__con_read_stdin` fills the
 // same kind of record from an OS read instead of from a copy, and the two must not grow two answers to
 // "how is a byte-element `Array` record made?".
 //
@@ -379,7 +377,7 @@ end 'emitCStringToManaged'
 // ⚠ **THE PENDING FLAG IS SET HERE AND NOWHERE ELSE.** `FindFirstFileA` has already written the first entry
 // into the record by the time this returns; see `FindBlockPendingOffset` for what happens without it.
 function buildManagedDirectoryOpenSearch(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDirectoryOpenSearchName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
+	var func = IrFunction.createFromStd(ManagedDirectoryOpenSearchName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -440,7 +438,7 @@ end 'buildManagedDirectoryOpenSearch'
 // `..` is byte0 `.` + byte1 `.` + byte2 NUL, and a real `.gitignore` / `..config` must survive both. Testing
 // only byte0 would hide every dotfile in the directory.
 function buildManagedDirectoryNext(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDirectoryNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
+	var func = IrFunction.createFromStd(ManagedDirectoryNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -544,7 +542,7 @@ end 'buildManagedDirectoryNext'
 // It is never a WILD read: `openSearch` only returns a box whose record
 // the OS has filled, and neither `close()` nor the pending flag touches the name bytes.
 function buildManagedDirectoryFilename(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDirectoryFilenameName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedDirectoryFilenameName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -575,7 +573,7 @@ end 'buildManagedDirectoryFilename'
 // post-close `next()` replay the first entry — which the `closed` guard now refuses anyway, so this is the
 // second of two independent reasons the replay cannot happen.
 function buildManagedDirectoryClose(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDirectoryCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedDirectoryCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -623,7 +621,7 @@ end 'buildManagedDirectoryClose'
 // `emitRefcountCheckToLastOwner` is shared with it — so "how many owners are left?" is asked one way by
 // every destructor in the compiler.
 function buildManagedDirectoryDestruct(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDirectoryDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedDirectoryDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -654,7 +652,7 @@ end 'buildManagedDirectoryDestruct'
 // directory path, and opening a search on one would cost a handle to answer a question about one
 // bit. The `osFileAttributes` op's comment says why that second entry point is admitted.
 function buildManagedDirectoryExists(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDirectoryExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(ManagedDirectoryExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -703,7 +701,7 @@ end 'buildManagedDirectoryExists'
 // through it would make one function speak for two error types. The shared parts — the scratch copy, the
 // errno classification, the two exits — ARE shared; what is written here is the one call and its verdict.
 function buildManagedDirectoryCreate(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDirectoryCreateName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
+	var func = IrFunction.createFromStd(ManagedDirectoryCreateName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -740,7 +738,7 @@ end 'buildManagedDirectoryCreate'
 // shared three-way classification. That split is what gives a caller three tellable answers: the path is not
 // there, the directory is occupied, anything else.
 function buildManagedDirectoryDelete(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDirectoryDeleteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
+	var func = IrFunction.createFromStd(ManagedDirectoryDeleteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -784,7 +782,7 @@ end 'buildManagedDirectoryDelete'
 // every exit, the throwing one included, and what the caller receives is the independent
 // `__ManagedMemory` copy.
 function buildManagedDirectoryCurrentPath(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDirectoryCurrentPathName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
+	var func = IrFunction.createFromStd(ManagedDirectoryCurrentPathName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -822,6 +820,7 @@ end 'emitFilledBufferVerdict'
 
 export union PathFill
 	executablePath
+	processNamespace
 	currentDirectory
 	systemDirectory
 	windowsDirectory
@@ -859,6 +858,7 @@ end 'emitGrowingPathFill'
 function emitPathFillOp(module StdModule, block IrBlock, fill PathFill, written ValueId, buffer ValueId, capacity ValueId, ids ValueMinter)
 	match fill 'fill'
 		executablePath then module.appendOp(block, op: StdOp.osExecutablePath(written, bufLenId: capacity, bufPtrId: buffer))
+		processNamespace then module.appendOp(block, op: StdOp.osProcessNamespace(written, bufLenId: capacity, bufPtrId: buffer))
 		currentDirectory then emitParkedCurrentDirectoryFill(module, block: block, written: written, buffer: buffer, capacity: capacity, ids: ids)
 		systemDirectory then emitDirectoryQuery(module, block: block, verb: PathQueryVerb.systemDirectory, written: written, buffer: buffer, capacity: capacity, ids: ids)
 		windowsDirectory then emitDirectoryQuery(module, block: block, verb: PathQueryVerb.windowsDirectory, written: written, buffer: buffer, capacity: capacity, ids: ids)
@@ -884,7 +884,7 @@ end 'emitDirectoryQuery'
 // constant so the lookup's message and the claim's message name the same author.
 let ManagedDirectoryOrdinalInstaller = b"the __ManagedDirectory runtime"
 
-// ⭐ **THE ORDINAL DRIFT GUARD FOR `__ManagedDirectoryError` (7b, re-anchored at A1s)** — the twin of
+// ⭐ **THE ORDINAL DRIFT GUARD FOR `__ManagedDirectoryError`** — the twin of
 // `verifyManagedFileOrdinals`, which carries the whole argument: the case ORDER is the wire format, the
 // declaration it is verified against is `stdlib/Builtins.maxon`'s, and it is a free function because it
 // needs the `Project` and must run on every compile.
@@ -935,19 +935,11 @@ export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUs
 		let named = isThrowingManagedDirectoryRuntimeCallee(func.name)
 		let stamped = throwsClauseIsThrowing(func.throwsTypeName)
 
-		if stamped and not named 'stampedNotNamed'
-			panic("installManagedDirectoryRuntime: '{String.from(func.name)}' stamps a `throws` clause but isThrowingManagedDirectoryRuntimeCallee does NOT name it — the throwing-builder set and the predicate have drifted (R4.3)")
-		end 'stampedNotNamed'
+		requireThrowsStampMatchesPredicate("installManagedDirectoryRuntime", predicate: "isThrowingManagedDirectoryRuntimeCallee", callee: func.name, stamped: stamped, named: named)
 
-		if named and not stamped 'namedNotStamped'
-			panic("installManagedDirectoryRuntime: isThrowingManagedDirectoryRuntimeCallee names '{String.from(func.name)}' as throwing but its builder stamps NO `throws` clause — the throwing-builder set and the predicate have drifted (R4.3)")
-		end 'namedNotStamped'
-
-		// ⭐ **THE THIRD LIST (D12 review): a throwing callee must also have a SOURCE-METHOD arm.** R4.3's map
-		// is the OLDEST instance of this exposure — it shipped guarded only by its own panic — and D12 turned
-		// one instance into four. Asked, not described: the CALL is the check, so a missing arm fires here at
-		// install rather than in front of a user who forgot a `try`. Reasoning lives once, on
-		// `GtRuntime.runtimeCalleeSourceMethod`.
+		// ⭐ **THE THIRD LIST: a throwing callee must also have a SOURCE-METHOD arm.** Asked, not
+		// described: the CALL is the check, so a missing arm fires here at install rather than in front
+		// of a user who forgot a `try`. Reasoning lives once, on `GtRuntime.runtimeCalleeSourceMethod`.
 		if named 'hasSourceMethod'
 			requireQuotableSourceSpelling(managedDirectorySourceMethodName(func.name), callee: func.name)
 		end 'hasSourceMethod'

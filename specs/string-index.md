@@ -23,8 +23,7 @@ slice(start StringIndex, length GraphemeIndex) returns String
 
 and the index itself answers two accessors, `charIndex()` and `bytePos()`.
 
-Four properties are what these tests pin, and every one of them was measured against the runnable
-reference compiler before it was written down:
+Four properties are what these tests pin:
 
 - **`charIndex()` is a GRAPHEME index, `bytePos()` is a byte offset, and they are different numbers.**
   A search is a BYTE search; the grapheme index is derived from the byte position it lands on by walking
@@ -42,9 +41,8 @@ search finds it at position 0 and the backward search at the end of the string, 
 occurs at every position.
 
 A `slice` whose byte range is not a range of the receiver — inverted, negative, or past its byte length —
-ABORTS the process with exit code 77. It is reachable from source (an index taken from a LONGER string is
-a perfectly good index of that string), and the reference dies on the same input, through a `panic` in
-`String.sliceBytes`.
+ABORTS the process with exit code 1, through a `panic` in `String.sliceBytes`. It is reachable from
+source: an index taken from a LONGER string is a perfectly good index of that string.
 
 ## Tests
 
@@ -87,10 +85,10 @@ end 'main'
 
 <!-- test: find-last-on-non-ascii-text -->
 ### The BACKWARD search derives its grapheme index the same way
-`findFirst` and `findLast` share one conversion, and this is the case that says so: sabotaging that
-conversion to return the byte position turned exactly ONE test red before this case existed — the
-forward one — because every ported `find-last-*` case is pure ASCII, where the two numbers coincide. The
-slice between the two hits is the third reader of the same pair.
+`findFirst` and `findLast` share one conversion, and this is the case that says so: every
+`find-last-*` case in `string-type.md` is pure ASCII, where the two numbers coincide, so without this one a conversion that
+returned the byte position would turn only the forward case red. The slice between the two hits is the
+third reader of the same pair.
 ```maxon
 function main() returns ExitCode
 	let uni = "aéb👨‍👩‍👧cdéb"
@@ -133,8 +131,7 @@ end 'main'
 
 <!-- test: find-last-empty-needle-is-the-end -->
 ### An empty needle's LAST occurrence is the end of the string
-The mirror of the case above, and the reference's own answer: `findLastIn` returns the byte length for an
-empty needle.
+The mirror of the case above: `findLastIn` returns the byte length for an empty needle.
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
@@ -235,8 +232,8 @@ aéb👨‍👩‍👧 22
 
 <!-- test: slice-by-length-clamps-past-the-end -->
 ### A `length:` past the end of the string stops at the end
-The walk runs out of string before it runs out of count, which is the reference's own bound
-(`graphemeOffsetToBytePos` tests both).
+The walk runs out of string before it runs out of count, and `graphemeOffsetToBytePos` stops at
+whichever comes first.
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
@@ -257,8 +254,8 @@ abc 3
 
 <!-- test: index-equality-and-ordering-read-the-grapheme-index -->
 ### `==` and `<` compare the grapheme index
-The two operators the reference's `Equatable`/`Comparable` conformances give a `StringIndex`, both over
-`charIdx` alone.
+The two operators `StringIndex`'s `Equatable`/`Comparable` conformances give it, both over `charIdx`
+alone.
 ```maxon
 function main() returns ExitCode
 	let s = "abcdefghijklm"
@@ -370,9 +367,8 @@ end 'main'
 ### An inverted range ends the process
 `end` before `start` would ask for a negative number of bytes.
 
-⚠ **THE GUARD THAT ANSWERS IS THE CORPUS'S OWN.** This case used to expect exit **77**, from the
-SYNTHESIZED `slice` arm's own bounds check. `slice` is `stdlib/String.maxon`'s
-now, so the guard that answers is the corpus's own `sliceBytes` precondition (`:336`).
+⚠ **THE GUARD THAT ANSWERS IS THE CORPUS'S OWN.** `slice` is `stdlib/String.maxon`'s, so the guard
+that answers is the corpus's own `sliceBytes` precondition.
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -386,7 +382,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at String.maxon:364: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
+panic at String.maxon:356: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
 Stack trace:
   in String.sliceBytes
   in String.slice
@@ -398,8 +394,7 @@ Stack trace:
 ### An index of ANOTHER string is out of range here
 An index is an ordinary value and nothing ties it to the string it came from, so this is reachable from
 source rather than hypothetical: byte 20 of a 24-byte string is past the end of a 2-byte one, and slicing
-to it would read out of the buffer. Its twin above records why the guard that answers is now the corpus's,
-and that this is the ORACLE's exit code rather than a new the compiler behaviour.
+to it would read out of the buffer. As in its twin above, the guard that answers is the corpus's.
 ```maxon
 function main() returns ExitCode
 	let long = "hello world that is long"
@@ -414,7 +409,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at String.maxon:364: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
+panic at String.maxon:356: String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()
 Stack trace:
   in String.sliceBytes
   in String.slice
@@ -424,14 +419,9 @@ Stack trace:
 
 <!-- test: an-index-inside-a-type-method -->
 ### The whole family works inside a `type`'s METHOD BODY
-⚠ **THIS CASE OUTLIVED THE DEFECT IT WAS WRITTEN FOR, AND IT IS KEPT.** While the compiler registered its own
-`StringIndex` layout, a token SWEEP decided per file whether to register it — and the declaration walk it
-rode hands a whole `type` (method bodies included) to `recordScannedType` and resumes past its `end`. So
-the four producers were invisible in exactly the place a String helper type puts them, the layout went
-unregistered, and `head` took the compiler down at `stringIndexLayoutOrPanic` while `width` took it down
-at `managedNameDropCallee`. **W49 wave 3 removed the per-file decision rather than fixing it**: the type is
-`stdlib/String.maxon`'s declaration, folded in every program, so there is nothing left to miss. The case
-still pins that the family composes inside a method, which is a different question and still worth asking.
+⚠ **THE TYPE IS `stdlib/String.maxon`'s DECLARATION, FOLDED IN EVERY PROGRAM**, so no per-file decision
+registers its layout and a producer inside a method body cannot be missed. The case pins that the family
+composes inside a method.
 ```maxon
 type Label
 	var text as String
@@ -472,18 +462,15 @@ aé 6 aéb
 
 <!-- test: char-at-and-index-after-walk-the-clusters -->
 ### `charAt` and `indexAfter` walk a string one CLUSTER at a time
-⭐ **`charAt` IS THE CORPUS'S AND SO IS EVERY PRODUCER IT IS FED FROM (W49 wave 3).** The compiler never had a
-`charAt` arm — it needs `makeCharFromBytes`, which the `__ManagedMemory` surface does not serve — and the
-one it could not have was the one the corpus already declares (`stdlib/String.maxon:397-402`). What kept
-it out of reach was not the missing arm: `startIndex()` minted a box of the compiler's OWN
-`__StringIndex` type while the corpus's `charAt` declares its parameter `StringIndex`, so the call was
-`E3005 argument type mismatch for 'idx': expected 'StringIndex', got '__StringIndex'` — two declarations
-of one type, and no program could hold a value satisfying both. Retiring the five producers onto the
-corpus leaves ONE declaration, and `charAt` resolves against it with nothing added anywhere.
+⭐ **`charAt` IS THE CORPUS'S AND SO IS EVERY PRODUCER IT IS FED FROM.** The compiler has no `charAt`
+arm — it needs `makeCharFromBytes`, which the `__ManagedMemory` surface does not serve — and the corpus
+declares it (`stdlib/String.maxon`). The five producers are the corpus's too, so there is ONE
+`StringIndex` declaration and `charAt` resolves against it; a producer minting a box of a separate
+compiler-owned type would make the call `E3005 argument type mismatch for 'idx'` — two declarations of
+one type, and no program could hold a value satisfying both.
 ⚠ The three interpolations are three `print`s rather than one, and that is E5001 rather than style: this
-loop's working set does not fit the register file as one statement (`needs 5 more register(s)`), and it
-does not at the merge base either — MEASURED both ways on the identical program, so the deficit is the
-allocator's standing limit and not something this retirement moved.
+loop's working set does not fit the register file as one statement (`needs 5 more register(s)`), which is
+the allocator's standing limit.
 ```maxon
 function main() returns ExitCode
 	let uni = "aéb👨‍👩‍👧cd"
@@ -513,10 +500,8 @@ d 5,23
 
 <!-- test: index-before-steps-back-one-cluster -->
 ### `indexBefore` steps BACKWARD, and it is the corpus's too
-`indexBefore` is the one member of this family that needs a BACKWARD segmenter (`findGraphemeStart`), and
-the roster's own header spent three revisions calling that the reason it was absent. It never was:
-`stdlib/helpers/string/grapheme.maxon` has had `findGraphemeStart` all along, and what actually blocked
-the call was the same two-declaration mismatch `charAt` hit. One index at a time from the END, over the
+`indexBefore` is the one member of this family that needs a BACKWARD segmenter:
+`stdlib/helpers/string/grapheme.maxon`'s `findGraphemeStart`. One index at a time from the END, over the
 same six clusters, so a backward step that answered a byte position where a grapheme index belongs would
 disagree with the forward walk above at the ZWJ family.
 ```maxon
@@ -544,13 +529,11 @@ end 'main'
 
 <!-- test: error.a-user-may-not-declare-the-string-index-type -->
 ### `StringIndex` is a name the compiler owns
-⭐ **THE RESERVATION MOVED WITH THE TYPE, AND WITHOUT IT THE RETIREMENT WOULD HAVE OPENED A HOLE.** While
-the layout was the compiler's own, it was registered under the RESERVED spelling `__StringIndex`
-precisely so that a user's `type StringIndex` could not land in the same bucket and have `slice` read a
-box through the user's field offsets. The corpus's declaration is the only one now, under the BARE name —
-so the reservation has to be the ordinary one every other corpus-declared builtin name carries
-(`String`, `Character`, `Ordering`): admitted from `stdlib/`, refused from a user file. MEASURED on the
-tree before this rung: this program COMPILED.
+⭐ **THE RESERVATION IS WHAT KEEPS A USER'S LAYOUT OUT OF `slice`.** A user's `type StringIndex` in the
+same bucket would have `slice` read a box through the user's field offsets. The corpus's declaration is
+the only one, under the BARE name — so the reservation is the ordinary one every other corpus-declared
+builtin name carries (`String`, `Character`, `Ordering`): admitted from `stdlib/`, refused from a user
+file.
 ```maxon
 type StringIndex
 	var a as Integer
@@ -568,9 +551,8 @@ error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'String
 
 <!-- test: error.slice-needs-an-index-not-an-integer -->
 ### `slice`'s start must be a `StringIndex`
-⚠ **THE SENTENCE IS THE ORDINARY DECLARED-PARAMETER CHECK'S.** It was `'slice' requires a StringIndex, but its
-argument is int` — the SYNTHESIZED arm's bespoke wording, from a hand-written type test. The member is
-`stdlib/String.maxon:487`'s now, so the refusal is the ordinary declared-parameter check.
+⚠ **THE SENTENCE IS THE ORDINARY DECLARED-PARAMETER CHECK'S.** The member is
+`stdlib/String.maxon:487`'s, so the refusal is the ordinary declared-parameter check.
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -585,13 +567,8 @@ error E3005: <fragment>:4:14: argument type mismatch for 'start': expected 'Stri
 
 <!-- test: error.slice-rejects-an-unknown-argument-label -->
 ### `slice`'s second argument is `endIndex:` or `length:`
-⚠ **W49 WAVE 4 MOVED THIS FROM A BESPOKE REFUSAL TO THE ORDINARY ONE.** The synthesized arm read the
-label off a token and named both spellings itself. With `slice` retired the call matches NEITHER corpus
-overload, so `resolveOverloadedCalls` leaves the op alone (its documented step 5) and `checkCalls` reports
-against the first-declared member's parameter list. The bootstrap answers `E3007 No overload of
-'stdlib.String.slice' matches the named arguments`; the compiler's E3037 names the offending label instead. Both
-refuse the program at the same token — the code and the noun differ, which is the same latitude
-`overloadTypeSuffix` records for a declaration-site-vs-call-site split.
+⚠ **THE REFUSAL IS THE ORDINARY ONE.** The call matches NEITHER corpus overload, so `resolveOverloadedCalls` leaves the op alone (its documented step 5) and `checkCalls` reports
+against the first-declared member's parameter list, so E3037 names the offending label.
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -622,15 +599,12 @@ error E2015: <fragment>:5:12: Unsupported: `StringIndex` member 'offset' — the
 
 <!-- test: error.find-first-without-try -->
 
-⭐ **THE SAME E3057 RULE, AND THE NOUN NOW COMES FROM THE DECLARATION ITSELF.** `findFirst` throws
+⭐ **THE SAME E3057 RULE, AND THE NOUN COMES FROM THE DECLARATION ITSELF.** `findFirst` throws
 `StringError.notFound`, so a bare call reads only the value register and takes a miss for an answer.
 
-⚠ **THE SENTENCE SAID `'findFirst'` UNTIL W49 WAVE 3 AND SAYS `'String.findFirst'` NOW, WHICH IS THE SAME
-FIX ARRIVING FOR FREE.** D12 had to build a map (`stringIndexSourceMethodName`) translating the runtime
-callee `__strix_first` back into the spelling the author wrote — without it this read *"throwing function
-requires try: 'throwing array accessor'"*. `findFirst` is `stdlib/String.maxon:477`'s ordinary declared
-method now, so the diagnostic reads the callee's REAL name and the map is gone: one fewer list to drift,
-and the qualified form matches `int.fromString`'s in `parsable-interface.md`.
+⚠ **THE SENTENCE SAYS `'String.findFirst'`.** `findFirst` is `stdlib/String.maxon:477`'s ordinary
+declared method, so the diagnostic reads the callee's REAL name with no translation map to drift, and
+the qualified form matches `int.fromString`'s in `parsable-interface.md`.
 ```maxon
 function main() returns ExitCode
 	let s = "a b"

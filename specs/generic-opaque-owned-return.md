@@ -340,13 +340,13 @@ end 'main'
 
 ### COVERAGE — `Iterable.map` over an `Array with String`
 
-The downstream shape this slice was a prerequisite for: `stdlib/Interfaces.maxon`'s `extension Iterable`
+The downstream shape the owned-return convention serves: `stdlib/Interfaces.maxon`'s `extension Iterable`
 builds an `Array with Element` and pushes a transform's result into it, so every element crosses a
 `returns Element` boundary out of a body compiled once for every conformer.
 
-⚠ This case is COVERAGE and not a bug capture — it was green before the slice as well. `Array` is a
+⚠ This case is COVERAGE and not a bug capture. `Array` is a
 BUILTIN container whose element accessors the compiler synthesizes rather than compiles, so the elements never
-travel through a user `returns T` body; what it pins is that the convention change did not disturb the
+travel through a user `returns T` body; what it pins is that the convention leaves undisturbed the
 route the retirement of the synthesized `Array` will eventually send them down.
 
 <!-- test: iterable-map-over-an-array-of-strings -->

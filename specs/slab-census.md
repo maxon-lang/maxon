@@ -88,15 +88,15 @@ which is what they are for.
 ### ⚠ These cases are SABOTAGE-MEASURED, not asserted
 
 **A gate that cannot fail is not evidence**, and `slab-scavenger.md` beside this file says the same of its
-own cases. Each row is ONE token changed on an otherwise pristine tree, rebuilt, with every case run and
-the source restored between rows. **x64-windows.**
+own cases. Each row is ONE token changed in the compiler, and the second column is every case that goes
+RED against it on **x64-windows**.
 
-| The break | What went RED |
+| The break | What goes RED |
 |---|---|
 | `__slab_meta_free` does not stamp `MspanOwningPFreed`, so a destroyed header is read as a live span | `a-scavenge-lowers-committed-and-leaves-live-alone` **2 = `parkedSpansSurvived`** — a dead header keeps the parked owner its span had, for ever |
 | the metadata chunk walk never follows the link, so only the chunk being filled is seen | `the-walk-reaches-every-metadata-chunk` **1 = `theWalkMissedSpans`** — and **nothing else**, which is why that case exists |
-| the class tally credits a span's WHOLE slot count to the live histogram, free slots included | **four at once**: `the-tally-totals-the-live-heap` **2 = `theCensusDisagreesWithTheLevel`** and `the-tally-totals-the-live-heap-on-several-processors` **2** — the bucket total overshoots the level the same walk reports — and `an-untraced-build-tallies-by-size-class` **2 = `noBucketRoseByThePopulation`** and `dropping-the-population-returns-the-bucket` **2 = `noBucketFellByThePopulation`**, because a bucket now moves by its spans' whole slot count rather than by the population |
-| the tag walk steps one slot PAST the bump cursor, so a slot that was never handed out is read as live | `a-tagged-population-moves-one-bucket-by-N` **119 = `slabCensusTallyUnsound`** — the tally's own live count no longer matches what the span's free counts say, and the walk ends the process rather than publishing a table it cannot stand behind |
+| the class tally credits a span's WHOLE slot count to the live histogram, free slots included | **four at once**: `the-tally-totals-the-live-heap` **2 = `theCensusDisagreesWithTheLevel`** and `the-tally-totals-the-live-heap-on-several-processors` **2** — the bucket total overshoots the level the same walk reports — and `an-untraced-build-tallies-by-size-class` **2 = `noBucketRoseByThePopulation`** and `dropping-the-population-returns-the-bucket` **2 = `noBucketFellByThePopulation`**, because a bucket then moves by its spans' whole slot count rather than by the population |
+| the tag walk steps one slot PAST the bump cursor, so a slot that was never handed out is read as live | `a-tagged-population-moves-one-bucket-by-N` **119 = `slabCensusTallyUnsound`** — the tally's own live count then disagrees with what the span's free counts say, and the walk ends the process rather than publishing a table it cannot stand behind |
 | a size-class bucket is keyed by the span's FREE COUNT rather than by its class index | `an-untraced-build-tallies-by-size-class` **2 = `noBucketRoseByThePopulation`** and `dropping-the-population-returns-the-bucket` **2 = `noBucketFellByThePopulation`** — one class's slots scatter over as many buckets as its spans have free counts |
 | a freed slot is left in the bucket the tally last found it in (the table is not cleared) | `dropping-the-population-returns-the-bucket` **2 = `noBucketFellByThePopulation`** — nothing falls when the population goes, and **nothing else**, which is why that case exists |
 | `__Builtins.mmRawAllocLive()` answers the RAW layer's own live count rather than that count less the tracked layer's | `raw-live-slots-do-not-count-boxes` **2 = `theBoxesWereCountedAsHeaderLessSlots`** — every box is a slab request too, so the figure becomes the whole live table's slot count and a thousand boxes move it by a thousand — and **nothing else in this file**, which is why that case exists; the figure is shared, so `builtins-mm-counters` reports the same break in its own cases |
@@ -114,11 +114,11 @@ The case is a gate against the sharing being undone: a tally that re-spelled the
 `free_count` alone would agree with the level on every single-threaded heap in this file and disagree by
 exactly the queued slots the moment another processor frees into a span it does not hold cached.
 
-⛔⛔ **TWO PREDICTIONS WERE FALSIFIED HERE AND THE ROWS ABOVE ARE WHAT REPLACED THEM.** *"mode 0 reads a
-box's first word without asking whether it is a plausible packed id"* was measured — the plausibility test
-removed — and **every case stayed GREEN**: in a single-processor traced program every live slot IS a box, so
-the guard fires on nothing the suite runs. Mis-extracting the tag was measured too (`word and 16` in place
-of `word and 0xFFFF`) and **stayed GREEN as well**, because the case asserts only that SOME bucket rose by
+⛔⛔ **TWO BREAKS STAY GREEN, AND THE ROWS ABOVE ARE THE ONES THAT DO NOT.** *"mode 0 reads a
+box's first word without asking whether it is a plausible packed id"* — the plausibility test
+removed — leaves **every case GREEN**: in a single-processor traced program every live slot IS a box, so
+the guard fires on nothing the suite runs. Mis-extracting the tag (`word and 16` in place
+of `word and 0xFFFF`) **stays GREEN as well**, because the case asserts only that SOME bucket rose by
 exactly N and 64 widgets that all land in one wrong bucket satisfy it as well as 64 in the right one. ⇒
 **`a-tagged-population-moves-one-bucket-by-N` GATES THE WALK, NOT THE ATTRIBUTION**: what it catches is a
 tally that finds the wrong number of live slots, which is the row above it. What pins the attribution is
@@ -128,7 +128,7 @@ this case's ```mm-trace golden, which names every box the program allocated.
 tier can have: the walk never sees a request, only a span's class index and the ladder's packed geometry.
 The row above it is the nearest break that is expressible — a bucket key that is not the class.
 
-⚠ **THE FIRST ROW'S SIGHTING SURVIVES THE OWNER STATES BEING RENAMED.** An unstamped destroyed header
+⚠ **WHY THE FIRST ROW'S BREAK REDDENS `parkedSpansSurvived`.** An unstamped destroyed header
 reads `Partial` with every slot free, which is exactly what `parked` counts — so it is reported against the
 same exit code the row names.
 
@@ -149,7 +149,7 @@ destroyed header as a live span, breaks the relation in one direction or the oth
 
 ⚠ **THE SUM IS BOUNDED RATHER THAN PINNED, AND THE SLACK IS ONE-SIDED ON PURPOSE.** The only thing that
 takes slots out of the accounting is a span being destroyed, and only `scavengeMemory()` does that — which
-this program never calls, so today the sum is level. Asserting the bound rather than the equality is what
+this program never calls, so the sum is level. Asserting the bound rather than the equality is what
 keeps the case measuring the census instead of the reclamation road.
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -491,8 +491,8 @@ end 'main'
 <!-- test: slab-census.the-walk-reaches-every-metadata-chunk -->
 **THE MAGNITUDE CASE, AND IT IS THE ONLY ONE THAT IS NOT A RELATION.** Every other case here compares
 the five figures with each other, and a census that walks only the NEWEST metadata chunk keeps every
-one of those relations intact while under-reporting the whole heap several-fold. **MEASURED: with the
-chunk link dropped, the other five cases stayed GREEN.**
+one of those relations intact while under-reporting the whole heap several-fold. **With the
+chunk link dropped, the other five cases stay GREEN.**
 
 ⭐ The bound is derived from the PROGRAM rather than from the allocator's geometry — 60,000 buffers of
 96 bytes are at least 5,760,000 bytes of slot whatever ladder the classes are cut from, because a slot

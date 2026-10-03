@@ -130,7 +130,7 @@ end 'main'
 ```
 
 <!-- test: boxed-union-field-throw-owned-local -->
-### Throwing a boxed-union field of a struct held in a local transfers it out (P1.4b wave 2c)
+### Throwing a boxed-union field of a struct held in a local transfers it out
 
 A function holds an owned local struct with a boxed-union field and throws that
 field. The throw TRANSFERS an owned reference to the caller either way — by nulling
@@ -139,13 +139,12 @@ is not — and the caller's catch consumes exactly one reference, so the box rea
 the caller alive and is freed once. Caught and matched, it yields the transferred
 payload once — no leak, no double-free.
 
-⚠ **THE TRANSFER HERE IS THE RETAIN, AND THE PROSE SAID "the compiler has no incref, so the
-throw MOVES the box out" — false twice over.** The retain is `retainBorrowedAggregate`
+⚠ **THE TRANSFER HERE IS THE RETAIN, NOT A MOVE.** The retain is `retainBorrowedAggregate`
 (the case below uses it), and this container is `let h = Holder.create()`: a CALL
 RESULT, which the compiler must treat as a CO-OWNER because a `return` may hand back an
 increfed borrow of something the callee still holds (`return h.ty`) and no signature
 records which. Nulling the slot of a co-owned container is a segfault
-(`union-managed-payload`'s co-owned family measures six of them), so the move-out now
+(`union-managed-payload`'s co-owned family pins six of them), so the move-out
 demands sole ownership. What this case pins is that the TRANSFER stays balanced
 whichever mechanism serves it; `boxed-union-field-throw-out-of-a-sole-owned-literal`
 pins the move-out itself.
@@ -186,7 +185,7 @@ end 'main'
 ```
 
 <!-- test: boxed-union-field-throw-borrowed-self -->
-### Throwing a boxed-union self-field through a BORROWED receiver RETAINS the box (#64)
+### Throwing a boxed-union self-field through a BORROWED receiver RETAINS the box
 
 An instance method throws its own boxed-union `self`-field. `self` is BORROWED — its owner
 is the caller's local — so the throw cannot MOVE the box out by nulling the field slot the
@@ -244,9 +243,9 @@ end 'main'
 <!-- test: boxed-union-field-throw-out-of-a-sole-owned-literal -->
 ### Throwing a boxed-union field of a SOLELY-owned struct still MOVES it out
 
-⭐⭐ **THE COVERAGE THE CASE ABOVE STOPPED PROVIDING, AND WITHOUT IT `moveOutThrownField` HAS NO TEST.**
-Once a call result became a CO-OWNER, every `let h = Type.create(…)` container took the retain. What is left
-is the PROPERTY rather than a list of spellings: **the frame must have CREATED the box and never shared its
+⭐⭐ **WITHOUT THIS CASE `moveOutThrownField` HAS NO TEST.** A call result is a CO-OWNER, so every
+`let h = Type.create(…)` container takes the retain. What licenses the move-out is the PROPERTY rather
+than a list of spellings: **the frame must have CREATED the box and never shared its
 pointer** — which is what `OwnedHeapExclusivity.sole` means and the only thing that licenses the null store.
 The reachable spelling is a struct LITERAL, which the language admits only inside the declaring type's own
 body (`struct-construction-restriction`), and that is this program: `let h = Self{…}` in a static of
@@ -255,12 +254,10 @@ it, and the box reaches the caller — so the emitted code carries the null stor
 is what tells this case apart from its three siblings. `3 + 4 + 100` on the `unexpectedEof` arm; a double
 free or a leak of the box would be exit 101 rather than a wrong number.
 
-⚠ **THIS PROSE ONCE SAID "the ONLY container the frame can still prove SOLE is a struct LITERAL", AND THE
-REVIEW FOUND A COUNTEREXAMPLE — a payload BINDING moved out of a sole box, which is `held(b) then throw b.e`
-and was a 0xC0000005.** That hole is closed (a moved-out payload is co-owned; see the case below), so the
-sentence would now be *accidentally* true — which is exactly why it is stated as the property instead. An
-"only X" claim about which shapes reach a rule is an enumeration, and enumerations in this file rot; a phi
-joining two struct literals is already a second sole container that no such list would have mentioned.
+⚠ **THE RULE IS STATED AS THE PROPERTY, NOT AS A LIST OF SHAPES.** An "only X" claim about which shapes
+reach a rule is an enumeration, and enumerations in this file rot: a phi joining two struct literals is a
+second sole container, and a payload BINDING moved out of a sole box (`held(b) then throw b.e`) is
+co-owned rather than sole — see the case below.
 
 ```maxon
 typealias N = int(0 to i64.max)
@@ -299,10 +296,10 @@ end 'main'
 ⛔⛔ **A SOLELY-OWNED BOX DOES NOT MAKE ITS PAYLOAD SOLELY OWNED, AND THE THROW CHANNEL READS THE SAME
 CONFLATION.** `Wrap.held(body)` over a BORROWED `body` co-owns the struct by `__mm_incref`
 (`moveManagedValueInto`'s borrowed arm) rather than moving it in, so `w` is genuinely this frame's alone while
-the `Body` record in its slot has two owners. The match's move-out then vacated `w`'s slot — which proves only
-that the frame holds *that slot's* reference — and the payload binding `b` was stamped SOLE, so `throw b.e`
-nulled `e@0` in a record the CALLER still reads. **This shape predates the co-ownership rule and is not a
-nested-union case: a struct payload has been constructible since P1.4b.** With the payload co-owned the throw
+the `Body` record in its slot has two owners. The match's move-out vacates `w`'s slot — which proves only
+that the frame holds *that slot's* reference — so a payload binding `b` stamped SOLE would have `throw b.e`
+null `e@0` in a record the CALLER still reads. **This is not a nested-union case: a struct payload is
+constructible directly.** With the payload co-owned the throw
 takes `retainBorrowedAggregate`, the caller's `body.e` stays live, and the refcount balances at one free (`first=7`
 from the fallback, `second=52`).
 

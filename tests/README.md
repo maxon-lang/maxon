@@ -103,6 +103,21 @@ tests/
     manifest-debug-info-false-refuses-coverage.maxtest        `--coverage` over that manifest is refused, and writes nothing
     manifest-no-debug-info-flag-refuses-coverage.maxtest      `--coverage --no-debug-info` over a manifest is refused, and writes nothing
     manifest-held-tree-lock-refuses-build.maxtest             a manifest build in a checkout whose tree lock is held exits 2, and writes nothing
+    manifest-tree-lock-of-an-ended-holder-is-broken.maxtest   a manifest build in a checkout whose tree lock names a process that has ended breaks it, says so, and builds
+    manifest-tree-lock-of-a-running-holder-reports-busy.maxtest      a running process on this host holding the tree lock refuses the build, exit 2
+    manifest-tree-lock-of-a-running-holder-that-stopped-refreshing-is-taken-over.maxtest      a running holder that stopped refreshing the record is taken over, with a line saying so
+    manifest-tree-lock-naming-the-builds-own-process-is-taken-over.maxtest      a record naming the build's own process id is taken over, with a line saying so (not on Windows)
+    manifest-tree-lock-of-another-host-is-not-probed.maxtest  a live record taken on another host is left to its heartbeat, never probed by pid
+    manifest-tree-lock-without-the-machine-is-not-probed.maxtest      a record whose host names no machine is left to its heartbeat
+    manifest-tree-lock-without-the-pid-space-is-not-probed.maxtest      a record whose host names no process namespace is left to its heartbeat
+    manifest-tree-lock-abandoned-on-another-host-is-taken-over.maxtest      a record another host stopped refreshing is taken over, with a line saying so
+    manifest-tree-lock-live-claim-reports-busy.maxtest        a live claim file is waited on, then the checkout is reported busy, exit 2
+    manifest-tree-lock-stale-claim-is-removed.maxtest         a claim file its claimer abandoned is removed, with a line saying so, and the build runs
+    manifest-tree-lock-leftovers-are-swept.maxtest            leftover probe, staged and set-aside files past the claim window are removed, with a line each, and the build runs
+    manifest-tree-lock-young-set-aside-claim-is-left-alone.maxtest      a set-aside claim whose name stamps a time inside the claim window is left alone, however old its file
+    manifest-tree-lock-in-a-read-only-checkout-is-refused.maxtest      a checkout root the build may not write is refused with the lock failure and its hint (not on Windows)
+    tree-lock-heartbeat-drops-a-hold-whose-record-is-not-its-own.maxtest      a heartbeat that finds another command's record drops its hold and says so
+    tree-lock-release-leaves-a-record-that-is-not-its-own.maxtest      a release that finds another command's record leaves it and says so
     manifest-version-not-a-string-refused.maxtest             a `version` that is not a string is refused, and writes nothing
     manifest-define-without-separator-refused.maxtest         a define with no `=` is refused, and writes nothing
     manifest-defines-not-a-list-refused.maxtest               `defines` that are not a list are refused, and write nothing
@@ -224,6 +239,8 @@ tests/
     clear-while-another-machine-is-mid-trap.maxtest      a breakpoint cleared with other machines still inside it kills nothing
     gt-breakpoint-in-coroutine.maxtest      a breakpoint inside an `async` body stops on the green thread running it
     values-render.maxtest                   every kind of local renders as itself, an enum by its raw tag
+    values-function-render.maxtest          a function value renders as the function it calls, and a closure lists its captures as children
+    a-breakpoint-on-line-zero-is-refused.maxtest      `break 0` and `break <file>:0` are each refused, saying lines are numbered from 1
     values-register-local.maxtest           a register local is read out of the stop's register file
     values-optimized-out.maxtest            a local whose range does not cover the stop is unavailable, not a number
     values-unknown-local-and-field.maxtest        a name and a field path nothing answers to are errors
@@ -276,6 +293,7 @@ tests/
     crash-is-an-exception-stop.maxtest      a fault is an `exception` stop with a walkable stack
     inlined-frame-has-its-locals-and-its-call-site.maxtest      a spliced frame's variables are its own, and its caller stands at the call
     zero-based-lines-and-columns.maxtest      `linesStartAt1`/`columnsStartAt1` false is answered in the client's own count
+    line-zero-is-unverified.maxtest         a breakpoint on line 0 from a client counting from 1 is unverified, and the rest of the request still arms
     set-breakpoints-names-the-file-by-its-full-path.maxtest      of two files with one base name, a source breakpoint arms the one its full path names
     a-step-over-a-long-call-answers-pause.maxtest      a `pause` sent while `next` walks is answered at once, and the pause stops the program
     requests-after-the-program-ended-answer-empty.maxtest      threads, stackTrace, scopes and variables after the end succeed, empty
@@ -341,6 +359,9 @@ tests/
     cache-does-not-count-a-staged-snippet.maxtest           a snippet the MCP server staged under the cache root is left out of bare `cache`'s build count
     cache-clear-keeps-a-live-debug-sessions-build.maxtest   `cache clear` keeps the debug build of a session still running, and says so
     help-lists-every-mcp-server-option.maxtest              `help mcp-server` lists every option the parser accepts
+    an-empty-option-value-is-refused.maxtest                an option stated with an empty value (`--output=`) is refused as an invalid option value
+    an-empty-word-is-refused.maxtest                        an empty positional argument is refused as a word that names nothing
+    monitor-refuses-an-empty-filter.maxtest                 `monitor --filter=` is refused, never read as every family
   profile/
     ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
     profile-hot-ordering.maxtest            the busier function ranks first in every section
@@ -443,6 +464,8 @@ tests/
     a-staged-snippet-is-removed-after-its-call.maxtest      a snippet staged for a tool call, and everything built from it, is gone once the call answers
     snippets-an-ended-server-left-are-swept.maxtest      a server sweeps the snippets and snippet builds an ended server left, and keeps a live server's
     run-spec-test-filter-union.maxtest           `run_spec_test` given a filter array runs the union of the specs those filters name
+    an-empty-string-argument-is-refused-by-name.maxtest      an empty string given to an argument is refused by name, never read as absent
+    execute-passes-an-empty-argument-through.maxtest      `execute` hands an empty program argument to the program
   docs/
     stdlib-reference-documents-every-public-api.maxtest      docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`
 ```
@@ -954,8 +977,11 @@ subdirectories, which is how the nested-project cases stage a project inside ano
 with no coverage-point table is the artifact the refusal exists to prevent.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in its staging
-directory under `temp/build-manifest/`, which is also what makes the build path-less), and it keeps rule 5:
-one spawning `test`, one file. It runs at the default deadline.
+directory under `temp/build_manifest/`, which is also what makes the build path-less), and it keeps rule 5:
+one spawning `test`, one file. Each case root holds an empty `stdlib/` directory, so the tree lock a staged
+build takes is the case's own and never the real checkout's; the tree-lock cases plant their records,
+claims and leftovers there. Run it as `maxon test tests/build-manifest --timeout=20000`: the heartbeat
+case holds the tree lock past one 5 s heartbeat, which the default deadline does not leave room for.
 
 ## `console-write/` — which console API an emitted x64-windows image imports
 

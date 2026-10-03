@@ -28,9 +28,9 @@ binding retains its type and can be used normally.
 ## Tests
 
 <!-- test: error.dispatch-interface-payload -->
-⚠ **The compiler REFUSES THE DECLARATION, NOT THE DISPATCH.** The bootstrap admits the payload and fails at the
-`who.volume()` that has no witness to dispatch against (`E4006`); The compiler refuses `live(who Speaker)` itself,
-and the reason is what makes the earlier site the right one: a value held at an interface type is a two-word
+⚠ **The compiler REFUSES THE DECLARATION, NOT THE DISPATCH.** It refuses `live(who Speaker)` itself rather
+than the `who.volume()` that would have no witness to dispatch against, and the reason is what makes the
+earlier site the right one: a value held at an interface type is a two-word
 `(value, witness)` fat pointer, a payload slot is ONE machine word, and unlike a struct field it cannot
 widen — every case of a union shares one slot region. That is a fact about the DECLARATION, so no use of it
 could ever have worked and the diagnostic that names it is the one an author can act on.

@@ -341,10 +341,10 @@ end 'main'
 ```
 
 <!-- test: error.return-wrong-struct -->
-Returning a DIFFERENT struct than declared is a memory-safety hole, not merely a wrong answer
-(OPEN #54). The value passes the scalar tag check — two structs share the `structRef` tag — and is
-then handed back and dropped under the DECLARED return type's destructor: a wild free (this program
-compiled clean and exited 139 before the check). Struct identity is the interned name, and a struct
+Returning a DIFFERENT struct than declared is a memory-safety hole, not merely a wrong answer.
+The value passes the scalar tag check — two structs share the `structRef` tag — and would be
+handed back and dropped under the DECLARED return type's destructor: a wild free (exit 139).
+Struct identity is the interned name, and a struct
 is never a subtype of another, so the mismatch is rejected outright.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -379,11 +379,11 @@ error E3005: specs/fragments/structs/error.return-wrong-struct.test:21:2: Cannot
 ```
 
 <!-- test: error.return-union-as-scalar -->
-Returning a boxed union where a scalar type is declared (returns Integer) is a memory-safety hole
-(OPEN 59). The ValueTypeTag.named tag is overloaded: a boxed union value and a ranged-int alias share
-it, so the tag check wrongly agrees and the union box is dropped under the scalar return's absent
-destructor, a leak. The aggregate-name check runs after the tag check and catches this case (a real
-aggregate meeting a scalar) via the shared namedAggregatesConflict, now extended to fire when exactly
+Returning a boxed union where a scalar type is declared (returns Integer) is a memory-safety hole.
+The ValueTypeTag.named tag is overloaded: a boxed union value and a ranged-int alias share
+it, so the tag check alone would agree and the union box would be dropped under the scalar return's
+absent destructor, a leak. The aggregate-name check runs after the tag check and catches this case (a real
+aggregate meeting a scalar) via the shared namedAggregatesConflict, which fires when exactly
 one side is an aggregate.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -415,11 +415,11 @@ error E3005: specs/fragments/structs/error.return-union-as-scalar.test:17:2: Can
 
 <!-- test: error.callarg-wrong-struct-consumed -->
 Passing a DIFFERENT struct than the parameter declares is a memory-safety hole, not merely a wrong
-answer (OPEN #54 Slice B). At a CONSUMING call site — `WrapA.create` moves its `BoxA` argument into a
+answer. At a CONSUMING call site — `WrapA.create` moves its `BoxA` argument into a
 managed field — the wrong struct passes the scalar tag check (two structs share the `structRef` tag)
 and is then dropped under the DECLARED parameter type's destructor, which reads `BoxB`'s scalar `n` as
-a `String` pointer and frees it: a wild free (this program compiled clean and exited 139 before the
-check). Struct identity is the interned name, EXACT — a struct is never a subtype of another — and the
+a `String` pointer and frees it: a wild free (without the check this program compiles clean and
+exits 139). Struct identity is the interned name, EXACT — a struct is never a subtype of another — and the
 check is at the call argument, which every call passes through, so it is caught regardless of ownership.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -706,11 +706,11 @@ end 'main'
 ```
 
 <!-- test: error.return-a-let-declared-global -->
-The negative control, and the one thing the widened door must still refuse — **at the WRITE** (⚖ user,
-2026-08-14, W117). RETURNING a `let`-declared global's record is legal: `expose()` compiles, and a caller
+The negative control, and the one thing the widened door must still refuse — **at the WRITE**.
+RETURNING a `let`-declared global's record is legal: `expose()` compiles, and a caller
 that only reads what it hands back is a working program. What is refused is `b.push("zz")`, because that
 mutates a global the program declared immutable. The caller can know this only because the return is
-summarised whole-program — `expose`'s body may be in another file — which is the fact this rung added.
+summarised whole-program — `expose`'s body may be in another file.
 ```maxon
 typealias Names = Array with String
 

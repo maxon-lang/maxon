@@ -12,12 +12,12 @@ category: memory
 Under the compiler's static single-owner model an owned heap value (an owned `String`, a struct box) has
 exactly ONE owner **per NAME that holds it**: a binding owns one reference and releases it once, at
 its scope exit. A value reaches a second owner only by a DURABLE STORE, which takes a reference of its
-own (⚖ 2026-08-12) — so the record's refcount always equals the number of live owners, and each owner
+own — so the record's refcount always equals the number of live owners, and each owner
 releases exactly the reference it took. What a binding-to-binding bind may never do is CONFER a second
 owner without a second reference, which is what the move rule below exists to prevent.
 
 **What decides whether a bare-reference bind MOVES that ownership or merely ALIASES it is the
-SOURCE's MUTABILITY** (`specs/ownership.md`; user ruling, 2026-08-04). Maxon is single-ownership and
+SOURCE's MUTABILITY** (`specs/ownership.md`; user ruling). Maxon is single-ownership and
 everything is a reference — `clone()` is the only copy — so two names for one value are safe exactly
 when neither can be written through:
 
@@ -132,7 +132,7 @@ v1v1
 ### A CONSUME Through Any Name Leaves Every Name Live
 
 `let b = a` aliases; `Box.create(b)` then hands the value to a callee that stores it. A consuming
-argument is a DURABLE SINK, so the callee takes its OWN reference (⚖ 2026-08-12) instead of stealing this
+argument is a DURABLE SINK, so the callee takes its OWN reference instead of stealing this
 frame's — the frame still owns the box through both names, and the later `print(a)` reads a live record.
 The box carries two references and is released twice: once by `held`'s destructor, once by `a`'s
 scope-exit drop.
@@ -200,11 +200,10 @@ end 'main'
 error E3102: <fragment>:11:8: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-### Owned Var Assigned From Owned Var (#41)
+### Owned Var Assigned From Owned Var
 
-`s = t` overwrites `s`'s box (dropped at the assignment) and MOVES `t`'s box into `s`. Before Wave C
-both bindings ended up owning `t`'s box and it was decref'd twice at scope exit — a double-free the
-leak gate reported as exit 101. Now `t` is moved-from and skipped, so each box drops exactly once.
+`s = t` overwrites `s`'s box (dropped at the assignment) and MOVES `t`'s box into `s`. `t` is
+moved-from and skipped, so each box drops exactly once.
 
 <!-- test: assign-owned-from-owned -->
 ```maxon
@@ -342,11 +341,10 @@ end 'main'
 error E3102: <fragment>:12:9: use of moved value 'next': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-### Moving an Immutable Source Declared Outside the Loop Is Refused, as a `var`'s Is
+### Moving an Immutable Source Declared Outside the Loop on Every Trip Is a Use After Move
 
-The loop-escape refusal exists because a MOVE across a loop boundary has no reconciliation — the back
-edge would re-move the binding, and a `break` would leave it live on one exit while giving it away on
-the other. A `let` assigned into a `var` moves, so it gets the answer a `var` source gets (E2015).
+A `let` assigned into a `var` moves, so a loop that does it on every trip reads, on its second trip, the
+value its first trip moved: E3102, as for a `var` source.
 
 <!-- test: immutable-rebind-on-assign-from-outside-a-loop -->
 ```maxon
@@ -371,7 +369,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:14:3: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary
+error E3102: <fragment>:14:10: use of moved value 'src': it was moved in an earlier iteration of this loop
 ```
 
 ### A `for` Element Is Copied, Not Moved
@@ -526,7 +524,7 @@ error E3102: <fragment>:11:10: use of moved value 'a': its ownership moved to an
 `a` is moved inside the `if` body. `movedFrom` is a flag set unconditionally where the move is
 written, so `a` is treated as moved on EVERY path past the merge — reading it after the `if` is a
 use-after-move even though the non-taken branch never moved it. This over-rejection is the intended
-sound minimum for this rung (a moved-on-all-paths dataflow join is a later rung).
+sound minimum.
 
 <!-- test: conditional-poisoning -->
 ```maxon
@@ -584,9 +582,9 @@ typealias Integer = int(i64.min to i64.max)
 
 `let u = (t)` — the initializer is a bare local reference wrapped in redundant parentheses.
 `parseParenthesizedExpression` returns its inner value UNCHANGED, so `(t)` aliases `t`'s owned box
-exactly as a bare `t` would: it MOVES. A move gate that decided "bare local" by counting tokens saw
-three tokens (`( t )`) and called this a consume, left `t` unpoisoned, and both bindings decref'd the
-one box at scope exit — a double-free (exit 101). The gate now strips redundant parentheses, so `t` is
+exactly as a bare `t` would: it MOVES. A move gate that decided "bare local" by counting tokens would
+see three tokens (`( t )`) and call this a consume, leave `t` unpoisoned, and both bindings would decref
+the one box at scope exit — a double-free (exit 101). The gate strips redundant parentheses, so `t` is
 moved-from and skipped and the box drops exactly once.
 
 <!-- test: paren-move -->
@@ -641,7 +639,7 @@ error E3102: <fragment>:11:8: use of moved value 't': its ownership moved to ano
 `let q = p` moves `p`'s box into `q`; `return p.x` then READS a field out of the moved-from `p`. The
 use-after-move guard fires at every binding-use site, not only the bare read — reading a field through
 a moved-from base is rejected at the base, before the field load is emitted. (Without the guard this
-returned the moved struct's field: a latent use-after-free once the new owner drops first.)
+would return the moved struct's field: a latent use-after-free once the new owner drops first.)
 
 <!-- test: field-read-after-move -->
 ```maxon
@@ -669,7 +667,7 @@ error E3102: <fragment>:13:9: use of moved value 'p': its ownership moved to ano
 `let q = p` moves `p`'s box into `q`; `p.x = 99` then WRITES a field through the moved-from `p`. A
 field store on a moved-from binding is a USE, not a revive: `p.x = …` mutates the box `p` no longer
 owns (the one `q` holds), so it is rejected at the base. Only a FULL reassignment `p = <expr>` revives
-`p`. Without the guard this silently mutated `q`'s aliased box and `return q.x` returned **99** — an
+`p`. Without the guard this would silently mutate `q`'s aliased box and `return q.x` would return **99** — an
 observable wrong answer for a program the compiler must reject.
 
 <!-- test: field-store-after-move -->
@@ -824,17 +822,15 @@ typealias Integer = int(i64.min to i64.max)
 ### One Owned Value at TWO Consuming Argument Positions
 
 `Pair.create(box, b: box)` hands the SAME owned `box` to TWO CONSUMING factory parameters. Each
-consuming position is a durable sink and takes its OWN reference (⚖ 2026-08-12), so the box ends at
+consuming position is a durable sink and takes its OWN reference, so the box ends at
 three — `a`, `b` and the caller's `box` — and is released three times: twice by `Pair`'s destructor
 cascade, once by `box`'s scope-exit drop. Both fields print the same name, which is the observable half
 of "one record, two owners".
 
-⛔ **This was E3102 until the durable-sink ruling, and the reason it was is now false.** The guard's
-justification was that the compiler is move-only and a single transferred `+1` cannot answer for two owners —
-true of a move, and not of a reference taken per position. It is the CALL analog of the struct-literal
-double-owning-store case (`struct-managed-field/managed-double-store-co-owns`), which was retracted in
-the same change and for the same reason; the repeat-detection core survives for the one sink that still
-MOVES, an opaque `T` slot in a shared generic body.
+⛔ **This is not E3102.** A single transferred `+1` cannot answer for two owners — true of a move, and
+not of a reference taken per position. It is the CALL analog of the struct-literal double-owning-store
+case (`struct-managed-field/managed-double-store-co-owns`); the repeat detection applies to the one sink
+that MOVES, an opaque `T` slot in a shared generic body.
 
 <!-- test: call-arg-consumed-at-two-positions -->
 ```maxon
@@ -1053,4 +1049,68 @@ end 'main'
 ```
 ```maxoncstderr
 error E3078: <fragment>:14:7: cannot assign from immutable variable to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: a-let-moves-where-a-field-read-before-the-loop-cannot-hold-it -->
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+type Holder
+	var list as Counts
+
+	static function create() returns Self
+		return Self{list: Counts.create()}
+	end 'create'
+
+	function refresh(n Count)
+		let before = self.list
+		var sink = Counts.create()
+
+		for i in 0 upto n 'each'
+			let fresh = Counts.create()
+			sink = fresh
+			print("{before.count()} {i}\n")
+		end 'each'
+
+		self.list = sink
+	end 'refresh'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.refresh(2)
+	return 0
+end 'main'
+```
+```stdout
+0 0
+0 1
+```
+```exitcode
+0
+```
+
+<!-- test: moves.error.a-record-moved-out-of-the-loops-source-cannot-be-cleared-inside-the-loop -->
+`taken` takes the record the loop walks, and `x` still borrows one of its elements, so `taken.clear()` is refused.
+```maxon
+typealias Words = Array with String
+
+function main() returns ExitCode
+	var items = Words.create()
+	items.push("first padded out long enough to heap allocate {1}")
+	items.push("second padded out long enough to heap allocate {2}")
+
+	for x in items 'each'
+		var taken = items
+		taken.clear()
+		print("{x}\n")
+		break
+	end 'each'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:11:9: cannot mutate 'taken' via 'clear' while it is borrowed by 'x' (borrowed at line 9)
 ```

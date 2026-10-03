@@ -38,9 +38,7 @@ the representation two ways: reading the record's raw `element_size` via
 values across byte boundaries. The **static** tests additionally pin the exact packed
 `.rdata` bytes with a `RequiredRdata` block — e.g. `[0 as Q, 1 as Q, 2 as Q, 3 as Q]`
 packs to the single byte `0b11_10_01_00 = 228` — which byte-for-byte proves both the
-LSB-first bit layout and the `ceil(count*bits/8)` sizing. (Self-hosted only: the C#
-bootstrap keeps ranged-int arrays byte-per-element, so this spec is `status:
-selfhosted`.)
+LSB-first bit layout and the `ceil(count*bits/8)` sizing.
 
 ## Tests
 

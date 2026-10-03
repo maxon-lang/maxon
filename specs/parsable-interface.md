@@ -308,10 +308,9 @@ not a listed module, and **a synthesized seed owes every clause the declaration 
 `stdlib/Array.maxon:6` is `export enum ArrayError implements Error`, so the synthesized seed carries
 `conformingInterfaces: ["Error"]` explicitly.
 
-MEASURED against the oracle, which compiles this and exits 5. The compiler refused it with
-`E3016: … throws 'ArrayError' which does not conform to Error` for as long as the conformance check read a
-list the seed left empty — a legal program rejected by the very rule that was added to reject an illegal
-one. `__DivisionByZeroError` is the same shape and is seeded the same way.
+The program is legal and exits 5. A seed that left the list empty would have the conformance check refuse
+it with `E3016: … throws 'ArrayError' which does not conform to Error` — a legal program rejected by the
+very rule that exists to reject an illegal one. `__DivisionByZeroError` is the same shape and is seeded the same way.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -398,20 +397,17 @@ end 'main'
 ```
 
 `float.fromString` and `"{x}"` are the two ends of ONE conversion — `stdlib/Builtins.maxon`'s
-`__float_bitsFromText`, read forwards and backwards. They used to be two: the printer was the exact
-shortest-round-trip search while the reader was a naive `intPart + Σ digit/10^k` accumulation, so
-print-then-parse was not guaranteed to return the value it started from. These two cases pin the
-convergence, and each fails against the reader that was replaced.
+`__float_bitsFromText`, read forwards and backwards, so print-then-parse returns the value it started
+from. These two cases pin that, and each fails against a naive `intPart + Σ digit/10^k` reader.
 
 <!-- test: parsable.float-fromstring-round-trips-interpolation -->
 Print a float, parse the text back, print it again. The shortest-round-trip printer emits the
 shortest decimal that reads back as the SAME double — a claim only an exact reader can honour, so
 the two lines being identical and `a == b` being true is the whole convergence in one program.
 
-⚠ **THE VALUE WAS CHOSEN BY MEASURING AGAINST THE REPLACED READER, NOT BY LOOKING HARD.** Most
-17-digit decimals round-trip through a naive `Σ digit/10^k` too, so most of them pin nothing:
-`3.14159`, `0.30000000000000004`, `0.12345678901234567`, `0.9999999999999999` and
-`2.2250738585072014` were all tried and all stayed GREEN against the old reader.
+⚠ **THE VALUE IS ONE A NAIVE READER GETS WRONG.** Most 17-digit decimals round-trip through a naive
+`Σ digit/10^k` too, so most of them pin nothing: `3.14159`, `0.30000000000000004`,
+`0.12345678901234567`, `0.9999999999999999` and `2.2250738585072014` all read back exactly that way.
 `1.7976931348623157` — `f64.max`'s significand — is one that does not: the naive accumulation
 lands on `1.7976931348623155`, one ULP low. The LITERAL is read by the compiler's own copy of the
 exact reader either way, so `a` is fixed and `b` alone moves, which is what makes this a test of
@@ -489,10 +485,10 @@ end 'main'
 ```
 
 <!-- test: parsable.byte-fromstring -->
-**THE SECOND DOOR (A1s-prim).** `byte` is not a keyword in
-the compiler — there is no `TokenKind.byte` at all — so `byte.fromString(…)` never needed a `parsePrimary` arm and
-has always flowed through the ordinary qualified-call path. What it got there was the mangled callee
-`byte.fromString`, which no file declares: `E3004: call to undefined function 'byte.fromString'`, a WRONG
+**THE SECOND DOOR.** `byte` is not a keyword in
+the compiler — there is no `TokenKind.byte` at all — so `byte.fromString(…)` needs no `parsePrimary` arm and
+flows through the ordinary qualified-call path. The mangled callee there, `byte.fromString`, is declared by
+no file, and reading it that way would be `E3004: call to undefined function 'byte.fromString'`, a WRONG
 ANSWER rather than a missing feature. Recognizing the primitive TYPE NAME rather than its token kind is
 what makes one rule serve both doors.
 ```maxon
@@ -509,8 +505,8 @@ end 'main'
 **A USER DECLARATION OUTRANKS THE PRIMITIVE READING, and this is the case that makes the clause
 load-bearing.** `type int` is refused at its own name (`E2010: Expected identifier but got 'int'`), so
 `int.`/`float.`/`bool.` can never be contested — but `byte` is an ordinary identifier here, and a `type
-byte` with its own `static function fromString` compiled and ran on this tree BEFORE the rewrite existed.
-Minting `__byte_fromString` ahead of it would silently re-point a call that already worked at the stdlib
+byte` with its own `static function fromString` is a working program.
+Minting `__byte_fromString` ahead of it would silently re-point its call at the stdlib
 body: a wrong answer with no diagnostic, which no exit code in the rest of this file could see. The
 precedence is asked as `declaresCallee` of the same mangled name the ordinary path builds, so the two
 readings of one call site cannot come to disagree about what "the user declared it" means.
@@ -533,15 +529,15 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: parsable.bound-keyword-outranks-primitive-static -->
-**AND THE KEYWORD QUALIFIERS HAVE THE SAME CONTEST AFTER ALL — NOT THROUGH A `type`, THROUGH A BINDING
-(A1s-prim review).** The case above turns on `byte` being an identifier, and the reason `int`/`float`/`bool`
-were argued to be uncontestable is that no user TYPE may be declared under a keyword. That argument covers
-declarations and not bindings: D8 admits a keyword-named PARAMETER, so `function f(float Box)` puts a VALUE
+**AND THE KEYWORD QUALIFIERS HAVE THE SAME CONTEST AFTER ALL — NOT THROUGH A `type`, THROUGH A BINDING.**
+The case above turns on `byte` being an identifier, and the reason `int`/`float`/`bool`
+look uncontestable is that no user TYPE may be declared under a keyword. That argument covers
+declarations and not bindings: the language admits a keyword-named PARAMETER, so `function f(float Box)` puts a VALUE
 in scope under the name `float`, and `float.fromString(…)` is then a method call on that value — the
 identical token shape `primitiveStaticCallAt` claims.
 
 ⚠ **THE ARM ORDER IS WHAT DECIDES IT, AND NOTHING ELSE DOES.** Both readings route to `parseDottedPrimary`,
-which asks the scope BEFORE the type reading — so the binding wins, and the new arm changed no answer here.
+which asks the scope BEFORE the type reading — so the binding wins, and the primitive arm changes no answer here.
 That is a property of an ORDERING inside one routine, which is exactly the kind a green suite cannot see:
 hoist the primitive test above the scope test and this call silently stops calling the user's method and
 starts calling `stdlib/Builtins.maxon`'s parser, with no diagnostic anywhere. Pinned as an exit code so the
@@ -576,10 +572,10 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: error.unknown-primitive-static -->
 **AN UNKNOWN STATIC ON A PRIMITIVE NAMES WHAT THE AUTHOR WROTE — NEVER THE MANGLED SYMBOL.** Rewriting
 unconditionally reports `E2004: Undefined function '__int_frobnicate'`, naming a symbol the author never
-typed. The compiler ruled on that class at D11c, so the check that decides whether to rewrite is the same check
+typed. The compiler rules that class out, so the check that decides whether to rewrite is the same check
 that keeps the author's spelling in the message.
 
-⚠ **IT IS THE PARSER'S REFUSAL AND IT HAS TO BE — MEASURED BY REMOVING IT, IN TWO STEPS.**
+⚠ **IT IS THE PARSER'S REFUSAL AND IT HAS TO BE.**
 `isBuiltinConformanceImplName` declares every callee under `int.`/`float.`/`bool.` to be the compiler's own.
 Remove this refusal and the RESERVED-CALLEE gate catches the call instead, telling an author who wrote
 `int.frobnicate` that *"the `__` prefix names a compiler intrinsic"* — the right code, describing a program
@@ -603,8 +599,8 @@ error E2015: <fragment>:3:14: Unsupported: 'int' has no static method named 'fro
 nothing declares it compiler-owned — so an unresolved member is left to the authority for "no such
 function", `SemanticCheck`, reading the registry the real parse built. That is `parseQualifiedCall`'s own
 rule (*"the sweep must never own a veto"*) obeyed wherever it can be, and it is also what keeps a user's
-`type byte` answerable in its own terms rather than in the primitive's. This diagnostic is UNCHANGED by the
-rewrite — it is what the tree already reported — and pinning it is what would catch the refusal above
+`type byte` answerable in its own terms rather than in the primitive's. Pinning this diagnostic is what
+would catch the refusal above
 being widened to a qualifier that does not need it.
 ```maxon
 function main() returns ExitCode
@@ -617,18 +613,16 @@ error E3004: <fragment>:3:19: call to undefined function 'byte.frobnicate'
 ```
 
 <!-- test: error.minted-callee-arity-names-the-source-spelling -->
-**THE MINT MUST NOT REACH THE AUTHOR'S DIAGNOSTICS (A1s-prim, coordinator ruling).** `int.fromString` links
-to `__int_fromString`, so every message that quotes a callee had to be taught the difference or it would
-report the right error code about a program the reader does not have — the D11c class, which the compiler ruled on
-and fixed in its own compiler. MEASURED before the fix: `'__int_fromString' expects 1 argument(s) but 0 were
-provided`.
+**THE MINT MUST NOT REACH THE AUTHOR'S DIAGNOSTICS.** `int.fromString` links
+to `__int_fromString`, so every message that quotes a callee must know the difference or it would
+report the right error code about a program the reader does not have: `'__int_fromString' expects 1
+argument(s) but 0 were provided`.
 
 ⚠⚠ **AND THE ANSWER IS THE CALL SITE'S, NEVER THE NAME'S.** `stdlib/Builtins.maxon` declares
 `__int_fromString` AND CALLS it (`__byte_fromString`'s first line) having genuinely written those bytes, so
-a name-keyed rewrite would rename the author's own diagnostic in their own file — D12's lossy key with the
-arrow reversed. `MaxonOp.call`/`tryCall` therefore carry a `CalleeMint`, and `SemanticCheck`'s
-`callDiagnosticNoun` reads it. MEASURED in the other direction, by breaking that stdlib call: it reports
-`stdlib/Builtins.maxon:322:19: '__int_fromString' expects 1 argument(s) but 0 were provided` — the mangled
+a name-keyed rewrite would rename the author's own diagnostic in their own file. `MaxonOp.call`/`tryCall`
+therefore carry a `CalleeMint`, and `SemanticCheck`'s `callDiagnosticNoun` reads it. A broken call in that
+stdlib file reports `'__int_fromString' expects 1 argument(s) but 0 were provided` — the mangled
 name, in the file whose author wrote it. That half CANNOT be pinned by a fragment (the exemption is an
 identity compare against the real `<stdlibDir>/Builtins.maxon`, which no spec file can be), so it is
 recorded here rather than tested.
@@ -644,11 +638,11 @@ error E3036: <fragment>:3:18: 'int.fromString' expects 1 argument(s) but 0 were 
 
 <!-- test: error.minted-callee-missing-try-names-the-source-spelling -->
 **E3057 IS THE SAME LEAK AT THE MISTAKE PEOPLE ACTUALLY MAKE** — forgetting the `try` on a throwing call —
-so it is pinned beside the arity one rather than trusted to share its fix. Both nouns come from the single
-`callDiagnosticNoun` door; before it, this said `throwing function requires try: '__int_fromString'`.
+so it is pinned beside the arity one rather than trusted to share its door. Both nouns come from the single
+`callDiagnosticNoun` door; without it, this would say `throwing function requires try: '__int_fromString'`.
 
 ⚠ `byte.fromString` gets the identical treatment through the identical door — it is minted by the same
-routine at the same site — so the two doors of this rung cannot diverge on the noun either.
+routine at the same site — so the two doors cannot diverge on the noun either.
 ```maxon
 function main() returns ExitCode
 	let n = int.fromString("42")

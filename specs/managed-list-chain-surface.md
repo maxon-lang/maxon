@@ -5,18 +5,18 @@ keywords: [managed-list, insertAfter, insertBefore, reinsert, setValue, node, ow
 category: collections
 ---
 
-# The `__ManagedList` members `/specs/managed-list.md` declares and does not corner
+# The `__ManagedList` members `specs/managed-list.md` declares and does not corner
 
 ## Documentation
 
-`/specs/managed-list.md` is the canonical surface and its cases pin the ANSWERS: what `insertAfter`
+`specs/managed-list.md` declares the surface and its cases pin the ANSWERS: what `insertAfter`
 splices, what order a `reinsertFirst` leaves behind, that a `setValue`'s displaced value still reads.
 This file pins the things that spec's programs cannot reach — the states a node can be in when one of
 these members is handed it, and the ownership each member owes for the element it moves.
 
-Every program here uses a **heap `String`** element. That is not decoration: the `int` twin of these
-programs prints `0` for a use-after-free and balances no refcount at all, and it hid four of the five
-defects `W138` shipped.
+Every program here uses a **heap `String`** element. That is not decoration: an `int` version of these
+programs prints `0` for a use-after-free and balances no refcount at all, so it would hide most of the
+ownership defects these members can have.
 
 ### Which members write the chain, and which only read it
 
@@ -34,9 +34,7 @@ The two are different questions with different right answers, and the asymmetry 
 **this** chain's header. Handed a target that belongs to another chain — or a detached one, which has no
 neighbours at all — there is nothing correct it can do: splicing into the target's chain would leave the
 receiver unchanged while reporting success, and splicing into the receiver's would corrupt both. It
-aborts (`77`). ⚠ v1 does neither: its `link_after` documents a caller-side membership check that no
-caller of its own performs, and its `nodeNotInList` ordinal is never raised, so a cross-chain
-`insertAfter` there corrupts two chains silently.
+aborts (`77`).
 
 `reinsertFirst(node)` MOVES a node to this chain's head, and "wherever it is now" is part of what that
 means. It unlinks from the chain `owner@32` names — repairing **that** chain's header, which is the one
@@ -45,9 +43,9 @@ elsewhere (a move), detached (a relink), and the chain's element count is right 
 
 ### No reference is ever released by a reinsertion
 
-v1 increfs at the relink and decrefs the old chain's reference afterwards, and its own header records why
-the ORDER is load-bearing: a decref before the relink can take a lone reference to zero, free the node,
-and leave the relink writing through freed memory. The compiler takes neither of that pair. A linked node's chain
+An incref at the relink paired with a decref of the old chain's reference would make the ORDER
+load-bearing: a decref before the relink can take a lone reference to zero, free the node, and leave the
+relink writing through freed memory. The compiler takes neither of that pair. A linked node's chain
 reference is **handed over** — the unlink drops nothing and the relink takes nothing — and only a
 DETACHED node, which no chain holds a reference to, makes the new chain take one. There is no window in
 which a count passes through zero, because no count moves down.
@@ -334,11 +332,10 @@ the element that replaced it after the detach, on the heap 0
 
 <!-- test: setting-a-value-through-a-let-handle-is-refused -->
 `setValue` is the one member that WRITES a node, so a `let`-bound handle is refused exactly as a
-`let`-bound chain's `insertLast` is. `/specs/managed-list.md` writes `var node` for both of its
-`setValue` cases and `let` for every read-only one, so the canonical spec already spells the split.
+`let`-bound chain's `insertLast` is. `specs/managed-list.md` writes `var node` for both of its
+`setValue` cases and `let` for every read-only one, so that spec already spells the split.
 
-⚠ The runnable oracle accepts this program — it has no immutable-receiver rule on either chain surface at
-all, and the compiler's is a deliberate departure that predates this member. What would be wrong is to have every
+⚠ What would be wrong is to have every
 other write on these two types refused through a `let` and this one admitted.
 ```maxon
 typealias StrChain = __ManagedList with String
@@ -356,9 +353,9 @@ error E3019: <fragment>:7:4: cannot pass 'n' to function that mutates parameter 
 ```
 
 <!-- test: detaching-through-a-let-chain-is-refused -->
-`detach` writes `head@0`, `tail@8` and `count@16` and was missing from the receiver-write roster until
-`BATCH37` — so `ml.detach(n)` was accepted through a `let` where the identical `ml.remove(n)` was
-refused, which is one operation with two answers about the same binding. The chain is built in a helper
+`detach` writes `head@0`, `tail@8` and `count@16`, so it is on the receiver-write roster: `ml.detach(n)`
+through a `let` is refused exactly as the identical `ml.remove(n)` is, or one operation would give two
+answers about the same binding. The chain is built in a helper
 so the `let` can hold a populated one.
 ```maxon
 typealias StrChain = __ManagedList with String
@@ -385,9 +382,9 @@ error E3019: <fragment>:16:8: cannot pass 'chain' to function that mutates param
 ```
 
 <!-- test: a-discarded-insertion-mints-no-handle -->
-⭐ **`W148`.** An insertion whose node nobody reads pays no refcount round trip: `insertLast(x)` in
-statement position emits the link and nothing else, where it used to emit an `__mm_incref` and a
-`__list_node_decref` that the statement's own drain cancelled one instruction later.
+⭐ **A DISCARDED INSERTION.** An insertion whose node nobody reads pays no refcount round trip:
+`insertLast(x)` in statement position emits the link and nothing else — no `__mm_incref` for the
+statement's own drain to cancel with a `__list_node_decref` one instruction later.
 
 ⚠ **The predicate is not `resultUsed`**, and this case is the second half of why. A statement whose
 postfix chain CONTINUES — `chain.insertLast(x).value()` — forwards the last hop's `resultUsed` to the

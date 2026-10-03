@@ -18,7 +18,7 @@ it can cost in that second column, which is what the call rule below is about.
 
 ### The operands have to be RUNTIME values, or the case tests the wrong pass
 
-`foldConstants` (EC12) runs two passes earlier and evaluates `const <op> const` outright, so a
+`foldConstants` runs two passes earlier and evaluates `const <op> const` outright, so a
 repeated expression over literals is gone before this pass sees it. Every case below therefore feeds
 its expression a value the compiler cannot see through — a parameter, a loop counter, an argument —
 which is the only spelling that reaches this pass at all.
@@ -40,7 +40,7 @@ plus the dialect's own `isPure`, which this pass is the first reader of:
 - **MEMORY IS OUT, entirely and on purpose.** A `loadIndirect` is `isPure: false` — a load's value can
   be changed by a store the pass cannot see — so it is neither in the roster nor past the purity gate.
   Two loads of one address are left as two, ALWAYS, with no attempt at store invalidation. Hoisting
-  loads is `EC14`'s row, and it needs the aliasing analysis this rung does not have.
+  loads needs an aliasing analysis the pass does not have.
 - **FLOATS ARE IN**, and unlike constant folding that needs no argument about NaNs or signed zero:
   CSE changes no value, it reuses one the program already computed, so the bits are the bits the
   second `mulsd` would have produced.
@@ -55,9 +55,9 @@ other, so an expression computed in one is not reused in the other.
 `E5001`.** The compiler REFUSES rather than spills when a loop needs more registers than the target has, so a
 CSE that lengthens a live range is not "slower code", it is a compile error — and the ranges that cost
 most are those crossing a call, which are confined to the five callee-saved registers x64-windows
-leaves. MEASURED: without the rule,
+leaves. Without the rule,
 `generic-hash-table-regalloc/generic-hash-table-regalloc.witness-dispatch-inside-a-pressured-loop`
-went red with `E5001 … needs 1 more register`, for ONE reused expression.
+fails with `E5001 … needs 1 more register`, for ONE reused expression.
 
 ### Commutativity is a canonical ORDER, and it stops at the opcodes that have one
 
@@ -70,9 +70,9 @@ swap can change which payload propagates.
 ## Tests
 
 <!-- test: a-repeated-expression-is-computed-once -->
-The shape the row was opened for. Three occurrences of `x * 31 + y` over runtime operands: the
-committed fragment carries ONE `imulRegRegImm32` where it used to carry three, and the answer is the
-same either way, which is the point.
+Three occurrences of `x * 31 + y` over runtime operands: the committed fragment carries ONE
+`imulRegRegImm32` where the source spells three, and the answer is the same either way, which is the
+point.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 

@@ -39,7 +39,7 @@ routing context is set aside while it parses and put back afterwards — the bod
 on routing to the handler.
 
 ⚠ **EVERY OWNED VALUE HERE IS BUILT BY `build(x)`, WHICH INTERPOLATES, AND EVERY MOVE SOURCE IS A `var`.**
-Both are load-bearing rather than stylistic, and each was measured: a BARE String LITERAL is a static
+Both are load-bearing rather than stylistic: a BARE String LITERAL is a static
 constant that owns no heap, so a case using one is dropped by nobody and leaks nothing whatever the move
 state says; and a bind from an IMMUTABLE binding is an ALIAS rather than a move
 (`conditional-move-drops.md` states the second rule for its own corpus). With `let s = "…"` these programs
@@ -51,8 +51,8 @@ pass every expectation below while testing none of the subject.
 
 `fetch` returns an owned `String` and throws. The call is bare inside the block body, so it is routed —
 and its result is a managed temporary the statement already owes a drop for. The throw edge must not
-release it: on that edge the result register was never written. Before this was fixed the landing pad
-decref'd it and the program died with an access violation instead of reaching the handler.
+release it: on that edge the result register was never written. A landing pad that decref'd it would
+kill the program with an access violation instead of reaching the handler.
 
 <!-- test: routed-call-managed-result -->
 ```maxon
@@ -139,7 +139,8 @@ got=fetched 1 padded out long enough to heap allocate
 
 The closure is a lifted function with its own parse context. The routing stack is set aside for it and
 restored afterwards, so `step()` on the following line still routes to the handler. Without the restore
-the body parsed with an empty stack: the throwing call stopped routing and the body's `end` panicked.
+the body would parse with an empty stack: the throwing call would stop routing and the body's `end`
+would panic.
 
 <!-- test: closure-in-try-block-body -->
 ```maxon

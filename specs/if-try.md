@@ -848,8 +848,8 @@ end 'main'
 <!-- test: error.if-try-discards-a-result -->
 `if try` is a THROW test, not a value test: the then-block runs whenever the call did not throw,
 whatever it produced. So a callee with a result has that result silently dropped while the source
-reads as though the result were what is being tested. MEASURED before this refusal existed — this
-exact program compiled, and `answer(true)` returning `false` still took the branch and exited 7.
+reads as though the result were what is being tested. Without this refusal this exact program would
+compile, and `answer(true)` returning `false` would still take the branch and exit 7.
 
 ```maxon
 
@@ -1055,9 +1055,9 @@ end 'main'
 The DUAL of the rule above, and the same question from the other side: a binding is a value
 position, so `if let x = try runStep()` asks for a value the call does not produce. It is the fault
 the expression `try` already refuses (`let x = try runStep() otherwise …`), with the same code, the
-same sentence and the same anchor — the condition form shares that rewrite and had never shared the
-question about its result. MEASURED before this refusal existed: The compiler did not survive it — it
-PANICKED in `maxonTypeOfTag`, "a `void` tag names no value".
+same sentence and the same anchor — the condition form shares that rewrite, so it shares the
+question about its result. Without this refusal the compiler would not survive it — it would
+PANIC in `maxonTypeOfTag`, "a `void` tag names no value".
 
 ```maxon
 

@@ -11,22 +11,20 @@ category: runtime
 
 `ExitCode` is a **narrow declared type**, and its range is **the compile TARGET's**: `int(0 to u32.max)`
 on Windows, `int(0 to 255)` on Linux, macOS and WASI — the platform's own exit-status domain, which is
-what `stdlib/Process.maxon` has always said and what `docs/LANGUAGE_REFERENCE.md` states at the entry
+what `stdlib/Process.maxon` says and what `docs/LANGUAGE_REFERENCE.md` states at the entry
 point. It is a builtin rather than a `typealias` the program writes, and that is the only thing that
 distinguishes it from `typealias Percent = int(0 to 100)`. **It is not a distinction the range rule may
 see.**
 
-⭐⭐ **THE RANGE IS NOT THE WIDTH, AND THE SENTENCE THAT STOOD HERE DERIVED ONE FROM THE OTHER.** It read
-*"the compiler gives it a 32-bit unsigned representation, **so** its range is `int(0 to 4294967295)`"* —
-which is the whole defect BATCH27 fixed, written down as a definition. The two are separate facts and
+⭐⭐ **THE RANGE IS NOT THE WIDTH, AND NEITHER IS DERIVED FROM THE OTHER.** The two are separate facts and
 only one of them is platform-shaped:
 
 - the **WIDTH is `u32` on every target** (`valueTagToStdType`), and deliberately stays there;
 - the **RANGE is the platform's**, and on three of four targets it is far narrower than the width.
 
 ⛔ **THE RANGE BEING NARROWER THAN THE SLOT IS WHAT MAKES THE ENTRY GUARD WORK, so the width may not
-follow the range down.** The runtime half of the call-argument door is a guard at the CALLEE'S ENTRY
-(`A1f`), which reads the value out of the parameter slot *after* the ABI has narrowed it. A guard can
+follow the range down.** The runtime half of the call-argument door is a guard at the CALLEE'S ENTRY,
+which reads the value out of the parameter slot *after* the ABI has narrowed it. A guard can
 only see a truncation while the slot is WIDER than the range: give `ExitCode` a `u8` slot on a POSIX
 lane and `takes(opaque(0) - 5)` arrives as `251`, which is inside `int(0 to 255)`, and the guard passes
 a value the program never wrote. `Project.maxon`'s `ExitCode` seed and
@@ -42,48 +40,41 @@ element:
 - **A value the compiler cannot fold** gets a **runtime range check** where it lands. Out of range, the
   program panics naming `ExitCode`, exactly as it would name any other alias.
 
-### ⚠ Why this needed saying at all
+### ⚠ Why this needs saying at all
 
-Before X6 the builtin recorded no range anywhere: `int(0 to u32.max)` was a *sentence in a comment*
-beside the shift rule, and the width `u32` was a `StdType` chosen at the Maxon→Std boundary. Nothing
-connected the two, and nothing checked either. A `returns ExitCode` function returning `-1` therefore
-compiled clean and **gave a different answer on each target** — `-1` on x64, `4294967295` on wasm —
-because the two disagree about how wide a register holding a `u32` is, and neither was asked to hold a
-value the type admits.
+A builtin with no recorded range — its range a *sentence in a comment*, its width a `StdType` chosen at
+the Maxon→Std boundary, nothing connecting the two and nothing checking either — lets a `returns ExitCode`
+function returning `-1` compile clean and **give a different answer on each target** — `-1` on x64,
+`4294967295` on wasm — because the two disagree about how wide a register holding a `u32` is, and neither
+is asked to hold a value the type admits.
 
-**The disagreement was the symptom; the missing check was the defect.** Widening the wasm
-representation until the two agreed would have made the declared type a lie about representation and
-left every out-of-range value silently accepted on both. The range is the type's promise, so the range
+**The disagreement is the symptom; the missing check is the defect.** Widening the wasm
+representation until the two agreed would make the declared type a lie about representation and
+leave every out-of-range value silently accepted on both. The range is the type's promise, so the range
 is what is enforced.
 
-⚠ **AND X6 THEN WROTE THE WIDTH'S SPAN DOWN AS THE RANGE, WHICH IS WHERE BATCH27 CAME IN.** X6's story
-above is unchanged and still true — the missing check was the defect, and X6 built the check. What X6
-also did was answer *"what range?"* with *"whatever the `u32` slot spans"*, so the builtin's declared
-range became `int(0 to u32.max)` on every target. That number was never the language's: it was the
-representation's, read off the slot the lowering happened to pick, and it disagreed with
-`stdlib/Process.maxon`, with `docs/LANGUAGE_REFERENCE.md` and with the oracle — all three of which key
-the exit-status domain by the OS, because the OS is what defines it.
+⚠ **AND THE RANGE IS NOT THE SPAN OF THE WIDTH.** Answering *"what range?"* with *"whatever the `u32` slot
+spans"* gives `int(0 to u32.max)` on every target — the representation's number, read off the slot the
+lowering picks, not the language's. It disagrees with `stdlib/Process.maxon` and with
+`docs/LANGUAGE_REFERENCE.md` — both of which key the exit-status domain by the OS,
+because the OS is what defines it.
 
-⭐ **AND ONE SPEC IN THIS CORPUS GOT THERE FIRST, WHICH IS WHY THIS WAS FINDABLE AT ALL.**
-`function-overloads.md`'s `enum-raw-value-argument` already states the platform rule correctly — *"`ExitCode`
+`function-overloads.md`'s `enum-raw-value-argument` states the same platform rule — *"`ExitCode`
 is `int(0 to u32.max)` on Windows but `int(0 to 255)` on Linux, macOS and wasi (`stdlib/Process.maxon`)"* —
-and it says so because a case there was RED on every non-Windows target until its addends were made small.
-It predates this rung and is the one `ExitCode`-range sentence in the corpus that needed no correction; the
-rest of the corpus was quoting the compiler's own answer back at itself.
+and keeps its addends small so that it runs on every target.
 
-**Deriving the range from the width did not merely quote a wrong number; it made two doors unable to
-refuse anything.** At `u32` width `int(0 to u32.max)` **is** the full span of the slot, so *every bit
-pattern is in range*: there is no predicate that separates a wrapped `-5` from an honest `4294967291`,
-and no check standing anywhere on that value can fire. That is why this spec spent a rung asserting the
-call-argument door could not be closed without moving the guard to the call site (see below) — the
-missing mechanism was never a Std-IR argument position. It was a range that said something.
+**A range derived from the width would make two doors unable to refuse anything.** At `u32` width
+`int(0 to u32.max)` **is** the full span of the slot, so *every bit pattern is in range*: there is no
+predicate that separates a wrapped `-5` from an honest `4294967291`, and no check standing anywhere on that
+value can fire. What closes the call-argument door (see below) is not a Std-IR argument position; it is a
+range that says something.
 
 ## ⭐⭐ WHAT THE NARROWING COSTS THE OTHER LANES, AND WHY NOTHING BUYS IT BACK
 
-`ExitCode` was carrying a second job that had nothing to do with exit codes. **`valueTagToStdType` maps
+`ExitCode` carries a second job that has nothing to do with exit codes. **`valueTagToStdType` maps
 exactly ONE tag — `exitCode` — to `StdType.u32`; every other tag it can return is `i1`, `f64` or `i64`.**
 So `ExitCode` is the only INTEGER type in the language whose *values* are narrower than a machine word —
-`bool`'s `i1` is the other narrow one and can hold nothing above 1 — and it became the vehicle for six
+`bool`'s `i1` is the other narrow one and can hold nothing above 1 — and it is the vehicle for six
 cases that pin the behaviour of a narrow value slot on `wasm32-wasi`, where such a value lives in an
 `i32` local and has to be widened back:
 
@@ -96,13 +87,13 @@ cases that pin the behaviour of a narrow value slot on `wasm32-wasi`, where such
 | `division/divide-a-value-whose-declared-type-is-narrower-than-a-machine-word` | `div`/`mod`, which carry no operand type |
 | `closure-capture/closure-capture.capture-exitcode-wide-value` | the closure ENV slot's width |
 
-All six carry a value the platform range no longer admits (`4000000000`, or `100000` for the env slot),
-so all six now exclude every lane but x64-windows — the honest marker, because those programs are
+All six carry a value the POSIX range does not admit (`4000000000`, or `100000` for the env slot),
+so all six exclude every lane but x64-windows — the honest marker, because those programs are
 *illegal* on POSIX rather than untested there.
 
-⛔⛔ **AND THE READING THEY CARRIED IS NOT MERELY UNTESTED ON WASM NOW — IT IS UNREACHABLE, WHICH IS A
-STRONGER THING AND A MORE FRAGILE ONE. IT IS WRITTEN DOWN HERE BECAUSE IT IS WHAT A FUTURE RUNG WOULD
-BREAK.** The argument is two lines and both are premises, not observations:
+⛔⛔ **AND THE READING THEY CARRY IS NOT MERELY UNTESTED ON WASM — IT IS UNREACHABLE, WHICH IS A
+STRONGER THING AND A MORE FRAGILE ONE. IT IS WRITTEN DOWN HERE BECAUSE A CHANGE TO EITHER PREMISE
+BREAKS IT.** The argument is two lines and both are premises, not observations:
 
 1. **`exitCode` is the sole producer of a narrow VALUE type.** `StdType.u32` has two construction sites:
    `valueTagToStdType`'s `exitCode` arm, and `stdTypeOfAbiClass`, which re-derives it from the narrow BIT
@@ -112,29 +103,27 @@ BREAK.** The argument is two lines and both are premises, not observations:
    unsigned one at `2^31`. The band is empty.
 
 ⇒ **no legal program on those lanes can put a value in the disagreeing band.** The defect class is closed
-by construction there rather than by a case, and it stays closed only while BOTH premises hold: if P1.9
-gives some other value a sub-64 Std type, or a later rung widens the POSIX range past `2^31`, these six
+by construction there rather than by a case, and it stays closed only while BOTH premises hold: if some
+other value gets a sub-64 Std type, or the POSIX range widens past `2^31`, these six
 readings need a new vehicle and the wasm lane has no guard until they get one.
 
-⚠ **AN ARRAY ELEMENT LOOKS LIKE THAT VEHICLE AND IS NOT — MEASURED, and the measurement is the point.** A
+⚠ **AN ARRAY ELEMENT LOOKS LIKE THAT VEHICLE AND IS NOT.** A
 `u32`-ranged element genuinely gets a **4-byte STORAGE slot** (`rangedAliasStorageBytes` = 4, visible as
 the `i64.const 4` handed to `__managed_create`), and a `4000000000` pushed through one reads back identically
-on the host and on wasm. That is a true measurement of a *different* property. **The STORAGE width is not
+on the host and on wasm. That is a true statement of a *different* property. **The STORAGE width is not
 the VALUE width:** `__managed_get` is `(param i64 i64) (result i64 i64)`, the loaded element never occupies an
 `i32` local, and the emitted `main` for such a program contains **zero** `extend_i32` instructions of
 either signedness — `coerceOnStack` is never asked. A case built on that route would pass with the
 sign-extension defect fully present, which makes it a positive control and not a guard. It is not added,
 and this paragraph is here so the next reader does not re-derive the attractive wrong answer.
 
-✅ **`Targets/Wasm/StdToWasm.maxon`'s `coerceOnStack` header AGREES WITH THE PARAGRAPH ABOVE, AND THE
-READING IT REFUTES IS THE ATTRACTIVE ONE.** That reading holds the widen "stays reachable on wasm by a
-route that is not platform-shaped: a `u32`-RANGED ARRAY ELEMENT … The widen did not become untestable
-here; only `ExitCode` stopped being able to spell it." Its measurement — the 4-byte slot, and the value
+✅ **`Targets/Wasm/StdToWasm.maxon`'s `coerceOnStack` header AGREES WITH THE PARAGRAPH ABOVE**, and carries
+the same two premises this section does. The reading both refute is the attractive one: that the widen
+stays reachable on wasm through a `u32`-RANGED ARRAY ELEMENT. Its evidence — the 4-byte slot, and the value
 agreeing across targets — is real; its conclusion does not follow from it, for the reason above, and the
 disassembly is the arbiter. ⚠ **The refutation is written down rather than left implicit, because the
 wrong reading is reached independently by anyone who measures the 4-byte slot** — so a reader arriving at
-either file finds it rather than re-deriving the appeal. Do not read it as a live disagreement: `coerceOnStack`'s header carries
-the same two premises this section does.
+either file finds it rather than re-deriving the appeal.
 
 ## Tests
 
@@ -163,8 +152,8 @@ error E3005: <fragment>:3:3: Value -1 is outside the range of 'ExitCode' (int(0 
 ```
 
 <!-- test: error.negative-literal-cast -->
-The same rule at an explicit `as`. A cast to `ExitCode` used to be the canonical example of a cast that
-names no ranged alias and therefore records nothing; it names one now.
+The same rule at an explicit `as`. A cast to `ExitCode` names a ranged type and is checked against it,
+exactly as a cast to a user alias is.
 ```maxon
 function main() returns ExitCode
   let v = -1 as ExitCode
@@ -227,13 +216,11 @@ error E3005: <fragment>:7:10: Value -3 is outside the range of 'ExitCode' (int(0
 The negative control for every case above: an in-range literal is not a violation, and `7` still comes
 out of the process.
 
-⚠ **AND ITS FRAGMENT RECORDS THE PRICE, WHICH SINCE A4f IS ZERO — for a reason that is still the one this
-spec opens with.** `code`'s `return 7` is folded and needs no runtime check at all; `main`'s `return
+⚠ **AND ITS FRAGMENT RECORDS THE PRICE, WHICH IS ZERO — for the reason this spec opens with.** `code`'s `return 7` is folded and needs no runtime check at all; `main`'s `return
 code()` returns a CALL RESULT, which no constant fold can see, so it is decided by the ordinary rule
 every ranged alias gets — and that rule (`range-check-panic.md`, *"a value the destination PROVABLY
-admits"*) answers **contained**, because the source is an `ExitCode` and the destination is an `ExitCode`.
-Between X6 and A4f this fragment carried a full `0 ≤ x ≤ 4294967295` cascade over a value that had just
-passed the identical cascade one frame down. `ExitCode` being a builtin is not a distinction the range
+admits"*) answers **contained**, because the source is an `ExitCode` and the destination is an `ExitCode`,
+so the value that passed the cascade one frame down is not checked again. `ExitCode` being a builtin is not a distinction the range
 rule may see — in EITHER direction.
 ```maxon
 function code() returns ExitCode
@@ -250,7 +237,7 @@ end 'main'
 
 <!-- test: both-bounds-are-reachable-values -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-⭐ **THE CLAIM IS "BOTH ENDS ARE ORDINARY VALUES", AND SINCE BATCH27 THE TOP END IS A DIFFERENT NUMBER PER
+⭐ **THE CLAIM IS "BOTH ENDS ARE ORDINARY VALUES", AND THE TOP END IS A DIFFERENT NUMBER PER
 PLATFORM — so this is a TWIN PAIR, not one case with a marker.** A single case would have to pick one
 platform's top bound and would then be asserting the claim on one lane only; two cases assert it on all
 four. The bound is a `unsupported-targets:` restriction rather than a `` ```Stdout: `` fence because `4294967295` is
@@ -289,9 +276,9 @@ low=0 high=255
 ```
 
 <!-- test: computed-negative-return-panics -->
-⭐ **THE RUNTIME HALF, AND THE CASE THE WHOLE RUNG IS ABOUT.** The value is computed, so no literal
-check can see it; the `return` is where it meets `ExitCode` and where the guard stands. It printed `-1`
-on x64 and `4294967295` on wasm before this rung, with no diagnostic on either — a wrong answer that was
+⭐ **THE RUNTIME HALF, AND THE CASE THIS SPEC IS ABOUT.** The value is computed, so no literal
+check can see it; the `return` is where it meets `ExitCode` and where the guard stands. Unguarded, it
+would print `-1` on x64 and `4294967295` on wasm, with no diagnostic on either — a wrong answer that is
 not even the SAME wrong answer.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -343,45 +330,40 @@ end 'main'
 7
 ```
 
-### ⭐⭐ THE DOOR WHERE THE ABI NARROWS BEFORE THE GUARD RUNS — CLOSED, AND NOT BY THE CURE THIS SECTION USED TO NAME
+### ⭐⭐ THE DOOR WHERE THE ABI NARROWS BEFORE THE GUARD RUNS — CLOSED BY THE RANGE, NOT BY MOVING THE GUARD
 
 Every door here guards the value while it is still a full machine word: a `return`'s guard runs before
 the `ret` narrows to the u32 return slot, a cast's before the value is used, a struct field's before the
 store (a field declared `ExitCode` takes `alias.underlying`, an 8-byte slot, and an env slot is widened
-outright by `envSlotStorageType`). **The call ARGUMENT is the one door whose guard reads the value AFTER
-a narrowing** — `A1f` put the runtime half at the **callee's entry**, one guard per narrowed parameter,
+outright by `wordSlotStorageType`). **The call ARGUMENT is the one door whose guard reads the value AFTER
+a narrowing** — the runtime half stands at the **callee's entry**, one guard per narrowed parameter,
 standing in front of every caller including the indirect ones — and that rests on a premise a narrowing
-ABI falsifies: *the value the callee sees is the value the caller passed.* **MEASURED:**
+ABI falsifies: *the value the callee sees is the value the caller passed.*
 `takes(opaque(0) - 5)` arrives inside `takes` as `4294967291` on wasm, byte-for-byte the *legitimate*
 `takes(opaque(4294967291))`. x64 refuses `-5` only because its registers never narrowed it.
 
-⛔⛔ **THIS SECTION USED TO CONCLUDE "⇒ THE GUARD HAS TO MOVE TO THE CALLER", AND THAT WAS WRONG — the
-diagnosis, not the observation.** The observation above is exact and stands. What did not survive is the
-cure it was read as needing: an argument position in the Std IR for every argument (the side table records
-only CONSTANT ones today, `recordConstantArgRangeChecks`) plus an answer to the indirect-call question
-`A1f` chose the entry to solve. **None of that was built and none of it was needed.**
+⛔⛔ **THE GUARD DOES NOT HAVE TO MOVE TO THE CALLER.** Moving it would need an argument position in the
+Std IR for every argument (the side table records only CONSTANT ones, `recordConstantArgRangeChecks`) plus
+an answer to the indirect-call question the entry position solves. **None of that is needed.**
 
-Read the sentence the old text argued from: *"at `u32` width `int(0 to u32.max)` **is** the FULL range,
-so every bit pattern is in range and there is no predicate that separates the two."* That is true — and
-it is a statement about **the range**, not about where the guard stands. The identity existed only
-because X6 derived the RANGE from the WIDTH. Give `ExitCode` its true platform range and the two values
-stop being the same value: `4294967291` is outside `int(0 to 255)`, and the entry guard X6 already built
-separates them at the entry, where it already stood. **BATCH27 closed this door by narrowing the range
-and changing nothing about the guard's position.**
+*"At `u32` width `int(0 to u32.max)` **is** the FULL range, so every bit pattern is in range and there is
+no predicate that separates the two"* is true — and it is a statement about **the range**, not about where
+the guard stands. The identity holds only for a RANGE derived from the WIDTH. With `ExitCode`'s true
+platform range the two values are not the same value: `4294967291` is outside `int(0 to 255)`, and the
+entry guard separates them at the entry. **The range closes this door, with the guard where it stands.**
 
-⚠ **AND HERE IS WHAT WOULD RE-BREAK IT, because the cure is a RELATION between two numbers rather than a
+⚠ **AND HERE IS WHAT WOULD BREAK IT, because the cure is a RELATION between two numbers rather than a
 number.** A guard at the callee's entry can only see a truncation while the **slot is WIDER than the
-range**. `ExitCode`'s slot is deliberately still `u32` on every target: put a `u8` slot under it on a
+range**. `ExitCode`'s slot is deliberately `u32` on every target: put a `u8` slot under it on a
 POSIX lane — the width that "obviously" matches an `int(0 to 255)` — and `-5` arrives as `251`, which is
-*inside* the range, and the guard passes it. The wrong answer returns wearing a check.
+*inside* the range, and the guard passes it. The wrong answer would come back wearing a check.
 `Targets/Wasm/StdToWasm.maxon`'s `coerceOnStack` carries the same warning at the place someone would
 reach for that `u8`.
 
-⚠ The compile-time half of this door was never affected and is closed on every target — `takes(-3)`
-above never builds.
+⚠ The compile-time half of this door is closed on every target — `takes(-3)` above never builds.
 
 <!-- test: computed-argument-is-guarded-at-the-callee-entry -->
-The half that held even before the range was narrowed: where the ABI passes the argument at full width,
+The half that holds whatever the range: where the ABI passes the argument at full width,
 the entry guard refuses it, and the panic names the parameter's own declaration line rather than the
 caller's — one guard serves every call site, so the caller's line is not a fact it holds.
 ```maxon
@@ -424,9 +406,9 @@ two pin different facts: the sibling says the guard catches a value the ABI *did
 says it still catches a value the ABI *did* narrow. A single portable case would assert the weaker of the
 two on every lane and the stronger one nowhere.
 
-⚠ **WHAT MADE IT PASS WAS THE RANGE, NOT THE GUARD'S POSITION** — see the section above. The truncated
-`-5` still arrives as `4294967291`; what changed is that `4294967291` is no longer a value `ExitCode`
-admits on this lane, so the guard that was already standing at the entry has something to refuse.
+⚠ **WHAT MAKES IT PASS IS THE RANGE, NOT THE GUARD'S POSITION** — see the section above. The truncated
+`-5` arrives as `4294967291`, which is not a value `ExitCode` admits on this lane, so the guard standing
+at the entry has something to refuse.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -455,31 +437,25 @@ Stack trace:
   in mrt_start
 ```
 
-### Joins, and the return sites a guard never reached
+### Joins, and the return sites a guard must reach
 
-⭐⭐ **THESE ARE REGRESSION CASES FOR A MEASURED WRONG ANSWER, NOT NEW SURFACE.** X6 built the
-guard and its elision path; the elision is correct wherever the value's own range is already inside the
-declared one. **It is NOT correct at a JOIN whose incoming value is wider than the declared type** — the
-premise the guard stands on is lost at the phi — nor at a `return` in a `throws` function, which never
-got a guard at all. Found 2026-08-03 by the `G14` review while auditing 604 guards the re-mint would
-otherwise have deleted from the record.
+⭐⭐ **THESE ARE REGRESSION CASES FOR A WRONG ANSWER, NOT NEW SURFACE.** The guard's elision is correct
+wherever the value's own range is already inside the declared one. **It is NOT correct at a JOIN whose
+incoming value is wider than the declared type** — the premise the guard stands on is lost at the phi —
+and a `return` in a `throws` function owes its guard exactly as any other `return` does.
 
-⚠⚠ **TWO SENTENCES THAT STOOD HERE WERE WRONG, AND BOTH MADE THE DEFECT LOOK SMALLER THAN IT IS (G14
-implementation).** They are corrected rather than deleted, because each one names a probe that was run
-and a conclusion that did not survive a second probe:
+⚠⚠ **TWO READINGS MAKE THE DEFECT LOOK SMALLER THAN IT IS, AND BOTH ARE WRONG:**
 
   * *"a `return` inside a `throws` function's **`match` arm**"* — the `match` is not the trigger. The
-    terminator is: a throwing function leaves through `errorReturn` rather than `ret`, and the pass
-    resolving a return site recognised only `ret`. **Every ranged `return` in every `throws` function
-    was unguarded**, `match` or no `match`, which
+    terminator is: a throwing function leaves through `errorReturn` rather than `ret`, so the pass
+    resolving a return site must recognise both. **Every ranged `return` in every `throws` function**
+    needs the guard, `match` or no `match`, which
     `throws-plain-return-is-guarded` below pins in its general form.
-  * *"**`try/otherwise` does NOT lose it** (measured), which is why `trycont` is excluded"* — measured
-    with a LITERAL fallback, which is the one shape that is separately checked at compile time
-    (`requireOtherwiseInRangedReturn` refuses an out-of-range literal and is documented as checking
-    nothing else). Swap the literal for a variable and the merge loses the premise exactly as the other
-    joins do — `try-otherwise-nonliteral-fallback-is-guarded` below. The asymmetry was an artifact of
-    the probe, not a property of `trycont`; `otherwise <literal>` still elides, and that is a fact about
-    the LITERAL rather than about `try`.
+  * *"**`try/otherwise` does NOT lose it**"* — true only with a LITERAL fallback, which is the one shape
+    that is separately checked at compile time (`requireOtherwiseInRangedReturn` refuses an out-of-range
+    literal and checks nothing else). With a variable the merge loses the premise exactly as the other
+    joins do — `try-otherwise-nonliteral-fallback-is-guarded` below. `otherwise <literal>` elides, and
+    that is a fact about the LITERAL rather than about `try`.
 
 <!-- test: join-in-a-gives-arm-is-guarded -->
 ```maxon
@@ -553,12 +529,11 @@ Stack trace:
 ```
 
 <!-- test: in-range-join-is-guarded-and-passes -->
-⛔ **THIS CASE WAS CALLED `in-range-join-still-elides-and-returns`, AND IT DOES NOT ELIDE (G14 review).**
+⛔ **THIS CASE DOES NOT ELIDE.**
 Its own committed fragment carries the `__rc_panic` block, and the emitted `matchcont` runs the full
 `0 ≤ x ≤ 1000` cascade — because `a + b` denotes no alias, so the arm proves nothing and the merge keeps
-its withheld claim. That is CORRECT and is exactly why the sibling above panics on `900 + 900`; what was
-wrong was the name, which promised an observation this case structurally cannot make. **A runtime case
-cannot see an elision at all** — an emitted guard and an elided one are the same PASS on an in-range
+its withheld claim. That is CORRECT and is exactly why the sibling above panics on `900 + 900`. **A runtime
+case cannot see an elision at all** — an emitted guard and an elided one are the same PASS on an in-range
 value — so what it pins is the other half, and the honest half: the withheld claim does not turn a
 program the range admits into a panic. The elision control is the FRAGMENT, and the `otherwise 0` corpus.
 ```maxon
@@ -624,16 +599,16 @@ Stack trace:
 ```
 
 <!-- test: try-otherwise-nonliteral-fallback-is-guarded -->
-⭐ **THE `try` MERGE IS A MERGE LIKE THE OTHERS — the case that retired this section's "`try/otherwise`
-does NOT lose it".** The continuation phi is named off the callee's return type, so it claims `Num`;
-the ok edge earns that claim (the callee guards its own `return`), but a VARIABLE fallback earns
-nothing — only a LITERAL fallback is checked, and only at compile time. `5000` therefore reached a
-`returns Num` caller's `return` wearing `Num`, and the guard was elided on it.
+⭐ **THE `try` MERGE IS A MERGE LIKE THE OTHERS.** The continuation phi is named off the callee's return
+type, so it claims `Num`; the ok edge earns that claim (the callee guards its own `return`), but a VARIABLE
+fallback earns nothing — only a LITERAL fallback is checked, and only at compile time. Without the claim
+withheld, `5000` would reach a `returns Num` caller's `return` wearing `Num`, and the guard would be elided
+on it.
 
-⚠ Its negative control is the whole `otherwise 0` corpus and its FRAGMENTS: the fix withholds the claim
+⚠ Its negative control is the whole `otherwise 0` corpus and its FRAGMENTS: the claim is withheld
 per EDGE, not per construct, so a literal fallback still proves and still elides. Both halves are needed
-— a fix that guarded every `trycont` would pass this case and be wrong. ⛔ `in-range-join-is-guarded-and-passes`
-is NOT the elision half and was named as though it were; a runtime case cannot distinguish an emitted
+— guarding every `trycont` would pass this case and be wrong. ⛔ `in-range-join-is-guarded-and-passes`
+is NOT the elision half; a runtime case cannot distinguish an emitted
 guard from an elided one on a value the range admits (see its own header). Only a fragment can.
 ```maxon
 typealias Num = int(0 to 1000)

@@ -19,32 +19,16 @@ looks at it. It would be hoisted to the preheader, and the loop would read the v
 held before it started — for ever. A **silent wrong answer**, not a crash: the program
 compiles, runs, and returns a plausible number.
 
-### ⚠ This case is a STANDING GUARD, not a live gate — and it must say so
+### ⚠ What this case pins
 
-**Nothing in the compiler hoists, and `StdOpMeta.isPure` has ZERO readers** (measured 2026-07-15: a
-per-field sweep of all nine `StdOpMeta` fields, plus a sabotage — with `loadIndirect` flipped
-to `isPure: true`, the whole suite still passes **371/0, exit 0**, this case included). The
-pipeline is `resolveTypes → semanticCheck → lowerMaxonToStd → pruneDeadBlockArgs →
-elimTrivialBlockArgs → foldConstOperands`; the flag's readers (DCE/CSE/LICM, the inliner) are
-scheduled, not present.
+The case pins the **ANSWER** — 5, not 1 — so a wrong purity declaration is caught by a test rather
+than by a program returning a plausible number in production.
 
-So this case **cannot fail today for the reason it exists**, and an earlier draft of this file
-called `isPure: false` "that op's one load-bearing declaration", which is not true yet. What
-the case does do is pin the **ANSWER** — 5, not 1 — so that on the day a hoisting pass lands,
-a wrong purity declaration is caught by a test that already exists rather than by a program
-returning a plausible number in production. That is worth having, and it is a different claim.
-**See OPEN.md #27.**
+`global-load-not-hoisted.md` is the GLOBAL twin. This file is the STRUCT twin, and it belongs beside
+it: the two are one declaration, reached through two surfaces.
 
-`global-load-not-hoisted.md` is the GLOBAL twin (P1.0d.5b), a standing guard on the same
-footing. This file is the STRUCT twin, and it belongs beside it: the two are one declaration,
-reached through two surfaces.
-
-This case is COMPILER-AUTHORED rather than ported, and the reason is worth recording. The corpus
-has no reachable case that writes a scalar struct field inside a loop — `/specs` covers field
-assignment (`challenge-struct-field-assign.md`) and covers loops, and never crosses the two.
-Wave 1 shipped field READS, but with no way to WRITE a field the hazard was unobservable;
-P1.1a wave 2 creates the observability, so P1.1a wave 2 pins it. (Precedent: P1.0d.5b
-authored the `var` twin of `file-private-same-name-cross-file` on the same grounds.)
+No other case writes a scalar struct field inside a loop — the suite covers field assignment
+(`challenge-struct-field-assign.md`) and covers loops, and never crosses the two.
 
 ## Tests
 
@@ -54,8 +38,8 @@ a store. Five iterations of `c.value = c.value + 1` from 0 give **5**. A hoisted
 read 0 on every iteration, store 1 every time, and return **1** — a plausible number, and the
 reason the exit code is the only gate that can see this.
 
-(It returns 5 today whatever `isPure` says, because nothing hoists — see the guard note above.
-The value of the case is that it is already here when the first hoister arrives.)
+`loopInvariantCodeMotion` hoists a load only out of a loop whose blocks write no memory, and this
+loop stores to the field it reads, so the load stays in the body.
 
 ```maxon
 

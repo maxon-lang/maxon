@@ -1,45 +1,25 @@
 // Runtime/GraphemeRuntime.maxon — the `Character` values a grapheme scan mints, and the three array
-// views over a String's bytes (P1.8 slice B / slice E).
+// views over a String's bytes.
 //
 // ⭐ **A `Character` IS A STRING RECORD.** It carries the same fused 56-byte layout `StringRuntime` owns
 // (`buffer@0`, `length@8`, `capacity@16`, `elementSize@24`, `parent@32`, `element_destroy@40`,
-// `singleByteGraphemes@48` — the first SIX slots are a whole `__ManagedMemory` since W157), holding one
+// `singleByteGraphemes@48` — the first SIX slots are a whole `__ManagedMemory`), holding one
 // grapheme cluster's UTF-8 bytes — so it is dropped by `__str_decref`, cloned by `__str_clone`, printed by
 // reading `buffer@0`/`length@8`, and compared by `__str_eq`. Not one line of that machinery is rebuilt
 // here; this file adds only the one MINTING door and the views. The type-level distinction between a
 // String and a Character lives entirely in `MaxonType`/`ValueTypeTag` — see `TypeRules.tagIsByteRecord`,
 // which states exactly which questions the shared representation answers and which it does not.
 //
-// ⭐⭐ **THE SEGMENTER USED TO LIVE HERE, AS A HAND-BUILT `StdOp` PORT OF
-// `stdlib/helpers/string/grapheme.maxon`. IT IS GONE, AND THE CORPUS IS NOW THE ONE IMPLEMENTATION.**
-// 661 lines went: the UAX #29 property table (`__gbp`), the Extended_Pictographic table (`__ext_pict`),
-// the GB3–GB999 rules (`__gr_break`), the RI/emoji state machine (`__gr_state`), the segmenter itself
-// (`__gr_end`), the counter (`__gr_count`) and the two UTF-8 decoders (`__utf8_cp_at` / `__utf8_len_at`).
-// Every one of them had a twin in `stdlib/helpers/string/`, which the compiler has LOADED since BATCH2 slice 6 —
-// so `s.count()` ran the port while a user's own `countGraphemes(s)` ran the corpus, two implementations
-// of one table that a differential spec existed only to keep in agreement.
-//
-// The port was written when its premise was true — *"the compiler reads no stdlib"* — and the premise expired
-// without the code noticing. What replaced it is not a mechanism: `for c in s` emits an ORDINARY Maxon-tier
-// call (`Parser.CorpusFindGraphemeEnd`) and `String.count()` is a corpus body calling a corpus body, so
-// every edge is one the reachability walk follows for itself.
+// ⭐⭐ **GRAPHEME SEGMENTATION IS THE CORPUS'S ALONE** (`stdlib/helpers/string/grapheme.maxon`).
+// `for c in s` emits an ORDINARY Maxon-tier call (`Parser.CorpusFindGraphemeEnd`) and
+// `String.count()` is a corpus body calling a corpus body, so every edge is one the reachability
+// walk follows for itself. A `StdOp` segmenter here would be a second implementation of one table.
 //
 // ⚠⚠ **NO BODY IN THIS FILE NAMES A CORPUS FUNCTION, WHICH IS THE STATE TO KNOW BEFORE ADDING ONE.** A Std
 // body naming a corpus callee does it from inside a graph no Maxon module contains, so the edge does not
 // exist when reachability is computed and it has to be declared —
 // `StdlibSource.markCorpusCalleesOfSynthesizedRuntime` is the seed that would have to be rebuilt; see the
 // paragraph `StdlibSource` keeps where it stood, which records the two things it paid for.
-//
-// ⚠ **NEITHER OF THE PORT'S TWO DOCUMENTED DIVERGENCES IS THIS FILE'S.** The CRLF one is against the
-// reference's `computeGraphemeLen` shortcut, which the port declines to copy: the corpus's own
-// `countGraphemes` → `findGraphemeEnd` honours GB3 and answers **1** for a CR followed by an LF, which is
-// what `grapheme-clusters/grapheme-boundary-crlf` pins. The Extend-block gap is the corpus's to own.
-//
-// ⚠ **AND ONE DIVERGENCE WAS REAL, UNDOCUMENTED, AND THE PORT WAS THE CORRECT SIDE.** A truncated UTF-8
-// sequence made the corpus `panic` where the port decoded the lead byte and advanced one. Converging
-// surfaced it as a red spec (`string-views/truncated-sequences-stop-at-the-buffer-end`) and the rule moved
-// INTO the corpus (`utf8.maxon`'s `utf8WidthFits`), because a lead byte that promises more than the buffer
-// holds is a reachable input — `String.from(bytes)` — and not a corrupt-memory signal.
 
 // ⭐⭐ **THE UTF-8 ENCODING'S BIT LAYOUT — THE ONE DECLARATION, `export`ed, exactly as `StringRuntime`
 // exports the fused record's field offsets** (`stdlib/helpers/string/utf8.maxon`, verbatim). The three
@@ -124,9 +104,9 @@ let Utf8FourByteLength = 4 as ParsedInt
 //     endPos)`. The ONE door a Character is born through.
 //   * `__char_from_cp(cp)` — mint an OWNED `Character` from a CODEPOINT, `__char_at`'s dual: it ENCODES
 //     UTF-8 where that one copies already-encoded bytes. The one producer of a Character with no String
-//     behind it, and what makes `for c in 'a' to 'e'` yield Characters (A5m-ab).
+//     behind it, and what makes `for c in 'a' to 'e'` yield Characters.
 //   * `__char_cmp(a, b)` — `a.compare(b)` as an `Ordering` tag: the lexicographic byte order of two
-//     Characters (`stdlib/Character.maxon:80-104`), which is what `<`/`>`/`<=`/`>=` lower to (A5m-c). It
+//     Characters (`stdlib/Character.maxon:80-104`), which is what `<`/`>`/`<=`/`>=` lower to. It
 //     BORROWS both records. The GRAPH is `BuiltinConformanceRuntime.buildByteRecordCompare`, installed there
 //     under `Character.compare` for the witness door as well — see it for why the operator door needs a
 //     `__`-prefixed name of its own rather than calling the conformer symbol the way `int.compare` is called.
@@ -159,16 +139,16 @@ export let StrToBytesName = b"__str_to_bytes"
 // the ABI's sake only, which is `__gt_process_run`'s arrangement with `RunProcessError`, verbatim. The day a
 // case discriminates `notAscii`, seed the enum in `Project` and add the arm — both, in one edit.
 //
-// ⛔⛔ **SEEDING AND GUARDING ARE TWO DIFFERENT QUESTIONS, AND THE PARAGRAPH ABOVE ANSWERED ONLY ONE — SO
-// THIS FAMILY'S ORDINAL WENT UNWATCHED (W135 review).** "No case discriminates it" is an argument about the
-// DECODE half, and it is sound; it says nothing about the ENCODE half, which is the literal `0` below held
-// against a case position `stdlib/Character.maxon` owns. MEASURED: inserting a case ahead of `notAscii`
-// there moved the declared ordinal to 1 while `buildCharAscii` went on emitting 0, and the compile exited
-// **0 with no diagnostic** — the same silence `BuiltinErrorOrdinalCheck.requireTotal` had just withdrawn
-// from the six families that WERE on `Compiler.compileToCodeResult`'s roster. `RunProcessError`, named
-// above as the identical arrangement, is NOT the identical case and needs no guard: its ordinals name a
-// type no corpus file declares (`GtRuntime`'s own header — that is what makes an `otherwise (e)` decode
-// land on scalars), so it has no second half to drift from, exactly as retired `StringError` has none.
+// ⛔⛔ **SEEDING AND GUARDING ARE TWO DIFFERENT QUESTIONS, AND THE PARAGRAPH ABOVE ANSWERS ONLY ONE.** "No
+// case discriminates it" is an argument about the DECODE half, and it is sound; it says nothing
+// about the ENCODE half, which is the literal `0` below held against a case position
+// `stdlib/Character.maxon` owns. Inserting a case ahead of `notAscii` there moves the declared
+// ordinal to 1 while `buildCharAscii` goes on emitting 0, and unguarded the compile exits **0 with
+// no diagnostic** — the silence `BuiltinErrorOrdinalCheck.requireTotal` removes for the families on
+// its roster. `RunProcessError`, named above as the identical arrangement, is NOT the identical
+// case and needs no guard: its ordinals name a type no corpus file declares (`GtRuntime`'s own
+// header — that is what makes an `otherwise (e)` decode land on scalars), so it has no second half
+// to drift from, exactly as retired `StringError` has none.
 let CharacterNotAsciiOrdinal = 0 as ParsedInt
 let CharacterNotAsciiFlag = CharacterNotAsciiOrdinal + ErrorFlagOrdinalBias
 
@@ -213,12 +193,6 @@ export function isThrowingCharacterRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(CharAsciiValueName)
 end 'isThrowingCharacterRuntimeCallee'
 
-// ⚠ **THE FIVE UTF-16 ENCODING CONSTANTS STOOD HERE FOR `__str_to_utf16` AND WENT WITH IT (W49 wave 6).**
-// They were a second copy of `stdlib/helpers/string/utf16.maxon:49-60`'s numbers, named rather than written
-// bare because a surrogate split spelled as four literals is four chances to transpose a bound. With the
-// builder retired the corpus's `utf16LeadSurrogate`/`utf16TrailSurrogate` are the only statement of them,
-// which is one copy where there were two.
-
 // Install the referenced grapheme runtime functions into the lowered Std module. Called AFTER the
 // pipeline (like `installStringRuntime`), so these are appended already-lowered — what runs over that
 // appended band is stated once, in `Compiler.compileToCodeResult`'s install block.
@@ -259,7 +233,7 @@ end 'installGraphemeRuntime'
 // not, a one-byte ASCII cluster is marked non-ASCII, which only ever costs a fast path, never an answer.
 // Deriving it exactly would be a load, a compare and a phi per iteration for that.
 function buildCharAt(module StdModule)
-	var func = IrFunction.createFromStd(CharAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(CharAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -298,7 +272,7 @@ end 'buildCharAt'
 // lexer already accepted; a surrogate or an out-of-range number would encode to the same bytes the reference
 // encoder produces for it, which is the reference's behaviour too (`fromCodepoint` has no guard either).
 function buildCharFromCodepoint(module StdModule)
-	var func = IrFunction.createFromStd(CharFromCodepointName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(CharFromCodepointName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -443,7 +417,7 @@ end 'emitUtf8ContinuationByte'
 // is explicit that its 128 IS the ASCII boundary. A third and fourth spelling of them here is precisely the
 // drift that header records paying for once already.
 function buildCharAscii(module StdModule)
-	var func = IrFunction.createFromStd(CharAsciiValueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: characterThrows())
+	var func = IrFunction.createFromStd(CharAsciiValueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: characterThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -488,7 +462,7 @@ end 'buildCharAscii'
 // ⇒ The day a second counted byte walk is synthesized, extract it again: over three subjects the shared
 // skeleton measured 27 sabotage reds and was worth its keep.
 function buildStrToBytes(module StdModule)
-	var func = IrFunction.createFromStd(StrToBytesName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(StrToBytesName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

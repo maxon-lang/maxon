@@ -13,13 +13,11 @@ category: type-system
 `specs/implicit-type-conversion.md` states the rule for one position — a function ARGUMENT —
 and its `no-bool-to-int` / `no-int-to-bool` cases gate it there.
 
-That spec is the whole of the upstream corpus's coverage, and **the gap is why this bug
-survived**: The compiler rejected `takeInt(flag)` nowhere and `4 + flag` nowhere, and quietly compiled
-both, because a bool is an `i1` carrying 1 or 0 and every arithmetic instruction is perfectly
-willing to add it. `4 + flag` returned **5**. `4 * flag` returned **4**. `flag shl 4` returned
-**16**. `if 4` branched on `4 != 0` and was always taken. Every one of them was a *wrong
-answer*, not a crash — the worst kind of compiler bug, and the kind a spec exists to make
-impossible.
+That spec covers one position, and **every other position needs the rule too**: a bool is an
+`i1` carrying 1 or 0 and every arithmetic instruction is perfectly willing to add it. Without the
+rule, `4 + flag` returns **5**, `4 * flag` returns **4**, `flag shl 4` returns **16**, and `if 4`
+branches on `4 != 0` and is always taken. Every one of them is a *wrong answer*, not a crash —
+the worst kind of compiler bug, and the kind a spec exists to make impossible.
 
 The rule is ONE rule (`maxon-bin/Compiler/IR/Maxon/TypeRules.maxon` — `typesAgree`), and the
 cases below are the SYNTAXES it has to hold in:
@@ -47,7 +45,7 @@ is no incoming value to derive a type from.
 
 **Maxon has no C-style truthiness.** `if 4` is not "if 4 is nonzero"; it is a type error. The
 x64 tier tests a condition it cannot fuse with `cmp reg, 0` + `jne`, which is exactly right for
-a bool (a bool IS 0 or 1) and is precisely why an `int` condition silently "worked" — the
+a bool (a bool IS 0 or 1) and is precisely why an `int` condition would silently "work" — the
 instruction cannot tell an int from a bool. The TYPE can, so the front end is where this is
 decided.
 
@@ -55,12 +53,11 @@ Two things are deliberately still LEGAL, and are gated below so the rule cannot 
 over-applied: a comparison of two `bool`s (`a == b` — they agree), and the bitwise reading of
 the word operators on two ints (`12 and 10` — see `bitwise-operators.md`).
 
-### Authored, not ported
+### The positions this file owns
 
-`/specs` covers the ARGUMENT position only (`implicit-type-conversion.md`) and the word
-operators (which the compiler gates in `word-operator-mixed-operands.md`). It has no case anywhere for
-a bool in an arithmetic, shift, comparison, condition, negation or return position, so those
-are authored here. Their diagnostics are:
+The ARGUMENT position is `implicit-type-conversion.md`'s and the word operators are
+`word-operator-mixed-operands.md`'s. This file owns a bool in an arithmetic, shift, comparison,
+condition, negation or return position. Their diagnostics are:
 
 - `Cannot operate on int and bool` (E2004)
 - `type mismatch: 'cannot compare int with bool'` (E3005)
@@ -157,7 +154,7 @@ error E3005: <fragment>:5:12: operator '+' is not defined for type 'bool'
 
 ### Unary `-` needs a number
 
-Negating a bool negated its 1 payload and produced **-1** — which is still TRUE in a condition.
+Negating a bool would negate its 1 payload and produce **-1** — which is still TRUE in a condition.
 
 <!-- test: negate-bool -->
 ```maxon
@@ -176,8 +173,8 @@ error E2004: <fragment>:4:10: Cannot negate bool
 
 ### A comparison is CLASS-STRICT
 
-`4 < flag` compiled to `4 < 1` — a comparison against the bool's payload, which is not what the
-source says and is always false.
+Unrefused, `4 < flag` would compile to `4 < 1` — a comparison against the bool's payload, which is not
+what the source says and is always false.
 
 <!-- test: int-less-than-bool -->
 ```maxon
@@ -282,11 +279,11 @@ error E3005: <fragment>:5:5: 'if' requires a bool condition, got 'int'
 
 ### A reassignment cannot change a binding's type — which is what keeps a merge phi honest
 
-Each of the three cases below defeated EVERY other rule in this spec before the reassignment was
+Each of the three cases below defeats EVERY other rule in this spec unless the reassignment is
 checked: the bool reaches the phi, the phi is stamped `int` from the binding's declaration, and
 the operator, the condition or the call argument downstream sees an `int` and waves it through.
-`laundered-bool-into-arithmetic` returned **1**; `laundered-int-into-condition` returned **42**
-(C-style truthiness, restored); `laundered-bool-into-int-param` put a bool in an int parameter,
+`laundered-bool-into-arithmetic` would return **1**; `laundered-int-into-condition` would return **42**
+(C-style truthiness, restored); `laundered-bool-into-int-param` would put a bool in an int parameter,
 which is `implicit-type-conversion.md`'s `no-bool-to-int` defeated by adding one `if`.
 
 <!-- test: assign-bool-to-int-var -->
@@ -481,11 +478,10 @@ end 'main'
 A `Map`'s VALUE column is one machine word dropped by nothing, which is exactly what a `bool`
 is — so `Map with (String, bool)` is admissible, and the gate
 (`ProgramSignatures.slotTypeFitsOneWord`) admits it. But which types may BE a column and which
-values may be WRITTEN to one are decided in two different files, and for one tick `boolean` was
-in the first roster and in neither arm of the second: the write fell through to the integral
-residual, `tagIsIntegral(boolean)` is FALSE **because a bool is not a number** — this spec's
-whole subject — and the program was admitted at the `typealias` and refused at the first
-`upsert` as *"this `Map`'s value is a bool — got a 'bool' value"*, a sentence that argues
+values may be WRITTEN to one are decided in two different files. A `boolean` in the first roster
+and in neither arm of the second would fall through to the integral residual, where
+`tagIsIntegral(boolean)` is FALSE **because a bool is not a number** — this spec's whole subject —
+and the program would be admitted at the `typealias` and refused at the first `upsert` as *"this `Map`'s value is a bool — got a 'bool' value"*, a sentence that argues
 against itself.
 
 The three cases below are the pin, and they must be read together: the column WORKS, and the
@@ -520,20 +516,14 @@ count=2 on=true off=false on2=false
 An `int` is not admitted by a `bool` column. If this starts passing, the column has been folded
 back into the integral fall-through and a `1` is being stored where a `bool` is read.
 
-⭐ **THE SENTENCE MOVED WHEN `Map` STOPPED BEING SYNTHESIZED (W41), AND WHAT IT PINS DID NOT.** The
-`E2015` here was the builtin map's own per-column gate. `Map` is `stdlib/Map.maxon` now, so
-`upsert(key Key, value Value)` is an ordinary declared method and the refusal is the ordinary
-argument-type check — `E3005`, naming the `value:` label. **The discipline this case exists for is
-untouched**: `bool` and `int` are still distinct at a container column, and the case still goes red
-the moment they are folded together. It is anchored on the CALL rather than on the argument, which
-is where an argument-type mismatch has always been anchored.
+⭐ **THE REFUSAL IS THE ORDINARY ARGUMENT-TYPE CHECK.** `Map` is `stdlib/Map.maxon`, so
+`upsert(key Key, value Value)` is an ordinary declared method and the refusal is `E3005`, naming the
+`value:` label. `bool` and `int` are distinct at a container column, and the case goes red the moment
+they are folded together. It is anchored on the CALL rather than on the argument, which is where an
+argument-type mismatch is anchored.
 
-⚠ **AND THE CALL'S ANCHOR IS THE METHOD NAME, NOT THE RECEIVER (W49b).** This block read `:6:2` — the
-`m` — which is the column the Map-retirement branch emitted and which nothing else in the suite agrees
-with: `per-instance-typealias.md`'s `wrong-instance-error` already pins `:30:4` on a method call and
-passes.
-The compiler is right and this golden was stale; it is the receiver-anchored spelling that was the
-outlier.
+⚠ **AND THE CALL'S ANCHOR IS THE METHOD NAME, NOT THE RECEIVER**, as on every method call —
+`per-instance-typealias.md`'s `wrong-instance-error` pins `:30:4` on one.
 ```maxon
 typealias Flags = Map with (String, bool)
 

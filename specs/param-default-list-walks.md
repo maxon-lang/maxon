@@ -29,7 +29,7 @@ agree; the second is the control, and it passed throughout.
 A defaulted parameter ahead of a type-parameter-typed one. `item` feeds `T`, so a concrete
 instantiation over `String` must CONSUME the argument — the box takes ownership of the heap record.
 Unrecorded, the caller keeps ownership too, drops the String at scope exit, and the next iteration
-reads a freed record: a use-after-free, measured as a SEGFAULT rather than a wrong answer.
+reads a freed record: a use-after-free.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -65,9 +65,8 @@ hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!he
 ```
 
 <!-- test: generic-feed-without-default-control -->
-The control: the identical program with the default removed. It must answer the same, and it did
-before parameter defaults existed — which is what makes the case above a statement about the walk
-rather than about generics.
+The control: the identical program with the default removed. It must answer the same, which is what
+makes the case above a statement about the walk rather than about generics.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

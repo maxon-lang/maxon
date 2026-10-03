@@ -306,7 +306,7 @@ end 'splitSourcePaths'
 
 // One pass over the declaration arena, so `noteGlobalLabel` is a lookup and not a scan of it.
 //
-// ⚠ **FIRST WINS, exactly as the scan's `return` did.** Two declarations cannot share a `.data` label
+// ⚠ **FIRST WINS.** Two declarations cannot share a `.data` label
 // — it is minted from the storage key, which is what makes featA's `counter` and featB's `counter` two
 // slots — but the tie is broken here anyway, so the answer can never come to depend on which of two
 // claimants a map happened to keep.
@@ -318,11 +318,17 @@ function indexGlobalLabels(signatures ProgramSignatures) returns GlobalLabelInde
 
 		// An immutable binding is INLINED at its use and has no slot to take the address of, so it has no
 		// label at all — see `TopLevelDecl.dataLabel`.
-		if not decl.hasStorage or labels.contains(decl.dataLabel) 'noSlotOrAlreadyClaimed'
+		if not decl.hasStorage 'noSlot'
 			continue
-		end 'noSlotOrAlreadyClaimed'
+		end 'noSlot'
 
-		labels.upsert(decl.dataLabel, value: i)
+		let label = try decl.dataLabel.label() otherwise panic("indexGlobalLabels: stored top-level '{String.from(decl.name)}' has no .data label — `assignDataLabels` labels every stored decl before the audit reads them")
+
+		if labels.contains(label) 'alreadyClaimed'
+			continue
+		end 'alreadyClaimed'
+
+		labels.upsert(label, value: i)
 	end 'eachDecl'
 
 	return labels
@@ -380,7 +386,7 @@ function seedFunctions(module MaxonModule, signatures ProgramSignatures, entryPo
 			continue
 		end 'narrowEnoughAlready'
 
-		if func.sourceFilePath.toString().isEmpty() 'synthesizedFunction'
+		if func.isCompilerBuilt() 'synthesizedFunction'
 			continue
 		end 'synthesizedFunction'
 
@@ -533,7 +539,7 @@ end 'seedBindings'
 // function VALUE is emitted as a `functionRef`, so the ordinary walk below reaches them.
 function collectReferences(module MaxonModule, signatures ProgramSignatures, tracked TrackedDecls, moduleTypeNames TypeNameInterner)
 	for func in module.functions 'eachFunc'
-		if func.sourceFilePath.toString().isEmpty() 'synthesizedReaderNamesNothingAnAuthorWrote'
+		if func.isCompilerBuilt() 'synthesizedReaderNamesNothingAnAuthorWrote'
 			continue
 		end 'synthesizedReaderNamesNothingAnAuthorWrote'
 
@@ -554,7 +560,7 @@ end 'collectReferences'
 // E3092 because nothing OUTSIDE names it).
 //
 // ⛔⛔ **THE TYPES IT WALKS ARE THE *PROJECT* INTERNER'S, AND RESOLVING THEM AGAINST THE SIGNATURE INDEX'S
-// WAS OPEN #56's FOURTH INSTANCE.** `ParseStaging.remapArtifact` rewrites every merged function's
+// IS A WRONG ANSWER.** `ParseStaging.renumberArtifact` rewrites every merged function's
 // `maxonParamTypes`/`maxonReturnType` through `project.typeNames`' fold, and `TypeResolution.resolveNamedType`
 // re-mints the surviving `structRef`/`interfaceRef` ids from that same table — so a signature's ids index
 // `project.typeNames` and NOTHING ELSE. The index folds a SECOND, independent per-file interner: its own
@@ -562,22 +568,15 @@ end 'collectReferences'
 // cast target) is therefore interned by one and not the other, and every name after it sits one id apart —
 // so the two tables agree only while two insertion orders coincide.
 //
-// ⛔ **WHAT THAT COST WAS A SUPPRESSED TRUE FINDING, NOT A FALSE ONE, AND THAT IS THE HALF NO GREEN CASE
-// COULD SEE.** A misresolved id credits WHATEVER NAME occupies that slot in the other table — a name the
+// ⛔ **WHAT THAT COSTS IS A SUPPRESSED TRUE FINDING, NOT A FALSE ONE, AND THAT IS THE HALF NO GREEN CASE
+// CAN SEE.** A misresolved id credits WHATEVER NAME occupies that slot in the other table — a name the
 // reader never wrote — so a declaration nothing outside its file reaches is recorded as reached and its
 // E3092/3/4 never fires. (The mirror is harmless here: the name that LOSES the credit was, by construction,
-// written by that reader, and `collectFileTypeReferences` credits it from `usedTypeNames` anyway.)
-// **MEASURED on this compiler's own source:** 10,568 credit events resolved to a name the project table
-// does not hold there, over 426 distinct `(id, project name, index name)` triples, diverging from id 9 up.
-// Correcting the resolver turned 7 reported findings into 13, and every one of the 11 declaration findings
-// was TRUE — a census of the tree found no reference to any of them outside its declaring file. Adding a
-// single file that declares types (`IR/Std/InlineManagedPrimitives.maxon`) had moved the divergence point
-// and changed which declarations were being credited, which is how a lint whose answer depends on an
-// unrelated file was noticed at all. `specs/unused-export.md`'s
+// written by that reader, and `collectFileTypeReferences` credits it from `usedTypeNames` anyway.) Which
+// declarations are credited then depends on unrelated files that declare types. `specs/unused-export.md`'s
 // `error.unused-exported-type-when-the-two-interners-disagree` is the smallest program that shows it.
-// ⇒ Every producer in this file now hands the walk THE INTERNER ITS IDS WERE MINTED AGAINST, beside the
-// type. `ProgramSignatures.indexTypeNames` exists for exactly that, and its header carries #56's third
-// instance (`MmRuntime.installStructRuntimeEntries`, a tuple field at id 814 read as `InstantNanos`).
+// ⇒ Every producer in this file hands the walk THE INTERNER ITS IDS WERE MINTED AGAINST, beside the
+// type. `ProgramSignatures.indexTypeNames` exists for exactly that.
 function noteSignatureTypes(func IrFunction, signatures ProgramSignatures, tracked TrackedDecls, moduleTypeNames TypeNameInterner, reader AuditedFile)
 	for paramType in func.maxonParamTypes 'eachParam'
 		noteComponentType(signatures, tracked: tracked, type: paramType, typeNames: moduleTypeNames, reader: reader)
@@ -630,15 +629,12 @@ end 'noteThrowsType'
 
 // ⭐⭐ **CALLING A FUNCTION USES ITS DECLARED ERROR TYPE, AND THE CALLER'S FILE IS WHERE THAT USE HAPPENS.**
 // `try risky(9) otherwise (e)` binds `e` to `risky`'s declared error union without the caller ever writing
-// the name, and it was MEASURED reporting E3092 against the very type the case exists to pass across a file
-// boundary.
+// the name; without this credit E3092 reports the very type a cross-file `throws` passes.
 //
-// ⛔ **THE RETURN TYPE IS NOT ASKED HERE, AND THIS HEADER CLAIMED IT WAS FOR THE WHOLE LIFE OF THE FILE**
-// (found BATCH43, by the program the claim predicts: `let a = build()` then `a.n`, with `build` and its
-// record declared together in another file, reported E3092 against that record and E4006 once the advice was
-// taken). It is not asked because it is not this pass's to derive: a value's type matters here only when the
-// reader reaches INTO it, and the lines that decide THAT are `Parser.requireFieldAccessible` and
-// `Parser.emitEnumTagOf`, whose answers arrive as `FileParseArtifact.memberAccessedTypeNames`. Reading
+// ⛔ **THE RETURN TYPE IS NOT ASKED HERE**, because it is not this pass's to derive: a value's type matters
+// here only when the reader reaches INTO it, and the lines that decide THAT are
+// `Parser.requireFieldAccessible` and `Parser.emitEnumTagOf`, whose answers arrive as
+// `FileParseArtifact.memberAccessedTypeNames`. Reading
 // `returnTypeOf` as well would credit every caller of every factory with its record whether or not the caller
 // ever opened one — three families of correct findings, deleted (see `collectFileTypeReferences`), plus
 // `unused-export/error.unused-exported-union-nothing-outside-reaches`, whose whole subject is a file that
@@ -666,33 +662,32 @@ end 'noteOpReferences'
 // anywhere else, and the check is wrong without any of them.
 //
 // **WRITTEN NAMES** are the one source that survives ERASURE. A ranged typealias in a signature is `integer`
-// by the time any pass sees it (MEASURED: `scoreOf(s Score)` declared in another file leaves
+// by the time any pass sees it (`scoreOf(s Score)` declared in another file leaves
 // `maxonParamTypes` holding `integer` with `UnnamedTypeId`), so reading declared types alone reports a
 // genuinely-used `export typealias` as E3092 — a wrong answer. The parser already records this set for
 // E3062, which asks the same question one scope narrower ("did this FILE use its own alias?"), so the answer
 // is shared rather than re-derived.
 //
 // ⭐⭐ **MEMBER-ACCESSED TYPES ARE THE RESOLVER'S OWN ANSWER TO THIS PASS'S QUESTION, AND WITHOUT THEM THE
-// TWO DIAGNOSTICS CONTRADICTED EACH OTHER (BATCH43).** `for it in h.items` then `it.n` requires `Item`
+// TWO DIAGNOSTICS CONTRADICT EACH OTHER.** `for it in h.items` then `it.n` requires `Item`
 // VISIBLE and never spells it: the transitive walk below reaches `Holder`'s field type `ItemArray` and stops
-// at the alias, so E3092 told the author to drop an `export` that E4006 then refused the access without —
-// a program with no legal spelling. `Parser.requireFieldAccessible` is the line that decides that
+// at the alias, so E3092 would tell the author to drop an `export` that E4006 then refuses the access
+// without — a program with no legal spelling. `Parser.requireFieldAccessible` is the line that decides that
 // visibility question, so it is the line that records it; this pass ASKS the resolver instead of walking the
 // type graph a second, weaker way.
 //
-// ⭐⭐ **THE SAME CLASS, THIRD INSTANCE: AN ENUM OR UNION REACHED THROUGH A `match` (BATCH43).** `match
+// ⭐⭐ **THE SAME CLASS, THIRD INSTANCE: AN ENUM OR UNION REACHED THROUGH A `match`.** `match
 // classify(42)` on another file's `union Answer` spells its CASES (`small`, `big(n)`) and never its TYPE, as
 // `s.ordinal` spells a member and an interpolation hole spells nothing — so nothing written reaches
-// `usedTypeNames` and the transitive walk has no field to follow. E3092 said to drop the `export`, which
-// is again advice with no legal spelling. `Parser.emitEnumTagOf` — the one line that reads a tag out of
+// `usedTypeNames` and the transitive walk has no field to follow. E3092 would say to drop the `export`,
+// again advice with no legal spelling. `Parser.emitEnumTagOf` — the one line that reads a tag out of
 // a value of a declared enum — records it, for `requireFieldAccessible`'s reason and through its
 // channel.
 //
-// ⚠ **IT IS NOT "EVERY TYPE STRUCTURALLY REACHABLE FROM ONE THIS FILE NAMES", AND THAT DISTINCTION IS
-// MEASURED.** A reader that holds a `Crate with Item`, a `function(Payload) returns …` or a `(Elem, Integer)`
-// without ever reaching INTO one compiles perfectly well once the `export` is dropped — verified on all
-// three — so crediting them would delete three families of correct findings. What earns a credit is a
-// visibility the resolver actually demanded.
+// ⚠ **IT IS NOT "EVERY TYPE STRUCTURALLY REACHABLE FROM ONE THIS FILE NAMES".** A reader that holds a
+// `Crate with Item`, a `function(Payload) returns …` or a `(Elem, Integer)` without ever reaching INTO one
+// compiles perfectly well once the `export` is dropped, so crediting them would delete three families of
+// correct findings. What earns a credit is a visibility the resolver actually demanded.
 //
 // ⭐⭐ **A NAME SPELLED ONLY IN A TOP-LEVEL INITIALIZER IS INVISIBLE TO THE PARSE.** `readTopLevelBinding`
 // skips an initializer's tokens wholesale — the const evaluator folds them, before any file is parsed, on a
@@ -771,13 +766,16 @@ end 'noteQualifiedOwner'
 
 // ⭐⭐ **USING A TYPE USES THE TYPES IT IS MADE OF, AND WITHOUT THAT THE CHECK REPORTS A WRONG ANSWER.**
 // A file can depend on a type without ever writing its name: `let c = Gate.make().c` names `Gate` and
-// consumes a `Color`, and `try f() otherwise …` catches a `Woe` its file never spells. MEASURED — those
-// two shapes were 9 of the corpus's failures, every one of them a spec whose SUBJECT is that the
-// cross-file reference works.
+// consumes a `Color`, and `try f() otherwise …` catches a `Woe` its file never spells.
 function noteTypeName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile)
 	if not tracked.creditsTypeNameFirst(name, reader: reader) 'alreadyCredited'
 		return
 	end 'alreadyCredited'
+
+	if let nominal = try signatures.qualifiedNominalOf(name) 'writtenQualified'
+		noteQualifiedNominal(signatures, tracked: tracked, name: nominal.name, reader: reader)
+		return
+	end 'writtenQualified'
 
 	if let claimants = try tracked.typeIndex.get(name) 'tracked'
 		noteEveryClaimant(signatures, tracked: tracked, name: name, claimants: claimants, reader: reader)
@@ -785,12 +783,28 @@ function noteTypeName(signatures ProgramSignatures, tracked TrackedDecls, name B
 
 	// A type this pass does not TRACK is still walked through: a file-private struct may hold a field of
 	// an exported type, and a reader that reaches the one reaches the other.
-	noteStructFieldTypes(signatures, tracked: tracked, name: name, reader: reader)
-	noteEnumPayloadTypes(signatures, tracked: tracked, name: name, reader: reader)
+	noteStructFieldTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: reader.path)
+	noteEnumPayloadTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: reader.path)
 end 'noteTypeName'
 
-function noteStructFieldTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile)
-	match signatures.structFor(name, readerFilePath: reader.path) 'lookup'
+function noteQualifiedNominal(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile)
+	let contested = signatures.crossKindContested(name)
+	let meaningFile = signatures.qualifiedNominalMeaningFile(name, readerFilePath: reader.path)
+
+	if let claimants = try tracked.typeIndex.get(name) 'tracked'
+		for at in claimants 'eachClaimant'
+			if not contested or tracked.at(at).declFile.path.equals(meaningFile) 'theNominalDeclaration'
+				noteRead(tracked, index: at, reader: reader)
+			end 'theNominalDeclaration'
+		end 'eachClaimant'
+	end 'tracked'
+
+	noteStructFieldTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: meaningFile)
+	noteEnumPayloadTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: meaningFile)
+end 'noteQualifiedNominal'
+
+function noteStructFieldTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile, meaningFile FilePath)
+	match signatures.structFor(name, readerFilePath: meaningFile) 'lookup'
 		undeclared then return
 
 		// A layout the SIGNATURE INDEX built, so its field-type ids are the index's own — see
@@ -799,8 +813,8 @@ function noteStructFieldTypes(signatures ProgramSignatures, tracked TrackedDecls
 	end 'lookup'
 end 'noteStructFieldTypes'
 
-function noteEnumPayloadTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile)
-	match signatures.enumFor(name, readerFilePath: reader.path) 'lookup'
+function noteEnumPayloadTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile, meaningFile FilePath)
+	match signatures.enumFor(name, readerFilePath: meaningFile) 'lookup'
 		undeclared then return
 		declared(layout) then noteEveryPayloadType(signatures, tracked: tracked, layout: layout, reader: reader)
 	end 'lookup'
@@ -809,11 +823,11 @@ end 'noteEnumPayloadTypes'
 function noteEveryPayloadType(signatures ProgramSignatures, tracked TrackedDecls, layout EnumLayout, reader AuditedFile)
 	// ⭐⭐ **A STRUCT-BACKED UNION'S BACKING IS A TYPE IT IS MADE OF, AND IT IS THE ONE A READER NEVER
 	// SPELLS.** `op.rawValue.isMemory` reaches `TargetOpMeta` through `TargetOp` and names it nowhere, so
-	// the reader file's `usedTypeNames` cannot carry it and this walk was the only route left. Exactly the
+	// the reader file's `usedTypeNames` cannot carry it and this walk is the only route left. Exactly the
 	// argument the payload loop below makes — *"using a type uses the types it is made of"* — for the half
 	// of an enum layout that is not a payload.
-	if not layout.backingStructName.isEmpty() 'structBacked'
-		noteTypeName(signatures, tracked: tracked, name: layout.backingStructName, reader: reader)
+	if let backingStructName = try layout.backingStruct.typeName() 'structBacked'
+		noteTypeName(signatures, tracked: tracked, name: backingStructName, reader: reader)
 	end 'structBacked'
 
 	// The index's own layout again — `noteStructFieldTypes`' interner, for its reason. Taken once rather
@@ -844,7 +858,7 @@ end 'noteComponentTypes'
 //
 // ⭐⭐ **`typeNames` IS WHICH NAME TABLE THE NAME-BEARING ARMS INDEX, AND IT IS A PARAMETER BECAUSE THE
 // CALLERS ARE IN TWO DIFFERENT SPACES.** A signature's types are the PROJECT interner's and a layout's are
-// the SIGNATURE INDEX's — see `noteSignatureTypes` for the measurement and for what a crossed pair costs.
+// the SIGNATURE INDEX's — see `noteSignatureTypes` for what a crossed pair costs.
 // It rides beside the type it resolves rather than being derived from `signatures`, which is the only
 // honest way for a walk with two entrances to say which space it was entered from.
 // (The two id-space arms below are unaffected: a `typeParameter`'s digest and a `GenericInstanceId` are
@@ -872,8 +886,8 @@ function noteComponentType(signatures ProgramSignatures, tracked TrackedDecls, t
 end 'noteComponentType'
 
 // ⚠ **A SUBSTITUTED INSTANCE ARGUMENT IS INTERNED IN THE INDEX**, whichever space the instance reference
-// itself arrived from — `ProgramSignatures.indexSpaceTypeName` is the door that says so, and its own panic
-// message is #56's third instance. So this hop RE-STATES the interner rather than forwarding its caller's.
+// itself arrived from — `ProgramSignatures.indexSpaceTypeName` is the door that says so. So this hop
+// RE-STATES the interner rather than forwarding its caller's.
 function noteInstanceArgs(signatures ProgramSignatures, tracked TrackedDecls, id GenericInstanceId, reader AuditedFile)
 	let argTypeNames = signatures.indexTypeNames()
 
@@ -1103,7 +1117,8 @@ end 'noteTopLevelInitializerCallees'
 function noteOneInitializersCallees(signatures ProgramSignatures, tracked TrackedDecls, decl TopLevelDecl)
 	match signatures.declInitializerCall(decl) 'initializer'
 		none then return
-		calls(callees) then noteEveryInitializerCallee(signatures, tracked: tracked, callees: callees, reader: tracked.fileOf(decl.declFilePath, signatures: signatures))
+		calls(callees, functionValues) then noteEveryInitializerCallee(signatures, tracked: tracked, callees: initializerRootNames(callees, functionValues: functionValues), reader: tracked.fileOf(decl.declFilePath, signatures: signatures))
+		namesFunctions(functionValues) then noteEveryInitializerCallee(signatures, tracked: tracked, callees: functionValues, reader: tracked.fileOf(decl.declFilePath, signatures: signatures))
 	end 'initializer'
 end 'noteOneInitializersCallees'
 
@@ -1121,15 +1136,13 @@ end 'noteEveryInitializerCallee'
 // IS NOT SAFE.** Crediting a spare claimant only ever SUPPRESSES a warning, so the direction is right for
 // two declarations a reader genuinely could mean — but a cross-KIND contested name is two declarations
 // that CANNOT both be meant, and crediting the wrong one makes this audit's answer depend on an unrelated
-// file's spelling. MEASURED, one program twice: with `a.maxon`'s file-private alias named `Other`,
-// `b.maxon`'s `export union Container` earned `E3092: exported type 'Container' is never referenced
-// outside its declaring file`; with the alias named `Container`, `a.maxon`'s uses of its OWN alias were
-// counted as references to that union and **the diagnostic vanished**.
+// file's spelling: a file-private alias in `a.maxon` named like `b.maxon`'s `export union Container` would
+// have its OWN uses counted as references to that union, silencing a true E3092.
 //
-// ⚠ It is the CONTEST that is asked and not visibility: a name only one kind holds is credited exactly as
-// before, which is every name in every program in the corpus.
+// ⚠ It is the CONTEST that is asked and not visibility: a name only one kind holds is credited
+// unconditionally, which is every name in every program in the corpus.
 function noteEveryClaimant(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, claimants TrackedDeclIndexArray, reader AuditedFile)
-	if signatures.crossKindContested(name) and signatures.contestGivesThisReaderAScalar(name, readerFilePath: reader.path) 'thisReaderMeansTheAlias'
+	if signatures.writtenNameMeansARangedAliasHere(name, readerFilePath: reader.path) 'thisReaderMeansTheAlias'
 		return
 	end 'thisReaderMeansTheAlias'
 

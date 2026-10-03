@@ -15,9 +15,9 @@ to its CONFORMER NAME and looking that name up (`ProgramSignatures.conformerType
 `ConformanceCheck.typeConformsTo`). A ranged alias reduces to its primitive (`Integer` → `int`); a
 conforming array reduces to the one `Array` conformer.
 
-**A generic's INSTANCE had no reduction at all**, so `Wrapper with Integer` reduced to its MANGLED
+**Without a reduction for a generic's INSTANCE**, `Wrapper with Integer` would reduce to its MANGLED
 name (`Wrapper_int`) — a name no `implements` clause claims and no intrinsic row lists — and a legal
-program was refused:
+program would be refused:
 
 ```text
 error E3017: Type 'IntWrapper' does not satisfy constraint 'Named' required by type parameter 'N' of 'Holder'
@@ -29,32 +29,32 @@ compiled once over an opaque layout, and every instantiation dispatches into tha
 `__witness_Wrapper.Named` table answers for all of them, exactly as one `__witness_Array.*` pair
 answers for every array.
 
-⚠ **The reduction lives on BOTH doors, and the first cut had it on one.** A type argument arrives
+⚠ **The reduction lives on BOTH doors.** A type argument arrives
 either as a resolved `genericInstance` (`Holder with (Wrapper with Integer)`) or as the NAME of a
-generic-instance typealias (`Holder with IntWrapper`) — the same split
-`instanceReducesToArrayConformer` already exists for. Fixed on the instance door alone, the nested
-spelling compiled while the ALIAS spelling — the one a user actually writes, and the only one the
-bootstrap oracle can parse at all — stayed E3017.
+generic-instance typealias (`Holder with IntWrapper`) — `ProgramSignatures.conformerNameOfType` and
+`conformerNameOfDeclaredName`, both answering through `instanceConformerReduction`. On the instance door
+alone, the nested spelling would compile while the ALIAS spelling — the one a user actually writes — would
+stay E3017.
 
 ⚠ **A base's own `where` clause is not waived by this.** `type MapIterator uses Key, Value implements
 Iterator where Key is Hashable` still has that clause checked at the `MapIterator with (K, V)`
 instantiation SITE, by the same `checkOneInstantiation` walk that reports every E3017. The question
 answered here is a different one — *does this declaration implement that interface* — and it does not
-depend on the arguments. (`Array`'s own reduction IS conditional, and only because `Array` has no
-declaration to hang a `where` clause on: The compiler synthesizes it, so its conditional conformance has
-nowhere else to live.)
+depend on the arguments. (`Array`'s own reduction IS conditional: `stdlib/Array.maxon` grants
+`Hashable`/`Equatable` through `extension Array … where Element is Hashable and Equatable`, a conformance
+the name-keyed registry cannot condition, so `instanceConformerReduction` reduces an `Array with E` to
+`Array` only when `E` conforms and otherwise leaves it unreduced.)
 
-A BUILTIN base — `Array`, `Set`, `List`, and `Map` while it is still synthesized — has no
-`StructLayout` to declare anything and keeps the mangled name it always had.
+`Set`, `List` and `Map` are declared generics (`stdlib/Set.maxon`, `stdlib/List.maxon`,
+`stdlib/Map.maxon`), so their instances reduce to their base like any other. A base with no declaration
+anywhere has no `StructLayout` to declare anything, so its instance keeps its mangled name.
 
 ## Tests
 
 <!-- test: instance-alias-satisfies-through-its-base -->
-⭐ **THE SPELLING A USER WRITES, and the one the oracle agrees on.** `IntWrapper` names
+⭐ **THE SPELLING A USER WRITES.** `IntWrapper` names
 `Wrapper with Integer`; `Wrapper` declares `implements Named`; so `Holder with IntWrapper` satisfies
-`where N is Named`. MEASURED at `HEAD~`: `E3017: Type 'IntWrapper' does not satisfy constraint
-'Named' required by type parameter 'N' of 'Holder'`, on a program with no stdlib in it. Both
-compilers now print `wrapped`.
+`where N is Named`. The program has no stdlib in it, and it prints `wrapped`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

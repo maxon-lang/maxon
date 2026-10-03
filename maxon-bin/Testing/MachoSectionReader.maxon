@@ -122,13 +122,13 @@ export function readMachoSectionData(path FilePath, segname String, sectname Str
 		let cmd = imageReadU32(image, at: cmdStart + LcCmdOffset)
 		let cmdSize = imageReadU32(image, at: cmdStart + LcCmdSizeOffset)
 
-		if cmd == LcSegment64 and imageNameAt(image, at: cmdStart + SegSegnameOffset, maxBytes: MachoNameBytes) == segname 'thisSegment'
+		if cmd == LcSegment64 and imageNameIs(image, at: cmdStart + SegSegnameOffset, maxBytes: MachoNameBytes, name: segname) 'thisSegment'
 			let nsects = imageReadU32(image, at: cmdStart + SegNsectsOffset)
 
 			for s in 0 upto nsects 'eachSection'
 				let sectStart = cmdStart + SegmentCommandBaseSize + s * SectionHeaderSize
 
-				if imageNameAt(image, at: sectStart + SectSectnameOffset, maxBytes: MachoNameBytes) != sectname 'notThisSection'
+				if not imageNameIs(image, at: sectStart + SectSectnameOffset, maxBytes: MachoNameBytes, name: sectname) 'notThisSection'
 					continue
 				end 'notThisSection'
 

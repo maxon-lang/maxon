@@ -17,18 +17,17 @@ element and releases it before the next one begins.
 
 For a shared generic body that release is `__drop_type_param`, which reads the destructor out of the
 enclosing instance's layout descriptor at run time. The descriptor arrives as a hidden parameter reserved
-before the body is parsed, and **nothing could see that this body needed one**: the loop's
+before the body is parsed, and **no token shows that this body needs one**: the loop's
 `createIterator()`, `current()` and `advance()` are emitted by the compiler, so they appear in no token
-the descriptor-need pre-scan reads, and the self-call edges it follows are token-shaped too. The body
-therefore emitted a drop with nothing to drop through and was refused with `E2015` — at
-`stdlib/Interfaces.maxon`, a line the user never wrote.
+the descriptor-need pre-scan reads, and the self-call edges it follows are token-shaped too. The
+reservation is taken from the loop itself; without it the body would emit a drop with nothing to drop
+through and be refused with `E2015` — at `stdlib/Interfaces.maxon`, a line the user never wrote.
 
-**`contains` is the one traversal in the library that drops rather than moves**, which is why the hole
-stayed shut until a corpus type reached it: `map` and `filter` `push` their element into an
+**`contains` is the one traversal in the library that drops rather than moves**: `map` and `filter` `push` their element into an
 `Array with Element` and that store already reserves the descriptor. And every listed conformer escapes
 for a different accidental reason — `Set` and `Array` declare their own `contains`, `Map`'s element is a
 tuple rather than a bare parameter, `Range` and `String` have concrete elements — so a user's own generic
-`Iterable` is the first thing in the language to reach it.
+`Iterable` is what reaches it.
 
 ### What the reservation rests on, and what it deliberately does not reach
 
@@ -50,19 +49,20 @@ real one into a chain that is deliberately inert on both ends.
 
 `createIterator()` may name its cursor directly (`returns BagIterator`) or through an inner generic-instance
 alias (`typealias BagIter = BagIterator with Element`, then `returns BagIter`). Only the first is a type's
-own name: a method is filed under the type that declares it, so `BagIter.current` resolves to nothing and the
-question "does this cursor hand out a bare type parameter?" silently answered *no* for the aliased spelling —
-no descriptor, and the loop's own drop refused at a line the user never wrote.
+own name: a method is filed under the type that declares it, so `BagIter.current` resolves to nothing by
+name. The question "does this cursor hand out a bare type parameter?" is therefore asked of the TYPE the
+alias denotes; asked of the name, it would silently answer *no* for the aliased spelling — no descriptor,
+and the loop's own drop refused at a line the user never wrote.
 
 **The corpus writes it the second way.** `stdlib/List.maxon`, `stdlib/Set.maxon`, `stdlib/Array.maxon` and
 `stdlib/Vector.maxon` all declare a `<Type>Iter` alias; `stdlib/Map.maxon` is the only conformer in the library
-that spells its cursor bare. So the spelling that worked was the one nothing in the library uses.
+that spells its cursor bare.
 
 ## Tests
 
 ### `contains` on a generic conformer
 
-The program the refusal stood in front of. `isBig(30)` is true, so the loop takes the early-exit path out
+The program the reservation serves. `isBig(30)` is true, so the loop takes the early-exit path out
 of the middle of the body — the trip's release has to happen on that exit as well as on the fall-through.
 
 <!-- test: contains-on-a-generic-conformer -->
@@ -119,9 +119,9 @@ end 'main'
 
 The program above with ONE thing changed: the cursor is reached through
 `typealias BagIter = BagIterator with Element` instead of by its own name. Nothing about what the loop OWNS
-has moved — the element is still `current()`'s bare type parameter and is still released per trip — so this
-case and the one above must answer identically. It is `stdlib/List.maxon:147`'s spelling, and while it was
-unresolved every program whose cone reached `extension Iterable` was refused.
+differs — the element is `current()`'s bare type parameter and is released per trip — so this
+case and the one above must answer identically. It is `stdlib/List.maxon`'s spelling, so every program
+whose cone reaches `extension Iterable` depends on it.
 
 <!-- test: contains-through-an-aliased-cursor -->
 ```maxon
@@ -370,9 +370,9 @@ none of 5
 `Bag with (Element, Cursor with Element)` — a PARAMETERIZED INTERFACE over the enclosing type's own
 parameter — so `current()` is a witness dispatch into a generic conformer's impl, and a witness table
 carries no layout descriptor for that impl to read. Reserving a descriptor here would let the body
-compile and the dispatch would jump with a null dictionary: measured, byte-identical on two tips,
-`0xC0000005`. The receiver `self` is the one spelling that can never be an existential, which is why it
-could be served ahead of the witness-ABI slot and this could not.
+compile and the dispatch would jump with a null dictionary, faulting `0xC0000005`. The receiver `self` is
+the one spelling that can never be an existential, which is why it is served while this waits on a witness
+ABI that carries a descriptor.
 
 <!-- test: error.a-cursor-over-a-parameter-is-still-refused -->
 ```maxon

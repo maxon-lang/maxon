@@ -42,8 +42,10 @@ and `Character` are `Equatable`; the numeric types, `String` and `Character` are
 record that implements `Comparable` is ordered by `<`, `>`, `<=` and `>=` through its `compare`.
 
 A copy may call its argument type's `where` requirements — `compare`, `equals`, any method of the
-constraining interface — whatever their visibility: the caller that passed the type granted the
-conformance. Any other method of the type needs ordinary visibility from the declaring file. A generic
+constraining interface — and the methods of an `extension` of that interface, whatever the type's
+visibility: the caller that passed the type granted the conformance. Any other member of the type — a
+method that is no requirement, or a field, even one named like a requirement — needs the type to be
+visible from the declaring file, because a type hidden from a file hides its members there (**E3008**). A generic
 function follows the visibility rules of any function, so a private one called from another file is
 **E3008**.
 
@@ -647,8 +649,224 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:5:12: function 'Point.heavy' is not exported
-error E3008: <fragment>:8:11: function 'Point.heavy' is not exported
+error E3008: <fragment>:5:12: type 'Point' is not exported
+```
+
+<!-- test: an-instance-calls-a-requirement-of-a-type-its-file-may-not-name -->
+A requirement the `where` clause names is the constraining interface's surface, so a copy calls it by name even
+where the type that satisfies it is hidden.
+```maxon
+// --- file: lib.maxon
+export function smaller(a T, b T) uses T returns T where T is Comparable
+	if a.compare(b) == Ordering.lessThan 'first'
+		return a
+	end 'first'
+
+	return b
+end 'smaller'
+
+// --- file: main.maxon
+typealias Rank = int(0 to 100)
+
+type Point implements Comparable
+	export var rank as Rank
+
+	static function create(rank Rank) returns Self
+		return Self{rank: rank}
+	end 'create'
+
+	function compare(other Self) returns Ordering
+		if self.rank < other.rank 'lower'
+			return Ordering.lessThan
+		end 'lower'
+
+		if self.rank > other.rank 'higher'
+			return Ordering.greaterThan
+		end 'higher'
+
+		return Ordering.equalTo
+	end 'compare'
+end 'Point'
+
+function main() returns ExitCode
+	let p = smaller(Point.create(9), b: Point.create(3))
+	print("{p.rank}\n")
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+
+<!-- test: a-closure-in-an-instance-calls-a-requirement-of-a-type-its-file-may-not-name -->
+A closure written in a generic function belongs to the copy it is written in, so it calls the requirement too.
+```maxon
+// --- file: lib.maxon
+export function smallerVia(a T, b T) uses T returns T where T is Comparable
+	let firstIsSmaller = function() gives a.compare(b) == Ordering.lessThan
+
+	if firstIsSmaller() 'first'
+		return a
+	end 'first'
+
+	return b
+end 'smallerVia'
+
+// --- file: main.maxon
+typealias Rank = int(0 to 100)
+
+type Point implements Comparable
+	export var rank as Rank
+
+	static function make(rank Rank) returns Self
+		return Self{rank: rank}
+	end 'make'
+
+	function compare(other Self) returns Ordering
+		if self.rank < other.rank 'lower'
+			return Ordering.lessThan
+		end 'lower'
+
+		if self.rank > other.rank 'higher'
+			return Ordering.greaterThan
+		end 'higher'
+
+		return Ordering.equalTo
+	end 'compare'
+end 'Point'
+
+function main() returns ExitCode
+	let p = smallerVia(Point.make(9), b: Point.make(3))
+	print("{p.rank}\n")
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+
+<!-- test: an-instance-calls-an-extension-method-of-its-constraint-on-a-type-its-file-may-not-name -->
+An `extension` of the constraining interface is that interface's surface too, so a copy calls its methods on a
+type it may not name.
+```maxon
+// --- file: lib.maxon
+export typealias Score = int(i64.min to i64.max)
+
+export interface Ranked
+	function rank() returns Score
+end 'Ranked'
+
+extension Ranked
+	function doubledRank() returns Score
+		return self.rank() * 2
+	end 'doubledRank'
+end 'Ranked'
+
+export function doubled(a T) uses T returns Score where T is Ranked
+	return a.doubledRank()
+end 'doubled'
+
+// --- file: main.maxon
+type Point implements Ranked
+	var value as Score
+
+	static function make(value Score) returns Self
+		return Self{value: value}
+	end 'make'
+
+	function rank() returns Score
+		return self.value
+	end 'rank'
+end 'Point'
+
+function main() returns ExitCode
+	print("{doubled(Point.make(21))}\n")
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+
+<!-- test: an-extension-method-calls-a-file-private-requirement-of-a-conformer-in-another-file -->
+An `extension` body calls a requirement through the interface's surface, so the conformer's implementation may be
+private to the file that declares it.
+```maxon
+// --- file: lib.maxon
+export typealias Score = int(i64.min to i64.max)
+
+export interface Ranked
+	function rank() returns Score
+end 'Ranked'
+
+extension Ranked
+	export function doubledRank() returns Score
+		return self.rank() * 2
+	end 'doubledRank'
+end 'Ranked'
+
+// --- file: main.maxon
+type Point implements Ranked
+	var value as Score
+
+	static function make(value Score) returns Self
+		return Self{value: value}
+	end 'make'
+
+	function rank() returns Score
+		return self.value
+	end 'rank'
+end 'Point'
+
+function main() returns ExitCode
+	print("{Point.make(21).doubledRank()}\n")
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+
+<!-- test: error.an-instance-cannot-read-a-field-named-like-a-method-of-its-constraint -->
+What a constraint grants is its methods. A field of the same name is a member of the type, and is hidden with it.
+```maxon
+// --- file: lib.maxon
+export typealias Score = int(i64.min to i64.max)
+
+export interface Ranked
+	function rank() returns Score
+end 'Ranked'
+
+extension Ranked
+	function tally() returns Score
+		return self.rank()
+	end 'tally'
+end 'Ranked'
+
+export function tallyOf(a T) uses T returns Score where T is Ranked
+	return a.tally
+end 'tallyOf'
+
+// --- file: main.maxon
+type Point implements Ranked
+	export var tally as Score
+
+	static function make(tally Score) returns Self
+		return Self{tally: tally}
+	end 'make'
+
+	function rank() returns Score
+		return self.tally
+	end 'rank'
+end 'Point'
+
+function main() returns ExitCode
+	print("{tallyOf(Point.make(7))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/generic-functions/error.an-instance-cannot-read-a-field-named-like-a-method-of-its-constraint.test:16:11: type 'Point' is not exported
 ```
 
 <!-- test: an-enum-argument-is-its-callers-own-type -->

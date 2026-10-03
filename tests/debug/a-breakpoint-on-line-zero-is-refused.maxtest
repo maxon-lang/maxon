@@ -1,0 +1,21 @@
+let LineZeroCaseLabel = "a-breakpoint-on-line-zero-is-refused"
+let LineZeroReasonNeedle = "numbered from 1"
+
+test 'a breakpoint on line 0, bare or in a file, is refused because lines are numbered from 1'
+	let staged = builtFixture(LineZeroCaseLabel, fixture: HeaplessFixtureName)
+	let bareTarget = "0"
+	let fileTarget = "{StagedProgramFileName}:0"
+	let commands = debugCommandLine(["{BreakCommand} {bareTarget}", "{BreakCommand} {fileTarget}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let errors = eventsOfKind(events, kind: ErrorEventName)
+
+	Expect.equal(errors.count(), expected: 2, message: "each breakpoint on line 0 is one refusal. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let bare = eventAt(errors, index: 0)
+	Expect.contains(textOf(bare, node: bare.root, key: MessageKey), needle: LineZeroReasonNeedle, message: "`{BreakCommand} {bareTarget}` names a line, not a function called `{bareTarget}`, and the refusal must say lines start at 1. {said}")
+
+	let inFile = eventAt(errors, index: 1)
+	Expect.contains(textOf(inFile, node: inFile.root, key: MessageKey), needle: LineZeroReasonNeedle, message: "`{BreakCommand} {fileTarget}` names line 0 of a file, and the refusal must say lines start at 1. {said}")
+end 'a breakpoint on line 0, bare or in a file, is refused because lines are numbered from 1'

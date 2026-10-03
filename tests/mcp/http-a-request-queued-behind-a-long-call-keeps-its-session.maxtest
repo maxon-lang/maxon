@@ -1,9 +1,19 @@
-let OkStatus = 200 as HttpStatusNumber
+let OkStatus = 200 as HttpAnswerStatus
 let IdleTimeoutSeconds = 1
 let QueuedStagingDir = "temp/mcp-http-queued-request"
 let QueueLeadMs = 500
 
 let QueuedBehindSleepMs = 3000
+
+function queuedBehindALongCall(listening StreamingHttpMcpServer, program FilePath, longSession McpSession, queuedSession McpSession) returns (JsonDoc, HttpAnswer) throws TestFailure
+	let longCall = async httpToolCall(listening, sessionId: longSession, id: 2, name: ExecuteTool, argumentsJson: pathArgument(program))
+	sleep(QueueLeadMs)
+
+	let queued = listening.post(toolsListRequest(3), sessionId: queuedSession)
+	let ran = await longCall
+	try listening.stop()
+	return (ran, queued)
+end 'queuedBehindALongCall'
 
 test 'a request that waits behind another session s long call keeps its own session'
 	let program = stagedProgram(QueuedStagingDir, fileName: "main.maxon", source: sleepingProgramSource(QueuedBehindSleepMs))
@@ -11,13 +21,7 @@ test 'a request that waits behind another session s long call keeps its own sess
 	var server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
 	let (_, longSession) = server.initializeSession()
 	let (_, queuedSession) = server.initializeSession()
-
-	let longCall = async httpToolCall(server, sessionId: longSession, id: 2, name: ExecuteTool, argumentsJson: pathArgument(program))
-	sleep(QueueLeadMs)
-
-	let queued = server.post(toolsListRequest(3), sessionId: queuedSession)
-	let ran = await longCall
-	try server.stop()
+	let (ran, queued) = try queuedBehindALongCall(server, program: program, longSession: longSession, queuedSession: queuedSession)
 
 	try Expect.isFalse(toolCallIsError(ran), message: "the control: `{ExecuteTool}` must run the sleeping program, or the other session's request never waited behind it: {toolCallText(ran)}")
 	try Expect.equal(queued.statusCode, expected: OkStatus, message: "a request that waited in the backlog behind another session's call arrived for a session that was live when it was sent, so the time it waited must not count as that session's idleness; it answered {queued.statusCode} with {queued.body}")

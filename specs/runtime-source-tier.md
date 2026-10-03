@@ -162,9 +162,9 @@ end 'main'
 <!-- test: runtime-file-may-ask-to-be-spliced-at-every-site -->
 **⭐⭐ `ownFrame`'s OPPOSITE, AND THE SECOND DIRECTIVE.** `splicedAtEverySite` says this body has no frame
 worth keeping: the inliner must splice it into every one of its call sites whatever its size. It is what
-lets a family that a BUILDER used to emit inline live in `runtime/` source instead — a builder splices its
-code at each site, and a tier body reached by a call pays the frame, the argument moves and the `ret` the
-builder never paid.
+lets a family a BUILDER would emit inline live in `runtime/` source instead — a builder splices its
+code at each site, and a tier body reached by a call pays the frame, the argument moves and the `ret` a
+builder never pays.
 
 ⚠ It appends no Std op either. What it does is set a fact about the enclosing function
 (`IrFunction.mustBeSplicedAtEverySite`), which waives the inliner's COST rules — the op budget, the
@@ -491,8 +491,7 @@ end 'main'
 ```
 
 <!-- test: runtime-file-may-read-its-machines-tls-slot -->
-**THE "WHICH MACHINE AM I" READ, AND IT IS THE ONE ROW WHOSE ABSENCE IS A PROPERTY OF THE LANE RATHER THAN
-OF THE RUNG.** `tlsSlotLoad` takes the TEB/TCB offset the scheduler published and answers the word stored
+**THE "WHICH MACHINE AM I" READ, AND IT IS THE ONE ROW WHOSE ABSENCE IS A PROPERTY OF THE LANE.** `tlsSlotLoad` takes the TEB/TCB offset the scheduler published and answers the word stored
 there for THIS OS thread. Every allocation and every free begins with it, which is why it carries a host
 facility of its own: a lane with one thread has no per-thread storage to read, and a constant would hand
 every reader the same slot rather than answer the question.
@@ -555,10 +554,10 @@ end 'main'
 
 <!-- test: error.a-tls-slot-read-is-refused-where-the-lane-has-no-thread-local -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-⛔⛔ **A `__Raw` ROW'S HOST FACILITY NOW REACHES A REFUSABLE SITE, AND THE SITE IS THE CROSSING.** A
+⛔⛔ **A `__Raw` ROW'S HOST FACILITY REACHES A REFUSABLE SITE, AND THE SITE IS THE CROSSING.** A
 `rawIntrinsic` op names no callee, so the door that meets a runtime entry BY NAME
-(`TargetFacilities.calleeHostFacility`) can never meet one — which left a lane missing the facility
-reaching instruction selection and panicking there. `StdlibSource.stdlibSubstrateEntries` seeds the
+(`TargetFacilities.calleeHostFacility`) can never meet one — which alone would leave a lane missing the
+facility reaching instruction selection and panicking there. `StdlibSource.stdlibSubstrateEntries` seeds the
 fixpoint with the ROW itself, so a library body that reaches the op carries that need out to the first
 call from user code, exactly as a body reaching `__gt_now_ns` does.
 
@@ -787,12 +786,14 @@ i8 0
 ⭐⭐ **`.data` FOLLOWS REACHABILITY, NOT THE PROGRAM'S VOCABULARY.** The word behind
 `schedMaxActiveWorkers()` is laid out only when a function that survives dead-function elimination reads
 it. `dormant` is a user function nothing calls, so its query reaches no body and lays out no word — the
-same answer the unreached tier probe above gets, now for the program's own dead code. The two sched words
+same answer the unreached tier probe above gets, here for the program's own dead code. The two sched words
 would land between `used` and the console probes, which is where a prefix compare can see them.
 ```maxon
+typealias WorkerCount = int(0 to u64.max)
+
 var used = 42
 
-function dormant() returns MachineWord
+function dormant() returns WorkerCount
 	return __Builtins.schedMaxActiveWorkers()
 end 'dormant'
 
@@ -923,15 +924,8 @@ end 'main'
 ```
 
 <!-- test: runtime-file-may-not-capture-a-mutable-local-in-a-closure -->
-⛔⛔ **THE ONE MANAGED THING THE VALUE TYPE COLUMNS CANNOT SEE, AND IT IS NOT A `String`.** A closure is
-`function`-tagged and `valueIsManagedHeap` declines that tag — rightly, because a NON-capturing closure is
-a bare code address that owns nothing. A CAPTURING one allocates a refcounted ENVIRONMENT block, and the
-cell a captured-and-reassigned `var` is promoted into lives inside it, so the tier acquires exactly the
-refcount traffic R1 exists to forbid by a route the type of no value records.
-
-⚠ The refusal is therefore asked at `markCapturingClosure`, the one door that records the capture, rather
-than at the mint. The anchor is the closure literal, because the env and every cell under it exist only
-because of it.
+A capturing closure is a refcounted record, so a runtime file may not bind one; a plain function value is an
+immortal record and owes no count.
 ```maxon
 // --- runtime-file: Probe.maxon
 module function probeClosure() returns MachineWord
@@ -947,7 +941,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3153: <fragment>:5:13: a managed value of type 'function' is built in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines
+error E3153: <fragment>:5:6: 'bump' has managed type 'function': a runtime source file may not name a managed value, because the reference-counting pass would emit calls into the very runtime this tier defines
 ```
 
 <!-- test: runtime-file-may-catch-an-unmanaged-error -->
@@ -1026,11 +1020,9 @@ privileges are not EMPTY. Neither proves they are not UNIVERSAL — a compiler t
 `__Raw.osTickCountMs` would pass both of them, and would hand every program a direct call to the raw
 machine floor with no runtime between.
 
-⚠ **THIS CASE CARRIES NO `// --- runtime-file:` SECTION ON PURPOSE.** It is an ordinary program, so it
-is the one case in this file whose red today is its OWN red rather than the harness refusing a marker
-it does not yet know: the same spelling answers E3004 now (`__Raw` is simply not a name any file may
-write) and must answer E3152 after the tier lands. A case that needed the new marker to be RED could
-not tell a missing privilege from a missing harness.
+⚠ **THIS CASE CARRIES NO `// --- runtime-file:` SECTION ON PURPOSE.** It is an ordinary program, so
+its answer is its OWN rather than the harness refusing a marker. A case that needed the runtime-file
+marker to be RED could not tell a missing privilege from a missing harness.
 
 The wording is deliberate and does not say the name is undefined — `__Raw.osTickCountMs` IS defined,
 and telling this author "no such function" would send them looking for a typo instead of telling them
@@ -1115,7 +1107,7 @@ error E3154: <fragment>:3:1: 'public' is not allowed in a runtime source file: r
 ```
 
 <!-- test: runtime-file-may-not-export -->
-**R2's SECOND HALF, AND THE ONE THAT WAS MEASURED.** `export` mints GLOBAL visibility, so an `export`
+**R2's SECOND HALF.** `export` mints GLOBAL visibility, so an `export`
 declaration in a file the compiler loads into EVERY program it builds is a name offered to every one of
 them — including to the compiler compiling ITSELF, where a `runtime/` alias and the compiler's own of
 that name make each other ambiguous (E3063) and the self-compile stops.

@@ -34,7 +34,9 @@ integer, a bool, or a managed value — a `String`, a struct, an array — which
 refused at compile time with **E2015** in either position, because the trampoline is hand-written assembly
 that fills the integer argument registers and captures R8, and never touches XMM; so are a value held at an
 interface type and one at an opaque type parameter, which are released through a companion the green-thread
-struct does not carry. A float INSIDE an async'd function is ordinary — that is
+struct does not carry. A float or interface ARGUMENT handed to a parameter the callee reassigns is the
+exception: it rides a cell the coroutine owns, and the cell is one word that carries a witness beside the
+value (`a-float-argument-the-callee-reassigns-rides-a-cell`). A float INSIDE an async'd function is ordinary — that is
 `a-float-argument-survives-a-stack-grow` below, whose subject is the stack grower's XMM save list rather
 than the async channel.
 
@@ -58,7 +60,7 @@ exactly which cases it did not run.
 ⚠ **IT IS NOT A PER-TARGET OPT-IN, and the test of that is what is refused and what is not.** Anything
 decided BEFORE lowering — an arity, an operand type, a shape refusal, a linearity error — is
 target-neutral and PASSES on wasm: the `-refused` cases in this file assert `E2015` and the
-`double-await` family asserts `E3102`/`E3141`, all of them measured green on wasm32-wasi. A marker on one
+`double-await` family asserts `E3102`/`E3141`, all of them green on wasm32-wasi. A marker on one
 of those would be hiding a green lane rather than describing a red one.
 
 ## Tests
@@ -172,6 +174,119 @@ typealias Integer = int(i64.min to i64.max)
 42
 ```
 
+<!-- test: async-scheduler.error.a-float-argument-is-refused -->
+A `float` argument handed to a parameter the callee only reads would travel in an XMM register, which the
+trampoline never fills.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+function half(x Real) returns Integer
+	Scheduler.yield()
+	return trunc(x / 2.0)
+end 'half'
+
+function main() returns ExitCode
+	let p = async half(84.0)
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:11:16: Unsupported: an `async` call argument must ride the green thread's integer channel — a `float` travels in an XMM register the hand-assembled trampoline never fills, a value held at an interface type is released through a witness table and one held at an opaque type parameter through a layout descriptor, and the green-thread struct carries neither. A managed String/struct/array argument is one heap pointer and is accepted, and so is a float or an interface value handed to a parameter the callee reassigns, which rides a cell the coroutine owns
+```
+
+<!-- test: async-scheduler.a-float-argument-the-callee-reassigns-rides-a-cell -->
+The same spawn, with a callee that reassigns its parameter: the argument rides a cell the coroutine owns, and
+the cell is one integer word whatever it holds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+function half(x Real) returns Integer
+	Scheduler.yield()
+	x = x / 2.0
+	return trunc(x)
+end 'half'
+
+function main() returns ExitCode
+	let p = async half(84.0)
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: async-scheduler.error.an-interface-argument-is-refused -->
+A value held at an interface type, handed to a parameter the callee only reads, is released through its
+witness table, which the green-thread struct does not carry.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function measure(s Shape) returns Integer
+	Scheduler.yield()
+	return s.area()
+end 'measure'
+
+function shapeOf(side Integer) returns Shape
+	return Square.create(side)
+end 'shapeOf'
+
+function main() returns ExitCode
+	let p = async measure(shapeOf(6))
+	return (await p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:30:16: Unsupported: an `async` call argument must ride the green thread's integer channel — a `float` travels in an XMM register the hand-assembled trampoline never fills, a value held at an interface type is released through a witness table and one held at an opaque type parameter through a layout descriptor, and the green-thread struct carries neither. A managed String/struct/array argument is one heap pointer and is accepted, and so is a float or an interface value handed to a parameter the callee reassigns, which rides a cell the coroutine owns
+```
+
+<!-- test: async-scheduler.a-generic-function-is-spawned-at-its-inferred-instance -->
+`async` infers a generic function's type parameters from its arguments exactly as a call does, and spawns the
+instance they fix.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function larger(a T, b T) uses T returns T where T is Comparable
+	Scheduler.yield()
+
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+function main() returns ExitCode
+	let p = async larger(30 as Integer, b: 42)
+	let q = async larger("ab", b: "cd")
+	print("{await q}\n")
+	return (await p) as ExitCode
+end 'main'
+```
+```stdout
+cd
+```
+```exitcode
+42
+```
+
 <!-- test: async-scheduler.nested -->
 A green thread can itself spawn and await another green thread — the current-GT tracking nests correctly.
 ```maxon
@@ -241,15 +356,13 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: async-scheduler.await-loop-bounded -->
 A spawn/await loop stays bounded: each spawn commits a fresh green-thread stack and each completed thread's
 stack is RELEASED (`osFreePages`/VirtualFree) as the strand runner reaps it, so 5000 iterations hold at most one
-resident stack at a time and exit cleanly. (P1.5-B1a′ replaced B1a's fixed-size 1 MiB free-list with
-alloc-fresh-on-spawn + free-on-complete, because the relocating morestack makes stacks variable-sized; the
-bound is now alloc+free churn rather than a recycle. Without either, every spawn would leak its stack
-commit — invisible to the `__mm` leak gate — and exhaust commit on a bounded-pagefile machine.) Since
-P1.5-B1c (#87) this loop is also a LEAK GATE on the GT struct + its inline arg buffer: each completed thread's
-struct is recycled onto the free-list and the completion-based `__gt_live_count` is balanced to zero, so a
-clean exit (0) proves nothing leaked. Before that fix each iteration bump-leaked its ~224-byte struct and
-its 48-byte arg buffer — slab allocations that are not boxes, so the heap leak gate's tracked live column
-never sees them — and, once the counter existed but the free-list did not, this same program exited 101.
+resident stack at a time and exit cleanly. (Stacks are allocated fresh on spawn and freed on completion,
+because the relocating morestack makes them variable-sized, so the bound is alloc+free churn rather than a
+recycle. Without it, every spawn would leak its stack commit — invisible to the `__mm` leak gate — and
+exhaust commit on a bounded-pagefile machine.) This loop is also a LEAK GATE on the GT struct + its inline
+arg buffer: each completed thread's struct is recycled onto the free-list and the completion-based
+`__gt_live_count` is balanced to zero, so a clean exit (0) proves nothing leaked. The struct and its arg
+buffer are slab allocations that are not boxes, so the heap leak gate's tracked live column never sees them.
 ```maxon
 
 function noop() returns Integer
@@ -276,7 +389,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-scheduler.struct-reuse -->
 The GT-struct free-list is exercised AND its whole-struct memzero-on-recycle is correct: five spawn/awaits run
-in sequence, each reusing the struct the previous completed thread pushed onto the free-list (P1.5-B1c #87).
+in sequence, each reusing the struct the previous completed thread pushed onto the free-list.
 Each thread computes `2 * i` from its argument, so `2+4+6+8+10 = 30` proves every recycled struct actually RAN
 its function. A recycled struct carries its previous tenant's fields (it lives outside the always-zeroing slab),
 so without the whole-struct memzero the second spawn would inherit `status == completed` and its `await` would
@@ -307,10 +420,11 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-scheduler.out-of-order-await -->
 A promise's struct must survive until ITS OWN `await`, even when the thread completes early while a DIFFERENT
-await is parked (P1.5-B1c #87). While `main` is parked on `await p2`, its strand runs `p1` first, FIFO; `p1` is
-now a completed-but-un-awaited handle. Two intervening `async` spawns must NOT recycle `p1`'s struct — only `p1`'s
+await is parked. While `main` is parked on `await p2`, its strand runs `p1` first, FIFO; `p1` is
+then a completed-but-un-awaited handle. Two intervening `async` spawns must NOT recycle `p1`'s struct — only `p1`'s
 own `await` may. `p4` therefore gets a distinct struct, and `await p1` reads `p1`'s real result (10), not `p4`'s
-(40). `10+20+30+40 = 100`. Reclaiming at completion instead of at await returned 130 here (a silent wrong answer).
+(40). `10+20+30+40 = 100`. Reclaiming at completion instead of at await would return 130 here (a silent wrong
+answer).
 ```maxon
 
 function w(x Integer) returns Integer
@@ -553,7 +667,7 @@ The free lists are Go's: one per processor, which sheds to one global list when 
 refills from it 32 at a time, so the second wave finds the records that `main`'s processor kept and the ones
 it shed.
 Whether a given spawn reuses a record or carves a fresh one can depend on which processor it runs on, and
-that no longer reaches the compiler's own memory, which `scale-test` measures bit-for-bit: records come from
+that does not reach the compiler's own memory, which `scale-test` measures bit-for-bit: records come from
 the scheduler's own arena, outside the counted allocator. Every one of the second wave's hundred spawns is
 served from a list, so a record lost or freed on the way back reads below 100.
 ```maxon

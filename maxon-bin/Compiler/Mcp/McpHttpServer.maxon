@@ -18,7 +18,7 @@ let HostHeaderName = "host"
 let JsonContentType = "application/json"
 let SessionIdBytes = 16 as DigestPrefixBytes
 let ContentTypeHeaderName = "content-type"
-let NoAcceptDeadline = 0 as SocketDeadlineMs
+let ClearedAcceptDeadline = 0 as SocketDeadlineMs
 let SoonestAcceptDeadline = 1 as SocketDeadlineMs
 let ExpiryPastTheIdleWindow = 1 as SessionMillis
 
@@ -146,9 +146,9 @@ export function runMcpHttpServer(devMode bool, exePath FilePath, options McpHttp
 
 	// No route shuts the server down: one would be a denial of service for any page that got past the
 	// header checks. It ends with its process, or with its stdin under `exitOnStdinEof`.
-	var handler = McpHttpHandler.create(devMode, exePath: exePath, caps: options, port: port, server: server)
+	let handler = McpHttpHandler.create(devMode, exePath: exePath, caps: options, port: port, server: server)
 	var wakes = McpHttpWakePromiseArray.create()
-	wakes.push(async servedSessions(server, handler: handler))
+	wakes.push(async McpHttpHandler.servedSessions(handler))
 
 	if options.exitOnStdinEof 'watchingStdin'
 		let watcher = spawn McpStdinWatcher.create()
@@ -182,21 +182,6 @@ function reportedListenerFailure() returns ExitCode
 	return OwnFailureExit
 end 'reportedListenerFailure'
 
-function servedSessions(server HttpServer, handler McpHttpHandler) returns McpHttpWake
-	handler.rearm()
-	var outcome = server.serve(handler)
-
-	while outcome == HttpServeEnd.acceptDeadlinePassed 'sweepOnTime'
-		handler.sweep()
-		handler.rearm()
-		outcome = server.serve(handler)
-	end 'sweepOnTime'
-
-	handler.reapEverySession()
-
-	return McpHttpWake.served(outcome)
-end 'servedSessions'
-
 type McpHttpHandler implements HttpHandler
 	export var sessions as McpHttpSessionList
 	let devMode as bool
@@ -208,6 +193,22 @@ type McpHttpHandler implements HttpHandler
 	static function create(devMode bool, exePath FilePath, caps McpHttpOptions, port NetworkPort, server HttpServer) returns McpHttpHandler
 		return Self{sessions: McpHttpSessionList.create(), devMode: devMode, exePath: exePath, caps: caps, port: port, server: server}
 	end 'create'
+
+	static function servedSessions(handler McpHttpHandler) returns McpHttpWake
+		let server = handler.server
+		handler.rearm()
+		var outcome = server.serve(handler)
+
+		while outcome == HttpServeEnd.acceptDeadlinePassed 'sweepOnTime'
+			handler.sweep()
+			handler.rearm()
+			outcome = server.serve(handler)
+		end 'sweepOnTime'
+
+		handler.reapEverySession()
+
+		return McpHttpWake.served(outcome)
+	end 'servedSessions'
 
 	function handle(exchange HttpExchange) throws HttpServerError
 		let startedMs = Clock.nowMs() as SessionMillis
@@ -282,7 +283,12 @@ type McpHttpHandler implements HttpHandler
 	end 'reapEverySession'
 
 	export function rearm()
-		try self.server.setAcceptDeadline(acceptDeadlineFor(self.sessions, idleMs: self.idleMs())) otherwise (fault) 'unarmed'
+		let deadline = match acceptDeadlineFor(self.sessions, idleMs: self.idleMs()) 'deadline'
+			cleared gives ClearedAcceptDeadline
+			after(milliseconds) gives milliseconds
+		end 'deadline'
+
+		try self.server.setAcceptDeadline(deadline) otherwise (fault) 'unarmed'
 			match fault 'why'
 				listenerClosed then break 'why'
 				default panic("McpHttpHandler.rearm: `setAcceptDeadline` answers only a closed listener, and it answered `{fault.name}`")
@@ -295,8 +301,17 @@ type McpHttpHandler implements HttpHandler
 	end 'idleMs'
 end 'McpHttpHandler'
 
-function acceptDeadlineFor(sessions McpHttpSessionList, idleMs SessionMillis) returns SocketDeadlineMs
-	let first = try sessions.first() otherwise return NoAcceptDeadline
+union AcceptDeadline
+	cleared
+	after(milliseconds SocketDeadlineMs)
+end 'AcceptDeadline'
+
+function acceptDeadlineFor(sessions McpHttpSessionList, idleMs SessionMillis) returns AcceptDeadline
+	if sessions.isEmpty() 'noSessionToExpire'
+		return AcceptDeadline.cleared
+	end 'noSessionToExpire'
+
+	let first = try sessions.first() otherwise panic("acceptDeadlineFor: a session list that is not empty has a first session")
 	var longestIdle = first.lastSeenMs
 
 	for session in sessions 'eachSession'
@@ -306,7 +321,7 @@ function acceptDeadlineFor(sessions McpHttpSessionList, idleMs SessionMillis) re
 	let expiry = longestIdle + idleMs + ExpiryPastTheIdleWindow
 	let nowMs = Clock.nowMs() as SessionMillis
 
-	return (expiry - nowMs) as SocketDeadlineMs if expiry > nowMs else SoonestAcceptDeadline
+	return AcceptDeadline.after((expiry - nowMs) as SocketDeadlineMs if expiry > nowMs else SoonestAcceptDeadline)
 end 'acceptDeadlineFor'
 
 function reapSessions(sessions McpHttpSessionList, ending SessionEnds) returns SessionTally

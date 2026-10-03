@@ -44,7 +44,7 @@ or   rax, rax, r15        ; dest coalesced into `edge`'s dying register — no c
   AND it is defined in the SAME BLOCK as the op reading it. Both are needed — a value defined OUTSIDE
   a loop and read ONCE inside it has one reader and is live across the back edge, so it dies nowhere
   near that reader; swapping on the weaker test would put a copy INTO a loop that had none, and the compiler
-  REFUSES rather than spills, so the price of that is an `E5001` on a program that compiled before.
+  REFUSES rather than spills, so the price of that is an `E5001` on a program that compiles without the swap.
   With the block test the range is closed inside one block and the answer is exact. This half carries
   the whole safety argument.
 - **The LEFT operand must have a second reader** — *necessary* for a copy to exist, and not
@@ -54,8 +54,8 @@ or   rax, rax, r15        ; dest coalesced into `edge`'s dying register — no c
   only cost a golden that moved for nothing** — the swapped order's reuse input provably dies, so no
   copy is recorded for it whatever `lhs` was doing.
 
-Both halves come off the ONE descent the instruction selector already makes for EC16
-(`ScaledIndexFolds`): `collectFunctionValueUses` counted with multiplicity over every operand of every
+Both halves come off the ONE descent the instruction selector already makes for scaled-index folding
+(`ScaledIndexFolds`): `collectFunctionValueUses` counts with multiplicity over every operand of every
 op, every terminator and every branch-edge argument, plus the def block of every arithmetic result.
 That also refuses `x ⊕ x` for free (one value inserted twice reads as repeated).
 
@@ -63,21 +63,19 @@ That also refuses `x ⊕ x` for free (one value inserted twice reads as repeated
 
 x64 `addsd`/`mulsd` propagate the **destination's** NaN payload, so `a ⊕ b` and `b ⊕ a` are not
 bit-identical when both operands are NaN. That is the same rule that keeps `foldConstOperands`'
-operand reordering integer-only (EC13), and `a-float-multiply-keeps-its-copy` is its pin: the
+operand reordering integer-only, and `a-float-multiply-keeps-its-copy` is its pin: the
 `movsd` survives in the committed fragment where the integer twin's `mov` does not.
 
-### ⚠ THIS IS A SMALL ROW AND THE CENSUS IS WHY
+### ⚠ THIS IS A SMALL TRANSFORM AND THE CENSUS IS WHY
 
-Measured on the self-compile (1,275,649 emitted x64 ops, 248,207 `movRegReg`): only **969** of those
-copies are two-address reuse copies at all, and only **314** of them sit on a commutative integer op.
-**91.6% of the compiler's register-to-register copies are the ABI** — an argument moved into its calling
-register, a result captured out of one, a parameter captured at entry — and 93% of those read a
-CALLEE-SAVED register, i.e. a value that crosses a call and therefore cannot live in an argument
-register at all. `docs/emitted-code-roadmap.md`'s `EC19` row carries the full table.
+Very few of the compiler's own register-to-register copies are two-address reuse copies at all, and
+fewer still sit on a commutative integer op. **The great majority of them are the ABI** — an argument
+moved into its calling register, a result captured out of one, a parameter captured at entry — and most
+of those read a CALLEE-SAVED register, i.e. a value that crosses a call and therefore cannot live in an argument
+register at all.
 
-⚠ It is also not uniformly a win, and the row says so: against a real control the self-compile emits
-175 fewer copies and 512 fewer bytes and `fannkuch-redux` runs 4.7% faster, while `scale-test`'s
-generated corpus emits **1.45% MORE code**, all of it from `regalloc:splitting` doing more work on a
+⚠ It is also not uniformly a win: against a control the self-compile emits fewer copies and fewer bytes
+and `fannkuch-redux` runs faster, while `scale-test`'s generated corpus emits **MORE code**, all of it from `regalloc:splitting` doing more work on a
 corpus whose pressure knob is sized to sit exactly at the register pool. Which of the two generalises
 is open.
 
@@ -156,10 +154,9 @@ condition of the rule holds, and the copy stays anyway because `sub` is not comm
 returns 1.
 
 ⚠ `scaled` is `b * 3` and not `b` itself, and that is what makes this a control at all: the
-straightforward spelling `a - b` passes under that sabotage FOR THE WRONG REASON — after inlining `b`
+straightforward spelling `a - b` would pass under that sabotage FOR THE WRONG REASON — after inlining `b`
 is the loop counter, the counter has half a dozen readers, so the dying-`rhs` condition fails first
-and the commutativity guard is never reached. MEASURED: with the guard removed, the `a - b` spelling
-left all five fragments byte-identical and all five green.
+and the commutativity guard is never reached.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
@@ -223,13 +220,12 @@ of both operands and costs no copy whatever the order. The pin is the fragment's
 `leaRegRegReg` names `total` before `scaled`, the order the source wrote. Flip `add gives false` to
 `true` in `integerBinOpIsTwoAddress` and this golden moves.
 
-⚠ **`scaled` is `step * 5`, and BOTH of those choices are a control that was caught failing.** The
+⚠ **`scaled` is `step * 5`, and BOTH of those choices are what makes it a control.** The
 straightforward `total + step` cannot reach the destructiveness test at all — after inlining `step` IS
-the loop counter and the counter has several readers, so the dying-`rhs` condition refuses first
-(MEASURED: with `add gives true`, that spelling left this fragment byte-identical). And `step * 3`
-fails too, differently: the call passes `i * 3` as `total`, so CSE makes `scaled` the SAME VALUE as
-`total` and the `x ⊕ x` guard refuses it — the fragment showed `lea rsi, rdx, rdx`. A multiplier that
-is neither `total`'s nor a power of two (which `EC16` would absorb into an addressing mode, leaving no
+the loop counter and the counter has several readers, so the dying-`rhs` condition refuses first. And
+`step * 3` fails too, differently: the call passes `i * 3` as `total`, so CSE makes `scaled` the SAME
+VALUE as `total` and the `x ⊕ x` guard refuses it, leaving `lea rsi, rdx, rdx`. A multiplier that
+is neither `total`'s nor a power of two (which scaled-index folding would absorb into an addressing mode, leaving no
 `lea` to pin) is what makes the case reach the roster.
 ```maxon
 typealias Word = int(i64.min to i64.max)

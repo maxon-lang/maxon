@@ -1,0 +1,107 @@
+typealias CopyLocationArray = Array with ElementIndex
+
+enum ParallelCopyStep implements Error
+	onlyCyclesRemain
+end 'ParallelCopyStep'
+
+export interface ParallelCopyEmitter
+	function emitCopy(dst ElementIndex, src ElementIndex)
+
+	// Must exchange the two locations, not only copy `b` into `a`: `sequence` rewrites every pending
+	// source through the exchange afterwards.
+	function emitSwap(a ElementIndex, b ElementIndex)
+end 'ParallelCopyEmitter'
+
+export type ParallelCopy
+	var dsts as CopyLocationArray
+	var srcs as CopyLocationArray
+
+	export static function create() returns Self
+		return Self{dsts: CopyLocationArray.create(), srcs: CopyLocationArray.create()}
+	end 'create'
+
+	export function add(dst ElementIndex, src ElementIndex)
+		if dst != src 'realMove'
+			self.dsts.push(dst)
+			self.srcs.push(src)
+		end 'realMove'
+	end 'add'
+
+	export function sequence(emitter ParallelCopyEmitter)
+		while self.dsts.count() > 0 'sequence'
+			self.removeSatisfiedMoves()
+
+			if self.dsts.count() == 0 'allDone'
+				break
+			end 'allDone'
+
+			if let leaf = try self.findLeafMove() 'foundLeaf'
+				let d = try self.dsts.get(leaf) otherwise panic("ParallelCopy.sequence: dsts.get OOB at leaf {leaf}")
+				let s = try self.srcs.get(leaf) otherwise panic("ParallelCopy.sequence: srcs.get OOB at leaf {leaf}")
+				emitter.emitCopy(d, src: s)
+				self.removeMoveAt(leaf)
+			end 'foundLeaf' else 'cycle'
+				let a = try self.dsts.get(0) otherwise panic("ParallelCopy.sequence: dsts.get(0) OOB")
+				let b = try self.srcs.get(0) otherwise panic("ParallelCopy.sequence: srcs.get(0) OOB")
+				emitter.emitSwap(a, b: b)
+				self.removeMoveAt(0)
+				self.rewriteSourcesThroughSwap(a, b: b)
+			end 'cycle'
+		end 'sequence'
+	end 'sequence'
+
+	function findLeafMove() returns ElementIndex throws ParallelCopyStep
+		for i in 0 upto self.dsts.count() 'eachMove'
+			let d = try self.dsts.get(i) otherwise panic("ParallelCopy.findLeafMove: dsts.get OOB at {i}")
+
+			if not self.isAnySource(d) 'leaf'
+				return i
+			end 'leaf'
+		end 'eachMove'
+
+		throw ParallelCopyStep.onlyCyclesRemain
+	end 'findLeafMove'
+
+	function isAnySource(location ElementIndex) returns bool
+		for s in self.srcs 'each'
+			if s == location 'match'
+				return true
+			end 'match'
+		end 'each'
+
+		return false
+	end 'isAnySource'
+
+	// A swap satisfies the move whose source it rewrote, and that move must go before the next swap is
+	// chosen: a self-swap zeroes an XMM register on x64 (`X64Backend.emitRegRegSwap`).
+	function removeSatisfiedMoves()
+		let n = self.dsts.count()
+
+		for ri in 0 upto n 'each'
+			let i = n - 1 - ri
+			let d = try self.dsts.get(i) otherwise panic("ParallelCopy.removeSatisfiedMoves: dsts.get OOB at {i}")
+			let s = try self.srcs.get(i) otherwise panic("ParallelCopy.removeSatisfiedMoves: srcs.get OOB at {i}")
+
+			if d == s 'satisfied'
+				self.removeMoveAt(i)
+			end 'satisfied'
+		end 'each'
+	end 'removeSatisfiedMoves'
+
+	function removeMoveAt(idx ElementIndex)
+		_ = try self.dsts.remove(idx) otherwise panic("ParallelCopy.removeMoveAt: dsts.remove OOB at {idx}")
+		_ = try self.srcs.remove(idx) otherwise panic("ParallelCopy.removeMoveAt: srcs.remove OOB at {idx}")
+	end 'removeMoveAt'
+
+	function rewriteSourcesThroughSwap(a ElementIndex, b ElementIndex)
+		for i in 0 upto self.srcs.count() 'each'
+			let s = try self.srcs.get(i) otherwise panic("ParallelCopy.rewriteSourcesThroughSwap: srcs.get OOB at {i}")
+
+			if s == a 'wasA'
+				try self.srcs.set(i, value: b) otherwise panic("ParallelCopy.rewriteSourcesThroughSwap: srcs.set OOB at {i}")
+			end 'wasA' else if s == b 'wasB'
+				try self.srcs.set(i, value: a) otherwise panic("ParallelCopy.rewriteSourcesThroughSwap: srcs.set OOB at {i}")
+			end 'wasB'
+		end 'each'
+	end 'rewriteSourcesThroughSwap'
+end 'ParallelCopy'

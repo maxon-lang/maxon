@@ -21,11 +21,10 @@ end 'printError'
 Like `print`, it takes one `String` and returns nothing. To write anything other than a `String`,
 interpolate: `printError("{value}\n")`.
 
-### Why this spec is WRITTEN rather than ported
+### Why this spec exists
 
-There is no canonical `/specs/print-error-function.md`. `printError` appears in `/specs` only
-incidentally (`source-location-defaults.md`), so there was no file to port byte-identical and this
-one is authored — the same route `W5` took for `console-stdin.md` and `process-executable-path.md`.
+`printError` appears elsewhere only incidentally (`source-location-defaults.md`), so this file is
+where its behaviour is pinned.
 
 ### The two streams are independent, and that is the property worth pinning
 

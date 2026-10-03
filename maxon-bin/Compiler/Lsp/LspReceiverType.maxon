@@ -42,11 +42,11 @@ module function lspSubjectOfReceiver(text String, tokens TokenArray, keywords Ke
 	return HoverDocument.ofTokens(text, tokens: tokens, keywords: keywords, corpus: corpus).receiverSubject(receiver)
 end 'lspSubjectOfReceiver'
 
-module function lspSubjectTypeName(subject LspSubject) returns String
-	return match subject 'subject'
-		staticSurfaceOf(typeName) gives typeName
-		instanceSurfaceOf(typeName) gives typeName
-		nothingNamed gives ""
+module function lspSubjectTypeName(subject LspSubject) returns String throws AbsentError
+	match subject 'subject'
+		staticSurfaceOf(typeName) then return typeName
+		instanceSurfaceOf(typeName) then return typeName
+		nothingNamed then throw AbsentError.absent
 	end 'subject'
 end 'lspSubjectTypeName'
 

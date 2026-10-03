@@ -8,42 +8,6 @@
 // `MaxonOpMeta{category}` per-variant tagging means a new op cannot be added
 // without declaring its category.
 
-// --- Ownership lattice ---
-//
-// The 4-value ownership lattice, born at the Maxon tier (per PLAN.md: ownership
-// is a first-class Maxon-dialect concept, resolved before lowerMaxonToStd). It
-// has three first-class homes and ZERO sidetables:
-//   1. an OwnershipKind attribute on every binding/value (this enum), carried
-//      on `VarInfo.ownership`;
-//   2. signature ownership modes in the function type (param consume/borrow/copy,
-//      return owned/borrow);
-//   3. explicit `own.*` ops in the block stream (the Own dialect).
-//
-// Kinds:
-//   - trivial — scalar / no destructor; never dropped, never refcounted.
-//   - owned   — unique heap value; dropped exactly once unless moved.
-//   - borrow  — non-owning view; never dropped; carries a lifetime.
-//   - shared  — escape-promoted to runtime refcounting (the ONLY place
-//               refcounts survive — emitted solely for `shared`).
-//
-// PRESENT BUT INERT: every binding/value is `trivial`; the Own tier
-// (OwnershipInfer / OwnershipCheck / EscapeAnalysis / InsertDrops) that reads
-// and mutates this is stubbed. The scaffold is designed in rather than
-// retrofitted.
-export enum OwnershipKind
-	trivial
-	owned
-	borrow
-	shared
-end 'OwnershipKind'
-
-// True for the default kind (no drop, no refcount). Lifted out so the Own
-// tier and Scope's per-frame owned-values gate share one classifier instead of
-// re-spelling the `== OwnershipKind.trivial` compare at each site.
-export function isTrivialOwnership(kind OwnershipKind) returns bool
-	return kind == OwnershipKind.trivial
-end 'isTrivialOwnership'
-
 // Identifier for a named type reference interned in the project's type-name
 // interner (Chunk C) so identical named references share one backing String and
 // structural identity is a single integer compare. Wide range: the interner is
@@ -161,25 +125,26 @@ export union MaxonType
 	structRef(id TypeNameId)
 	string
 
-	// A non-capturing FUNCTION VALUE — a bare code pointer, no environment. `id` is the
-	// interned name that GOVERNS the value's signature: the FUNCTION's own name for a `functionRef`
-	// (`let f = double` → `function(intern("double"))`), or a function-TYPEALIAS name for a declared
-	// place (`f UnaryOp` → `function(intern("UnaryOp"))`). An indirect call recovers the return type
-	// by that name (`ProgramSignatures.returnTypeOf` / `functionAliasReturnOf`), which is why the id
-	// is a real interned NAME and rides the value column's name slot exactly as `named`/`structRef`
-	// do — it interns, remaps and hashes by the same machinery.
+	// A FUNCTION VALUE — the address of its function record: the code word, then a closure's captures.
+	// `id` is the interned name that GOVERNS the value's signature: the FUNCTION's own name for a
+	// `functionRef` (`let f = double` → `function(intern("double"))`), or a function-TYPEALIAS name
+	// for a declared place (`f UnaryOp` → `function(intern("UnaryOp"))`). An indirect call recovers
+	// the return type by that name (`ProgramSignatures.returnTypeOf` / `functionAliasReturnOf`), which
+	// is why the id is a real interned NAME and rides the value column's name slot exactly as
+	// `named`/`structRef` do — it interns, remaps and hashes by the same machinery.
 	//
 	// It is its OWN arm, NEVER `named`, for the identical reason `structRef`/`string` are: the five
 	// rules that read `named` (`typeClassOf`, `tagIsIntegral`, `typeTagName`, `notOperatorFor`,
 	// `valueTagToStdType`) all treat it as a ranged INT, and filing a function under `named` would
 	// make `f + 1`, `return f` from an `ExitCode` function and `not f` all compile as integer
-	// arithmetic on a code pointer. A function is `TypeClass.function`, agreeing only with another
+	// arithmetic on a record pointer. A function is `TypeClass.function`, agreeing only with another
 	// function value (which is what makes a function value assignable to a function-typed place and
 	// nothing else — the E3005 discipline).
 	//
-	// Its width is a machine word (a `.text` address), assigned at the Maxon→Std boundary
-	// (`valueTagToStdType` → i64) exactly as every other arm's is, so MaxonType stays width-free. It
-	// carries no ownership: a code pointer is never allocated, refcounted or dropped.
+	// Its width is a machine word (the record's address), assigned at the Maxon→Std boundary
+	// (`valueTagToStdType` → i64) exactly as every other arm's is, so MaxonType stays width-free. A
+	// named function's record is immortal `.rdata`; a capturing closure's is a heap record, owned and
+	// dropped like any other.
 	//
 	function(id TypeNameId)
 
@@ -211,7 +176,7 @@ export union MaxonType
 	// ⚠ **IT IS ITS OWN ARM AND ITS OWN `TypeClass`, NOT `string`, AND THE REPRESENTATION IS EXACTLY WHY
 	// THAT IS NOT ENOUGH.** Sharing a record is not sharing a type: `s == c` must be a type error rather
 	// than a byte compare that silently succeeds when a one-cluster String meets a Character, `print(c)`
-	// must be refused where `print(s)` is fine, and `Set with Character` (slice D) must be a different
+	// must be refused where `print(s)` is fine, and `Set with Character` must be a different
 	// instance from `Set with String`. `stdlib/Character.maxon` declares a distinct `type Character`,
 	// whose `toString()` is `String.init(managed)`, i.e. the same bytes reinterpreted.
 	//
@@ -317,7 +282,7 @@ export enum ValueTypeTag
 	// arm for why it is not `named`).
 	string
 
-	// The tag of a non-capturing FUNCTION VALUE — a pointer to a `.text` code address (see MaxonType's
+	// The tag of a FUNCTION VALUE — a pointer to its function record (see MaxonType's
 	// `function` arm for why it is not `named`).
 	function
 
@@ -438,56 +403,6 @@ end 'typeParamIdOf'
 // `nameOf(UnnamedTypeId)` is `EmptySourceText` rather than the first real name a file interned.
 export let UnnamedTypeId = 0 as TypeNameId
 
-// ⭐ **THE FILLER A STORED TYPE-PARAMETER COLUMN CARRIES FOR A SLOT THAT IS NOT ONE** — `UnnamedTypeId`'s
-// twin, for `FunctionAliasParam.typeParamToken` and `FunctionTypeAlias.returnTypeParamToken`.
-//
-// ⚠ **IT IS A FILLER AND NOT A SENTINEL, AND THE TAG IS WHAT MAKES THAT TRUE.** A digest could in
-// principle BE zero, so nothing may read this value to decide whether a slot names a type parameter:
-// `tag == ValueTypeTag.typeParameter` decides that, exactly as it decides whether `typeName` means
-// anything. Spelled apart from `UnnamedTypeId` because the two answer different questions of the same
-// slot, and a shared spelling would invite a reader to test the wrong one.
-export let NoTypeParamId = 0 as TypeParamId
-
-// ⭐⭐ **THE FILLER A STORED GENERIC-INSTANCE COLUMN CARRIES FOR A SLOT THAT IS NOT ONE** —
-// `FunctionAliasParam.genericInstanceId` and `FunctionTypeAlias.returnGenericInstanceId`.
-//
-// ⛔⛔ **IT IS A SENTINEL AND NOT A FILLER, WHICH IS THE OPPOSITE OF `NoTypeParamId` ONE LINE UP, AND THE
-// ASYMMETRY IS THE MEASURED DEFECT THIS COLUMN EXISTS TO CLOSE.** Until F3g a function alias stored a
-// `genericInstance` slot as the NAME column's "no name" filler — the empty string — and the rebuild passed
-// that through `functionAliasNameId`, which answers `UnnamedTypeId` for an empty name. `UnnamedTypeId` is
-// **0**, and 0 is a perfectly valid `GenericInstanceId` (`GenericInstanceRegistry.intern` numbers densely
-// from zero), so the declared side of every comparison silently became *"whichever instantiation the
-// declaration sweep interned FIRST"*. MEASURED: a legal program refused `expected 'fn(int) returns struct',
-// got 'fn(int) returns struct'`, and — the other polarity — a `fn returns Array with Small` ACCEPTED where
-// `Array with Field` was required, which dereferenced the integer 3 as a struct pointer and SIGSEGV'd.
-//
-// ⇒ The absent value must lie OUTSIDE the id space, so that a `genericInstance` slot whose identity was
-// never filled panics instead of naming instance 0. `u64.max` is that value: the registry is dense and
-// append-only, so reaching it would mean interning 2^64 instances.
-// ⚠ **`i64.max` AND NOT `u64.max`, AND THE ARGUMENT IS UNCHANGED BY THE MOVE.** A sentinel is chosen to
-// sit ABOVE every key any program can mint, and interning 2^63 of them is as impossible as 2^64. What
-// changed is that the alias is a checked QUANTITY now, and `u64.max` rides as the wrapped `-1` — a
-// signed-negative, which is not a value a quantity holds, so every door it crossed began to panic.
-export let NoGenericInstance = i64.max as GenericInstanceId
-
-// ⭐⭐ **HOW MANY OF THESE DECLARED PARAMETERS CARRY `tag` — THE RESERVE/SUPPLY COUNT, AND IT HAS EXACTLY
-// ONE HOME.**
-//
-// Two hidden-parameter blocks are sized by it, and each is counted TWICE — once by the PARSER, deciding how
-// many slots a declaration RESERVES, and once by the LOWERING, deciding how many arguments a call SUPPLIES:
-//
-//   • `ValueTypeTag.function` — the companion ENVIRONMENT block (`Parser.bindClosureEnvParams`);
-//   • `ValueTypeTag.interfaceRef` — the companion WITNESS block (`Parser.bindExistentialWitnessParams`).
-//
-// ⚠ **THE TWO SIDES CANNOT BE ALLOWED TO DRIFT, AND NOTHING BUT THIS FUNCTION STOPS THEM.** They were four
-// byte-identical bodies in two files. A clause added to the reserve side and not the supply side is a callee
-// reading a witness (or an env) slot the caller never filled — a wrong function pointer at the first
-// dispatch, with no compile error anywhere and no diagnostic at run time. It is not a tidiness point: it is
-// the one place a mis-sized ABI block becomes unrepresentable rather than merely unwritten.
-//
-// It lives beside `maxonTypeTag`, whose answer it counts, and takes the declared parameter TYPES — the list
-// both sides genuinely hold (the callee side reads `IrFunction.maxonParamTypes`, the caller side the
-// callee's `FuncSignature.paramTypes`).
 export function countParamsWithTag(paramTypes MaxonTypeArray, tag ValueTypeTag) returns ParamCount
 	var n = 0 as ParamCount
 
@@ -500,17 +415,50 @@ export function countParamsWithTag(paramTypes MaxonTypeArray, tag ValueTypeTag) 
 	return n
 end 'countParamsWithTag'
 
+// ⭐⭐ **HOW MANY OF THESE DECLARED PARAMETERS CARRY A HIDDEN WITNESS — THE RESERVE/SUPPLY COUNT, AND
+// IT HAS EXACTLY ONE HOME.**
+//
+// The companion WITNESS block (`Parser.bindExistentialWitnessParams`) is sized by it, and counted
+// TWICE — once by the PARSER, deciding how many slots a declaration RESERVES, and once by the
+// LOWERING, deciding how many arguments a call SUPPLIES. A by-reference position carries none: its
+// witness rides in the parameter cell.
+//
+// ⚠ **THE TWO SIDES CANNOT BE ALLOWED TO DRIFT, AND NOTHING BUT THIS FUNCTION STOPS THEM.** A
+// clause added to the reserve side and not the supply side is a callee reading a witness slot the
+// caller never filled — a wrong function pointer at the first dispatch, with no compile error
+// anywhere and no diagnostic at run time. It is not a tidiness point: it is the one place a
+// mis-sized ABI block becomes unrepresentable rather than merely unwritten.
+//
+// It takes the declared parameter TYPES and the by-reference mask — what both sides genuinely hold
+// (the callee side reads `IrFunction.maxonParamTypes`, the caller side the callee's
+// `FuncSignature.paramTypes`).
+export function existentialWitnessParamCount(paramTypes MaxonTypeArray, byReference ParamPositionMask) returns ParamCount
+	var n = 0 as ParamCount
+
+	for i in 0 upto paramTypes.count() 'each'
+		if paramCarriesAnExistentialWitness(try paramTypes.get(i) otherwise panic("existentialWitnessParamCount: paramTypes.get OOB at {i} below its own count"), param: i as ParamCount, byReference: byReference) 'carries'
+			n = n + 1
+		end 'carries'
+	end 'each'
+
+	return n
+end 'existentialWitnessParamCount'
+
+export function paramCarriesAnExistentialWitness(paramType MaxonType, param ParamCount, byReference ParamPositionMask) returns bool
+	return maxonTypeTag(paramType) == ValueTypeTag.interfaceRef and not maskHasParam(byReference, param: param)
+end 'paramCarriesAnExistentialWitness'
+
 // ⭐⭐ **WHERE THE TWO OPTIONAL HIDDEN SLOTS SIT, WRITTEN ONCE.** The ABI is
-// `[user][env][existentialWitness][layout][count][witness_0..k]`, and both optional blocks are addressed
+// `[user][existentialWitness][layout][count][witness_0..k]`, and both optional blocks are addressed
 // FROM THE END — so each slot's ValueId is arithmetic on `paramCount` and the counts trailing it. That
-// arithmetic was spelled out twice per slot: once where the parser RESERVES it (`Parser.parseFunction`,
-// `Parser.parseFieldDefaultHelper`) and once where the lowering BINDS it
+// arithmetic is read both where the parser RESERVES it (`Parser.layoutParamOf`,
+// `Parser.fixedElementCountParamOf`) and where the lowering BINDS it
 // (`LowerMaxonToStd.bindImplicitParams`).
 //
-// ⚠ **IT IS `countParamsWithTag`'S HAZARD ONE AXIS OVER, AND IT HAS THE SAME CONSEQUENCE.** That header
-// records what a drifted reserve/supply COUNT costs; a drifted reserve/bind OFFSET costs the same thing by a
-// shorter road — the callee reads the register the caller filled with the OTHER hidden slot, with no compile
-// error anywhere. Adding a third optional block now means editing one expression per slot instead of two.
+// ⚠ **IT IS `existentialWitnessParamCount`'S HAZARD ONE AXIS OVER, AND IT HAS THE SAME
+// CONSEQUENCE.** That header records what a drifted reserve/supply COUNT costs; a drifted
+// reserve/bind OFFSET costs the same thing by a shorter road — the callee reads the register the
+// caller filled with the OTHER hidden slot, with no compile error anywhere.
 export function fixedElementCountSlotValueId(paramCount ParamCount, witnessParamCount ParamCount) returns ValueId
 	return valueIdAtParamPosition(paramCount - witnessParamCount - 1)
 end 'fixedElementCountSlotValueId'
@@ -608,7 +556,7 @@ end 'maxonReturnTypeIsATypeParameter'
 // a value to agree with, and manufacturing a tag for it would be exactly the sentinel this
 // codebase forbids. Every caller has already established the function returns a value —
 // `maxonReturnTypeIsVoid` is the gate, and a void `return <expr>` is its own diagnostic
-// (`ParseError.returnValueFromVoid`) — so the void arm is a caller bug and panics.
+// (`SourceParseError.returnValueFromVoid`) — so the void arm is a caller bug and panics.
 export function maxonReturnTypeTag(ref MaxonReturnType) returns ValueTypeTag
 	match ref 'k'
 		void then panic("maxonReturnTypeTag: a void return type has no value tag — the caller must gate on maxonReturnTypeIsVoid first")
@@ -1004,14 +952,15 @@ export enum MaxonCmpOp
 	ge
 end 'MaxonCmpOp'
 
-// Variants are declared in CATEGORY-CONTIGUOUS BANDS, in `OpCategory` order, so a pass
-// that treats a whole category uniformly spells it as one `or`-chain of that band's
-// variants and a reader finds a category's ops together.
-//
-// ⭐ **A VARIANT MAY BE ADDED ANYWHERE, AND EVERY SITE THAT MUST CLASSIFY IT SAYS SO** —
-// an arm names the cases it covers, so a variant no arm names is E2026 at that match.
-// Band position is an organizing choice, not a rule reviewers enforce by hand; `StdOp`
-// carries the same one, for the same reason.
+// `functionValue` materializes the address of the function's record, which an indirect call loads
+// its code from at offset 0; `codeAddress` the bare `.text` address of a compiler-internal callee,
+// which the drop walk calls as it stands. Either one read as the other is a call through a wrong
+// address.
+export enum FunctionRefForm
+	functionValue
+	codeAddress
+end 'FunctionRefForm'
+
 // ⭐⭐ **WAS THIS CALL SITE'S CALLEE MINTED BY THE `<primitive>.<method>` REWRITE?** — the ONE
 // fact about a call that its CALLEE BYTES cannot carry, and the reason it rides the op rather than being
 // re-derived downstream.
@@ -1050,7 +999,7 @@ export enum CalleeMint
 	paramDefaultHelper
 
 	// ⭐ `FilePath from "C:\x.txt"` → `FilePath.init(…)`, minted by
-	// `Parser.parseStringLiteralInitConstruction` (N1a).
+	// `Parser.parseStringLiteralInitConstruction`.
 	//
 	// It exists because the author writes NO MEMBER NAME in this form — the `init` is the
 	// `InitableFromStringLiteral` requirement the compiler dispatches to — so cross-file VISIBILITY has
@@ -1069,7 +1018,7 @@ export enum CalleeMint
 	fieldDefaultHelper
 
 	// ⭐⭐ **THE QUALIFIER IS THE COMPILER'S AND THE MEMBER IS THE AUTHOR'S — `p.toString()` ⇒
-	// `FilePath.toString` (F31). This one says something
+	// `FilePath.toString`. This one says something
 	// weaker and it is the weaker fact that is needed: a method dispatch spells its callee's HEAD out of the
 	// receiver's RESOLVED TYPE, which is a name that need not appear at the call site — or anywhere in the
 	// author's file.
@@ -1102,9 +1051,9 @@ end 'CalleeMint'
 export union ImmortalBoxSlotValue
 	// An empty `Array with T` record. Its `element_size@24`, which for a column over one of the base's own
 	// type parameters is the fixed opaque slot the SHARED body builds it at and not the argument's own
-	// width; and the element's drop callee, EMPTY when the element owns nothing —
+	// width; and the element's drop callee, `inert` when the element owns nothing —
 	// `ImmortalRecordKind.emptyContainer`'s encoding, for its reason.
-	emptyArray(elementSize ElementStride, elementDestroy ByteArray)
+	emptyArray(elementSize ElementStride, elementDestroy OwnershipCallee)
 
 	// ⭐⭐ **ANOTHER IMAGED BOX — a nested struct, a `Map`/`Set` box, a payload-free union case's tag box.**
 	// An INDEX into the op's node arena rather than the node itself, because a union carrying one would make
@@ -1141,6 +1090,14 @@ end 'ImmortalBoxNode'
 
 export typealias ImmortalBoxNodeArray = Array with ImmortalBoxNode
 
+// Variants are declared in CATEGORY-CONTIGUOUS BANDS, in `OpCategory` order, so a pass
+// that treats a whole category uniformly spells it as one `or`-chain of that band's
+// variants and a reader finds a category's ops together.
+//
+// ⭐ **A VARIANT MAY BE ADDED ANYWHERE, AND EVERY SITE THAT MUST CLASSIFY IT SAYS SO** —
+// an arm names the cases it covers, so a variant no arm names is E2026 at that match.
+// Band position is an organizing choice, not a rule reviewers enforce by hand; `StdOp`
+// carries the same one, for the same reason.
 export union MaxonOp
 	// --- band: callFree ---
 	// A free-function call `callee(args…)` whose result is a freshly-minted ValueId.
@@ -1198,7 +1155,7 @@ export union MaxonOp
 	// `mint` says whether `callee` is bytes the author wrote or a name the compiler minted from a spelling
 	// that shares none of them — see `CalleeMint`. It is the LAST field for the reason a new op is appended at
 	// its band's end: every existing destructuring reads its operands positionally.
-	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
+	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// --- band: plain ---
 	// Integer literal materialization. `value` is the already-parsed i64 (the
@@ -1320,7 +1277,7 @@ export union MaxonOp
 	// PARSER emits (`compare(errorFlag != 0)` + `condBranch`) is what reads the flag; the value is used
 	// on the success edge. Category `callFree`, the same band as `call` — it IS `call` plus the flag def.
 	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
-	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
+	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// THROW an error — a `throw E.case` / `throw U.case(x)` or `otherwise (e) throw e`. TERMINATOR (control
 	// leaves the function via the error edge). `errorValue` is either the enum ORDINAL (a SCALAR error) or a
@@ -1360,23 +1317,24 @@ export union MaxonOp
 	// carries the very same prefix as its first fragment.
 	panicAbort(message ByteArray) = MaxonOpMeta{category: OpCategory.panicking}
 
-	// --- non-capturing function values ---
+	// --- function values ---
 	//
 	// Their `OpCategory` metadata places each variant
 	// logically, independent of this tail position.
 	//
 	// A named function used as a VALUE — address-of, `let f = double`. `funcName` is identifier TEXT (a
-	// NAME, looked up — not a value), per the MaxonOp header's value/name split. It has NO env, NO heap
-	// and NO effect: a bare code pointer, allocation-free. It lands in `plain` (matched by variant,
-	// standing alone) exactly as `literal`/`stringLiteral` do — NOT in the reserved `closureProducer`
-	// band, which is for `closureCreate`, the op that allocates a heap environment block and is what
-	// a coarse "does this produce a heap closure?" membership test will want. functionRef allocates
-	// nothing, so it is not that.
-	functionRef(result ValueId, funcName ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	// NAME, looked up — not a value), per the MaxonOp header's value/name split. It has NO captures,
+	// NO heap and NO effect: the address of an immortal record or of code (`FunctionRefForm`),
+	// allocation-free. It lands in `plain` (matched by variant, standing alone) exactly as
+	// `literal`/`stringLiteral` do — NOT in the reserved `closureProducer` band, which a coarse "does
+	// this produce a heap closure?" membership test will want. functionRef allocates nothing, so it is
+	// not that.
+	functionRef(result ValueId, funcName ByteArray, form FunctionRefForm) = MaxonOpMeta{category: OpCategory.plain}
 
 	// A call THROUGH a function VALUE — `f(21)`, `h.op(21)`, `pick()(21)`. `callee` is a `ValueId` holding
-	// the code pointer (unlike `call`'s `callee ByteArray` NAME) — the whole reason it is a distinct op. It
-	// has full call-barrier semantics like `call`, so category `callFree` (the same band as `call`/`tryCall`).
+	// the function record (unlike `call`'s `callee ByteArray` NAME) — the whole reason it is a
+	// distinct op. It has full call-barrier semantics like `call`, so category `callFree` (the same
+	// band as `call`/`tryCall`).
 	//
 	// ⚠ **NO `argLabels`/`argRanges` (a DEVIATION from `call`, DELIBERATE).** Indirect calls are POSITIONAL —
 	// a function TYPE has no parameter names, so there is nothing to label — and an argument's own span would
@@ -1384,7 +1342,7 @@ export union MaxonOp
 	// names the argument by POSITION for the same reason there is no label.
 	//
 	// ⚠ **`args` ALWAYS CARRIES ONE MORE ENTRY THAN THE FUNCTION TYPE DECLARES** — see
-	// `IndirectCallEnvArgCount`.
+	// `FunctionRecordArgCount`.
 	//
 	// ⚠ **NO SIGNATURE RIDES THIS OP EITHER, and both consumers recover the same one the same way.** The Std
 	// `callIndirect` it lowers to carries the function value's register-file signature
@@ -1414,7 +1372,7 @@ export union MaxonOp
 	// spawn's `callee` is always bytes the author wrote (a free identifier, or a `<Type>.<static>` mangle of
 	// two written tokens); a MINTED callee (`int.fromString` → `__int_fromString`) is REFUSED at the parse
 	// door rather than carried here, so every reader downstream may read this name as the author's own.
-	asyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray) = MaxonOpMeta{category: OpCategory.awaiting}
+	asyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;
 	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.
@@ -1592,7 +1550,7 @@ export union MaxonOp
 	// work to a green thread — independent of this tail position.
 	//
 	// ⭐⭐ **`serviceSpawn(result, typeName, state)` — START `<T>`'s SERVICE AND ANSWER ITS MAILBOX.** `state`
-	// is the `<T>` box the factory just built, MOVED (`Parser.handIntoGreenThread`); `result` is the mailbox
+	// is the `<T>` box the factory just built, MOVED (`Parser.handOff`); `result` is the mailbox
 	// POINTER, an integer, which the parser then stores into the one field of a freshly allocated
 	// `<T>.handle` box. The two synthesized functions the runtime needs — `<T>.__loop` and the request
 	// union's drop cascade — are named by the TYPE alone, so the op carries neither: `LowerMaxonToStd`
@@ -1690,9 +1648,9 @@ export union MaxonOp
 	// carries ONE payload and serves an owned heap literal as well, so its imaged sites need a side table to
 	// say which of the two they are; this shape has no heap spelling and its payload is N SEPARATE literals,
 	// which one `bytes` field cannot hold without inventing an encoding for it.
-	immortalStringTable(result ValueId, texts ByteArrayArray, elementSize ElementStride, elementDestroy ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	immortalStringTable(result ValueId, texts ByteArrayArray, elementSize ElementStride, elementDestroy OwnershipCallee) = MaxonOpMeta{category: OpCategory.plain}
 
-	// --- WP-3: `--coverage` counter points ---
+	// --- `--coverage` counter points ---
 	//
 	// ⭐⭐ **ONE EXECUTION OF THE STATEMENT OR BRANCH ARM THIS OP HEADS.** `pointId` is the point's
 	// FILE-LOCAL index in the parsing artifact's `covPoints`; `mergeArtifact` records the file's base and
@@ -1740,21 +1698,11 @@ export union MaxonOp
 	existentialWitness(result ValueId, interfaceName ByteArray, conformer ValueId) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
-// ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
-// is NOT the argument list the source wrote.** Under the uniform `(userargs, env) -> R` ABI every function
-// value is called through one signature, so `Parser.parseIndirectCall` appends an env pointer as the LAST
-// argument — the callee value's own env when it carries one, else a materialized null. Every consumer that
-// pairs `args` with the function type's DECLARED parameters must therefore drop this many from the end:
-// `SemanticCheck.checkIndirectCall` (which would otherwise report every call as one argument too many) and
-// `LowerMaxonToStd.widenIndirectCallArgs` (which would otherwise index a parameter that does not exist).
-// ONE named fact, read by both, rather than a bare `- 1` in each.
-export let IndirectCallEnvArgCount = 1 as ParamCount
-
 // ⭐ **`args[0]` OF A WITNESS DISPATCH IS THE BORROWED RECEIVER, WHICH FILLS NO FORMAL** — so interface
 // formal `j` is `args[j + WitnessReceiverArgCount]`. `Parser.withWitnessReceiver` is the ONE place the
 // receiver is put back after `slotCallArgs` (which knows only the formals) has reordered the actuals; this
 // is the ONE place it is taken back off, beside the op whose operand shape it describes and beside
-// `IndirectCallEnvArgCount`, which states the same kind of fact for the other indirect form.
+// `FunctionRecordArgCount`, which states the same kind of fact for the other indirect form.
 export let WitnessReceiverArgCount = 1 as ParamCount
 
 // The receiver of a witness dispatch. Three tiers ask for it — `SemanticCheck.checkWitnessArgTypes` to name
@@ -1910,7 +1858,7 @@ export function maxonOpCalleeName(op MaxonOp) returns ByteArray
 		call(_, callee, _, _, _, _, _, _) gives callee
 		tryCall(_, _, callee, _, _, _, _, _, _) gives callee
 		asyncCall(_, callee, _, _, _, _, _) gives callee
-		functionRef(_, funcName) gives funcName
+		functionRef(_, funcName, _) gives funcName
 		serviceSend(_, callee, _, _) gives callee
 		default panic("maxonOpCalleeName: asked of an op that binds no callee name — `maxonOpCalleeKind` answers `noCallee` for it, and every caller gates on that")
 	end 'op'
@@ -2034,33 +1982,72 @@ export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonO
 	end 'op'
 end 'withRewrittenCallee'
 
-// The same op with its ARGUMENT LIST replaced — every other operand, the parallel label / range /
-// blame-name / default-slot columns included, carried through verbatim. `withRewrittenCallee`'s twin one
-// operand over, and it exists for the same reason: `LiteralArgPromotion` substitutes a writable record for
-// an immortal or merged one at a call, and doing that at the two call variants' own match arms would put the
-// eight-operand reconstruction in two places, where a field added to `MaxonOp.call` could be carried by one
-// and dropped by the other.
+export enum WriteBlameError implements Error
+	unblamed
+end 'WriteBlameError'
+
+export enum WriteBlameHolder
+	binding
+	closure
+end 'WriteBlameHolder'
+
+export union WriteBlame
+	unblamed
+	blamed(name ByteArray, holder WriteBlameHolder)
+
+	export function isBlamed() returns bool
+		return match self 'blame'
+			unblamed gives false
+			blamed gives true
+		end 'blame'
+	end 'isBlamed'
+
+	export function isHeldByAClosure() returns bool
+		return match self 'blame'
+			unblamed gives false
+			blamed(_, holder) gives holder == WriteBlameHolder.closure
+		end 'blame'
+	end 'isHeldByAClosure'
+
+	export function blamedName() returns ByteArray throws WriteBlameError
+		match self 'blame'
+			unblamed then throw WriteBlameError.unblamed
+			blamed(name, _) then return name
+		end 'blame'
+	end 'blamedName'
+end 'WriteBlame'
+
+export typealias WriteBlameArray = Array with WriteBlame
+
+// The same op with its ARGUMENT LIST and blame names replaced — every other operand, the parallel
+// label / range / default-slot columns included, carried through verbatim. `withRewrittenCallee`'s
+// twin one operand over, and it exists for the same reason: `LiteralArgPromotion` substitutes a
+// writable record for an immortal or merged one at a call, `SemanticCheck.bindDeferredArguments`
+// binds the arguments the parser left to overload resolution, and doing either at the call
+// variants' own match arms would put the reconstruction in several places, where a field added to
+// `MaxonOp.call` could be carried by one and dropped by another.
 //
 // ⚠ **IT REBUILDS RATHER THAN WRITING THROUGH THE OLD `args` ARRAY, AND THAT IS THE POINT.** A Maxon op is
 // a heap box that `IrModule.merge` copies BY REFERENCE out of the file's parse artifact, so an argument
 // list edited in place is the artifact's own and would corrupt the memo for every later compile of the
 // project. The caller pairs this with `module.ops.set`, which replaces only the merged module's slot.
-//
-// ⚠ `asyncCall` is deliberately absent where `withRewrittenCallee` admits it, and the reason is NOT that a
-// spawn has no managed argument: `SemanticCheck.requireAsyncScalarParams` ACCEPTS
-// a managed `async` PARAMETER and refuses only a CONSUMED managed one, and
-// `multicore-stress/refcount-torture.maxon` hands one `String` to twelve tasks. What is actually absent is a REASON to
-// substitute: `LiteralArgPromotion` swaps an immortal or merged record for a writable one where a callee
-// WRITES its argument, and a spawn's arguments are transferred through `transferAsyncSpawnArgs`, which
-// already promotes a borrowed byte record to a fresh owned copy — so nothing an `asyncCall` carries is
-// immortal by the time this door could act. Admitting it would claim a capability nothing has tested.
-export function withRewrittenArgs(op MaxonOp, args ValueIdArray) returns MaxonOp
+export function withRewrittenArgs(op MaxonOp, args ValueIdArray, argImmutableNames WriteBlameArray) returns MaxonOp
 	return match op 'op'
-		call(result, callee, _, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
-		tryCall(result, errorFlag, callee, _, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
-		default panic("withRewrittenArgs: asked of an op that supplies no substitutable argument list — only the two direct-call variants carry one, and every caller reaches this from their own match arms")
+		call(result, callee, _, argLabels, argRanges, _, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		tryCall(result, errorFlag, callee, _, argLabels, argRanges, _, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
+		asyncCall(result, callee, _, argLabels, argRanges, _, argDefaultSlots) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots)
+		default panic("withRewrittenArgs: asked of an op that supplies no substitutable argument list — only the three direct-call variants carry one")
 
 		// ⚠ `serviceSend` supplies none either: its arguments were moved into the request BOX at the parser,
 		// so there is no argument list left on the op for `LiteralArgPromotion` to substitute into.
 	end 'op'
 end 'withRewrittenArgs'
+
+export function callArgImmutableNamesOf(op MaxonOp) returns WriteBlameArray
+	return match op 'op'
+		call(_, _, _, _, _, argImmutableNames, _, _) gives argImmutableNames
+		tryCall(_, _, _, _, _, _, argImmutableNames, _, _) gives argImmutableNames
+		asyncCall(_, _, _, _, _, argImmutableNames, _) gives argImmutableNames
+		default panic("callArgImmutableNamesOf: asked of an op that supplies no argument list — only the three direct-call variants carry one")
+	end 'op'
+end 'callArgImmutableNamesOf'

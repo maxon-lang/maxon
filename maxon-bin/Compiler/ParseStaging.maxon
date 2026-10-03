@@ -17,19 +17,15 @@
 // empty array it will never push into. The matching `record*` copies on write at the first push
 // (`count() == 0` uniquely identifies "still the shared empty", since each of those functions is its
 // array's only writer). This is the same pay-for-use discipline `sharedEmptyWhereConstraints`/`emptyTypeParams`
-// follow, and it keeps the artifact allocation-neutral for a program that declares none (measured for the
-// interface pair: the eager form cost +2 empty arrays per artifact, a linear delta scaling with the file
-// count).
+// follow, and it keeps the artifact allocation-neutral for a program that declares none.
 //
 // ⚠ **`typeNameDecls` IS HERE FOR A STRONGER REASON THAN "OFTEN EMPTY" — TWO OF THE THREE `Parser`
 // CONSTRUCTION SITES CAN NEVER FILL IT.** Only `recordTypeName`, reached from `dispatchTopLevel`, ever
 // pushes one, and `dispatchTopLevel` runs on the REAL parse alone: the tolerant declaration sweep
 // (`foldDeclaredSignaturesInto`, one `Parser` per file) walks tokens on its own and `walkConstInitializer`
 // (one `Parser` per top-level constant) evaluates an expression. Eagerly creating the array in
-// `FileParseArtifact.create` therefore billed one allocation to EVERY sweep and EVERY constant for a
-// structure with no writer — measured at +1 per file and +1 per top-level constant in `phase:signatures`
-// (rung 0: 30 files + 64 constants = +96; rung 5: 185 + 2,048 = +2,235), which was 38% of the whole
-// type-name rung's memory cost, spent on nothing.
+// `FileParseArtifact.create` would bill one allocation to EVERY sweep and EVERY constant for a structure
+// with no writer.
 let sharedEmptyInterfaces = IrInterfaceArray.create()
 let sharedEmptyConformances = ConformanceDeclArray.create()
 
@@ -91,9 +87,10 @@ export type ParseJob
 	export let buildsBodies as bool
 	export let capturesDebugLocals as bool
 	export let instrumentsCoverage as bool
+	export let foldsAConstantInitializer as bool
 
 	export static function create(path FilePath, namespace String, isStdlibSource bool, isRuntimeSource bool, declaresCompilerInternalNames bool, compilerMintedNames ByteArrayArray, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool) returns ParseJob
-		return Self{path: path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage}
+		return Self{path: path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, foldsAConstantInitializer: false}
 	end 'create'
 
 	// ⭐ **THE JOB OF A TOP-LEVEL CONSTANT'S INITIALIZER** (`ProgramSignatures.walkConstInitializer`), and every flag in it
@@ -107,7 +104,7 @@ export type ParseJob
 	// So the walk never asks the project for a path, which would put a `Directory.currentPath()` probe on the
 	// per-declaration path.
 	export static function forConstantInitializer(path FilePath, namespace String) returns ParseJob
-		return Self{path: path, namespace: namespace, isStdlibSource: false, isRuntimeSource: false, declaresCompilerInternalNames: false, compilerMintedNames: ByteArrayArray.create(), livesUnderStdlibDirectory: false, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false}
+		return Self{path: path, namespace: namespace, isStdlibSource: false, isRuntimeSource: false, declaresCompilerInternalNames: false, compilerMintedNames: ByteArrayArray.create(), livesUnderStdlibDirectory: false, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, foldsAConstantInitializer: true}
 	end 'forConstantInitializer'
 end 'ParseJob'
 
@@ -115,7 +112,7 @@ end 'ParseJob'
 // still knows (`Parser.abortedParseArtifact`).
 export union FileParseOutcome
 	parsed(artifact FileParseArtifact)
-	failed(error ParseError, blame LibraryBlame, salvaged FileParseArtifact)
+	failed(error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact)
 end 'FileParseOutcome'
 
 // ⭐⭐ **ONE FILE'S PARSE, AS A FUNCTION OF WHAT IT IS HANDED** — the job, the file's tokens, the row-set answers it
@@ -148,7 +145,7 @@ end 'ParseMints'
 // declared return type, recorded by the parser. Ordered in an array so the
 // merge order is the declaration order.
 //
-// ⭐ **`declaredSurface` IS THE PRE-ERASURE `__ManagedMemory` SPELLING OF THAT RETURN TYPE (A2j / A2m)** —
+// ⭐ **`declaredSurface` IS THE PRE-ERASURE `__ManagedMemory` SPELLING OF THAT RETURN TYPE** —
 // where the source named the alias, which `parseTypeReference` folds into `genericInstance(Array with Byte)`
 // before a `MaxonReturnType` exists. It rides THIS record rather than a column of its own for one reason:
 // the two facts must never disagree about the same declaration, and they cannot when they are written,
@@ -176,19 +173,19 @@ end 'ParseMints'
 // helpers the sweep itself publishes (a parameter default's, a field default's) take the receiverless
 // default and mean it: each is a plain function the emitter calls with no instance.
 // ⭐⭐ **`opaqueParams` IS WHICH OF THE DECLARATION'S PARAMETERS TAKE A BARE TYPE PARAMETER, AND IT RIDES
-// HERE FOR `takesReceiver`'S REASON (ARRR)** — a fourth fact about the SAME declaration, applied by
+// HERE FOR `takesReceiver`'S REASON** — a fourth fact about the SAME declaration, applied by
 // `ProgramSignatures.record` in the same act. It is what lets a CALL SITE build the range guard a shared
 // generic body cannot hold for itself (`OpaqueParamInfo`), and it can only come from the sweep: the callee
 // may be declared in another file, and `resolveTypes` has erased the parameter's alias long before any
 // caller asks. It DEFAULTS to `sharedNoOpaqueParams` for the three `Project.funcReturnTypes` producers named
-// below and for every declaration outside a generic type, which is the overwhelming majority.
+// above and for every declaration outside a generic type, which is the overwhelming majority.
 // ⭐⭐ **`paramNames`/`paramTypes` ARE THE DECLARATION'S OWN SOURCE PARAMETER LIST — THE RECEIVER EXCLUDED —
 // AND THEY RIDE HERE FOR `opaqueParams`' REASON: a fifth fact about the SAME declaration, applied by
 // `ProgramSignatures.record` in the same act.** They are what lets a CALL SITE tell one member of an overload
 // set from another while its own file is being parsed, which is the one moment a call's result type is
 // decided and a whole pass before `SemanticCheck.resolveOverloadedCalls` picks a member. See
 // `ProgramSignatures.overloadedDeclsOf`. Both default EMPTY for the three `Project.funcReturnTypes` producers
-// named below — a synthesized helper is never overloaded, so there is nothing to tell apart.
+// named above — a synthesized helper is never overloaded, so there is nothing to tell apart.
 export type FuncReturnTypeEntry
 	export var name as ByteArray
 	export var returnType as MaxonReturnType
@@ -200,21 +197,21 @@ export type FuncReturnTypeEntry
 	export var paramTypes as MaxonTypeArray
 
 	// The bare NAME the `returns` clause wrote, when it wrote one — `DenseColumn` for
-	// `returns DenseColumn`, and EMPTY for `returns Array with Integer`, for a primitive, or for no
+	// `returns DenseColumn`, and `none` for `returns Array with Integer`, for a primitive, or for no
 	// return clause at all. It is the CALL RESULT's BRAND: two generic aliases over one instance share the
 	// gid a call hands back, so only this can say which alias the callee's signature named.
 	//
 	// ⚠ **IT IS THE TOKEN'S TEXT AND NOTHING IS ASKED ABOUT IT HERE.** Whether the name IS a generic
 	// alias is a whole-program question, and this entry is built during the declaration SWEEP that
 	// answers it. The consumer asks, at parse time, with the index complete.
-	export var returnAliasName as ByteArray
+	export var returnAliasName as ReturnAliasSpelling
 	export var nameLine as LineNumber
 	export var nameColumn as ColumnNumber
 
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS.** A default naming a module-level `let`
 	// makes that anchor an export nothing calls, which `checkUnusedExports` reports as E3092. An empty
 	// container costs a record; the anchor costs a build.
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = ByteArrayArray.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), returnAliasName ByteArray = EmptySourceText, nameLine LineNumber = 0, nameColumn ColumnNumber = 0) returns FuncReturnTypeEntry
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = ByteArrayArray.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0) returns FuncReturnTypeEntry
 		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
 end 'FuncReturnTypeEntry'
@@ -235,15 +232,15 @@ export type FuncSignatureEntry
 	export var sourceFilePath as FilePath
 
 	// ⭐⭐ **DID THE COMPILER MINT THIS FUNCTION, OR DID THE AUTHOR WRITE IT? — the bit
-	// `commitFuncSignatures` needs to keep a duplicate diagnostic on a name the author can grep for (W74).**
+	// `commitFuncSignatures` needs to keep a duplicate diagnostic on a name the author can grep for.**
 	// A default value is compiled as a synthesized nullary function named after the declaration that owns it
 	// (`Project.paramDefaultHelperName`), so two of THEM colliding is never a fact of its own: the join is
 	// injective, so one helper name means one owner registration name and one parameter position — and two
 	// declarations claiming one registration name is the duplicate `commitFuncSignatures` reports, in the same
 	// run, at a position the author wrote. The FIELD door's mint is injective for the same reason over
-	// `(type name, field name)`, so two of ITS helpers colliding means two `type` declarations of one name —
-	// MEASURED: the duplicate `type` and its duplicate factory are both reported, and the swallowed helper was
-	// never the only diagnostic. STATED here rather than decoded from the name's `__` prefix at the
+	// `(type name, field name)`, so two of ITS helpers colliding means two `type` declarations of one name,
+	// and the duplicate `type` and its duplicate factory are both reported. STATED here rather than decoded
+	// from the name's `__` prefix at the
 	// merge, for the reason this file keeps: a minted name is a thing to be RECORDED, never a thing to be
 	// read back apart.
 	export var synthesized as bool
@@ -255,7 +252,7 @@ end 'FuncSignatureEntry'
 
 export typealias FuncSignatureEntryArray = Array with FuncSignatureEntry
 
-// One function's range-check contribution (P1.9): its name paired with the sites the parser
+// One function's range-check contribution: its name paired with the sites the parser
 // recorded (see FunctionRangeChecks). Keyed by name, folded into `project.rangeChecks` by
 // `commitRangeChecks` — the same NEVER-touch-Project discipline the other `*Entry` families
 // follow. The alias/site NAMES are plain ByteArrays and the value ids are function-local, so —
@@ -277,7 +274,7 @@ export type FileParseArtifact
 	// The file this artifact was parsed from (its identity + merge order anchor).
 	export var filePath as FilePath
 
-	// ⭐ **DOES THIS FILE PHYSICALLY LIVE UNDER `stdlib/` (W3)** — the one fact `commitEnumTypes` needs to
+	// ⭐ **DOES THIS FILE PHYSICALLY LIVE UNDER `stdlib/`** — the one fact `commitEnumTypes` needs to
 	// tell the CORPUS's declaration of a compiler-owned enum from a user's contest of it
 	// (`Project.upsertDeclaredEnum`). It rides the artifact rather than being re-derived at commit time
 	// because `Queries.isStdlibSourceFile` is a memo probe on a `FilePath` key — which clones and
@@ -365,7 +362,7 @@ export type FileParseArtifact
 	// This file's `funcSignatures` registry contributions, in declaration order.
 	export var funcSignatures as FuncSignatureEntryArray
 
-	// ⭐ This file's OVERLOAD SETS (D7) — each overloaded bare name ⇒ its members' registration names, in
+	// ⭐ This file's OVERLOAD SETS — each overloaded bare name ⇒ its members' registration names, in
 	// declaration order. Folded into `project.overloadSets` by `commitOverloadSets`.
 	//
 	// A MAP where the other contributions are ordered arrays, and for the reason those are arrays: what has
@@ -375,7 +372,7 @@ export type FileParseArtifact
 	// so the shared empty map keeps a non-overloading parse allocation-identical.
 	export var overloadSets as OverloadSetTable
 
-	// This file's recorded function-value merges awaiting whole-program signature agreement (P1.5 #81).
+	// This file's recorded function-value merges awaiting whole-program signature agreement.
 	// Appended to `project.pendingFnMergeChecks` by `commitPendingFnMergeChecks`; the check itself is
 	// drained after merge, before resolution (see PendingFnMergeCheck).
 	export var pendingFnMergeChecks as PendingFnMergeCheckArray
@@ -390,16 +387,14 @@ export type FileParseArtifact
 	// built (see PendingDiscardedResult).
 	export var pendingDiscardedResults as PendingDiscardedResultArray
 
-	// This file's range-check contributions (P1.9), one per function that has a cast into a
+	// This file's range-check contributions, one per function that has a cast into a
 	// ranged alias or a ranged `return`. Folded into `project.rangeChecks` by `commitRangeChecks`.
 	export var rangeChecks as FunctionRangeCheckEntryArray
 
-	// This file's ranged-typealias declarations, in declaration order. Each carries its declaring file
-	// and its name token's position: the file makes resolution file-scoped and the position anchors
-	// the E3105 a cross-file underlying conflict earns (see RangedTypeAlias).
+	// This file's ranged-typealias declarations, in declaration order (see RangedTypeAlias).
 	export var typeAliases as RangedTypeAliasArray
 
-	// This file's declared FUNCTION typealiases (P1.5-A1), in declaration order. The twin of
+	// This file's declared FUNCTION typealiases, in declaration order. The twin of
 	// `typeAliases`, and remap-free: a function alias's whole declared signature is stored interner-free
 	// (a tag + a name ByteArray per parameter and for the return), so `mergeArtifact` folds it by NAME
 	// with no id rewrite.
@@ -412,7 +407,7 @@ export type FileParseArtifact
 	// declared type carries ids, which `rewriteTypeIds` renumbers.
 	export var enumTypes as EnumLayoutArray
 
-	// This file's declared `interface` types (P1.7a slice 1), in declaration order. Remap-free like
+	// This file's declared `interface` types, in declaration order. Remap-free like
 	// `enumTypes`: an interface method's types are stored as rendered source STRINGS (see IrInterface),
 	// not interner ids, so `mergeArtifact` folds it by name with no id rewrite.
 	export var interfaces as IrInterfaceArray
@@ -437,16 +432,16 @@ export type FileParseArtifact
 	// `integer` by the time any pass sees it.
 	export var usedTypeNames as UsedTypeNameRoster
 
-	// ⭐⭐ **THE TYPES THIS FILE REACHED INTO THROUGH A VALUE, AND NEVER NAMED (BATCH43)** — the set
+	// ⭐⭐ **THE TYPES THIS FILE REACHED INTO THROUGH A VALUE, AND NEVER NAMED** — the set
 	// `Parser.requireFieldAccessible` (a struct's field) and `Parser.emitEnumTagOf` (an enum's or union's tag)
 	// record at the lines the compile already had to reach to emit the access.
 	// `checkUnusedExports` reads it beside `usedTypeNames` above, so its "is this reached from outside?" IS
-	// the resolver's answer: without it E3092 advised dropping an `export` that E4006 then required, and the
-	// program had no legal spelling. Two sets and not one because they hold two facts — see
+	// the resolver's answer: without it E3092 would advise dropping an `export` that E4006 then requires, and
+	// the program would have no legal spelling. Two sets and not one because they hold two facts — see
 	// `Parser.memberAccessedTypeNames`.
 	export var memberAccessedTypeNames as UsedTypeNameRoster
 
-	// This file's `type X implements …` conformance declarations (P1.7a slice 1). Each carries the
+	// This file's `type X implements …` conformance declarations. Each carries the
 	// type-name token position so the whole-program `checkConformance` can anchor an E3015/E3016 on it.
 	// Remap-free (all names are plain ByteArrays). Folded into `project.conformances` by `mergeArtifact`.
 	export var conformances as ConformanceDeclArray
@@ -456,7 +451,7 @@ export type FileParseArtifact
 	// after the merge, by `checkLiteralInitConformance`.
 	export var literalInitSites as LiteralInitSiteArray
 
-	// ⭐⭐ **THIS FILE'S INSTANTIATIONS THAT NO `typealias` WROTE (W41-lit).** A `[k: v]` literal interns a
+	// ⭐⭐ **THIS FILE'S INSTANTIATIONS THAT NO `typealias` WROTE.** A `[k: v]` literal interns a
 	// `Map with (K, V)` from its first pair, so it is a genuine instantiation with a genuine source
 	// position and no declaration to anchor on — which is exactly what `ProgramSignatures.instantiationSites`
 	// (built by the token SWEEP, from `typealias` entries) structurally cannot hold. Appended to
@@ -470,21 +465,19 @@ export type FileParseArtifact
 	export var typeNames as TypeNameInterner
 
 	// ⭐ **THE LOCAL INDEX OF THE FUNCTION CURRENTLY BEING PARSED** — the key `recordValueOrigin` /
-	// `recordParamOrigin` file each value's origin under. It used to be read straight off
-	// `module.funcCount()`, on the assumption that the function being parsed is always the NEXT one to be
-	// pushed (funcCount() == its eventual index). That held while functions were parsed strictly one at a
-	// time — until closure literals (P1.5-A2a), whose lifted top-level function is parsed and pushed in the
-	// MIDDLE of its enclosing function's body. With two functions in flight, `funcCount()` no longer names
-	// either one's final index, and the two would collide on it (the enclosing function's early values and
-	// the closure's values both keyed to the same index — a corrupted origin table, an E5001 pointing at
-	// the wrong source). `parseFunction` now pushes each function up front and stamps this field with the
-	// index it landed at, and `parseClosureExpression` saves/sets/restores it around the lifted body — so
-	// every value is filed under the index its function actually occupies. Zero for the tolerant
-	// declaration sweep, which parses no bodies and records no origins.
+	// `recordParamOrigin` file each value's origin under. `module.funcCount()` cannot serve: a closure
+	// literal's lifted top-level function is parsed and pushed in the MIDDLE of its enclosing function's
+	// body, so with two functions in flight the count names neither one's final index, and the two would
+	// collide on it (the enclosing function's early values and the closure's values both keyed to the same
+	// index — a corrupted origin table, an E5001 pointing at the wrong source). `parseFunction` pushes each
+	// function up front and stamps this field with the index it landed at, and `parseClosureExpression`
+	// saves/sets/restores it around the lifted body — so every value is filed under the index its function
+	// actually occupies. Zero for the tolerant declaration sweep, which parses no bodies and records no
+	// origins.
 	export var currentFuncIndex as ElementIndex
 
-	// ⭐ DIAGNOSTICS THE PARSER RAISES WITHOUT UNWINDING (P1.6-A). The parser reports a malformed
-	// construct by THROWING a `ParseError` (which aborts the file's parse), but a WHOLE-PROGRAM
+	// ⭐ DIAGNOSTICS THE PARSER RAISES WITHOUT UNWINDING. The parser reports a malformed
+	// construct by THROWING a `SourceParseError` (which aborts the file's parse), but a WHOLE-PROGRAM
 	// SEMANTIC error a pure per-file parser detects — a generic instantiation whose base is not
 	// generic, whose arity is wrong, or whose argument is managed — is not a reason to abort the
 	// parse: it is a diagnostic that gates the build, exactly like `SemanticCheck`'s do. The parser
@@ -494,8 +487,8 @@ export type FileParseArtifact
 	// diagnostic it records against the still-building signature index is discarded for free.
 	export var diagnostics as DiagnosticArray
 
-	// ⭐ THE TWO DEFERRED NAME DIAGNOSTICS (P1.9) — an unused typealias, and an `as` target naming an
-	// alias this file cannot see. They are kept OUT of `diagnostics` above and reported later, in a
+	// ⭐ THE TWO DEFERRED NAME DIAGNOSTICS — an unused typealias, and a type name this file cannot
+	// see. They are kept OUT of `diagnostics` above and reported later, in a
 	// fixed order, by `TypeResolution.reportDeferredNameDiagnostics`; `DeferredNameDiagnostic`'s header
 	// carries the whole argument for why per-file reporting cannot give the order the corpus pins.
 	//
@@ -503,7 +496,7 @@ export type FileParseArtifact
 	// they are deferred: every unused-alias diagnostic in the program precedes every hidden-name one,
 	// and a single list would have to re-derive that split at the drain.
 	export var unusedTypeAliases as DeferredNameDiagnosticRoster
-	export var hiddenTypeNames as DeferredNameDiagnosticRoster
+	export var hiddenTypeNames as DeferredDiagnosticRoster
 
 	// Refusals a door recorded instead of throwing; `Parser.refuseUnlessDeferred` owns the rule.
 	export var deferredParseErrors as DeferredParseErrorArray
@@ -518,7 +511,7 @@ export type FileParseArtifact
 	// function body and is settled at its `end`.
 	export var bindingHygieneDiagnostics as DiagnosticArray
 
-	// ⭐⭐ **WHAT THIS FILE'S PARSE WROTE INTO THE SIGNATURE INDEX (B2).** The parse's writes are undone when it
+	// ⭐⭐ **WHAT THIS FILE'S PARSE WROTE INTO THE SIGNATURE INDEX.** The parse's writes are undone when it
 	// ends, so a parse reads only the settled index and its own mints; every merge folds these back in
 	// (`ProgramSignatures.adoptParseMints`), whether this artifact is a fresh parse or a memo reused against a
 	// rebuilt index.
@@ -567,7 +560,7 @@ export type FileParseArtifact
 			currentFuncIndex: 0,
 			diagnostics: DiagnosticArray.create(),
 			unusedTypeAliases: noDeferredNameDiagnostics,
-			hiddenTypeNames: noDeferredNameDiagnostics,
+			hiddenTypeNames: noDeferredDiagnostics,
 			deferredParseErrors: DeferredParseErrorArray.create(),
 			bindingHygieneDiagnostics: DiagnosticArray.create(),
 			parseMints: ParseMints.none,
@@ -588,17 +581,30 @@ export type FileParseArtifact
 		self.instanceIdsInUse = bandIds
 	end 'recordParseMints'
 
-	// Record an alias this file declared and never named, and an `as` target naming an alias this file
-	// cannot see. Each installs its own list on the first entry (`DeferredNameDiagnosticRoster`).
+	// Record an alias this file declared and never named, and a type name this file cannot see. Each
+	// installs its own list on the first entry (`DeferredNameDiagnosticRoster`, `DeferredDiagnosticRoster`).
 	export function recordUnusedTypeAlias(entry DeferredNameDiagnostic)
 		var recorded = self.unusedTypeAliasesForWrite()
 		recorded.push(entry)
 	end 'recordUnusedTypeAlias'
 
-	export function recordHiddenTypeName(entry DeferredNameDiagnostic)
+	export function recordHiddenTypeName(entry Diagnostic)
 		var recorded = self.hiddenTypeNamesForWrite()
 		recorded.push(entry)
 	end 'recordHiddenTypeName'
+
+	export function adoptHiddenTypeNames(source FileParseArtifact)
+		match source.hiddenTypeNames 'source'
+			unwritten then return
+			entries(recorded) then self.recordHiddenTypeNames(recorded)
+		end 'source'
+	end 'adoptHiddenTypeNames'
+
+	function recordHiddenTypeNames(entries DiagnosticArray)
+		for entry in entries 'eachEntry'
+			self.recordHiddenTypeName(entry)
+		end 'eachEntry'
+	end 'recordHiddenTypeNames'
 
 	// THE emit choke point for a Maxon body op — the only way the parser creates
 	// one. Appending the op and recording its span happen together here, so
@@ -680,21 +686,16 @@ export type FileParseArtifact
 	// `emitOp`; separate only because a terminator is stored on the block rather
 	// than appended to its op list.
 	//
-	// ⭐⭐ **A SECOND TERMINATOR ON ONE BLOCK IS A MISCOMPILE, AND THIS IS WHERE IT WAS SILENT (W118).**
+	// ⭐⭐ **A SECOND TERMINATOR ON ONE BLOCK IS A MISCOMPILE, AND WITHOUT THIS GUARD IT IS SILENT.**
 	// A block's terminator is a SLOT, not the last op of its list, so `setTerminator` on a block that
 	// already has one simply REPLACES it and the first is gone — no diagnostic, no orphan the backend
-	// trips over, just a `ret` or a `br` that never happens. MEASURED: `return false` followed by an `if`
-	// answered `true`, and a `break` followed by an `if` ran its loop to completion, each emitting a
-	// binary byte-identical to the same program with the terminator deleted.
+	// trips over, just a `ret` or a `br` that never happens.
 	//
 	// The SOURCE-level cure is E3071 (`parseStatements` refuses the statement after a terminator); this
 	// is the structural one behind it, so a construct added to the grammar without that guard fails
 	// LOUDLY here instead of quietly answering wrong. Every legitimate site already asks first —
 	// `finalizeIfNoElse`/`finalizeIfElse` on `thenEnd.isTerminated()`, `closeFunctionBody` and
-	// `parseBlockBody` on `bodyEnd.isTerminated()`. MEASURED with it in place: it did not fire once across
-	// the 5906-case `specs` suite, so with E3071 landed no parser path in the corpus re-terminates a
-	// block — which is the answer to the question W118 was asked, *"does the diagnostic MASK the wrong
-	// answer or CURE it?"*. It cures it: there is no second route left to overwrite a terminator.
+	// `parseBlockBody` on `bodyEnd.isTerminated()`.
 	//
 	// ⚠ **`hasTerminatorOp` AND NOT `isTerminated`** — a `dead` block (the continuation of an `if` whose
 	// branches all return) holds no terminator op, and giving it one is the ordinary way its unreachable
@@ -761,7 +762,7 @@ export type FileParseArtifact
 		self.funcSignatures.push(FuncSignatureEntry.create(name.clone(), signature: signature.clone(), nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized))
 	end 'recordFuncSignature'
 
-	// Record the whole current member list of one overloaded bare name (D7). REPLACES rather than appends:
+	// Record the whole current member list of one overloaded bare name. REPLACES rather than appends:
 	// the parser hands back the complete list every time a member joins, which is what keeps this table a
 	// projection of the parser's own records rather than a second accumulation to keep in step.
 	export function recordOverloadSet(base ByteArray, members ByteArrayArray)
@@ -786,14 +787,14 @@ export type FileParseArtifact
 	end 'unusedTypeAliasesForWrite'
 
 	// The hidden-name list, its twin.
-	function hiddenTypeNamesForWrite() returns DeferredNameDiagnosticArray
+	function hiddenTypeNamesForWrite() returns DiagnosticArray
 		match self.hiddenTypeNames 'state'
 			unwritten then break 'state'
 			entries(recorded) then return recorded
 		end 'state'
 
-		let fresh = DeferredNameDiagnosticArray.create()
-		self.hiddenTypeNames = DeferredNameDiagnosticRoster.entries(fresh)
+		let fresh = DiagnosticArray.create()
+		self.hiddenTypeNames = DeferredDiagnosticRoster.entries(fresh)
 		return fresh
 	end 'hiddenTypeNamesForWrite'
 
@@ -808,8 +809,8 @@ export type FileParseArtifact
 		return fresh
 	end 'overloadSetsForWrite'
 
-	// Record a function's range-check sites as this file's contribution to `project.rangeChecks`
-	// (P1.9). Called by the parser at function completion, and ONLY when the function actually has
+	// Record a function's range-check sites as this file's contribution to `project.rangeChecks`.
+	// Called by the parser at function completion, and ONLY when the function actually has
 	// a cast into a ranged alias or a ranged `return` — a function with neither files nothing, so
 	// the registry stays proportional to the range checks a program contains, not its function count.
 	export function recordFunctionRangeChecks(name ByteArray, checks FunctionRangeChecks)
@@ -843,7 +844,7 @@ export type FileParseArtifact
 		appendUnionCasesCompanion(self.enumTypes, layout: owned)
 	end 'recordEnumType'
 
-	// Record a declared `interface` as this file's contribution to `project.interfaces` (P1.7a slice 1)
+	// Record a declared `interface` as this file's contribution to `project.interfaces`
 	// — the same NEVER-touch-Project discipline every `record*` above follows. Copy-on-write off the
 	// shared empty on the first push (this is the array's only writer, so `count() == 0` means shared).
 	export function recordInterface(iface IrInterface)
@@ -854,12 +855,6 @@ export type FileParseArtifact
 		self.interfaces.push(iface.clone())
 	end 'recordInterface'
 
-	// Record that a top-level declaration minted a TYPE NAME — the same NEVER-touch-Project discipline
-	// every `record*` above follows. Called from `Parser.dispatchTopLevel`, the ONE place that sees all
-	// five declaring keywords, so this array's order IS the file's source order across kinds.
-	// Copy-on-write off the shared empty on the first push, exactly as `recordInterface` — and here it
-	// buys more, because the two `Parser` sites that are not the real parse never reach this function at
-	// all (see `sharedEmptyTypeNameDecls`).
 	export function recordGenericInstanceRequest(instance GenericFunctionInstance)
 		for requested in self.genericInstanceRequests 'eachRequested'
 			if requested.instanceName.equals(instance.instanceName) 'requestedAlready'
@@ -870,6 +865,22 @@ export type FileParseArtifact
 		self.genericInstanceRequests.push(instance)
 	end 'recordGenericInstanceRequest'
 
+	export function requestedGenericInstanceSiteKey(instanceName ByteArray) returns ByteArray throws AbsentError
+		for requested in self.genericInstanceRequests 'eachRequested'
+			if requested.instanceName.equals(instanceName) 'thisInstance'
+				return requested.siteKey.clone()
+			end 'thisInstance'
+		end 'eachRequested'
+
+		throw AbsentError.absent
+	end 'requestedGenericInstanceSiteKey'
+
+	// Record that a top-level declaration minted a TYPE NAME — the same NEVER-touch-Project discipline
+	// every `record*` above follows. Called from `Parser.dispatchTopLevel`, the ONE place that sees all
+	// five declaring keywords, so this array's order IS the file's source order across kinds.
+	// Copy-on-write off the shared empty on the first push, exactly as `recordInterface` — and here it
+	// buys more, because the two `Parser` sites that are not the real parse never reach this function at
+	// all (see `sharedEmptyTypeNameDecls`).
 	export function recordTypeNameDecl(decl TypeNameDecl)
 		if self.typeNameDecls.count() == 0 'firstTypeNameDecl'
 			self.typeNameDecls = TypeNameDeclArray.create()
@@ -878,8 +889,8 @@ export type FileParseArtifact
 		self.typeNameDecls.push(decl)
 	end 'recordTypeNameDecl'
 
-	// Record a `type X implements …` conformance as this file's contribution to `project.conformances`
-	// (P1.7a slice 1). The type-name position travels with it so `checkConformance` anchors on the name.
+	// Record a `type X implements …` conformance as this file's contribution to `project.conformances`.
+	// The type-name position travels with it so `checkConformance` anchors on the name.
 	// Copy-on-write off the shared empty on the first push, exactly as `recordInterface`.
 	export function recordConformance(conformance ConformanceDecl)
 		if self.conformances.count() == 0 'firstConformance'
@@ -889,9 +900,8 @@ export type FileParseArtifact
 		self.conformances.push(conformance.clone())
 	end 'recordConformance'
 
-	// Record a `<Type> from "…"` construction as this file's contribution to `project.literalInitSites`
-	// (BATCH2 slice 3). Copy-on-write off the shared empty on the first push, exactly as
-	// `recordConformance`.
+	// Record a `<Type> from "…"` construction as this file's contribution to `project.literalInitSites`.
+	// Copy-on-write off the shared empty on the first push, exactly as `recordConformance`.
 	export function recordLiteralInitSite(site LiteralInitSite)
 		if self.literalInitSites.count() == 0 'firstSite'
 			self.literalInitSites = LiteralInitSiteArray.create()
@@ -900,7 +910,7 @@ export type FileParseArtifact
 		self.literalInitSites.push(site)
 	end 'recordLiteralInitSite'
 
-	// Record an instantiation a bracketed literal inferred (W41-lit) — see `inferredInstantiationSites`.
+	// Record an instantiation a bracketed literal inferred — see `inferredInstantiationSites`.
 	// Copy-on-write off the shared empty on the first push, exactly as `recordLiteralInitSite`.
 	export function recordInferredInstantiationSite(site GenericInstantiationSite)
 		if self.inferredInstantiationSites.count() == 0 'firstSite'
@@ -1002,9 +1012,9 @@ end 'artifactOwnedOp'
 // match of its own, for `LowerMaxonToStd.lowerIndirectCall`'s reason.
 function artifactOwnedCall(op MaxonOp) returns MaxonOp
 	match op 'call'
-		call(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then return MaxonOp.call(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint)
-		tryCall(result, errorFlag, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then return MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint)
-		asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots) then return MaxonOp.asyncCall(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedNames(argImmutableNames), argDefaultSlots: argDefaultSlots)
+		call(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then return MaxonOp.call(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint)
+		tryCall(result, errorFlag, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then return MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint)
+		asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots) then return MaxonOp.asyncCall(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), argDefaultSlots: argDefaultSlots)
 		default panic("artifactOwnedCall: reached with an op that is not a named call — `artifactOwnedOp` routes only `call`, `tryCall` and `asyncCall` here")
 	end 'call'
 end 'artifactOwnedCall'
@@ -1013,6 +1023,10 @@ end 'artifactOwnedCall'
 function ownedNames(names ByteArrayArray) returns ByteArrayArray
 	return names if names.isEmpty() else names.clone()
 end 'ownedNames'
+
+function ownedBlames(blames WriteBlameArray) returns WriteBlameArray
+	return blames if blames.isEmpty() else blames.clone()
+end 'ownedBlames'
 
 // Fold `artifact` into the whole-program build in source-path order:
 //   1. reconcile the artifact's local type-name ids into the project interner,
@@ -1045,6 +1059,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	// where the answer is knowable: a round begins with every one of them emptied or with none of them.
 	if opOffset == 0 'theFirstFileOfARound'
 		requireOpKeyedTableIsEmpty("moduleVarAccessSites", held: project.moduleVarAccessSites.count())
+		requireOpKeyedTableIsEmpty("synthesizedOpFiles", held: project.synthesizedOpFiles.count())
 		requireOpKeyedTableIsEmpty("registryUseSites", held: project.registryUseSites.count())
 		requireOpKeyedTableIsEmpty("serviceAwaitSites", held: project.serviceAwaitSites.count())
 		requireOpKeyedTableIsEmpty("asyncSpawnSites", held: project.asyncSpawnSites.count())
@@ -1081,7 +1096,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	// BEFORE the five per-kind commits below, because it is the one that can REFUSE a declaration: a
 	// name reported here is one whose meaning the registries beneath cannot agree on, and reporting it
 	// first keeps a program's diagnostics in the order a reader meets the declarations.
-	commitTypeNameDecls(project, artifact: artifact)
+	commitTypeNameDecls(project, artifact: artifact, signatures: signatures)
 	commitTypeAliases(project, artifact: artifact, signatures: signatures)
 	commitFunctionTypeAliases(project, artifact: artifact, signatures: signatures)
 	commitStructTypes(project, artifact: artifact)
@@ -1115,7 +1130,7 @@ function commitCovPoints(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitCovPoints'
 
-// Fold this file's two DEFERRED name diagnostics into the project's own lists (P1.9). They are appended
+// Fold this file's two DEFERRED name diagnostics into the project's own lists. They are appended
 // rather than reported, because their whole point is to be reported LATER and in a fixed order — see
 // `DeferredNameDiagnostic` for why, and `TypeResolution.reportDeferredNameDiagnostics` for the drain.
 function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifact)
@@ -1126,7 +1141,7 @@ function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifa
 
 	match artifact.hiddenTypeNames 'hidden'
 		unwritten then break 'hidden'
-		entries(recorded) then pushEachDeferredDiagnostic(project.hiddenTypeNameDiagnostics, recorded: recorded)
+		entries(recorded) then project.hiddenTypeNameDiagnostics.append(recorded)
 	end 'hidden'
 end 'commitDeferredNameDiagnostics'
 
@@ -1169,7 +1184,7 @@ function pushEachDeferredDiagnostic(into DeferredNameDiagnosticArray, recorded D
 	end 'each'
 end 'pushEachDeferredDiagnostic'
 
-// Fold this file's parser-raised diagnostics into `project.diagnostics` (P1.6-A) — the last
+// Fold this file's parser-raised diagnostics into `project.diagnostics` — the last
 // contribution, and the one that carries no ids to remap (a `Diagnostic` is a finished
 // (code, message, position) record). `reportDiagnostic` is the single project sink, so a
 // parser-recorded diagnostic and a `SemanticCheck`-recorded one are indistinguishable downstream.
@@ -1190,23 +1205,22 @@ end 'commitDiagnostics'
 // ⭐ **COMMIT EVERY TYPE-NAME DECLARATION, AND REPORT A NAME DECLARED TWICE.** The whole-program
 // duplicate check for the TYPE namespace, exactly as `commitFuncSignatures` is for functions and for
 // the same reason it lives at the merge rather than in the parser: a file-local check cannot see a
-// second file, and the parser must stay pure. The rule itself, and the one carve-out it has, are
-// stated once on `TypeNameRegistry`; this function only chooses the CODE and writes the text.
+// second file, and the parser must stay pure. The rule itself is stated on `TypeNameRegistry`; this
+// function only chooses the CODE and writes the text.
 //
 // ⚠ **WHICH CODE IS A PROPERTY OF THE PAIR, NOT OF THIS SITE.** E3061 says "two typealiases in scope
-// declare the same name", so it is right exactly when BOTH declarations are typealiases — including
-// two different FORMS across two files, which is the pair the file-local carve-out does not cover.
+// declare the same name", so it is right exactly when BOTH declarations are typealiases.
 // Everything else is E3006, the code a name declared twice already carries for a function and for a
 // top-level `let`/`var` (`specs/static-variables.md`, where the kind of keyword is likewise
 // irrelevant).
 //
 // Both arms blame the DECLARATION THE AUTHOR JUST WROTE — its own file, its own name token — and name
 // the incumbent's KEYWORD, which is the half that is invisible from the line being reported. The
-// incumbent's PATH is deliberately not in the text, for the reason E3105 states: a second absolute
-// path inside a message is machine-dependent and unmatchable in a spec golden.
-function commitTypeNameDecls(project Project, artifact FileParseArtifact)
+// incumbent's PATH is deliberately not in the text: a second absolute path inside a message is
+// machine-dependent and unmatchable in a spec golden.
+function commitTypeNameDecls(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
 	for decl in artifact.typeNameDecls 'each'
-		match project.typeNameDecls.record(decl) 'collision'
+		match project.typeNameDecls.record(decl, directories: signatures.fileModuleDirectories) 'collision'
 			accepted then break 'collision'
 			collides(winner) then reportTypeNameCollision(project, decl: decl, winner: winner)
 		end 'collision'
@@ -1216,16 +1230,16 @@ end 'commitTypeNameDecls'
 // The two texts a collision can have, kept together because the CHOICE between them is the thing
 // worth reading in one place.
 function reportTypeNameCollision(project Project, decl TypeNameDecl, winner TypeNameDecl)
-	// ⭐ **A NAME REPORTED HERE IS NOT ALSO REPORTED AS UNUSED (P1.9).** Both declarations of a
+	// ⭐ **A NAME REPORTED HERE IS NOT ALSO REPORTED AS UNUSED.** Both declarations of a
 	// `typealias Score` declared twice in one file are genuinely unused, so the drain would add two
 	// E3062s on top of the one E3061 that actually explains the file — three diagnostics for one
 	// mistake, and the two extra pointing at the wrong thing. An explicit set is what suppresses them: the
 	// unused check runs at the parse and this one at the merge, so nothing structural separates the two.
 	//
 	// ⚠ **KEYED PER DECLARING FILE, and that is not caution — a bare name would suppress the wrong
-	// file's diagnostic.** Two files may each legally declare `typealias Byte` (`TypeNameRegistry`'s
-	// carve-out; seven `stdlib/` files do), so one file declaring it twice would poison the name
-	// project-wide and silently swallow another file's genuinely-unused `Byte`.
+	// file's diagnostic.** Two files may each legally declare a file-private `typealias Byte` (see
+	// `TypeNameRegistry`), so one file declaring it twice would poison the name project-wide and
+	// silently swallow another file's genuinely-unused `Byte`.
 	project.collidedTypeNames.insert(fileScopedDeclKey(decl.name, declFilePath: decl.claim.declFilePath))
 
 	if isTypeAliasDecl(decl.claim.kind) and isTypeAliasDecl(winner.claim.kind) 'bothAreTypeAliases'
@@ -1255,24 +1269,22 @@ end 'InstantiationAnchor'
 // instantiation has no source name, so the compiler builds one (`mangleGenericInstance` joins the base
 // name to each argument's — `Box with String` ⇒ `Box_String`), and EVERY per-type symbol the backend
 // emits is derived from that string — `__destruct_<name>`, `__layout_<name>`. Two instantiations that
-// build the SAME string mint one symbol twice and the later install wins: measured, a **SIGSEGV** from a
-// build that exited 0 with no diagnostic, because `_` is a legal name character and the join is
-// therefore NOT injective — `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` both compile to
-// `Pair_Box_Int_Str`.
+// build the SAME string mint one symbol twice and the later install wins, silently, because `_` is a
+// legal name character and the join is therefore NOT injective — `Pair with (Box_Int, Str)` and
+// `Pair with (Box, Int_Str)` both compile to `Pair_Box_Int_Str`.
 //
 // ⚠ **THE OTHER HALF OF THAT COLLISION — a DECLARED `type Box_String` claiming the same string — IS NOT
 // CHECKED HERE, BECAUSE IT CANNOT HAPPEN.** `mangleGenericInstance` mints a contested name behind the
-// reserved `__` prefix instead (`reservedIfDeclared`), which no declaration may take (E2051), so the
-// declared and compiled halves are disjoint by construction. Reporting it was the P1.7 defect: a program
-// that merely writes an `[Foo…]` array literal — which interns `Array with Foo` — had a legal
-// `type Array_Foo` rejected with E3006, naming an instantiation that appears nowhere in its source.
-// This pair check is the half a prefix cannot cure — there is no declaration to move out of the way.
+// reserved `__` prefix instead, which no declaration may take (E2051), so the declared and compiled
+// halves are disjoint by construction. Reporting it would reject a legal `type Array_Foo` in a program
+// that merely writes an `[Foo…]` array literal — which interns `Array with Foo` — naming an
+// instantiation that appears nowhere in its source. This pair check is the half a prefix cannot cure —
+// there is no declaration to move out of the way.
 //
 // ⚠ **DECIDED HERE, IN THE FRONT END, AND NOT WHERE THE SYMBOL IS MINTED.** The mangling is consumed by
 // the backend, but the NAMESPACE is a source-level fact and a collision must land on the `typealias` the
 // author wrote. A diagnostic raised at symbol-emission time has no user span to land on and would blame
-// a file the author never opened — the defect E3104, E3061/E3105 and E3006 have each had fixed once
-// already.
+// a file the author never opened.
 //
 // Called once per compile from `compileToCodeResult`, after `queryProgramSignatures` has interned every
 // instantiation — the same placement, and for the same reason, as `checkWhereConstraints`.
@@ -1312,10 +1324,9 @@ export function checkTypeSymbolNamespace(project Project, signatures ProgramSign
 	end 'eachInstantiation'
 end 'checkTypeSymbolNamespace'
 
-// ⭐ **A GENERIC ALIAS WHOSE TYPE ARGUMENTS LEAD BACK TO IT IS REFUSED (P1.7, E3091).** `typealias A = Box
-// with A`, and the mutual `A = Box with B` / `B = Box with A`, describe INFINITE types: no finite layout and
-// no finite compiled name. Both compiled with exit 0 and NO diagnostic, then SEGFAULTED — the same shape as
-// this rung's original defect, one level up.
+// ⭐ **A GENERIC ALIAS WHOSE TYPE ARGUMENTS LEAD BACK TO IT IS REFUSED (E2012, or E3091 when no path is
+// provable).** `typealias A = Box with A`, and the mutual `A = Box with B` / `B = Box with A`, describe
+// INFINITE types: no finite layout and no finite compiled name.
 //
 // Blamed at the DECLARATION rather than at a use, because the declaration is the ill-formed thing and a
 // cycle is ill-formed whether or not anyone instantiates it. Run BEFORE the pipeline (so before
@@ -1333,8 +1344,7 @@ export function checkGenericAliasCycles(project Project, signatures ProgramSigna
 	end 'cycle'
 end 'checkGenericAliasCycles'
 
-// ⭐⭐ **REPORT THE CYCLE — E2012 WITH THE DEPENDENCY PATH, WHICH IS `specs/type-checking.md`'s OWN SENTENCE**
-// (user ruling, 2026-08-04: the canonical spec's wording wins over what the compiler happened to print).
+// ⭐⭐ **REPORT THE CYCLE — E2012 WITH THE DEPENDENCY PATH, WHICH IS `specs/type-checking.md`'s OWN SENTENCE.**
 // `Circular typealias dependency: A -> B -> A` names every alias the loop passes through, and that path is
 // the whole reason the canonical corpus carries two cases: a message naming only the alias it was reported
 // against says identical words for `typealias A = Array with A` and for the mutual pair, so the mutual case
@@ -1354,9 +1364,9 @@ end 'checkGenericAliasCycles'
 // says what IS known — which `typealias-file-scope.md`'s own prose ratifies (*"the non-convergence IS the
 // detection"*). The code and the words follow from what the compiler can prove.
 //
-// A SYNTHESIZED alias carries no anchor (line 0), so it falls back to the whole-program form
-// `reportInstantiationPairCollision` uses for the same reason — pointing at line 0 of a file the user never
-// wrote would be worse than not pointing at all.
+// A SYNTHESIZED alias carries no anchor (`unanchored`), so it falls back to the whole-program form
+// `reportInstantiationPairCollision` uses for the same reason — pointing into a file the user never wrote
+// would be worse than not pointing at all.
 function reportGenericAliasCycle(project Project, entry GenericAliasEntry, path ByteArrayArray)
 	if path.isEmpty() 'noCycleTheGraphCanProve'
 		reportUnsettledAliasResolution(project, entry: entry)
@@ -1364,16 +1374,12 @@ function reportGenericAliasCycle(project Project, entry GenericAliasEntry, path 
 	end 'noCycleTheGraphCanProve'
 
 	let namesOnlyItself = path.count() == 1
-	let line = entry.selfRefLine if namesOnlyItself else entry.nameLine
-	let column = entry.selfRefColumn if namesOnlyItself else entry.nameColumn
 	let message = "Circular typealias dependency: {renderAliasCyclePath(path)}"
 
-	if line == 0 'synthesized'
-		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.parserCircularDependency, message: message))
-		return
-	end 'synthesized'
-
-	reportPositioned(project, code: ErrorCode.parserCircularDependency, message: message, line: line, column: column, filePath: entry.filePath)
+	match entry.anchor 'anchor'
+		unanchored then reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.parserCircularDependency, message: message))
+		declaredAt(nameLine, nameColumn, selfRefLine, selfRefColumn) then reportPositioned(project, code: ErrorCode.parserCircularDependency, message: message, line: selfRefLine if namesOnlyItself else nameLine, column: selfRefColumn if namesOnlyItself else nameColumn, filePath: entry.filePath)
+	end 'anchor'
 end 'reportGenericAliasCycle'
 
 // `A` for a one-node cycle, `A -> B -> A` for a longer one. The single name is not a TRUNCATED path: an alias
@@ -1401,12 +1407,10 @@ end 'renderAliasCyclePath'
 function reportUnsettledAliasResolution(project Project, entry GenericAliasEntry)
 	let message = "typealias '{String.from(entry.aliasName)}' forms a type cycle: its type arguments refer back to '{String.from(entry.aliasName)}'"
 
-	if entry.nameLine == 0 'synthesized'
-		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.semanticTypeResolutionCycle, message: message))
-		return
-	end 'synthesized'
-
-	reportPositioned(project, code: ErrorCode.semanticTypeResolutionCycle, message: message, line: entry.nameLine, column: entry.nameColumn, filePath: entry.filePath)
+	match entry.anchor 'anchor'
+		unanchored then reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.semanticTypeResolutionCycle, message: message))
+		declaredAt(nameLine, nameColumn, _, _) then reportPositioned(project, code: ErrorCode.semanticTypeResolutionCycle, message: message, line: nameLine, column: nameColumn, filePath: entry.filePath)
+	end 'anchor'
 end 'reportUnsettledAliasResolution'
 
 // Two instantiations that compile to one name — the shape no declaration takes part in, which the
@@ -1420,7 +1424,7 @@ function reportInstantiationPairCollision(project Project, signatures ProgramSig
 		// No `typealias` names EITHER instantiation, so both are nested (`Box with (Pair with …)`) and
 		// neither was interned with an anchor. Whole-program then — the anchorless form E3001 uses —
 		// rather than pointing at an enclosing alias whose own instantiation is fine.
-		unanchored then reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.duplicateDefinition, message: message))
+		unanchored then reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.duplicateDefinition, message: message))
 	end 'anchor'
 end 'reportInstantiationPairCollision'
 
@@ -1489,7 +1493,7 @@ end 'renderInstantiation'
 // observed. That is the same relationship `commitFuncReturnTypes` has with `commitFuncSignatures`.
 //
 // ⚠ **AND IT DOES NOT ASK `Project.declarationContestsACompilerOwnedName` WHILE `commitEnumTypes`
-// DIRECTLY BELOW DOES — THE ASYMMETRY IS PROVED, NOT OVERLOOKED (W16 review).** That rule drops a
+// DIRECTLY BELOW DOES — THE ASYMMETRY IS PROVED, NOT OVERLOOKED.** That rule drops a
 // declaration of a compiler-owned type name from anyone but the corpus, and it belongs at a write a
 // TOLERANT walk can reach: `ProgramSignatures.recordStruct` is fed by the declaration SWEEP, which folds
 // a user's `type String` in before the real parse refuses it. This write is not that. Its two feeders are
@@ -1516,7 +1520,7 @@ function commitEnumTypes(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitEnumTypes'
 
-// Commit the artifact's declared `interface`s into the project registry (P1.7a slice 1) — a plain
+// Commit the artifact's declared `interface`s into the project registry — a plain
 // upsert keyed by name, matching `commitEnumTypes` and unobservable on a collision for its reason.
 function commitInterfaces(project Project, artifact FileParseArtifact)
 	for iface in artifact.interfaces 'each'
@@ -1524,8 +1528,8 @@ function commitInterfaces(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitInterfaces'
 
-// Commit the artifact's `implements` conformance declarations into `project.conformances` (P1.7a
-// slice 1). A PUSH, not an upsert: each is a distinct declaration site (its own type-name position),
+// Commit the artifact's `implements` conformance declarations into `project.conformances`. A PUSH,
+// not an upsert: each is a distinct declaration site (its own type-name position),
 // and `checkConformance` drains them all. `resetMergeTargets` clears the array so a warm rebuild does
 // not double it (the same discipline `commitPendingFnMergeChecks` follows).
 function commitConformances(project Project, artifact FileParseArtifact)
@@ -1544,7 +1548,7 @@ function commitLiteralInitSites(project Project, artifact FileParseArtifact)
 end 'commitLiteralInitSites'
 
 // Commit the artifact's literal-inferred instantiation sites into `project.inferredInstantiationSites`
-// (W41-lit) — a PUSH, for `commitLiteralInitSites`' reason: two literals over one instance are two
+// — a PUSH, for `commitLiteralInitSites`' reason: two literals over one instance are two
 // positions to report, and `checkWhereConstraints` drains them all.
 //
 // ⚠ **THE gid NEEDS NO FILE SCOPING, unlike the alias sites `rekeyScopedGenericAliases` rebuilds.** That
@@ -1558,7 +1562,7 @@ function commitInferredInstantiationSites(project Project, artifact FileParseArt
 	end 'each'
 end 'commitInferredInstantiationSites'
 
-// Commit the artifact's range-check contributions into `project.rangeChecks` (P1.9) — a plain
+// Commit the artifact's range-check contributions into `project.rangeChecks` — a plain
 // upsert keyed by function name, which is UNIQUE per program (the whole-program E3006 check runs
 // in `commitFuncSignatures`), so no collision handling is needed. Read by `InsertRangeChecks`.
 function commitRangeChecks(project Project, artifact FileParseArtifact)
@@ -1567,60 +1571,15 @@ function commitRangeChecks(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitRangeChecks'
 
-// Commit the artifact's ranged-typealias declarations into the project registry, and raise E3105 —
-// two FILES declaring one name over two different underlying primitives.
-//
-// ⭐ **THAT IS NOT "TWO FILES DECLARED THIS NAME", and the distinction is the whole point.** A
-// non-exported typealias is FILE-LOCAL, so two FILES may each declare `MyInt` over their own RANGE
-// and neither is an error (`specs/duplicate-typealias.md`, and `stdlib/` relies on it — seven files
-// privately declare `Byte = int(0 to u8.max)`). What is rejected is the pair no reader downstream
-// could pick a winner for: two PRIMITIVES for one name, which the file-less readers resolve through a
-// bare door holding one entry (`RangedAliasRegistry.record`).
-//
-// ⚠ **A DUPLICATE DECLARATION IS NOT THIS FUNCTION'S** — `commitTypeNameDecls` reports it, for every
-// declaration kind at once, which is why this one no longer has a same-file arm. This registry sees
-// only ranged aliases, so it could never have decided a `type`/`typealias` pair, and two structures
-// answering one question for overlapping inputs is how they come to disagree.
-//
-// ⚠ **WHOLE-PROGRAM, NOT PARSE-TIME.** It runs at the merge, where `commitFuncSignatures` raises
-// E3006, and not in the parser — a file-local check cannot see a forward reference or a second file,
-// and this project has already paid for that lesson once (the value-merge rung, #81). The parser
-// records positions and nothing else.
-//
-// ⚠ **THE NAMESPACE-QUALIFIED MIRROR IS RECORDED BUT NEVER REPORTED ON (N1b).** `api/a.maxon`'s `int Score`
-// beside `api/b.maxon`'s `float Score` is ONE mistake, and it is already named against the bare key; the
-// mirror is a second entry for the same pair, so letting it report too would print the identical sentence
-// twice with a compiler-minted name in it. The registry still records it — the mirror must resolve — only
-// the diagnostic is the bare declaration's.
 function commitTypeAliases(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
 	let declaredByTheCorpus = signatures.declaredByTheCorpus(artifact.filePath)
 
 	for alias in artifact.typeAliases 'each'
-		match project.typeAliases.record(alias, declaredByTheCorpus: declaredByTheCorpus) 'conflict'
-			// Blames the DECLARATION THE USER JUST WROTE — its own name token, in its own file — and
-			// never the incumbent, which is the line that was fine.
-			//
-			// ⚠ The other declaration's PATH is deliberately not in the text. A diagnostic names its file
-			// once, in the position the runner rewrites to `<fragment>`; a second path inside the
-			// message would be an absolute temp path in every spec golden, machine-dependent and
-			// unmatchable. The alias name and the two underlying types are what makes it actionable.
-			conflictingUnderlying(prior) then reportUnderlyingConflict(project, alias: alias, prior: prior)
-			accepted then break 'conflict'
-		end 'conflict'
+		project.typeAliases.record(alias, declaredByTheCorpus: declaredByTheCorpus)
 	end 'each'
 end 'commitTypeAliases'
 
-// E3105's one wording and one anchor — split out of the loop above so the mirror suppression is a guard on a
-// named function rather than a condition inside a `match` arm.
-function reportUnderlyingConflict(project Project, alias RangedTypeAlias, prior RangedTypeAlias)
-	if mirrorsANamespaceQualifiedAlias(alias) 'theBareKeyAlreadySaidIt'
-		return
-	end 'theBareKeyAlreadySaidIt'
-
-	reportPositioned(project, code: ErrorCode.semanticTypeAliasUnderlyingConflict, message: "Typealias '{String.from(prior.name)}' is declared over '{maxonTypeName(alias.underlying, typeNames: project.typeNames)}' here and over '{maxonTypeName(prior.underlying, typeNames: project.typeNames)}' in another file — two files may declare one alias name over different RANGES, but not over different underlying types", line: alias.nameLine, column: alias.nameColumn, filePath: alias.declFilePath)
-end 'reportUnderlyingConflict'
-
-// Commit the artifact's FUNCTION typealiases into the project registry (P1.5-A1) — the twin of
+// Commit the artifact's FUNCTION typealiases into the project registry — the twin of
 // `commitTypeAliases`, remap-free (a function alias carries no interner ids).
 //
 // A declaration of a SHAPE-CONTESTED name is committed twice: once bare, and once under this file's mint.
@@ -1828,12 +1787,11 @@ function commitFuncSignatures(project Project, artifact FileParseArtifact)
 	for entry in artifact.funcSignatures 'each'
 		if project.funcSignatures.contains(entry.name) 'duplicate'
 			// ⚠ **A SYNTHESIZED FUNCTION'S DUPLICATE IS THE SHADOW OF ONE THE AUTHOR CAN SEE, AND IS NOT
-			// REPORTED TWICE (W74).** See `FuncSignatureEntry.synthesized` for why the two always arrive
-			// together. MEASURED before the gate, on two files each declaring `f(a Num = 1)`: the correct
-			// `Duplicate function 'f'` came with a second E3006 naming `__paramDefault#f#0` and explaining it
-			// as a parameter-SPELLING collision — a symbol absent from the source, described by a sentence
-			// about a mechanism the author never used. The first entry is still kept, exactly as for a
-			// reported duplicate: the two paths differ in what they SAY, never in what the registry holds.
+			// REPORTED TWICE.** See `FuncSignatureEntry.synthesized` for why the two always arrive
+			// together. Reporting it would add, beside the correct `Duplicate function 'f'`, a second E3006
+			// naming `__paramDefault#f#0` — a symbol absent from the source. The first entry is still kept,
+			// exactly as for a reported duplicate: the two paths differ in what they SAY, never in what the
+			// registry holds.
 			if not entry.synthesized 'theAuthorWroteThisName'
 				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: entry.name, declFilePath: entry.sourceFilePath), line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
 			end 'theAuthorWroteThisName'
@@ -1846,7 +1804,7 @@ function commitFuncSignatures(project Project, artifact FileParseArtifact)
 end 'commitFuncSignatures'
 
 // ⭐⭐ **WHY ONE NAME HAS TWO DECLARATIONS — and the CONTESTED case earns its own sentence because the name
-// the message quotes is one NEITHER declaration wrote (N1c review).**
+// the message quotes is one NEITHER declaration wrote.**
 //
 // E3006 already carries a sentence per KIND of duplicate, each at the site that owns that kind; this is the
 // same discipline applied to the one kind whose name is SYNTHESIZED. A free function contested across
@@ -1856,7 +1814,7 @@ end 'commitFuncSignatures'
 // nowhere in their source and finds two declarations that do not look like duplicates of each other. The
 // fix is a rename on either side, and it has to be said, because it is not inferable from the name.
 //
-// ⭐⭐ **THE SECOND SYNTHESIZED-NAME KIND IS A CONTESTED `extension` METHOD (X-contains)**, and it earns its
+// ⭐⭐ **THE SECOND SYNTHESIZED-NAME KIND IS A CONTESTED `extension` METHOD**, and it earns its
 // own sentence for the identical reason one kind up. A `<Conformer>.<method>` declared by extensions in more
 // than one FILE is registered by every one of them under its parameter-type spelling — nobody keeps the bare
 // name — so two declarations of one signature claim `Array.contains#Element` and collide there. That is the
@@ -1864,8 +1822,7 @@ end 'commitFuncSignatures'
 // no declaration wrote, and the fix — change the PARAMETERS, or the name — is not inferable from it.
 //
 // ⭐ **AND THE THIRD IS A `static` MEMBER BESIDE AN INSTANCE MEMBER OF ONE NAME** (`same-name-methods.md`),
-// whose static side is filed as `<name>#__static`. Same reason again; see its arm below, which also records
-// what reading a contest flag OUTSIDE the minted-name band measured.
+// whose static side is filed as `<name>#__static`. Same reason again; see its arm below.
 //
 // ⛔ **THE PLAIN SENTENCE'S WORDING IS THE CANONICAL ONE AND IS NOT OURS TO CHOOSE** — `Duplicate function
 // 'X'` is what `/specs/duplicate-functions.md` states the language emits for a plain redefinition.
@@ -1876,9 +1833,8 @@ end 'commitFuncSignatures'
 // `generic-instance-names.md:238`) — but that is its own sentence for its own situation, and no canonical
 // text spells any of the three below. Nothing here may be described as "matching canonical": these say
 // `duplicate definition of function 'X' — …`, which is a fourth spelling, and the compiler's generic-instance
-// sentence (`checkGenericInstanceNameCollision`) is a fifth. That the wordings have drifted apart is a real
-// debt, and reconciling them is a decision about ALL of them at once — not something a tick touching one
-// member may do to it alone, which is exactly how they drifted.
+// sentence (`reportInstantiationPairCollision`) is a fifth. Reconciling the wordings is a decision about ALL
+// of them at once, never about one member alone.
 //
 // ⛔ **WHAT MUST NOT CHANGE IS THE SPLIT, whatever the wordings settle on.** A plain redefinition tells the
 // author to DELETE a definition; a mangled collision tells them to RENAME a spelling. Folding these into one
@@ -1890,18 +1846,15 @@ end 'commitFuncSignatures'
 //
 // ⭐⭐ **THE SORT IS ON A PROPERTY, NOT ON AN ENUMERATION OF KINDS, and that is the correctness of it.** The
 // plain sentence is earned by `name` BEING the name a declaration wrote — never by failing to match the
-// mangled kinds this function happens to know about. It was an enumeration, and the set of names the parser
-// MINTS is larger than any list kept here: an ordinary same-file overload set whose member is redeclared with
-// identical parameters is handed the incumbent's minted name (`Parser.overloadMemberHoldingSignature`), which
-// matches neither contested test and fell through to the canonical sentence. MEASURED: two declarations of
-// `pick(x bool)` beside a `pick(x Integer)` gave `Duplicate function 'pick#bool'` — a canonical sentence, in
-// canonical's own shape, quoting a symbol that appears nowhere in the program, against the one spec that
-// states only WRITTEN names go in that slot. Pinned by
-// `function-overloads/error.overload-redeclared-with-the-same-parameters`.
+// mangled kinds this function happens to know about. The set of names the parser MINTS is larger than any
+// list kept here: an ordinary same-file overload set whose member is redeclared with identical parameters is
+// handed the incumbent's minted name (`Parser.overloadMemberHoldingSignature`), which matches neither
+// contested test. An enumeration would give two declarations of `pick(x bool)` beside a `pick(x Integer)`
+// the canonical `Duplicate function 'pick#bool'`, quoting a symbol that appears nowhere in the program.
+// Pinned by `function-overloads/error.overload-redeclared-with-the-same-parameters`.
 //
-// ⇒ A new mint nobody classifies now lands on a mangled sentence and says what the author WROTE, which is
-// imprecise rather than wrong. The enumeration failed OPEN, onto the one sentence that promises the name it
-// quotes is greppable — the worst of the four places it could have landed.
+// ⇒ A new mint nobody classifies lands on a mangled sentence and says what the author WROTE, which is
+// imprecise rather than wrong.
 function duplicateFunctionMessage(project Project, name ByteArray, declFilePath FilePath) returns String
 	let signatures = try queryProgramSignatures(project) otherwise panic("duplicateFunctionMessage: queryProgramSignatures failed during merge — the whole-program index is computed and memoized before the pipeline runs, so a merge-time ask cannot fail fresh")
 
@@ -1925,11 +1878,10 @@ function duplicateFunctionMessage(project Project, name ByteArray, declFilePath 
 	end 'aFreeFunctionDeclaredByTwoFilesOfOneDirectory'
 
 	// ⛔⛔ **THE MINTED-NAME SENTENCES ARE GATED ON THE PROPERTY — `name` IS NOT WHAT A DECLARATION WROTE — AND
-	// NOT ON WHICH CONTEST EXISTS. A CONTEST FLAG READ OUTSIDE THIS BAND IS A WRONG SENTENCE, MEASURED.** The
-	// `static`/instance arm below was first written as a bare `isStaticInstanceContest(base)` test above this
-	// gate, and a `type Box` declaring `static getValue()` plus TWO instance `getValue()` reported *"more than
-	// one `static` declaration of it claims that spelling. Give the statics distinct parameter types"* — about
-	// a program whose statics are fine, quoting `Box.getValue`, which is exactly what the author wrote. The two
+	// NOT ON WHICH CONTEST EXISTS. A CONTEST FLAG READ OUTSIDE THIS BAND IS A WRONG SENTENCE.** Asked above
+	// this gate, `isStaticInstanceContest(base)` would tell a `type Box` declaring `static getValue()` plus TWO
+	// instance `getValue()` that *"more than one `static` declaration of it claims that spelling"* — about a
+	// program whose statics are fine, quoting `Box.getValue`, which is exactly what the author wrote. The two
 	// instance members take the redeclaration path (`Parser.overloadMemberHoldingSignature`) and collide on the
 	// SOURCE name, where the canonical wording is the whole point of the header's sort rule.
 	//
@@ -1957,7 +1909,7 @@ end 'duplicateFunctionMessage'
 
 // THE one speller of the mangled register's opening. Three call sites above, identical up to the tail; it is
 // written once so that a future reconciliation of the wordings (see the header) is one edit and cannot leave
-// a sibling behind — which is precisely what happened to this family the first time one member was reworded.
+// a sibling behind.
 function mangledDuplicateFunctionMessage(name ByteArray, why String) returns String
 	return "duplicate definition of function '{String.from(name)}' — {why}"
 end 'mangledDuplicateFunctionMessage'
@@ -1970,19 +1922,19 @@ function parameterSpellingCollisionMessage(name ByteArray, base ByteArray, whyTh
 	return mangledDuplicateFunctionMessage(name, why: "'{String.from(base)}' {whyThereAreSeveral}, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names")
 end 'parameterSpellingCollisionMessage'
 
-// Commit this file's overload sets (D7). A file that overloads nothing carries the shared empty table and
+// Commit this file's overload sets. A file that overloads nothing carries the shared empty table and
 // this loop does not run.
 //
-// ⭐⭐ **THE MEMBERS ACCUMULATE ACROSS FILES RATHER THAN REPLACING (X-contains).** An `extension` method
+// ⭐⭐ **THE MEMBERS ACCUMULATE ACROSS FILES RATHER THAN REPLACING.** An `extension` method
 // declared by two files' extensions onto one conformer is ONE overload set whose members are minted in two
 // different parses, and neither parser can see the other's — so this is where they meet, and a plain upsert
-// left whichever file merged last as the whole set. The dedup is by registration NAME and not by position,
-// because the same file is re-merged on a warm rebuild; `OverloadSetMap` carries why that makes the reset
-// mandatory.
+// would leave whichever file merged last as the whole set. The dedup is by registration NAME and not by
+// position, because the same file is re-merged on a warm rebuild; `OverloadSetMap` carries why that makes
+// the reset mandatory.
 //
 // ⚠ The resulting ORDER is file-merge order, then declaration order within a file — the order E3007 lists
 // tied candidates in. It is deterministic (the merge walks the project's sources in one fixed order), but it
-// is no longer "declaration order" in any sense the author of a single file can see, which is why the
+// is not "declaration order" in any sense the author of a single file can see, which is why the
 // diagnostic says which candidates rather than which came first.
 function commitOverloadSets(project Project, artifact FileParseArtifact)
 	match artifact.overloadSets 'file'
@@ -2007,7 +1959,7 @@ function commitEachOverloadSet(project Project, byBase OverloadSetMap)
 	end 'each'
 end 'commitEachOverloadSet'
 
-// Append this file's recorded function-value merge checks to the whole-program list (P1.5 #81). Unlike
+// Append this file's recorded function-value merge checks to the whole-program list. Unlike
 // the signature commit above there is NO dedup: each entry is a DISTINCT merge SITE (its own position),
 // so every one is drained. Kept an array (not a map) for the same reason the `*Entry` families are —
 // the drain order is the file/declaration order, deterministic and reviewable.

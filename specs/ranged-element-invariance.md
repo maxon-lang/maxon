@@ -25,20 +25,19 @@ rejected. Two things distinguish them, and both matter:
 1. **Their invariants.** A `Narrow` promises `0 to 16`. That promise is what a ranged type is *for*.
 2. **Their storage width.** `Narrow` occupies ONE byte per element; `Wide` occupies EIGHT.
 
-Compatibility used to be decided by normalizing a ranged element to its BASE type before comparing —
-and the base is the *declared* one, so `int(0 to 16)` and `int(0 to u64.max)` **both declare base
-`int`** and compared EQUAL. A `NarrowCol` could therefore be passed to a `WideCol` parameter with no
-diagnostic.
+Compatibility is not decided by normalizing a ranged element to its BASE type before comparing: the
+base is the *declared* one, so `int(0 to 16)` and `int(0 to u64.max)` **both declare base `int`** and
+would compare EQUAL, letting a `NarrowCol` be passed to a `WideCol` parameter with no diagnostic.
 
-The consequence was silent corruption of the range invariant. A store through the wide parameter is
+The consequence would be silent corruption of the range invariant. A store through the wide parameter is
 range-checked against `Wide` — which permits anything — and then truncated into the one-byte element:
-writing `300` read back as **44** (300 mod 256), leaving a value *outside* the range its own type
-declares. Memory stays safe (element width travels with the value, so the stride is right and
+writing `300` would read back as **44** (300 mod 256), leaving a value *outside* the range its own type
+declares. Memory would stay safe (element width travels with the value, so the stride is right and
 neighbours are untouched); what breaks is the type's guarantee.
 
-This is the same root cause as `array-clone-element-size`, where the range was thrown away while
-resolving a `Self` return and `Array.clone()` read 8 bytes at a 1-byte stride. That was fixed on the
-`Self`-returning-call path; this is the same class on the ARGUMENT-PASSING path.
+This is the same class as `array-clone-element-size`, where losing the range while resolving a `Self`
+return would make `Array.clone()` read 8 bytes at a 1-byte stride; this is that class on the
+ARGUMENT-PASSING path.
 
 A ranged alias is a nominal type: two aliases spelling the *same* range are two types, and a value
 of one reaches the other only through `as` (`nominal-typealias.md`). Two containers over two such

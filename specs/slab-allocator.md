@@ -11,16 +11,12 @@ category: system
 
 `__slab_alloc` is the layer every heap byte in a Maxon program comes from: `__mm_alloc` asks it for
 each managed box WHOLE (header + payload, one request), and the green-thread scheduler, the subprocess
-scratch buffers and the DebugStream ring call it directly. Since S2 it is a **size-classed span
+scratch buffers and the DebugStream ring call it directly. It is a **size-classed span
 allocator** over the chunk arena (`Compiler/Runtime/SlabRuntime.maxon` on
-`Compiler/Runtime/SlabArena.maxon`), not the bump cursor it used to be.
+`Compiler/Runtime/SlabArena.maxon`).
 
-⭐⭐ **SINCE S4 IT IS THE ONLY ALLOCATOR.** Between S2 and S4 `__mm_alloc` carried a second one —
-16-byte-granular free lists of its own — which served a repeat box out of its own buckets and asked
-`__slab_alloc` only on a miss. It was a stopgap from the days when the layer beneath it reclaimed
-nothing. It is gone, and the consequence for THIS file is that every case below now drives the span
-free list, the recycled-slot zeroing and (past 32 KiB) the OS-direct unmap, where before S4 most of
-them stopped at a bucket.
+⭐⭐ **IT IS THE ONLY ALLOCATOR.** `__mm_alloc` keeps no free lists of its own, so every case below
+drives the span free list, the recycled-slot zeroing and (past 32 KiB) the OS-direct unmap.
 
 The pieces, and what each of the cases below can actually see of them:
 
@@ -49,13 +45,12 @@ visible any other way.
 
 ### ⚠⚠ GREEN HERE IS A CORRECTNESS CLAIM, NOT A LIVENESS ONE — and that has to be said out loud
 
-**Every case in this file would also pass against the BUMP ALLOCATOR these layers replaced.** A
+**Every case in this file would also pass against a BUMP ALLOCATOR.** A
 cursor that never reuses a byte cannot hand one slot to two objects, so it satisfies the whole file
 trivially. ⇒ **A green run of this file does not prove the slab is what served the program.**
 
 What these cases are is a REGRESSION net: they are the thing that goes red when the class lookup, the
-span geometry, the bump bound or the free routing is wrong, and before this file existed ~890 lines
-of arena and object-layer code had no committed test at all. Two other instruments carry the half
+span geometry, the bump bound or the free routing is wrong. Two other instruments carry the half
 this one cannot:
 
 - **the emitted-bytes delta** — the allocator is in the image, and a layer nothing calls is dropped
@@ -66,34 +61,23 @@ this one cannot:
 
 ### What these cases CANNOT observe, stated rather than skipped
 
-Four of the layer's behaviours have no Maxon-visible consequence today, and saying so is the point:
+What the cases here can and cannot see of four of the layer's behaviours, and saying so is the point:
 
-- ~~The arena's chunk FREE path (`__slab_arena_free_chunks`).~~ **OBSERVABLE SINCE S6, AND IT HAS ITS
-  OWN FILE.** This entry said the function had no reachable path and that its first caller would be
-  the scavenger, which was true and is not any more: `__slab_scavenge` calls it for every span on a
+- **The arena's chunk FREE path (`__slab_arena_free_chunks`) IS OBSERVABLE, AND IT HAS ITS OWN FILE.**
+  `__slab_scavenge` calls it for every span on a
   class's list with no live slot, and `__Builtins.scavengeMemory()` reports what the OS then took back.
   The cases that drive it — including the one that proves a recycled chunk is handed back ZEROED, which
-  is what the release path now owes — are in `slab-scavenger.md` and `slab-census.md`. **No case in
+  is what the release path owes — are in `slab-scavenger.md` and `slab-census.md`. **No case in
   THIS file calls `scavengeMemory()`**, and no free and no refill destroys a span, so every case below
   still describes an allocator that only ever grows.
 - **INV-1's trap** (`RuntimeAbort.slabSpanExhaustedPastItsEnd`). It fires only when the span's three
   accounts of its own free slots disagree, which no legal sequence of allocations can produce. It is
   verified by SABOTAGE — breaking the bump cursor's bound turns these cases red — not by a case.
-- ~~The span FREE list's recycling.~~ **OBSERVABLE — AND THE HISTORY IS WORTH KEEPING, BECAUSE ONLY
-  MEASURING IT EVER SAID SO.** While `__mm_free` still had buckets of its own (S2–S4) the obvious
-  reading was that a box always went to a bucket and never back to its span. It was wrong even then:
-  a box the buckets REFUSED went to `__slab_free`, and they refused two kinds — one past 256 KiB (an
-  OS-direct mapping) and one with a **ZERO PAYLOAD**, which is what an EMPTY element buffer is.
-  ⭐ **MEASURED at S2: with every `__slab_free` routed to the OS-direct arm, 12 corpus cases abort on
-  the magic word** — `arrays/slice-of-empty-array-then-push`,
-  `byte-string-literal.empty-literal-detaches`, `managed-memory-methods/empty-bstring-push`,
-  `string-type-2/string-append-empty` and eight more, every one of them a program that builds an array
-  or a String from empty. **S4 removed the buckets, so what was true of two shapes is now true of
-  every box in the language**: every free reaches `__slab_free` and every reuse comes off a span's
+- **The span FREE list's recycling IS OBSERVABLE.** `__mm_free` keeps no buckets of its own, so for
+  every box in the language every free reaches `__slab_free` and every reuse comes off a span's
   free list or its bump region.
-- **The size a request is ROUNDED to.** `__slab_rounded_size` reports it, and nothing in the compiler asks:
-  v1's caller is an inline-small-array capacity reclaim that the compiler's array records have no equivalent
-  of. The rounding is still what these cases depend on — a class too small corrupts a neighbour —
+- **The size a request is ROUNDED to.** `__slab_rounded_size` reports it, and nothing in the compiler asks.
+  The rounding is still what these cases depend on — a class too small corrupts a neighbour —
   they just cannot read the number.
 
 ### The one thing a case here must never do
@@ -220,13 +204,12 @@ read out of the 16-byte prefix the allocation stamped.
 
 Sixty-four round trips, each writing and verifying its own pattern.
 
-⚠ **IT FAILS TWO WAYS ON THIS LANE, NOT THE THREE THE OBVIOUS READING GIVES — MEASURED AT S4.** A prefix
+⚠ **IT FAILS TWO WAYS ON THIS LANE, NOT THE THREE THE OBVIOUS READING GIVES.** A prefix
 the free does not recognise aborts on the magic word, and a mapping that is never released leaves 19 MB
-committed where the live set is 300 KB (MEASURED post-cutover: **peak RSS 1.06 MB**, so the release both
-runs and works). The third — *"a length recovered wrongly unmaps a region that is still in use"* — is NOT
+committed where the live set is 300 KB. The third — *"a length recovered wrongly unmaps a region that is still in use"* — is NOT
 a failure mode on **x64-windows**, because `osFreePages` lowers to `VirtualFree(addr, 0, MEM_RELEASE)`,
-whose `dwSize` MUST be 0 and is ignored: the length word in the prefix is DEAD on this lane. (SABOTAGE:
-reading it out of the MAGIC word's offset instead leaves this file at 10 passed / 0 failed.) It is live on
+whose `dwSize` MUST be 0 and is ignored: the length word in the prefix is DEAD on this lane. (Reading it out of the MAGIC word's
+offset instead leaves every case in this file passing.) It is live on
 a `munmap` lane, and inert again on wasm, where `osFreePages` emits nothing at all.
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -273,9 +256,8 @@ holds one at a time, so a free that released the wrong mapping would still leave
 working. Here 40 mappings of DIFFERENT sizes are live together, each stamped with its own pattern,
 and every one is read back after all 40 exist.
 
-⭐ It is also the case that would have caught v1's ceiling. Its OS-direct tier tracks live mappings
-in a 512-entry array and ABORTS the program on the 513th; The compiler carries each length in the mapping's
-own prefix, so there is no table to fill and no number of live mappings that is too many.
+⭐ It is also the case that catches a ceiling on live mappings. The compiler carries each length in the
+mapping's own prefix, so there is no table to fill and no number of live mappings that is too many.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -447,17 +429,16 @@ the same way is verified afterwards.
 
 ⚠ It hammers the RECYCLED arm of `__slab_alloc`'s pop — the arm that must zero a dirty slot, where the
 virgin arm gets its zeroes free. A pop that failed to unlink, or a push of the wrong pointer, hands one
-slot to two buffers, and the survivors are what shows it. (Before S4 this was the ONE case here that
-reached that arm at all, because `__mm_free`'s own buckets served every other shape. Now every case
-does, and this one keeps its place as the extreme: the shortest slot, recycled the most times.)
+slot to two buffers, and the survivors are what shows it. (Every case here reaches that arm; this one
+is the extreme: the shortest slot, recycled the most times.)
 
 ⛔ **THE SHAPE IS `b""` AND A GROW, AND THE OBVIOUS SPELLING DOES NOT WORK.** `ByteArray.create()`
 followed by a push allocates nothing to free — an array that never had a buffer owes nothing — so a
 case written that way passes against a `__slab_free` whose span arm has been sabotaged away, which is
-to say it tested nothing here. MEASURED at S2, both spellings, against that sabotage: the `create()`
-version PASSED and this one aborted. The zero-payload box is the buffer an EMPTY LITERAL detaches
-into, freed when the first push reallocates it — which is exactly what the twelve corpus cases named
-above do.
+to say it tested nothing here. Against that sabotage the `create()` version passes and this one
+aborts. The zero-payload box is the buffer an EMPTY LITERAL detaches
+into, freed when the first push reallocates it — which is exactly what a program that builds an array
+or a String from empty does.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -509,8 +490,8 @@ end 'main'
 ```
 
 <!-- test: slab-allocator.the-header-decides-which-side-of-the-os-direct-boundary-a-box-lands -->
-**THE ROUTING BOUNDARY, AND THE 24 BYTES THAT DECIDE IT (S4).** `__slab_alloc` serves a request of at
-most `SlabMaxSmallSize` (32,768) out of a span and gives anything larger its own mapping. Since S4
+**THE ROUTING BOUNDARY, AND THE 24 BYTES THAT DECIDE IT.** `__slab_alloc` serves a request of at
+most `SlabMaxSmallSize` (32,768) out of a span and gives anything larger its own mapping.
 `__mm_alloc` asks for the WHOLE box, so the boundary in USER terms sits 24 bytes lower: a 32,744-byte
 buffer is the largest a span can serve, and 32,745 is the first that needs a mapping of its own.
 
@@ -519,9 +500,7 @@ so the population contains both routes and each one's neighbours are on the othe
 them all and rebuilds the identical sweep, which runs both FREE routes (a slot pushed back onto its
 span, a mapping handed back to the OS) before the second round asks for the same sizes again.
 
-⚠ **IT IS THE OFF-BY-ONE THE BOX LAYER INTRODUCED, AND NOTHING ELSE IN THIS FILE STRADDLES IT.** Before
-S4 `__mm_alloc` never routed on this boundary at all — its own buckets ran to 256 KB, and the slab only
-ever saw the boxes those buckets refused. A total computed WITHOUT the header sends a 32,750-byte
+⚠ **IT IS THE OFF-BY-ONE THE BOX HEADER CREATES, AND NOTHING ELSE IN THIS FILE STRADDLES IT.** A total computed WITHOUT the header sends a 32,750-byte
 request down the span path, where the widest class is 32,768 bytes and the box needs 32,774: the tail
 of that buffer lands in the following slot, which is its neighbour in this sweep. Verifying every byte
 of every buffer only after all 26 exist is what makes that visible.
@@ -645,7 +624,7 @@ word boundary long before the population is exhausted — the case where the all
 per-bit word recomputation and the release side's have to agree about which bit belongs to which
 chunk.
 
-⚠ It exercises the arena's ALLOCATE side only. Nothing in this rung returns a chunk, so first-fit
+⚠ It exercises the arena's ALLOCATE side only. Nothing in this file returns a chunk, so first-fit
 REUSE has no producer to drive it — see *What these cases cannot observe* above.
 ```maxon
 typealias Byte = int(0 to u8.max)

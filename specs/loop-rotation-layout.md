@@ -20,13 +20,13 @@ loop's exit test) — and lays it down immediately after the loop's hot latch, t
 hot block whose terminator is an unconditional branch to the header. The latch then falls into the
 header and the cleanup's jump elision drops its back-edge `jmp`. What the exit test becomes depends
 on its shape, and a loop is rotated only where the result is one instruction fewer per iteration.
-A `for` or `while cond` header is `jcc body; jmp exit`: its conditional branch INTO THE BODY is now
-the taken back branch — a taken `jmp` behind a not-taken `jcc` became one taken `jcc` — and the
+A `for` or `while cond` header is `jcc body; jmp exit`: its conditional branch INTO THE BODY becomes
+the taken back branch — a taken `jmp` behind a not-taken `jcc` becomes one taken `jcc` — and the
 elision also drops the `jmp exit` when the exit lands next. A header whose conditional aims at the
 exit, such as a folded `while true` ending in its `break` test, pays only when that exit block is
 the one physically after the latch, so that the conditional inversion turns `jcc exit; jmp body`
 into the complemented conditional into the body with the exit falling through. Entering the loop
-costs one branch to the header where the preheader used to fall into it; that branch is paid once
+costs one branch to the header where the preheader would otherwise fall into it; that branch is paid once
 per loop entry, the saving once per iteration.
 
 The reorder is sound because it runs after the sinking and before the fall-through elision, while
@@ -52,7 +52,7 @@ refuses, and a `while true` whose first block branches into two hot arms, which 
 ## Tests
 
 <!-- test: a-latch-falls-into-its-header -->
-The shape the row was opened for. In `copyTail`'s versioned fast copy the step block falls into the
+The shape this layout exists for. In `copyTail`'s versioned fast copy the step block falls into the
 loop header, whose `cmp / jcc less` is the taken back edge, and the exit is its fall-through.
 ```maxon
 typealias Word = int(i64.min to i64.max)

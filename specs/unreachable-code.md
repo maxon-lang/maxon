@@ -20,8 +20,7 @@ the compiler stores a block's terminator in a **slot** (`IrBlock.terminator`), n
 op list, and `IrModule.setTerminator` **overwrites** that slot. So an accepted statement after a
 terminator does not merely emit dead code — if that statement is one that terminates the block
 itself (an `if`, a `while`, a `for`, a `match`), its terminator **replaces** the one already
-there and the earlier `return`/`break` is silently discarded. MEASURED before this refusal
-existed:
+there and the earlier `return`/`break` is silently discarded. Without this refusal:
 
 | program | answered | should answer |
 |---|---|---|
@@ -29,9 +28,8 @@ existed:
 | `break` then an `if` inside a `while` | `105` | `1` |
 
 Both are byte-identical in the emitted binary to the same program with the terminator deleted.
-That is why `break`/`continue` carry the rule here even though the deprecated v1 self-hosted
-compiler applied it only to `return`/`throw`/`panic`: in the compiler they are the same defect, and the
-reference bootstrap already refuses all five (`specs/break.md` pins the two loop keywords).
+That is why `break`/`continue` carry the rule as well as `return`/`throw`/`panic`: they are the same
+defect, so all five are refused (`specs/break.md` pins the two loop keywords).
 
 ### What it deliberately does NOT refuse
 
@@ -43,7 +41,7 @@ already returned somewhere" would refuse the single most common shape in the lan
 ## Tests
 
 <!-- test: return-then-if-is-refused -->
-The W118 baseline, exactly: a straight-line `return` whose block is then re-terminated by an
+The baseline: a straight-line `return` whose block is then re-terminated by an
 `if`. Refused at the `if`, which is the first unreachable statement.
 ```maxon
 function f(x ExitCode) returns ExitCode
@@ -63,8 +61,8 @@ error E3071: <fragment>:4:2: unreachable code after 'return'
 ```
 
 <!-- test: break-then-if-is-refused -->
-The same defect through `break`. Without the refusal this program printed `105` and returned 0;
-the `break` never happened.
+The same defect through `break`. Without the refusal this program prints `105` and returns 0;
+the `break` never happens.
 ```maxon
 function main() returns ExitCode
 	var total = 0
@@ -120,7 +118,7 @@ error E3071: <fragment>:4:2: unreachable code after 'panic'
 ```
 
 <!-- test: terminator-ends-its-own-block -->
-The legal half, and the one this rung had to prove still RUNS rather than merely still compiles:
+The legal half, pinned as a program that RUNS rather than one that merely compiles:
 a `return` that is the last statement of an `if` body with ordinary statements after the `if`,
 and a `continue` that is the last statement of an `if` body inside a loop with an ordinary
 statement after that `if`. Each terminator ends its OWN block; nothing follows it there. Both

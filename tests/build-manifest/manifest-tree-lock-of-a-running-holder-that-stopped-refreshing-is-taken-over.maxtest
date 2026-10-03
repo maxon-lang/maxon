@@ -1,0 +1,8 @@
+test 'a manifest build takes over a tree lock whose running holder stopped refreshing it, and says so'
+	let staged = stagedProject("tree-lock-of-a-running-holder-that-stopped-refreshing-is-taken-over", fixture: DefaultFixtureName)
+	plantTreeLockOfThisRunningProcess(staged)
+	ageTreeLock(staged, seconds: PastTheAbandonmentWindowSeconds)
+
+	let build = spawnManifestBuild(staged, options: StringArray.create())
+	requireBuiltPastTheLock(staged, build: build, wordings: [TreeLockAbandonedWording, TreeLockHolderRunningWording], what: "names a running process that refreshed nothing past the abandonment window")
+end 'a manifest build takes over a tree lock whose running holder stopped refreshing it, and says so'

@@ -3,14 +3,12 @@ feature: basics
 status: selfhosted
 keywords: [main, return, semantic, validation]
 category: basics
-milestone: M1
 ---
 
 ## Documentation
 
 The compiler performs two semantic checks before lowering: every program must
-declare a `main` function, and `main` must return `ExitCode`. The walking
-skeleton (M1) compiles exactly the `return <int-literal>` slice.
+declare a `main` function, and `main` must return `ExitCode`.
 
 ### E3001: No main function
 
@@ -31,10 +29,9 @@ error E3002: Function 'main' must return ExitCode
 
 ## Tests
 
-These are the M1 slice of `specs/basics.md` — the two semantic-error cases and
-the `return <int> → exit <int>` case — restricted to what the M1 parser accepts
-(function declaration, `return`, integer literal). The `no-main` case uses
-`ExitCode` (the one builtin type M1 resolves) rather than a `typealias`.
+These are the two semantic-error cases and the `return <int> → exit <int>` case,
+written with nothing but a function declaration, `return` and an integer literal.
+The `no-main` case uses `ExitCode` rather than a `typealias`.
 
 <!-- test: return-literal -->
 ```maxon

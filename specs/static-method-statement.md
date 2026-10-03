@@ -19,13 +19,10 @@ as for every other call written on a line of its own. The refusal therefore name
 the `_ = expr` cure where one exists, instead of saying the shape is unsupported — which it is not.
 `discarded-results.md` carries all three verdicts.
 
-⭐ These cases are compiler-authored rather than ported. `specs/static-methods.md` covers statics
-thoroughly — three cases, all green here — but **every one of them returns a value**, so the corpus
-had no case in this position at all. That is why the gap survived: The compiler accepted
-`__Builtins.sleep(ms)` and `__ManagedFile.statFree(buf)` in statement position through a recognizer
-listing compiler-owned callees, and refused the identical user-written shape as
-`E2015: Unsupported: identifier statement`. The asymmetry was never a rule, only which callees
-happened to have a recognizer; the oracle compiles and runs the user form.
+⭐ `specs/static-methods.md` covers statics thoroughly, but **every one of its cases returns a value**,
+so these are the cases in statement position. A user-written void static is a statement exactly as
+`__Builtins.sleep(ms)` and `__ManagedFile.statFree(buf)` are: which callees are compiler-owned is not a
+rule about the shape.
 
 ## Tests
 
@@ -81,8 +78,7 @@ ticktick
 <!-- test: static-method-statement.error.value-returning-static-is-still-refused -->
 The NEGATIVE half. A static whose result falls off the statement is still refused — but under the
 DISCARD code, which names the callee and points at the member the author wrote. Accepting the shape
-strands no box: a program carrying this diagnostic never reaches codegen. Measured identical on the
-oracle.
+strands no box: a program carrying this diagnostic never reaches codegen.
 ```maxon
 type Point
 	export var x as ExitCode
@@ -102,14 +98,13 @@ error E3064: <fragment>:11:8: result of pure function 'Point.create' must be use
 ```
 
 <!-- test: static-method-statement.error.unknown-static-names-the-callee -->
-A TYPO in a static's name, in statement position. Until this rung it was
-`E2015: Unsupported: identifier statement` — a message about the SHAPE, which became false the moment a
-void static became a legal statement: the construct is supported, the name is wrong, and E2015 says
-nothing about a name. The statement door claims a qualified call on the strength of its BASE alone, so a
-member that resolves to nothing is refused by `parseCallNamed`, which names the callee.
-⭐ This is the same answer TWO other positions already gave for the identical typo — expression position
-(`let x = Helper.nope()`) and the compiler-owned half in THIS position (`__Builtins.nope()`), both
-measured — so the rung removes a third spelling rather than adding one.
+A TYPO in a static's name, in statement position. The statement door claims a qualified call on the
+strength of its BASE alone, so a member that resolves to nothing is refused by `parseCallNamed`, which
+names the callee — not by `E2015: Unsupported: identifier statement`, a message about the SHAPE, which is
+false for a void static: the construct is supported, the name is wrong, and E2015 says nothing about a name.
+⭐ This is the same answer TWO other positions give for the identical typo — expression position
+(`let x = Helper.nope()`) and the compiler-owned half in THIS position (`__Builtins.nope()`) — so the
+typo has one spelling, not three.
 ```maxon
 type Helper
 	static function shout()
@@ -127,14 +122,11 @@ error E3004: <fragment>:9:9: call to undefined function 'Helper.nope'
 ```
 
 <!-- test: static-method-statement.keyword-named-static-is-a-statement -->
-⭐⭐ A static DECLARED UNDER A KEYWORD (D8), called as a bare statement. Found in review: the statement
-door's shape check asked a raw `TokenKind.identifier` for the member, so `Helper.to()` was refused as
-`E2015: Unsupported: identifier statement` — while EXPRESSION position compiled and ran the identical
-name (`let x = Helper.to()`, measured). That is
-the same asymmetry this rung was written to remove, surviving one level down in the shape check standing
-in front of the fix. The member half now asks `namesMemberAt`, the predicate `methodCallsAt`,
-`memberCallFollows` and `fieldAssignsAt` already share, so a member-naming token is taught to all four
-at once. Prints `mut`.
+⭐⭐ A static DECLARED UNDER A KEYWORD (D8), called as a bare statement. The statement door's shape check asks `namesMemberAt` for the member, the
+predicate `methodCallsAt`, `memberCallFollows` and `fieldAssignsAt` share, so a member-naming token is
+taught to all four at once. A check that asked a raw `TokenKind.identifier` would refuse `Helper.to()` as
+`E2015: Unsupported: identifier statement` while EXPRESSION position compiles and runs the identical
+name (`let x = Helper.to()`). Prints `mut`.
 ```maxon
 type Helper
 	static function match()
@@ -187,18 +179,16 @@ error E3004: <fragment>:9:9: call to undefined function 'Helper.while'
 
 <!-- test: static-method-statement.void-static-through-an-inner-generic-alias -->
 ⭐⭐ **THE BASE IS AN INNER GENERIC ALIAS, AND THIS DOOR HAS TO READ IT UNDER THE SAME KEY THE EXPRESSION
-DOOR READS (found in W7's review).** `typealias IntPair = Pair with ExitCode` declared INSIDE `Plain` is
+DOOR READS.** `typealias IntPair = Pair with ExitCode` declared INSIDE `Plain` is
 keyed whole-program as `Plain.IntPair`, so a statement door asking the BARE member finds no registration,
 mangles `IntPair.shout`, and refuses a program the expression door on the very next line resolves
 perfectly.
 
-⚠ **MEASURED AS AN ASYMMETRY INSIDE ONE BINARY, which is what makes it a defect rather than a missing
-feature.** With the identical alias moved to FILE scope this program already compiled and printed `shout`;
-declared inside the calling type it was `E2015: Unsupported: identifier statement` — one written spelling
-answered two ways, which is exactly what `qualifiedStaticCallsAt`'s own header forbids and what W7's
-`genericAliasKeyFor` exists to make impossible. The bootstrap oracle cannot arbitrate: it fails this
-program with an internal `E9001 … Function 'IntPair.shout' not found in module`, its own spelling of the
-same missing lookup.
+⚠ **ANSWERED ANY OTHER WAY IT WOULD BE AN ASYMMETRY INSIDE ONE BINARY, which is what makes it a defect
+rather than a missing feature.** With the identical alias moved to FILE scope this program compiles and
+prints `shout`, and declared inside the calling type it must do the same — one written spelling answered
+two ways is exactly what `qualifiedStaticCallsAt`'s own header forbids and what `genericAliasKeyFor`
+exists to make impossible.
 ```maxon
 type Pair uses T
 	export var a as ExitCode

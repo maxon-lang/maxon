@@ -17,44 +17,41 @@ as a MEMBER** — `Kw.end`, `Kw.while` — in an ordinary expression.
 The two halves are one rule stated from two sides. `Parser.maxon`'s block-extent token scans
 (`opensBlockAt` / `closesBlockAt`, and every scan that counts depth through them) re-derive Maxon's
 block structure from the raw token array, and a keyword that is a NAME here is not block structure.
-Both shapes are now ONE predicate (`keywordIsAName`), because they are one fact:
+Both shapes are ONE predicate (`keywordIsAName`), because they are one fact:
 
 - **A match-arm case name is a NAME** — the LOOKAHEAD (the next token is a match-arm separator
-  `gives`/`then`/`to`/`upto`/`or`). That half already existed.
+  `gives`/`then`/`to`/`upto`/`or`).
 - **A match-arm case name CARRYING A PAYLOAD BINDING LIST is a NAME** — the SAME lookahead, taken PAST
   the list (`end(m) then …`, `while(a, b) gives …`). A one-token lookahead cannot see the separator at
-  all, because the list sits between them. That half did NOT exist either, and both directions refused a
-  program the oracle compiles and runs to 42:
-  - `end(m) then …` ended the arm loop, so the match reported `E2026 … not exhaustive, missing: end,
+  all, because the list sits between them, and without this half both directions refuse a legal program
+  that runs to 42:
+  - `end(m) then …` would end the arm loop, so the match reports `E2026 … not exhaustive, missing: end,
     omega` — a **false rejection**;
-  - `while(m) then …` opened a block nothing closed, and `assertScanAligned` took the compiler down.
-- **A member name after a `.` is a NAME too** — the LOOKBEHIND. That half did NOT exist, and its
-  absence was a **reachable compiler PANIC**, in both directions:
-  - `Kw.end` was read as a **CLOSER**, so the scan predicted a construct's `end` too EARLY;
-  - `Kw.while` / `Kw.match` / `Kw.for` were read as **OPENERS**, so it predicted one too LATE.
+  - `while(m) then …` would open a block nothing closes, and `assertScanAligned` takes the compiler down.
+- **A member name after a `.` is a NAME too** — the LOOKBEHIND. Without it the misreading is a
+  **reachable compiler PANIC**, in both directions:
+  - `Kw.end` read as a **CLOSER** makes the scan predict a construct's `end` too EARLY;
+  - `Kw.while` / `Kw.match` / `Kw.for` read as **OPENERS** make it predict one too LATE.
 
-  Either way `assertScanAligned` fired — `parseIfStatement: the token scan predicted the closing 'end'
+  Either way `assertScanAligned` fires — `parseIfStatement: the token scan predicted the closing 'end'
   at token 60 but the parser closed the last body at token 69`. Every block statement that runs a token
-  scan was affected: `if`, `while`, `for`, and a `match`'s scrutinee and arm bodies.
+  scan is exposed: `if`, `while`, `for`, and a `match`'s scrutinee and arm bodies.
 
-⚠ **`Kw.if` and `Kw.else` never panicked, and pinning them is the point.** Neither is an unconditional
-block marker — an `if` opens a block only at STATEMENT START (`ifBeginsStatement`), an `else` only after
-a then-branch's `end` (`elseFollowsBlockEnd`) — and a member name satisfies neither. So they were already
-excluded, **by a position test that has nothing to do with being a name.** They are pinned here because a
-case that passes for an unrelated reason is exactly the case a later rung deletes as redundant, and
-because the lookbehind now covers all seven uniformly.
+⚠ **`Kw.if` and `Kw.else` cannot panic even without the lookbehind, and pinning them is the point.**
+Neither is an unconditional block marker — an `if` opens a block only at STATEMENT START
+(`ifBeginsStatement`), an `else` only after a then-branch's `end` (`elseFollowsBlockEnd`) — and a member
+name satisfies neither. So they are excluded twice, once **by a position test that has nothing to do with
+being a name.** They are pinned here because a case that passes for an unrelated reason is exactly the case
+a later edit deletes as redundant, and because the lookbehind covers all seven uniformly.
 
-⚠⚠ **`Kw.otherwise` WAS THE EXCEPTION, AND THIS FILE USED TO CLAIM OTHERWISE — the claim was FALSE and a
-compiler PANIC lived behind it.** The reasoning was the same as for `if`/`else`: an `otherwise` opens a
-block only in its two handler shapes (`otherwiseOpensBlock`), and a member name was said to satisfy
-neither. But one of those shapes is `otherwise 'label'`, and a member read that ENDS A BLOCK HEADER is
-followed by that header's own block label — so `while k == Kw.otherwise 'loop'` satisfies it exactly, in
-the same way `match Kw.end 'm'` satisfies the labelled-closer shape below. Found by D8's independent
-review, on the same day D8 made `.otherwise` reachable a second way (a keyword-named METHOD:
-`while Ops.otherwise(i) 'loop'`, whose `( <ident> ) <label>` tail is the caught-error binding form).
-`handler-case-member-spelling-a-labelled-otherwise-in-a-header` pins it. **The lesson is the file's own:
-"excluded by an unrelated position test" is not an exclusion, and the three keywords whose arms did their
-own thinking were the three worth doubting.**
+⚠⚠ **`Kw.otherwise` IS NOT EXCLUDED BY POSITION — only the lookbehind stands between it and a compiler
+PANIC.** An `otherwise` opens a block only in its two handler shapes (`otherwiseOpensBlock`), and one of
+those shapes is `otherwise 'label'`: a member read that ENDS A BLOCK HEADER is followed by that header's
+own block label — so `while k == Kw.otherwise 'loop'` satisfies it exactly, in the same way
+`match Kw.end 'm'` satisfies the labelled-closer shape below. A keyword-named METHOD reaches `.otherwise`
+a second way: `while Ops.otherwise(i) 'loop'`, whose `( <ident> ) <label>` tail is the caught-error
+binding form. `handler-case-member-spelling-a-labelled-otherwise-in-a-header` pins it. **"Excluded by an
+unrelated position test" is not an exclusion.**
 
 ⚠ **Two shapes are worse than the rest and each gets its own case, because in both a keyword member
 spells a real piece of block syntax character for character:**
@@ -63,7 +60,7 @@ spells a real piece of block syntax character for character:**
   closing `end`;
 - `… or Kw.end == Kw.end else 2` — a TERNARY whose condition ends in the member puts `end` immediately
   before the `else`, which is how a block `else` is told from a ternary one (`elseFollowsBlockEnd`). So
-  the ternary read as opening a block, and the enclosing loop's scan ran past its `end`.
+  the ternary reads as opening a block, and the enclosing loop's scan runs past its `end`.
 
 Nothing but the preceding `.` tells any of these apart, which is why the lookbehind belongs to the one
 shared predicate and every scan that counts depth asks it rather than testing `TokenKind.end` itself.
@@ -76,44 +73,41 @@ expression needs: `if (driveByte >= 65 and driveByte <= 90) or (driveByte >= 97 
 two separators a payload-carrying arm can take AND the only two no real header can be followed by;
 `to`/`upto` belong to scalar RANGE patterns, which carry no payload. `or` is the one accepted gap —
 `end(m) or omega then …` still reads as a closer, and the compiler refuses a payload binding on an `or`-pattern
-outright, so the program stays refused either way; the rung that lifts THAT restriction is the one that
-must widen this set. `a-parenthesized-condition-with-or-past-the-group` below is the case that turns a
+outright, so the program stays refused either way; lifting THAT restriction must also widen this
+set. `a-parenthesized-condition-with-or-past-the-group` below is the case that turns a
 premature widening red.
 
 ⚠ **AND THE PAYLOAD SHAPE MAY ONLY EVER ANSWER *YES*.** `Kw.end(20, b: 22)` — CONSTRUCTING a
 keyword-named case that carries a payload — has the `.` before the keyword AND the `(` after it, so a
-payload test that returned its verdict outright would answer for the lookbehind and hide it. Measured
-during this file's own review: it took `assertScanAligned` down on
-`if tagOf(Kw.end(20, b: 22)) == 42 'ok'`. `constructing-a-payload-carrying-keyword-case` pins it.
+payload test that returned its verdict outright would answer for the lookbehind and hide it, and take
+`assertScanAligned` down on `if tagOf(Kw.end(20, b: 22)) == 42 'ok'`.
+`constructing-a-payload-carrying-keyword-case` pins it.
 
-⚠ **One case here was authored AFTER the fix and never ran red, deliberately:**
+⚠ **One case here is a combination of two others:**
 `closer-case-member-spelling-a-labelled-end-in-a-header` puts `Kw.end == Kw.end 'label'` in a `while`
-AND an `if` header, so the header itself ends in the labelled-`end` shape. Its red is carried by the two
-cases above it (a `while` condition and an `if` condition, both observed panicking), and it is here for
-the reason `enum-union-method-receiver.md` states for its own: next rung, only a committed case still
-runs.
+AND an `if` header, so the header itself ends in the labelled-`end` shape. The two cases above it (a
+`while` condition and an `if` condition) each panic on their own without the lookbehind; this one keeps
+the combined shape running.
 
 ⚠ **THE SIBLING-RECEIVER WALK COUNTS THE SAME DEPTH, AND ITS MISCOUNT IS A FALSE REJECTION.**
 `ensureSiblingReceivers` (which resolves a bare `inner()` inside a method to `self.inner()`) walks a
-type body through the same two predicates, and a `Kw.end` / `Kw.while` in a METHOD BODY moved its
-delimiter. Both directions refuse a legal program, and each has a case below:
+type body through the same two predicates, so a `Kw.end` / `Kw.while` in a METHOD BODY read as block
+structure would move its delimiter. Both directions refuse a legal program, and each has a case below:
 
-- `Kw.end` **ended the walk early** — the type's remaining methods were never registered, so a bare
-  call to one reported `E3004 call to undefined function 'bonus'`;
-- `Kw.while` **ran the walk past the type's own `end`** — a FREE function declared after the type was
-  adopted as an instance sibling, so a bare call to it reported `E3004 … 'Holder.helper'`.
+- `Kw.end` would **end the walk early** — the type's remaining methods go unregistered, so a bare call
+  to one reports `E3004 call to undefined function 'bonus'`;
+- `Kw.while` would **run the walk past the type's own `end`** — a FREE function declared after the type
+  is adopted as an instance sibling, so a bare call to it reports `E3004 … 'Holder.helper'`.
 
-This is the same family the D1 review fixed for an enum's CASE LIST, reached from the other side: that
-fix taught the walk that a member list is not block structure, and this one teaches it that a member
-READ is not either.
+This is the same family as an enum's CASE LIST, reached from the other side: a member list is not block
+structure, and a member READ is not either.
 
 ⚠ **The DECLARATION SWEEP counts the same depth, and its miscount is silent rather than loud.**
 `foldDeclaredSignaturesInto`'s walk gates its `let`/`var` arm on depth 0, so a `Kw.end` inside a
-function body dropped the sweep's depth to 0 and every following LOCAL binding was recorded as a
-TOP-LEVEL one. Measured before the fix: the answers happened to stay right (the real parse is
-authoritative for what a binding IS, and an unreferenced global is eliminated), so this half had no
-observable symptom at all — which is precisely why it goes through the same shared predicate as the
-loud half rather than being left to be found later.
+function body read as a closer would drop the sweep's depth to 0 and record every following LOCAL
+binding as a TOP-LEVEL one. The answers happen to stay right (the real parse is authoritative for what a
+binding IS, and an unreferenced global is eliminated), so this half has no observable symptom at all —
+which is precisely why it goes through the same shared predicate as the loud half.
 
 ## Tests
 
@@ -316,15 +310,13 @@ end 'main'
 ```
 
 <!-- test: handler-case-member-spelling-a-labelled-otherwise-in-a-header -->
-⚠⚠ **THE THIRD SHAPE, AND IT WAS A LIVE PANIC UNTIL D8's REVIEW** — the exact twin of the `end 'm'` case
-above, for the OTHER keyword that has a labelled block form. A member read `Kw.otherwise` at the end of a
-block header puts `otherwise` immediately before the construct's own block label, which is
-`otherwiseOpensBlock`'s `otherwise 'label'` form character for character — so the header opened a second
-block nothing closed and `assertScanAligned` took the compiler down. It is why the claim above that a
-member name "satisfies none of those" position tests was WRONG for `otherwise`: it satisfies the label
-form whenever the member is the header's last token. The cure is that `opensBlockAt` now asks the
-keyword-as-a-name exclusion ONCE, ahead of every arm, instead of per arm — three arms had it and the
-`otherwise` arm did not.
+⚠⚠ **THE THIRD SHAPE** — the exact twin of the `end 'm'` case above, for the OTHER keyword that has a
+labelled block form. A member read `Kw.otherwise` at the end of a block header puts `otherwise`
+immediately before the construct's own block label, which is `otherwiseOpensBlock`'s `otherwise 'label'`
+form character for character — so read as a keyword, the header would open a second block nothing closes
+and `assertScanAligned` would take the compiler down. A member name satisfies the label form whenever it
+is the header's last token, so no position test excludes it. `opensBlockAt` asks the keyword-as-a-name
+exclusion ONCE, ahead of every arm, rather than per arm, so no arm can lack it.
 ```maxon
 enum Kw
 	otherwise

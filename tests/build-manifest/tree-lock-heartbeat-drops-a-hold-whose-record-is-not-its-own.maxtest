@@ -1,0 +1,17 @@
+test 'a heartbeat drops a hold whose tree lock record is not its own, and says so'
+	let staged = stagedForeignRecordCheckout("tree-lock-heartbeat-drops-a-hold-whose-record-is-not-its-own", sleepMs: PastOneHeartbeatMs)
+
+	let run = spawnSpecTest(staged)
+	let stderr = withoutCarriageReturns(run.stderr)
+
+	Expect.equal(run.exitCode(), expected: 0, message: "`maxon spec-test` over a spec that replaces the tree lock record exited {run.exitCode()}. It wrote to stdout: {run.stdout} and to stderr: {stderr}")
+	Expect.contains(stderr, needle: TreeLockNotItsOwnWording, message: "`maxon spec-test` refreshed a tree lock record that is not its own without saying so. It wrote to stderr: {stderr}")
+	Expect.contains(stderr, needle: TreeLockRefreshingWording, message: "`maxon spec-test` did not find the foreign record while refreshing its lock. It wrote to stderr: {stderr}")
+	Expect.isFalse(stderr.contains(TreeLockReleasingWording), message: "`maxon spec-test` dropped its hold and still went on to release the lock. It wrote to stderr: {stderr}")
+
+	let record = try File.readText(treeLockOf(staged)) otherwise 'unread'
+		try Expect.fail("the tree lock record could not be read back after the run, so whatever the run did to it is unknown")
+		panic("Expect.fail returned without throwing")
+	end 'unread'
+	Expect.equal(withoutCarriageReturns(record), expected: foreignLockRecord(), message: "`maxon spec-test` rewrote or deleted a tree lock record that is not its own.")
+end 'a heartbeat drops a hold whose tree lock record is not its own, and says so'

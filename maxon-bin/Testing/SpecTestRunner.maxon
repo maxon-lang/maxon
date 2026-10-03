@@ -548,10 +548,6 @@ let BatchTimedOutToken = "TIMEDOUT"
 let ShQuote = "'"
 let ShBackslash = "\\"
 
-// `FilePathArray` is NOT declared here. It is `QueryDatabase`'s export, and the top-level namespace
-// is FLAT, so a second exported declaration of it is exactly what the flat-namespace check refuses
-// and fails the build. One declaration, read from wherever it is needed.
-
 // PASS, or FAIL carrying a human-readable reason, or one of the TWO ways a case can end up neither.
 // A union (not a `bool` + a message field) so a passing result has no vestigial empty-string message.
 //
@@ -2232,14 +2228,18 @@ function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exeP
 	// no printer for a name to reach. An `<!-- AsyncTrace -->` case and a capture case each ask for
 	// their producer per CASE, so no other case pays for it and an untraced program is byte-for-byte
 	// what it was.
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: exeBase.toString(), emitIr: pinnable, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: staged.stdlibDir, runtimeDirOverride: staged.runtimeDir, session: session) otherwise (e) 'compileFailed'
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exeBase.toString()), emitIr: pinnable, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir), session: session) otherwise (e) 'compileFailed'
 		reportCompileError(e, sink: session.diagnostics)
 		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), cpu: CompileCpu.unreported, irText: MissingIrPlaceholder, exePath: exePath)
 	end 'compileFailed'
 
-	// EMPTY IR is the placeholder: a target that emits no Target IR (`pinnable` false) renders none, and
-	// a fragment is never written for it anyway (`recordFragmentAndCleanup`).
-	let irText = MissingIrPlaceholder if product.irText.isEmpty() else product.irText
+	// Unrendered IR takes the placeholder: a target that emits no Target IR (`pinnable` false) renders
+	// none, and a fragment is never written for it anyway (`recordFragmentAndCleanup`).
+	let irText = match product.irText 'ir'
+		notRendered gives MissingIrPlaceholder
+		rendered(text) gives text
+	end 'ir'
+
 	return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(CompileVerdict.built, diagnostics: session.diagnostics.text()), cpu: CompileCpu.reported(product.totalCpuTicks), irText: irText, exePath: exePath)
 end 'compileOneTest'
 
@@ -2562,7 +2562,7 @@ function renumberAllocIds(payload String, seen MmAllocIdMap) returns String
 	for i in 1 upto parts.count() 'eachId'
 		let part = try parts.get(i) otherwise panic("renumberAllocIds: split gave {parts.count()} parts but index {i} is missing")
 		let tokens = part.split(TraceTokenSeparator)
-		let raw = try tokens.get(0) otherwise ""
+		let raw = try tokens.get(0) otherwise panic("renumberAllocIds: a split yields at least one part")
 		let tail = joinFrom(tokens, first: 1, separator: TraceTokenSeparator)
 		let rest = "" if tokens.count() < 2 else "{TraceTokenSeparator}{tail}"
 
@@ -4114,6 +4114,7 @@ function runFailureReason(e SubprocessError) returns String
 			spawnFailed or
 			ioFailed or
 			inputTooLarge gives "program spawn failed: {e.displayReason()}"
+		endOfStream gives "program output ended early: {e.displayReason()}"
 	end 'why'
 end 'runFailureReason'
 

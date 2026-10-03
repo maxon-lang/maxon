@@ -5,7 +5,7 @@ keywords: [async, await, green-threads, promise, linearity, E3100, ownership]
 category: concurrency
 ---
 
-# Async / Await — linear await (E3100, P1.5-B2a)
+# Async / Await — linear await (E3100)
 
 ## Documentation
 
@@ -23,8 +23,8 @@ awaiting it again is the first await of *that* thread, not a second await of the
 
 ### Which code speaks — E3142, E3102 and E3100 divide this family, and the division is deliberate
 
-**WRITTEN ONCE, HERE.** This paragraph used to be pasted verbatim beside five individual cases across three
-spec files; every one of them was restating a rule that belongs to the rule's own spec.
+**WRITTEN ONCE, HERE**, because the rule belongs to the rule's own spec and not beside each case that
+reaches it.
 
 - **E3142 — "this promise was already consumed"** is the ordinary answer, and the one the parser gives. The
   two consumes that hand the thread back to the RUNTIME (`await` / `try await`, and `.cancel()`) record the
@@ -50,25 +50,19 @@ The check is **flow-sensitive reachability**, not lexical position, and it has t
 - a **single** `await` sitting in a loop, over a promise spawned **outside** the loop, awaits the same
   thread on every iteration — the await is reachable from itself across the back-edge, and is refused.
 
-These cases are **scalar twins** of `specs/async-await.md`'s linearity tests, which gate on `File.exists`
-(no the compiler I/O yet); the linearity rule is structural and fires identically for a scalar promise.
+These cases are **scalar twins** of `specs/async-await.md`'s linearity tests, which gate on `File.exists`;
+the linearity rule is structural and fires identically for a scalar promise.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** These cases spawn and await, so they reach the scheduler's `QueryPerformanceCounter`
-and `VirtualFree` entries, which exist only on x64-windows at this rung. The marker is not an opt-in.
+statement of it.** These cases spawn and await, so they reach the scheduler's entries, which every native
+lane provides and wasm32-wasi refuses with `E3104`.
 
-⚠⚠ **THE `error.*` CASES CARRY THE MARKER TOO, AND THIS PARAGRAPH USED TO SAY THEY DID NOT.** It read
-*"the linearity RULE itself is target-neutral, and its compile-time refusals carry no marker"* — the RULE
-is target-neutral, but **a case that exercises it cannot be**, and the difference cost two red lanes.
-MEASURED 2026-08-14: a legal `async` spawn needs a callee that YIELDS (`E3073` otherwise), the only yield
-primitive is `Scheduler.yield()`, and that lowers to `__gt_resched`, which is x64-windows-only. So the
-thunk reaches a gated construct no matter how it is written, `E3104` is raised at the thunk and — the
-compiler reporting the FIRST error — MASKS the `E3100` the case exists to pin. Six cases here, six in
-`async-await.md` (whose thunks gate on `File.exists`/`__mf_exists` instead) and one in
-`async-try-await.md` were green on the host and red on x64-linux and wasm32-wasi.
-⇒ **There is no way to write a target-neutral async case until a second substrate lands** — which is
-exactly what `async-scheduler.md`'s *Targets* section already says to watch for: **un-gate these the
-moment one does.** Removing the marker before then re-creates the masking, silently on the host.
+⚠⚠ **THE RULE IS TARGET-NEUTRAL, BUT A CASE WHOSE ERROR IS DECIDED AFTER THE TARGET GATE IS NOT.** A legal
+`async` spawn needs a callee that YIELDS (`E3073` otherwise), the only yield primitive is
+`Scheduler.yield()`, and that lowers to `__gt_resched`. So on wasm32-wasi the thunk reaches a gated
+construct no matter how it is written, `E3104` is raised at the thunk and — the compiler reporting the
+FIRST error — MASKS an `E3100` the case exists to pin. That case carries the `wasm32-wasi` marker; the
+refusals decided before lowering (`E3142`, `E3102`) are target-neutral and carry none.
 
 ## Tests
 
@@ -259,12 +253,12 @@ typealias Integer = int(i64.min to i64.max)
 awaits and then RETURNS contributes no edge to the merge, so the thread it spent is spent on ITS path and
 on no other; the `await` after the `match` is the only one on the path that reaches it.
 
-⚠ **THE `if` TWIN ABOVE PASSED WHILE THIS FAILED, AND THE REASON IS WHY BOTH ARE HERE.** A `match` restores
-its entry state at the START of each arm and never after the last one, so the last arm's own consumes were
-still live when the merge ran — and the merge UNIONED them onto that state instead of ASSIGNING from the
-reaching edges the way the `movedFrom` bits beside them are. MEASURED at W232's review: with the awaiting
-arm written LAST this program was refused **E3142**, and with the two arms swapped — the same program —
-it compiled and ran. A settle rule that reads the arm order is not a settle rule.
+⚠ **THE `if` TWIN ABOVE CANNOT SEE THIS, WHICH IS WHY BOTH ARE HERE.** A `match` restores its entry state
+at the START of each arm and never after the last one, so the last arm's own consumes are still live when
+the merge runs — and the merge ASSIGNS from the reaching edges, the way the `movedFrom` bits beside them
+are, rather than UNIONING onto that state. A union would refuse this program **E3142** with the awaiting
+arm written LAST and compile it with the two arms swapped. A settle rule that reads the arm order is not a
+settle rule.
 ```maxon
 function makeValue() returns Integer
 	Scheduler.yield()
@@ -395,10 +389,9 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: async-linearity.error.use-after-await-through-alias -->
 ⭐ **A CONSUME POISONS EVERY NAME THAT SPELLS THE THREAD, NOT ONLY THE ONE THAT OWNS IT.** `let q = p`
 enrols no second owner — `q` simply reads `p`'s value — so a consume that poisoned only the owned-set
-entry left `q` fully live over a green thread the runtime had already reclaimed. MEASURED before the
-cure, on exactly this program: it COMPILED, ran, and `gtIsComplete` answered **1** off a GT struct
-already back on the scheduler's free list — **exit 43**, no diagnostic, no crash. That is the shape a
-peek gives an ownership defect: a plausible number.
+entry would leave `q` fully live over a green thread the runtime has already reclaimed, and
+`gtIsComplete` would answer off a GT struct already back on the scheduler's free list — no diagnostic, no
+crash. That is the shape a peek gives an ownership defect: a plausible number.
 
 ⚠ The peek is what makes this observable at all. `q` could not be awaited a second time — E3100 catches
 that — but `q.inner` is a NON-consuming read, and no linearity check exists that can see one.
@@ -423,8 +416,8 @@ error E3142: <fragment>:11:37: this promise was already consumed by an earlier '
 
 <!-- test: async-linearity.error.use-after-cancel-through-alias -->
 The same hole down the `cancel` road, and it is the same hole because `cancel` reaches the same consume
-door (`consumePromiseThread`) that `await` does. MEASURED before the cure: compiled, **exit 7** —
-`gtIsComplete` answered 0 reading the struct `__gt_promise_drop` had just reclaimed. `cancel` is not a
+door (`consumePromiseThread`) that `await` does, and the struct it would read is the one
+`__gt_promise_drop` reclaims. `cancel` is not a
 weaker consume than `await`; it renounces the result instead of taking it, and the thread is equally
 gone.
 ```maxon

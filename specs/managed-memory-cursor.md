@@ -26,7 +26,7 @@ as `IterationError`.
 ⭐ A cursor is a second reader of a record it does not own. It therefore takes its own
 reference to the source record, and releases it when the cursor is dropped. Without that
 retain the source's textual last use is the `createCursor()` call itself, the record is
-freed there, and the cursor reads through a reclaimed allocation — a measured SIGSEGV
+freed there, and the cursor reads through a reclaimed allocation — a SIGSEGV
 (`maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`, the `__ManagedMemoryCursor` section).
 
 ⚠ **IT HOLDS THE RECORD, NOT THE RECORD'S FIELDS.** `length` and `element_size` are read
@@ -38,19 +38,19 @@ longer has.
 
 ### …and it LOCKS its source, which is a second guarantee
 
-⚖ USER RULING (PLAN `S2l`): *"an array cursor locks its source."* Staying ALIVE is not the
+⚖ USER RULING: *"an array cursor locks its source."* Staying ALIVE is not the
 same as staying UNCHANGED — `clear()` empties a record the retain is still holding — so a
 cursor is additionally recorded as a standing BORROW of its source and a write under it is
-E3070. The two error cases below are the programs; both faulted with `0xC0000005` before the
-borrow was minted.
+E3070. The two error cases below are the programs; without the borrow both fault with
+`0xC0000005`.
 
 ⚠ **THE LOCK IS ONE HOP, AND THAT LIMIT IS NOT THE CURSOR'S.** A value read OUT of a cursor
 (`let s = cursor.current()`) borrows the CURSOR, and the borrow set does not compose: once
 the cursor's own last use has passed, its lock on the source expires even though `s` still
-points inside it. MEASURED, and MEASURED to be general — the identical shape over a nested
+points inside it. It is general — the identical shape over a nested
 `Array with (Array with String)`, with no cursor anywhere, faults the same way. So it is a
-transitivity gap in E3070 rather than anything this type introduces, and fixing it here
-would have been a fix in the wrong place.
+transitivity gap in E3070 rather than anything this type introduces, and its fix belongs
+in E3070, not here.
 
 ## Tests
 
@@ -344,7 +344,7 @@ beta heap string long enough to require an allocation
 <!-- test: the-cursor-keeps-its-source-alive -->
 ⭐ The source's textual last use is the `createCursor()` call. Without the retain the
 record is released there and every read afterwards is through reclaimed memory — the
-measured SIGSEGV both references carry a retain to avoid. The intervening allocations make
+SIGSEGV both references carry a retain to avoid. The intervening allocations make
 the reclaimed slot certain to be reused, so a missing retain is a WRONG ANSWER here rather
 than a silent pass.
 ```maxon
@@ -396,10 +396,10 @@ error E2015: <fragment>:9:16: Unsupported: `__ManagedMemoryCursor` member 'frobn
 
 <!-- test: error.clearing-the-source-under-a-live-cursor -->
 ⭐⭐ **A CURSOR IS A STANDING BORROW OF ITS SOURCE, AND THIS IS THE PROGRAM THAT SAYS SO.**
-⚖ USER RULING (PLAN `S2l`): *"an array cursor locks its source."* The retain keeps the record
+⚖ USER RULING: *"an array cursor locks its source."* The retain keeps the record
 ALIVE, which is a different guarantee from keeping it UNCHANGED — `clear()` releases every
-element and zeroes its slot while the cursor still names position 0. MEASURED before the
-borrow was minted: this exact program compiled clean and faulted with **0xC0000005**.
+element and zeroes its slot while the cursor still names position 0. Without the borrow this
+exact program would compile clean and fault with **0xC0000005**.
 
 ⚠ The refusal is E3070 — the same one an outstanding `get` borrow already earns — because a
 cursor is the same relationship written down once: a reference into storage someone else
@@ -468,9 +468,7 @@ end 'main'
 <!-- test: a-cursor-stored-in-a-generic-struct-field -->
 ⭐⭐ **THIS IS `stdlib/Array.maxon:490-531`'s `ArrayIterator`, AND IT IS WHY THIS TYPE EXISTS.**
 Naming `__ManagedMemoryCursor with Element` inside a generic type, storing one in a field and
-forwarding its members is the exact shape that module needs, and the measured blocker on
-listing it was `E2055: Type '__ManagedMemoryCursor' has no associated types` at that very
-`typealias`. The iterator owns the cursor, the cursor holds the source, and the whole chain
+forwarding its members is the exact shape that module needs. The iterator owns the cursor, the cursor holds the source, and the whole chain
 is released when the iterator goes out of scope — the leak gate is what says so.
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -592,16 +590,16 @@ end 'main'
 ```
 
 <!-- test: error.a-cursor-alias-cannot-be-created -->
-### `Cur.create()` is REFUSED, and it used to PANIC THE COMPILER
-⛔⛔ **FOUND BY THE `W153` REVIEW, MEASURED AS A STACK TRACE IN FRONT OF AN AUTHOR.** A cursor is
+### `Cur.create()` is REFUSED, never a compiler PANIC
+⛔⛔ **A REFUSAL, NOT A STACK TRACE IN FRONT OF AN AUTHOR.** A cursor is
 `ManagedMemoryCursorBuiltinBaseName`'s *"SECOND type no source can construct"* — only
-`__ManagedMemory.createCursor()` mints one — but `ProgramSignatures.instanceHasBuiltinCreate` named only
-the node handle as the builtin without a `create`, so this program was ADMITTED at that gate and then met
+`__ManagedMemory.createCursor()` mints one — so `ProgramSignatures.instanceHasBuiltinCreate` names it beside
+the node handle as a builtin without a `create`. Admitted at that gate, this program would meet
 `Parser.requireContainerColumnTypes`' *"a container admitted there owes an arm here"* **panic**, which a
 cursor can never satisfy because it has no columns to gate.
 
-⇒ The predicate now names both uncreatable builtins, so the refusal is the one the node handle already
-got: the sentence `containerStaticSurfaceSentence` owns, anchored on the alias the author wrote.
+⇒ The predicate names both uncreatable builtins, so the refusal is the one the node handle
+gets: the sentence `containerStaticSurfaceSentence` owns, anchored on the alias the author wrote.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Cur = __ManagedMemoryCursor with Int

@@ -108,13 +108,15 @@ public extension Array
 		// After this `lo` holds the pivot value for the rest of the pass.
 		self.swap(lo, j: pivotIndex)
 
-		// Pivot value is loop-invariant: read once before the sweep.
-		let pv = try managed.get(lo) otherwise panic("partition: get OOB at pivot")
 		var leftAllStrictlyLess = true
 		var i = lo + 1
 		var j = hi - 1
 
 		while i <= j 'sweep'
+			// Read on every trip: the swap below writes `managed`, so a pivot read held across it would be
+			// a live borrow of what it writes.
+			let pv = try managed.get(lo) otherwise panic("partition: get OOB at pivot")
+
 			// Advance i while arr[i] < pivot.
 			let vi = try managed.get(i) otherwise panic("partition: get OOB at i")
 			let cmpI = cmp(vi, pv)
