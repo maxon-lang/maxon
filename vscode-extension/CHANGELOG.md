@@ -2,20 +2,29 @@
 
 Versions are `YEAR.MONTH.PATCH`, the month a release shipped, and are independent of the compiler's.
 
-## 2026.9.5
+## 2026.10.0
 
 ### Added
 
-- Debugging, on x64-windows. F5 on a `.maxon` file builds it with debug info and runs it under the
-  compiler's own debug adapter, `maxon dap-server`, with no `launch.json` needed; a project directory or an
-  already-built executable can be debugged too. Breakpoints in the gutter, with conditions, and function
-  breakpoints; the Call Stack, with every green thread as a thread; the Variables pane, hover, Watch and
-  the Debug Console; Step Over, Step Into, Step Out and Pause. A crash stops the session as an exception,
-  and the program's output appears in the Debug Console.
-- **Debug Test** in the Test Explorer, on x64-windows. It builds each project's tests once with debug
-  info (`maxon test --list --build`), debugs each selected test in turn under a copy of the same test
-  binary `maxon test` runs, and reports it passed or failed from how that binary exits. Cancelling the
-  run stops the live session.
+- Debugging, on x64-windows, x64-linux, arm64-linux and arm64-macos. F5 on a `.maxon` file builds it
+  with debug info and runs it under the compiler's own debug adapter, `maxon dap-server`, with no
+  `launch.json` needed; a project directory or an already-built executable can be debugged too.
+  Breakpoints in the gutter, with conditions, and function breakpoints; the Call Stack, with every green
+  thread as a thread; the Variables pane, hover, Watch and the Debug Console; Step Over, Step Into, Step
+  Out and Pause. A crash stops the session as an exception, and the program's output appears in the
+  Debug Console.
+- **Debug Test** in the Test Explorer. It builds each project's tests once with debug info
+  (`maxon test --list --build`), debugs each selected test in turn under a copy of the same test binary
+  `maxon test` runs, and reports it passed or failed from how that binary exits. Cancelling the run
+  stops the live session.
+- The status bar item turns yellow while the language server loads a project and lists the projects
+  loading; its tooltip links to Restart and to the new **Maxon: Show Language Server Output** command.
+
+### Changed
+
+- Project, task and test files are `.maxproj`, `.maxtasks` and `.maxtest`, and the extension activates
+  on each. The Test Explorer lists the tests in `.maxtest` files.
+- Language server errors are written to the output channel instead of appearing as notifications.
 
 ## 2026.9.4
 
