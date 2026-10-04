@@ -1725,3 +1725,680 @@ bytes len=5 [97 98 0 99 100]
 line len=4 [101 102 0 103]
 errline len=4 [119 0 120 121]
 ```
+
+<!-- test: subprocess-an-argument-holding-a-nul-is-refused-before-the-spawn -->
+<!-- unsupported-targets: wasm32-wasi -->
+An argument holding a NUL cannot reach a child intact on any OS, so the spawn is refused as `spawnFailed`
+before anything starts, and the child never runs. The child is this case's own executable, which prints
+every argument it was given, so a spawn that went ahead shows exactly how the argument list arrived.
+```maxon
+function runChild()
+	let args = CommandLine.args()
+	var line = "child ran"
+	for (iter, arg) in args.withIterator() 'each'
+		if iter.index() > 0 'afterProgram'
+			line = "{line} [{arg}]"
+		end 'afterProgram'
+	end 'each'
+	print("{line}\n")
+end 'runChild'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		runChild()
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("child")
+	argv.push("a\0b")
+	argv.push("after")
+
+	if let result = try Subprocess.run(exe, arguments: argv) 'ran'
+		print("ran: {result.stdout}")
+	end 'ran' else (e) 'refused'
+		print("refused {e.name}\n")
+	end 'refused'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+refused spawnFailed
+```
+
+<!-- test: subprocess-an-environment-entry-holding-a-nul-is-refused-before-the-spawn -->
+<!-- unsupported-targets: wasm32-wasi -->
+An environment variable whose name or value holds a NUL cannot reach a child intact on any OS, so the spawn
+is refused as `spawnFailed` before anything starts, for every arm that hands the child variables of its own.
+```maxon
+function attempt(label String, config Configuration)
+	if let result = try config.run() 'ran'
+		print("{label}: ran: {result.stdout}")
+	end 'ran' else (e) 'refused'
+		print("{label}: refused {e.name}\n")
+	end 'refused'
+end 'attempt'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("child ran\n")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("child")
+
+	var value = Configuration.create(exe)
+	value.arguments = argv.clone()
+	var valueVars = EnvMap.create()
+	valueVars.upsert("MAXON_SPEC_NUL_VALUE", value: "a\0b")
+	value.environment = Environment.inheritUpdating(valueVars)
+	attempt("value", config: value)
+
+	var name = Configuration.create(exe)
+	name.arguments = argv.clone()
+	var nameVars = EnvMap.create()
+	nameVars.upsert("MAXON_SPEC\0NUL_NAME", value: "v")
+	name.environment = Environment.inheritUpdating(nameVars)
+	attempt("name", config: name)
+
+	var custom = Configuration.create(exe)
+	custom.arguments = argv
+	var customVars = EnvMap.create()
+	customVars.upsert("MAXON_SPEC_NUL_CUSTOM", value: "a\0b")
+	custom.environment = Environment.custom(customVars)
+	attempt("custom", config: custom)
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+value: refused spawnFailed
+name: refused spawnFailed
+custom: refused spawnFailed
+```
+
+<!-- test: subprocess-a-working-directory-holding-a-nul-is-refused-before-the-spawn -->
+<!-- unsupported-targets: wasm32-wasi -->
+A working directory holding a NUL names no directory, never the one named by the bytes before the NUL — so
+the spawn is refused as `spawnFailed` and the child never runs, even when that prefix is a directory that
+exists.
+```maxon
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("child ran in {Directory.currentPath().filename()}\n")
+		return 0
+	end 'childMode'
+
+	let prefix = Directory.currentPath().join("subprocess-nul-working-directory")
+
+	if not Directory.create(prefix) 'setup'
+		return 2
+	end 'setup'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 3)
+	var argv = StringArray.create()
+	argv.push("child")
+
+	if let result = try Subprocess.run(exe, arguments: argv, workingDirectory: Directory.currentPath().join("subprocess-nul-working-directory\0x")) 'ran'
+		print("ran: {result.stdout}")
+	end 'ran' else (e) 'refused'
+		print("refused {e.name}\n")
+	end 'refused'
+
+	try Directory.delete(prefix) otherwise ignore
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+refused spawnFailed
+```
+
+<!-- test: subprocess-a-program-path-holding-a-nul-is-refused-before-the-spawn -->
+<!-- unsupported-targets: wasm32-wasi -->
+A program path holding a NUL names no program, never the one named by the bytes before the NUL — so the
+spawn is refused as `spawnFailed` and nothing runs, even when that prefix is this case's own executable.
+```maxon
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("child ran\n")
+		return 0
+	end 'childMode'
+
+	let me = try Process.executablePath() otherwise return 2
+	let folder = try me.parent() otherwise return 3
+	let exe = Executable.path(folder.join("{me.filename()}\0x"))
+	var argv = StringArray.create()
+	argv.push("child")
+
+	if let result = try Subprocess.run(exe, arguments: argv) 'ran'
+		print("ran: {result.stdout}")
+	end 'ran' else (e) 'refused'
+		print("refused {e.name}\n")
+	end 'refused'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+refused spawnFailed
+```
+
+<!-- test: subprocess-a-redirect-file-path-holding-a-nul-is-refused-before-the-spawn -->
+<!-- unsupported-targets: wasm32-wasi -->
+A redirect file whose path holds a NUL names no file, never the one named by the bytes before the NUL — so
+a spawn that reads stdin from one, or writes stdout or stderr to one, is refused as `spawnFailed` and the
+child never runs. The prefix is a file that exists, and it is neither read from nor written to.
+```maxon
+function attempt(label String, config Configuration)
+	if let result = try config.run() 'ran'
+		print("{label}: ran: {result.stdout}")
+	end 'ran' else (e) 'refused'
+		print("{label}: refused {e.name}\n")
+	end 'refused'
+end 'attempt'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("child ran\n")
+		printError("child ran\n")
+		return 0
+	end 'childMode'
+
+	let prefix = Directory.currentPath().join("subprocess-nul-redirect")
+	let holding = Directory.currentPath().join("subprocess-nul-redirect\0x")
+	try File.writeText(prefix, content: "x") otherwise return 2
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 3)
+	var argv = StringArray.create()
+	argv.push("child")
+
+	var input = Configuration.create(exe)
+	input.arguments = argv.clone()
+	input.standardInput = InputSource.file(holding)
+	attempt("stdin", config: input)
+
+	var output = Configuration.create(exe)
+	output.arguments = argv.clone()
+	output.standardOutput = OutputDestination.file(holding)
+	attempt("stdout", config: output)
+
+	var errors = Configuration.create(exe)
+	errors.arguments = argv
+	errors.standardError = OutputDestination.file(holding)
+	attempt("stderr", config: errors)
+
+	let kept = try File.readText(prefix) otherwise "(gone)"
+	print("prefix holds {kept}\n")
+	try File.delete(prefix) otherwise ignore
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+stdin: refused spawnFailed
+stdout: refused spawnFailed
+stderr: refused spawnFailed
+prefix holds x
+```
+
+<!-- test: subprocess-stdin-bytes-holding-a-nul-reach-the-child-whole -->
+<!-- unsupported-targets: wasm32-wasi -->
+A stdin payload is bytes, and a zero byte is one of them: every door that feeds a child's stdin delivers a
+payload holding a NUL whole, never cut at the NUL. The child is this case's own executable, which reads its
+stdin to the end and prints the count and the value of every byte it received. The `delayed` child prints a
+line first, because that door feeds nothing until the child's first stdout byte.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function readAllStdin() returns String
+	var received = ByteArray.create()
+
+	while true 'drain'
+		let chunk = __Builtins.readStdin(4096)
+
+		if chunk.length() == 0 'ended'
+			break
+		end 'ended'
+
+		received.append(ByteArray.init(chunk))
+	end 'drain'
+
+	var line = "{received.count()} bytes ["
+	for (iter, value) in received.withIterator() 'each'
+		if iter.index() > 0 'separator'
+			line = "{line} "
+		end 'separator'
+		line = "{line}{value}"
+	end 'each'
+	return "{line}]"
+end 'readAllStdin'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+
+	if args.count() > 1 'childMode'
+		if (try args.get(1) otherwise "") == "ready" 'announce'
+			print("ready\n")
+		end 'announce'
+
+		print("{readAllStdin()}\n")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("child")
+
+	var fed = Configuration.create(exe)
+	fed.arguments = argv.clone()
+	fed.standardInput = InputSource.bytes("a\0b")
+	let fedResult = try fed.run() otherwise return 3
+	print("bytes: {fedResult.stdout}")
+
+	var readyArgv = StringArray.create()
+	readyArgv.push("ready")
+	var held = Configuration.create(exe)
+	held.arguments = readyArgv
+	held.standardInput = InputSource.delayed("a\0b")
+	let heldResult = try held.run() otherwise return 4
+	print("delayed: {heldResult.stdout}")
+
+	var streamed = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 5
+	try streamed.writeStdinLine("a\0b") otherwise return 6
+	streamed.closeStdin()
+	let streamedLine = try streamed.readStdoutLine() otherwise return 7
+	_ = try streamed.wait() otherwise return 8
+	streamed.release()
+	print("streamed: {streamedLine}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+bytes: 3 bytes [97 0 98]
+delayed: ready
+3 bytes [97 0 98]
+streamed: 4 bytes [97 0 98 10]
+```
+
+<!-- test: subprocess-a-spawn-whose-pipes-cannot-be-made-fails-instead-of-panicking -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A spawn whose stdin or stdout pipe cannot be made fails as `spawnFailed`, and nothing panics. The case runs
+itself under `/bin/sh` with `ulimit -n` lowered, and that child opens its own executable until the open
+fails, so every descriptor the process may hold is in use; then it spawns once feeding stdin and once
+collecting stdout, every other stream inherited so that pipe is the only descriptor the spawn needs. The
+case is POSIX-only because Windows has no per-process handle limit a program can lower and reach in a test.
+```maxon
+function attempt(label String, config Configuration)
+	if let result = try config.run() 'ran'
+		print("{label}: ran: {result.stdout}")
+	end 'ran' else (e) 'refused'
+		print("{label}: refused {e.displayReason()}\n")
+	end 'refused'
+end 'attempt'
+
+function spawnWithoutDescriptors(exe Executable)
+	var argv = StringArray.create()
+	argv.push("grandchild")
+
+	var fed = Configuration.create(exe)
+	fed.arguments = argv.clone()
+	fed.standardInput = InputSource.bytes("x")
+	fed.standardOutput = OutputDestination.inherit
+	fed.standardError = OutputDestination.inherit
+	attempt("stdin pipe", config: fed)
+
+	var collected = Configuration.create(exe)
+	collected.arguments = argv
+	collected.standardInput = InputSource.inherit
+	collected.standardError = OutputDestination.inherit
+	attempt("stdout pipe", config: collected)
+end 'spawnWithoutDescriptors'
+
+function exhaustThenSpawn(me FilePath)
+	var held = try __ManagedFile.openRead(me.path.toByteArray().managed) otherwise 'exhausted'
+		print("exhausted\n")
+		spawnWithoutDescriptors(Executable.path(me))
+		return
+	end 'exhausted'
+
+	exhaustThenSpawn(me)
+	held.close()
+end 'exhaustThenSpawn'
+
+function main() returns ExitCode
+	let me = try Process.executablePath() otherwise return 2
+	let args = CommandLine.args()
+
+	if args.count() > 1 'childMode'
+		if (try args.get(1) otherwise "") == "grandchild" 'ranAnyway'
+			print("grandchild ran\n")
+			return 0
+		end 'ranAnyway'
+
+		exhaustThenSpawn(me)
+		return 0
+	end 'childMode'
+
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("ulimit -n 64; exec \"$0\" child")
+	argv.push(me.path)
+	let result = try Subprocess.run(Executable.path(try FilePath.from("/bin/sh") otherwise return 3), arguments: argv) otherwise return 4
+	print(result.stdout)
+	print("child exit {result.exitCode()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+exhausted
+stdin pipe: refused spawn failed: os error 4
+stdout pipe: refused spawn failed: os error 4
+child exit 0
+```
+
+<!-- test: subprocess-a-stdin-pipe-that-cannot-be-created-reports-the-creations-own-error -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+A spawn whose stdin pipe cannot be created fails with the error the creation itself reported, not one from a
+later call made on the handle that was never created. A Windows pipe is named `mx` followed by sixteen digits
+spelling the spawning process's id and a per-process sequence number, so a PowerShell child this program starts
+occupies every one of the first sixty-four such names with a single-instance server before it says `ready`,
+spelling the digits 10 to 15 as `a` to `f`. The next
+spawn's stdin pipe takes one of those names, and Windows refuses a second instance of a single-instance pipe with
+`ERROR_PIPE_BUSY`, 231.
+```maxon
+function main() returns ExitCode
+	var holderArgv = StringArray.create()
+	holderArgv.push("-NoProfile")
+	holderArgv.push("-Command")
+	holderArgv.push("$parent = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $PID)).ParentProcessId; $held = @(); foreach ($letters in 87) \{ foreach ($seq in 0..63) \{ $v = ([int64]$parent -shl 32) -bor $seq; $name = 'mx' + (-join (15..0 | ForEach-Object \{ $n = ($v -shr (4 * $_)) -band 15; [char]($n + $(if ($n -lt 10) \{ 48 \} else \{ $letters \})) \})); try \{ $held += New-Object System.IO.Pipes.NamedPipeServerStream($name, 'InOut', 1) \} catch \{ \} \} \}; [Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); [void][Console]::In.ReadLine()")
+	var holder = try StreamingSubprocess.spawn(Executable.name("powershell"), arguments: holderArgv) otherwise return 2
+	let announced = try holder.readStdoutLine() otherwise return 3
+	print("holder ready: {announced.startsWith("ready")}\n")
+
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("exit")
+	var fed = Configuration.create(Executable.name("cmd"))
+	fed.arguments = argv
+	fed.standardInput = InputSource.bytes("x")
+
+	if let result = try fed.run() 'ran'
+		print("fed: ran with exit {result.exitCode()}\n")
+	end 'ran' else (e) 'refused'
+		print("fed: refused {e.displayReason()}\n")
+	end 'refused'
+
+	holder.closeStdin()
+	_ = try holder.wait() otherwise return 4
+	holder.release()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+holder ready: true
+fed: refused spawn failed: os error 231
+```
+
+<!-- test: subprocess-a-program-started-with-its-stdin-closed-reads-and-hands-on-the-null-device -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A program started with its standard input closed reads its standard input as the null device, and a child that
+inherits it does too. Such a program's first new descriptor is 0, so unless the runtime reopens a closed standard
+descriptor on the null device at start-up, whatever it opens first — the poller, or the first pipe of a spawn —
+becomes its standard input. The case runs itself under `/bin/sh` with `<&-`, and that child spawns a grandchild
+feeding its stdin, then runs `/bin/cat` with stdin inherited: on the null device `cat` reads end of file at once
+and exits 0 having written nothing to either stream.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function spawnWithStdinClosed(exe Executable)
+	var fedArgv = StringArray.create()
+	fedArgv.push("fed")
+	var fed = Configuration.create(exe)
+	fed.arguments = fedArgv
+	fed.standardInput = InputSource.bytes("xyz")
+
+	if let result = try fed.run() 'ran'
+		print("fed: ran: {result.stdout}")
+	end 'ran' else (e) 'refused'
+		print("fed: refused {e.displayReason()}\n")
+	end 'refused'
+
+	var inherited = Configuration.create(Executable.path(try FilePath.from("/bin/cat") otherwise panic("/bin/cat is a valid path")))
+	inherited.standardInput = InputSource.inherit
+
+	if let result = try inherited.run() 'catRan'
+		print("inherited: cat exit {result.exitCode()} stdout {result.stdout.byteLength()} bytes stderr {result.stderr.byteLength()} bytes\n")
+	end 'catRan' else (e) 'catRefused'
+		print("inherited: refused {e.displayReason()}\n")
+	end 'catRefused'
+end 'spawnWithStdinClosed'
+
+function main() returns ExitCode
+	let me = try Process.executablePath() otherwise return 2
+	let args = CommandLine.args()
+
+	if args.count() > 1 'childMode'
+		let mode = try args.get(1) otherwise ""
+
+		if mode == "fed" 'readFed'
+			var received = ByteArray.create()
+
+			while true 'drain'
+				let chunk = __Builtins.readStdin(4096)
+
+				if chunk.length() == 0 'ended'
+					break
+				end 'ended'
+
+				received.append(ByteArray.init(chunk))
+			end 'drain'
+
+			print("{received.count()} bytes\n")
+			return 0
+		end 'readFed'
+
+		spawnWithStdinClosed(Executable.path(me))
+		return 0
+	end 'childMode'
+
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("exec \"$0\" child <&-")
+	argv.push(me.path)
+	let result = try Subprocess.run(Executable.path(try FilePath.from("/bin/sh") otherwise return 3), arguments: argv) otherwise return 4
+	print(result.stdout)
+	print("child exit {result.exitCode()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fed: ran: 3 bytes
+inherited: cat exit 0 stdout 0 bytes stderr 0 bytes
+child exit 0
+```
+
+<!-- test: subprocess-a-child-that-writes-before-it-reads-gets-its-whole-stdin -->
+<!-- unsupported-targets: wasm32-wasi -->
+A collected run feeds a child's stdin and drains its stdout together, so a child that writes more than a pipe
+holds before it reads anything still receives its whole input. The child is this case's own executable: it
+writes one mebibyte to stdout, then reads its stdin to the end and reports the count on stderr. The payload is
+four times a pipe's capacity, so a push that waited for the child to read would wait on a child that is itself
+waiting for its stdout to be drained. The run carries a ten-second deadline, which a healthy run never nears.
+```maxon
+typealias Tally = int(0 to i64.max)
+
+let stdoutBlocks = 16
+let stdinBlocks = 4
+let deadlineMs = 10000
+
+function block() returns String
+	var text = ""
+	for _ in 0 upto 65536 'byte'
+		text.append("a")
+	end 'byte'
+	return text
+end 'block'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+
+	if args.count() > 1 'childMode'
+		let chunk = block()
+		for _ in 0 upto stdoutBlocks 'write'
+			print(chunk)
+		end 'write'
+
+		var received = 0 as Tally
+
+		while true 'drain'
+			let read = __Builtins.readStdin(4096)
+
+			if read.length() == 0 'ended'
+				break
+			end 'ended'
+
+			received = received + read.length()
+		end 'drain'
+
+		printError("child read {received} bytes\n")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	let chunk = block()
+	var payload = ""
+	for _ in 0 upto stdinBlocks 'fill'
+		payload.append(chunk)
+	end 'fill'
+
+	var argv = StringArray.create()
+	argv.push("child")
+	var config = Configuration.create(exe)
+	config.arguments = argv
+	config.standardInput = InputSource.bytes(payload)
+	config.timeoutMs = deadlineMs
+
+	if let result = try config.run() 'ran'
+		print("exit {result.exitCode()}\nstdout {result.stdout.byteLength()} bytes\n{result.stderr}")
+	end 'ran' else (e) 'refused'
+		print("refused {e.displayReason()}\n")
+	end 'refused'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+exit 0
+stdout 1048576 bytes
+child read 262144 bytes
+```
+
+<!-- test: subprocess-a-child-inherits-no-other-spawns-pipe-ends -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+A child inherits only the three standard handles its own spawn gives it, never the pipe ends another spawn is
+setting up at the same moment. A service starts thirty detached `ping` children back to back, each living about
+two seconds, while `main` collects `cmd /c echo hi` thirty times. A collected child's stdout ends when the last
+copy of its write end is closed, so if a `ping` child inherited one of those write ends, that collect would last
+until the `ping` exits. Every collect must finish well inside the `ping` children's lifetime.
+```maxon
+typealias Tally = int(0 to 30)
+
+let rounds = 30 as Tally
+let slowMs = 1500
+
+type Spawner
+	var started as Tally
+
+	static function create() returns Self
+		return Self{started: 0}
+	end 'create'
+
+	export function burst()
+		var argv = StringArray.create()
+		argv.push("-n")
+		argv.push("3")
+		argv.push("127.0.0.1")
+		var config = Configuration.create(Executable.name("ping"))
+		config.arguments = argv
+
+		for _ in 0 upto rounds 'spawn'
+			_ = try config.runDetached() otherwise panic("ping starts")
+			self.started = self.started + 1
+		end 'spawn'
+	end 'burst'
+
+	export function count() returns Tally
+		return self.started
+	end 'count'
+end 'Spawner'
+
+function main() returns ExitCode
+	let spawner = spawn Spawner.create()
+	spawner.burst()
+
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("echo hi")
+	var echo = Configuration.create(Executable.name("cmd"))
+	echo.arguments = argv
+	var slow = 0 as Tally
+	var answered = 0 as Tally
+
+	for _ in 0 upto rounds 'collect'
+		let result = try echo.run() otherwise return 2
+
+		if result.stdout.trim() == "hi" 'said'
+			answered = answered + 1
+		end 'said'
+
+		if result.durationMs >= slowMs 'late'
+			slow = slow + 1
+		end 'late'
+	end 'collect'
+
+	let started = try await spawner.count() otherwise return 3
+	print("pings={started} collects={rounds} answered={answered} slow={slow}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+pings=30 collects=30 answered=30 slow=0
+```

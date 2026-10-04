@@ -291,7 +291,7 @@ function emitNetpollFailed(module StdModule, block IrBlock, shape NetpollShape, 
 end 'emitNetpollFailed'
 
 // Terminate `cur`: to the named failure when `answer` failed, else to `cont`.
-function emitNetpollRequire(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, verb NetpollVerb, subject ValueId, answer ValueId, cont IrBlock, ids ValueMinter)
+export function emitNetpollRequire(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, verb NetpollVerb, subject ValueId, answer ValueId, cont IrBlock, ids ValueMinter)
 	var failed = module.addBlock(func, label: b"npfailed", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(emitNetpollFailed(module, block: cur, shape: shape, answer: answer, ids: ids), thenBlockId: failed.id, elseBlockId: cont.id))
 	emitNetpollFailWith(module, func: func, block: failed, verb: verb, subject: subject, answer: answer, ids: ids)
@@ -1678,16 +1678,18 @@ function buildNetpollPdReadyOne(module StdModule)
 	let tag = emitTimerTagOfNetpollMode(module, block: wake, mode: mode, ids: ids)
 	let ownDeadline = emitPdDeadline(module, block: wake, pd: pd, mode: mode, ids: ids)
 	emitNetpollBranchOnGroupPark(module, block: wake, gt: state, several: unhookRest, one: disarmTimer, ids: ids)
-	wake.branchEdges.push(BranchEdge.create(disarmTimer.id, argIds: argsOf(ownDeadline)))
+	wake.branchEdges.push(BranchEdge.create(disarmTimer.id, argIds: twoArgs(ownDeadline, second: tag)))
 
 	module.appendOp(unhookRest, op: StdOp.call(ids.mint(), callee: NetpollGroupUnhookName, args: argsOf(state)))
 	let groupDeadline = emitNetpollGroupDeadline(module, block: unhookRest, gt: state, ids: ids)
 	module.setTerminator(unhookRest, op: StdOp.branch(disarmTimer.id))
-	unhookRest.branchEdges.push(BranchEdge.create(disarmTimer.id, argIds: argsOf(groupDeadline)))
+	unhookRest.branchEdges.push(BranchEdge.create(disarmTimer.id, argIds: twoArgs(groupDeadline, second: emitNetpollGroupTimerTag(module, block: unhookRest, ids: ids))))
 
 	let deadline = ids.mint()
+	let disarmTag = ids.mint()
 	disarmTimer.blockArgs.push(IrBlockArg.create(deadline, argType: StdType.i64))
-	emitNetpollDisarmDeadline(module, func: func, ids: ids, startBlock: disarmTimer, gt: state, deadline: deadline, tag: tag, cont: readied)
+	disarmTimer.blockArgs.push(IrBlockArg.create(disarmTag, argType: StdType.i64))
+	emitNetpollDisarmDeadline(module, func: func, ids: ids, startBlock: disarmTimer, gt: state, deadline: deadline, tag: disarmTag, cont: readied)
 	module.setTerminator(readied, op: StdOp.ret(emitGtReadyLocked(module, block: readied, gt: state, ids: ids)))
 
 	module.functions.push(func)
@@ -2747,11 +2749,11 @@ function emitNetpollGroupSlotAddr(module StdModule, block IrBlock, group ValueId
 	return emitBin(module, block: block, a: group, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitNetpollGroupSlotAddr'
 
-// Write one member into `group` at `index`: its `(fd, read)` pair and `gen`, the generation `__np_pd_op_begin`
+// Write one member into `group` at `index`: its `(fd, mode)` pair and `gen`, the generation `__np_pd_op_begin`
 // answered for `fd` (see `GroupSlotGen`). EXPORTED for the collect drain, which fills a group from whichever of
 // its sources are still live.
-export function emitNetpollGroupSetMember(module StdModule, block IrBlock, group ValueId, index ValueId, fd ValueId, gen ValueId, ids ValueMinter)
-	let arg = emitNetpollParkArg(module, block: block, fd: fd, mode: emitConst(module, block: block, value: NetpollModeRead, ids: ids), ids: ids)
+export function emitNetpollGroupSetMember(module StdModule, block IrBlock, group ValueId, index ValueId, fd ValueId, mode ParsedInt, gen ValueId, ids ValueMinter)
+	let arg = emitNetpollParkArg(module, block: block, fd: fd, mode: emitConst(module, block: block, value: mode, ids: ids), ids: ids)
 	let slot = emitNetpollGroupSlotAddr(module, block: block, group: group, index: index, ids: ids)
 	emitStoreField(module, block: block, record: slot, offset: GroupSlotArg, value: arg)
 	emitStoreField(module, block: block, record: slot, offset: GroupSlotGen, value: gen)
@@ -2772,10 +2774,10 @@ export function emitNetpollGroupSetDeadline(module StdModule, block IrBlock, gro
 	emitStoreField(module, block: block, record: group, offset: GroupOffDeadline, value: deadline)
 end 'emitNetpollGroupSetDeadline'
 
-// The tag a group's timer entry wears. EVERY MEMBER IS WATCHED FOR READING (`emitNetpollGroupSetMember`), and
-// two things rest on that: the expiry cannot be mistaken for a `sleep` the same thread holds, and the readiness
-// wake in `__np_pd_ready_one` — which removes the entry under the tag of the DIRECTION it woke on — reaches the
-// group's. A member added for writing would leak a timer entry past the wait that armed it.
+// The tag a group's timer entry wears, whichever direction its members are watched in. The expiry
+// cannot be mistaken for a `sleep` the same thread holds, and `__np_pd_ready_one` disarms a GROUP
+// park under this tag rather than under the direction the member woke on — otherwise a member
+// watched for writing would leak a timer entry past the wait that armed it.
 function emitNetpollGroupTimerTag(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	return emitTimerTagOfNetpollMode(module, block: block, mode: emitConst(module, block: block, value: NetpollModeRead, ids: ids), ids: ids)
 end 'emitNetpollGroupTimerTag'

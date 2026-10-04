@@ -134,8 +134,8 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // ⚠ Every import that takes or returns text is the `W` entry point, fed and read through
 // `HostTextRuntime`'s UTF-8⇄UTF-16 conversion. An `A` entry point reads bytes in the system ANSI
 // code page: two Maxon programs round-trip through it, but a shell, a file named on disk or a
-// child reading UTF-16 sees mojibake. `CreateEventA` stays narrow because its name is always
-// NULL, and `getaddrinfo` takes a narrow host name.
+// child reading UTF-16 sees mojibake. `CreateEventA` is the one `A` import: its name is always
+// NULL.
 //
 // `ExitProcess` terminates with main's return code. The other three are the panic runtime:
 // `GetStdHandle` + `WriteFile` are how a panic reaches stderr — the emitted
@@ -570,6 +570,10 @@ export enum IatSlot
 	DebugBreakProcess = IatSlotMeta{dll: ImportDll.kernel32}
 	VirtualProtectEx = IatSlotMeta{dll: ImportDll.kernel32}
 	RegGetValueW = IatSlotMeta{dll: ImportDll.kernel32}
+	SetNamedPipeHandleState = IatSlotMeta{dll: ImportDll.kernel32}
+	InitializeProcThreadAttributeList = IatSlotMeta{dll: ImportDll.kernel32}
+	UpdateProcThreadAttribute = IatSlotMeta{dll: ImportDll.kernel32}
+	DeleteProcThreadAttributeList = IatSlotMeta{dll: ImportDll.kernel32}
 
 	// The ws2_32 run sits after every kernel32 slot, which keeps kernel32's run contiguous so
 	// `iatSlotByteOffset` needs one gap term per DLL. A kernel32 import declared below this line would
@@ -577,8 +581,8 @@ export enum IatSlot
 	// library. It goes above, and shifting every ordinal below costs nothing: no emitted artefact
 	// persists an ordinal.
 	WSAStartup = IatSlotMeta{dll: ImportDll.ws2_32}
-	getaddrinfo = IatSlotMeta{dll: ImportDll.ws2_32}
-	freeaddrinfo = IatSlotMeta{dll: ImportDll.ws2_32}
+	GetAddrInfoW = IatSlotMeta{dll: ImportDll.ws2_32}
+	FreeAddrInfoW = IatSlotMeta{dll: ImportDll.ws2_32}
 	WSASocketW = IatSlotMeta{dll: ImportDll.ws2_32}
 	connect = IatSlotMeta{dll: ImportDll.ws2_32}
 	send = IatSlotMeta{dll: ImportDll.ws2_32}
@@ -644,7 +648,8 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 			GetSystemTimePreciseAsFileTime or
 			SetLastError or
 			Sleep or
-			freeaddrinfo gives ImportAnswer.nothing
+			DeleteProcThreadAttributeList or
+			FreeAddrInfoW gives ImportAnswer.nothing
 		GetStdHandle or
 			AddVectoredExceptionHandler or
 			VirtualAlloc or
@@ -741,7 +746,7 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 			DebugBreakProcess or
 			VirtualProtectEx or
 			WSAStartup or
-			getaddrinfo or
+			GetAddrInfoW or
 			connect or
 			send or
 			recv or
@@ -756,6 +761,9 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 			shutdown or
 			NtGetNextThread or
 			RegGetValueW or
+			SetNamedPipeHandleState or
+			InitializeProcThreadAttributeList or
+			UpdateProcThreadAttribute or
 			ProcessPrng gives ImportAnswer.signedDword
 	end 'answer'
 end 'importAnswerOf'
@@ -888,6 +896,10 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			ContinueDebugEvent or
 			DebugBreakProcess or
 			VirtualProtectEx or
+			SetNamedPipeHandleState or
+			InitializeProcThreadAttributeList or
+			UpdateProcThreadAttribute or
+			DeleteProcThreadAttributeList or
 			RegGetValueW gives true
 
 		// The ws2_32 and ntdll slots in this arm answer `false` because `dllIsEmitted` gates each of
@@ -940,8 +952,8 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			MultiByteToWideChar or
 			SetThreadStackGuarantee or
 			WSAStartup or
-			getaddrinfo or
-			freeaddrinfo or
+			GetAddrInfoW or
+			FreeAddrInfoW or
 			WSASocketW or
 			connect or
 			send or

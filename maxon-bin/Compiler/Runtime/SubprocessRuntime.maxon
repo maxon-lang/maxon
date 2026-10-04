@@ -55,6 +55,8 @@ export let SubpWaitExitName = b"__gt_subp_wait_exit"
 export let SubpPollExitName = b"__gt_subp_poll_exit"
 export let SubpExitSignalName = b"__gt_subp_exit_signal"
 export let SubpWriteAllName = b"__gt_subp_write_all"
+export let SubpWriteBytesName = b"__gt_subp_write_bytes"
+export let SubpQueueStdinName = b"__gt_subp_queue_stdin"
 export let SubpReadOutBytesName = b"__gt_subp_read_out_bytes"
 export let SubpReadErrBytesName = b"__gt_subp_read_err_bytes"
 
@@ -180,6 +182,7 @@ let SubpGrowthFactor = 2 as ParsedInt
 // (`emitSubpSlotOf`) rather than cached, because a cached pointer is a live value across the drain loop and
 // this file's header is about not having those.
 let WcHandle = 0 as ByteOffset
+let WcStdinBlocked = 8 as ByteOffset
 let WcDeadline = 16 as ByteOffset  // absolute tick-count deadline; 0 means "wait forever"
 let WcStartMs = 24 as ByteOffset
 let WcOutBuf = 32 as ByteOffset
@@ -209,13 +212,25 @@ let WcChildToken = 136 as ByteOffset
 let WcChildExited = 144 as ByteOffset
 let WcChildMemberBit = 152 as ByteOffset
 
+let WcStdinBackoffMs = 160 as ByteOffset
+
 // The wait's own group record, and the member counter that fills it. It lives in this scratch rather than in a
 // frame for this file's stated reason: the drain's state is memory, never a block argument.
-let WcGroupCount = 160 as ByteOffset
-let WcGroup = 168 as ByteOffset
+let WcGroupCount = 168 as ByteOffset
+let WcGroup = 176 as ByteOffset
 
-// How many sources one collect wait can hold: stdout, stderr and the child.
-let WcGroupMembers = 3 as ParsedInt
+// How many sources one collect wait can hold: stdout, stderr, the child and the stdin write end.
+let WcGroupMembers = 4 as ParsedInt
+
+// How the completion-port lane waits for a full stdin pipe to drain: 1, 3, 7, 15, then 16 ms per
+// blocked pass. A PIPE_NOWAIT handle reports no readiness to wait on, and an overlapped write end
+// would take the synchronous writes `__gt_subp_write_all` and `__gt_subp_write_line` make from
+// under them.
+let SubpStdinBackoffGrowth = 2 as ParsedInt
+
+let SubpStdinBackoffFloorMs = 1 as ParsedInt
+
+let SubpStdinMaxBackoffMs = 16 as ParsedInt
 let WcBytes = (WcGroup as ParsedInt) + NetpollGroupHeaderBytes + WcGroupMembers * NetpollGroupSlotBytes
 
 // ⭐ **THE RESULT STRUCT `subprocessWaitCollect` ANSWERS A POINTER TO**, and the six `subprocessResult*`
@@ -1280,28 +1295,50 @@ function buildSubpGetPid(module StdModule)
 	module.functions.push(func)
 end 'buildSubpGetPid'
 
-// `__gt_subp_write_all(handle, data) -> 0 | -1` — `__Builtins.subprocessWriteStdinAll`. Writes the whole
-// `cstring` to the child's stdin, which is what `StreamingSubprocess.writeStdinLine` asks for (it appends the
-// newline itself, so this must NOT — the streaming `__gt_subp_write_line` is the entry that does).
-function buildSubpWriteAll(module StdModule)
-	var func = IrFunction.createFromStd(SubpWriteAllName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+enum SubpPayloadExtent
+	terminated
+	counted
+end 'SubpPayloadExtent'
+
+// `__gt_subp_write_all(handle, data)` (`__Builtins.subprocessWriteStdinAll`) writes a `cstring`
+// up to its NUL, and `__gt_subp_write_bytes(handle, data, length)`
+// (`__Builtins.subprocessWriteStdinBytes`) writes `length` bytes, NULs included; both answer
+// 0 | -1. Neither appends a newline: `StreamingSubprocess.writeStdinLine` appends its own, and the
+// streaming `__gt_subp_write_line` is the entry that does.
+function buildSubpWriteStdin(module StdModule, name ByteArray, extent SubpPayloadExtent)
+	let paramCount = match extent 'params'
+		terminated gives 2 as ParamCount
+		counted gives 3 as ParamCount
+	end 'params'
+
+	let paramTypes = match extent 'types'
+		terminated gives twoI64Params()
+		counted gives threeI64Params()
+	end 'types'
+
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes)
+	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var bad = module.addBlock(func, label: b"subpbad", heat: BlockHeat.normal)
 	var failed = module.addBlock(func, label: b"subpwfail", heat: BlockHeat.normal)
 	var wrote = module.addBlock(func, label: b"subpwok", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 2)
+	emitParams(module, block: entry, count: paramCount)
 	let handle = 0 as ValueId
 	let data = 1 as ValueId
 
 	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
 	module.setTerminator(bad, op: StdOp.ret(failure))
 
-	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
-	let length = ids.mint()
-	var measured = emitCStringLength(module, func: func, cur: good, cstr: data, length: length, ids: ids)
+	var measured = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
+	var length = 2 as ValueId
+
+	if extent == SubpPayloadExtent.terminated 'measure'
+		length = ids.mint()
+		measured = emitCStringLength(module, func: func, cur: measured, cstr: data, length: length, ids: ids)
+	end 'measure'
+
 	let slot = emitSubpSlotOf(module, block: measured, ids: ids, handle: handle)
 	let stdinWrite = emitLoadField(module, block: measured, record: slot, offset: SubpSlotStdinWrite, ids: ids)
 	let bytesOutPtr = emitLoadField(module, block: measured, record: slot, offset: SubpSlotBytesOut, ids: ids)
@@ -1319,7 +1356,40 @@ function buildSubpWriteAll(module StdModule)
 	module.setTerminator(wrote, op: StdOp.ret(ok))
 
 	module.functions.push(func)
-end 'buildSubpWriteAll'
+end 'buildSubpWriteStdin'
+
+// `__gt_subp_queue_stdin(handle, data, length) -> 0 | -1` — `__Builtins.subprocessQueueStdin`.
+// A handle with no stdin write end is refused, which keeps `emitSubpCloseStdinWrite`'s rule. The
+// payload is not copied, so it must outlive the push.
+function buildSubpQueueStdin(module StdModule)
+	var func = IrFunction.createFromStd(SubpQueueStdinName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var bad = module.addBlock(func, label: b"subpbad", heat: BlockHeat.normal)
+	var queued = module.addBlock(func, label: b"subpqok", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 3)
+	let handle = 0 as ValueId
+	let data = 1 as ValueId
+	let length = 2 as ValueId
+
+	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
+	module.setTerminator(bad, op: StdOp.ret(failure))
+
+	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
+	let slot = emitSubpSlotOf(module, block: good, ids: ids, handle: handle)
+	let stdinWrite = emitLoadField(module, block: good, record: slot, offset: SubpSlotStdinWrite, ids: ids)
+	let zero = emitConst(module, block: good, value: 0, ids: ids)
+	let noPipe = emitCmp(module, block: good, a: stdinWrite, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(good, op: StdOp.condBranch(noPipe, thenBlockId: bad.id, elseBlockId: queued.id))
+
+	emitSubpStoreStdinQueue(module, block: queued, slot: slot, cursor: data, remaining: length)
+	let ok = emitConst(module, block: queued, value: 0, ids: ids)
+	module.setTerminator(queued, op: StdOp.ret(ok))
+
+	module.functions.push(func)
+end 'buildSubpQueueStdin'
 
 // ⭐⭐ **`srcLen` BYTES AT `srcBuf` → A FRESH OWNED `__ManagedMemory`, IN ONE PLACE.** Three entry points in
 // this file answer a buffer the caller owns — the two line readers, the two result-stream readers and the
@@ -1583,13 +1653,10 @@ end 'emitSubpChildHasExited'
 // and it waits green, so the scheduler runs meanwhile. The same structure is what lets a deadline
 // be honoured at all: a committed blocking read cannot observe one.
 //
-// The stdin payload is pushed from inside this loop, between drains, as a synchronous `WriteFile`.
-// A payload larger than the pipe buffer handed to a child that never reads its stdin blocks the OS
-// thread, and with it the whole scheduler and this function's deadline; lifting that needs an
-// overlapped write end.
-//
-// ⚠ The payload crosses as a `cstring`, the contract's shape: an `InputSource.bytes(s)` whose
-// String holds a 0x00 is truncated there, silently, as is a path or working directory holding one.
+// The stdin payload is pushed from inside this loop, between drains, through a write end made
+// non-blocking when the wait begins (`emitSubpPushStdin`). A child that writes before it reads
+// therefore cannot stall the push and the drain against each other, and the deadline fires while
+// stdin is still pending.
 function buildSubpWaitCollect(module StdModule, target Target)
 	if WcGroupMembers > NetpollGroupMaxMembers 'groupFitsTheAnswer'
 		panic("buildSubpWaitCollect: a collect group of {WcGroupMembers} members outgrows the {NetpollGroupMaxMembers} bits `__np_pd_wait_any` answers in")
@@ -1641,10 +1708,32 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let statusExited = emitConst(module, block: held, value: SubpStatusExited, ids: ids)
 	emitStoreField(module, block: held, record: state, offset: WcStatus, value: statusExited)
 
+	var armStdin = module.addBlock(func, label: b"wcarmstdin", heat: BlockHeat.normal)
+	var ready = module.addBlock(func, label: b"wcready", heat: BlockHeat.normal)
+
+	let stdinEnd = emitLoadField(module, block: held, record: slotS, offset: SubpSlotStdinWrite, ids: ids)
+	let queuedAtStart = emitLoadField(module, block: held, record: slotS, offset: SubpSlotStdinPend, ids: ids)
+	let nothingYet = emitConst(module, block: held, value: 0, ids: ids)
+	let hasEnd = emitCmp(module, block: held, a: stdinEnd, b: nothingYet, pred: StdCmpPred.ne, ids: ids)
+	let hasQueue = emitCmp(module, block: held, a: queuedAtStart, b: nothingYet, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(held, op: StdOp.condBranch(emitBin(module, block: held, a: hasEnd, b: hasQueue, opcode: StdBinOpcode.bitAnd, ids: ids), thenBlockId: armStdin.id, elseBlockId: ready.id))
+
+	let nonBlocking = emitNetpoll(module, block: armStdin, verb: NetpollVerb.armPipeSource, operands: argsOf(stdinEnd), ids: ids)
+	var flagged = module.addBlock(func, label: b"wcflagstdin", heat: BlockHeat.normal)
+	emitNetpollRequire(module, func: func, cur: armStdin, shape: netpollShape(target), verb: NetpollVerb.armPipeSource, subject: stdinEnd, answer: nonBlocking, cont: flagged, ids: ids)
+
+	match ioCompletionShape(target) 'registration'
+		completionPort then module.setTerminator(flagged, op: StdOp.branch(ready.id))
+		inlineCompletion then emitSubpRegisterStdinForWrite(module, block: flagged, ready: ready, stdinEnd: stdinEnd, ids: ids)
+	end 'registration'
+
+	let noBackoff = emitConst(module, block: held, value: 0, ids: ids)
+	emitStoreField(module, block: held, record: state, offset: WcStdinBackoffMs, value: noBackoff)
+
 	// The child joins the poller for the length of this wait, so an idle pass has something other than
 	// a clock to suspend on. On a lane whose pipes ride a completion port the drain still yields, and
 	// `emitSubpOpenChildSource` emits nothing.
-	var opened = emitSubpOpenChildSource(module, func: func, ids: ids, cur: held, target: target, state: state, handle: handle)
+	var opened = emitSubpOpenChildSource(module, func: func, ids: ids, cur: ready, target: target, state: state, handle: handle)
 
 	let zeroD = emitConst(module, block: opened, value: 0, ids: ids)
 	let noDeadline = emitCmp(module, block: opened, a: timeoutMs, b: zeroD, pred: StdCmpPred.eq, ids: ids)
@@ -1660,6 +1749,7 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	// arms and the next pass's push is the earliest that can see the deadline.
 	let zeroP = emitConst(module, block: loopHdr, value: 0, ids: ids)
 	emitStoreField(module, block: loopHdr, record: state, offset: WcProgress, value: zeroP)
+	emitStoreField(module, block: loopHdr, record: state, offset: WcStdinBlocked, value: zeroP)
 	var afterStdin = emitSubpPushStdin(module, func: func, ids: ids, cur: loopHdr, state: state)
 	var afterOut = emitSubpDrainStream(module, func: func, ids: ids, cur: afterStdin, state: state, streamBase: SubpStdoutBase, bufOffset: WcOutBuf, lenOffset: WcOutLen, capOffset: WcOutCap, doneOffset: WcOutDone, slotLimitOffset: SubpSlotOutLimit)
 	var afterArm = emitSubpArmDelayedFeed(module, func: func, ids: ids, cur: afterOut, state: state)
@@ -1726,8 +1816,9 @@ function buildSubpWaitCollect(module StdModule, target Target)
 
 	match ioCompletionShape(target) 'idle'
 		// This lane's pipes are overlapped and its reads complete on a port, so a pass that moved nothing has
-		// no descriptor to wait on — it yields a millisecond, and the whole scheduler runs through the wait.
-		completionPort then emitSubpIdleSleep(module, block: doSleep, cont: loopHdr, ids: ids)
+		// no descriptor to wait on — it sleeps green (`emitSubpIdleSleep`), and the whole scheduler runs through
+		// the wait.
+		completionPort then emitSubpIdleSleep(module, block: doSleep, cont: loopHdr, state: state, ids: ids)
 
 		inlineCompletion then emitSubpWaitForAnySource(module, func: func, ids: ids, cur: doSleep, state: state, cont: loopHdr)
 	end 'idle'
@@ -1773,13 +1864,39 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildSubpWaitCollect'
 
-// A pass that moved no bytes yields a millisecond — the completion-port lane's idle arm. It is a GREEN sleep
-// (`__gt_sleep`), so the whole scheduler runs while it waits.
-function emitSubpIdleSleep(module StdModule, block IrBlock, cont IrBlock, ids ValueMinter)
+// A pass that moved no bytes yields a millisecond, or the stdin backoff when its push found the
+// pipe full — the completion-port lane's idle arm. It is a GREEN sleep (`__gt_sleep`), so the whole
+// scheduler runs while it waits.
+function emitSubpIdleSleep(module StdModule, block IrBlock, cont IrBlock, state ValueId, ids ValueMinter)
+	let blocked = emitLoadField(module, block: block, record: state, offset: WcStdinBlocked, ids: ids)
+	let backoff = emitLoadField(module, block: block, record: state, offset: WcStdinBackoffMs, ids: ids)
+	let holdsOff = emitCmp(module, block: block, a: blocked, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let pause = emitSelectWord(module, block: block, cond: holdsOff, whenSet: backoff, whenClear: emitConst(module, block: block, value: SubpPollMs, ids: ids), ids: ids)
 	let slept = ids.mint()
-	module.appendOp(block, op: StdOp.call(slept, callee: GtSleepName, args: argsOf(emitConst(module, block: block, value: SubpPollMs, ids: ids))))
+	module.appendOp(block, op: StdOp.call(slept, callee: GtSleepName, args: argsOf(pause)))
 	module.setTerminator(block, op: StdOp.branch(cont.id))
 end 'emitSubpIdleSleep'
+
+function emitSubpRegisterStdinForWrite(module StdModule, block IrBlock, ready IrBlock, stdinEnd ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollPdOpenName, args: twoArgs(stdinEnd, second: stdinEnd)))
+	module.setTerminator(block, op: StdOp.branch(ready.id))
+end 'emitSubpRegisterStdinForWrite'
+
+function emitSubpGroupAddStdin(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, group ValueId) returns IrBlock
+	var add = module.addBlock(func, label: b"wcgstdin", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"wcgstdindone", heat: BlockHeat.normal)
+
+	let blocked = emitLoadField(module, block: cur, record: state, offset: WcStdinBlocked, ids: ids)
+	let slot = emitSubpStateSlot(module, block: cur, ids: ids, state: state)
+	let stdinEnd = emitLoadField(module, block: cur, record: slot, offset: SubpSlotStdinWrite, ids: ids)
+	let none = emitConst(module, block: cur, value: 0, ids: ids)
+	let waiting = emitBin(module, block: cur, a: emitCmp(module, block: cur, a: blocked, b: none, pred: StdCmpPred.ne, ids: ids), b: emitCmp(module, block: cur, a: stdinEnd, b: none, pred: StdCmpPred.ne, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(waiting, thenBlockId: add.id, elseBlockId: cont.id))
+
+	_ = emitSubpGroupAdd(module, block: add, ids: ids, state: state, group: group, fd: stdinEnd, mode: NetpollModeWrite)
+	module.setTerminator(add, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpGroupAddStdin'
 
 // ⭐⭐ **THE IDLE PASS SUSPENDS ON EVERY SOURCE THIS WAIT OWNS, AND WAKES ON THE FIRST OF THEM.** Waiting on
 // one would be a deadlock in either direction: a child filling its stderr pipe while stdout stays silent, or a
@@ -1797,7 +1914,8 @@ function emitSubpWaitForAnySource(module StdModule, func IrFunction, ids ValueMi
 	var afterOut = emitSubpGroupAddStream(module, func: func, ids: ids, cur: cur, state: state, group: group, streamBase: SubpStdoutBase, doneOffset: WcOutDone)
 	var afterErr = emitSubpGroupAddStream(module, func: func, ids: ids, cur: afterOut, state: state, group: group, streamBase: SubpStderrBase, doneOffset: WcErrDone)
 	var afterChild = emitSubpGroupAddChild(module, func: func, ids: ids, cur: afterErr, state: state, group: group)
-	module.setTerminator(afterChild, op: StdOp.branch(waitBlock.id))
+	var afterStdin = emitSubpGroupAddStdin(module, func: func, ids: ids, cur: afterChild, state: state, group: group)
+	module.setTerminator(afterStdin, op: StdOp.branch(waitBlock.id))
 
 	// ⛔ **A GROUP WITH NO MEMBER IS A PARK NOTHING CAN END, AND NO PASS REACHES ONE.** It needs both streams
 	// done — the drain marks a pipeless one done on its first pass — and the child's exit learned, and that
@@ -1811,6 +1929,8 @@ function emitSubpWaitForAnySource(module StdModule, func IrFunction, ids ValueMi
 	// The wait answers 0 for a group it refused as well as for one that expired, so the group is asked
 	// (`emitNetpollGroupStale`): a member whose record left the life this pass began in is a pipe the slot no
 	// longer owns, which the interlock makes a program error rather than a wait to go round again.
+	// The one exception is the stdin write end, which `subprocessCloseStdin` may close while this
+	// pass is parked.
 	var bounded = emitSubpGroupDeadline(module, func: func, ids: ids, cur: parkOn, state: state, group: group)
 	let fired = ids.mint()
 	module.appendOp(bounded, op: StdOp.call(fired, callee: NetpollPdWaitAnyName, args: argsOf(group)))
@@ -1818,7 +1938,11 @@ function emitSubpWaitForAnySource(module StdModule, func IrFunction, ids ValueMi
 	var staleStop = module.addBlock(func, label: b"wcwaitstale", heat: BlockHeat.normal)
 	let stale = emitCmp(module, block: bounded, a: emitNetpollGroupStale(module, block: bounded, group: group, ids: ids), b: emitConst(module, block: bounded, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(bounded, op: StdOp.condBranch(stale, thenBlockId: staleStop.id, elseBlockId: consume.id))
-	emitRuntimeAbort(module, func: func, block: staleStop, abort: RuntimeAbort.subpCollectSlotReleased, ids: ids)
+	var reallyStale = module.addBlock(func, label: b"wcwaitreallystale", heat: BlockHeat.normal)
+	let stdinAfterwards = emitLoadField(module, block: staleStop, record: emitSubpStateSlot(module, block: staleStop, ids: ids, state: state), offset: SubpSlotStdinWrite, ids: ids)
+	let stdinClosed = emitCmp(module, block: staleStop, a: stdinAfterwards, b: emitConst(module, block: staleStop, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(staleStop, op: StdOp.condBranch(stdinClosed, thenBlockId: cont.id, elseBlockId: reallyStale.id))
+	emitRuntimeAbort(module, func: func, block: reallyStale, abort: RuntimeAbort.subpCollectSlotReleased, ids: ids)
 
 	// The child's readiness is consumed by this wait and never reported again, so its bit in the answer is
 	// recorded as the exit it is.
@@ -1831,7 +1955,7 @@ end 'emitSubpWaitForAnySource'
 
 // ⛔⛔ **A WAIT WITH A DEADLINE MUST STILL END AT IT, AND THE SOURCES CANNOT PROMISE THAT.** A child that
 // writes nothing and does not exit — which is exactly what `waitWithTimeout` exists for — makes none of the
-// three sources ready, so without this the wait would run past the caller's deadline and the kill would fire
+// wait's sources ready, so without this the wait would run past the caller's deadline and the kill would fire
 // only when the child finally finished. `subprocess-builtins.posix-timeout-kills-the-child` is what holds it.
 //
 // ⚠ **THE TWO CLOCKS ARE NOT THE SAME ONE.** The drain's deadline is in `osTickCountMs` milliseconds and the
@@ -1867,9 +1991,9 @@ end 'emitSubpGroupDeadline'
 //
 // ⚠ **ONLY AN ARMED FEED NEEDS THE BOUND, AND THE OTHER TWO STATES SAY WHY.** An UNARMED feed (negative)
 // is waiting for the first stdout byte, which IS a group member, so the park ends on its own. A PUSH-NOW feed
-// (0) is written at the top of every pass and reports progress, so the idle arm is never reached — and the
-// parent's stdin WRITE end is deliberately still blocking, so a full pipe waits for the child to read rather
-// than answering `EAGAIN` to a caller expecting a count.
+// (0) is written at the top of every pass and either reports progress, so the idle arm is not reached, or
+// found the pipe full, and then the stdin write end is itself a member waiting to be writable
+// (`emitSubpGroupAddStdin`).
 function emitSubpDeadlineWithFeed(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, have IrBlock) returns IrBlock
 	var feedCheck = module.addBlock(func, label: b"wcgdlfeed", heat: BlockHeat.normal)
 	var pickEarlier = module.addBlock(func, label: b"wcgdlpick", heat: BlockHeat.normal)
@@ -1925,7 +2049,7 @@ function emitSubpGroupAddStream(module StdModule, func IrFunction, ids ValueMint
 	let havePipe = emitCmp(module, block: live, a: readEnd, b: emitConst(module, block: live, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(live, op: StdOp.condBranch(havePipe, thenBlockId: add.id, elseBlockId: cont.id))
 
-	_ = emitSubpGroupAdd(module, block: add, ids: ids, state: state, group: group, fd: readEnd)
+	_ = emitSubpGroupAdd(module, block: add, ids: ids, state: state, group: group, fd: readEnd, mode: NetpollModeRead)
 	module.setTerminator(add, op: StdOp.branch(cont.id))
 	return cont
 end 'emitSubpGroupAddStream'
@@ -1940,7 +2064,7 @@ function emitSubpGroupAddChild(module StdModule, func IrFunction, ids ValueMinte
 	let running = emitCmp(module, block: cur, a: exited, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(running, thenBlockId: add.id, elseBlockId: cont.id))
 
-	let index = emitSubpGroupAdd(module, block: add, ids: ids, state: state, group: group, fd: emitLoadField(module, block: add, record: state, offset: WcChildSource, ids: ids))
+	let index = emitSubpGroupAdd(module, block: add, ids: ids, state: state, group: group, fd: emitLoadField(module, block: add, record: state, offset: WcChildSource, ids: ids), mode: NetpollModeRead)
 	emitStoreField(module, block: add, record: state, offset: WcChildMemberBit, value: emitBin(module, block: add, a: emitConst(module, block: add, value: 1, ids: ids), b: index, opcode: StdBinOpcode.shl, ids: ids))
 	module.setTerminator(add, op: StdOp.branch(cont.id))
 
@@ -1950,10 +2074,10 @@ end 'emitSubpGroupAddChild'
 // Append `fd` to the group and answer the member index it took. The member carries the generation its record
 // is in NOW, from `__np_pd_op_begin`, so a release between here and the wait's lock is a refusal there rather
 // than a mark in the next owner's record (`NetpollRuntime.GroupSlotGen`).
-function emitSubpGroupAdd(module StdModule, block IrBlock, ids ValueMinter, state ValueId, group ValueId, fd ValueId) returns ValueId
+function emitSubpGroupAdd(module StdModule, block IrBlock, ids ValueMinter, state ValueId, group ValueId, fd ValueId, mode ParsedInt) returns ValueId
 	let index = emitLoadField(module, block: block, record: state, offset: WcGroupCount, ids: ids)
 	let gen = emitNetpollPdOpBegin(module, block: block, source: fd, ids: ids)
-	emitNetpollGroupSetMember(module, block: block, group: group, index: index, fd: fd, gen: gen, ids: ids)
+	emitNetpollGroupSetMember(module, block: block, group: group, index: index, fd: fd, mode: mode, gen: gen, ids: ids)
 	emitStoreField(module, block: block, record: state, offset: WcGroupCount, value: emitBin(module, block: block, a: index, b: emitConst(module, block: block, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids))
 	return index
 end 'emitSubpGroupAdd'
@@ -2049,20 +2173,30 @@ end 'emitSubpGiveChildSourceBack'
 // close the pipe once the payload is spent. `stdinPend` is 0 for every stdin kind that carries no payload,
 // which is what makes this a pointer test rather than a kind test repeated a pass later.
 //
+// The write end is non-blocking here, so a full pipe answers would-block or a short write. That
+// pass sets `WcStdinBlocked` and the idle arm waits for the pipe to drain, by poller or by backoff,
+// instead of spinning. Any other failed write is a broken pipe, and the queue is dropped with the
+// end.
+//
 // ⭐⭐ **`delayed` IS THE SAME PUSH BEHIND `SubpSlotStdinFeedAt`**: unarmed until `emitSubpArmDelayedFeed` sees
 // the child's first stdout byte, then a deadline. A pass that declines reports NO PROGRESS, so the loop gives
 // its machine back before the next pass — the wait costs this program nothing and the whole scheduler runs
 // through it.
 function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
 	var feedDue = module.addBlock(func, label: b"wcfdue", heat: BlockHeat.normal)
-	var haveWrite = module.addBlock(func, label: b"wcfeed", heat: BlockHeat.normal)
+	var acquire = module.addBlock(func, label: b"wcfacquire", heat: BlockHeat.normal)
 	var doWrite = module.addBlock(func, label: b"wcfwrite", heat: BlockHeat.normal)
-	var spentTest = module.addBlock(func, label: b"wcfspent", heat: BlockHeat.normal)
+	var committed = module.addBlock(func, label: b"wcfcommit", heat: BlockHeat.normal)
 	var closeStdin = module.addBlock(func, label: b"wcfclose", heat: BlockHeat.normal)
+	var classify = module.addBlock(func, label: b"wcfclassify", heat: BlockHeat.normal)
+	var partial = module.addBlock(func, label: b"wcfpartial", heat: BlockHeat.normal)
+	var retryLater = module.addBlock(func, label: b"wcfretry", heat: BlockHeat.normal)
+	var fullChunk = module.addBlock(func, label: b"wcffull", heat: BlockHeat.normal)
+	var finish = module.addBlock(func, label: b"wcffinish", heat: BlockHeat.normal)
+	var honour = module.addBlock(func, label: b"wcfhonour", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"wcfdone", heat: BlockHeat.normal)
 
-	let handle = emitLoadField(module, block: cur, record: state, offset: WcHandle, ids: ids)
-	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
+	let slot = emitSubpStateSlot(module, block: cur, ids: ids, state: state)
 	let pend = emitLoadField(module, block: cur, record: slot, offset: SubpSlotStdinPend, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	let nothingQueued = emitCmp(module, block: cur, a: pend, b: zero, pred: StdCmpPred.eq, ids: ids)
@@ -2081,67 +2215,77 @@ function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, c
 	let due = emitBin(module, block: feedDue, a: armed, b: arrived, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let mayPush = emitBin(module, block: feedDue, a: noDeadline, b: due, opcode: StdBinOpcode.bitOr, ids: ids)
 	let stillHolding = emitCmp(module, block: feedDue, a: mayPush, b: feedZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(feedDue, op: StdOp.condBranch(stillHolding, thenBlockId: cont.id, elseBlockId: haveWrite.id))
+	module.setTerminator(feedDue, op: StdOp.condBranch(stillHolding, thenBlockId: cont.id, elseBlockId: acquire.id))
 
-	// A payload with no pipe to push it into is a spawn that asked for `bytes` and got no write end; drop the
-	// queue rather than looping on it for ever.
-	let handleW = emitLoadField(module, block: haveWrite, record: state, offset: WcHandle, ids: ids)
-	let slotW = emitSubpSlotOf(module, block: haveWrite, ids: ids, handle: handleW)
-	let stdinWrite = emitLoadField(module, block: haveWrite, record: slotW, offset: SubpSlotStdinWrite, ids: ids)
-	let zeroW = emitConst(module, block: haveWrite, value: 0, ids: ids)
-	let noPipe = emitCmp(module, block: haveWrite, a: stdinWrite, b: zeroW, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(haveWrite, op: StdOp.condBranch(noPipe, thenBlockId: closeStdin.id, elseBlockId: doWrite.id))
+	let slotA = emitSubpStateSlot(module, block: acquire, ids: ids, state: state)
+	var owned = emitSubpStdinTransition(module, func: func, ids: ids, cur: acquire, slot: slotA, expected: SubpStdinIdle, replacement: SubpStdinPushing, whenLost: cont)
 
-	// One chunk per pass, so a child that reads its input while writing its output makes progress on both.
-	let handleD = emitLoadField(module, block: doWrite, record: state, offset: WcHandle, ids: ids)
-	let slotD = emitSubpSlotOf(module, block: doWrite, ids: ids, handle: handleD)
-	let pendD = emitLoadField(module, block: doWrite, record: slotD, offset: SubpSlotStdinPend, ids: ids)
-	let remaining = ids.mint()
-	var measured = emitCStringLength(module, func: func, cur: doWrite, cstr: pendD, length: remaining, ids: ids)
-	var capped = emitSubpMinInto(module, func: func, ids: ids, cur: measured, state: state, outOffset: WcAvail, a: remaining, limit: SubpReadChunkBytes)
+	let slotG = emitSubpStateSlot(module, block: owned, ids: ids, state: state)
+	let pendG = emitLoadField(module, block: owned, record: slotG, offset: SubpSlotStdinPend, ids: ids)
+	let drained = emitCmp(module, block: owned, a: pendG, b: emitConst(module, block: owned, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(owned, op: StdOp.condBranch(drained, thenBlockId: finish.id, elseBlockId: doWrite.id))
+
+	let slotD = emitSubpStateSlot(module, block: doWrite, ids: ids, state: state)
+	let remaining = emitLoadField(module, block: doWrite, record: slotD, offset: SubpSlotStdinRemaining, ids: ids)
+	var capped = emitSubpMinInto(module, func: func, ids: ids, cur: doWrite, state: state, outOffset: WcAvail, a: remaining, limit: SubpReadChunkBytes)
 	let chunk = emitLoadField(module, block: capped, record: state, offset: WcAvail, ids: ids)
-	let handleC = emitLoadField(module, block: capped, record: state, offset: WcHandle, ids: ids)
-	let slotC = emitSubpSlotOf(module, block: capped, ids: ids, handle: handleC)
+	let slotC = emitSubpStateSlot(module, block: capped, ids: ids, state: state)
 	let pendC = emitLoadField(module, block: capped, record: slotC, offset: SubpSlotStdinPend, ids: ids)
 	let writeEnd = emitLoadField(module, block: capped, record: slotC, offset: SubpSlotStdinWrite, ids: ids)
 	let bytesOutPtr = emitLoadField(module, block: capped, record: slotC, offset: SubpSlotBytesOut, ids: ids)
 	let verdict = ids.mint()
 	module.appendOp(capped, op: StdOp.osWriteFile(verdict, handleId: writeEnd, bufId: pendC, lenId: chunk, bytesOutPtrId: bytesOutPtr))
 	let written = emitLoadDword(module, block: capped, record: bytesOutPtr, offset: 0, ids: ids)
-	let advanced = emitBin(module, block: capped, a: pendC, b: written, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: capped, record: slotC, offset: SubpSlotStdinPend, value: advanced)
-	emitSubpAddProgress(module, block: capped, ids: ids, state: state, amount: written)
-
-	// A FAILED write is a broken pipe — the child closed its stdin, or exited — and the queue must be
-	// abandoned rather than retried every pass. Without this the feed makes no progress for ever while the
-	// loop waits on the exit check to save it, which it does, one millisecond at a time.
 	let zeroV = emitConst(module, block: capped, value: 0, ids: ids)
 	let writeFailed = emitCmp(module, block: capped, a: verdict, b: zeroV, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(capped, op: StdOp.condBranch(writeFailed, thenBlockId: closeStdin.id, elseBlockId: spentTest.id))
+	module.setTerminator(capped, op: StdOp.condBranch(writeFailed, thenBlockId: classify.id, elseBlockId: committed.id))
 
-	// The payload is spent when the cursor stands on its terminator — the same test the length walk makes,
-	// one byte at a time.
-	let handleS = emitLoadField(module, block: spentTest, record: state, offset: WcHandle, ids: ids)
-	let slotS = emitSubpSlotOf(module, block: spentTest, ids: ids, handle: handleS)
-	let cursor = emitLoadField(module, block: spentTest, record: slotS, offset: SubpSlotStdinPend, ids: ids)
-	let zeroIdx = emitConst(module, block: spentTest, value: 0, ids: ids)
-	let nextByte = emitLoadByte(module, block: spentTest, base: cursor, index: zeroIdx, ids: ids)
-	let zeroN = emitConst(module, block: spentTest, value: 0, ids: ids)
-	let spent = emitCmp(module, block: spentTest, a: nextByte, b: zeroN, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(spentTest, op: StdOp.condBranch(spent, thenBlockId: closeStdin.id, elseBlockId: cont.id))
+	let lastError = ids.mint()
+	module.appendOp(classify, op: StdOp.osLastError(lastError))
+	let wouldBlock = emitCmp(module, block: classify, a: lastError, b: emitConst(module, block: classify, value: ErrorIoPending, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(classify, op: StdOp.condBranch(wouldBlock, thenBlockId: retryLater.id, elseBlockId: closeStdin.id))
 
-	// The child sees EOF on its stdin exactly once: the write end is closed AND zeroed, so a later pass
-	// cannot close a handle the OS has already reused.
-	let handleX = emitLoadField(module, block: closeStdin, record: state, offset: WcHandle, ids: ids)
-	let slotX = emitSubpSlotOf(module, block: closeStdin, ids: ids, handle: handleX)
-	let writeEndX = emitLoadField(module, block: closeStdin, record: slotX, offset: SubpSlotStdinWrite, ids: ids)
-	module.appendOp(closeStdin, op: StdOp.osCloseHandle(writeEndX))
-	let zeroX = emitConst(module, block: closeStdin, value: 0, ids: ids)
-	emitStoreField(module, block: closeStdin, record: slotX, offset: SubpSlotStdinWrite, value: zeroX)
-	emitStoreField(module, block: closeStdin, record: slotX, offset: SubpSlotStdinPend, value: zeroX)
-	module.setTerminator(closeStdin, op: StdOp.branch(cont.id))
+	let advanced = emitBin(module, block: committed, a: pendC, b: written, opcode: StdBinOpcode.add, ids: ids)
+	let slotM = emitSubpStateSlot(module, block: committed, ids: ids, state: state)
+	let remainingM = emitLoadField(module, block: committed, record: slotM, offset: SubpSlotStdinRemaining, ids: ids)
+	let left = emitBin(module, block: committed, a: remainingM, b: written, opcode: StdBinOpcode.sub, ids: ids)
+	emitSubpStoreStdinQueue(module, block: committed, slot: slotM, cursor: advanced, remaining: left)
+	emitSubpAddProgress(module, block: committed, ids: ids, state: state, amount: written)
+	let zeroN = emitConst(module, block: committed, value: 0, ids: ids)
+	let spent = emitCmp(module, block: committed, a: left, b: zeroN, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(committed, op: StdOp.condBranch(spent, thenBlockId: closeStdin.id, elseBlockId: partial.id))
+
+	let filledPipe = emitCmp(module, block: partial, a: written, b: chunk, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(partial, op: StdOp.condBranch(filledPipe, thenBlockId: retryLater.id, elseBlockId: fullChunk.id))
+
+	emitStoreField(module, block: fullChunk, record: state, offset: WcStdinBackoffMs, value: emitConst(module, block: fullChunk, value: 0, ids: ids))
+	module.setTerminator(fullChunk, op: StdOp.branch(finish.id))
+
+	let priorBackoff = emitLoadField(module, block: retryLater, record: state, offset: WcStdinBackoffMs, ids: ids)
+	let doubled = emitBin(module, block: retryLater, a: emitBin(module, block: retryLater, a: priorBackoff, b: emitConst(module, block: retryLater, value: SubpStdinBackoffGrowth, ids: ids), opcode: StdBinOpcode.mul, ids: ids), b: emitConst(module, block: retryLater, value: SubpStdinBackoffFloorMs, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+	let overCap = emitCmp(module, block: retryLater, a: doubled, b: emitConst(module, block: retryLater, value: SubpStdinMaxBackoffMs, ids: ids), pred: StdCmpPred.gt, ids: ids)
+	let nextBackoff = emitSelectWord(module, block: retryLater, cond: overCap, whenSet: emitConst(module, block: retryLater, value: SubpStdinMaxBackoffMs, ids: ids), whenClear: doubled, ids: ids)
+	emitStoreField(module, block: retryLater, record: state, offset: WcStdinBackoffMs, value: nextBackoff)
+	emitStoreField(module, block: retryLater, record: state, offset: WcStdinBlocked, value: emitConst(module, block: retryLater, value: 1, ids: ids))
+	module.setTerminator(retryLater, op: StdOp.branch(finish.id))
+
+	let slotX = emitSubpStateSlot(module, block: closeStdin, ids: ids, state: state)
+	emitSubpCloseStdinWrite(module, block: closeStdin, ids: ids, slot: slotX)
+	module.setTerminator(closeStdin, op: StdOp.branch(finish.id))
+
+	let slotF = emitSubpStateSlot(module, block: finish, ids: ids, state: state)
+	var released = emitSubpStdinTransition(module, func: func, ids: ids, cur: finish, slot: slotF, expected: SubpStdinPushing, replacement: SubpStdinIdle, whenLost: honour)
+	module.setTerminator(released, op: StdOp.branch(cont.id))
+
+	let slotH = emitSubpStateSlot(module, block: honour, ids: ids, state: state)
+	emitSubpCloseStdinThenIdle(module, block: honour, ids: ids, slot: slotH)
+	module.setTerminator(honour, op: StdOp.branch(cont.id))
 	return cont
 end 'emitSubpPushStdin'
+
+function emitSubpStateSlot(module StdModule, block IrBlock, ids ValueMinter, state ValueId) returns ValueId
+	return emitSubpSlotOf(module, block: block, ids: ids, handle: emitLoadField(module, block: block, record: state, offset: WcHandle, ids: ids))
+end 'emitSubpStateSlot'
 
 // Start `delayed`'s clock the pass the stdout drain collects the child's first byte: an UNARMED feed word
 // becomes `now + SubpStdinDelayedFeedMs` once `WcOutLen > 0`. That length is exactly "the child has written
@@ -2469,9 +2613,9 @@ end 'buildSubpResultRelease'
 //
 // ⚠ **THE NUMBER IS IN Win32's VOCABULARY ON EVERY LANE.** `osLastError` is `GetLastError()` on Windows and
 // `mrt_host_last_error` on POSIX, which translates the errno into the same codes (`ENOENT` → 2, `ENOTDIR`
-// → 3, `EACCES`/`EPERM` → 5, anything else → `ErrorGenericFailure`; `Targets/Shared/PosixRuntime` holds the
-// table). So `2` means the same thing wherever the program runs, and `SubpErrorPrefix` names the OS rather
-// than Win32.
+// → 3, `EACCES`/`EPERM` → 5, `EMFILE`/`ENFILE` → 4, anything else → `ErrorGenericFailure`;
+// `Targets/Shared/PosixRuntime` holds the table). So `2` means the same thing wherever the program
+// runs, and `SubpErrorPrefix` names the OS rather than Win32.
 //
 // It renders the low 32 bits only: a spawn's failed step rides above them (`GtRuntime.SpawnPreparationShift`).
 // A word of 0 means "nothing has failed", and answers the empty buffer rather than `os error 0`.
@@ -3472,7 +3616,9 @@ export function installSubprocessRuntime(module StdModule, target Target)
 	buildSubpAttachedSpawn(module, shape: envShape)
 	buildSubpStreamSpawn(module, shape: envShape)
 	buildSubpGetPid(module)
-	buildSubpWriteAll(module)
+	buildSubpWriteStdin(module, name: SubpWriteAllName, extent: SubpPayloadExtent.terminated)
+	buildSubpWriteStdin(module, name: SubpWriteBytesName, extent: SubpPayloadExtent.counted)
+	buildSubpQueueStdin(module)
 	buildSubpReadBytes(module, name: SubpReadOutBytesName, readerName: SubpReadLineName)
 	buildSubpReadBytes(module, name: SubpReadErrBytesName, readerName: SubpReadErrLineName)
 	buildSubpReadBytes(module, name: SubpReadExactOutBytesName, readerName: SubpReadExactName)

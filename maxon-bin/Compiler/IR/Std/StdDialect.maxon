@@ -857,10 +857,10 @@ export enum HostProcessCall
 	processSignal
 end 'HostProcessCall'
 
-// ⭐⭐ **WHICH VERB ONE `osNetpoll` ASKS FOR — Go's netpoll verbs (`netpollinit`, `netpollBreak`, `netpoll`) and
-// the poller's clock, each with one body per lane.** One op with a selector, for `HostProcessCall`'s measured
-// reason: every member is a scheduler-owned host call of the same shape, and a variant each would be the per-op
-// arm cost seven times over.
+// ⭐⭐ **WHICH VERB ONE `osNetpoll` ASKS FOR — Go's netpoll verbs (`netpollinit`, `netpollBreak`, `netpoll`),
+// the poller's clock, and the Windows calls that make a pipe and a spawn's handle list.** One op with a
+// selector, for `HostProcessCall`'s measured reason: every member is a scheduler-owned host call of the same
+// shape, and a variant each would be the per-op arm cost once per verb.
 //
 // Operands are `a0…a4` in the order each verb lists them; a verb reads only its own and the rest are zeros. Each
 // list puts what the POSIX lanes read first, so their chunks take a prefix (`posixNetpollOperandCount`).
@@ -943,18 +943,43 @@ export enum NetpollVerb
 	// POSIX kernels make a child readable themselves and need nobody to forward it.
 	postChildExit
 
-	// ⭐⭐ **`(fd) -> the host's raw answer`. MAKE A PIPE'S READ END NON-BLOCKING.** A descriptor a green
-	// thread parks on must never hold its machine inside `read(2)`, and the `armChildSource` that follows this
-	// verb is what gives an `EAGAIN` somewhere to park — two syscalls, so two verbs, each answering for its own
-	// (`NetpollRuntime.emitNetpollArmPipe`).
+	// ⭐⭐ **`(fd) -> the host's raw answer`. MAKE A PIPE END THE PARENT HOLDS NON-BLOCKING** — a read
+	// end, and the stdin write end for the length of a collect. A descriptor a green thread parks on
+	// must never hold its machine inside `read(2)` or `write(2)`, and the `armChildSource` that
+	// follows this verb is what gives an `EAGAIN` somewhere to park — two syscalls, so two verbs, each
+	// answering for its own (`NetpollRuntime.emitNetpollArmPipe`).
 	//
-	// ⛔ **ONLY THE END THE PARENT READS IS FLAGGED, AND THAT IS WHY THIS IS PER-DESCRIPTOR RATHER THAN A PIPE
-	// FLAG.** `pipe2(O_NONBLOCK)` sets the flag on BOTH file descriptions, and the child holds the write end as
-	// its stdout — so the CHILD's writes would fail `EAGAIN`, on a program that did nothing unusual.
+	// ⛔ **ONLY THE PARENT'S END IS FLAGGED, AND THAT IS WHY THIS IS PER-DESCRIPTOR RATHER THAN A PIPE
+	// FLAG.** `pipe2(O_NONBLOCK)` sets the flag on BOTH file descriptions, and the child holds the
+	// other end as its stdout or stdin — so the CHILD's writes or reads would fail `EAGAIN`, on a
+	// program that did nothing unusual.
 	//
-	// ⚠ **THE COMPLETION-PORT SHAPE NEVER EMITS IT.** Its pipes are overlapped and are handed to the poller
-	// under `NetpollOverlappedToken` when they are created, so `NetpollRuntime.__np_pipe_open` does nothing there.
+	// ⚠ **THE COMPLETION-PORT SHAPE EMITS IT ONLY FOR THE STDIN WRITE END**, as
+	// `SetNamedPipeHandleState(PIPE_NOWAIT)`. Its read ends are overlapped and are handed to the
+	// poller under `NetpollOverlappedToken` when they are created, so `NetpollRuntime.__np_pipe_open`
+	// does nothing there.
 	armPipeSource
+
+	// The x64-windows steps of a pipe creation and a spawn's PROC_THREAD_ATTRIBUTE_HANDLE_LIST, one
+	// host call each, so the IR branches on each call's failure before the next call can overwrite its
+	// last error; a spawn that gives up reports that call's own. The completion-port shape alone emits
+	// them.
+	//
+	// `openPipeServer(name, openMode) -> handle` is `CreateNamedPipeW` with no SECURITY_ATTRIBUTES;
+	// `openPipeClient(name, access, securityAttributes) -> handle` is `CreateFileW` on the same name,
+	// both `INVALID_HANDLE_VALUE` on failure. `skipCompletionOnSuccess(handle) -> BOOL` is
+	// `SetFileCompletionNotificationModes(FILE_SKIP_COMPLETION_PORT_ON_SUCCESS)`.
+	// `spawnAttributesInit(list, sizePtr) -> BOOL` is `InitializeProcThreadAttributeList` for one
+	// attribute, and a list of 0 asks only for the size; `spawnAttributesInheritOnly(list, handles,
+	// byteCount) -> BOOL` is `UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_HANDLE_LIST)`;
+	// `spawnAttributesDelete(list) -> 0` is `DeleteProcThreadAttributeList`.
+
+	openPipeServer
+	openPipeClient
+	skipCompletionOnSuccess
+	spawnAttributesInit
+	spawnAttributesInheritOnly
+	spawnAttributesDelete
 end 'NetpollVerb'
 
 // ⭐ **THE IDENTITY A BREAK ARRIVES UNDER, ON EVERY LANE** — the completion key `raiseBreak` posts with, the
@@ -1607,19 +1632,19 @@ export union StdOp
 	// result via MEMORY (an out-param pointer) or ignore it (a lock op's void return), so they carry no result id, as
 	// `osCloseHandle` does.
 	//
-	// `osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr, syncSilencedPtr)` = create ONE overlapped read pipe:
-	// CreateNamedPipeW(name, INBOUND|OVERLAPPED|FIRST_PIPE_INSTANCE, …) → the parent READ end stored to `[readPtr]`;
-	// CreateFileW(name, GENERIC_WRITE, …, saPtr=inheritable, OPEN_EXISTING, …) → the inheritable child WRITE end
-	// stored to `[writePtr]`; SetHandleInformation strips inheritance from the read end; CreateIoCompletionPort
-	// registers the read end with `iocp` and SetFileCompletionNotificationModes sets
-	// FILE_SKIP_COMPLETION_PORT_ON_SUCCESS. Six VALUE operands, no result (everything lands in memory).
+	// `osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr, syncSilencedPtr)` = create ONE read pipe:
+	// the parent READ end stored to `[readPtr]` and the child WRITE end to `[writePtr]`, both 0 when
+	// the creation fails. Emitted only on a POSIX lane, as one `pipe2`; x64-windows makes its named
+	// pipe a call at a time through `NetpollVerb.openPipeServer` and the verbs after it. Six VALUE
+	// operands, no result (everything lands in memory).
 	//
 	// ⛔⛔ **`[syncSilencedPtr]` IS THE ANSWER TO *"WILL A READ THAT COMPLETES INLINE POST A PACKET?"*, AND IT IS A
 	// LOAD-BEARING ONE.** `GtRuntime.__gt_subp_yield_read` answers an inline `ReadFile` out of `[bytesOut]` without
 	// waiting; a packet for that read would arrive after its source was given back, and the next operation's wake
 	// would take it and store one read's byte count and status as another's. The caller SEEDS the word with the
-	// vacuous truth and a lane that can falsify it writes its host's answer — so a lane with no completion port
-	// ignores this operand exactly as it ignores the name, the SA and the port.
+	// vacuous truth, and the lanes this op reaches have no completion port, so they ignore this operand exactly
+	// as they ignore the name, the SA and the port; x64-windows writes its host's answer through
+	// `NetpollVerb.skipCompletionOnSuccess`.
 	osPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, syncSilencedPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osEventCreate()` = `CreateEventA(NULL, FALSE, FALSE, NULL)` — an AUTO-RESET, initially-unsignaled event (the
@@ -1720,24 +1745,22 @@ export union StdOp
 	// --- the STREAMING subprocess stdin pipe + synchronous write ---
 	//
 	// Both carry `category: system` (metadata placing them logically in the system band, independent of
-	// this tail position) — the same shape and rationale as the IOCP ops. ⭐ x64-WINDOWS ONLY, like
-	// the whole green-thread substrate; every other backend REJECTS them (emitted only inside the
-	// x64-windows-gated streaming runtime). Full call-barrier metadata: each IS one or more indirect calls
-	// once lowered.
+	// this tail position) — the same shape and rationale as the IOCP ops. Full call-barrier metadata: each IS
+	// one or more calls once lowered.
 	//
-	// `osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr)` = the STDIN pipe, the direction
-	// mirror of `osPipeCreate`: CreateNamedPipeW(name, OUTBOUND|FIRST_PIPE_INSTANCE, … NO OVERLAPPED, NO IOCP)
-	// → the parent WRITE end (a synchronous server end) stored to `[parentWritePtr]`; CreateFileW(name,
-	// GENERIC_READ, …, saPtr=inheritable, OPEN_EXISTING, …) → the inheritable child READ end stored to
-	// `[childReadPtr]`; SetHandleInformation strips inheritance from the parent write end. Four VALUE operands,
-	// no result (the two handles land in memory).
+	// `osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr)` = the STDIN pipe, the
+	// direction mirror of `osPipeCreate`: the parent WRITE end stored to `[parentWritePtr]` and the
+	// child READ end to `[childReadPtr]`, both 0 when the creation fails. POSIX-only, as
+	// `osPipeCreate` is. Four VALUE operands, no result (the two handles land in memory).
 	osPipeCreateOutbound(namePtrId ValueId, saPtrId ValueId, childReadPtrId ValueId, parentWritePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osWriteFile(handle, buf, len, bytesOutPtr)` = `WriteFile(handle, buf, len, bytesOutPtr, NULL)` — a
 	// SYNCHRONOUS write to the child's stdin pipe (the sync outbound pipe is not overlapped, so the write
-	// blocks until the pipe buffer accepts the bytes). FOUR args (`bytesOutPtr` is the 4th, a valid out-param
-	// pointer WriteFile requires; the 5th, lpOverlapped, is NULL, a stack arg like `osWriteStdout`'s); DEFINES
-	// the BOOL result (captured from RAX) — nonzero success, zero a broken pipe. Distinct from `osWriteStdout`,
+	// blocks until the pipe buffer accepts the bytes — unless a collect has made the end non-blocking
+	// (`NetpollVerb.armPipeSource`), when a full pipe answers a short count or a would-block failure). FOUR
+	// args (`bytesOutPtr` is the 4th, a valid out-param pointer WriteFile requires; the 5th, lpOverlapped, is
+	// NULL, a stack arg like `osWriteStdout`'s); DEFINES the BOOL result (captured from RAX) — nonzero
+	// success, zero a failure, a broken pipe among them. Distinct from `osWriteStdout`,
 	// which writes to the process's OWN stdout via GetStdHandle and takes no explicit handle.
 	osWriteFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
@@ -2200,7 +2223,8 @@ export union StdOp
 	osSocketStartup(resultId ValueId, wsaDataPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osSocketResolve(result, hostPtr, hintsPtr, outPtr)` = `getaddrinfo(hostPtr, NULL, hintsPtr, outPtr)`,
-	// the returned int in `result` (0 = success, anything else = resolution failed).
+	// the returned int in `result` (0 = success, anything else = resolution failed). On x64-windows it is
+	// `GetAddrInfoW` and `hostPtr` is UTF-16.
 	//
 	// ⭐ **THE SERVICE ARGUMENT IS ALWAYS NULL, AND THAT IS WHY NO PORT IS FORMATTED ANYWHERE.** Passing a port
 	// as the service string would need an int→decimal conversion in the runtime; instead the caller reads the
@@ -2211,9 +2235,9 @@ export union StdOp
 	// `resolveFailed`-vs-`connectFailed` decision is made in builder-built Std by `ManagedSocketRuntime`.
 	osSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osSocketFreeAddrInfo(addrInfoPtr)` = `freeaddrinfo(addrInfoPtr)`. No result — the call returns void, and
-	// it exists beside the resolve for `osFileClose`'s reason: a `getaddrinfo` with no matching
-	// free leaks OS memory for the process lifetime, and that leak is invisible to the exit-101 gate.
+	// `osSocketFreeAddrInfo(addrInfoPtr)` = `freeaddrinfo(addrInfoPtr)`, `FreeAddrInfoW` on x64-windows. No
+	// result — the call returns void, and it exists beside the resolve for `osFileClose`'s reason: a
+	// resolve with no matching free leaks OS memory for the process lifetime, and that leak is invisible to the exit-101 gate.
 	osSocketFreeAddrInfo(addrInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osSocketCreate(result)` = `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` (`WSASocketW` on

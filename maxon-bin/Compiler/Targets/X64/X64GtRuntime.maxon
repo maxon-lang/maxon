@@ -65,18 +65,60 @@ module let TibStackLimitDisp = 0x10 as Imm32  // NT_TIB.StackLimit — gs:[0x10]
 // exactly a load). `scratch` shuttles each word (`gtReg` and `scratch` must differ); neither helper touches any
 // other register.
 function emitSaveTibIntoGt(code ByteArray, gtReg X64Register, scratch X64Register)
-	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackBaseDisp)
+	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackBaseDisp, wide: true)
 	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackBase as Imm32, srcReg: scratch, wide: true)
-	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackLimitDisp)
+	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackLimitDisp, wide: true)
 	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackLimit as Imm32, srcReg: scratch, wide: true)
 end 'emitSaveTibIntoGt'
 
 function emitLoadTibFromGt(code ByteArray, gtReg X64Register, scratch X64Register)
 	encodeLoadRegBaseDisp(code, destReg: scratch, base: gtReg, disp: GtOffTibStackBase as Imm32, wide: true)
-	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: scratch)
+	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: scratch, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: scratch, base: gtReg, disp: GtOffTibStackLimit as Imm32, wide: true)
-	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: scratch)
+	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: scratch, wide: true)
 end 'emitLoadTibFromGt'
+
+function emitX64CarryLastError(code ByteArray, gtReg X64Register, os Os, direction GtLastErrorDirection)
+	match direction 'direction'
+		intoGt then emitX64SaveLastErrorIntoGt(code, gtReg: gtReg, os: os)
+		fromGt then emitX64RestoreLastErrorFromGt(code, gtReg: gtReg, os: os)
+	end 'direction'
+end 'emitX64CarryLastError'
+
+function emitX64SaveLastErrorIntoGt(code ByteArray, gtReg X64Register, os Os)
+	emitX64RawLastError(code, os: os, direction: GtLastErrorDirection.intoGt)
+	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffLastError as Imm32, srcReg: GtSwitchTibScratchReg, wide: true)
+end 'emitX64SaveLastErrorIntoGt'
+
+function emitX64RestoreLastErrorFromGt(code ByteArray, gtReg X64Register, os Os)
+	encodeLoadRegBaseDisp(code, destReg: GtSwitchTibScratchReg, base: gtReg, disp: GtOffLastError as Imm32, wide: true)
+	emitX64RawLastError(code, os: os, direction: GtLastErrorDirection.fromGt)
+end 'emitX64RestoreLastErrorFromGt'
+
+function emitX64RawLastError(code ByteArray, os Os, direction GtLastErrorDirection)
+	match os 'os'
+		windows then emitWindowsRawLastError(code, direction: direction)
+		linux then emitLinuxRawLastError(code, direction: direction)
+		macos then panic("emitX64RawLastError: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend")
+		wasi then panic("emitX64RawLastError: wasm32-wasi is not an x64 target — a WASI component has no OS-thread last error")
+	end 'os'
+end 'emitX64RawLastError'
+
+function emitWindowsRawLastError(code ByteArray, direction GtLastErrorDirection)
+	match direction 'direction'
+		intoGt then encodeMovRegGsAbs(code, dest: GtSwitchTibScratchReg, disp: WindowsTebLastErrorOffset, wide: false)
+		fromGt then encodeMovGsAbsReg(code, disp: WindowsTebLastErrorOffset, srcReg: GtSwitchTibScratchReg, wide: false)
+	end 'direction'
+end 'emitWindowsRawLastError'
+
+function emitLinuxRawLastError(code ByteArray, direction GtLastErrorDirection)
+	match direction 'direction'
+		intoGt then x64LinuxEmitReadThreadErrnoSlot(code, dest: GtSwitchTibScratchReg, base: GtSwitchErrnoBaseReg)
+		fromGt then x64LinuxEmitWriteThreadErrnoSlot(code, base: GtSwitchErrnoBaseReg, srcReg: GtSwitchTibScratchReg)
+	end 'direction'
+end 'emitLinuxRawLastError'
+
+let GtSwitchErrnoBaseReg = X64Register.r11
 
 // ⭐⭐⭐ **DOES THIS OS PROBE A PER-THREAD STACK-BOUNDS PAIR ON A KERNEL CALL?** Windows does: `NT_TIB`'s
 // `StackBase`/`StackLimit` are read by the kernel on entry and a call made with RSP outside them FAULTS, which
@@ -153,9 +195,9 @@ end 'emitGtStackMunmap'
 // where an edit to one could silently repoint one stack differently from the other. `topReg` is DESTROYED (it
 // becomes `top - size`); both callers hold `top` in a register they are otherwise done with.
 function emitRepointTibToSystemStack(code ByteArray, topReg X64Register)
-	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: topReg)
+	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: topReg, wide: true)
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: topReg, imm: GtSystemStackSize as Imm32)
-	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: topReg)
+	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: topReg, wide: true)
 end 'emitRepointTibToSystemStack'
 
 // The scratch registers the trampoline holds across the straight-line body: r12 = the GT (callee-saved, so it
@@ -200,6 +242,9 @@ end 'assertGtFrameConsistent'
 // `__gt_context_switch(from = rcx, to = rdx)` — save the current GT's callee-saved register + rsp/rbp state
 // into `from`, restore `to`'s, and `ret` into `to`'s saved return address (a resumed GT's await-loop
 // continuation, or — for a fresh GT — the trampoline). No frame, no `.data`.
+// The OS thread's last error is saved into `from` and restored from `to` with them
+// (`GtRuntime.GtOffLastError`): the TEB's 32-bit `LastErrorValue` on Windows, the errno slot on
+// Linux.
 function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	assertGtFrameConsistent(target)
 	var code = ByteArray.create()
@@ -243,6 +288,8 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 		emitSaveTibIntoGt(code, gtReg: GtSwitchFromReg, scratch: GtSwitchTibScratchReg)
 	end 'saveTheBounds'
 
+	emitX64CarryLastError(code, gtReg: GtSwitchFromReg, os: target.os, direction: GtLastErrorDirection.intoGt)
+
 	// rsp = to->sp ; rbp = to->fp — now on the destination stack.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rsp, base: GtSwitchToReg, disp: GtOffSp as Imm32, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rbp, base: GtSwitchToReg, disp: GtOffFp as Imm32, wide: true)
@@ -253,6 +300,8 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	if x64OsProbesStackBounds(target.os) 'loadTheBounds'
 		emitLoadTibFromGt(code, gtReg: GtSwitchToReg, scratch: GtSwitchTibScratchReg)
 	end 'loadTheBounds'
+
+	emitX64CarryLastError(code, gtReg: GtSwitchToReg, os: target.os, direction: GtLastErrorDirection.fromGt)
 
 	// Restore the callee-saved XMMs from the new stack FIRST — they sit BELOW the pushed GPR words, so rsp
 	// addresses them before the `add rsp` that releases their area. Restore order is free (each register has
@@ -522,6 +571,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		ReadFile gives ReadFileStackArgWords
 		MapViewOfFile gives MapViewOfFileStackArgWords  // 5: hFileMappingObject, dwDesiredAccess, dwFileOffsetHigh, dwFileOffsetLow, dwNumberOfBytesToMap
 		RegGetValueW gives RegGetValueStackArgWords
+		UpdateProcThreadAttribute gives UpdateProcThreadAttributeStackArgWords
 
 		ExitProcess or  // 1: uExitCode
 			GetStdHandle or  // 1: nStdHandle
@@ -536,6 +586,9 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 			SetHandleInformation or  // 3: hObject, dwMask, dwFlags
 			CreateIoCompletionPort or  // 4: FileHandle, ExistingCompletionPort, CompletionKey, NumberOfConcurrentThreads
 			SetFileCompletionNotificationModes or  // 2: FileHandle, Flags
+			SetNamedPipeHandleState or  // 4: hNamedPipe, lpMode, lpMaxCollectionCount, lpCollectDataTimeout
+			InitializeProcThreadAttributeList or  // 4: lpAttributeList, dwAttributeCount, dwFlags, lpSize
+			DeleteProcThreadAttributeList or  // 1: lpAttributeList
 			CreateEventA or  // 4: lpEventAttributes, bManualReset, bInitialState, lpName
 			SetEvent or  // 1: hEvent
 			InitializeCriticalSection or  // 1: lpCriticalSection
@@ -563,8 +616,8 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 			OpenFileMappingW or  // 3: dwDesiredAccess, bInheritHandle, lpName
 			GetTickCount64 or  // 0
 			WSAStartup or  // 2: wVersionRequested, lpWSAData
-			getaddrinfo or  // 4: pNodeName, pServiceName, pHints, ppResult
-			freeaddrinfo or  // 1: pAddrInfo
+			GetAddrInfoW or  // 4: pNodeName, pServiceName, pHints, ppResult
+			FreeAddrInfoW or  // 1: pAddrInfo
 			connect or  // 3: s, name, namelen
 			send or  // 4: s, buf, len, flags
 			recv or  // 4: s, buf, len, flags
@@ -710,11 +763,11 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			// `schedulerBound` (`lowerOsWaitHandleWin64`).
 			WaitForSingleObjectEx or
 
-			// `getaddrinfo` waits on a resolver (a literal address never reaches it —
+			// `GetAddrInfoW` waits on a resolver (a literal address never reaches it —
 			// `ManagedSocketRuntime.emitResolveHostIp`), and `WSAStartup`, which runs until one succeeds
 			// (`ManagedSocketRuntime.emitWinsockStartup`), on loading the provider stack.
 			WSAStartup or
-			getaddrinfo or
+			GetAddrInfoW or
 
 			// Reached by no emitter on this lane, which takes the overlapped transfer, so the slots are
 			// classed for the call they name: a blocking-mode transfer waits on its peer.
@@ -796,6 +849,10 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			SetHandleInformation or
 			CreateIoCompletionPort or
 			SetFileCompletionNotificationModes or
+			SetNamedPipeHandleState or
+			InitializeProcThreadAttributeList or
+			UpdateProcThreadAttribute or
+			DeleteProcThreadAttributeList or
 			CancelIoEx or
 			FindClose or
 			CreateEventA or
@@ -826,7 +883,7 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 			GetPriorityClass or
 			TlsAlloc or
 			TlsSetValue or
-			freeaddrinfo or
+			FreeAddrInfoW or
 			UnmapViewOfFile or
 
 			// Bounded kernel bookkeeping over handles this process already holds: a handle open, the

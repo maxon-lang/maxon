@@ -222,14 +222,12 @@ let InheritHandlesTrue = 1  // CreateProcessW bInheritHandles=TRUE (the child in
 let CreateSuspended = 0x00000004
 let CreateUnicodeEnvironment = 0x00000400
 let SpawnFixedCreationFlags = CreateSuspended or CreateUnicodeEnvironment
-let PipeReadOpenMode = 0x40080001  // PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE
 let PipeMessageMode = 0x0  // PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT
 let PipeMaxInstances = 1  // one server instance per uniquely-named pipe
 let PipeBufferSize = 0x10000  // nOutBufferSize / nInBufferSize (64 KB)
 let PipeDefaultTimeout = 0x0  // nDefaultTimeOut (0 = the 50 ms system default; unused for a byte-mode read)
-let GenericWrite = 0x40000000  // the child write end's dwDesiredAccess (CreateFileW)
-let GenericRead = 0x80000000  // the child stdin-read end's dwDesiredAccess (CreateFileW)
-let PipeWriteOpenMode = 0x00080002  // PIPE_ACCESS_OUTBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE — the sync stdin server pipe (no OVERLAPPED)
+let GenericWrite = 0x40000000  // a file opened for writing: CreateFileW's dwDesiredAccess
+let GenericRead = 0x80000000  // a file opened for reading: CreateFileW's dwDesiredAccess
 let FileShareNone = 0x0  // dwShareMode (the pipe is not shared)
 
 // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, on every file open, which is what a
@@ -281,6 +279,9 @@ let IocpNoConcurrentThreads = 0x0  // CreateIoCompletionPort NumberOfConcurrentT
 // `INVALID_HANDLE_VALUE`. `CreateIoCompletionPort` reads it as "make a new port" and `CreateFileMappingW`
 // as "back this section with the page file rather than with a file on disk".
 let InvalidHandleValue = -1
+let PipeNoWait = 1
+let SpawnAttributeCount = 1
+let ProcThreadAttributeHandleList = 0x00020002
 let FileSkipCompletionPortOnSuccess = 1  // SetFileCompletionNotificationModes — a SYNC read posts no IOCP packet
 let CreateEventManualReset = 0x0  // CreateEventA bManualReset = FALSE → AUTO-reset (one wait consumes one signal)
 let CreateEventInitialUnsignaled = 0x0  // CreateEventA bInitialState = FALSE (unsignaled until the first SetEvent)
@@ -371,6 +372,7 @@ export let CreateNamedPipeStackArgWords = 4 as MachineWord  // args 5-8: nOutBuf
 export let CreateFileStackArgWords = 3 as MachineWord  // args 5-7: dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile
 export let CreateThreadStackArgWords = 2 as MachineWord  // args 5-6: dwCreationFlags, lpThreadId
 export let ReadFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
+export let UpdateProcThreadAttributeStackArgWords = 3 as MachineWord  // args 5-7: cbSize, lpPreviousValue, lpReturnSize
 export let RegGetValueStackArgWords = 3 as MachineWord  // args 5-7: pdwType, pvData, pcbData
 
 // The DebugStream producer's one import that overflows the register file. Stated in this band with its
@@ -451,14 +453,16 @@ let WinsockSoError = 0x1007
 // The poller's one import past the register file, stated in this band for its reason. EXPORTED for the shim.
 export let GetQueuedCompletionStatusExStackArgWords = 2 as MachineWord  // args 5-6: dwMilliseconds, fAlertable
 
-// `osNetpoll`'s outgoing slots: the two stack arguments of its widest calls (`GetQueuedCompletionStatusEx`,
-// `SetWaitableTimer`, `RegisterWaitForSingleObject`), then one word the frame owns for the length of a call —
-// `SetWaitableTimer`'s relative due time and `RegisterWaitForSingleObject`'s wait-handle out-param both reach
-// the kernel through a pointer, so neither needs an operand to carry it.
+// `osNetpoll`'s outgoing slots: room for the stack arguments of its widest call,
+// `CreateNamedPipeW`'s four. Slot 2 doubles as a word the frame owns for the length of a call that
+// has at most two stack arguments — `SetWaitableTimer`'s relative due time,
+// `RegisterWaitForSingleObject`'s wait-handle out-param and `SetNamedPipeHandleState`'s mode all
+// reach the kernel through a pointer, so none needs an operand to carry it.
 let NetpollArg5Slot = 0
 let NetpollArg6Slot = 1
+let NetpollArg7Slot = 2
 let NetpollBorrowedWordSlot = 2
-let NetpollOutgoingSlots = (NetpollBorrowedWordSlot + 1) as MachineWord
+let NetpollOutgoingSlots = CreateNamedPipeStackArgWords
 
 // `GetQueuedCompletionStatusEx`'s `fAlertable`: no APC is ever queued to a machine, so none may end its wait.
 let NetpollWaitNotAlertable = 0
@@ -525,10 +529,6 @@ function hostProcessCallSlot(service HostProcessCall) returns IatSlot
 			processSignal panic("hostProcessCallSlot: `{service.name}` is a ptrace-lane primitive with no Win32 import — `installDebugHostRuntime` builds its entry only where `hostDebugCall` spells it, which is the Linux arm alone, so reaching this map with one means a body survived a lane that cannot serve it")
 	end 'slot'
 end 'hostProcessCallSlot'
-
-// `osPipeCreate` reserves the MAX outgoing stack-arg count across its calls (CreateNamedPipeW's 4 dominates
-// CreateFileW's 3), so its single GT-frame region holds either call's stack args at `[rsp + shadow + k*8]`.
-let PipeCreateOutgoingSlots = CreateNamedPipeStackArgWords
 
 // The `[rsp + disp]` displacement of an OUTGOING stack-argument slot — past the 32-byte shadow space,
 // one `SpillSlotBytes`-sized slot per index. The Win64 ABI fact shared by EVERY >4-argument import call the
@@ -1244,9 +1244,8 @@ export type StdToX64Lowering
 			// capture, not an outgoing argument), so it reserves the same outgoing space.
 			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count() as ParamCount)
 
-			// Both pipe creates reserve the larger of `CreateNamedPipeW`'s and `CreateFileW`'s stack tails.
 			osPipeCreate or
-				osPipeCreateOutbound gives win64OutgoingArgBytes(PipeCreateOutgoingSlots)
+				osPipeCreateOutbound gives win64OutgoingArgBytes(0)
 			osThreadCreate gives win64OutgoingArgBytes(CreateThreadStackArgWords)
 			osReadOverlapped or
 				osReadFile gives win64OutgoingArgBytes(ReadFileStackArgWords)
@@ -1506,7 +1505,7 @@ export type StdToX64Lowering
 			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
 
 			// The green-thread substrate's OS-import ops.
-			osPipeCreate(namePtrId, saPtrId, iocpId, readPtrId, writePtrId, syncSilencedPtrId) then self.lowerOsPipeCreate(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, syncSilencedPtrId: syncSilencedPtrId, dstBlock: dstBlock)
+			osPipeCreate(_, _, _, readPtrId, writePtrId, _) then self.lowerOsPipeCreate(readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
 			osEventCreate(resultId) then self.lowerOsEventCreate(resultId, dstBlock: dstBlock)
 			osThreadCreate(resultId, entryPtrId, argId) then self.lowerOsThreadCreate(resultId, entryPtrId: entryPtrId, argId: argId, dstBlock: dstBlock)
 			osLockInit(lockPtrId) then self.lowerOsLockOp(lockPtrId, importSlot: IatSlot.InitializeCriticalSection, chunk: HostLockInitName, dstBlock: dstBlock)
@@ -1519,7 +1518,7 @@ export type StdToX64Lowering
 			osGetPid(resultId) then self.lowerOsGetPid(resultId, dstBlock: dstBlock)
 
 			// The streaming subprocess stdin pipe + synchronous write.
-			osPipeCreateOutbound(namePtrId, saPtrId, childReadPtrId, parentWritePtrId) then self.lowerOsPipeCreateOutbound(namePtrId, saPtrId: saPtrId, childReadPtrId: childReadPtrId, parentWritePtrId: parentWritePtrId, dstBlock: dstBlock)
+			osPipeCreateOutbound(_, _, childReadPtrId, parentWritePtrId) then self.lowerOsPipeCreateOutbound(childReadPtrId, parentWritePtrId: parentWritePtrId, dstBlock: dstBlock)
 			osWriteFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsWriteFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
 
 			// The `__Builtins` WALL clock: read the host's calendar into the caller's out-param word.
@@ -3463,12 +3462,9 @@ export type StdToX64Lowering
 		self.lowerPanic(self.rdata.stringBlob(message), dstBlock: dstBlock)
 	end 'lowerRuntimeAbort'
 
-	// Lower `osPipeCreate` to the five-call overlapped-read-pipe sequence. `iocpId` is the scheduler's poller.
-	// The two handles land in `[readPtr]`/`[writePtr]`; each later call RELOADS the read end from `[readPtr]`
-	// rather than pinning a register across an intervening `iatCall`.
-	function lowerOsPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, syncSilencedPtrId ValueId, dstBlock IrBlock)
+	function lowerOsPipeCreate(readPtrId ValueId, writePtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsPipeCreateWin64(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, syncSilencedPtrId: syncSilencedPtrId, dstBlock: dstBlock)
+			importCall then panic("lowerOsPipeCreate: x64-windows builds a pipe in steps through `NetpollVerb.openPipeServer`, `openPipeClient`, `armSource` and `skipCompletionOnSuccess`, so a failed step is seen before the next one runs — `GtRuntime` emits `StdOp.osPipeCreate` only on a POSIX lane")
 
 			// ⚠ **THE NAME, THE `SECURITY_ATTRIBUTES`, THE COMPLETION PORT AND THE SYNC-SILENCING ANSWER ARE ALL
 			// DROPPED.** Windows needs a uniquely NAMED pipe to get overlapped reads and a port for the packet to land
@@ -3477,28 +3473,6 @@ export type StdToX64Lowering
 			syscall then self.emitHostCall(dstBlock, callee: HostCallee.chunk(HostPipeName), args: twoArgs(readPtrId, second: writePtrId))
 		end 'route'
 	end 'lowerOsPipeCreate'
-
-	function lowerOsPipeCreateWin64(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, syncSilencedPtrId ValueId, dstBlock IrBlock)
-		self.emitWin64NamedPipePair(namePtrId, saPtrId: saPtrId, serverOpenMode: PipeReadOpenMode, serverEndPtrId: readPtrId, clientAccess: GenericWrite, clientEndPtrId: writePtrId, dstBlock: dstBlock)
-
-		// 4) CreateIoCompletionPort(readEnd, poller, NetpollOverlappedToken, threads=0) — join the scheduler's ONE
-		//    poller. The key is a TOKEN rather than a source key: a completion key is fixed per handle, and what
-		//    a reader waits for is the OPERATION, which the packet names through its `lpOverlapped`.
-		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(readPtrId), disp: 0, width: X64AccessWidth.word64))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(iocpId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.r8), value: NetpollOverlappedToken as MachineWord))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: IocpNoConcurrentThreads))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateIoCompletionPort)))
-
-		// 5) SetFileCompletionNotificationModes(readEnd, FileSkipCompletionPortOnSuccess) — a SYNC read posts no
-		//    packet. Its BOOL is stored to `[syncSilencedPtr]`, which the caller REFUSES TO RUN WITHOUT: see the op's
-		//    own header for what a read whose inline completion still posts a packet does to the next one.
-		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(readPtrId), disp: 0, width: X64AccessWidth.word64))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: FileSkipCompletionPortOnSuccess))
-		let syncSilenced = self.mintVirtual()
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.SetFileCompletionNotificationModes, into: syncSilenced)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(syncSilencedPtrId), disp: 0, src: syncSilenced, width: X64AccessWidth.word64))
-	end 'lowerOsPipeCreateWin64'
 
 	// ⭐ **`CreateFileW(path, GENERIC_READ, FileShareAll, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
 	// NULL)`** — the file-IO runtime's OPEN primitive, and the first site in this file that opens an actual
@@ -3598,7 +3572,7 @@ export type StdToX64Lowering
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.WSAStartup, into: TargetVReg.virtual(resultId))
 	end 'lowerOsSocketStartupWin64'
 
-	// `getaddrinfo(host, NULL, hints, out)` - the service argument is always NULL; see the op's own header
+	// `GetAddrInfoW(host, NULL, hints, out)` - the service argument is always NULL; see the op's own header
 	// for why no port is ever formatted as a string.
 	function lowerOsSocketResolve(resultId ValueId, hostPtrId ValueId, hintsPtrId ValueId, outPtrId ValueId, dstBlock IrBlock)
 		self.requireWin64Import("osSocketResolve")
@@ -3606,13 +3580,13 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: SocketNoServiceName))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(hintsPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(outPtrId)))
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.getaddrinfo, into: TargetVReg.virtual(resultId))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetAddrInfoW, into: TargetVReg.virtual(resultId))
 	end 'lowerOsSocketResolve'
 
 	function lowerOsSocketFreeAddrInfo(addrInfoPtrId ValueId, dstBlock IrBlock)
 		self.requireWin64Import("osSocketFreeAddrInfo")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(addrInfoPtrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.freeaddrinfo)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.FreeAddrInfoW)))
 	end 'lowerOsSocketFreeAddrInfo'
 
 	// The three protocol values are the Std tier's (`ManagedSocketRuntime`'s protocol block owns them,
@@ -4095,6 +4069,12 @@ export type StdToX64Lowering
 				armPipeSource or
 				shortSleep then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(posixNetpollChunk(verb)), args: posixNetpollChunkArgs(verb, operands: operands), dstBlock: dstBlock)
 			postChildExit then panic("lowerOsNetpollLinux: `postChildExit` forwards a child's exit to a completion port, and this lane's `pidfd` becomes readable on its own — `NetpollRuntime` emits it only under `NetpollShape.completionPort`")
+			openPipeServer or
+				openPipeClient or
+				skipCompletionOnSuccess or
+				spawnAttributesInit or
+				spawnAttributesInheritOnly or
+				spawnAttributesDelete then panic("lowerOsNetpollLinux: the Windows verbs build a named pipe and a child's handle list in steps; this lane makes a pipe with one anonymous `StdOp.osPipeCreate` and spawns with no handle list — `GtRuntime` emits them only on x64-windows")
 		end 'v'
 	end 'lowerOsNetpollLinux'
 
@@ -4108,11 +4088,17 @@ export type StdToX64Lowering
 			raiseBreak then self.lowerNetpollRaiseBreakWin64(resultId, port: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			drainBreak then panic("lowerOsNetpollWin64: `drainBreak` is the epoll shape's read of its eventfd, and x64-windows is `NetpollShape.completionPort`, whose break is consumed by receiving its packet — `NetpollRuntime` emits this verb only under `NetpollShape.epoll`")
 			armSource then self.lowerNetpollArmSourceWin64(resultId, poller: netpollOperand(operands, index: 0), fd: netpollOperand(operands, index: 1), dstBlock: dstBlock)
-			armPipeSource then panic("lowerOsNetpollWin64: `armPipeSource` makes a pipe end non-blocking, and this lane's pipes are OVERLAPPED and were given to the port when they were created — `NetpollRuntime.__np_pipe_open` emits nothing here")
+			armPipeSource then self.lowerNetpollPipeNoWaitWin64(resultId, handle: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			openChildSource then panic("lowerOsNetpollWin64: `openChildSource` asks the HOST for a descriptor that reports a child's exit, and Windows has none — `NetpollRuntime.__np_child_open` allocates this lane's source key itself")
 			armChildSource then self.lowerNetpollArmChildWin64(resultId, child: netpollOperand(operands, index: 2), source: netpollOperand(operands, index: 1), callback: netpollOperand(operands, index: 3), dstBlock: dstBlock)
 			closeChildSource then self.lowerNetpollCloseChildWin64(resultId, registeredWait: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			postChildExit then self.lowerNetpollPostChildExitWin64(resultId, port: netpollOperand(operands, index: 0), source: netpollOperand(operands, index: 1), dstBlock: dstBlock)
+			openPipeServer then self.lowerNetpollOpenPipeServerWin64(resultId, name: netpollOperand(operands, index: 0), openMode: netpollOperand(operands, index: 1), dstBlock: dstBlock)
+			openPipeClient then self.lowerNetpollOpenPipeClientWin64(resultId, name: netpollOperand(operands, index: 0), access: netpollOperand(operands, index: 1), securityAttributes: netpollOperand(operands, index: 2), dstBlock: dstBlock)
+			skipCompletionOnSuccess then self.lowerNetpollSkipCompletionWin64(resultId, handle: netpollOperand(operands, index: 0), dstBlock: dstBlock)
+			spawnAttributesInit then self.lowerNetpollSpawnAttributesInitWin64(resultId, list: netpollOperand(operands, index: 0), sizePtr: netpollOperand(operands, index: 1), dstBlock: dstBlock)
+			spawnAttributesInheritOnly then self.lowerNetpollSpawnAttributesInheritOnlyWin64(resultId, list: netpollOperand(operands, index: 0), handles: netpollOperand(operands, index: 1), byteCount: netpollOperand(operands, index: 2), dstBlock: dstBlock)
+			spawnAttributesDelete then self.lowerNetpollSpawnAttributesDeleteWin64(resultId, list: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			openTimer then self.lowerNetpollOpenTimerWin64(resultId, flags: netpollOperand(operands, index: 0), dstBlock: dstBlock)
 			sleepOnTimer then self.lowerNetpollSleepWin64(resultId, microseconds: netpollOperand(operands, index: 0), timer: netpollOperand(operands, index: 1), dstBlock: dstBlock)
 
@@ -4121,6 +4107,71 @@ export type StdToX64Lowering
 			shortSleep then self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.SwitchToThread, into: TargetVReg.virtual(resultId))
 		end 'v'
 	end 'lowerOsNetpollWin64'
+
+	function lowerNetpollOpenPipeServerWin64(resultId ValueId, name ValueId, openMode ValueId, dstBlock IrBlock)
+		self.emitWin64StackArgImm(dstBlock, slot: 0, value: PipeBufferSize)
+		self.emitWin64StackArgImm(dstBlock, slot: 1, value: PipeBufferSize)
+		self.emitWin64StackArgImm(dstBlock, slot: 2, value: PipeDefaultTimeout)
+		self.emitWin64StackArgImm(dstBlock, slot: 3, value: NullPointer)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(name)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(openMode)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: PipeMessageMode))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: PipeMaxInstances))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateNamedPipeW, into: TargetVReg.virtual(resultId))
+	end 'lowerNetpollOpenPipeServerWin64'
+
+	function lowerNetpollOpenPipeClientWin64(resultId ValueId, name ValueId, access ValueId, securityAttributes ValueId, dstBlock IrBlock)
+		self.emitWin64StackArgImm(dstBlock, slot: 0, value: OpenExisting)
+		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
+		self.emitWin64StackArgImm(dstBlock, slot: 2, value: NullPointer)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(name)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(access)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: FileShareNone))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(securityAttributes)))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateFileW, into: TargetVReg.virtual(resultId))
+	end 'lowerNetpollOpenPipeClientWin64'
+
+	function lowerNetpollPipeNoWaitWin64(resultId ValueId, handle ValueId, dstBlock IrBlock)
+		let modeDisp = win64OutgoingArgDisp(NetpollBorrowedWordSlot)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: PipeNoWait))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: modeDisp, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(handle)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(x64PhysReg(X64Register.rdx), base: x64PhysReg(X64Register.rsp), disp: modeDisp))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.SetNamedPipeHandleState, into: TargetVReg.virtual(resultId))
+	end 'lowerNetpollPipeNoWaitWin64'
+
+	function lowerNetpollSpawnAttributesInitWin64(resultId ValueId, list ValueId, sizePtr ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(list)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: SpawnAttributeCount))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(sizePtr)))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.InitializeProcThreadAttributeList, into: TargetVReg.virtual(resultId))
+	end 'lowerNetpollSpawnAttributesInitWin64'
+
+	function lowerNetpollSpawnAttributesInheritOnlyWin64(resultId ValueId, list ValueId, handles ValueId, byteCount ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(NetpollArg5Slot), src: TargetVReg.virtual(byteCount), width: X64AccessWidth.word64))
+		self.emitWin64StackArgImm(dstBlock, slot: NetpollArg6Slot, value: NullPointer)
+		self.emitWin64StackArgImm(dstBlock, slot: NetpollArg7Slot, value: NullPointer)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(list)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: ProcThreadAttributeHandleList))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(handles)))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.UpdateProcThreadAttribute, into: TargetVReg.virtual(resultId))
+	end 'lowerNetpollSpawnAttributesInheritOnlyWin64'
+
+	function lowerNetpollSpawnAttributesDeleteWin64(resultId ValueId, list ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(list)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.DeleteProcThreadAttributeList)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(TargetVReg.virtual(resultId), value: 0))
+	end 'lowerNetpollSpawnAttributesDeleteWin64'
+
+	function lowerNetpollSkipCompletionWin64(resultId ValueId, handle ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(handle)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: FileSkipCompletionPortOnSuccess))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.SetFileCompletionNotificationModes, into: TargetVReg.virtual(resultId))
+	end 'lowerNetpollSkipCompletionWin64'
 
 	// ⭐⭐ **`CreateIoCompletionPort(socket, poller, NetpollOverlappedToken, 0)` — HOW A SOCKET JOINS THE PORT.**
 	// A completion key is fixed per HANDLE, so it cannot name one of several transfers in flight on one socket;
@@ -4811,12 +4862,9 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
 	end 'lowerOsGetPidLinux'
 
-	// Lower `osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr)`, the direction mirror
-	// of `osPipeCreate`. The parent write end is a synchronous outbound server pipe (no
-	// FILE_FLAG_OVERLAPPED, no IOCP); the child read end is a GENERIC_READ inheritable client end.
-	function lowerOsPipeCreateOutbound(namePtrId ValueId, saPtrId ValueId, childReadPtrId ValueId, parentWritePtrId ValueId, dstBlock IrBlock)
+	function lowerOsPipeCreateOutbound(childReadPtrId ValueId, parentWritePtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.emitWin64NamedPipePair(namePtrId, saPtrId: saPtrId, serverOpenMode: PipeWriteOpenMode, serverEndPtrId: parentWritePtrId, clientAccess: GenericRead, clientEndPtrId: childReadPtrId, dstBlock: dstBlock)
+			importCall then panic("lowerOsPipeCreateOutbound: x64-windows builds a pipe in steps through `NetpollVerb.openPipeServer` and `openPipeClient`, so a failed step is seen before the next one runs — `GtRuntime` emits `StdOp.osPipeCreateOutbound` only on a POSIX lane")
 
 			// ⚠ **THE NAME AND THE `SECURITY_ATTRIBUTES` ARE DROPPED.** The first uniquifies a Windows NAMED
 			// pipe so two overlapped reads cannot collide; the second makes the ends inheritable. A POSIX pipe
@@ -4824,41 +4872,6 @@ export type StdToX64Lowering
 			syscall then self.emitHostCall(dstBlock, callee: HostCallee.chunk(HostPipeName), args: twoArgs(childReadPtrId, second: parentWritePtrId))
 		end 'route'
 	end 'lowerOsPipeCreateOutbound'
-
-	function emitWin64NamedPipePair(namePtrId ValueId, saPtrId ValueId, serverOpenMode MachineWord, serverEndPtrId ValueId, clientAccess MachineWord, clientEndPtrId ValueId, dstBlock IrBlock)
-		// 1) CreateNamedPipeW(name, serverOpenMode, PipeMessageMode, PipeMaxInstances, nOutBuf, nInBuf,
-		//    timeout, NULL): the parent's server end. Stack args 5-8 first (rax scratch, while every arg
-		//    register is free), then the register args.
-		self.emitWin64StackArgImm(dstBlock, slot: 0, value: PipeBufferSize)
-		self.emitWin64StackArgImm(dstBlock, slot: 1, value: PipeBufferSize)
-		self.emitWin64StackArgImm(dstBlock, slot: 2, value: PipeDefaultTimeout)
-		self.emitWin64StackArgImm(dstBlock, slot: 3, value: NullPointer)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(namePtrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: serverOpenMode))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: PipeMessageMode))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: PipeMaxInstances))
-		let serverEnd = self.mintVirtual()
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateNamedPipeW, into: serverEnd)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(serverEndPtrId), disp: 0, src: serverEnd, width: X64AccessWidth.word64))
-
-		// 2) CreateFileW(name, clientAccess, FileShareNone, saPtr, OpenExisting, FileAttributeNormal,
-		//    NULL): the child's inheritable client end.
-		self.emitWin64StackArgImm(dstBlock, slot: 0, value: OpenExisting)
-		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
-		self.emitWin64StackArgImm(dstBlock, slot: 2, value: NullPointer)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(namePtrId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: clientAccess))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: FileShareNone))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(saPtrId)))
-		let clientEnd = self.mintVirtual()
-		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateFileW, into: clientEnd)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(clientEndPtrId), disp: 0, src: clientEnd, width: X64AccessWidth.word64))
-
-		// 3) SetHandleInformation(serverEnd, HandleFlagInherit, HandleFlagClear): the parent's end is
-		//    not inherited.
-		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(serverEndPtrId), disp: 0, width: X64AccessWidth.word64))
-		self.emitWin64StripInheritanceOfRcx(dstBlock)
-	end 'emitWin64NamedPipePair'
 
 	// Lower `osWriteFile(handle, buf, len, bytesOutPtr)` to `WriteFile(handle, buf, len, bytesOutPtr,
 	// NULL)`, a synchronous write to the child's stdin pipe. `bytesOutPtr` (the caller's out-param

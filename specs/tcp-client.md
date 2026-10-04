@@ -106,3 +106,81 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: tcp-client.a-host-holding-a-nul-resolves-to-nothing-not-its-prefix -->
+A host holding a NUL names no host on any lane: the connect fails to resolve rather than reaching the host
+the bytes before the NUL name, or the local machine an empty name means to some resolvers. The listener
+the prefix names is live, so a connect that reached it would answer `connected`.
+```maxon
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 2
+
+	if let client = try TcpClient.connect("127.0.0.1\0junk", port: listener.port()) 'ok'
+		print("connected\n")
+	end 'ok' else (e) 'err'
+		print("refused {e.name}\n")
+	end 'err'
+
+	return 0
+end 'main'
+```
+```stdout
+refused resolveFailed
+```
+```exitcode
+0
+```
+
+<!-- test: tcp-client.a-listener-host-holding-a-nul-resolves-to-nothing-not-its-prefix -->
+A listener's host holding a NUL names no address on any lane: the bind fails to resolve rather than binding
+the address the bytes before the NUL name, or every local address an empty name means to some resolvers.
+```maxon
+function main() returns ExitCode
+	if let listener = try TcpListener.bind("127.0.0.1\0junk", port: 0) 'ok'
+		print("bound {listener.port() > 0}\n")
+	end 'ok' else (e) 'err'
+		print("refused {e.name}\n")
+	end 'err'
+
+	return 0
+end 'main'
+```
+```stdout
+refused resolveFailed
+```
+```exitcode
+0
+```
+
+<!-- test: tcp-client.a-non-ascii-host-name-resolves-through-its-unicode-form -->
+<!-- network: live -->
+<!-- unsupported-targets: x64-linux, arm64-linux, arm64-macos, wasm32-wasi -->
+A host name holding non-ASCII characters reaches the Windows resolver as the characters it spells, so
+`münchen.de` resolves as its IDNA form `xn--mnchen-3ya.de` does; the ASCII form is the control that proves
+the network answers. The other lanes pass the name's bytes to the resolver unchanged and no POSIX resolver
+applies IDNA, so the case is about the Windows code-page boundary.
+```maxon
+let ConnectDeadlineMs = 10000 as SocketDeadlineMs
+
+function report(label String, host String)
+	if let client = try TcpClient.connect(host, port: 80, deadlineMs: ConnectDeadlineMs) 'ok'
+		client.close()
+		print("{label}: connected\n")
+	end 'ok' else (e) 'err'
+		print("{label}: refused {e.name}\n")
+	end 'err'
+end 'report'
+
+function main() returns ExitCode
+	report("ascii form", host: "xn--mnchen-3ya.de")
+	report("unicode form", host: "münchen.de")
+	return 0
+end 'main'
+```
+```stdout
+ascii form: connected
+unicode form: connected
+```
+```exitcode
+0
+```

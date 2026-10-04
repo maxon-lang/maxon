@@ -480,10 +480,11 @@ end 'arm64SigstackLayout'
 // mrt_runtime_init (DARWIN) — register the fault handler for SIGSEGV/SIGBUS/SIGFPE. `mrt_start` calls
 // it before `main`, so the very first instruction of user code is already covered.
 //
-// ⚠ **THE MAIN THREAD's ALTERNATE STACK IS REGISTERED FIRST, AND THAT IS THE ONLY ORDER WITH NO WINDOW IN
-// IT.** `SA_ONSTACK` is a promise that a stack exists to switch to, so making the handler reachable before
-// providing one leaves an interval in which a fault would enter the kernel's stack switch with nothing
+// ⚠ **THE MAIN THREAD's ALTERNATE STACK IS REGISTERED BEFORE THE HANDLER, AND THAT IS THE ONLY ORDER WITH NO
+// WINDOW IN IT.** `SA_ONSTACK` is a promise that a stack exists to switch to, so making the handler reachable
+// before providing one leaves an interval in which a fault would enter the kernel's stack switch with nothing
 // registered.
+// The standard descriptors are checked ahead of both (`PosixRuntime.PosixCheckStdFdsName`).
 //
 // Slots: 0..2 = the `struct sigaction`.
 function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
@@ -491,6 +492,7 @@ function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns Fu
 	var asm = Arm64RuntimeAsm.beginFunction((DarwinSigactionBytes / SpillSlotBytes) as StackSize)
 
 	arm64EmitProgramStartedMark(asm)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x9, slot: SlotSigaction)
@@ -546,8 +548,9 @@ end 'arm64EmitDarwinSigactionCall'
 // stops threads the preemption signal's handler beside it. `mrt_start` calls it before `main`, so the very
 // first instruction of user code is already covered.
 //
-// ⚠ The main thread's alternate stack is sized and registered first, the only order with no window in it:
-// `SA_ONSTACK` is a promise that a stack exists to switch to.
+// ⚠ The main thread's alternate stack is sized and registered before the handler, the only order
+// with no window in it: `SA_ONSTACK` is a promise that a stack exists to switch to. The standard
+// descriptors are checked ahead of both (`PosixRuntime.PosixCheckStdFdsName`).
 //
 // The `struct sigaction` is the kernel's (`LinuxSigactionOffHandler` owns the layout), in zeroed slots
 // ascending from slot 0, so `&act` is slot 0's address.
@@ -556,6 +559,7 @@ function buildArm64LinuxRuntimeInitChunk(usesGt bool, target Target) returns Fun
 	var asm = Arm64RuntimeAsm.beginFunction(LinuxSigactionSlots)
 
 	arm64EmitProgramStartedMark(asm)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxSignalStackSizeName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
 
@@ -617,6 +621,7 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 		wasi then panic("appendArm64FaultRuntimeChunks: `wasm32-wasi` is not an arm64 lane — a WASI component takes a wasm trap, not a signal")
 	end 'installLane'
 
+	chunks.push(buildArm64CheckStdFdsChunk(globalData, os: target.os))
 	chunks.push(buildArm64SignalStackInstallChunk(target.os))
 
 	if target.os == Os.linux 'sizedFromTheAuxiliaryVector'
@@ -631,6 +636,15 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 		chunks.push(buildArm64GtStackOverflowChunk(globalData, os: target.os))
 	end 'greenThreads'
 end 'appendArm64FaultRuntimeChunks'
+
+function buildArm64CheckStdFdsChunk(globalData GlobalDataTable, os Os) returns FunctionCodeChunk
+	match os 'lane'
+		macos then return buildArm64PosixCheckStdFdsChunk(globalData, os: os, fcntl: PosixHostCall.importCall(OsImportSlot.fcntl), open: PosixHostCall.importCall(OsImportSlot.open))
+		linux then return buildArm64PosixCheckStdFdsChunk(globalData, os: os, fcntl: PosixHostCall.syscall(Arm64LinuxSyscallFcntl as MachineWord), open: PosixHostCall.syscall(Arm64LinuxSyscallOpenat as MachineWord))
+		windows then panic("buildArm64CheckStdFdsChunk: there is no arm64-Windows lane in this compiler")
+		wasi then panic("buildArm64CheckStdFdsChunk: `wasm32-wasi` is not an arm64 lane and has no standard descriptors to check")
+	end 'lane'
+end 'buildArm64CheckStdFdsChunk'
 
 // mrt_gt_stack_overflow(x0 = pc, x1 = frame pointer, x2 = stack pointer) — see `GtStackOverflowName`. Called on
 // the machine's system stack, 16-aligned.

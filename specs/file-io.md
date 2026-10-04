@@ -715,3 +715,57 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: a-path-holding-a-nul-names-no-file-not-its-prefix -->
+A path holding a NUL names no file on any lane — never the file named by the bytes before the NUL. Every
+`File` operation on one answers as it would for a file that is not there, and the file the prefix names
+is neither read, overwritten, moved nor deleted.
+```maxon
+function main() returns ExitCode
+	let here = try FilePath.from(".") otherwise return 2
+	let prefix = here.join("file-io-nul-probe")
+	let holding = here.join("file-io-nul-probe\0x")
+	let moved = here.join("file-io-nul-probe-moved")
+	try File.writeText(prefix, content: "x") otherwise return 3
+
+	print("exists {File.exists(holding)}\n")
+
+	if let text = try File.readText(holding) 'read'
+		print("readText answered {text}\n")
+	end 'read' else (e) 'readRefused'
+		print("readText refused {e.name}\n")
+	end 'readRefused'
+
+	try File.writeText(holding, content: "y") otherwise 'writeRefused'
+		print("writeText refused\n")
+	end 'writeRefused'
+
+	try File.rename(holding, to: moved) otherwise (e) 'renameRefused'
+		print("rename refused {e.name}\n")
+	end 'renameRefused'
+
+	try File.delete(holding) otherwise (e) 'deleteRefused'
+		print("delete refused {e.name}\n")
+	end 'deleteRefused'
+
+	print("moved exists {File.exists(moved)}\n")
+	let kept = try File.readText(prefix) otherwise "(gone)"
+	print("prefix holds {kept}\n")
+
+	try File.delete(moved) otherwise ignore
+	try File.delete(prefix) otherwise ignore
+	return 0
+end 'main'
+```
+```stdout
+exists false
+readText refused notFound
+writeText refused
+rename refused notFound
+delete refused notFound
+moved exists false
+prefix holds x
+```
+```exitcode
+0
+```

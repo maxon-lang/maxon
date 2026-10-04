@@ -307,6 +307,8 @@ export enum PosixErrno
 	fileExists = 17
 	deviceBusy = 16
 	textFileBusy = 26
+	tooManyOpenFiles = 24
+	fileTableOverflow = 23
 	notADirectory = 20
 	resultTooLarge = 34
 
@@ -890,6 +892,20 @@ export let LinuxEpollReadEvents = LinuxEpollIn + LinuxEpollEdgeTriggered
 export let LinuxFcntlSetFlags = 4
 export let LinuxONonBlock = 0x800
 
+// `mrt_check_std_fds` runs before anything in a POSIX lane's runtime init opens a descriptor. A
+// program started with descriptor 0, 1 or 2 closed would see the runtime's own first descriptors,
+// the poller's among them, land on those numbers, and a child handed that stream would inherit one.
+// So each closed one is opened on the null device; a check or an open that fails any other way ends
+// the program with the message, exit 2.
+export let PosixFcntlGetDescriptorFlags = 1
+export let PosixStandardDescriptorCount = 3
+export let PosixNullDevicePath = b"/dev/null"
+export let PosixCheckStdFdsName = b"mrt_check_std_fds"
+export let PosixStdFdsRefusedMessage = b"fatal error: cannot open standard fds
+"
+
+export let PosixStdFdsRefusedExitCode = 2 as MachineWord
+
 // An eventfd is read and written in 8-byte counters; a raise adds one.
 export let LinuxEventfdCounterBytes = 8
 export let LinuxEventfdRaise = 1
@@ -1004,6 +1020,12 @@ export function posixNetpollChunk(verb NetpollVerb) returns ByteArray
 		closeChildSource gives HostNetpollChildCloseName
 		openTimer panic("posixNetpollChunk: `openTimer` has no chunk on a POSIX lane — a sleep needs no object there, so the isel answers `PosixNoTimerObject` inline")
 		postChildExit panic("posixNetpollChunk: `postChildExit` forwards a child's exit to a completion port, and these kernels make a child's source readable themselves — `NetpollRuntime` emits it only under `NetpollShape.completionPort`")
+		openPipeServer or
+			openPipeClient or
+			skipCompletionOnSuccess or
+			spawnAttributesInit or
+			spawnAttributesInheritOnly or
+			spawnAttributesDelete panic("posixNetpollChunk: the Windows verbs build a named pipe and a child's handle list in steps; a POSIX pipe is one anonymous `pipe2` (`StdOp.osPipeCreate`) and a POSIX spawn has no handle list — `GtRuntime` emits them only on x64-windows")
 	end 'v'
 end 'posixNetpollChunk'
 
@@ -1028,5 +1050,11 @@ export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 			armChildSource gives 2
 		openTimer panic("posixNetpollOperandCount: `openTimer` has no chunk on a POSIX lane — see `posixNetpollChunk`")
 		postChildExit panic("posixNetpollOperandCount: `postChildExit` has no chunk on a POSIX lane — see `posixNetpollChunk`")
+		openPipeServer or
+			openPipeClient or
+			skipCompletionOnSuccess or
+			spawnAttributesInit or
+			spawnAttributesInheritOnly or
+			spawnAttributesDelete panic("posixNetpollOperandCount: the Windows pipe and handle-list verbs have no chunk on a POSIX lane — see `posixNetpollChunk`")
 	end 'v'
 end 'posixNetpollOperandCount'

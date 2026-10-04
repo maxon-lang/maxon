@@ -458,7 +458,7 @@ end 'emitLeaString'
 
 // Print a chunk-local string constant: `lea rcx, [rip + s]; call mrt_write_cstr_stderr`.
 // The single most repeated three lines in this file.
-function emitPrintString(asm X64RuntimeAsm, bytes ByteArray)
+module function emitPrintString(asm X64RuntimeAsm, bytes ByteArray)
 	emitLeaString(asm, dest: X64Register.rcx, bytes: bytes)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 end 'emitPrintString'
@@ -1346,10 +1346,10 @@ function emitWalkStackBounds(asm X64RuntimeAsm, usesGt bool, os Os, lowSlot Stac
 
 	// Each arm leaves the stack's top in r8, or branches to `windowed`.
 	if x64OsProbesStackBounds(os) 'threadBounds'
-		encodeMovRegGsAbs(asm.code, dest: X64Register.r8, disp: TibStackLimitDisp)
+		encodeMovRegGsAbs(asm.code, dest: X64Register.r8, disp: TibStackLimitDisp, wide: true)
 		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
 		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: windowed)
-		encodeMovRegGsAbs(asm.code, dest: X64Register.r8, disp: TibStackBaseDisp)
+		encodeMovRegGsAbs(asm.code, dest: X64Register.r8, disp: TibStackBaseDisp, wide: true)
 		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
 		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: windowed)
 	end 'threadBounds' else if usesGt 'greenThreadBounds'
@@ -1905,8 +1905,9 @@ end 'buildLinuxSignalStackSizeChunk'
 // mrt_runtime_init (LINUX) — registers the fault handler for SIGFPE, SIGSEGV and SIGBUS, and on a lane that
 // stops threads the SIGURG one too, via rt_sigaction. `mrt_start` calls this before `main`, so the first user
 // instruction is already covered. The Linux twin of `buildRuntimeInitChunk`.
-// It sizes and installs the main thread's signal stack first — `SA_ONSTACK` is a promise that one exists, so
-// the handler is not made reachable before it does. Then it builds the kernel's `struct sigaction` in zeroed
+// It checks the standard descriptors first (`PosixRuntime.PosixCheckStdFdsName`), then sizes and
+// installs the main thread's signal stack — `SA_ONSTACK` is a promise that one exists, so the
+// handler is not made reachable before it does. Then it builds the kernel's `struct sigaction` in zeroed
 // slots (`LinuxSigactionOffHandler` owns the layout): the handler, `X64LinuxSigactionFlags`, the mandatory
 // restorer, and the mask left empty — then one rt_sigaction(signal, &act, NULL, 8) per signal.
 //
@@ -1917,6 +1918,7 @@ function buildLinuxRuntimeInitChunk(usesGt bool, target Target) returns Function
 	var asm = X64RuntimeAsm.beginFunction(LinuxSigactionSlots)
 
 	emitProgramStartedMark(asm)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxSignalStackSizeName)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
 
@@ -2164,6 +2166,7 @@ end 'appendX64WindowsHostSurfaceChunks'
 // the scheduler nothing; `usesGt` reaches here for `mrt_panic`'s stack guard alone.
 function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
 	chunks.push(buildLinuxRuntimeInitChunk(usesGt, target: target))
+	chunks.push(buildX64LinuxCheckStdFdsChunk())
 	chunks.push(buildLinuxSignalStackInstallChunk())
 	chunks.push(buildLinuxSignalStackSizeChunk())
 	chunks.push(buildLinuxSigreturnTrampolineChunk())

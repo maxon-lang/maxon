@@ -123,6 +123,8 @@ let Arm64GtTrampArgBufReg = Arm64Register.x11
 // Save the current green thread's callee-saved register + SP/FP state into `from`, restore `to`'s, and
 // `ret` — which on AArch64 branches to the x30 the last `ldp` restored: a resumed thread's await-loop
 // continuation, or, for a fresh one, `__gt_trampoline`. No frame, no `.data`, no OS call.
+// On Linux the OS thread's errno slot moves with them (`GtRuntime.GtOffLastError`); Darwin carries
+// nothing, its failure arms stash instead.
 //
 // ⚠ **`gt.fp` IS WRITTEN AND NOT READ BACK, AND THAT IS THE ISA DIFFERENCE AGAIN.** x64 restores rbp from
 // `to->fp` because rbp is NOT one of its pushed registers; here x29 rides the frame-record pair, so the
@@ -139,16 +141,54 @@ function buildArm64GtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64GtSwitchSpScratch))
 	arm64EmitStoreWord64At(asm, src: Arm64GtSwitchSpScratch, base: Arm64GtSwitchFromReg, byteOffset: GtOffSp)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x29, base: Arm64GtSwitchFromReg, byteOffset: GtOffFp)
+	emitArm64GtCarryLastError(asm, gtReg: Arm64GtSwitchFromReg, os: target.os, direction: GtLastErrorDirection.intoGt)
 
 	// SP = to->sp — from here on we are on the destination green thread's stack.
 	arm64EmitLoadWord64At(asm, dest: Arm64GtSwitchSpScratch, base: Arm64GtSwitchToReg, byteOffset: GtOffSp)
 	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64GtSwitchSpScratch))
+	emitArm64GtCarryLastError(asm, gtReg: Arm64GtSwitchToReg, os: target.os, direction: GtLastErrorDirection.fromGt)
 
 	emitArm64GtSavedBlock(asm, direction: Arm64GtBlockDirection.pop)
 	arm64EmitRet(asm.code)
 
 	return asm.finishChunk(GtContextSwitchName)
 end 'buildArm64GtContextSwitchChunk'
+
+let Arm64GtErrnoSlotReg = Arm64Register.x11
+let Arm64GtErrnoValueReg = Arm64Register.x12
+
+function emitArm64GtCarryLastError(asm Arm64RuntimeAsm, gtReg Arm64Register, os Os, direction GtLastErrorDirection)
+	match os 'os'
+		linux then emitArm64GtCopyThreadLastError(asm, gtReg: gtReg, direction: direction)
+		macos then break 'os'
+		windows then panic("emitArm64GtCarryLastError: there is no arm64-windows backend — `buildBackend` dispatches arm64 to this backend only for macos/linux")
+		wasi then panic("emitArm64GtCarryLastError: wasm32-wasi is not an arm64 lane — a WASI component has no `.text` this fragment could be spliced into")
+	end 'os'
+end 'emitArm64GtCarryLastError'
+
+function emitArm64GtCopyThreadLastError(asm Arm64RuntimeAsm, gtReg Arm64Register, direction GtLastErrorDirection)
+	let noSlot = asm.newLabel()
+	let slotHeld = asm.newLabel()
+
+	arm64LinuxEmitBranchIfThreadHasErrnoSlot(asm, dest: Arm64GtErrnoSlotReg, present: slotHeld)
+	arm64EmitBranchTo(asm, label: noSlot)
+
+	asm.placeLabel(slotHeld)
+
+	match direction 'direction'
+		intoGt then emitArm64GtMoveWord(asm, fromBase: Arm64GtErrnoSlotReg, fromOffset: Arm64GtAddressedWord, toBase: gtReg, toOffset: GtOffLastError)
+		fromGt then emitArm64GtMoveWord(asm, fromBase: gtReg, fromOffset: GtOffLastError, toBase: Arm64GtErrnoSlotReg, toOffset: Arm64GtAddressedWord)
+	end 'direction'
+
+	asm.placeLabel(noSlot)
+end 'emitArm64GtCopyThreadLastError'
+
+let Arm64GtAddressedWord = 0
+
+function emitArm64GtMoveWord(asm Arm64RuntimeAsm, fromBase Arm64Register, fromOffset MachineWord, toBase Arm64Register, toOffset MachineWord)
+	arm64EmitLoadWord64At(asm, dest: Arm64GtErrnoValueReg, base: fromBase, byteOffset: fromOffset)
+	arm64EmitStoreWord64At(asm, src: Arm64GtErrnoValueReg, base: toBase, byteOffset: toOffset)
+end 'emitArm64GtMoveWord'
 
 // Which way the saved block moves. A union of two cases rather than a bool, so the emitter below cannot be
 // called with an argument whose meaning has to be remembered.
@@ -358,6 +398,17 @@ module function emitArm64GtBailUnlessOnItsOwnStack(asm Arm64RuntimeAsm, gt Arm64
 	arm64EmitCmpRuntimeReg(asm, lhs: addr, rhs: scratch)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: bail)
 end 'emitArm64GtBailUnlessOnItsOwnStack'
+
+function emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm Arm64RuntimeAsm, bail BlockId)
+	emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64DoorMReg, gtDest: Arm64DoorGtReg, scratch: Arm64DoorSpReg, bail: bail, os: Os.macos)
+	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64DoorSpReg))
+	emitArm64GtBailUnlessOnItsOwnStack(asm, gt: Arm64DoorGtReg, scratch: Arm64DoorLowReg, addr: Arm64DoorSpReg, bail: bail)
+end 'emitArm64DarwinLoadMachineOnItsOwnStackOrBail'
+
+module function emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm Arm64RuntimeAsm, bail BlockId)
+	emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm, bail: bail)
+	arm64EmitLoadWord64At(asm, dest: Arm64DoorGtReg, base: Arm64DoorMReg, byteOffset: MOffCurrentGt)
+end 'emitArm64DarwinLoadGtOnItsOwnStackOrBail'
 
 // ⭐⭐ **A FOURTH NULL, AND IT EXISTS ON ONE LANE ONLY.** On Darwin the thread pointer is written by the
 // kernel for every thread that has ever existed, so it cannot be zero and no test is emitted — which is why
@@ -989,9 +1040,7 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 	let direct = asm.newLabel()
 
 	if greenThreads 'mayRunOnAGreenThread'
-		emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64DoorMReg, gtDest: Arm64DoorGtReg, scratch: Arm64DoorSpReg, bail: direct, os: Os.macos)
-		arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64DoorSpReg))
-		emitArm64GtBailUnlessOnItsOwnStack(asm, gt: Arm64DoorGtReg, scratch: Arm64DoorLowReg, addr: Arm64DoorSpReg, bail: direct)
+		emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm, bail: direct)
 
 		// ⭐⭐ **THE SAME WINDOW x64's IMPORT SHIM HAS, AND HERE IT CANNOT FIRE — WHICH IS NOT THE SAME FACT
 		// AND MUST NOT READ AS THOUGH IT WERE.** A machine cached in a register while SP is still on the
@@ -1060,7 +1109,7 @@ end 'emitArm64ShimLockDepthStep'
 // door destroys them as any call destroys the caller-saved file (`TargetDialect.arm64ImportCall`'s
 // `implicitDefs`). The low/high pair is also the shuttle for the copied stack words.
 let Arm64DoorMReg = Arm64Register.x10
-let Arm64DoorGtReg = Arm64Register.x11
+module let Arm64DoorGtReg = Arm64Register.x11
 let Arm64DoorSpReg = Arm64Register.x12
 let Arm64DoorLowReg = Arm64Register.x13
 let Arm64DoorHighReg = Arm64Register.x14

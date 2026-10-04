@@ -385,3 +385,39 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: a-path-holding-a-nul-names-no-directory-not-its-prefix -->
+A path holding a NUL names no directory on any lane — never the one named by the bytes before the NUL.
+Creating one creates nothing, and listing one is refused even when the prefix is a directory that exists.
+```maxon
+function main() returns ExitCode
+	let here = try FilePath.from(".") otherwise return 2
+	let madePrefix = here.join("directory-nul-made")
+	let listedPrefix = here.join("directory-nul-listed")
+
+	print("create {Directory.create(here.join("directory-nul-made\0x"))}\n")
+	print("prefix created {Directory.exists(madePrefix)}\n")
+
+	if not Directory.create(listedPrefix) 'setup'
+		return 3
+	end 'setup'
+
+	if let entries = try Directory.list(here.join("directory-nul-listed\0x")) 'listed'
+		print("list answered {entries.count()} entries\n")
+	end 'listed' else (e) 'listRefused'
+		print("list refused {e.name}\n")
+	end 'listRefused'
+
+	try Directory.delete(madePrefix) otherwise ignore
+	try Directory.delete(listedPrefix) otherwise ignore
+	return 0
+end 'main'
+```
+```stdout
+create false
+prefix created false
+list refused notFound
+```
+```exitcode
+0
+```

@@ -7946,8 +7946,8 @@ function isDebugStreamCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: DebugStreamQualifierPrefix)
 end 'isDebugStreamCallee'
 
-// ⭐⭐ **THE TWENTY-THREE `__Builtins` INTRINSICS `stdlib/Subprocess.maxon` BOTTOMS OUT IN —
-// TWENTY-TWO `subprocess*` NAMES PLUS `managedIsNull`, WHICH IS NOT ONE OF THEM.** That module is
+// ⭐⭐ **THE `__Builtins` INTRINSICS `stdlib/Subprocess.maxon` BOTTOMS OUT IN — THE `subprocess*`
+// NAMES PLUS `managedIsNull`, WHICH IS NOT ONE OF THEM.** That module is
 // the whole child-process surface — `Subprocess.run(...)`, `Configuration.run()`, `runDetached()`
 // and `StreamingSubprocess` — and every one of its leaves is a static call on one of these names.
 // See `SubprocessRuntime.maxon` for the entry points each lowers to.
@@ -7955,18 +7955,19 @@ end 'isDebugStreamCallee'
 // ⚠ **`subprocessKill` AND `subprocessSendSignal` ARE DELIBERATELY ABSENT.** NOTHING in the corpus
 // calls either — `stdlib/Subprocess.maxon` has no `kill()` and no `sendSignal()` surface at all. An
 // intrinsic no program can reach is an entry point no spec can exercise, which is exactly the shape
-// a backend panic hides in (this rung's own predecessor was reverted for declaring intrinsics whose
-// runtime entries did not exist); they arrive with the stdlib method that needs them, not before.
+// a backend panic hides in; they arrive with the stdlib method that needs them, not before.
 //
 // THE THREE FAMILIES, which is why the emits below are a handful of shared functions rather than one per name:
 //   • the ATTACHED run — `subprocessSpawn` / `subprocessDetach` (the fourteen-argument contract),
-//     `subprocessGetPid`, `subprocessWaitCollect`, the five `subprocessResult*` readers of the struct it
-//     answers, `subprocessResultRelease` and `subprocessReleaseHandle`;
-//   • the STREAMING child — `subprocessSpawnStreaming`, `subprocessWriteStdinAll`, the two
-//     `subprocessRead*Line` readers, `subprocessReadStdoutBytes` (the EXACT-COUNT reader a framed body
-//     needs, whose second argument is a length where the line readers’ is a ceiling), `subprocessCloseStdin`
-//     and `subprocessWaitExit`, which sit on the `__gt_subp_*` handle table P1.5 slice 1b already built
-//     rather than on a second CreateProcess path;
+//     `subprocessGetPid`, `subprocessQueueStdin`, `subprocessWaitCollect`, the five
+//     `subprocessResult*` readers of the struct it answers, `subprocessResultRelease` and
+//     `subprocessReleaseHandle`;
+//   • the STREAMING child — `subprocessSpawnStreaming`, `subprocessWriteStdinAll` /
+//     `subprocessWriteStdinBytes`, the two `subprocessRead*Line` readers,
+//     `subprocessReadStdoutBytes` (the EXACT-COUNT reader a framed body needs, whose second argument
+//     is a length where the line readers’ is a ceiling), `subprocessCloseStdin` and
+//     `subprocessWaitExit`, which sit on the `__gt_subp_*` handle table rather than on a second
+//     CreateProcess path;
 //   • the HELPERS a caller needs around either — `subprocessResolveOnPath` (PATH + PATHEXT) and
 //     `subprocessLastErrorMessage`, plus `managedIsNull`, which is not a subprocess entry at all (it is a
 //     `__ManagedMemory` predicate lowering to `__mm_is_null`) and is here because this is its only caller.
@@ -7986,6 +7987,8 @@ let BuiltinsSubprocessLastErrorMessageName = b"__Builtins.subprocessLastErrorMes
 let BuiltinsSubprocessLastErrorCodeName = b"__Builtins.subprocessLastErrorCode"
 let BuiltinsSubprocessSpawnStreamingName = b"__Builtins.subprocessSpawnStreaming"
 let BuiltinsSubprocessWriteStdinAllName = b"__Builtins.subprocessWriteStdinAll"
+let BuiltinsSubprocessWriteStdinBytesName = b"__Builtins.subprocessWriteStdinBytes"
+let BuiltinsSubprocessQueueStdinName = b"__Builtins.subprocessQueueStdin"
 let BuiltinsSubprocessReadStdoutLineName = b"__Builtins.subprocessReadStdoutLine"
 let BuiltinsSubprocessReadStderrLineName = b"__Builtins.subprocessReadStderrLine"
 let BuiltinsSubprocessReadStdoutBytesName = b"__Builtins.subprocessReadStdoutBytes"
@@ -8110,7 +8113,8 @@ enum IntrinsicArgShape
 	// section name, each the only non-scalar its contract has.
 	cstringFirst
 
-	// Argument 1 is a `cstring` — `subprocessWriteStdinAll`, whose argument 0 is the stream handle.
+	// Argument 1 is a `cstring` — the stdin payload of `subprocessWriteStdinAll`,
+	// `subprocessWriteStdinBytes` and `subprocessQueueStdin`, whose argument 0 is the handle.
 	cstringSecond
 
 	// The LAST argument is a `cstring` — `sharedMemoryClose`'s published section NAME, whose three leading
@@ -8240,10 +8244,12 @@ let StreamWriteArity = 1 as ParamCount
 // ⭐ **THE ARGUMENT SHAPES THE SUBPROCESS INTRINSICS FALL INTO.** Stated here for `CommandLineArgArity`'s
 // reason — an intrinsic has no signature for SemanticCheck's ordinary arity check to read, because no file
 // declares it — and stated as SHAPES rather than one constant per name because a shape is what a caller can
-// get wrong: the handle ops take one, the timed ops two, the last-error read none, a spawn fourteen and a
-// streaming spawn six. A further constant equal to an existing one would be a second name for one fact.
+// get wrong: the handle ops take one, the timed ops two, the counted stdin ops three, the
+// last-error read none, a spawn fourteen and a streaming spawn six. A further constant equal to an
+// existing one would be a second name for one fact.
 let SubprocessOneArgArity = 1 as ParamCount
 let SubprocessTwoArgArity = 2 as ParamCount
+let SubprocessThreeArgArity = 3 as ParamCount
 let SubprocessNoArgArity = 0 as ParamCount
 
 // The fourteen-argument spawn contract, in order: `argv_mm, argc, cwd_cstr, env_mm, envInherit,
@@ -90307,6 +90313,14 @@ export type Parser
 			if callee.equals(BuiltinsSubprocessWriteStdinAllName) 'subprocessWriteStdinAll'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpWriteAllName, arity: SubprocessTwoArgArity, shape: IntrinsicArgShape.cstringSecond, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
 			end 'subprocessWriteStdinAll'
+
+			if callee.equals(BuiltinsSubprocessWriteStdinBytesName) 'subprocessWriteStdinBytes'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpWriteBytesName, arity: SubprocessThreeArgArity, shape: IntrinsicArgShape.cstringSecond, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+			end 'subprocessWriteStdinBytes'
+
+			if callee.equals(BuiltinsSubprocessQueueStdinName) 'subprocessQueueStdin'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpQueueStdinName, arity: SubprocessThreeArgArity, shape: IntrinsicArgShape.cstringSecond, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+			end 'subprocessQueueStdin'
 
 			if callee.equals(BuiltinsSubprocessResultStatusKindName) 'subprocessResultStatusKind'
 				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SubpResultKindName, arity: SubprocessOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)

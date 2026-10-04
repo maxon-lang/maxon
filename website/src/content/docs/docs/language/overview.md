@@ -27,6 +27,11 @@ The value `main` returns is the process exit code. `ExitCode`'s range depends on
 and a computed one panics at the `return`. A project run with [`maxon test`](/docs/language/testing/)
 needs no `main`; a program compiled with `maxon build` or `maxon execute` without one is **E3001**.
 
+On Linux and macOS a program started with its standard input, output or error closed finds that stream open
+on `/dev/null`: reads see end of input, writes are discarded, and a child that inherits the stream gets the
+same. When the stream cannot be opened there, the program writes `fatal error: cannot open standard fds` to
+standard error and exits with code 2 before `main` runs.
+
 ### Files and Projects
 
 - A program is one `.maxon` file or a directory of them, compiled together. There are no `import`

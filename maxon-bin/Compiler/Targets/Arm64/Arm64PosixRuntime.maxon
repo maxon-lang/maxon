@@ -214,6 +214,7 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt,
 	let notEmpty = asm.newLabel()
 	let noMoreFiles = asm.newLabel()
 	let stillInFlight = asm.newLabel()
+	let tooManyOpen = asm.newLabel()
 	let answered = asm.newLabel()
 
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: noMoreFiles)
@@ -235,6 +236,10 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt,
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: busy)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.textFileBusy.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: busy)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.tooManyOpenFiles.rawValue as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooManyOpen)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.fileTableOverflow.rawValue as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooManyOpen)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorGenericFailure as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
 
@@ -264,6 +269,10 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt,
 
 	asm.placeLabel(stillInFlight)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorIoPending as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(tooManyOpen)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorTooManyOpenFiles as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(noMoreFiles)
@@ -548,7 +557,7 @@ end 'arm64PosixEmitStashFailure'
 
 function arm64PosixEmitPublishErrno(asm Arm64RuntimeAsm, call PosixHostCall, value ParsedInt)
 	match call 'route'
-		importCall then arm64DarwinEmitPublishErrno(asm, value: value)
+		importCall then arm64DarwinEmitPublishAndStashErrno(asm, value: value)
 		syscall then arm64LinuxEmitPublishErrno(asm, value: value)
 	end 'route'
 end 'arm64PosixEmitPublishErrno'
@@ -628,8 +637,10 @@ end 'buildArm64PosixTickMsChunk'
 // `subprocessCloseStdin` closes the parent's, which is a HANG rather than a wrong answer.
 //
 // ⚠ **A FAILED pipe LEAVES BOTH OUT-WORDS ZERO**, which is the Std tier's own "no pipe" reading
-// (`emitSubpDrainStream` tests `readEnd == 0`). A pipe cannot answer descriptor 0 in a process that still
-// holds its standard streams, so a real end is never mistaken for the absence of one.
+// (`emitSubpDrainStream` tests `readEnd == 0`), and leaves its errno where
+// `mrt_host_last_error` reads it, so the spawn that gives up reports why. A pipe cannot answer
+// descriptor 0 in a process that still holds its standard streams, so a real end is never mistaken
+// for the absence of one.
 export function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) returns FunctionCodeChunk
 	let SlotReadOut = 0 as StackSize
 	let SlotWriteOut = 1 as StackSize
@@ -643,9 +654,10 @@ export function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotWriteOut)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotFds)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: flags)
-	arm64PosixEmitHostCall(asm, call: call)
+	arm64PosixEmitHostCallErrno(asm, call: call)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: created)
 
+	arm64PosixEmitStashFailure(asm, call: call)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixNoPipeDescriptor)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoPipeDescriptor)
 	arm64EmitBranchTo(asm, label: published)
@@ -663,6 +675,91 @@ export function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) 
 
 	return asm.finishFunction(HostPipeName)
 end 'buildArm64PosixPipeChunk'
+
+function arm64PosixEmitOpenNullDevice(asm Arm64RuntimeAsm, globalData GlobalDataTable, open PosixHostCall)
+	arm64EmitCStringArg(asm, globalData: globalData, bytes: PosixNullDevicePath)
+
+	match open 'lane'
+		importCall then arm64PosixEmitDarwinOpenArguments(asm)
+		syscall then arm64PosixEmitOpenatArguments(asm)
+	end 'lane'
+
+	arm64PosixEmitVariadicArgument(asm, call: open)
+	arm64PosixEmitHostCall(asm, call: open)
+end 'arm64PosixEmitOpenNullDevice'
+
+function arm64PosixEmitDarwinOpenArguments(asm Arm64RuntimeAsm)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixOpenReadWrite as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixNoFileMode as MachineWord)
+end 'arm64PosixEmitDarwinOpenArguments'
+
+function arm64PosixPassesVariadicOnStack(call PosixHostCall) returns bool
+	return match call 'route'
+		importCall gives true
+		syscall gives false
+	end 'route'
+end 'arm64PosixPassesVariadicOnStack'
+
+function arm64PosixEmitVariadicArgument(asm Arm64RuntimeAsm, call PosixHostCall)
+	if arm64PosixPassesVariadicOnStack(call) 'onStack'
+		arm64EmitStoreWord64Sp(asm.code, src: arm64RuntimeReg(Arm64Register.x2), byteOffset: 0)
+	end 'onStack'
+end 'arm64PosixEmitVariadicArgument'
+
+function arm64PosixBeginCheckStdFdsFrame(fcntl PosixHostCall, open PosixHostCall) returns Arm64RuntimeAsm
+	if arm64PosixPassesVariadicOnStack(fcntl) or arm64PosixPassesVariadicOnStack(open) 'variadic'
+		return Arm64RuntimeAsm.beginVariadicCallerFunction(0)
+	end 'variadic'
+
+	return Arm64RuntimeAsm.beginFunction(0)
+end 'arm64PosixBeginCheckStdFdsFrame'
+
+function arm64PosixEmitOpenatArguments(asm Arm64RuntimeAsm)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxAtFdCwd)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixOpenReadWrite as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoFileMode as MachineWord)
+end 'arm64PosixEmitOpenatArguments'
+
+function arm64PosixEmitEnsureStdDescriptor(asm Arm64RuntimeAsm, globalData GlobalDataTable, fcntl PosixHostCall, open PosixHostCall, descriptor ParsedInt, refused BlockId)
+	let present = asm.newLabel()
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: descriptor as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixFcntlGetDescriptorFlags as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64PosixEmitVariadicArgument(asm, call: fcntl)
+	arm64PosixEmitHostCallErrno(asm, call: fcntl)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: present)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.badDescriptor.rawValue) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: refused)
+
+	arm64PosixEmitOpenNullDevice(asm, globalData: globalData, open: open)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: descriptor as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: refused)
+
+	asm.placeLabel(present)
+end 'arm64PosixEmitEnsureStdDescriptor'
+
+export function buildArm64PosixCheckStdFdsChunk(globalData GlobalDataTable, os Os, fcntl PosixHostCall, open PosixHostCall) returns FunctionCodeChunk
+	var asm = arm64PosixBeginCheckStdFdsFrame(fcntl, open: open)
+
+	let refused = asm.newLabel()
+	let done = asm.newLabel()
+
+	for descriptor in 0 upto PosixStandardDescriptorCount 'each'
+		arm64PosixEmitEnsureStdDescriptor(asm, globalData: globalData, fcntl: fcntl, open: open, descriptor: descriptor, refused: refused)
+	end 'each'
+
+	arm64EmitBranchTo(asm, label: done)
+
+	asm.placeLabel(refused)
+	arm64EmitPrintConstant(asm, globalData: globalData, bytes: PosixStdFdsRefusedMessage)
+	arm64EmitProcessExit(asm, os: os, exitCode: PosixStdFdsRefusedExitCode)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(PosixCheckStdFdsName)
+end 'buildArm64PosixCheckStdFdsChunk'
 
 // ==========================================================================
 // mrt_host_pipe_peek(x0 = handle, x1 = availOutPtr) -> x0 = BOOL
@@ -778,8 +875,7 @@ end 'arm64PosixEmitPollWasInterrupted'
 // libSystem answers -1 and keeps the number in the thread-local `*__error()`, so the result
 // register cannot carry it. ⚠ It CLOBBERS x0, which every caller has already finished with.
 export function arm64PosixEmitDarwinBranchIfEintr(asm Arm64RuntimeAsm, whenInterrupted BlockId)
-	arm64PosixEmitHostCall(asm, call: PosixHostCall.importCall(OsImportSlot.errnoLocation))
-	arm64EmitLoadWord32At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x1)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixErrno.interrupted.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: whenInterrupted)
 end 'arm64PosixEmitDarwinBranchIfEintr'

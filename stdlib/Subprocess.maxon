@@ -201,6 +201,19 @@ public type SpawnEnvironment
 	end 'create'
 end 'SpawnEnvironment'
 
+type SpawnOperands
+	export let executablePath as String
+	export let argv as String
+	export let argc as ElementIndex
+	export let environment as SpawnEnvironment
+
+	static function prepare(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment) returns SpawnOperands throws SubprocessError
+		try requireNulFreeSpawn(executable, arguments: arguments, workingDirectory: workingDirectory, environment: environment)
+		let exePath = try resolveExecutablePath(executable, workingDirectory: workingDirectory)
+		return SpawnOperands{executablePath: exePath, argv: buildArgvBlob(exePath, args: arguments), argc: arguments.count() + 1, environment: try spawnEnvironmentFor(environment)}
+	end 'prepare'
+end 'SpawnOperands'
+
 // =============================================================================
 // Input / Output sources
 // =============================================================================
@@ -209,7 +222,7 @@ end 'SpawnEnvironment'
 ///
 /// - `none` — stdin is closed immediately.
 /// - `inherit` — pass through the parent's stdin.
-/// - `bytes(s)` — write `s` to stdin, then close.
+/// - `bytes(s)` — write `s` to stdin, NUL bytes included, then close.
 /// - `file(p)` — read stdin from a file on disk.
 /// - `hold` — stdin is a pipe the parent opens, hands the read end of to the
 ///   child, and then holds open WITHOUT EVER WRITING TO IT, until the child is
@@ -251,10 +264,11 @@ end 'SpawnEnvironment'
 /// alongside stdout's and stderr's kinds and NONE alongside stdin's, so there is
 /// no slot to put a per-call duration in; a caller-chosen delay is a change to
 /// the builtin's arity, which is declared in the parser as well as in the
-/// emitter. The payload rides the existing `stdinData` slot and IS the caller's,
-/// so only the duration is fixed.
+/// emitter. The payload IS the caller's, so only the duration is fixed.
 ///
-/// Each variant routes its payload through the `subprocessSpawn` stdio triple.
+/// `file` routes its path through the `subprocessSpawn` stdio triple; `bytes`
+/// and `delayed` queue their payload once the spawn answers
+/// (`__Builtins.subprocessQueueStdin`), so it reaches the child whole.
 public union InputSource
 	none
 	inherit
@@ -516,21 +530,21 @@ public type Subprocess
 	/// the `__Builtins.subprocess*` runtime contract: build argv/cwd/stdio
 	/// payloads, spawn, wait-collect, decode the result struct, release.
 	public static function runConfiguration(config Configuration) returns CollectedOutput throws SubprocessError
+		try requireNulFreeStandardStreams(config.standardInput, stdout: config.standardOutput, stderr: config.standardError)
 		try requireDelayedFeedObservable(config.standardInput, stdout: config.standardOutput)
-		let exePath = try resolveExecutablePath(config.executable, workingDirectory: config.workingDirectory)
-		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
-		let argc = config.arguments.count() + 1
-		let spawnEnv = try spawnEnvironmentFor(config.environment)
+		let operands = try SpawnOperands.prepare(config.executable, arguments: config.arguments, workingDirectory: config.workingDirectory, environment: config.environment)
 		let stdinTriple = stdinTripleFromSource(config.standardInput)
 		let stdoutTriple = outputTripleFromDestination(config.standardOutput)
 		let stderrTriple = outputTripleFromDestination(config.standardError)
 		let flags = attachedFlagsFor(config.platformOptions)
 
-		let handle = __Builtins.subprocessSpawn(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), spawnEnv.block.addressableBytes(), spawnEnv.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
+		let handle = __Builtins.subprocessSpawn(operands.argv.addressableBytes(), operands.argc, config.workingDirectory.toString().cstr(), operands.environment.block.addressableBytes(), operands.environment.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
 
 		if handle == -1 'spawnFailed'
-			throw spawnFailure(exePath)
+			throw spawnFailure(operands.executablePath)
 		end 'spawnFailed'
+
+		queueStdinPayload(handle as StreamingHandle, source: config.standardInput)
 
 		let pid = __Builtins.subprocessGetPid(handle)
 		let result = __Builtins.subprocessWaitCollect(handle, config.timeoutMs)
@@ -562,17 +576,14 @@ public type Subprocess
 	/// of an attached handle. stdin/stdout/stderr are forced to discard so the
 	/// child doesn't inherit pipe ends the caller would have to drain.
 	public static function runDetachedConfiguration(config Configuration) returns Pid throws SubprocessError
-		let exePath = try resolveExecutablePath(config.executable, workingDirectory: config.workingDirectory)
-		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
-		let argc = config.arguments.count() + 1
-		let spawnEnv = try spawnEnvironmentFor(config.environment)
+		let operands = try SpawnOperands.prepare(config.executable, arguments: config.arguments, workingDirectory: config.workingDirectory, environment: config.environment)
 		let emptyCStr = subprocessEmptyCString()
 		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
 
-		let pid = __Builtins.subprocessDetach(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), spawnEnv.block.addressableBytes(), spawnEnv.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
+		let pid = __Builtins.subprocessDetach(operands.argv.addressableBytes(), operands.argc, config.workingDirectory.toString().cstr(), operands.environment.block.addressableBytes(), operands.environment.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
 
 		if pid == -1 'spawnFailed'
-			throw spawnFailure(exePath)
+			throw spawnFailure(operands.executablePath)
 		end 'spawnFailed'
 
 		return pid
@@ -600,7 +611,9 @@ typealias SpawnFlagsValue = int(0 to 15)
 /// type-checked at the source language level; the conversion to `cstring`
 /// happens at the spawn call site via `.cstr()`. For kinds whose contract
 /// has no payload (e.g. inherit/discard), pass the empty string and the
-/// runtime treats the leading-NUL cstring as "no payload".
+/// runtime treats the leading-NUL cstring as "no payload". `bytes` and
+/// `delayed` pass it empty too: a `cstring` ends at its first NUL, so their
+/// payload is queued after the spawn (`queueStdinPayload`).
 public type StdioRuntimeTriple
 	public var kind as StdioKindValue
 	public var data as String
@@ -688,6 +701,66 @@ function appendNulTerminated(out ByteArray, source String)
 	appendBytesOf(out, source: source)
 	out.push(BlobTokenTerminator)
 end 'appendNulTerminated'
+
+function requireNulFree(text String, operand String) throws SubprocessError
+	for b in text.bytes() 'eachByte'
+		if b == BlobTokenTerminator 'holdsNul'
+			throw SubprocessError.spawnFailed("{operand} holds a NUL byte, which no operating system passes to a child intact")
+		end 'holdsNul'
+	end 'eachByte'
+end 'requireNulFree'
+
+function requireNulFreeSpawn(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment) throws SubprocessError
+	match executable 'program'
+		name(n) then try requireNulFree(n, operand: "the program name")
+		path(p) then try requireNulFree(p.path, operand: "the program path")
+	end 'program'
+
+	try requireNulFree(workingDirectory.path, operand: "the working directory")
+
+	for (iter, argument) in arguments.withIterator() 'eachArgument'
+		try requireNulFree(argument, operand: "argument {iter.index() + 1}")
+	end 'eachArgument'
+
+	match environment 'env'
+		inherit then return
+		inheritUpdating(overrides) then try requireNulFreeEnvironment(overrides)
+		custom(vars) then try requireNulFreeEnvironment(vars)
+	end 'env'
+end 'requireNulFreeSpawn'
+
+function requireNulFreeEnvironment(vars EnvMap) throws SubprocessError
+	for (name, value) in vars 'eachVariable'
+		try requireNulFree(name, operand: "an environment variable name")
+		try requireNulFree(value, operand: "the value of environment variable '{name}'")
+	end 'eachVariable'
+end 'requireNulFreeEnvironment'
+
+function requireNulFreeStandardStreams(stdin InputSource, stdout OutputDestination, stderr OutputDestination) throws SubprocessError
+	try requireNulFreeInputFile(stdin)
+	try requireNulFreeOutputFile(stdout, operand: "the standard output file path")
+	try requireNulFreeOutputFile(stderr, operand: "the standard error file path")
+end 'requireNulFreeStandardStreams'
+
+function requireNulFreeInputFile(source InputSource) throws SubprocessError
+	match source 'in'
+		file(path) then try requireNulFree(path.path, operand: "the standard input file path")
+		none or
+			inherit or
+			bytes or
+			delayed or
+			hold then return
+	end 'in'
+end 'requireNulFreeInputFile'
+
+function requireNulFreeOutputFile(destination OutputDestination, operand String) throws SubprocessError
+	match destination 'out'
+		file(path) then try requireNulFree(path.path, operand: operand)
+		discard or
+			inherit or
+			collect then return
+	end 'out'
+end 'requireNulFreeOutputFile'
 
 /// Empty cstring sentinel for the slots
 /// whose runtime contract is a cstring but whose value carries no payload
@@ -842,12 +915,29 @@ function stdinTripleFromSource(src InputSource) returns StdioRuntimeTriple
 	return match src 's'
 		none gives StdioRuntimeTriple.create(StdinKind.none.rawValue, data: "", limit: 0)
 		inherit gives StdioRuntimeTriple.create(StdinKind.inherit.rawValue, data: "", limit: 0)
-		bytes(data) gives StdioRuntimeTriple.create(StdinKind.bytes.rawValue, data: data, limit: 0)
+		bytes gives StdioRuntimeTriple.create(StdinKind.bytes.rawValue, data: "", limit: 0)
 		file(path) gives StdioRuntimeTriple.create(StdinKind.file.rawValue, data: path.path, limit: 0)
 		hold gives StdioRuntimeTriple.create(StdinKind.hold.rawValue, data: "", limit: 0)
-		delayed(data) gives StdioRuntimeTriple.create(StdinKind.delayed.rawValue, data: data, limit: 0)
+		delayed gives StdioRuntimeTriple.create(StdinKind.delayed.rawValue, data: "", limit: 0)
 	end 's'
 end 'stdinTripleFromSource'
+
+function queueStdinPayload(handle StreamingHandle, source InputSource)
+	match source 's'
+		bytes(data) then queuePayload(handle, data: data)
+		delayed(data) then queuePayload(handle, data: data)
+		none or
+			inherit or
+			file or
+			hold then return
+	end 's'
+end 'queueStdinPayload'
+
+function queuePayload(handle StreamingHandle, data String)
+	if __Builtins.subprocessQueueStdin(handle, data.cstr(), data.byteLength()) != 0 'refused'
+		panic("Subprocess: the runtime refused the stdin payload of handle {handle}, whose spawn has just answered it with a pipe")
+	end 'refused'
+end 'queuePayload'
 
 function outputTripleFromDestination(dst OutputDestination) returns StdioRuntimeTriple
 	return match dst 'o'
@@ -980,19 +1070,16 @@ public type StreamingSubprocess
 	/// Windows and Linux this process becomes its debugger; on macOS the child is created suspended, for
 	/// a debugger to attach to by its `processId()` before its first instruction runs.
 	public static function spawnTraceable(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment, traced bool) returns StreamingSubprocess throws SubprocessError
-		let exePath = try resolveExecutablePath(executable, workingDirectory: workingDirectory)
-		let argvBlob = buildArgvBlob(exePath, args: arguments)
-		let argc = arguments.count() + 1
-		let spawnEnv = try spawnEnvironmentFor(environment)
+		let operands = try SpawnOperands.prepare(executable, arguments: arguments, workingDirectory: workingDirectory, environment: environment)
 
 		// 4th arg is the spawn-flags bitfield. Streaming spawns never detach — the parent has to keep the
 		// pipes open — and don't take platform-options today, so `traced` is the only bit they ever carry.
 		// The environment block and its source flag follow it.
 		let flags = SpawnFlag.traced.rawValue if traced else 0
-		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.addressableBytes(), argc, workingDirectory.toString().cstr(), flags, spawnEnv.block.addressableBytes(), spawnEnv.source)
+		let rawHandle = __Builtins.subprocessSpawnStreaming(operands.argv.addressableBytes(), operands.argc, workingDirectory.toString().cstr(), flags, operands.environment.block.addressableBytes(), operands.environment.source)
 
 		if rawHandle == -1 'spawnFailed'
-			throw spawnFailure(exePath)
+			throw spawnFailure(operands.executablePath)
 		end 'spawnFailed'
 
 		// rawHandle is the wide builtin return; -1 is excluded above, so the
@@ -1000,12 +1087,12 @@ public type StreamingSubprocess
 		return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false}
 	end 'spawnTraceable'
 
-	/// Write `line + "\n"` to the child's stdin. Throws on broken pipe.
+	/// Write `line + "\n"` to the child's stdin, NUL bytes included. Throws on broken pipe.
 	/// Embeds the newline; pass payload WITHOUT a trailing newline.
 	public function writeStdinLine(line String) throws SubprocessError
 		try requireLive()
 		let withNewline = "{line}\n"
-		let rc = __Builtins.subprocessWriteStdinAll(handle, withNewline.cstr())
+		let rc = __Builtins.subprocessWriteStdinBytes(handle, withNewline.cstr(), withNewline.byteLength())
 
 		if rc != 0 'writeFailed'
 			throw SubprocessError.ioFailed("write to child stdin failed: {lastErrorMessage()}")

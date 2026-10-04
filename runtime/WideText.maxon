@@ -187,7 +187,7 @@ module typealias WideTextWord = int(i64.min to i64.max)
 		return written + 4
 	end 'wideTextStoreCodepointBytes'
 
-	module function __wt_widen(src WideTextWord, byteLen WideTextWord, dst WideTextWord, refuseNul bool) returns WideTextWord
+	module function __wt_widen(src WideTextWord, byteLen WideTextWord, dst WideTextWord) returns WideTextWord
 		var index = 0 as WideTextWord
 		var written = 0 as WideTextWord
 
@@ -195,14 +195,6 @@ module typealias WideTextWord = int(i64.min to i64.max)
 			let sequence = wideTextSequenceWidth(src, index: index, byteLen: byteLen)
 			let consumed = 1 if sequence == 0 else sequence
 			let codepoint = ReplacementCodepoint if sequence == 0 else wideTextCodepoint(src, index: index, width: sequence)
-
-			// A path with a NUL inside becomes the empty name, which matches no file; stopping at the NUL
-			// would open the file its prefix names.
-			if codepoint == 0 and refuseNul 'refused'
-				wideTextStoreUnit(dst, index: 0, value: 0)
-
-				return 0
-			end 'refused'
 
 			written = wideTextStoreCodepointUnits(dst, written: written, codepoint: codepoint)
 			index = index + consumed

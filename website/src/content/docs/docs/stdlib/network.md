@@ -11,10 +11,12 @@ sidebar:
 `close()` is optional.
 
 Available on `x64-windows`, `arm64-macos`, `arm64-linux` and `x64-linux`; refused at compile time (E3104) on
-`wasm32-wasi`. Windows and macOS resolve host names through the platform resolver. The two Linux targets
-link no C library and use a built-in resolver instead: it accepts a numeric address, reads `/etc/hosts`,
-and otherwise sends an `A` query over TCP to the first `nameserver` in `/etc/resolv.conf`. It does not apply
-`search`/`domain` suffixes, does not fall over to a second nameserver and has no timeout of its own.
+`wasm32-wasi`. Windows and macOS resolve host names through the platform resolver. On Windows a non-ASCII
+host name reaches the resolver in its Unicode form, and Windows applies IDNA to it; the other targets hand
+the name's UTF-8 bytes to their resolver as they are. The two Linux targets link a built-in resolver: it
+accepts a numeric address, reads `/etc/hosts`, and otherwise sends an `A` query over TCP to the first
+`nameserver` in `/etc/resolv.conf`. It looks the name up exactly as written, ignoring `search`/`domain`
+lines, asks that one nameserver only, and waits on it for as long as it takes to answer.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
@@ -51,7 +53,7 @@ end 'NetworkError'
 
 | Case | Meaning |
 |------|---------|
-| `resolveFailed` | The host name did not resolve |
+| `resolveFailed` | The host name did not resolve. An empty host, or one holding a NUL byte, is always this, for `connect` and `bind` alike |
 | `connectFailed` | The connection was refused or could not be made |
 | `sendFailed`, `recvFailed` | The OS reported an error |
 | `connectionClosed` | The peer closed the connection |

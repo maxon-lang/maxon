@@ -492,8 +492,7 @@ function x64LinuxEmitStoreErrno(asm X64RuntimeAsm, valueReg X64Register)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: stored)
 
 	asm.placeLabel(perThread)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: X64LinuxErrnoSlotOffset)
-	encodeMovSegBaseReg(asm.code, base: X64Register.rdi, srcReg: valueReg, segment: x64ThreadPointerSegment(Os.linux))
+	x64LinuxEmitWriteThreadErrnoSlot(asm.code, base: X64Register.rdi, srcReg: valueReg)
 
 	asm.placeLabel(stored)
 end 'x64LinuxEmitStoreErrno'
@@ -510,11 +509,20 @@ function x64LinuxEmitLoadErrno(asm X64RuntimeAsm, destReg X64Register)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: loaded)
 
 	asm.placeLabel(perThread)
-	encodeMovRegImm32(asm.code, dest: destReg, value: X64LinuxErrnoSlotOffset)
-	encodeMovRegSegBase(asm.code, dest: destReg, base: destReg, segment: x64ThreadPointerSegment(Os.linux))
+	x64LinuxEmitReadThreadErrnoSlot(asm.code, dest: destReg, base: destReg)
 
 	asm.placeLabel(loaded)
 end 'x64LinuxEmitLoadErrno'
+
+module function x64LinuxEmitReadThreadErrnoSlot(code ByteArray, dest X64Register, base X64Register)
+	encodeMovRegImm32(code, dest: base, value: X64LinuxErrnoSlotOffset)
+	encodeMovRegSegBase(code, dest: dest, base: base, segment: x64ThreadPointerSegment(Os.linux))
+end 'x64LinuxEmitReadThreadErrnoSlot'
+
+module function x64LinuxEmitWriteThreadErrnoSlot(code ByteArray, base X64Register, srcReg X64Register)
+	encodeMovRegImm32(code, dest: base, value: X64LinuxErrnoSlotOffset)
+	encodeMovSegBaseReg(code, base: base, srcReg: srcReg, segment: x64ThreadPointerSegment(Os.linux))
+end 'x64LinuxEmitWriteThreadErrnoSlot'
 
 // `scratch = __mrt_tls_ready ; if (scratch) goto whenReady` — the shared head of the two above.
 function x64LinuxEmitTestTlsReady(asm X64RuntimeAsm, scratch X64Register, whenReady BlockId)
@@ -673,6 +681,7 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	let notEmpty = asm.newLabel()
 	let noMoreFiles = asm.newLabel()
 	let stillInFlight = asm.newLabel()
+	let tooManyOpen = asm.newLabel()
 	let answered = asm.newLabel()
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
@@ -695,6 +704,10 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: busy)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.textFileBusy.rawValue as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: busy)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.tooManyOpenFiles.rawValue as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: tooManyOpen)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrno.fileTableOverflow.rawValue as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: tooManyOpen)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorGenericFailure as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
@@ -724,6 +737,10 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 
 	asm.placeLabel(stillInFlight)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorIoPending as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(tooManyOpen)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorTooManyOpenFiles as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
 	asm.placeLabel(noMoreFiles)
@@ -3014,8 +3031,9 @@ end 'buildX64LinuxTickMsChunk'
 // copy of the parent's stdin WRITE end and never sees EOF when `subprocessCloseStdin` closes the parent's,
 // which is a HANG rather than a wrong answer.
 //
-// ⚠ **A FAILED `pipe2` LEAVES BOTH OUT-WORDS ZERO**, which is the Std tier's own "no pipe" reading. A pipe
-// cannot answer descriptor 0 in a process that still holds its standard streams.
+// ⚠ **A FAILED `pipe2` LEAVES BOTH OUT-WORDS ZERO**, which is the Std tier's own "no pipe" reading,
+// and stashes its errno so the spawn that gives up reports why. A pipe cannot answer descriptor 0
+// in a process that still holds its standard streams.
 function buildX64LinuxPipeChunk() returns FunctionCodeChunk
 	let SlotReadOut = 0 as StackSize
 	let SlotWriteOut = 1 as StackSize
@@ -3033,6 +3051,7 @@ function buildX64LinuxPipeChunk() returns FunctionCodeChunk
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: created)
 
+	x64LinuxEmitStashErrno(asm)
 	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: PosixNoPipeDescriptor)
 	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: PosixNoPipeDescriptor)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: published)
@@ -4194,6 +4213,50 @@ function buildX64LinuxShmUnmapChunk() returns FunctionCodeChunk
 	asm.placeLabel(unmapped)
 	return asm.finishFunction(HostShmUnmapName)
 end 'buildX64LinuxShmUnmapChunk'
+
+function x64LinuxEmitEnsureStdDescriptor(asm X64RuntimeAsm, descriptor ParsedInt, refused BlockId)
+	let present = asm.newLabel()
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: descriptor as MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: PosixFcntlGetDescriptorFlags as MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallFcntl)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: present)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.badDescriptor.rawValue) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: refused)
+
+	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+	emitLeaString(asm, dest: X64Register.rsi, bytes: PosixNullDevicePath)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixOpenReadWrite as MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixNoFileMode as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: descriptor as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: refused)
+
+	asm.placeLabel(present)
+end 'x64LinuxEmitEnsureStdDescriptor'
+
+export function buildX64LinuxCheckStdFdsChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	let refused = asm.newLabel()
+	let done = asm.newLabel()
+
+	for descriptor in 0 upto PosixStandardDescriptorCount 'each'
+		x64LinuxEmitEnsureStdDescriptor(asm, descriptor: descriptor, refused: refused)
+	end 'each'
+
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(refused)
+	emitPrintString(asm, bytes: PosixStdFdsRefusedMessage)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: PosixStdFdsRefusedExitCode)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallExitGroup)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(PosixCheckStdFdsName)
+end 'buildX64LinuxCheckStdFdsChunk'
 
 // ==========================================================================
 // Assembly

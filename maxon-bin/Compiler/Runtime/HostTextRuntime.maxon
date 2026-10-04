@@ -22,8 +22,6 @@ let BlockExtentName = b"__wt_block_extent"
 
 let Utf8UnitBytes = 1 as ParsedInt
 let Utf16UnitBytes = 2 as ParsedInt
-let RefuseNul = 1 as ParsedInt
-let KeepNul = 0 as ParsedInt
 let MeasureOnly = 0 as ParsedInt
 let SurrogateBase = 0x10000 as ParsedInt
 let SurrogateUnitMask = 0x3FF as ParsedInt
@@ -121,14 +119,13 @@ end 'emitTextAllocInto'
 
 // `byteLength + 1` units is always enough: UTF-16 never needs more units than UTF-8 has bytes, and
 // an invalid byte becomes one U+FFFD unit.
-function emitWidenUtf8(module StdModule, block IrBlock, source ValueId, byteLength ValueId, refuseNul bool, allocation TextAllocation, ids ValueMinter) returns ValueId
+function emitWidenUtf8(module StdModule, block IrBlock, source ValueId, byteLength ValueId, allocation TextAllocation, ids ValueMinter) returns ValueId
 	let one = emitConst(module, block: block, value: 1, ids: ids)
 	let units = emitBin(module, block: block, a: byteLength, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let size = emitByteCountOfUnits(module, block: block, units: units, encoding: HostTextEncoding.utf16, ids: ids)
 	let wide = ids.mint()
 	emitTextAllocInto(module, block: block, result: wide, byteCount: size, allocation: allocation, ids: ids)
-	let nulPolicy = emitConst(module, block: block, value: RefuseNul if refuseNul else KeepNul, ids: ids)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: WidenName, args: fourArgs(source, second: byteLength, third: wide, fourth: nulPolicy)))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: WidenName, args: threeArgs(source, second: byteLength, third: wide)))
 
 	return wide
 end 'emitWidenUtf8'
@@ -139,7 +136,7 @@ export function emitUtf8ToWide(module StdModule, block IrBlock, source ValueId, 
 		block gives emitRuntimeCall(module, block: block, callee: BlockExtentName, args: argsOf(source), ids: ids)
 	end 'extent'
 
-	return emitWidenUtf8(module, block: block, source: source, byteLength: byteLength, refuseNul: false, allocation: TextAllocation.slab, ids: ids)
+	return emitWidenUtf8(module, block: block, source: source, byteLength: byteLength, allocation: TextAllocation.slab, ids: ids)
 end 'emitUtf8ToWide'
 
 export function emitHostCString(module StdModule, block IrBlock, cstr ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
@@ -156,16 +153,54 @@ export function emitReleaseHostCopy(module StdModule, block IrBlock, copy ValueI
 	end 'owned'
 end 'emitReleaseHostCopy'
 
+type NulRefusedExtent
+	export let block as IrBlock
+	export let length as ValueId
+
+	static function create(block IrBlock, length ValueId) returns NulRefusedExtent
+		return Self{block: block, length: length}
+	end 'create'
+end 'NulRefusedExtent'
+
+// A text holding a NUL becomes the empty name, which names no file or directory: the OS reads a
+// name only up to its first NUL, so passing the text on would act on whatever its prefix names.
+// Host names take this path too, and `emitResolveHostIp` refuses the empty one.
+function emitNulRefusedExtent(module StdModule, func IrFunction, cur IrBlock, buf ValueId, len ValueId, ids ValueMinter) returns NulRefusedExtent
+	let start = emitConst(module, block: cur, value: 0, ids: ids)
+	var loop = openCountedLoop(module, func: func, cur: cur, from: start, to: len, label: b"pnul", ids: ids)
+	var advance = module.addBlock(func, label: b"pnuls", heat: BlockHeat.normal)
+	var refused = module.addBlock(func, label: b"pnulr", heat: BlockHeat.normal)
+	var joined = module.addBlock(func, label: b"pnulj", heat: BlockHeat.normal)
+
+	let byte = emitLoadByteIndexed(module, block: loop.body, base: buf, index: loop.index, ids: ids)
+	let nul = emitConst(module, block: loop.body, value: NulByte, ids: ids)
+	let holdsNul = emitCmp(module, block: loop.body, a: byte, b: nul, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(loop.body, op: StdOp.condBranch(holdsNul, thenBlockId: refused.id, elseBlockId: advance.id))
+	closeCountedLoop(module, loop: loop, tail: advance, step: SingleStep, ids: ids)
+
+	let extent = ids.mint()
+	joined.blockArgs.push(IrBlockArg.create(extent, argType: StdType.i64))
+	module.setTerminator(loop.done, op: StdOp.branch(joined.id))
+	loop.done.branchEdges.push(BranchEdge.create(joined.id, argIds: argsOf(len)))
+
+	let emptyName = emitConst(module, block: refused, value: 0, ids: ids)
+	module.setTerminator(refused, op: StdOp.branch(joined.id))
+	refused.branchEdges.push(BranchEdge.create(joined.id, argIds: argsOf(emptyName)))
+
+	return NulRefusedExtent.create(joined, length: extent)
+end 'emitNulRefusedExtent'
+
 export function emitPathToText(module StdModule, func IrFunction, cur IrBlock, join IrBlock, pathRec ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
 	let len = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordLengthOffset, ids: ids)
 	let buf = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordBufferOffset, ids: ids)
+	let extent = emitNulRefusedExtent(module, func: func, cur: cur, buf: buf, len: len, ids: ids)
 
 	if encoding == HostTextEncoding.utf8 'narrow'
-		return emitBytesToCString(module, func: func, cur: cur, join: join, buf: buf, len: len, ids: ids)
+		return emitBytesToCString(module, func: func, cur: extent.block, join: join, buf: buf, len: extent.length, ids: ids)
 	end 'narrow'
 
-	let wide = emitWidenUtf8(module, block: cur, source: buf, byteLength: len, refuseNul: true, allocation: TextAllocation.raw, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(join.id))
+	let wide = emitWidenUtf8(module, block: extent.block, source: buf, byteLength: extent.length, allocation: TextAllocation.raw, ids: ids)
+	module.setTerminator(extent.block, op: StdOp.branch(join.id))
 
 	return wide
 end 'emitPathToText'

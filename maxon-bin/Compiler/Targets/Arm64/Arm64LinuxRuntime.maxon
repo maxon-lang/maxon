@@ -157,7 +157,7 @@ let Arm64LinuxSyscallRenameat = 38
 // `CreateFileMappingW` does in one. VERIFIED by invoking 46 on an aarch64 guest against a `/dev/shm` file
 // whose `st_size` then read back as the requested length.
 let Arm64LinuxSyscallFtruncate = 46
-let Arm64LinuxSyscallOpenat = 56
+export let Arm64LinuxSyscallOpenat = 56
 export let Arm64LinuxSyscallClose = 57
 let Arm64LinuxSyscallGetdents64 = 61
 let Arm64LinuxSyscallRead = 63
@@ -194,7 +194,7 @@ let Arm64LinuxSyscallPidfdOpen = 434
 
 // The per-descriptor flag change a polled pipe end needs — see `NetpollVerb.armPipeSource` for why the flag
 // cannot come from `pipe2`.
-let Arm64LinuxSyscallFcntl = 25
+export let Arm64LinuxSyscallFcntl = 25
 let Arm64LinuxSyscallMprotect = 226
 export let Arm64LinuxSyscallSetPriority = 140
 export let Arm64LinuxSyscallGetPriority = 141
@@ -409,6 +409,9 @@ let Arm64LinuxTimespecNsecSlot = 2 as StackSize
 // and is now RESERVED rather than merely unused. A thread that has no block yet — every thread of a program
 // with no scheduler, and the main thread before `__sched_init_procs` — falls back to the process-wide
 // `.data` word, which is sound because at that moment it is the only thread there is.
+// `__gt_context_switch` also moves the per-thread word in and out of each green thread
+// (`GtRuntime.GtOffLastError`), through `arm64LinuxEmitBranchIfThreadHasErrnoSlot`, and carries
+// nothing on a thread with no block.
 //
 // ⚠ **NO INSTRUCTION HERE TOUCHES THE FLAGS**, which is load-bearing: `arm64LinuxEmitStashIfFailed` branches
 // on a `cmp` taken BEFORE the stash and `arm64LinuxEmitFailureSentinel` reads one after it. `mrs`, `cbnz`,
@@ -416,12 +419,16 @@ let Arm64LinuxTimespecNsecSlot = 2 as StackSize
 function arm64LinuxEmitErrnoAddr(asm Arm64RuntimeAsm, dest Arm64Register)
 	let perThread = asm.newLabel()
 
-	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(dest), source: Arm64ThreadPointerSource.linuxWritable)
-	arm64EmitCbnzTo(asm, reg: dest, label: perThread)
+	arm64LinuxEmitBranchIfThreadHasErrnoSlot(asm, dest: dest, present: perThread)
 	arm64EmitDataAddr(asm, dest: dest, label: LinuxErrnoLabel)
 
 	asm.placeLabel(perThread)
 end 'arm64LinuxEmitErrnoAddr'
+
+module function arm64LinuxEmitBranchIfThreadHasErrnoSlot(asm Arm64RuntimeAsm, dest Arm64Register, present BlockId)
+	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(dest), source: Arm64ThreadPointerSource.linuxWritable)
+	arm64EmitCbnzTo(asm, reg: dest, label: present)
+end 'arm64LinuxEmitBranchIfThreadHasErrnoSlot'
 
 // x0 holds a FAILED syscall's `-errno`. Stash the POSITIVE errno where `mrt_host_last_error` reads it, and
 // leave that positive value in x9 for a caller that must also test it (`mrt_host_dir_current_path` does).

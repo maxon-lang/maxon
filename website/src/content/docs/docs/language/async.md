@@ -518,6 +518,10 @@ started with `async` like any other waiting function (`try await` for the throwi
 `File.readText`). The [standard library reference](/docs/stdlib/) documents the file, network and process
 APIs.
 
+A failed operation reports the reason its own call into the operating system gave, such as the case of a file
+error or the `os error N` of a `SubprocessError`, even when its green thread ran on another OS thread between
+that call and the report.
+
 ## The Scheduler
 
 - **Green threads.** Every green thread starts on a small stack that grows on demand, so thousands are
@@ -546,6 +550,9 @@ Each of these aborts writes `fatal error: runtime abort N (name)` to stderr, the
 | 96 | a service send found a value with a second owner |
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
 | 120 | a deep copy reached an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled |
+
+Exit code 2 with `fatal error: cannot open standard fds` is the start-up check described under
+[Entry Point](/docs/language/overview/#entry-point).
 
 ## Targets
 

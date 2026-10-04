@@ -2894,6 +2894,12 @@ export type StdToArm64Lowering
 				armPipeSource or
 				shortSleep then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(posixNetpollChunk(verb)), args: posixNetpollChunkArgs(verb, operands: operands), dstRef: dstRef)
 			postChildExit then panic("lowerOsNetpoll: `postChildExit` forwards a child's exit to a completion port, and both of this CPU's lanes make a child's source readable on its own — `NetpollRuntime` emits it only under `NetpollShape.completionPort`")
+			openPipeServer or
+				openPipeClient or
+				skipCompletionOnSuccess or
+				spawnAttributesInit or
+				spawnAttributesInheritOnly or
+				spawnAttributesDelete then panic("lowerOsNetpoll: the Windows verbs build a named pipe and a child's handle list in steps; both of this CPU's lanes make a pipe with one anonymous `StdOp.osPipeCreate` and spawn with no handle list — `GtRuntime` emits them only on x64-windows")
 		end 'v'
 	end 'lowerOsNetpoll'
 

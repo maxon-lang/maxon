@@ -155,8 +155,9 @@ export enum OsImportSlot
 	// --- The filesystem, standard-input and argv substrate ---
 	//
 	// ⭐⭐ **`__error` IS THE WHOLE errno STORY, AND IT IS A FUNCTION RATHER THAN A LOCATION.** POSIX makes
-	// `errno` a per-thread lvalue; Darwin implements it as `*__error()`, so both READING the last failure and
-	// PUBLISHING one go through this call. `Arm64DarwinRuntime.buildArm64DarwinLastErrorChunk` is the single
+	// `errno` a per-thread lvalue; Darwin implements it as `*__error()`, so both READING a failure and
+	// PUBLISHING one go through this call, a green thread's failure arm stashing what it read in the thread
+	// (`GtRuntime.GtOffLastError`). `Arm64DarwinRuntime.buildArm64DarwinLastErrorChunk` is the single
 	// place that maps a Darwin errno onto the Win32 number `StdOp.osLastError`'s consumers test, which is why
 	// the family costs one slot and not one per failing call.
 	//

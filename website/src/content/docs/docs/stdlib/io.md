@@ -53,6 +53,9 @@ Each operation throws its own error enum. They share these cases:
 | `busy` | Another process holds the file open in a way that excludes this operation |
 | `failed` | Any other failure |
 
+On every target a path holding a NUL byte is a missing file: each operation on it answers as it does for a
+file that is not there, and the file named by the bytes before the NUL is left as it was.
+
 | Error enum | Cases |
 |------------|-------|
 | `FileReadError` | `notFound`, `accessDenied`, `busy`, `failed` |
@@ -200,6 +203,9 @@ end 'DirectoryDeleteError'
 | `DirectoryDeleteError` | `notFound` | Nothing exists at `path` |
 | `DirectoryDeleteError` | `notEmpty` | The directory still holds an entry |
 | `DirectoryDeleteError` | `deleteFailed` | The removal fails for any other reason |
+
+On every target a path holding a NUL byte is a missing directory: `Directory.create` answers false, and the
+other methods answer as they do for a directory that is not there.
 
 ```maxon
 function main() returns ExitCode
@@ -649,10 +655,10 @@ override's spelling, and a map that names one variable in two spellings makes th
 |-------------|-------------------|
 | `none` | Closed; reads see end of input immediately |
 | `inherit` | This process's stdin |
-| `bytes(data)` | `data`, then end of input |
+| `bytes(data)` | `data` whole, NUL bytes included, then end of input |
 | `file(path)` | The file's contents |
 | `hold` | A pipe that stays open and silent until the child exits, so a read blocks |
-| `delayed(data)` | Like `hold` until about one second after the child's first stdout byte, then `data` and end of input. Requires `standardOutput` to be `collect`; any other pairing throws `spawnFailed` before spawning. |
+| `delayed(data)` | Like `hold` until about one second after the child's first stdout byte, then `data` whole and end of input. Requires `standardOutput` to be `collect`; any other pairing throws `spawnFailed` before spawning. |
 
 | OutputDestination | The stream |
 |-------------------|------------|
@@ -660,6 +666,12 @@ override's spelling, and a map that names one variable in two spellings makes th
 | `inherit` | Passed through to this process's stream |
 | `collect(limitBytes)` | Captured into `CollectedOutput`, truncated at the `limitBytes` limit |
 | `file(path)` | Written to a file |
+
+A run feeds `bytes` and `delayed` input while it drains the child's output, so a child that writes before it
+reads still receives its whole input, and a `timeoutMs` deadline fires while input is still pending.
+
+On Windows a child inherits only the three standard handles its own configuration gives it; the pipes of
+other spawns in progress at the same moment stay with this process.
 
 ### Results
 
@@ -702,7 +714,13 @@ end 'SubprocessError'
 `executableNotFound` is thrown on every target when the executable does not exist: a bare name no search
 finds, or an `Executable.path` naming a missing file. `spawnFailed` is any other refusal to start the child —
 a `file` stream that cannot be opened and a `workingDirectory` that does not exist included, though either
-fails with a not-found code; its reason carries the OS error number (`os error 5`).
+fails with a not-found code; its reason carries the OS error number (`os error 5`). A spawn whose pipe
+cannot be made throws it with the error of the call that failed, `os error 4` when the process has too many
+files open.
+
+A NUL byte in the program name or path, an argument, the working directory, an environment variable's name
+or value, or a `file` stream's path throws `spawnFailed` before any child starts, with a reason naming that
+operand.
 
 `timeout` carries the output the child had already produced when the deadline killed it, since that partial
 text is usually the only evidence of why it hung. Both fields are empty when the layer that threw was not
@@ -741,7 +759,7 @@ request after request. A read parks the calling green thread until data arrives.
 | `StreamingSubprocess.spawnWithEnvironment(executable, arguments:, workingDirectory:, environment Environment)` | `StreamingSubprocess` | `SubprocessError` | With a working directory (empty for the parent's) and an environment. |
 | `StreamingSubprocess.spawnTraceable(executable, arguments:, workingDirectory:, environment Environment, traced bool)` | `StreamingSubprocess` | `SubprocessError` | As `spawnWithEnvironment`; with `traced`, the child is created for a debugger: on Windows and Linux this process becomes its debugger, and on macOS the child is created suspended, for a debugger to attach to by its `processId()`. |
 | `processId()` | `Pid` | `SubprocessError` | The child's operating-system process id. Throws once the handle is released. |
-| `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline. Throws on a broken pipe. |
+| `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline, NUL bytes included. Throws on a broken pipe. |
 | `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF); `""` is a blank line. Throws `endOfStream` when the stream has ended. Lines over 1 MiB arrive in pieces. |
 | `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | With an explicit per-call cap. |
 | `readStdoutBytes(count)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; nothing is stripped. For length-framed protocols. Shares a buffer with the line readers. |

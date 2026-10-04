@@ -16,8 +16,8 @@ three families.
 
 | Family | Intrinsics |
 |---|---|
-| the ATTACHED run | `subprocessSpawn` / `subprocessDetach` (fourteen arguments), `subprocessGetPid`, `subprocessWaitCollect`, `subprocessResultStatusKind` / `StatusCode` / `Stdout` / `Stderr` / `DurationMs` / `Release`, `subprocessReleaseHandle` |
-| the STREAMING child | `subprocessSpawnStreaming`, `subprocessWriteStdinAll`, `subprocessReadStdoutLine` / `ReadStderrLine`, `subprocessReadStdoutBytes`, `subprocessStdoutState` / `subprocessStderrState`, `subprocessCloseStdin`, `subprocessWaitExit`, and the three that ask rather than commit — `subprocessPollExit`, `subprocessTryReadStdoutLine` / `TryReadStderrLine` |
+| the ATTACHED run | `subprocessSpawn` / `subprocessDetach` (fourteen arguments), `subprocessGetPid`, `subprocessQueueStdin`, `subprocessWaitCollect`, `subprocessResultStatusKind` / `StatusCode` / `Stdout` / `Stderr` / `DurationMs` / `Release`, `subprocessReleaseHandle` |
+| the STREAMING child | `subprocessSpawnStreaming`, `subprocessWriteStdinAll` / `subprocessWriteStdinBytes`, `subprocessReadStdoutLine` / `ReadStderrLine`, `subprocessReadStdoutBytes`, `subprocessStdoutState` / `subprocessStderrState`, `subprocessCloseStdin`, `subprocessWaitExit`, and the three that ask rather than commit — `subprocessPollExit`, `subprocessTryReadStdoutLine` / `TryReadStderrLine` |
 | the helpers | `subprocessResolveOnPath`, `subprocessLastErrorMessage`, and `managedIsNull` (a `__ManagedMemory` predicate whose only corpus caller is the executable lookup) |
 
 `subprocessKill` and `subprocessSendSignal` are deliberately NOT surfaced, because no corpus file calls
@@ -467,7 +467,7 @@ verbatim=true len=17 kind=0
 never spawned — a negative handle, one whose packed generation (`3` is generation 0) no live slot ever
 holds, and live-looking ones (`64`, `9999`) in a table no spawn allocated. ⚠ A guessed handle that
 happens to equal a live one is the live one; the guard names a child, it does not authenticate the
-caller. All eight: the two VOID entries and the two READERS are here precisely because they are the
+caller. All ten: the two VOID entries and the two READERS are here precisely because they are the
 ones that fault unguarded, and reaching the final `print` at all is
 what proves they returned.
 ```maxon
@@ -477,7 +477,9 @@ function main() returns ExitCode
 	let waitCollect = __Builtins.subprocessWaitCollect(-1, 0)
 	let waitExit = __Builtins.subprocessWaitExit(9999, 0)
 	let writeAll = __Builtins.subprocessWriteStdinAll(3, empty.cstr())
-	print("getPid={getPid} waitCollect={waitCollect} waitExit={waitExit} writeAll={writeAll}\n")
+	let writeBytes = __Builtins.subprocessWriteStdinBytes(-1, empty.cstr(), 0)
+	let queue = __Builtins.subprocessQueueStdin(64, empty.cstr(), 0)
+	print("getPid={getPid} waitCollect={waitCollect} waitExit={waitExit} writeAll={writeAll} writeBytes={writeBytes} queue={queue}\n")
 	let outLine = String.init(__Builtins.subprocessReadStdoutLine(-1, 64))
 	let errLine = String.init(__Builtins.subprocessReadStderrLine(64, 64))
 	__Builtins.subprocessCloseStdin(-1)
@@ -490,7 +492,7 @@ end 'main'
 0
 ```
 ```stdout
-getPid=-1 waitCollect=-1 waitExit=-1 writeAll=-1
+getPid=-1 waitCollect=-1 waitExit=-1 writeAll=-1 writeBytes=-1 queue=-1
 readOut=0 readErr=0 voidsReturned=true
 
 ```
@@ -2439,4 +2441,87 @@ exit=0 out=ok
 ```
 ```exitcode
 0
+```
+
+<!-- test: subprocess-builtins.posix-a-released-handle-cannot-release-the-spawn-that-reuses-its-slot -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A released handle stays dead while a new spawn is still being set up in the slot it named. The first spawn
+makes a FIFO, is collected and released, so the second spawn takes the same slot. The second spawn reads its
+child's stdin from that FIFO, and opening a FIFO for reading waits until something opens it for writing, so the
+second spawn, made in a service, holds the slot mid-setup for as long as this program likes. While it waits,
+the first spawn's handle is released again, which must do nothing; then the FIFO is written and the second
+child, `/bin/cat`, echoes what arrived. Windows has no file whose open waits for a writer, so it would need a
+different way to hold a spawn between claiming its slot and launching its child.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+let setupHoldMs = 500
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+type FifoReader
+	var summary as String
+
+	static function create() returns Self
+		return Self{summary: ""}
+	end 'create'
+
+	export function catFrom(fifo String)
+		var argv = ByteArray.create()
+		appendToken(argv, token: "/bin/cat")
+		let empty = ""
+		let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+		let h = __Builtins.subprocessSpawn(argv, 1, empty.cstr(), env, 1, 3, fifo.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+		let r = __Builtins.subprocessWaitCollect(h, 0)
+		let out = String.init(__Builtins.subprocessResultStdout(r))
+		self.summary = "kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} out={out}"
+		__Builtins.subprocessResultRelease(r)
+		__Builtins.subprocessReleaseHandle(h)
+	end 'catFrom'
+
+	export function answer() returns String
+		return self.summary.clone()
+	end 'answer'
+end 'FifoReader'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "d=$(mktemp -d) && mkfifo \"$d/f\" && printf %s \"$d\"")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let first = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let made = __Builtins.subprocessWaitCollect(first, 0)
+	let dir = String.init(__Builtins.subprocessResultStdout(made))
+	__Builtins.subprocessResultRelease(made)
+	__Builtins.subprocessReleaseHandle(first)
+	let fifo = "{dir}/f"
+
+	let reader = spawn FifoReader.create()
+	reader.catFrom("{dir}/f")
+	sleep(setupHoldMs)
+	__Builtins.subprocessReleaseHandle(first)
+	try File.writeText(try FilePath.from(fifo) otherwise return 2, content: "through the fifo") otherwise return 3
+	let answer = try await reader.answer() otherwise return 8
+	print("second: {answer}\n")
+
+	try File.delete(try FilePath.from(fifo) otherwise return 4) otherwise return 5
+	try Directory.delete(try FilePath.from(dir) otherwise return 6) otherwise return 7
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+second: kind=0 code=0 out=through the fifo
 ```

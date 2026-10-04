@@ -119,6 +119,11 @@ export function arm64DarwinCallImportAnswering(asm Arm64RuntimeAsm, slot OsImpor
 	arm64EmitImportAnswerWidth(asm, slot: slot)
 end 'arm64DarwinCallImportAnswering'
 
+module function arm64DarwinEmitLoadErrno(asm Arm64RuntimeAsm, dest Arm64Register)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
+	arm64EmitLoadWord32At(asm, dest: dest, base: Arm64Register.x0, byteOffset: 0)
+end 'arm64DarwinEmitLoadErrno'
+
 // `x0 = clock_gettime_nsec_np(clockId)` — the one call three of the four chunks below open with.
 function arm64DarwinReadClockNanos(asm Arm64RuntimeAsm, clockId MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: clockId)
@@ -1138,20 +1143,86 @@ let DarwinSearchAllocFailedMessage = b"panic: out of memory opening a directory 
 // mrt_darwin_last_error() -> x0 = the Win32 code the Std tier classifies
 // ==========================================================================
 
-// ⭐⭐ **`GetLastError()` ON THIS LANE: FETCH `*__error()` AND HAND IT TO THE SHARED TRANSLATOR.** The
+// ⭐⭐ **`GetLastError()` ON THIS LANE: FETCH THE ERRNO AND HAND IT TO THE SHARED TRANSLATOR.** The
 // MAPPING is `Arm64PosixRuntime.arm64EmitErrnoToWin32`'s; the two numbers the OSes disagree about are passed
 // in, and every other errno it tests is the same on both POSIX lanes. What is Darwin's beyond those is only
-// the FETCH: libc keeps errno in thread-local storage reachable through `__error()`, where the Linux lane has
-// no libc and reads the word its own chunks stashed.
-function buildArm64DarwinLastErrorChunk() returns FunctionCodeChunk
+// the FETCH: on a green thread, the word its failure arms stashed (`GtRuntime.GtOffLastError`);
+// elsewhere libc's thread-local `__error()`. The Linux lane has no libc and reads the word its own
+// chunks stashed.
+function buildArm64DarwinLastErrorChunk(greenThreads bool) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
-	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
-	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+	let libcErrno = asm.newLabel()
+	let fetched = asm.newLabel()
+
+	if greenThreads 'mayRunOnAGreenThread'
+		emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm, bail: libcErrno)
+		arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64DoorGtReg, byteOffset: GtOffLastError as MachineWord)
+		arm64EmitBranchTo(asm, label: fetched)
+	end 'mayRunOnAGreenThread'
+
+	asm.placeLabel(libcErrno)
+	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x0)
+
+	asm.placeLabel(fetched)
 	arm64EmitErrnoToWin32(asm, wouldBlock: DarwinErrno.wouldBlock.rawValue, dirNotEmpty: DarwinErrno.directoryNotEmpty.rawValue)
 
 	return asm.finishFunction(HostLastErrorName)
 end 'buildArm64DarwinLastErrorChunk'
+
+// Stash libc's `errno`, or the errno in x0, in the running green thread
+// (`GtRuntime.GtOffLastError`). A failure arm that calls neither reports, on a green thread,
+// whatever reason was stashed last. Both leave x0 and x1 as they found them, so an arm stashes
+// without disturbing the answer it is about to give or the errno it goes on testing.
+let DarwinStashErrnoName = b"mrt_darwin_stash_errno"
+
+let DarwinStashErrnoValueName = b"mrt_darwin_stash_errno_value"
+
+function buildArm64DarwinStashErrnoChunk(greenThreads bool) returns FunctionCodeChunk
+	let SlotAnswer = 0 as StackSize
+	let SlotSecondAnswer = 1 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(2)
+
+	if greenThreads 'mayRunOnAGreenThread'
+		arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotAnswer)
+		arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotSecondAnswer)
+		arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x0)
+		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoValueName)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotAnswer)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSecondAnswer)
+	end 'mayRunOnAGreenThread'
+
+	return asm.finishFunction(DarwinStashErrnoName)
+end 'buildArm64DarwinStashErrnoChunk'
+
+function buildArm64DarwinStashErrnoValueChunk(greenThreads bool) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	let finished = asm.newLabel()
+
+	if greenThreads 'mayRunOnAGreenThread'
+		emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm, bail: finished)
+		arm64EmitStoreWord32At(asm, src: Arm64Register.x0, base: Arm64DoorGtReg, byteOffset: GtOffLastError as MachineWord)
+	end 'mayRunOnAGreenThread'
+
+	asm.placeLabel(finished)
+	return asm.finishFunction(DarwinStashErrnoValueName)
+end 'buildArm64DarwinStashErrnoValueChunk'
+
+function arm64DarwinEmitStashIfStatusFailed(asm Arm64RuntimeAsm)
+	let succeeded = asm.newLabel()
+
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: succeeded)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
+
+	asm.placeLabel(succeeded)
+end 'arm64DarwinEmitStashIfStatusFailed'
+
+module function arm64DarwinEmitPublishAndStashErrno(asm Arm64RuntimeAsm, value ParsedInt)
+	arm64DarwinEmitPublishErrno(asm, value: value)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
+end 'arm64DarwinEmitPublishAndStashErrno'
 
 // ==========================================================================
 // mrt_darwin_read_file / mrt_darwin_write_file
@@ -1220,6 +1291,7 @@ function buildArm64DarwinTransferChunk(name ByteArray, importSlot OsImportSlot) 
 	// available: the diagnostic chain reaches these chunks by direct branch from hand-assembled code, never
 	// through the lowering that brackets them.
 	arm64PosixEmitDarwinBranchIfEintr(asm, whenInterrupted: issue)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
@@ -1257,6 +1329,7 @@ function buildArm64DarwinFileSizeChunk() returns FunctionCodeChunk
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.fstat)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: measured)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
@@ -1284,6 +1357,7 @@ function buildArm64DarwinFileDeleteChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.unlink)
+	arm64DarwinEmitStashIfStatusFailed(asm)
 	arm64EmitWin32BoolFromZeroStatus(asm)
 
 	return asm.finishFunction(HostFileDeleteName)
@@ -1297,6 +1371,7 @@ function buildArm64DarwinDirCreateChunk() returns FunctionCodeChunk
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixDirectoryMode)
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.mkdir)
+	arm64DarwinEmitStashIfStatusFailed(asm)
 	arm64EmitWin32BoolFromZeroStatus(asm)
 
 	return asm.finishFunction(HostDirCreateName)
@@ -1309,6 +1384,7 @@ function buildArm64DarwinDirRemoveChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.rmdir)
+	arm64DarwinEmitStashIfStatusFailed(asm)
 	arm64EmitWin32BoolFromZeroStatus(asm)
 
 	return asm.finishFunction(HostDirRemoveName)
@@ -1343,6 +1419,7 @@ function buildArm64DarwinFileRenameChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotNewPath)
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.rename)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: renamed)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
@@ -1500,6 +1577,7 @@ function buildArm64DarwinFileAttributesChunk() returns FunctionCodeChunk
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.stat)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: described)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: InvalidFileAttributes as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
@@ -1547,8 +1625,8 @@ function buildArm64DarwinDirCurrentPathChunk() returns FunctionCodeChunk
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(refused)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
-	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x0)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoValueName)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrno.resultTooLarge.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooSmall)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
@@ -1634,6 +1712,7 @@ function buildArm64DarwinDirFindNextChunk() returns FunctionCodeChunk
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(exhausted)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
 
 	asm.placeLabel(answered)
@@ -1765,6 +1844,7 @@ function buildArm64DarwinDirFindFirstChunk(globalData GlobalDataTable) returns F
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(refused)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixInvalidHandle)
 
 	asm.placeLabel(answered)
@@ -1793,8 +1873,7 @@ end 'arm64DarwinEmitAllocateSearch'
 // Read this thread's `errno` into a frame slot, so that a call which runs library code of its own cannot
 // disturb the reason a previous call is about to be blamed for.
 function arm64DarwinEmitCaptureErrno(asm Arm64RuntimeAsm, slot StackSize)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
-	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x0)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: slot)
 end 'arm64DarwinEmitCaptureErrno'
 
@@ -1949,6 +2028,7 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: cwdReady)
 
 	// The open failed and set errno itself: nothing was launched, and the record says which step failed.
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotProcInfo)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: SpawnPreparation.workingDirectory.rawValue as MachineWord)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x4, base: Arm64Register.x1, byteOffset: SpawnFailedPreparationOffset as MachineWord)
@@ -2042,6 +2122,7 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotStatus)
 	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
 	arm64EmitBranchTo(asm, label: published)
@@ -2125,6 +2206,7 @@ function buildArm64DarwinFileOpenChunk() returns FunctionCodeChunk
 	arm64EmitStoreWord64Sp(asm.code, src: arm64RuntimeReg(Arm64Register.x2), byteOffset: 0)
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.open)
 	arm64PosixEmitDarwinFailureBranchIfEintr(asm, whenInterrupted: issue)
+	arm64DarwinEmitStashIfStatusFailed(asm)
 
 	return asm.finishFunction(HostFileOpenName)
 end 'buildArm64DarwinFileOpenChunk'
@@ -2205,6 +2287,8 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	// function's in a green-thread program.
 	chunks.push(buildArm64DarwinLibcCallChunk(usage.usesGt))
 	chunks.push(buildArm64DarwinStatusOrErrnoChunk())
+	chunks.push(buildArm64DarwinStashErrnoChunk(usage.usesGt))
+	chunks.push(buildArm64DarwinStashErrnoValueChunk(usage.usesGt))
 
 	if usage.usesWallClock 'wallClock'
 		chunks.push(buildArm64DarwinWallClockChunk())
@@ -2338,7 +2422,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	// failure publishes through it. Splitting it out of the cluster is what keeps the cluster's own
 	// "these call each other, so gate them as one" argument intact.
 	if usesFilesystem or usage.usesChildPipes 'lastError'
-		chunks.push(buildArm64DarwinLastErrorChunk())
+		chunks.push(buildArm64DarwinLastErrorChunk(usage.usesGt))
 	end 'lastError'
 
 	if usesFilesystem 'filesystem'
@@ -2515,8 +2599,7 @@ function buildArm64DarwinNetpollWaitChunk() returns FunctionCodeChunk
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: answered)
 
 	// Failed: an interrupted wait is no entries; anything else stays the negative answer.
-	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
-	arm64EmitLoadWord32At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
+	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x1)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: DarwinKeventFailed)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: PosixErrno.interrupted.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: answered)
@@ -2764,13 +2847,13 @@ end 'arm64DarwinEmitStatusOrErrno'
 
 // `x0 = -(*__error())` — this thread's errno, negated into the vocabulary every socket op answers in.
 function arm64DarwinEmitNegatedErrno(asm Arm64RuntimeAsm)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
-	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x0)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoValueName)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: 0)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x9, rhs: Arm64Register.x0)
 end 'arm64DarwinEmitNegatedErrno'
 
-module function arm64DarwinEmitPublishErrno(asm Arm64RuntimeAsm, value ParsedInt)
+function arm64DarwinEmitPublishErrno(asm Arm64RuntimeAsm, value ParsedInt)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: value as MachineWord)
 	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)
