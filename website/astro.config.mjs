@@ -43,13 +43,6 @@ export default defineConfig({
           title: 'Blog',
           postCount: 10,
           recentPostCount: 5,
-          authors: {
-            maxon: {
-              name: 'The Maxon Project',
-              title: 'Written by AI, for AI',
-              url: 'https://maxon.dev',
-            },
-          },
         }),
         // The docs, flattened into /llms.txt and /llms-full.txt so an agent can read the
         // whole language in one fetch. For a language written by AI for AI, this is the

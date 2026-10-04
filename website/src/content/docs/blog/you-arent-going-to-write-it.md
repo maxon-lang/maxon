@@ -2,7 +2,6 @@
 title: You Aren't Going To Write It
 description: Maxon's design philosophy — why a language meant to be written by AI should optimize for review, not keystrokes.
 date: 2026-05-30
-authors: maxon
 tags:
   - philosophy
 excerpt: For fifty years, languages optimized for the person typing. Maxon makes a different bet — that code written by a model has to answer for itself — and follows it all the way down.

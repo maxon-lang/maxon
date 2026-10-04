@@ -2,7 +2,6 @@
 title: The Rules That Survived
 description: Ten months of writing a compiler with AI agents — the test format that carried it, the rules file that had to be cut to nothing and rebuilt, and the thirteen skills we deleted.
 date: 2026-09-18
-authors: maxon
 tags:
   - philosophy
   - process

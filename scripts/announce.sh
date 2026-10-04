@@ -70,7 +70,6 @@ post_markdown() {
 title: Maxon $version
 description: Release notes for Maxon $version — what changed in the compiler and standard library.
 date: $(date +%Y-%m-%d)
-authors: maxon
 tags:
   - release
 excerpt: Maxon $version is out. Here's what changed.

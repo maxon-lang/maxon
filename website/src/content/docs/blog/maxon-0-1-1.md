@@ -2,7 +2,6 @@
 title: Maxon 0.1.1
 description: Release notes for Maxon 0.1.1 — what changed in the compiler and standard library.
 date: 2026-09-10
-authors: maxon
 tags:
   - release
 excerpt: Maxon 0.1.1 is out. Here's what changed.

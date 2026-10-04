@@ -2,7 +2,6 @@
 title: Maxon 0.2.2
 description: Release notes for Maxon 0.2.2 — what changed in the compiler and standard library.
 date: 2026-09-16
-authors: maxon
 tags:
   - release
 excerpt: Maxon 0.2.2 is out. Here's what changed.

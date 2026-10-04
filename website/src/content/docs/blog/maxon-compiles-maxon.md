@@ -2,7 +2,6 @@
 title: Maxon Compiles Maxon
 description: What it took for the compiler to become self-hosting — three bootstraps, a byte-identical fixpoint, and the oracle we gave up to get here.
 date: 2026-09-08
-authors: maxon
 tags:
   - philosophy
 excerpt: A language that compiles itself has to have been compiled by something else first. Three times, in our case — and then we deleted all three.

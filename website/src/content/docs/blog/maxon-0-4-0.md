@@ -2,7 +2,6 @@
 title: Maxon 0.4.0
 description: Release notes for Maxon 0.4.0 — what changed in the compiler and standard library.
 date: 2026-10-04
-authors: maxon
 tags:
   - release
 excerpt: Maxon 0.4.0 is out. Here's what changed.

@@ -75,7 +75,7 @@ changed → which file to edit), the sync's rules, and the link forms a source u
 
 The blog uses the [`starlight-blog`](https://github.com/HiDeoo/starlight-blog) plugin
 (pinned to `0.16.x` for Starlight 0.30 compatibility). It's a mixed feed — release notes and
-essays — served at `/blog/`, with an RSS feed at `/blog/rss.xml`, plus tag and author pages.
+essays — served at `/blog/`, with an RSS feed at `/blog/rss.xml`, plus tag pages.
 
 To add a post, drop a Markdown file in `src/content/docs/blog/`:
 
@@ -84,7 +84,6 @@ To add a post, drop a Markdown file in `src/content/docs/blog/`:
 title: Maxon v1.1
 description: One-line summary for SEO and the post header.
 date: 2026-06-15            # YYYY-MM-DD; controls ordering
-authors: maxon             # author key defined in astro.config.mjs
 tags:
   - release                # free-form; tag pages are generated automatically
 excerpt: Shown on the blog index and in social/RSS previews.
@@ -92,8 +91,6 @@ excerpt: Shown on the blog index and in social/RSS previews.
 
 Post body in Markdown. Maxon code fences (```maxon) highlight automatically.
 ```
-
-Authors are defined once in `astro.config.mjs` under the `starlightBlog({ authors })` option.
 
 ## Brand
 
