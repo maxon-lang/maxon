@@ -68,6 +68,27 @@ goldens_stage_lane() {
 	printf '%s\n' "$goldens_lane_changes"
 }
 
+goldens_download_artifacts() {
+	goldens_run="$1"
+	goldens_downloads="$2"
+
+	goldens_names="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$goldens_run/artifacts" --paginate \
+		--jq '.artifacts[] | select(.expired | not) | .name')" || return 1
+
+	mkdir -p "$goldens_downloads" || return 1
+
+	while IFS= read -r goldens_name; do
+		[ -n "$goldens_name" ] || continue
+
+		case "$goldens_name" in
+			"$GOLDENS_ARTIFACT_PREFIX"*) ;;
+			*) continue ;;
+		esac
+
+		gh run download "$goldens_run" --name "$goldens_name" --dir "$goldens_downloads/$goldens_name" || return 1
+	done <<< "$goldens_names"
+}
+
 goldens_guard_artifacts() {
 	goldens_artifacts="$1"
 	goldens_refused=0

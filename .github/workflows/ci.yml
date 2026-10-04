@@ -249,16 +249,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Download the goldens
-        uses: actions/download-artifact@v6
-        with:
-          pattern: goldens-*
-          path: ${{ runner.temp }}/goldens-in
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . scripts/lib/goldens.sh
+          goldens_download_artifacts "$GITHUB_RUN_ID" "$RUNNER_TEMP/goldens-in"
 
       - name: Record the goldens on main
         run: ./scripts/record-goldens.sh "$GITHUB_SHA" "$RUNNER_TEMP/goldens-in"
