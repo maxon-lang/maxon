@@ -3,7 +3,7 @@ function main() returns ExitCode
 	var holderArgv = StringArray.create()
 	holderArgv.push("-NoProfile")
 	holderArgv.push("-Command")
-	holderArgv.push("$parent = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $PID)).ParentProcessId; $held = @(); foreach ($letters in 87, 97) \{ foreach ($seq in 0..63) \{ $v = ([int64]$parent -shl 32) -bor $seq; $name = 'mx' + (-join (15..0 | ForEach-Object \{ $n = ($v -shr (4 * $_)) -band 15; [char]($n + $(if ($n -lt 10) \{ 48 \} else \{ $letters \})) \})); try \{ $held += New-Object System.IO.Pipes.NamedPipeServerStream($name, 'InOut', 1) \} catch \{ \} \} \}; [Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); [void][Console]::In.ReadLine()")
+	holderArgv.push("$parent = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $PID)).ParentProcessId; $held = @(); foreach ($letters in 87) \{ foreach ($seq in 0..63) \{ $v = ([int64]$parent -shl 32) -bor $seq; $name = 'mx' + (-join (15..0 | ForEach-Object \{ $n = ($v -shr (4 * $_)) -band 15; [char]($n + $(if ($n -lt 10) \{ 48 \} else \{ $letters \})) \})); try \{ $held += New-Object System.IO.Pipes.NamedPipeServerStream($name, 'InOut', 1) \} catch \{ \} \} \}; [Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); [void][Console]::In.ReadLine()")
 	var holder = try StreamingSubprocess.spawn(Executable.name("powershell"), arguments: holderArgv) otherwise return 2
 	let announced = try holder.readStdoutLine() otherwise return 3
 	print("holder ready: {announced.startsWith("ready")}\n")
@@ -129,7 +129,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-    x64.leaRegRdata rcx, [rip + __str_rec_91]  ; "$parent = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $PID)).ParentProcessId; $held = @(); foreach ($letters in 87, 97) { foreach ($seq in 0..63) { $"...
+    x64.leaRegRdata rcx, [rip + __str_rec_91]  ; "$parent = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $PID)).ParentProcessId; $held = @(); foreach ($letters in 87) { foreach ($seq in 0..63) { $v = "...
     x64.callDirect __str_retain
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8

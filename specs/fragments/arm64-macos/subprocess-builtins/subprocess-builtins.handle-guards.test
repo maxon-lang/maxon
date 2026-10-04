@@ -5,7 +5,9 @@ function main() returns ExitCode
 	let waitCollect = __Builtins.subprocessWaitCollect(-1, 0)
 	let waitExit = __Builtins.subprocessWaitExit(9999, 0)
 	let writeAll = __Builtins.subprocessWriteStdinAll(3, empty.cstr())
-	print("getPid={getPid} waitCollect={waitCollect} waitExit={waitExit} writeAll={writeAll}\n")
+	let writeBytes = __Builtins.subprocessWriteStdinBytes(-1, empty.cstr(), 0)
+	let queue = __Builtins.subprocessQueueStdin(64, empty.cstr(), 0)
+	print("getPid={getPid} waitCollect={waitCollect} waitExit={waitExit} writeAll={writeAll} writeBytes={writeBytes} queue={queue}\n")
 	let outLine = String.init(__Builtins.subprocessReadStdoutLine(-1, 64))
 	let errLine = String.init(__Builtins.subprocessReadStderrLine(64, 64))
 	__Builtins.subprocessCloseStdin(-1)
@@ -84,18 +86,18 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 224
-    arm64.storeSlotReg slot25, x28
-    arm64.storeSlotReg slot24, x27
-    arm64.storeSlotReg slot23, x26
-    arm64.storeSlotReg slot22, x25
-    arm64.storeSlotReg slot21, x24
-    arm64.storeSlotReg slot20, x23
-    arm64.storeSlotReg slot19, x22
-    arm64.storeSlotReg slot18, x21
-    arm64.storeSlotReg slot17, x20
-    arm64.storeSlotReg slot16, x19
-    arm64.leaRdata x19, __str_rec_9  ; ""
+    arm64.prologue 304
+    arm64.storeSlotReg slot34, x28
+    arm64.storeSlotReg slot33, x27
+    arm64.storeSlotReg slot32, x26
+    arm64.storeSlotReg slot31, x25
+    arm64.storeSlotReg slot30, x24
+    arm64.storeSlotReg slot29, x23
+    arm64.storeSlotReg slot28, x22
+    arm64.storeSlotReg slot27, x21
+    arm64.storeSlotReg slot26, x20
+    arm64.storeSlotReg slot25, x19
+    arm64.leaRdata x19, __str_rec_11  ; ""
     arm64.movImm x0, 18446744073709551615
     arm64.bl __gt_subp_get_pid
     arm64.movRegReg x20, x0
@@ -108,169 +110,243 @@ func @main {
     arm64.bl __gt_subp_wait_exit
     arm64.movRegReg x22, x0
     arm64.movImm x23, 3
-  __il_body#2:
     arm64.movRegReg x0, x19
-    arm64.bl __mm_to_cstring
+    arm64.bl String.cstr
     arm64.movRegReg x1, x0
-  __il_cont#1:
     arm64.movRegReg x0, x23
     arm64.bl __gt_subp_write_all
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_10  ; "getPid="
-    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
-    arm64.movImm x0, 21
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movImm x24, 18446744073709551615
+    arm64.movRegReg x0, x19
+    arm64.bl String.cstr
     arm64.movRegReg x1, x0
-    arm64.storeSlotReg slot15, x1
-    arm64.movRegReg x0, x20
-    arm64.bl __int_to_string
-    arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_11  ; " waitCollect="
+    arm64.movImm x2, 0
+    arm64.movRegReg x0, x24
+    arm64.bl __gt_subp_write_bytes
+    arm64.movRegReg x24, x0
+    arm64.movImm x25, 64
+    arm64.movRegReg x0, x19
+    arm64.bl String.cstr
+    arm64.movRegReg x1, x0
+    arm64.movImm x2, 0
+    arm64.movRegReg x0, x25
+    arm64.bl __gt_subp_queue_stdin
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_12  ; "getPid="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.storeSlotReg slot13, x1
+    arm64.storeSlotReg slot18, x1
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeSlotReg slot11, x1
-    arm64.movRegReg x0, x21
+    arm64.storeSlotReg slot16, x1
+    arm64.movRegReg x0, x20
     arm64.bl __int_to_string
-    arm64.movRegReg x21, x0
-    arm64.leaRdata x0, __str_rec_12  ; " waitExit="
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_13  ; " waitCollect="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.storeSlotReg slot9, x1
+    arm64.storeSlotReg slot14, x1
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeSlotReg slot7, x1
-    arm64.movRegReg x0, x22
+    arm64.storeSlotReg slot13, x1
+    arm64.movRegReg x0, x21
     arm64.bl __int_to_string
-    arm64.movRegReg x22, x0
-    arm64.leaRdata x0, __str_rec_13  ; " writeAll="
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x0, __str_rec_14  ; " waitExit="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.storeSlotReg slot5, x1
+    arm64.storeSlotReg slot12, x1
     arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
     arm64.movImm x0, 21
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x28, x0
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x28
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot11, x1
+    arm64.movRegReg x0, x22
     arm64.bl __int_to_string
-    arm64.storeSlotReg slot4, x0
-    arm64.leaRdata x1, __str_rec_14  ; "\x0a"
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_15  ; " writeAll="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot10, x1
+    arm64.loadRegBaseDisp.word64 x28, [x0 + 8]
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot9, x1
+    arm64.movRegReg x0, x23
+    arm64.bl __int_to_string
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x0, __str_rec_16  ; " writeBytes="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot8, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot22, x0
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot7, x1
+    arm64.movRegReg x0, x24
+    arm64.bl __int_to_string
+    arm64.movRegReg x24, x0
+    arm64.storeSlotReg slot23, x24
+    arm64.leaRdata x0, __str_rec_17  ; " queue="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot6, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot20, x0
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x19
+    arm64.bl __int_to_string
+    arm64.storeSlotReg slot0, x0
+    arm64.leaRdata x1, __str_rec_18  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.storeSlotReg slot3, x2
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-    arm64.storeSlotReg slot2, x1
-    arm64.add x2, x24, x20
-    arm64.add x2, x2, x25
-    arm64.add x2, x2, x21
+    arm64.storeSlotReg slot5, x1
+    arm64.add x2, x25, x20
     arm64.add x2, x2, x26
-    arm64.add x2, x2, x22
+    arm64.add x2, x2, x21
     arm64.add x2, x2, x27
+    arm64.add x2, x2, x22
+    arm64.add x2, x2, x28
+    arm64.add x2, x2, x23
+    arm64.loadRegSlot x19, slot22
+    arm64.add x2, x2, x19
+    arm64.add x2, x2, x24
+    arm64.loadRegSlot x3, slot20
+    arm64.add x2, x2, x3
     arm64.add x0, x2, x0
     arm64.add x0, x0, x1
-    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot2, x0
     arm64.add x0, x0, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeSlotReg slot1, x0
-    arm64.add x19, x0, 56
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
-    arm64.movRegReg x2, x24
-    arm64.bl __str_copy
-    arm64.add x23, x19, x24
-    arm64.loadRegSlot x1, slot15
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x2, x20
-    arm64.bl __str_copy
-    arm64.add x20, x23, x20
-    arm64.loadRegSlot x1, slot13
-    arm64.movRegReg x0, x20
+    arm64.storeSlotReg slot4, x0
+    arm64.add x24, x0, 56
+    arm64.loadRegSlot x1, slot18
+    arm64.movRegReg x0, x24
     arm64.movRegReg x2, x25
     arm64.bl __str_copy
-    arm64.add x20, x20, x25
-    arm64.loadRegSlot x1, slot11
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x2, x21
+    arm64.add x25, x24, x25
+    arm64.loadRegSlot x1, slot16
+    arm64.movRegReg x0, x25
+    arm64.movRegReg x2, x20
     arm64.bl __str_copy
-    arm64.add x20, x20, x21
-    arm64.loadRegSlot x1, slot9
+    arm64.add x20, x25, x20
+    arm64.loadRegSlot x1, slot14
     arm64.movRegReg x0, x20
     arm64.movRegReg x2, x26
     arm64.bl __str_copy
     arm64.add x20, x20, x26
-    arm64.loadRegSlot x1, slot7
+    arm64.loadRegSlot x1, slot13
     arm64.movRegReg x0, x20
-    arm64.movRegReg x2, x22
+    arm64.movRegReg x2, x21
     arm64.bl __str_copy
-    arm64.add x20, x20, x22
-    arm64.loadRegSlot x1, slot5
+    arm64.add x20, x20, x21
+    arm64.loadRegSlot x1, slot12
     arm64.movRegReg x0, x20
     arm64.movRegReg x2, x27
     arm64.bl __str_copy
     arm64.add x20, x20, x27
-    arm64.loadRegSlot x2, slot4
+    arm64.loadRegSlot x1, slot11
     arm64.movRegReg x0, x20
-    arm64.movRegReg x1, x28
+    arm64.movRegReg x2, x22
     arm64.bl __str_copy
-    arm64.loadRegSlot x0, slot4
-    arm64.add x20, x20, x0
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x1, slot3
+    arm64.add x20, x20, x22
+    arm64.loadRegSlot x1, slot10
     arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x28
     arm64.bl __str_copy
-    arm64.loadRegSlot x0, slot2
-    arm64.add x0, x20, x0
-    arm64.loadRegSlot x20, slot1
-    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.add x20, x20, x28
+    arm64.loadRegSlot x1, slot9
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x20, x20, x23
+    arm64.loadRegSlot x1, slot8
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x20, x19
+    arm64.loadRegSlot x1, slot7
+    arm64.loadRegSlot x2, slot23
+    arm64.movRegReg x0, x19
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot23
+    arm64.add x19, x19, x0
+    arm64.loadRegSlot x1, slot6
+    arm64.loadRegSlot x2, slot20
+    arm64.movRegReg x0, x19
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot20
+    arm64.add x19, x19, x0
+    arm64.loadRegSlot x2, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.movRegReg x0, x19
+    arm64.bl __str_copy
     arm64.loadRegSlot x0, slot0
-    arm64.storeBaseDispReg.word64 [x20 + 8], x0
+    arm64.add x19, x19, x0
+    arm64.loadRegSlot x1, slot3
+    arm64.loadRegSlot x2, slot5
+    arm64.movRegReg x0, x19
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot5
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot4
+    arm64.storeBaseDispReg.word64 [x19 + 0], x24
+    arm64.loadRegSlot x0, slot2
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x20 + 24], x0
-    arm64.loadRegSlot x0, slot15
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.loadRegSlot x0, slot16
+    arm64.bl __mm_decref
+    arm64.loadRegSlot x0, slot13
     arm64.bl __mm_decref
     arm64.loadRegSlot x0, slot11
     arm64.bl __mm_decref
+    arm64.loadRegSlot x0, slot9
+    arm64.bl __mm_decref
     arm64.loadRegSlot x0, slot7
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x28
+    arm64.loadRegSlot x0, slot1
     arm64.bl __mm_decref
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl print
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.movImm x0, 18446744073709551615
     arm64.movImm x1, 64
     arm64.bl __gt_subp_read_out_bytes
     arm64.bl String.init
     arm64.movRegReg x19, x0
-    arm64.storeSlotReg slot6, x19
+    arm64.storeSlotReg slot15, x19
     arm64.movImm x0, 64
     arm64.movImm x1, 64
     arm64.bl __gt_subp_read_err_bytes
     arm64.bl String.init
     arm64.movRegReg x20, x0
-    arm64.storeSlotReg slot8, x20
+    arm64.storeSlotReg slot17, x20
     arm64.movImm x0, 18446744073709551615
     arm64.bl __gt_subp_close_stdin
     arm64.movImm x0, 18446744073709551615
     arm64.bl __gt_subp_release
-    arm64.leaRdata x0, __str_rec_15  ; "readOut="
+    arm64.leaRdata x0, __str_rec_19  ; "readOut="
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
-  __il_body#5:
+  __il_body#3:
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
-  __il_cont#4:
+  __il_cont#2:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -279,12 +355,12 @@ func @main {
     arm64.movRegReg x1, x23
     arm64.bl __uint_to_string
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_16  ; " readErr="
+    arm64.leaRdata x0, __str_rec_20  ; " readErr="
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
-  __il_body#6:
+  __il_body#4:
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
-  __il_cont#3:
+  __il_cont#1:
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -293,19 +369,19 @@ func @main {
     arm64.movRegReg x1, x26
     arm64.bl __uint_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_17  ; " voidsReturned=true\x0a"
+    arm64.leaRdata x0, __str_rec_21  ; " voidsReturned=true\x0a"
     arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeSlotReg slot14, x0
+    arm64.storeSlotReg slot24, x0
     arm64.add x1, x22, x19
     arm64.add x1, x1, x25
     arm64.add x1, x1, x20
     arm64.add x0, x1, x0
-    arm64.storeSlotReg slot10, x0
+    arm64.storeSlotReg slot19, x0
     arm64.add x0, x0, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeSlotReg slot12, x0
+    arm64.storeSlotReg slot21, x0
     arm64.add x28, x0, 56
     arm64.movRegReg x0, x28
     arm64.movRegReg x1, x21
@@ -327,15 +403,15 @@ func @main {
     arm64.movRegReg x2, x20
     arm64.bl __str_copy
     arm64.add x19, x19, x20
-    arm64.loadRegSlot x2, slot14
+    arm64.loadRegSlot x2, slot24
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x27
     arm64.bl __str_copy
-    arm64.loadRegSlot x0, slot14
+    arm64.loadRegSlot x0, slot24
     arm64.add x0, x19, x0
-    arm64.loadRegSlot x19, slot12
+    arm64.loadRegSlot x19, slot21
     arm64.storeBaseDispReg.word64 [x19 + 0], x28
-    arm64.loadRegSlot x0, slot10
+    arm64.loadRegSlot x0, slot19
     arm64.storeBaseDispReg.word64 [x19 + 8], x0
     arm64.movImm x0, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
@@ -350,21 +426,21 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __str_decref
     arm64.movImm x19, 0
-    arm64.loadRegSlot x0, slot8
+    arm64.loadRegSlot x0, slot17
     arm64.bl __str_decref
-    arm64.loadRegSlot x0, slot6
+    arm64.loadRegSlot x0, slot15
     arm64.bl __str_decref
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot16
-    arm64.loadRegSlot x20, slot17
-    arm64.loadRegSlot x21, slot18
-    arm64.loadRegSlot x22, slot19
-    arm64.loadRegSlot x23, slot20
-    arm64.loadRegSlot x24, slot21
-    arm64.loadRegSlot x25, slot22
-    arm64.loadRegSlot x26, slot23
-    arm64.loadRegSlot x27, slot24
-    arm64.loadRegSlot x28, slot25
-    arm64.epilogue 224
+    arm64.loadRegSlot x19, slot25
+    arm64.loadRegSlot x20, slot26
+    arm64.loadRegSlot x21, slot27
+    arm64.loadRegSlot x22, slot28
+    arm64.loadRegSlot x23, slot29
+    arm64.loadRegSlot x24, slot30
+    arm64.loadRegSlot x25, slot31
+    arm64.loadRegSlot x26, slot32
+    arm64.loadRegSlot x27, slot33
+    arm64.loadRegSlot x28, slot34
+    arm64.epilogue 304
     arm64.ret
 }
