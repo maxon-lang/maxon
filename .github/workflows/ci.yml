@@ -9,11 +9,12 @@
 # writes a notice instead. It becomes real the moment a release is published, with no edit here.
 
 # ⭐ A COMMIT THAT TOUCHES NOTHING THIS WORKFLOW READS DOES NOT RUN IT. The build reads `maxon-bin/`,
-# `stdlib/`, `runtime/`, `vendor/`, `project.maxon` and the scripts; the jobs read `specs/` and the
-# four `tests/` corpora they run. Everything excluded below is read by none of them — prose, editor and
-# agent config, and projects with workflows of their own. `tests/` and `examples/` are excluded because
-# no job here runs the rest of them, so a run on their change reports on code it never touched; the
-# four corpora are re-included because a job does run them.
+# `stdlib/`, `runtime/`, `vendor/`, `project.maxon` and the scripts re-included below; the jobs read
+# `specs/` and the `tests/` corpora they run. Everything excluded below is read by none of them — prose,
+# editor and agent config, and projects with workflows of their own. `tests/`, `examples/` and `scripts/`
+# are excluded because no job here runs the rest of them, so a run on their change reports on code it
+# never touched; the corpora and scripts a job does run are re-included. A step that starts running
+# another script needs that script re-included here.
 #
 # ⛔ THE LIST IS EXCLUSIONS, AND A RE-INCLUSION IS WRITTEN ONLY FOR A PATH A JOB READS. A new
 # directory therefore runs CI until someone decides it need not, rather than being skipped silently
@@ -58,6 +59,14 @@ on:
       - 'tests/cli/**'
       - 'tests/build-manifest/**'
       - '!examples/**'
+      - '!scripts/**'
+      - 'scripts/fetch-seed.sh'
+      - 'scripts/build-from-seed.sh'
+      - 'scripts/fetch-vendor.sh'
+      - 'scripts/fixpoint.sh'
+      - 'scripts/record-goldens.sh'
+      - 'scripts/lib/**'
+      - 'scripts/seed-shim/**'
       - '!.github/**'
       - '.github/workflows/ci.yml'
   pull_request:
