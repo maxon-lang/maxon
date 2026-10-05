@@ -32,8 +32,8 @@ unconditionally: the slot survives, so its target must be there to fill it.
 ## Tests
 
 <!-- test: unreachable-function-pruned -->
-A function nothing calls is not emitted. The committed fragment is the assertion: it contains `main` and
-nothing else.
+A function nothing calls is not emitted. The emitted code (`--emit-ir`) contains `main` and nothing
+else; nothing in the suite pins it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

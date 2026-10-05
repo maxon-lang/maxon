@@ -692,6 +692,14 @@ maxon build app.maxon --log=error            # only errors
 the names that file interned and the arena bytes they occupy, what its table reserved ahead of them, and
 how many times the table rehashed or had to grow.
 
+**The shared library memo.** A process that compiles many programs — a `spec-test` worker, the MCP
+server, the language server — keeps each library file's tokens and parse across compiles, and
+`--log=compiler:debug` prints one `shared stdlib memo` line per compile: the token, active-token and
+producer-mask hits, the files admitted and held, then the parse artifacts held, the parse hits, misses and
+publishes, how many held parses missed because ids they reference moved, and whether this program may
+share library parses at all (`shareable`, or the reason it parses the library cold: `shadowed`,
+`namesOverlap`, `rootInsideStdlib`).
+
 **The census by tag.** [`--census-by-tag`](#maxon-build) adds a third table under the residency one: the
 live heap at each phase boundary broken down by the type each allocation was tagged with. It prints the
 top five buckets for every phase sampled, then the whole table for the phase whose *live* level was

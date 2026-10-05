@@ -76,7 +76,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variable-name-scope/one-loop-of-that-name-and-no-mention-is-still-refused.test:4:6: unused variable: 'i'
+error E3012: specs/unused-variable-name-scope/one-loop-of-that-name-and-no-mention-is-still-refused.maxon:4:6: unused variable: 'i'
 ```
 
 <!-- test: a-closure-capture-of-that-name-excuses-a-loop-binding -->
@@ -114,5 +114,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variable-name-scope/error.a-closure-parameter-of-that-name-does-not-excuse-it.test:5:6: unused variable: 'i'
+error E3012: specs/unused-variable-name-scope/error.a-closure-parameter-of-that-name-does-not-excuse-it.maxon:5:6: unused variable: 'i'
 ```

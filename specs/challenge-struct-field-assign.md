@@ -60,7 +60,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assign-error.test:16:2: cannot assign to field 'Config.id' because it is immutable (declare with 'var' to make it mutable)
+error E2013: specs/challenge-struct-field-assign/immutable-field-assign-error.maxon:16:2: cannot assign to field 'Config.id' because it is immutable (declare with 'var' to make it mutable)
 ```
 
 <!-- test: nested-struct-field-reassignment -->

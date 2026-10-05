@@ -372,7 +372,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/try-postfix-target/error.two-throwing-calls-in-one-chain.test:14:21: throwing function requires try: 'stdlib.Array.slice'
+error E3057: specs/try-postfix-target/error.two-throwing-calls-in-one-chain.maxon:14:21: throwing function requires try: 'stdlib.Array.slice'
 ```
 
 <!-- test: error.chained-non-throwing-method -->
@@ -392,7 +392,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/try-postfix-target/error.chained-non-throwing-method.test:12:10: try requires a throwing function: this builtin call cannot fail
+error E3055: specs/try-postfix-target/error.chained-non-throwing-method.maxon:12:10: try requires a throwing function: this builtin call cannot fail
 ```
 
 <!-- test: error.non-throwing-array-accessor -->
@@ -408,7 +408,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/try-postfix-target/error.non-throwing-array-accessor.test:8:10: try requires a throwing function: this builtin call cannot fail
+error E3055: specs/try-postfix-target/error.non-throwing-array-accessor.maxon:8:10: try requires a throwing function: this builtin call cannot fail
 ```
 
 <!-- test: error.non-throwing-builtin-static-constructor -->
@@ -431,7 +431,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/try-postfix-target/error.non-throwing-builtin-static-constructor.test:6:10: try requires a throwing function: this builtin call cannot fail
+error E3055: specs/try-postfix-target/error.non-throwing-builtin-static-constructor.maxon:6:10: try requires a throwing function: this builtin call cannot fail
 ```
 
 <!-- test: error.non-throwing-stdlib-print -->
@@ -455,7 +455,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/try-postfix-target/error.non-throwing-stdlib-print.test:3:2: try requires a throwing function: 'print' does not throw'
+error E3055: specs/try-postfix-target/error.non-throwing-stdlib-print.maxon:3:2: try requires a throwing function: 'print' does not throw'
 ```
 
 <!-- test: error.throwing-argument-non-throwing-callee -->
@@ -480,7 +480,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/try-postfix-target/error.throwing-argument-non-throwing-callee.test:17:10: try requires a throwing function: 'f' does not throw'
+error E3055: specs/try-postfix-target/error.throwing-argument-non-throwing-callee.maxon:17:10: try requires a throwing function: 'f' does not throw'
 ```
 
 <!-- test: error.chained-non-throwing-after-throwing -->
@@ -504,5 +504,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/try-postfix-target/error.chained-non-throwing-after-throwing.test:16:10: try requires a throwing function: this builtin call cannot fail
+error E3055: specs/try-postfix-target/error.chained-non-throwing-after-throwing.maxon:16:10: try requires a throwing function: this builtin call cannot fail
 ```

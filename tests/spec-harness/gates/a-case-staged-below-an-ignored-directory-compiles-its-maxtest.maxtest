@@ -1,0 +1,15 @@
+let BelowIgnoredSpecName = "below-ignored"
+
+test 'a case staged below a directory holding .maxonignore still compiles its .maxtest file'
+	let run = runGateFixtureBelowAnIgnoredDirectory()
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: BelowIgnoredSpecName, testNames: ["below-ignored.mismatched-end-label"], broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a staged `.maxtest` file is compiled below an ignored directory")
+end 'a case staged below a directory holding .maxonignore still compiles its .maxtest file'

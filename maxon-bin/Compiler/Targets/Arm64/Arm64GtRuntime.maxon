@@ -332,7 +332,7 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	// `gt.status == completed` and then reads `gt.result` / `gt.threw`. On this weakly-ordered ISA a plain `str`
 	// here lets the flag become visible before the two words it announces, and the awaiter reads a result the
 	// thread had not written yet — **a wrong awaited
-	// value, not a crash**, which no golden on this lane could see. The store-release orders both of them
+	// value, not a crash**. The store-release orders both of them
 	// before itself. Its acquire partner is `GtRuntime.emitGtLoadPublishedStatus`, which every reader of this
 	// word goes through; neither half is a fix alone.
 	//
@@ -413,8 +413,7 @@ end 'emitArm64DarwinLoadGtOnItsOwnStackOrBail'
 // ⭐⭐ **A FOURTH NULL, AND IT EXISTS ON ONE LANE ONLY.** On Darwin the thread pointer is written by the
 // kernel for every thread that has ever existed, so it cannot be zero and no test is emitted — which is why
 // this is not folded into the sequence above unconditionally: an extra `cbz` in the PROLOGUE GUARD is paid by
-// every guarded function on the hot path, and it would move every arm64-macOS golden for a test that can
-// never fire.
+// every guarded function on the hot path, for a test that can never fire.
 //
 // On Linux `TPIDR_EL0` is what `mrt_host_tls_alloc` made it, and it is ZERO on any OS thread that never asked
 // the scheduler for a slot. The offset test above cannot cover that: the offset is a `.data` word shared by
@@ -872,7 +871,7 @@ end 'arm64WidestGuardedFrame'
 // header.
 //
 // It emits into the function's own byte stream with a guard-local branch table, exactly as the x64
-// twin does, so it is invisible to the Target-IR goldens and is verified by the run plus a
+// twin does, so it is invisible to the rendered Target IR and is verified by the run plus a
 // disassembly instead.
 export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, site GtGuardSite, target Target)
 	var asm = Arm64RuntimeAsm.beginRawFunction()

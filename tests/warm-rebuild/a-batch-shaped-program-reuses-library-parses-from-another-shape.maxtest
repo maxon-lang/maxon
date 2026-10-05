@@ -1,0 +1,9 @@
+let BatchShapeReusedPassLine = "verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold + library parses reused across programs)"
+
+test 'a program of per-case directories with contested element names reuses the library parses a program of another shape left'
+	let staged = stagedFixture("batch-shape", caseLabel: "a-batch-shaped-program-reuses-library-parses-from-another-shape")
+	let run = spawnVerify(staged)
+
+	Expect.contains(run.stdout, needle: BatchShapeReusedPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report every library parse reused for a program of per-case directories declaring `Integer` over two ranges, after a primer program of another shape. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
+end 'a program of per-case directories with contested element names reuses the library parses a program of another shape left'

@@ -377,7 +377,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/enum-match-exhaustive/error.enum-not-exhaustive.test:13:2: match on enum 'Color' is not exhaustive, missing: blue
+error E2026: specs/enum-match-exhaustive/error.enum-not-exhaustive.maxon:13:2: match on enum 'Color' is not exhaustive, missing: blue
 ```
 
 <!-- test: error.union-not-exhaustive -->
@@ -397,7 +397,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/enum-match-exhaustive/error.union-not-exhaustive.test:13:2: match on union 'Shape' is not exhaustive, missing: triangle
+error E2026: specs/enum-match-exhaustive/error.union-not-exhaustive.maxon:13:2: match on union 'Shape' is not exhaustive, missing: triangle
 ```
 
 <!-- test: error.enum-not-exhaustive-lists-every-missing-case -->
@@ -419,7 +419,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/enum-match-exhaustive/error.enum-not-exhaustive-lists-every-missing-case.test:15:2: match on enum 'Color' is not exhaustive, missing: blue, amber, violet
+error E2026: specs/enum-match-exhaustive/error.enum-not-exhaustive-lists-every-missing-case.maxon:15:2: match on enum 'Color' is not exhaustive, missing: blue, amber, violet
 ```
 
 <!-- test: error.enum-default-without-throws -->
@@ -439,7 +439,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/enum-match-exhaustive/error.enum-default-without-throws.test:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
+error E2046: specs/enum-match-exhaustive/error.enum-default-without-throws.maxon:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: error.enum-gap-in-ranges -->
@@ -461,7 +461,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/enum-match-exhaustive/error.enum-gap-in-ranges.test:15:2: match on enum 'Priority' is not exhaustive, missing: high
+error E2026: specs/enum-match-exhaustive/error.enum-gap-in-ranges.maxon:15:2: match on enum 'Priority' is not exhaustive, missing: high
 ```
 
 <!-- test: error.enum-overlapping-ranges -->
@@ -486,7 +486,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/enum-match-exhaustive/error.enum-overlapping-ranges.test:15:3: overlapping pattern in match: 'medium' is already covered
+error E2027: specs/enum-match-exhaustive/error.enum-overlapping-ranges.maxon:15:3: overlapping pattern in match: 'medium' is already covered
 ```
 
 <!-- test: error.enum-explicit-overlaps-range -->
@@ -508,7 +508,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/enum-match-exhaustive/error.enum-explicit-overlaps-range.test:14:3: overlapping pattern in match: 'green' is already covered
+error E2027: specs/enum-match-exhaustive/error.enum-explicit-overlaps-range.maxon:14:3: overlapping pattern in match: 'green' is already covered
 ```
 
 <!-- test: enum-exhaustive.bare-case-names -->
@@ -595,7 +595,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3075: specs/fragments/enum-match-exhaustive/error.enum-qualified-case-name.test:11:3: use 'red' instead of 'Color.red' in match
+error E3075: specs/enum-match-exhaustive/error.enum-qualified-case-name.maxon:11:3: use 'red' instead of 'Color.red' in match
 ```
 
 ### Cross-file scrutinee shadowed by a larger same-case-name union
@@ -810,5 +810,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/enum-match-exhaustive/error.cross-file-range-genuine-overlap.test:17:3: overlapping pattern in match: 'ret' is already covered
+error E2027: specs/enum-match-exhaustive/error.cross-file-range-genuine-overlap.maxon:17:3: overlapping pattern in match: 'ret' is already covered
 ```

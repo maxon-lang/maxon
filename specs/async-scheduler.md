@@ -459,8 +459,7 @@ xmm6–15 are callee-saved, so the register allocator believes a float in xmm6 s
 green thread's stack, which runs arbitrary user code, and comes back only later. The switch has no
 prologue and no coloring, so it must save that half explicitly (`X64GtRuntime`), and this is the
 test that says so: with the switch's `movsd` saves removed, `threadA` returns **5524** — the sum of
-`threadB`'s floats — instead of 79. Nothing in the golden fragments covers the emitted GT runtime,
-so only a RUN can see this.
+`threadB`'s floats — instead of 79. Only a RUN can see this.
 
 `threadA` sums 1..10 = 55 plus `trunc(3.0) + trunc(21.0)` = 24, so 79. `threadB` sums
 100+…+1000 = 5500 plus 201 + 2001 = 2202, so 7702. `main`'s own two floats must also survive both
@@ -534,8 +533,7 @@ the grower must save and restore that half by hand exactly as it saves the thirt
 (`X64GtRuntime.morestackSavedXmmOrder`). Without it `x` reads 0 from the level the guard fires at
 downwards, and since `0 * 2.0` is 0 for ever the sweep saturates: **20 / 60 / 60 / 60** instead of
 20 / 60 / 140 / 300. The same recursion run synchronously is correct, because nothing grows a
-non-GT stack — only a RUN through `await async` can see this, and no golden fragment covers the
-hand-assembled GT runtime.
+non-GT stack — only a RUN through `await async` can see this.
 
 `scale(20.0, depth: n)` sums 20 + 40 + … + 20·2ⁿ, so the four depths are 20, 60, 140, 300; each
 mismatch returns its own exit code so a partial corruption names the level it started at.

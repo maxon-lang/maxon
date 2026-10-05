@@ -1,0 +1,16 @@
+let BatchedServiceSpecName = "batched-service"
+
+test 'a batched case whose service prints after main returns keeps that output and its verdict'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: BatchedServiceSpecName, testNames: ["batched-service.before", "batched-service.spawns", "batched-service.after"], broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(3, programs: 1, alone: 0), broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a batched case's service finishes before its end marker")
+end 'a batched case whose service prints after main returns keeps that output and its verdict'

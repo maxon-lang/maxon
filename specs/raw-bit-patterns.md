@@ -312,7 +312,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/raw-bit-patterns/error.a-written-negative-into-a-pattern-is-refused.test:5:13: Value -1 is outside the range of 'Word' (bits(64))
+error E3005: specs/raw-bit-patterns/error.a-written-negative-into-a-pattern-is-refused.maxon:5:13: Value -1 is outside the range of 'Word' (bits(64))
 ```
 
 <!-- test: error.an-illegal-width-is-refused -->
@@ -327,7 +327,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3148: specs/fragments/raw-bit-patterns/error.an-illegal-width-is-refused.test:2:22: 'bits(5)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
+error E3148: specs/raw-bit-patterns/error.an-illegal-width-is-refused.maxon:2:22: 'bits(5)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
 ```
 
 <!-- test: error.a-zero-width-is-refused -->
@@ -340,7 +340,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3148: specs/fragments/raw-bit-patterns/error.a-zero-width-is-refused.test:2:26: 'bits(0)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
+error E3148: specs/raw-bit-patterns/error.a-zero-width-is-refused.maxon:2:26: 'bits(0)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
 ```
 
 <!-- test: error.a-width-past-the-machine-word-is-refused -->
@@ -353,7 +353,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3148: specs/fragments/raw-bit-patterns/error.a-width-past-the-machine-word-is-refused.test:2:23: 'bits(128)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
+error E3148: specs/raw-bit-patterns/error.a-width-past-the-machine-word-is-refused.maxon:2:23: 'bits(128)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
 ```
 
 <!-- test: error.bare-bits-is-not-a-type -->
@@ -368,7 +368,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/raw-bit-patterns/error.bare-bits-is-not-a-type.test:3:12: Unknown type 'bits'
+error E3011: specs/raw-bit-patterns/error.bare-bits-is-not-a-type.maxon:3:12: Unknown type 'bits'
 ```
 
 <!-- test: error.a-cast-to-a-values-own-pattern-alias-is-unneeded -->
@@ -383,7 +383,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/raw-bit-patterns/error.a-cast-to-a-values-own-pattern-alias-is-unneeded.test:6:12: unneeded cast: 'Word' already fits in 'Word'
+error E3010: specs/raw-bit-patterns/error.a-cast-to-a-values-own-pattern-alias-is-unneeded.maxon:6:12: unneeded cast: 'Word' already fits in 'Word'
 ```
 
 <!-- test: every-width-rides-the-storage-ladder -->
@@ -467,9 +467,8 @@ ordinary program and does not call it.
 ⚠ **WHAT THIS CASE CAN AND CANNOT SAY.** Nothing reaches `probeLoadedCount`, so dead-function elimination
 drops it and no instruction of it survives into the binary. The case therefore measures that the program
 PARSES and LOWERS — that the cast is accepted at all — and it passes whether or not the guard is
-emitted. It is not the evidence for the guard's absence. **The committed golden fragment is**: the emitted
-sequence for this probe is where a sign-bit test and an `__rc_panic` are either present or gone, and a
-diff of that fragment is what reports the change.
+emitted. It is not the evidence for the guard's absence. **The emitted code is**: the emitted
+sequence for this probe is where a sign-bit test and an `__rc_panic` are either present or gone.
 ```maxon
 // --- runtime-file: Probe.maxon
 typealias ProbeCount = int(0 to u64.max)

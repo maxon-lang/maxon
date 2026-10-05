@@ -36,7 +36,7 @@ plus the dialect's own `isPure`, which this pass is the first reader of:
   special-cases its way past a purity flag is a pass that will be wrong about the next impure op
   somebody adds. ⚠ **There is no runtime discriminator for this one and the case below says so**: the
   only difference a wrong answer would make is how many times the program traps, and one trap ends it.
-  The committed fragment showing two `idivReg` is the record.
+  The emitted code (`--emit-ir`) shows the two `idivReg`; nothing in the suite pins them.
 - **MEMORY IS OUT, entirely and on purpose.** A `loadIndirect` is `isPure: false` — a load's value can
   be changed by a store the pass cannot see — so it is neither in the roster nor past the purity gate.
   Two loads of one address are left as two, ALWAYS, with no attempt at store invalidation. Hoisting
@@ -70,7 +70,7 @@ swap can change which payload propagates.
 ## Tests
 
 <!-- test: a-repeated-expression-is-computed-once -->
-Three occurrences of `x * 31 + y` over runtime operands: the committed fragment carries ONE
+Three occurrences of `x * 31 + y` over runtime operands: the emitted code (`--emit-ir`) carries ONE
 `imulRegRegImm32` where the source spells three, and the answer is the same either way, which is the
 point.
 ```maxon
@@ -232,7 +232,7 @@ Two identical divisions and two identical remainders over runtime operands. ⚠ 
 CAN TELL THE TWO ANSWERS APART, AND SAYING SO IS THE HONEST VERSION**: `div` is excluded because it
 TRAPS, and the only observable difference a wrong reuse would make is how many times a faulting
 program faults — which is once either way, because the first one ends it. The case checks the
-arithmetic, and the committed fragment showing TWO `idivReg` is the record of the exclusion.
+arithmetic; the emitted code (`--emit-ir`) shows TWO `idivReg`, and nothing in the suite pins the exclusion.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 // The divisor's type excludes zero, but a NEGATIVE dividend needs a signed division, which is spelled only
@@ -285,8 +285,8 @@ end 'main'
 <!-- test: an-expression-across-a-call-is-recomputed -->
 The register-pressure rule, in the shape it exists for: the two occurrences are separated by a CALL,
 so the value is recomputed rather than carried across it in a callee-saved register. Nothing at run
-time distinguishes the two codegens — the answer is the same — so the committed fragment showing TWO
-`imulRegRegImm32` either side of the `callDirect` is the record. What the case pins here is that the
+time distinguishes the two codegens — the answer is the same — so only the emitted code (`--emit-ir`)
+shows TWO `imulRegRegImm32` either side of the `callDirect`, and nothing in the suite pins it. What the case pins here is that the
 program still answers correctly under the rule.
 ```maxon
 typealias Word = int(i64.min to i64.max)

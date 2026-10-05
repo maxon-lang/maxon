@@ -144,7 +144,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/hex-escape/hex-escape.invalid-short.test:3:15: Invalid hex escape '\xG0': expected 2 hex digits in byte string literal
+error E1004: specs/hex-escape/hex-escape.invalid-short.maxon:3:15: Invalid hex escape '\xG0': expected 2 hex digits in byte string literal
 ```
 
 <!-- test: hex-escape.invalid-truncated -->
@@ -156,5 +156,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/hex-escape/hex-escape.invalid-truncated.test:3:15: Invalid hex escape '\x4': expected 2 hex digits in byte string literal
+error E1004: specs/hex-escape/hex-escape.invalid-truncated.maxon:3:15: Invalid hex escape '\x4': expected 2 hex digits in byte string literal
 ```

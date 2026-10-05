@@ -8,9 +8,9 @@
 //
 // ⭐ **WHY IT IS A PREREQUISITE, not a nicety.** The compiler compiles `stdlib/*.maxon` source into every
 // program. Without this pass, loading one stdlib module drags EVERY function in it into EVERY
-// program — which adds them to all 221+
-// committed goldens, costs every compile, and BREAKS the wasm and arm64 suites outright, because the
-// GT/clock/IOCP substrate those modules reach is x64-windows-only (a `sleep(1)` program dies on wasm at
+// program — which adds them to every program's rendered Target IR, costs every compile, and BREAKS
+// the wasm and arm64 suites outright, because the GT/clock/IOCP substrate those modules reach is
+// x64-windows-only (a `sleep(1)` program dies on wasm at
 // `StdToWasm: emitFuncAddr: no wasm function index for '__gt_trampoline'`). Reachability fixes all
 // three at once.
 //
@@ -53,8 +53,8 @@
 // reached through the `rdataAddr` that reads it or an `.rdata` slot that names it, and a record
 // nothing reached keeps its bytes with its code slot unbaked
 // (`GlobalDataTable.dropFunctionRecordRelocsExcept`) — so a function only ever named by a dead
-// function's value use is swept. Dead-`.rdata` elimination is a separate change with its own
-// goldens (`.rdata` offsets move, so `RequiredData` moves with them).
+// function's value use is swept. Dead-`.rdata` elimination is a separate change
+// (`.rdata` offsets move, so every `RequiredData` pin moves with them).
 //
 // ⚠ **A USER GLOBAL'S SLOT IS DECIDED UPSTREAM, AND DELIBERATELY NOT HERE**: a dead top-level global's slot
 // is never BUILT, by `IR/Maxon/DeadGlobalElimination` filtering the arena in `compileToCodeResult`, and it
@@ -416,9 +416,9 @@ export typealias CompilerOwnedRootArray = Array with CompilerOwnedRoot
 
 // ⭐⭐ **A FOURTH KIND OF ROOT: EVERY `test` DECLARATION.** Nothing CALLS a test — that is what a test IS,
 // a body the program reaches by no edge — so this walk would drop every one of them and the binary would
-// hold no tests at all. `specs/test-declaration.md`'s `survives-dead-function-elimination` pins exactly
-// that, through its minted golden: the exit code cannot see it, because `main` returns 0 whether the test
-// survived or not.
+// hold no tests at all. `specs/test-declaration.md`'s `survives-dead-function-elimination`
+// exercises exactly that, but nothing pins it: the exit code cannot see it, because `main` returns
+// 0 whether the test survived or not.
 //
 // ⚠ **IT IS RECOGNISED BY ITS NAME, AND THE NAME IS UNFORGEABLE.** `__test_` is in the space
 // `Parser.requireUnreservedName` refuses to any declared name (E2051), so no source can wear the prefix and

@@ -211,7 +211,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/mutable-enums/error.assign-to-let-enum-binding.test:12:20: cannot assign to immutable variable: 'value'
+error E2013: specs/mutable-enums/error.assign-to-let-enum-binding.maxon:12:20: cannot assign to immutable variable: 'value'
 ```
 
 <!-- test: mutate-string-payload -->
@@ -389,7 +389,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/mutable-enums/error.temporary-scrutinee-payload-is-read-only.test:24:26: cannot pass 'c' to function that mutates parameter 'c' (in main)
+error E3019: specs/mutable-enums/error.temporary-scrutinee-payload-is-read-only.maxon:24:26: cannot pass 'c' to function that mutates parameter 'c' (in main)
 ```
 
 <!-- test: error.let-to-a-callee-that-writes-back-a-payload -->
@@ -421,7 +421,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/mutable-enums/error.let-to-a-callee-that-writes-back-a-payload.test:18:2: cannot pass 's' to function that mutates parameter 's' (in main)
+error E3019: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-payload.maxon:18:2: cannot pass 's' to function that mutates parameter 's' (in main)
 ```
 
 <!-- test: error.let-to-a-callee-that-writes-back-a-managed-payload -->
@@ -450,7 +450,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/mutable-enums/error.let-to-a-callee-that-writes-back-a-managed-payload.test:16:2: cannot pass 'n' to function that mutates parameter 'n' (in main)
+error E3019: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-managed-payload.maxon:16:2: cannot pass 'n' to function that mutates parameter 'n' (in main)
 ```
 
 <!-- test: error.let-scrutinee-payload-is-read-only -->
@@ -486,5 +486,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/mutable-enums/error.let-scrutinee-payload-is-read-only.test:24:19: cannot pass 'c' to function that mutates parameter 'c' (in main)
+error E3019: specs/mutable-enums/error.let-scrutinee-payload-is-read-only.maxon:24:19: cannot pass 'c' to function that mutates parameter 'c' (in main)
 ```

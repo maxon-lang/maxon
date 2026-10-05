@@ -20,7 +20,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3077: specs/fragments/var-should-be-let/docs-example-1.test:3:6: variable 'x' is never reassigned; use 'let' instead of 'var'
+error E3077: specs/var-should-be-let/docs-example-1.maxon:3:6: variable 'x' is never reassigned; use 'let' instead of 'var'
 ```
 
 ### A mutable name may not write what a live `let` reads (E3078, E3102, E3159)
@@ -44,7 +44,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3077: specs/fragments/var-should-be-let/var-never-reassigned.test:4:6: variable 'x' is never reassigned; use 'let' instead of 'var'
+error E3077: specs/var-should-be-let/var-never-reassigned.maxon:4:6: variable 'x' is never reassigned; use 'let' instead of 'var'
 ```
 
 <!-- test: var-reassigned -->
@@ -97,7 +97,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3077: specs/fragments/var-should-be-let/multiple-var-first-reported.test:4:6: variable 'x' is never reassigned; use 'let' instead of 'var'
+error E3077: specs/var-should-be-let/multiple-var-first-reported.maxon:4:6: variable 'x' is never reassigned; use 'let' instead of 'var'
 ```
 
 <!-- test: var-from-immutable-integer-ok -->
@@ -192,7 +192,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/var-from-immutable-struct-field.test:23:6: cannot assign from immutable variable to mutable binding 'i'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/var-from-immutable-struct-field.maxon:23:6: cannot assign from immutable variable to mutable binding 'i'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: var-from-immutable-value-field-ok -->
@@ -244,7 +244,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/var-should-be-let/unused-takes-precedence.test:4:6: unused variable: 'x'
+error E3012: specs/var-should-be-let/unused-takes-precedence.maxon:4:6: unused variable: 'x'
 ```
 
 <!-- test: returned-alias-of-a-let-string-field -->
@@ -274,7 +274,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/returned-alias-of-a-let-string-field.test:17:6: cannot assign the result of 'pass', which may share storage with a field of an immutable variable, to mutable binding 'x'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/returned-alias-of-a-let-string-field.maxon:17:6: cannot assign the result of 'pass', which may share storage with a field of an immutable variable, to mutable binding 'x'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: returned-alias-of-a-let-struct -->
@@ -303,7 +303,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/returned-alias-of-a-let-struct.test:19:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/returned-alias-of-a-let-struct.maxon:19:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: returned-alias-of-a-let-receiver-field -->
@@ -320,7 +320,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/returned-alias-of-a-let-receiver-field.test:5:6: cannot assign the result of 'toString', which may share storage with immutable variable 'fp', to mutable binding 's'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/returned-alias-of-a-let-receiver-field.maxon:5:6: cannot assign the result of 'toString', which may share storage with immutable variable 'fp', to mutable binding 's'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: returned-alias-through-two-calls -->
@@ -345,7 +345,7 @@ function pass(s String) returns String
 end 'pass'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/returned-alias-through-two-calls.test:6:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/returned-alias-through-two-calls.maxon:6:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: returned-alias-through-recursion -->
@@ -372,7 +372,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/returned-alias-through-recursion.test:16:6: cannot assign the result of 'pick', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/returned-alias-through-recursion.maxon:16:6: cannot assign the result of 'pick', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: returned-alias-through-an-interface-call -->
@@ -409,7 +409,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/returned-alias-through-an-interface-call.test:25:6: cannot assign the result of 'nameOf', which may share storage with immutable variable 't', to mutable binding 'y'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/returned-alias-through-an-interface-call.maxon:25:6: cannot assign the result of 'nameOf', which may share storage with immutable variable 't', to mutable binding 'y'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: returned-alias-through-a-closure -->
@@ -427,7 +427,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/returned-alias-through-a-closure.test:7:6: cannot assign the result of 'f', which may share storage with immutable variable 's', to mutable binding 'x'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/returned-alias-through-a-closure.maxon:7:6: cannot assign the result of 'f', which may share storage with immutable variable 's', to mutable binding 'x'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: returned-alias-bound-by-if-let -->
@@ -471,7 +471,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/returned-alias-bound-by-if-let.test:31:7: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/returned-alias-bound-by-if-let.maxon:31:7: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: returned-alias-bound-by-if-var -->
@@ -523,7 +523,7 @@ function relayT(p Point) returns Point throws PointError
 end 'relayT'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/returned-alias-bound-by-if-var.test:31:9: cannot assign the result of 'relayT', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/returned-alias-bound-by-if-var.maxon:31:9: cannot assign the result of 'relayT', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: returned-alias-in-an-unreached-function -->
@@ -543,7 +543,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/returned-alias-in-an-unreached-function.test:5:6: cannot assign the result of 'toString', which may share storage with immutable variable 'fp', to mutable binding 's'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/returned-alias-in-an-unreached-function.maxon:5:6: cannot assign the result of 'toString', which may share storage with immutable variable 'fp', to mutable binding 's'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-record-laundered-through-a-container -->
@@ -577,7 +577,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-record-laundered-through-a-container.test:23:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-laundered-through-a-container.maxon:23:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-record-laundered-through-a-setter -->
@@ -624,7 +624,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-record-laundered-through-a-setter.test:37:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-laundered-through-a-setter.maxon:37:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-record-laundered-through-an-array-literal -->
@@ -654,7 +654,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-record-laundered-through-an-array-literal.test:20:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-laundered-through-an-array-literal.maxon:20:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-record-of-a-let-global-through-a-call -->
@@ -685,7 +685,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-record-of-a-let-global-through-a-call.test:20:6: cannot assign the result of 'relay', which may share storage with immutable variable 'origin', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-of-a-let-global-through-a-call.maxon:20:6: cannot assign the result of 'relay', which may share storage with immutable variable 'origin', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-record-alias-of-a-parameter-bound-through-a-call -->
@@ -714,7 +714,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-record-alias-of-a-parameter-bound-through-a-call.test:9:6: cannot assign the result of 'pass', which may share storage with immutable variable 'q', to mutable binding 'x'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-alias-of-a-parameter-bound-through-a-call.maxon:9:6: cannot assign the result of 'pass', which may share storage with immutable variable 'q', to mutable binding 'x'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-record-assigned-to-a-var -->
@@ -740,7 +740,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: specs/fragments/var-should-be-let/let-record-assigned-to-a-var.test:18:9: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+error E3102: specs/var-should-be-let/let-record-assigned-to-a-var.maxon:18:9: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: let-record-assigned-through-a-call -->
@@ -770,7 +770,7 @@ function relay(p Point) returns Point
 end 'relay'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-record-assigned-through-a-call.test:16:2: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-assigned-through-a-call.maxon:16:2: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-record-constructed-into-a-var -->
@@ -804,7 +804,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/fragments/var-should-be-let/let-record-constructed-into-a-var.test:24:2: cannot write through 'box.item', which may be the record of immutable variable 'a'; use clone()
+error E3159: specs/var-should-be-let/let-record-constructed-into-a-var.maxon:24:2: cannot write through 'box.item', which may be the record of immutable variable 'a'; use clone()
 ```
 
 <!-- test: let-record-pushed-into-a-var-container -->
@@ -834,7 +834,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-record-pushed-into-a-var-container.test:19:6: cannot assign the result of 'get', which may share storage with immutable variable 'a', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-pushed-into-a-var-container.maxon:19:6: cannot assign the result of 'get', which may share storage with immutable variable 'a', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-record-stored-into-a-var-field -->
@@ -869,7 +869,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/fragments/var-should-be-let/let-record-stored-into-a-var-field.test:25:2: cannot write through 'box.item', which may be the record of immutable variable 'a'; use clone()
+error E3159: specs/var-should-be-let/let-record-stored-into-a-var-field.maxon:25:2: cannot write through 'box.item', which may be the record of immutable variable 'a'; use clone()
 ```
 
 <!-- test: let-record-bound-to-a-var-moves -->
@@ -894,7 +894,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: specs/fragments/var-should-be-let/let-record-bound-to-a-var-moves.test:17:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+error E3102: specs/var-should-be-let/let-record-bound-to-a-var-moves.maxon:17:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: let-record-popped-while-its-let-is-live -->
@@ -923,7 +923,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-record-popped-while-its-let-is-live.test:19:6: cannot assign the result of 'pop', which may share storage with immutable variable 'a', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-popped-while-its-let-is-live.maxon:19:6: cannot assign the result of 'pop', which may share storage with immutable variable 'a', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-borrow-live-refuses-a-var-of-the-same-element -->
@@ -953,7 +953,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-borrow-live-refuses-a-var-of-the-same-element.test:19:6: cannot assign the result of 'get', which may share storage with immutable variable 's', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-borrow-live-refuses-a-var-of-the-same-element.maxon:19:6: cannot assign the result of 'get', which may share storage with immutable variable 's', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-borrow-of-a-field-refuses-a-write-through-it -->
@@ -987,7 +987,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/fragments/var-should-be-let/let-borrow-of-a-field-refuses-a-write-through-it.test:24:2: cannot write through 'box.item', which may be the record of immutable variable 'p'; use clone()
+error E3159: specs/var-should-be-let/let-borrow-of-a-field-refuses-a-write-through-it.maxon:24:2: cannot write through 'box.item', which may be the record of immutable variable 'p'; use clone()
 ```
 
 <!-- test: let-record-written-through-an-interface-call -->
@@ -1025,7 +1025,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-record-written-through-an-interface-call.test:27:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-written-through-an-interface-call.maxon:27:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-record-written-through-a-function-value -->
@@ -1059,7 +1059,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/let-record-written-through-a-function-value.test:23:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-written-through-a-function-value.maxon:23:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: let-borrow-taken-after-a-var-of-the-same-element -->
@@ -1089,7 +1089,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/fragments/var-should-be-let/let-borrow-taken-after-a-var-of-the-same-element.test:20:2: cannot write through 'e', which may be the record of immutable variable 's'; use clone()
+error E3159: specs/var-should-be-let/let-borrow-taken-after-a-var-of-the-same-element.maxon:20:2: cannot write through 'e', which may be the record of immutable variable 's'; use clone()
 ```
 
 <!-- test: sibling-fields-do-not-alias -->
@@ -1204,7 +1204,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/fragments/var-should-be-let/one-record-handed-to-two-fields-aliases-them.test:26:2: cannot write through 'pair.right', which may be the record of immutable variable 'l'; use clone()
+error E3159: specs/var-should-be-let/one-record-handed-to-two-fields-aliases-them.maxon:26:2: cannot write through 'pair.right', which may be the record of immutable variable 'l'; use clone()
 ```
 
 <!-- test: one-record-stored-into-two-fields-aliases-them -->
@@ -1241,7 +1241,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/fragments/var-should-be-let/one-record-stored-into-two-fields-aliases-them.test:28:2: cannot write through 'pair.right', which may be the record of immutable variable 'l'; use clone()
+error E3159: specs/var-should-be-let/one-record-stored-into-two-fields-aliases-them.maxon:28:2: cannot write through 'pair.right', which may be the record of immutable variable 'l'; use clone()
 ```
 
 <!-- test: a-let-a-closure-captured-is-read-when-the-closure-is-called -->
@@ -1271,5 +1271,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/fragments/var-should-be-let/a-let-a-closure-captured-is-read-when-the-closure-is-called.test:20:6: cannot assign the result of 'get', which may share storage with immutable variable 's', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/a-let-a-closure-captured-is-read-when-the-closure-is-called.maxon:20:6: cannot assign the result of 'get', which may share storage with immutable variable 's', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
 ```

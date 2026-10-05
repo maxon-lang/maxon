@@ -1518,7 +1518,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/managed-memory-methods/error.byte-at-without-try.test:8:18: throwing function requires try: 'byteAt'
+error E3057: specs/managed-memory-methods/error.byte-at-without-try.maxon:8:18: throwing function requires try: 'byteAt'
 ```
 
 ### The buffer surface IS the roster its refusal names, in both directions
@@ -2153,7 +2153,7 @@ error E2015: <fragment>:10:10: Unsupported: overloading 'make' — one of its de
 <!-- test: error.array-roster-names-managed-and-not-create -->
 
 ⭐⭐ **THE CASE WHOSE PURPOSE IS THE LIST ITSELF**, so an edit to `arraySurfaceMemberNames` has a
-test that speaks for it rather than only goldens that happen to quote it. A HAND-WRITTEN refusal literal can
+test that speaks for it rather than only `maxoncstderr` blocks that happen to quote it. A HAND-WRITTEN refusal literal can
 be false in both directions at once — naming **`create`**, which `dispatchArrayMethod` does not serve as a
 member, and omitting **`managed`**, which that dispatch does serve. The refusal is joined from the very
 constants the arms match on — so it names `managed`, does not name `create` among the members, and says

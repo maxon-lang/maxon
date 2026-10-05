@@ -304,7 +304,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/keyword-as-a-declared-name/block-keywords-as-parameter-names-beside-real-blocks.test:4:16: unused variable: 'while'
+error E3012: specs/keyword-as-a-declared-name/block-keywords-as-parameter-names-beside-real-blocks.maxon:4:16: unused variable: 'while'
 ```
 
 <!-- test: error.a-bare-read-of-a-block-keyword-parameter -->
@@ -333,7 +333,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/keyword-as-a-declared-name/error.a-bare-read-of-a-block-keyword-parameter.test:5:13: Unsupported: reading 'while' as a value here — it is a legal DECLARED name, but the token scans that re-derive Maxon's block structure read a bare `while` in this position as block structure and have no scope to tell them otherwise. Pass it under a different name, or read a differently-named binding
+error E2015: specs/keyword-as-a-declared-name/error.a-bare-read-of-a-block-keyword-parameter.maxon:5:13: Unsupported: reading 'while' as a value here — it is a legal DECLARED name, but the token scans that re-derive Maxon's block structure read a bare `while` in this position as block structure and have no scope to tell them otherwise. Pass it under a different name, or read a differently-named binding
 ```
 
 ### Two hazards outside the grammar
@@ -757,5 +757,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/keyword-as-a-declared-name/error.a-bare-read-of-end-in-a-first-method-is-the-only-diagnostic.test:11:21: Unsupported: reading 'end' as a value here — it is a legal DECLARED name, but the token scans that re-derive Maxon's block structure read a bare `end` in this position as block structure and have no scope to tell them otherwise. Pass it under a different name, or read a differently-named binding
+error E2015: specs/keyword-as-a-declared-name/error.a-bare-read-of-end-in-a-first-method-is-the-only-diagnostic.maxon:11:21: Unsupported: reading 'end' as a value here — it is a legal DECLARED name, but the token scans that re-derive Maxon's block structure read a bare `end` in this position as block structure and have no scope to tell them otherwise. Pass it under a different name, or read a differently-named binding
 ```

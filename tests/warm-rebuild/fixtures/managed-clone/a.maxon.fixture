@@ -1,0 +1,34 @@
+module typealias Integer = int(i64.min to i64.max)
+
+module type Leaf
+	module var label as String
+	module var value as Integer
+
+	module static function create(label String, value Integer) returns Self
+		return Self{label: label, value: value}
+	end 'create'
+end 'Leaf'
+
+module type Mid
+	module var leaf as Leaf
+
+	module static function create(leaf Leaf) returns Self
+		return Self{leaf: leaf}
+	end 'create'
+end 'Mid'
+
+module type Outer
+	module var mid as Mid
+
+	module static function create(mid Mid) returns Self
+		return Self{mid: mid}
+	end 'create'
+end 'Outer'
+
+module typealias OuterArray = Array with Outer
+
+module function makeClone() returns OuterArray
+	var src = OuterArray.create()
+	src.push(Outer.create(Mid.create(Leaf.create("a nested label long enough to reach the heap", value: 7))))
+	return src.clone()
+end 'makeClone'

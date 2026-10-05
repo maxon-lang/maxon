@@ -840,7 +840,7 @@ export let NetpollPdDropName = b"__np_pd_drop"
 // decodes a note asks this first, and asks it the same way.
 function emitNetpollBranchOnGroupPark(module StdModule, block IrBlock, gt ValueId, several IrBlock, one IrBlock, ids ValueMinter)
 	let parkKind = emitLoadField(module, block: block, record: gt, offset: GtOffParkKind, ids: ids)
-	let isGroup = emitCmp(module, block: block, a: parkKind, b: emitConst(module, block: block, value: GtParkKindNetpollAny, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let isGroup = emitCmp(module, block: block, a: parkKind, b: emitConst(module, block: block, value: GtParkKind.netpollAny.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(isGroup, thenBlockId: several.id, elseBlockId: one.id))
 end 'emitNetpollBranchOnGroupPark'
 
@@ -1339,7 +1339,7 @@ function buildNetpollPdDeadline(module StdModule)
 	// SECOND entry under a pair that already has one. Nothing calls it this way today — `ManagedSocketRuntime`
 	// is the only caller — and a loud refusal is what keeps a future one from corrupting the heap quietly.
 	let waiterKind = emitLoadField(module, block: rearm, record: waiter, offset: GtOffParkKind, ids: ids)
-	let onAGroup = emitCmp(module, block: rearm, a: waiterKind, b: emitConst(module, block: rearm, value: GtParkKindNetpollAny, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let onAGroup = emitCmp(module, block: rearm, a: waiterKind, b: emitConst(module, block: rearm, value: GtParkKind.netpollAny.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(rearm, op: StdOp.condBranch(onAGroup, thenBlockId: groupMember.id, elseBlockId: rearmOne.id))
 	emitRuntimeAbort(module, func: func, block: groupMember, abort: RuntimeAbort.netpollGroupMemberDeadline, ids: ids)
 
@@ -1456,7 +1456,7 @@ function buildNetpollPdWait(module StdModule)
 	// side of the switch in `__np_pd_commit`, which holds nothing but the thread (`GtRuntime.GtOffParkGen`).
 	emitStoreField(module, block: park, record: emitLoadCurrentGt(module, block: park, ids: ids), offset: GtOffParkGen, value: gen)
 	emitSchedLockLeave(module, block: park, ids: ids)
-	emitGtPark(module, ids: ids, cur: park, kind: GtParkKindNetpoll, arg: parkArg, cont: resumed)
+	emitGtPark(module, ids: ids, cur: park, kind: GtParkKind.netpoll.rawValue, arg: parkArg, cont: resumed)
 
 	// ⛔⛔ **THE WAIT IS OVER, BUT THE RECORD MAY NOT BE THIS THREAD’S ANY MORE.** A release readies its waiter
 	// and resets the record while the table slot goes on naming it, so by the time this thread runs the
@@ -2925,7 +2925,7 @@ function buildNetpollPdWaitAny(module StdModule)
 	emitNetpollGroupWalkEnd(module, next: markAct, hdr: markHdr, index: mark.index, ids: ids)
 
 	emitSchedLockLeave(module, block: park, ids: ids)
-	emitGtPark(module, ids: ids, cur: park, kind: GtParkKindNetpollAny, arg: group, cont: resumed)
+	emitGtPark(module, ids: ids, cur: park, kind: GtParkKind.netpollAny.rawValue, arg: group, cont: resumed)
 
 	// The wait is over, and every member word still in the life the caller began in — the life this wait
 	// marked, by the test above — is held for this thread and is this group's to settle

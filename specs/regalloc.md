@@ -9,8 +9,7 @@ category: backend
 ## Documentation
 
 This spec exercises specific register-allocator behaviors that are easy
-to exhibit but hard to gate via regular feature tests. Each test lives
-under `fragments-x64-windows/regalloc/`.
+to exhibit but hard to gate via regular feature tests.
 
 The tests are primarily behavioral: they compile a small handwritten
 Maxon program, run it, and check the exit code against the deterministic

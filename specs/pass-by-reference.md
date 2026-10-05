@@ -324,7 +324,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/pass-by-reference/pass-by-reference.borrowed-managed-global-to-reassigning-param-error.test:13:2: cannot mutate 'pool' via 'wipe' while it is borrowed by 'held' (borrowed at line 12)
+error E3070: specs/pass-by-reference/pass-by-reference.borrowed-managed-global-to-reassigning-param-error.maxon:13:2: cannot mutate 'pool' via 'wipe' while it is borrowed by 'held' (borrowed at line 12)
 ```
 
 <!-- test: pass-by-reference.mutate-ranged-float-alias-ref -->
@@ -716,7 +716,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/pass-by-reference/pass-by-reference.let-to-mutating-param-error.test:11:2: cannot pass 'n' to function that mutates parameter 'x' (in main)
+error E3019: specs/pass-by-reference/pass-by-reference.let-to-mutating-param-error.maxon:11:2: cannot pass 'n' to function that mutates parameter 'x' (in main)
 ```
 
 <!-- test: pass-by-reference.captured-let-to-mutating-param-error -->
@@ -737,7 +737,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.test:12:27: cannot pass 'x' to function that mutates parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach it
+error E3019: specs/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.maxon:12:27: cannot pass 'x' to function that mutates parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach it
 ```
 
 <!-- test: pass-by-reference.captured-var-to-mutating-param-error -->
@@ -835,7 +835,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/pass-by-reference/pass-by-reference.a-let-to-the-reassigning-overload-is-refused-and-to-the-by-value-one-is-not.test:15:2: cannot pass 'n' to function that mutates parameter 'dest' (in main)
+error E3019: specs/pass-by-reference/pass-by-reference.a-let-to-the-reassigning-overload-is-refused-and-to-the-by-value-one-is-not.maxon:15:2: cannot pass 'n' to function that mutates parameter 'dest' (in main)
 ```
 
 <!-- test: pass-by-reference.an-out-of-range-literal-at-the-reassigning-overload-is-a-compile-error -->
@@ -857,7 +857,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/pass-by-reference/pass-by-reference.an-out-of-range-literal-at-the-reassigning-overload-is-a-compile-error.test:14:2: Value 2000 is outside the range of 'Count' (int(0 to 1000))
+error E3005: specs/pass-by-reference/pass-by-reference.an-out-of-range-literal-at-the-reassigning-overload-is-a-compile-error.maxon:14:2: Value 2000 is outside the range of 'Count' (int(0 to 1000))
 ```
 
 <!-- test: pass-by-reference.an-async-call-to-overloads-disagreeing-on-by-reference-binds-its-member -->

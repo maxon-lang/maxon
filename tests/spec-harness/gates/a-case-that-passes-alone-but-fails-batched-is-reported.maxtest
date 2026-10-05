@@ -1,0 +1,28 @@
+let ProcessStateSpecName = "process-state"
+let PassesAloneButFailsBatched = "passes alone but fails batched"
+
+test 'a case that passes in a process of its own but fails in the batch is reported as a batching gap'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: ProcessStateSpecName, testNames: ["process-state.first"], broken: broken)
+
+	let secondFailed = failVerdictPrefix(testLabel(ProcessStateSpecName, testName: "process-state.second"))
+
+	if not said.contains(secondFailed) 'secondDidNotFail'
+		broken.push("'process-state.second' passes alone but fails batched, and the run must say so. Expected '{secondFailed}', and the run said:\n{said}\n")
+	end 'secondDidNotFail'
+
+	if not said.contains(PassesAloneButFailsBatched) 'gapUnnamed'
+		broken.push("the failure of 'process-state.second' does not say it '{PassesAloneButFailsBatched}'. The run said:\n{said}\n")
+	end 'gapUnnamed'
+
+	collectMissingSummary(said, expected: batchSummaryLine(1, programs: 1, alone: 1), broken: broken)
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with a batching gap in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "a case that passes alone but fails batched is reported")
+end 'a case that passes in a process of its own but fails in the batch is reported as a batching gap'

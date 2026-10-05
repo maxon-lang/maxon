@@ -1,0 +1,16 @@
+let SharedRebaseSpecName = "shared-rebase"
+let SharedRebaseWorkersFlag = "--workers=1"
+
+test 'a worker that reuses shared library parses compiles a batch of nine programs without a write past the settled index'
+	let run = runGateFixtureOnce([SharedRebaseWorkersFlag])
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: SharedRebaseSpecName, testNames: ["shared-rebase.case1", "shared-rebase.case2", "shared-rebase.case3", "shared-rebase.case4", "shared-rebase.case5", "shared-rebase.case6", "shared-rebase.case7", "shared-rebase.case8", "shared-rebase.case9"], broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a shared library parse's rebase leaves the signature index at its baseline")
+end 'a worker that reuses shared library parses compiles a batch of nine programs without a write past the settled index'

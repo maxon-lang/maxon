@@ -367,8 +367,9 @@ Runs `maxon spec-test` and returns `passed`, `failed`, `total`, `summaryParsed`,
 | Argument | Type | Description |
 |----------|------|-------------|
 | `filter` | string or array of strings | One `--filter=` per pattern, each a case-sensitive substring of the `<spec>/<test>` label. The run takes every case any pattern selects; a pattern that selects nothing refuses the run, and an empty pattern is a tool error. A comma is part of a pattern. |
-| `directory` | string | Spec directory (default `specs`) |
-| `updateRequired` | boolean | `--update-required`: rewrite the committed IR goldens. Always pair it with `filter`; unfiltered, it rewrites every golden. |
+| `directory` | string | Spec directory (default `specs`; `ir-specs` is the Target IR suite) |
+| `updateRequired` | boolean | `--update-required`: re-mint the inline blocks in the spec files, the trace-capture blocks and the `TargetIr` pins. Always pair it with `filter`; unfiltered, it re-mints every selected case's blocks. |
+| `batch` | boolean | `--batch=off` when false: every run case is compiled and run on its own. The default, true, runs a spec's plain run cases batched, as the fewest programs whose type names do not overlap. |
 | `log` | string | `--log=` value, such as `ir:debug` |
 | `network` | boolean | `--network`: also run the cases that reach a real external host |
 | `target` | string | `--target=` value, such as `wasm32-wasi` |

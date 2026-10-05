@@ -432,5 +432,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/same-name-methods/error.same-name-methods.throwing-static-names-its-callee.test:25:13: throwing function requires try: 'Box.getValue'
+error E3057: specs/same-name-methods/error.same-name-methods.throwing-static-names-its-callee.maxon:25:13: throwing function requires try: 'Box.getValue'
 ```

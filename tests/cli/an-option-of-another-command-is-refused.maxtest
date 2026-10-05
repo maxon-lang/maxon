@@ -5,7 +5,7 @@ let OutputStem = "program"
 let VersionCommand = "version"
 let ScaleTestCommand = "scale-test"
 let TestCommand = "test"
-let RewriteDriftedGoldensFlag = "--rewrite-drifted-goldens"
+let BatchOffFlag = "--batch=off"
 let UpdateRequiredFlag = "--update-required"
 let RungsFlag = "--rungs=3"
 let ListFlag = "--list"
@@ -42,11 +42,11 @@ test 'a command refuses an option only another command takes, naming the option,
 	let build = [BuildCommandWord, source.toString(), "{OutputOptionPrefix}{dir.join(OutputStem).toString()}"]
 	var cases = ForeignOptionArray.create()
 
-	for goldenFlag in [RewriteDriftedGoldensFlag, UpdateRequiredFlag] 'eachGoldenFlag'
-		cases.push(ForeignOption.trailing(BuildCommandWord, option: goldenFlag, owner: HiddenAnchorCommand, arguments: build))
-		cases.push(ForeignOption.trailing(VersionCommand, option: goldenFlag, owner: HiddenAnchorCommand, arguments: [VersionCommand]))
-		cases.push(ForeignOption.trailing(ScaleTestCommand, option: goldenFlag, owner: HiddenAnchorCommand, arguments: [ScaleTestCommand]))
-	end 'eachGoldenFlag'
+	for specTestFlag in [BatchOffFlag, UpdateRequiredFlag] 'eachSpecTestFlag'
+		cases.push(ForeignOption.trailing(BuildCommandWord, option: specTestFlag, owner: HiddenAnchorCommand, arguments: build))
+		cases.push(ForeignOption.trailing(VersionCommand, option: specTestFlag, owner: HiddenAnchorCommand, arguments: [VersionCommand]))
+		cases.push(ForeignOption.trailing(ScaleTestCommand, option: specTestFlag, owner: HiddenAnchorCommand, arguments: [ScaleTestCommand]))
+	end 'eachSpecTestFlag'
 
 	cases.push(ForeignOption.trailing(BuildCommandWord, option: RungsFlag, owner: ScaleTestCommand, arguments: build))
 	cases.push(ForeignOption.trailing(BuildCommandWord, option: ListFlag, owner: TestCommand, arguments: build))

@@ -363,7 +363,7 @@ end 'main'
 <!-- test: a-generic-leaf -->
 A `Map.count`-shaped accessor on a type declared with `uses`: ONE shared body, reached from two
 instantiations. Its trailing LAYOUT-DESCRIPTOR parameter is an ordinary parameter and maps to the
-site's argument like any other — which is what the two `__il_body` blocks in the golden say, one per
+site's argument like any other — which is what the two `__il_body` blocks in the emitted code say, one per
 instantiation, each carrying that instantiation's own `__layout_Box_*` address in.
 
 ⚠ **IT READS A FIELD OF A CONCRETE TYPE, AND THAT IS THE WHOLE DIFFERENCE FROM `get() returns T`.**
@@ -464,10 +464,11 @@ end 'main'
 ```
 
 <!-- test: an-accessor-that-becomes-a-leaf-after-the-managed-rewrite-is-inlined -->
-⭐ **THE ORDER'S GATE.** `Array.isEmpty`'s whole body is one call to `__managed_count`, which
+⭐ **THE PASS ORDER DECIDES IT.** `Array.isEmpty`'s whole body is one call to `__managed_count`, which
 `inlineManagedPrimitives` rewrites in place into a single `loadIndirect`. Ordered before that pass this
 one would see a body holding a call and refuse it; ordered after, the accessor is a two-op leaf and both
-call sites are spliced. The fragment is the pin: `main` holds no `callDirect Array.isEmpty`.
+call sites are spliced. The emitted code (`--emit-ir`) shows it, and nothing in the suite pins it: `main`
+holds no `callDirect Array.isEmpty`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -585,117 +586,6 @@ end 'main'
 42
 ```
 
-<!-- test: a-runtime-body-that-asks-to-be-spliced-is-spliced-past-the-budget -->
-⭐⭐ **THE BUDGET IS A COST RULE, AND `__Raw.splicedAtEverySite()` OVERRULES IT.** `__probe_wide` is a
-runtime body far past `MaxInlinedLeafOps`, so the budget alone refuses it — and it has TWO call sites, so
-the called-once rule never looks at it either. The row is the whole difference: the golden below is
-`__probe_wide_caller` with both copies of the body spliced in and no `callDirect` left.
-
-⚠ **A COMPILER WITHOUT THE ROW RENDERS `call __probe_wide` TWICE HERE**, which is what this case exists
-to hold. It is the same shape the `tlsSlotLoad` case above uses, and for the same reason: a golden
-difference is a REFERENCE rather than a gate, so the reading that makes it evidence is the one taken from
-a compiler built without the change.
-
-⚠ **THE ROW OVERRIDES WHAT INLINING IS WORTH AND NEVER WHAT IT WOULD BREAK.** Both bodies here are tier
-source, which is what keeps `InlineLeaves.splicingWouldWidenTheSafePoint` — a correctness rule the row
-does not touch — out of the way; a tier callee spliced into a caller the compiler does not own is refused
-by it, and the row then ends the compile rather than falling back to a call.
-```maxon
-// --- runtime-file: Probe.maxon
-module function __probe_wide(seed MachineWord) returns MachineWord
-	__Raw.splicedAtEverySite()
-
-	var acc = seed + 1
-	acc = acc + 2
-	acc = acc + 3
-	acc = acc + 4
-	acc = acc + 5
-	acc = acc + 6
-	acc = acc + 7
-	acc = acc + 8
-	acc = acc + 9
-	acc = acc + 10
-	acc = acc + 11
-	acc = acc + 12
-	acc = acc + 13
-	acc = acc + 14
-
-	return acc
-end '__probe_wide'
-
-function __probe_wide_caller(seed ExitCode) returns ExitCode
-	let base = __probe_wide(seed as MachineWord)
-	let again = __probe_wide(base and 1)
-
-	return (base + again) as ExitCode
-end '__probe_wide_caller'
-// --- stdlib-overlay: Builtins.maxon
-export function probeWideSplice(seed ExitCode) returns ExitCode
-	return __probe_wide_caller(seed)
-end 'probeWideSplice'
-// --- file: main.maxon
-function main() returns ExitCode
-	return probeWideSplice(0)
-end 'main'
-```
-```exitcode
-211
-```
-```RequiredRuntime
-__probe_wide_caller
-```
-
-<!-- test: a-body-that-asks-to-be-spliced-may-call-another-that-does -->
-⭐⭐ **THE ONE CASCADE THE ROW BUYS, AND WHY IT IS NOT OPTIONAL.** A builder composes its emitters freely
-and pays nothing for it — `emitElementByteLen` calls `emitElementBits` and `emitBitsToBytes`, and all three
-land inline at every site. A tier family that could hold no helpers would be a family written in one
-function, so a body declaring the row may call another that does.
-
-⭐ **CALLEES FIRST, AND ONCE.** `__probe_inner` is spliced out of `__probe_outer` before `__probe_outer`
-is copied anywhere, so each body is copied exactly once per site and the work is bounded by the chain of
-DECLARED rows rather than by anything the program controls. The golden is `__probe_chain_caller` with both
-levels flattened into it and no `callDirect` left.
-
-⚠ **`__probe_outer` IS WHAT THIS CASE DISCRIMINATES ON, NOT `__probe_inner`.** The inner body holds no
-call and is an ordinary tiny leaf, which a compiler without the row inlines anyway; the outer body holds
-TWO calls, so the leaf rule refuses it outright and the called-once rule never sees it. Without the row a
-compiler renders `callDirect __probe_outer` twice here.
-```maxon
-// --- runtime-file: Probe.maxon
-module function __probe_inner(seed MachineWord) returns MachineWord
-	__Raw.splicedAtEverySite()
-
-	return seed + 1
-end '__probe_inner'
-
-module function __probe_outer(seed MachineWord) returns MachineWord
-	__Raw.splicedAtEverySite()
-
-	return __probe_inner(seed) + __probe_inner(seed + 1)
-end '__probe_outer'
-
-function __probe_chain_caller(seed ExitCode) returns ExitCode
-	let base = __probe_outer(seed as MachineWord)
-	let again = __probe_outer(base and 1)
-
-	return (base + again) as ExitCode
-end '__probe_chain_caller'
-// --- stdlib-overlay: Builtins.maxon
-export function probeSpliceChain(seed ExitCode) returns ExitCode
-	return __probe_chain_caller(seed)
-end 'probeSpliceChain'
-// --- file: main.maxon
-function main() returns ExitCode
-	return probeSpliceChain(0)
-end 'main'
-```
-```exitcode
-8
-```
-```RequiredRuntime
-__probe_chain_caller
-```
-
 <!-- test: error.a-body-that-asks-to-be-spliced-where-it-may-not-be-is-refused -->
 ⛔⛔ **THE ROW OVERRIDES WHAT INLINING IS WORTH AND NEVER WHAT IT WOULD BREAK, AND THIS IS THE CASE THAT
 HOLDS THE SECOND HALF.** `__probe_unowned` is compiler-owned scaffolding and `probeUnowned` is not, so
@@ -704,7 +594,7 @@ per SYMBOL, and the copied bytes would sit inside a symbol the predicate answers
 does not lift that, and must not.
 
 ⛔⛔ **WHAT IS UNDER TEST IS THAT THE REFUSAL IS LOUD.** A compiler that quietly left the call would be
-green on every case in this file and every golden in the suite, and a family ported on the strength of the
+green on every case in this file, and a family ported on the strength of the
 row would ship at exactly the cost the port was written to remove — with nothing anywhere saying so. The
 report names the body, the reference that survived and the rule that refused, and it is positioned at the
 declaration that has to change.
@@ -811,53 +701,4 @@ end 'main'
 ```
 ```maxoncstderr
 error E3158: <fragment>:3:17: '__probe_unhonourable' declares '__Raw.splicedAtEverySite()', so it must be left at no call site, but '__probe_unhonourable_entry' still calls it: it holds an op the splice cannot copy. The row overrides the inliner's cost rules — the op budget, the pressure budget, the inline-frame-record rule — and never its correctness rules, so a body one of those refuses is a body that must not declare it
-```
-
-<!-- test: a-runtime-leaf-reading-its-machines-tls-slot-is-spliced -->
-⭐⭐ **THE ADMISSION RULE READS `isUnsupportedInInlineBody`, AND THE `system` BAND IS NOT ONE ANSWER.**
-`__probe_tls_read` is a two-op leaf whose whole body is the per-OS-thread slot read every allocation and
-every current-GT read begins with. It is `isCall: false`, so the flag's tail files it a body op and both
-admission rules may carry it; the golden below is `__probe_tls_caller` with the read spliced in and no
-`callDirect` left. A compiler that refused the callee renders the call instead, which is the difference
-this case exists to hold.
-
-⚠ **SPLICING IS NOT HOISTING, AND ONLY THE SECOND WOULD BE WRONG.** A copy stays where it was written, so
-the M whose slot is read is the M the surrounding code is running on. What forbids the move is the pair of
-rosters `classifyArithOperands` and `classifyLoadOperands`, which answer `neither` and `notALoad` for this
-variant — so CSE, LICM and the unswitcher's invariance test each decline it before `isPure` is reached.
-
-⚠ **BOTH FUNCTIONS ARE TIER SOURCE, WHICH IS WHAT LETS THE SPLICE HAPPEN AT ALL.**
-`InlineLeaves.splicingWouldWidenTheSafePoint` refuses the compiler's own scaffolding spliced into code
-that is not, so a runtime callee reaches only a runtime caller — and the pair here is inside one
-`runtime/` file.
-
-⚠ It carries NO `unsupported-targets` marker: wasm32-wasi has no per-thread storage and answers E3104,
-which the harness counts as a SKIP naming this case.
-```maxon
-// --- runtime-file: Probe.maxon
-module function __probe_tls_read(tebOffset MachineWord) returns MachineWord
-	return __Raw.tlsSlotLoad(tebOffset)
-end '__probe_tls_read'
-
-function __probe_tls_caller(tebOffset ExitCode) returns ExitCode
-	if tebOffset == 0 'neverAMachine'
-		return 0
-	end 'neverAMachine'
-
-	return __probe_tls_read(tebOffset as MachineWord) as ExitCode
-end '__probe_tls_caller'
-// --- stdlib-overlay: Builtins.maxon
-export function probeTlsSlotRead(tebOffset ExitCode) returns ExitCode
-	return __probe_tls_caller(tebOffset)
-end 'probeTlsSlotRead'
-// --- file: main.maxon
-function main() returns ExitCode
-	return probeTlsSlotRead(0)
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredRuntime
-__probe_tls_caller
 ```

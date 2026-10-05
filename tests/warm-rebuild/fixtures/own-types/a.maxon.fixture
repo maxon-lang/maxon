@@ -1,0 +1,41 @@
+module typealias Tally = int(0 to 1000)
+module typealias Rank = int(0 to 9)
+
+module type Particle
+	module let weight as Tally
+	module let rank as Rank
+
+	module static function create(weight Tally, rank Rank) returns Particle
+		return Self{weight: weight, rank: rank}
+	end 'create'
+
+	module function heavy() returns bool
+		return self.weight > 500 and self.rank > 5
+	end 'heavy'
+end 'Particle'
+
+module typealias ParticleArray = Array with Particle
+module typealias LabelMap = Map with (String, Tally)
+
+module enum Phase
+	solid
+	liquid
+	gas
+end 'Phase'
+
+module union Reading
+	count(value Tally)
+	missing
+end 'Reading'
+
+module function totalWeight(particles ParticleArray) returns Tally
+	var total = 0 as Tally
+
+	for particle in particles 'eachParticle'
+		if particle.heavy() 'aHeavyOne'
+			total = total + 1
+		end 'aHeavyOne'
+	end 'eachParticle'
+
+	return total
+end 'totalWeight'

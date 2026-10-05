@@ -29,8 +29,8 @@ no `try` — so the comparison is against the instruction itself and against not
 `inlineLeaves` to splice with its literal argument would have its divisor folded to a constant and be
 reduced too — and the case would then compare a reduction against itself and pass however wrong both
 were. The reference functions below carry a ranged-parameter guard, which keeps them out of the
-budget; the committed fragments show `callDirect` at every reference site and `idivReg` inside every
-reference body, which is what makes that visible rather than assumed.
+budget; the emitted code (`--emit-ir`) shows `callDirect` at every reference site and `idivReg` inside
+every reference body, which is where that is visible rather than assumed.
 
 ### The dividends are the edges — and the edges are TWO different sets
 
@@ -66,7 +66,7 @@ That is sound only where the fault provably cannot happen:
 
 ### What the emitted code looks like
 
-The committed fragments are the record. `x / 8` is `sar 63` / `shr 61` / `lea` / `sar 3`; `x /u 8` is
+The emitted code (`--emit-ir`) shows it, and nothing in the suite pins it. `x / 8` is `sar 63` / `shr 61` / `lea` / `sar 3`; `x /u 8` is
 one `shr`; `x modu 8` is one `and`; `x / 10` is `mov rax, 7378697629483820647` / `imulHighReg` /
 `sar 2` / `shr 63` / `lea`, and `x / 15` carries one more `lea` for the negative-multiplier fixup.
 

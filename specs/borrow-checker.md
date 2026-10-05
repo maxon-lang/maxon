@@ -33,7 +33,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-checker/borrow-basic-conflict.test:5:6: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
+error E3070: specs/borrow-checker/borrow-basic-conflict.maxon:5:6: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
 ```
 
 <!-- test: borrow-nll-allowed -->

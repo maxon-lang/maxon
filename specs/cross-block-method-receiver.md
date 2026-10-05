@@ -266,5 +266,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/cross-block-method-receiver/error-receiver-declared-only-in-branch.test:10:2: Undefined variable 'arr'
+error E2004: specs/cross-block-method-receiver/error-receiver-declared-only-in-branch.maxon:10:2: Undefined variable 'arr'
 ```

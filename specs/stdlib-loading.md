@@ -39,12 +39,12 @@ always lives inside the checkout. A missing `stdlib/` is a loud, hard error — 
 ### An unused stdlib module changes NOTHING
 
 Every stdlib module reaches EVERY compile, so a program that never reads a clock must compile to the
-exact bytes it would without `stdlib/Clock.maxon` — same x64 goldens, same wasm/arm64 output.
+exact bytes it would without `stdlib/Clock.maxon` — the same output on every target.
 Two mechanisms compose to guarantee that:
 
 1. Dead-function elimination drops every stdlib function no reachable code calls, before the
    back end — so an unused Clock never reaches instruction selection, register allocation or
-   encoding, and never lands in a golden, on any target.
+   encoding, and never lands in the emitted code, on any target.
 
 2. The runtime-floor decision (`scanRuntimeUsage`: does this program carry the heap / GT scheduler /
    wall clock?) runs at the Maxon tier, BEFORE that elimination. Clock.nowMs's body calls
@@ -87,12 +87,13 @@ module from a larger root set that includes every function an `.rdata` slot name
 pass CHECKS that it drops every function whose body lowering skipped, rather than assuming it. A
 disagreement would otherwise link cleanly and call an empty function.
 
-`a-stdlib-modules-literals-are-byte-neutral` below is that guard stated as a golden: it compiles a
-program holding a float constant and a dense-`match` jump table, so its fragment names labels from two
-of the three prefixes the shared counter mints, and any stdlib module that registers `.rdata` for code
-the program cannot reach moves them. (A payload registered under a STRUCTURAL label — a witness table,
-a layout descriptor — does not advance that counter, so it shifts `.rdata` OFFSETS without moving any
-label a fragment prints. The lowering skip covers it; no fragment golden can see it.)
+`a-stdlib-modules-literals-are-byte-neutral` below is that guard stated as a reading of the emitted
+code: it compiles a program holding a float constant and a dense-`match` jump table, so its emitted code
+names labels from two of the three prefixes the shared counter mints, and any stdlib module that
+registers `.rdata` for code the program cannot reach moves them. (A payload registered under a
+STRUCTURAL label — a witness table, a layout descriptor — does not advance that counter, so it shifts
+`.rdata` OFFSETS without moving any label the emitted code prints. The lowering skip covers it; no
+label reading can see it.)
 
 ### The collision rule
 
@@ -109,7 +110,7 @@ rules about ADDING OR CHANGING a stdlib module.
   ```
 
   naming the stdlib definition it collided with. (That path is the real `stdlib/Clock.maxon`,
-  not the test fragment, so this diagnostic is documented here rather than pinned as a golden — the
+  not the test fragment, so this diagnostic is documented here rather than pinned in a `maxoncstderr` block — the
   runner only rewrites the fragment's own path to `<fragment>`.)
 
 - TYPE-name-vs-builtin collisions are the maintainer's responsibility, with **exactly two
@@ -260,9 +261,9 @@ end 'main'
 ```
 
 <!-- test: stdlib-loading.a-stdlib-modules-literals-are-byte-neutral -->
-The sibling of `no-clock-is-byte-neutral`, for the half that case cannot see. That program's fragment
-names no `.rdata` label at all, so it stays green while every synthetic label in the corpus renumbers.
-This one holds a dense-`match` jump table and a String blob, so its fragment NAMES labels off the one
+The sibling of `no-clock-is-byte-neutral`, for the half that case cannot see. That program's emitted code
+names no `.rdata` label at all, so it shows nothing while every synthetic label in the corpus renumbers.
+This one holds a dense-`match` jump table and a String blob, so its emitted code NAMES labels off the one
 shared counter — `__jumptable_1` and `__str_blob_0`, the last being the range-check panic message that took
 id 0. A stdlib module that registers ANY `.rdata` for code no path from `main` reaches moves both.
 
@@ -270,12 +271,12 @@ id 0. A stdlib module that registers ANY `.rdata` for code no path from `main` r
 share a compile with an island of another kind — but its `__fconst_12.5` label is not a counter
 reading: float islands are named by their value and take the labelled door.
 
-⛔⛔ **BUT IT DETECTS THAT THROUGH ITS GOLDEN, SO IT CANNOT FAIL — IT IS A READING, NOT A GATE.** A
-fragment mismatch prints a `note:`, counts as no failure and leaves the exit code at 0. With
+⛔⛔ **BUT IT SHOWS THAT ONLY IN ITS EMITTED CODE, SO IT CANNOT FAIL — IT IS A READING, NOT A GATE.** Its
+exit code is its only assertion. With
 `registerProgramLiteralBlobs`' unreachable-stdlib gate neutralised — an orphan blob at `.rdata` byte 0
-of every program in the suite — this case still PASSES. Keep it: the drift it prints names the moved labels, which no other case does. But the
-enforcement lives in `a-stdlib-modules-literals-cannot-reach-the-rdata-image` below, which pins the linked
-image and goes red.
+of every program in the suite — this case still PASSES. Keep it: its emitted code names the moved labels, which no other case's does. But the
+enforcement lives in `ir-specs/stdlib-loading.md`'s `a-stdlib-modules-literals-cannot-reach-the-rdata-image`,
+which pins the linked image and goes red.
 ```maxon
 typealias Weight = float(0.0 to 100.0)
 
@@ -308,65 +309,6 @@ end 'main'
 ```
 ```exitcode
 14
-```
-
-<!-- test: stdlib-loading.a-stdlib-modules-literals-cannot-reach-the-rdata-image -->
-⛔⛔ **THE BYTE-NEUTRALITY CLAIM'S ONLY GATE. ITS TWO SIBLINGS ABOVE CANNOT FAIL.**
-`a-stdlib-modules-literals-are-byte-neutral` detects a displaced `.rdata` payload through its golden
-FRAGMENT — and a fragment mismatch is REFERENCE, NOT A GATE: it prints a `note:`, counts as no failure
-and leaves the exit code at 0. Neutralising `LowerMaxonToStd.registerProgramLiteralBlobs`'
-unreachable-stdlib gate puts an orphan blob from `stdlib/Json.maxon` at `.rdata` byte 0 of every program
-in the suite, and that case still PASSES. It is a real reading and a useful one, but nothing in the
-battery turns it red.
-
-⭐ **A ```RequiredRdata BLOCK IS THAT ENFORCEMENT, AND THE FIT IS EXACT.** The block is compared as a run
-FROM BYTE 0, read back out of the LINKED IMAGE rather than out of the compiler's opinion of it — so it
-answers precisely "did anything get in front of this program's read-only data?". This program's whole
-`.rdata` is its two float constants, 16 bytes, every one of them pinned; a stdlib module that registers ANY
-`.rdata` for code no path from `main` reaches lands ahead of them, because `registerProgramLiteralBlobs`
-runs before the target tier mints a float. With the gate neutralised it reports
-`.rdata mismatch at byte 6: expected 0x29, got 0x00` — eight zero bytes of orphan where `12.5` belongs.
-
-⚠ **IT MUST HOLD NO STRING LITERAL OF ITS OWN, and that is not a stylistic choice.** The user's `main` is
-walked before stdlib's functions, so a program literal in `main` keeps byte 0 whatever an orphan does and
-the pin goes green on the broken compiler. The payload a displacement is visible against has to
-be one the COMPILER composes.
-
-⛔⛔ **AND THE LOOP IS LOAD-BEARING: WITHOUT IT THIS PROGRAM HAS NO `.rdata` AT ALL.** Straight-line
-`let scale = 12.5` / `let floor = 1.5` / `if scale > floor` is folded by `foldConstants`, which folds
-FLOATS — the comparison becomes a constant, `foldConstantBranches` takes the arm, and both float
-`const`s are retired unread. The program still returns 8, but materialises neither float, the linked
-image has no `.rdata` section, and this gate cannot read the thing it gates: `could not read the .rdata
-section … has no .rdata section`.
-
-⇒ The loop makes `scale` a HEADER PHI, which this pass reads as unknown by construction — *"it is not a
-constant propagator; a value that is constant on every path into a phi is not constant to this pass"*. So
-`scale + floor` and `scale > floor` both keep their instructions, `12.5` is materialised as the phi's
-entering value and `1.5` as an operand (floats have no immediate form on any target, so
-`foldConstOperands` cannot absorb it either), and the two islands are registered in source order. **Do not
-simplify it back.** A folded version of this program passes its exit code and gates nothing — which is
-precisely the failure mode the paragraph above this one is about, arriving by a second route.
-```maxon
-function main() returns ExitCode
-	var scale = 12.5
-	let floor = 1.5
-	var spins = 0
-	while spins < 1 'spin'
-		scale = scale + floor
-		spins = spins + 1
-	end 'spin'
-	if scale > floor 'gt'
-		return 8
-	end 'gt'
-	return 1
-end 'main'
-```
-```exitcode
-8
-```
-```RequiredRdata
-f64 12.5
-f64 1.5
 ```
 
 <!-- test: stdlib-loading.target-refusal-blames-the-crossing-call -->
@@ -889,7 +831,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/stdlib-loading/stdlib-loading.error.print-arity-comes-from-the-stdlib-declaration.test:3:2: 'print' expects 1 argument(s) but 0 were provided
+error E3036: specs/stdlib-loading/stdlib-loading.error.print-arity-comes-from-the-stdlib-declaration.maxon:3:2: 'print' expects 1 argument(s) but 0 were provided
 ```
 
 The VOID-RESULT refusal (`void-call-result.md` covers `noop`/`push`/`insert`/`append`/`reserve` and
@@ -903,7 +845,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/stdlib-loading/stdlib-loading.error.print-void-result-comes-from-the-stdlib-declaration.test:3:10: Function 'print' does not return a value
+error E2004: specs/stdlib-loading/stdlib-loading.error.print-void-result-comes-from-the-stdlib-declaration.maxon:3:10: Function 'print' does not return a value
 ```
 
 And the two streams are INDEPENDENT, asserted separately in one program — a spec that only checked
@@ -1078,11 +1020,13 @@ the declaration and leaves the module inert. Both are checked rather than assume
 ⛔ **`Json.maxon` IS BYTE-NEUTRAL ONLY BECAUSE OF `registerProgramLiteralBlobs`' UNREACHABLE-STDLIB
 GATE.** A STRING field default mints a nullary helper, and `LowerMaxonToStd.registerProgramLiteralBlobs`
 walks it — a pre-elimination door onto `GlobalDataTable.nextStringId` of its own. The two `.rdata`
-cases above are written against that gate.
+cases, `a-stdlib-modules-literals-are-byte-neutral` above and
+`ir-specs/stdlib-loading.md`'s `a-stdlib-modules-literals-cannot-reach-the-rdata-image`, are written
+against that gate.
 
-⚠ **A DISPLACED LABEL SHOWS AS DRIFT, NOT AS A FAILING CASE.** `a-stdlib-modules-literals-are-byte-neutral`
-shifts by a label and still PASSES — a golden is REFERENCE, not a gate. The case that turns this
-invariant red is `a-stdlib-modules-literals-cannot-reach-the-rdata-image`.
+⚠ **A DISPLACED LABEL SHOWS IN THE EMITTED CODE, NOT AS A FAILING CASE.** `a-stdlib-modules-literals-are-byte-neutral`
+shifts by a label and still PASSES — it pins no emitted code. The case that turns this
+invariant red is `ir-specs/stdlib-loading.md`'s `a-stdlib-modules-literals-cannot-reach-the-rdata-image`.
 
 ⭐ **AND THE TWO CASES BELOW ARE THE DIFFERING-DECLARATIONS CONTROL IN SPEC FORM.** Neither can pass
 against an inert entry and neither can pass by merely NAMING the type: each drives the module's own

@@ -30,7 +30,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3082: specs/fragments/empty-block/empty-if.test:4:2: empty block: 'check'
+error E3082: specs/empty-block/empty-if.maxon:4:2: empty block: 'check'
 ```
 
 <!-- test: empty-else -->
@@ -44,7 +44,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3082: specs/fragments/empty-block/empty-else.test:6:2: empty block: 'otherwise'
+error E3082: specs/empty-block/empty-else.maxon:6:2: empty block: 'otherwise'
 ```
 
 <!-- test: empty-while -->
@@ -57,7 +57,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3082: specs/fragments/empty-block/empty-while.test:5:2: empty block: 'loop'
+error E3082: specs/empty-block/empty-while.maxon:5:2: empty block: 'loop'
 ```
 
 <!-- test: empty-for-in -->
@@ -70,7 +70,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3082: specs/fragments/empty-block/empty-for-in.test:5:2: empty block: 'loop'
+error E3082: specs/empty-block/empty-for-in.maxon:5:2: empty block: 'loop'
 ```
 
 <!-- test: empty-for-range -->
@@ -82,7 +82,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3082: specs/fragments/empty-block/empty-for-range.test:4:2: empty block: 'loop'
+error E3082: specs/empty-block/empty-for-range.maxon:4:2: empty block: 'loop'
 ```
 
 <!-- test: empty-otherwise -->
@@ -103,7 +103,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3082: specs/fragments/empty-block/empty-otherwise.test:10:2: empty block: 'oops'
+error E3082: specs/empty-block/empty-otherwise.maxon:10:2: empty block: 'oops'
 ```
 
 <!-- test: valid-nonempty-if -->

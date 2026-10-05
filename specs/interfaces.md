@@ -439,7 +439,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/interfaces/partial-implementation-error.test:11:6: Partial interface implementation: type 'Incomplete' is missing 2 method(s):
+error E3016: specs/interfaces/partial-implementation-error.maxon:11:6: Partial interface implementation: type 'Incomplete' is missing 2 method(s):
   - two() returns Integer
   - three() returns Integer
 ```
@@ -503,7 +503,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/interfaces/transitive-interface-validation.test:14:6: Partial interface implementation: type 'IncompleteType' is missing 1 method(s):
+error E3016: specs/interfaces/transitive-interface-validation.maxon:14:6: Partial interface implementation: type 'IncompleteType' is missing 1 method(s):
   - baseMethod() returns Integer (from BaseInterface)
 ```
 

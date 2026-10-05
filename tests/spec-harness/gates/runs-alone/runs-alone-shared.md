@@ -8,7 +8,7 @@ an ordinary SHARED job: it marks itself busy, holds that mark for a second, then
 mark. The `runs-alone-gate` spec beside it reads the two marks, and what it prints says whether it ran
 after this job or beside it.
 
-**Its expected stdout is DELIBERATELY WRONG, and it must stay wrong**, so it mints no golden.
+**Its expected stdout is DELIBERATELY WRONG, and it must stay wrong.**
 
 ## Tests
 

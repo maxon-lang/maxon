@@ -110,45 +110,13 @@ export type TestRunProgress
 	end 'create'
 end 'TestRunProgress'
 
-// What one process launch produced.
-union TestLaunchResult
-	// The process ran to completion, whatever it exited with.
-	ran(exitCode ExitCodeValue, stderr String)
-
-	// The process outlived its deadline and was killed. ⚠ **NO STREAM SURVIVES THIS** — `Subprocess`
-	// reports a deadline by THROWING, so the bytes the child had already written are gone with it,
-	// and there is nothing to attribute from. `executeShard` answers this arm before attribution for
-	// exactly that reason.
-	deadlineExpired
-
-	// Nothing started: the binary is missing, unreadable, or the spawn itself failed.
-	couldNotStart(reason String)
-end 'TestLaunchResult'
-
 // A test binary runs in the directory `maxon test` was invoked from, never the project directory: a
 // relative path in a test body must mean the same under `maxon test sub/project` as when its author
 // runs it by hand. Nothing in this command changes directory. `tests/test-command/` locates its
 // fixtures relative to the checkout root and breaks silently if this changes.
-function launchTests(plan TestLaunchPlan, indices TestRunIndexArray) returns TestLaunchResult
-	var argv = StringArray.create()
-	argv.push("{testSelectFlag()}{formatTestSelection(indices)}")
-
-	let run = try runProcess(Executable.path(plan.binary), argv: argv, workingDirectory: inheritedWorkingDirectory(), timeoutMs: plan.timeoutMs) otherwise (e) 'didNotRun'
-		return launchFailureOf(e)
-	end 'didNotRun'
-
-	return TestLaunchResult.ran(run.exitCode, stderr: run.stderr)
+function launchTests(plan TestLaunchPlan, indices TestRunIndexArray) returns SelectedLaunch
+	return launchSelected(Executable.path(plan.binary), leadingArguments: StringArray.create(), indices: indices, timeoutMs: plan.timeoutMs, workingDirectory: inheritedWorkingDirectory())
 end 'launchTests'
-
-// A deadline is not a launch failure: the process ran, and one of its tests is the reason it was
-// killed.
-function launchFailureOf(error SubprocessError) returns TestLaunchResult
-	if error.timedOut() 'outlivedItsBudget'
-		return TestLaunchResult.deadlineExpired
-	end 'outlivedItsBudget'
-
-	return TestLaunchResult.couldNotStart(error.displayReason())
-end 'launchFailureOf'
 
 // The two facts attribution reads off a launch that actually produced a stream.
 type AttributableLaunch
@@ -168,15 +136,15 @@ type AttributableLaunch
 	end 'create'
 end 'AttributableLaunch'
 
-function attributableLaunch(launch TestLaunchResult) returns AttributableLaunch
+function attributableLaunch(launch SelectedLaunch) returns AttributableLaunch
 	match launch 'how'
-		ran(exitCode, stderr) then return AttributableLaunch.create(stderr, leaked: isLeakDetectedExit(exitCode as ExitCode), launchProblem: StatedText.unstated)
-		deadlineExpired then panic("attributableLaunch: a launch killed at its deadline never reaches attribution — `executeShard` answers that arm first, because a killed process leaves no stream to attribute from")
+		ran(exitCode, _, stderr) then return AttributableLaunch.create(stderr, leaked: isLeakDetectedExit(exitCode as ExitCode), launchProblem: StatedText.unstated)
+		deadlineExpired then panic("attributableLaunch: a launch killed at its deadline never reaches attribution — `executeShard` answers that arm first, which never attributes a killed process's partial stream")
 		couldNotStart(reason) then return AttributableLaunch.create("", leaked: false, launchProblem: StatedText.stated("{CouldNotLaunchPrefix}{reason}"))
 	end 'how'
 end 'attributableLaunch'
 
-function hitTheDeadline(launch TestLaunchResult) returns bool
+function hitTheDeadline(launch SelectedLaunch) returns bool
 	return match launch 'how'
 		ran or
 			couldNotStart gives false
@@ -366,7 +334,7 @@ type ShardStep
 	end 'create'
 end 'ShardStep'
 
-function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected TestRunIndexArray, launch TestLaunchResult) returns ShardStep
+function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected TestRunIndexArray, launch SelectedLaunch) returns ShardStep
 	let attributable = attributableLaunch(launch)
 
 	var walk = TestStreamWalk.create()
@@ -461,7 +429,7 @@ end 'asLeaked'
 
 function leakedAlone(plan TestLaunchPlan, index ElementIndex) returns bool
 	return match launchTests(plan, indices: soleIndex(index)) 'how'
-		ran(exitCode, _) gives isLeakDetectedExit(exitCode as ExitCode)
+		ran(exitCode, _, _) gives isLeakDetectedExit(exitCode as ExitCode)
 
 		// A test that hangs or cannot start when run alone showed no leak; whatever verdict the shard
 		// gave it stands.
@@ -476,12 +444,6 @@ end 'leakedAlone'
 
 // One process launch's worth of work: the run indices it runs, all from ONE file.
 typealias TestShardArray = Array with TestRunIndexArray
-
-module function soleIndex(index ElementIndex) returns TestRunIndexArray
-	var only = TestRunIndexArray.create()
-	only.push(index)
-	return only
-end 'soleIndex'
 
 function shardsOf(group TestFileGroup, selected TestSelection, isolate bool) returns TestShardArray
 	var shards = TestShardArray.create()

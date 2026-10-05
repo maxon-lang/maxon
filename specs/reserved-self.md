@@ -37,7 +37,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-self/function-param-named-self.test:2:20: identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code
+error E2051: specs/reserved-self/function-param-named-self.maxon:2:20: identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code
 ```
 
 <!-- test: let-named-self -->
@@ -50,7 +50,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/reserved-self/let-named-self.test:3:6: Expected identifier but got 'self'
+error E2010: specs/reserved-self/let-named-self.maxon:3:6: Expected identifier but got 'self'
 ```
 
 <!-- test: var-named-self -->
@@ -62,7 +62,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/reserved-self/var-named-self.test:3:6: Expected identifier but got 'self'
+error E2010: specs/reserved-self/var-named-self.maxon:3:6: Expected identifier but got 'self'
 ```
 
 <!-- test: for-in-named-self -->
@@ -77,7 +77,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/reserved-self/for-in-named-self.test:4:6: Expected identifier but got 'self'
+error E2010: specs/reserved-self/for-in-named-self.maxon:4:6: Expected identifier but got 'self'
 ```
 
 <!-- test: enum-case-named-self-allowed -->

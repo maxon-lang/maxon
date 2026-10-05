@@ -60,7 +60,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3014: specs/fragments/field-visibility-is-type-scoped/error.other-type-cannot-read-private.test:22:12: cannot access unexported field: 'secret' outside of type 'A'
+error E3014: specs/field-visibility-is-type-scoped/error.other-type-cannot-read-private.maxon:22:12: cannot access unexported field: 'secret' outside of type 'A'
 ```
 
 <!-- test: error.other-type-cannot-write-private -->
@@ -100,7 +100,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3014: specs/fragments/field-visibility-is-type-scoped/error.other-type-cannot-write-private.test:22:5: cannot access unexported field: 'secret' outside of type 'A'
+error E3014: specs/field-visibility-is-type-scoped/error.other-type-cannot-write-private.maxon:22:5: cannot access unexported field: 'secret' outside of type 'A'
 ```
 
 <!-- test: own-type-reaches-its-own-private-field -->

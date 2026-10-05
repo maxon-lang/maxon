@@ -321,7 +321,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3084: specs/fragments/try-block-shadowed-binding/error.closure-inside-a-handler-does-not-discharge-e3084.test:38:19: otherwise block must contain a match on the error binding 'e'
+error E3084: specs/try-block-shadowed-binding/error.closure-inside-a-handler-does-not-discharge-e3084.maxon:38:19: otherwise block must contain a match on the error binding 'e'
 ```
 
 <!-- test: try-block-shadowed-binding.closure-inside-a-handler-matches-its-own-binding -->

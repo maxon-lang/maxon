@@ -12,6 +12,9 @@ let NetworkFlag = "--network"
 module let SuccessExitCode = 0
 
 let StagingDirNamePrefix = "maxon-tests-spec-harness"
+let IgnoredWrapperDirName = "ignored"
+let IgnoredWrapperInnerDirName = "spec"
+let IgnoreMarkerFileName = ".maxonignore"
 let CheckoutMarkerDirName = "stdlib"
 
 let CallerPathSeparator = "/"
@@ -19,10 +22,8 @@ let CarriageReturn = "\r"
 let LineFeed = "\n"
 let BrokenCheckIndent = "\n  "
 
-module let ResultNoteIndent = "  "
+let ResultNoteIndent = "  "
 module let FragmentsDirName = "fragments"
-module let GoldenExtension = ".test"
-module let DriftHeadline = "DRIFTED from what the compiler emits"
 
 #if os(Windows)
 	let HostTempVariable = "TEMP"
@@ -33,7 +34,30 @@ module let DriftHeadline = "DRIFTED from what the compiler emits"
 	let ExecutableSuffix = ""
 #endif
 
+#if os(Windows)
+	let HostLane = "x64-windows"
+#endif
+
+#if os(Macos)
+	let HostLane = "arm64-macos"
+#endif
+
+#if os(Linux) and arch(x64)
+	let HostLane = "x64-linux"
+#endif
+
+#if os(Linux) and arch(arm64)
+	let HostLane = "arm64-linux"
+#endif
+
+let TargetIrFenceStem = "```TargetIr:"
+module let PlantedTargetIrLine = "planted.byTheTargetIrPinGates r0"
+module let UpdateRequiredFlag = "--update-required"
+
 module typealias PathArray = Array with FilePath
+module typealias CaseTally = int(0 to u64.max)
+module typealias SpecLine = int(0 to u64.max)
+module typealias SpecLineArray = Array with SpecLine
 
 type HarnessFixture
 	export let kind as String
@@ -60,8 +84,12 @@ module function stagedGateFixture(caller String = __file__) returns FilePath
 end 'stagedGateFixture'
 
 module function saidByOneGateRun(caller String = __file__) returns String
-	return everythingSaid(runOnceThenDiscard(stagedGateFixture(caller)))
+	return everythingSaid(runGateFixtureOnce(StringArray.create(), caller: caller))
 end 'saidByOneGateRun'
+
+module function runGateFixtureOnce(extraArguments StringArray, caller String = __file__) returns CollectedOutput
+	return runOnceThenDiscard(stagedGateFixture(caller), extraArguments: extraArguments)
+end 'runGateFixtureOnce'
 
 module function requireMarkerShapeRan(label String, caller String = __file__) throws TestFailure
 	let said = saidByOneGateRun(caller)
@@ -100,8 +128,8 @@ module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments
 	return CollectedOutput.create(run.status, stdout: withoutCarriageReturns(run.stdout), stderr: withoutCarriageReturns(run.stderr), pid: run.pid, durationMs: run.durationMs)
 end 'runSpecTest'
 
-function runOnceThenDiscard(staged FilePath) returns CollectedOutput
-	let run = runSpecTest(staged, includeNetwork: false)
+function runOnceThenDiscard(staged FilePath, extraArguments StringArray = StringArray.create()) returns CollectedOutput
+	let run = runSpecTest(staged, includeNetwork: false, extraArguments: extraArguments)
 	discardStaging(staged)
 	return run
 end 'runOnceThenDiscard'
@@ -121,6 +149,52 @@ end 'failVerdictPrefix'
 module function passVerdictLine(label String) returns String
 	return "PASS {label}"
 end 'passVerdictLine'
+
+module function hostTargetIrFence() returns String
+	return "{TargetIrFenceStem}{HostLane}"
+end 'hostTargetIrFence'
+
+module function linesOpening(lines StringArray, prefix String) returns SpecLineArray
+	var found = SpecLineArray.create()
+
+	for (iter, line) in lines.withIterator() 'eachLine'
+		if line.trim().startsWith(prefix) 'hit'
+			found.push(iter.index() as SpecLine)
+		end 'hit'
+	end 'eachLine'
+
+	return found
+end 'linesOpening'
+
+module function firstLineOpening(lines StringArray, prefix String, said String) returns SpecLine
+	let found = linesOpening(lines, prefix: prefix)
+	return try found.get(0) otherwise panic("spec-harness tests: the re-minted spec holds no line opening with '{prefix}'. {said}")
+end 'firstLineOpening'
+
+module function plantBogusTargetIrPin(specPath FilePath)
+	let text = readStagedText(specPath)
+	writeStagedText(specPath, content: "{text}{LineFeed}{hostTargetIrFence()}{LineFeed}{PlantedTargetIrLine}{LineFeed}```{LineFeed}")
+end 'plantBogusTargetIrPin'
+
+module function batchSummaryLine(batched CaseTally, programs CaseTally, alone CaseTally) returns String
+	return "{batched} run case(s) ran batched in {programs} program(s); {alone} ran alone"
+end 'batchSummaryLine'
+
+module function collectNotPassed(said String, specName String, testNames StringArray, broken StringArray)
+	for testName in testNames 'eachCase'
+		let verdict = "{passVerdictLine(testLabel(specName, testName: testName))}{LineFeed}"
+
+		if not said.contains(verdict) 'didNotPass'
+			broken.push("'{testLabel(specName, testName: testName)}' did not PASS. Expected '{verdict.trimEnd(CharacterSet.newlines())}', and the run said:\n{said}\n")
+		end 'didNotPass'
+	end 'eachCase'
+end 'collectNotPassed'
+
+module function collectMissingSummary(said String, expected String, broken StringArray)
+	if not said.contains(expected) 'summaryAbsent'
+		broken.push("the run's summary does not say '{expected}'. It said:\n{said}\n")
+	end 'summaryAbsent'
+end 'collectMissingSummary'
 
 module function resultNoteEntry(label String) returns String
 	return "{ResultNoteIndent}{label}{LineFeed}"
@@ -209,16 +283,39 @@ end 'expectedRefusalIn'
 
 function stagedCopyOf(fixture HarnessFixture) returns FilePath
 	let staged = hostTempDir().join("{StagingDirNamePrefix}-{__Builtins.currentProcessId()}-{fixture.kind}-{fixture.caseName}").resolve(Directory.currentPath())
-	requireNoCheckoutAbove(staged)
+	createFreshDirectory(staged)
+	copyFixtureInto(fixture, staged: staged)
+	return staged
+end 'stagedCopyOf'
 
-	if Directory.isDirectory(staged) 'leftByAnEndedProcess'
-		discardStaging(staged)
+module function runGateFixtureBelowAnIgnoredDirectory(caller String = __file__) returns CollectedOutput
+	let fixture = fixtureOf(caller, kind: GatesDirName)
+	let wrapper = hostTempDir().join("{StagingDirNamePrefix}-{__Builtins.currentProcessId()}-{IgnoredWrapperDirName}").resolve(Directory.currentPath())
+	createFreshDirectory(wrapper)
+	writeStagedText(wrapper.join(IgnoreMarkerFileName), content: "")
+
+	let staged = wrapper.join(IgnoredWrapperInnerDirName)
+	createFreshDirectory(staged)
+	copyFixtureInto(fixture, staged: staged)
+
+	let run = runSpecTest(staged, includeNetwork: false)
+	discardStaging(wrapper)
+	return run
+end 'runGateFixtureBelowAnIgnoredDirectory'
+
+function createFreshDirectory(dir FilePath)
+	requireNoCheckoutAbove(dir)
+
+	if Directory.isDirectory(dir) 'leftByAnEndedProcess'
+		discardStaging(dir)
 	end 'leftByAnEndedProcess'
 
-	if not Directory.create(staged) 'couldNotCreate'
-		panic("spec-harness tests: the gate could not run - could not create {staged.toString()}.")
+	if not Directory.create(dir) 'couldNotCreate'
+		panic("spec-harness tests: the gate could not run - could not create {dir.toString()}.")
 	end 'couldNotCreate'
+end 'createFreshDirectory'
 
+function copyFixtureInto(fixture HarnessFixture, staged FilePath)
 	for entry in listing(fixture.dir) 'eachEntry'
 		if Directory.isDirectory(entry) 'aSubdirectory'
 			panic("spec-harness tests: the fixture {fixture.dir.toString()} holds a directory, {entry.filename()}. A fixture is flat: its spec files and nothing a run leaves behind.")
@@ -227,9 +324,7 @@ function stagedCopyOf(fixture HarnessFixture) returns FilePath
 		let bytes = try File.readBinary(entry) otherwise panic("spec-harness tests: the gate could not run - could not read {entry.toString()}.")
 		try File.writeBinary(staged.join(entry.filename()), content: bytes) otherwise panic("spec-harness tests: the gate could not run - could not stage {entry.filename()} into {staged.toString()}.")
 	end 'eachEntry'
-
-	return staged
-end 'stagedCopyOf'
+end 'copyFixtureInto'
 
 module function discardStaging(dir FilePath)
 	for entry in listing(dir) 'eachEntry'
@@ -281,45 +376,6 @@ module function listing(dir FilePath) returns PathArray
 	return try Directory.list(dir) otherwise panic("spec-harness tests: the gate could not run - could not list {dir.toString()}")
 end 'listing'
 
-module function mintedGoldensIn(staged FilePath) returns PathArray
-	var found = PathArray.create()
-	let fragmentsRoot = staged.join(FragmentsDirName)
-
-	if not Directory.exists(fragmentsRoot) 'nothingMinted'
-		return found
-	end 'nothingMinted'
-
-	for lane in fragmentsListing(fragmentsRoot) 'eachLane'
-		for specGoldens in fragmentsListing(lane) 'eachSpec'
-			for golden in fragmentsListing(specGoldens) 'eachGolden'
-				if golden.fileExtension() == GoldenExtension 'isAGolden'
-					found.push(golden)
-				end 'isAGolden'
-			end 'eachGolden'
-		end 'eachSpec'
-	end 'eachLane'
-
-	return found
-end 'mintedGoldensIn'
-
-function fragmentsListing(dir FilePath) returns PathArray
-	if not Directory.isDirectory(dir) 'aStrayFile'
-		panic("spec-harness tests: the gate could not run - {dir.toString()} is a file where the mint run lays out only directories.")
-	end 'aStrayFile'
-
-	return listing(dir)
-end 'fragmentsListing'
-
-module function mintedGoldenOf(minted PathArray, caseName String) returns FilePath
-	for path in minted 'eachGolden'
-		if path.stem() == caseName 'isTheOne'
-			return path
-		end 'isTheOne'
-	end 'eachGolden'
-
-	panic("spec-harness tests: the gate could not run - the fixture minted no golden for `{caseName}`.")
-end 'mintedGoldenOf'
-
 module function readStagedText(path FilePath) returns String
 	return try File.readText(path) otherwise panic("spec-harness tests: the gate could not run - could not read {path.toString()}.")
 end 'readStagedText'
@@ -328,6 +384,6 @@ module function writeStagedText(path FilePath, content String)
 	try File.writeText(path, content: content) otherwise panic("spec-harness tests: the gate could not run - could not write {path.toString()}.")
 end 'writeStagedText'
 
-function withoutCarriageReturns(text String) returns String
+module function withoutCarriageReturns(text String) returns String
 	return text.replace(CarriageReturn, with: "")
 end 'withoutCarriageReturns'

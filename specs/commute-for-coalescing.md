@@ -38,7 +38,7 @@ or   rax, rax, r15        ; dest coalesced into `edge`'s dying register — no c
   `min(nan, 5.0)` is `5.0` while `min(5.0, nan)` is `nan`).
 - **The x64 instruction must be two-address.** Integer `+` lowers to the three-operand
   `lea dest, [lhs + rhs]`, which has an independent destination and never costs a copy — commuting it
-  would move a golden and save nothing.
+  would change the emitted code and save nothing.
 - **The RIGHT operand must PROVABLY DIE HERE**, and "read exactly once" is not that.
   `valueDiesAtItsOnlyReader` asks TWO things: the value is read exactly once in the whole function,
   AND it is defined in the SAME BLOCK as the op reading it. Both are needed — a value defined OUTSIDE
@@ -51,7 +51,7 @@ or   rax, rax, r15        ; dest coalesced into `edge`'s dying register — no c
   sufficient: a second reader that comes BEFORE this op leaves `lhs` dying here anyway, and the swap
   then removes nothing. Answering that exactly needs a use POSITION, a dense per-function column on
   the isel's hot path, and it is not bought. **Because the RIGHT half is exact, this imprecision can
-  only cost a golden that moved for nothing** — the swapped order's reuse input provably dies, so no
+  only cost a swap that saves nothing** — the swapped order's reuse input provably dies, so no
   copy is recorded for it whatever `lhs` was doing.
 
 Both halves come off the ONE descent the instruction selector already makes for scaled-index folding
@@ -63,8 +63,8 @@ That also refuses `x ⊕ x` for free (one value inserted twice reads as repeated
 
 x64 `addsd`/`mulsd` propagate the **destination's** NaN payload, so `a ⊕ b` and `b ⊕ a` are not
 bit-identical when both operands are NaN. That is the same rule that keeps `foldConstOperands`'
-operand reordering integer-only, and `a-float-multiply-keeps-its-copy` is its pin: the
-`movsd` survives in the committed fragment where the integer twin's `mov` does not.
+operand reordering integer-only, and `a-float-multiply-keeps-its-copy` is its case: the
+`movsd` survives in its rendered Target IR where the integer twin's `mov` does not.
 
 ### ⚠ THIS IS A SMALL TRANSFORM AND THE CENSUS IS WHY
 
@@ -84,11 +84,11 @@ is open.
 <!-- test: a-commutative-op-with-a-dying-right-operand-needs-no-copy -->
 The gate. `flags` is read by the `or` AND by the sum below it, so it survives the op; `edge` is read
 by the `or` and nowhere else, so it dies there. The `or` is emitted with its operands the other way
-round and the destination coalesces into `edge`'s register: the committed fragment holds **no
+round and the destination coalesces into `edge`'s register: the rendered Target IR holds **no
 `movRegReg` before the `orRegReg`**, and the `or`'s printed `dest` and `lhs` are the same register.
 Its own operation is symmetric, so no order bug HERE could change its answer — the case that turns an
-order bug into an exit code is `a-non-commutative-op-keeps-its-copy` below. This one is a golden pin,
-and disabling the transform is what moves it.
+order bug into an exit code is `a-non-commutative-op-keeps-its-copy` below. This one is read off the
+emitted code (`--emit-ir`), and disabling the transform is what changes it.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
@@ -118,7 +118,7 @@ end 'main'
 <!-- test: a-commutative-op-whose-both-operands-survive-keeps-its-copy -->
 The control that says the RIGHT-operand half of the rule is load-bearing. The same program with
 `edge` read a second time: now neither operand dies at the `or`, swapping would move the copy rather
-than remove it, and the rule declines. The committed fragment keeps its `movRegReg` before the
+than remove it, and the rule declines. The emitted code (`--emit-ir`) keeps its `movRegReg` before the
 `orRegReg`.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -147,7 +147,7 @@ end 'main'
 
 <!-- test: a-non-commutative-op-keeps-its-copy -->
 The control that says the OPCODE half is load-bearing, and the one whose sabotage is a **wrong
-answer** rather than a moved golden. `a - scaled` has exactly the liveness the gate case has — the
+answer** rather than a change in the emitted code. `a - scaled` has exactly the liveness the gate case has — the
 left operand is read again below, the right one is read here and nowhere else — so every other
 condition of the rule holds, and the copy stays anyway because `sub` is not commutative and
 `scaled - a` is a different number. Remove the `binOpcodeIsCommutative` guard and this program
@@ -186,7 +186,7 @@ end 'main'
 <!-- test: a-float-multiply-keeps-its-copy -->
 The NaN control. `x * k` is commutative in arithmetic and the liveness is the gate case's exactly —
 `x` is read again, `k` is not — but `mulsd` propagates the DESTINATION's NaN payload, so the two
-orders are not bit-identical on a NaN input and the rule refuses every float. The committed fragment
+orders are not bit-identical on a NaN input and the rule refuses every float. The rendered Target IR
 keeps its `movRegReg` before the `mulsdRegReg` where the integer twin has none.
 ```maxon
 typealias Wide = float(f64.min to f64.max)
@@ -216,9 +216,9 @@ end 'main'
 The control for the DESTRUCTIVENESS half. Every other condition of the rule holds — `+` is
 commutative, `total` is read again below, and `scaled` is read here and nowhere else — and it is still
 not commuted, because integer `+` lowers to the three-operand `lea`, whose destination is independent
-of both operands and costs no copy whatever the order. The pin is the fragment's operand ORDER:
+of both operands and costs no copy whatever the order. The reading is the emitted operand ORDER:
 `leaRegRegReg` names `total` before `scaled`, the order the source wrote. Flip `add gives false` to
-`true` in `integerBinOpIsTwoAddress` and this golden moves.
+`true` in `integerBinOpIsTwoAddress` and that order flips.
 
 ⚠ **`scaled` is `step * 5`, and BOTH of those choices are what makes it a control.** The
 straightforward `total + step` cannot reach the destructiveness test at all — after inlining `step` IS

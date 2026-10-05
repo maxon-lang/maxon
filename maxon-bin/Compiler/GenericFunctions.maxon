@@ -78,16 +78,17 @@ export type GenericFunctionTemplate
 		return declarationSiteKey(self.declFilePath, line: self.line, column: self.column)
 	end 'siteKey'
 
-	// A private template's key is shared by every file declaring that name, and two files can hold it
-	// at one line and column, so its instances also carry a hash of the declaring file's name. The
-	// name and not the path: the instance name reaches goldens, which must not depend on the
-	// checkout's location.
-	export function instanceName(arguments GenericFunctionArgumentArray) returns ByteArray
+	// A template below the program-wide tiers shares its key with every file declaring that name, and two
+	// files can hold it at one line and column, so its instances also carry a hash of `declaringFile`:
+	// the project-relative path (`ProgramSignatures.projectRelativeFileDisplay`), because two directories
+	// can hold files of one name, and relative because the instance name reaches emitted symbols and
+	// `TargetIr` pins, which must not depend on the host or the checkout's location.
+	export function instanceName(arguments GenericFunctionArgumentArray, declaringFile String) returns ByteArray
 		var suffix = "{GenericInstanceSuffixHead}{self.line}_{self.column}"
 
-		if self.visibility == Visibility.file 'privateToItsFile'
-			suffix = "{suffix}_{mixBytes(Hasher.empty(), bytes: self.declFilePath.filename().toByteArray())}"
-		end 'privateToItsFile'
+		if not isProgramWideTier(self.visibility) 'scopedBelowTheProgram'
+			suffix = "{suffix}_{mixBytes(Hasher.empty(), bytes: declaringFile.toByteArray())}"
+		end 'scopedBelowTheProgram'
 
 		for argument in arguments 'eachArgument'
 			suffix = "{suffix}#{String.from(argument.spelling())}"

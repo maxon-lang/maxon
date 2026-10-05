@@ -122,7 +122,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/tuple-assign/tuple-assign-discard-all.test:9:2: result of pure function 'makePair' must be used
+error E3064: specs/tuple-assign/tuple-assign-discard-all.maxon:9:2: result of pure function 'makePair' must be used
 ```
 
 <!-- test: tuple-assign-error-immutable -->
@@ -141,7 +141,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/tuple-assign/tuple-assign-error-immutable.test:11:3: cannot assign to immutable variable: 'x'
+error E2013: specs/tuple-assign/tuple-assign-error-immutable.maxon:11:3: cannot assign to immutable variable: 'x'
 ```
 
 <!-- test: tuple-assign-mixed-var-decl -->
@@ -213,7 +213,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/tuple-assign/tuple-assign-error-assign-to-let-decl.test:11:6: cannot assign to immutable variable: 'y'
+error E2013: specs/tuple-assign/tuple-assign-error-assign-to-let-decl.maxon:11:6: cannot assign to immutable variable: 'y'
 ```
 
 <!-- test: tuple-assign-error-count-mismatch -->
@@ -231,5 +231,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/tuple-assign/tuple-assign-error-count-mismatch.test:10:2: Tuple has 2 elements but destructuring has 1 bindings
+error E3005: specs/tuple-assign/tuple-assign-error-count-mismatch.maxon:10:2: Tuple has 2 elements but destructuring has 1 bindings
 ```

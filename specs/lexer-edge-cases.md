@@ -20,7 +20,7 @@ Tests for lexer behavior at source boundaries: empty source, tokens at EOF, unte
 x
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/single-char-eof.test:2:1: Expected function declaration, got 'x'
+error E2001: specs/lexer-edge-cases/single-char-eof.maxon:2:1: Expected function declaration, got 'x'
 ```
 
 <!-- test: whitespace-only -->
@@ -38,7 +38,7 @@ error E3001: No 'main' function found
 let x = 'hello
 ```
 ```maxoncstderr
-error E1002: specs/fragments/lexer-edge-cases/unterminated-squote-eof.test:2:9: Unterminated string literal
+error E1002: specs/lexer-edge-cases/unterminated-squote-eof.maxon:2:9: Unterminated string literal
 ```
 
 <!-- test: unterminated-dquote-eof -->
@@ -46,7 +46,7 @@ error E1002: specs/fragments/lexer-edge-cases/unterminated-squote-eof.test:2:9: 
 let x = "hello
 ```
 ```maxoncstderr
-error E1002: specs/fragments/lexer-edge-cases/unterminated-dquote-eof.test:2:9: Unterminated string literal
+error E1002: specs/lexer-edge-cases/unterminated-dquote-eof.maxon:2:9: Unterminated string literal
 ```
 
 <!-- test: string-with-newline -->
@@ -55,7 +55,7 @@ let x = 'hel
 lo'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-edge-cases/string-with-newline.test:2:9: Expected constant expression, got 'hel
+error E2004: specs/lexer-edge-cases/string-with-newline.maxon:2:9: Expected constant expression, got 'hel
 lo'
 ```
 
@@ -64,7 +64,7 @@ lo'
 let x = "hello\
 ```
 ```maxoncstderr
-error E1002: specs/fragments/lexer-edge-cases/unterminated-escape-eof.test:2:9: Unterminated string literal
+error E1002: specs/lexer-edge-cases/unterminated-escape-eof.maxon:2:9: Unterminated string literal
 ```
 
 <!-- test: empty-squote-string -->
@@ -72,7 +72,7 @@ error E1002: specs/fragments/lexer-edge-cases/unterminated-escape-eof.test:2:9: 
 let x = ''
 ```
 ```maxoncstderr
-error E2016: specs/fragments/lexer-edge-cases/empty-squote-string.test:2:9: invalid character literal: a character literal must contain exactly one character
+error E2016: specs/lexer-edge-cases/empty-squote-string.maxon:2:9: invalid character literal: a character literal must contain exactly one character
 ```
 
 <!-- test: empty-dquote-string -->
@@ -90,7 +90,7 @@ error E3001: No 'main' function found
 42
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/integer-eof.test:2:1: Expected function declaration, got '42'
+error E2001: specs/lexer-edge-cases/integer-eof.maxon:2:1: Expected function declaration, got '42'
 ```
 
 <!-- test: hex-eof -->
@@ -98,7 +98,7 @@ error E2001: specs/fragments/lexer-edge-cases/integer-eof.test:2:1: Expected fun
 0xFF
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/hex-eof.test:2:1: Expected function declaration, got '0xFF'
+error E2001: specs/lexer-edge-cases/hex-eof.maxon:2:1: Expected function declaration, got '0xFF'
 ```
 
 <!-- test: binary-eof -->
@@ -106,7 +106,7 @@ error E2001: specs/fragments/lexer-edge-cases/hex-eof.test:2:1: Expected functio
 0b1010
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/binary-eof.test:2:1: Expected function declaration, got '0b1010'
+error E2001: specs/lexer-edge-cases/binary-eof.maxon:2:1: Expected function declaration, got '0b1010'
 ```
 
 <!-- test: octal-eof -->
@@ -114,7 +114,7 @@ error E2001: specs/fragments/lexer-edge-cases/binary-eof.test:2:1: Expected func
 0o77
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/octal-eof.test:2:1: Expected function declaration, got '0o77'
+error E2001: specs/lexer-edge-cases/octal-eof.maxon:2:1: Expected function declaration, got '0o77'
 ```
 
 <!-- test: float-eof -->
@@ -122,7 +122,7 @@ error E2001: specs/fragments/lexer-edge-cases/octal-eof.test:2:1: Expected funct
 3.14
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/float-eof.test:2:1: Expected function declaration, got '3.14'
+error E2001: specs/lexer-edge-cases/float-eof.maxon:2:1: Expected function declaration, got '3.14'
 ```
 
 <!-- test: float-exponent-eof -->
@@ -130,7 +130,7 @@ error E2001: specs/fragments/lexer-edge-cases/float-eof.test:2:1: Expected funct
 1e10
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/float-exponent-eof.test:2:1: Expected function declaration, got '1'
+error E2001: specs/lexer-edge-cases/float-exponent-eof.maxon:2:1: Expected function declaration, got '1'
 ```
 
 <!-- test: number-underscore-eof -->
@@ -138,7 +138,7 @@ error E2001: specs/fragments/lexer-edge-cases/float-exponent-eof.test:2:1: Expec
 1_000
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/number-underscore-eof.test:2:1: Expected function declaration, got '1_000'
+error E2001: specs/lexer-edge-cases/number-underscore-eof.maxon:2:1: Expected function declaration, got '1_000'
 ```
 
 <!-- test: bare-hex-prefix-eof -->
@@ -146,7 +146,7 @@ error E2001: specs/fragments/lexer-edge-cases/number-underscore-eof.test:2:1: Ex
 0x
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/bare-hex-prefix-eof.test:2:1: Expected function declaration, got '0x'
+error E2001: specs/lexer-edge-cases/bare-hex-prefix-eof.maxon:2:1: Expected function declaration, got '0x'
 ```
 
 ### Comments at EOF
@@ -164,7 +164,7 @@ error E3001: No 'main' function found
 /* no close
 ```
 ```maxoncstderr
-error E1007: specs/fragments/lexer-edge-cases/unterminated-block-comment.test:2:1: Unterminated block comment
+error E1007: specs/lexer-edge-cases/unterminated-block-comment.maxon:2:1: Unterminated block comment
 ```
 
 <!-- test: block-comment-multiline -->
@@ -191,7 +191,7 @@ error E3001: No 'main' function found
 ==
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/two-char-operator-eof.test:2:1: Expected function declaration, got '=='
+error E2001: specs/lexer-edge-cases/two-char-operator-eof.maxon:2:1: Expected function declaration, got '=='
 ```
 
 <!-- test: single-equals-eof -->
@@ -199,7 +199,7 @@ error E2001: specs/fragments/lexer-edge-cases/two-char-operator-eof.test:2:1: Ex
 =
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/single-equals-eof.test:2:1: Expected function declaration, got '='
+error E2001: specs/lexer-edge-cases/single-equals-eof.maxon:2:1: Expected function declaration, got '='
 ```
 
 <!-- test: single-bang-eof -->
@@ -207,7 +207,7 @@ error E2001: specs/fragments/lexer-edge-cases/single-equals-eof.test:2:1: Expect
 !
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/single-bang-eof.test:2:1: Expected function declaration, got '!'
+error E2001: specs/lexer-edge-cases/single-bang-eof.maxon:2:1: Expected function declaration, got '!'
 ```
 
 <!-- test: single-slash-eof -->
@@ -215,7 +215,7 @@ error E2001: specs/fragments/lexer-edge-cases/single-bang-eof.test:2:1: Expected
 /
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-edge-cases/single-slash-eof.test:2:1: Expected function declaration, got '/'
+error E2001: specs/lexer-edge-cases/single-slash-eof.maxon:2:1: Expected function declaration, got '/'
 ```
 
 ### Line endings

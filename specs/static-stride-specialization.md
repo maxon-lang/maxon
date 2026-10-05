@@ -98,7 +98,7 @@ The shape this specialization exists for. `for v in a` over an `Array with` an 8
 the buffer load and the element load and nothing else — no `[<rec> + 24]`, no `cmpRegImm32 …, 8`, no
 `__im_stride` / `__im_byte` block, and no `callDirect __managed_get_unchecked` anywhere in `total`.
 
-The committed fragment is the reading: `@total` is eight instructions per element across four blocks
+The emitted code (`--emit-ir`) is the reading: `@total` is eight instructions per element across four blocks
 with no call at all — which is also why its prologue saves none of `rbx`/`r12`/`r13`.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -176,7 +176,7 @@ end 'main'
 A `ByteArray` stamps `element_size@24` with 1 — and that is the one known stride the compiler may NOT
 act on, because a record wearing a byte-strided type may still be the word-strided one a shared generic
 body created. 1 and 8 are two DIFFERENT single-op arms, so the site keeps `emitStrideDispatch`: the
-committed fragment still shows the `[<rec> + 24]` load, the `cmpRegImm32 …, 8` and the `cmpRegImm32
+emitted code (`--emit-ir`) shows the `[<rec> + 24]` load, the `cmpRegImm32 …, 8` and the `cmpRegImm32
 …, 1` around a `loadRegBaseDisp.byte` and a `loadRegBaseIndexScale.word64`.
 
 ⚠ The values here are all genuinely byte-strided, so this case cannot go RED on its own — it is a
@@ -219,9 +219,9 @@ end 'main'
 <!-- test: a-packed-element-is-not-inlined-at-all -->
 A NEGATIVE `element_size@24` IS A WIDTH, NOT AN ERROR. `int(0 to 3)` packs four elements to the byte
 and stamps `-2`, which selects NEITHER single-op arm — so the compiler knows, at compile time, that
-every fast arm this pass could emit is dead, and emits none of them. The fragment therefore shows a
-plain `callDirect __managed_get` / `__managed_set` with no `__im_` block anywhere around it, where
-before it showed the guard chain leading to that same call.
+every fast arm this pass could emit is dead, and emits none of them. The emitted code (`--emit-ir`)
+therefore shows a plain `callDirect __managed_get` / `__managed_set` with no `__im_` block anywhere
+around it.
 
 The values round-trip across a byte boundary (five elements at four per byte) and the raw stamp is
 asserted, so a specialization that treated `-2` as a byte stride would read one element's two bits as a
@@ -266,7 +266,7 @@ value below is wrong by a factor of eight in one direction or the other if it is
 word-strided one keeps one byte of every element.
 
 So `Bag.at` and `Bag.put` keep `emitStrideDispatch` — the `element_size@24` load and both compares —
-and that is the shape the committed fragment shows. `main`'s own direct accesses on the same two
+and that is the shape the emitted code (`--emit-ir`) shows. `main`'s own direct accesses on the same two
 element types are specialized as usual: the difference between the two is the whole rule.
 ```maxon
 typealias Word = int(i64.min to i64.max)

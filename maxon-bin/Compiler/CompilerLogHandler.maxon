@@ -30,7 +30,7 @@ end 'LogSpecRefusal'
 // The trace unit is the handler's own state, so `compilerLogger` reads no module storage and a pool
 // worker may log (E3143). `attribute` arrives through the same mailbox as the records, so the unit
 // it sets precedes every later record from that sender; across senders the last `attribute` wins.
-module type CompilerLogHandler implements LogHandler
+type CompilerLogHandler implements LogHandler
 	var unit as TraceUnit
 
 	static function create() returns CompilerLogHandler
@@ -40,6 +40,10 @@ module type CompilerLogHandler implements LogHandler
 	export function attribute(traceUnit TraceUnit)
 		self.unit = traceUnit
 	end 'attribute'
+
+	export function flush() returns bool
+		return true
+	end 'flush'
 
 	export function handle(record LogRecord) returns bool
 		let group = recordGroupOf(record)
@@ -55,10 +59,10 @@ module type CompilerLogHandler implements LogHandler
 	end 'handle'
 end 'CompilerLogHandler'
 
-module type CompilerLogRoute
+type CompilerLogRoute
 	export let handler as CompilerLogHandler.handle
 
-	module static function create(handler CompilerLogHandler.handle) returns CompilerLogRoute
+	static function create(handler CompilerLogHandler.handle) returns CompilerLogRoute
 		return Self{handler: handler}
 	end 'create'
 end 'CompilerLogRoute'
@@ -71,6 +75,18 @@ default CompilerLogRoute = CompilerLogRoute.create(spawn CompilerLogHandler.crea
 export function installCompilerLogHandler()
 	Log.setDefault(LogSink.create(CompilerLogRoute.current().handler.clone(), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 end 'installCompilerLogHandler'
+
+module function attributeCompilerLog(unit TraceUnit)
+	CompilerLogRoute.current().handler.attribute(unit)
+	flushCompilerLog()
+end 'attributeCompilerLog'
+
+// A barrier: the handler is a service, so records still in its mailbox are handled after the sender
+// moves on, allocating inside whatever measured bracket is open by then. A compile flushes before
+// its totals close.
+module function flushCompilerLog()
+	try await CompilerLogRoute.current().handler.flush() otherwise panic("flushCompilerLog: the compiler's log handler stopped answering")
+end 'flushCompilerLog'
 
 function recordGroupOf(record LogRecord) returns CompilerLogGroup
 	let bound = try record.attrs.get(0) otherwise panic("CompilerLogHandler: a record carrying no attrs reached the compiler's handler — `compilerLogger` binds its group marker under the record's group on every compiler logger")

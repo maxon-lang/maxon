@@ -37,7 +37,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/array-realloc-dangling-ref/string-ref-survives-array-growth.test:9:7: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
+error E3070: specs/array-realloc-dangling-ref/string-ref-survives-array-growth.maxon:9:7: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
 ```
 
 <!-- test: struct-ref-survives-array-growth -->
@@ -82,7 +82,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/array-realloc-dangling-ref/struct-ref-survives-array-growth.test:24:7: cannot mutate 'arr' via 'push' while it is borrowed by 'item' (borrowed at line 19)
+error E3070: specs/array-realloc-dangling-ref/struct-ref-survives-array-growth.maxon:24:7: cannot mutate 'arr' via 'push' while it is borrowed by 'item' (borrowed at line 19)
 ```
 
 <!-- test: multiple-refs-survive-array-growth -->
@@ -119,5 +119,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/array-realloc-dangling-ref/multiple-refs-survive-array-growth.test:14:7: cannot mutate 'arr' via 'push' while it is borrowed by 'a' (borrowed at line 7)
+error E3070: specs/array-realloc-dangling-ref/multiple-refs-survive-array-growth.maxon:14:7: cannot mutate 'arr' via 'push' while it is borrowed by 'a' (borrowed at line 7)
 ```

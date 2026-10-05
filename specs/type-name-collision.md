@@ -345,6 +345,60 @@ end 'main'
 42
 ```
 
+<!-- test: a-type-and-another-directorys-generic-instance-alias-of-one-name-coexist -->
+`a/` names `Pair with (Integer, Integer)` as `IntPair` while `b/` declares `type IntPair`; each file means its own.
+```maxon
+// --- file: a/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair uses A, B
+	export var first as A
+	export var second as B
+
+	static function create(a A, b B) returns Self
+		return Self{first: a, second: b}
+	end 'create'
+end 'Pair'
+
+typealias IntPair = Pair with (Integer, Integer)
+
+export function runA()
+	let p = IntPair.create(3, b: 4)
+	print("a {p.first} {p.second}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type IntPair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(n Integer) returns Self
+		return Self{a: n, b: n}
+	end 'create'
+end 'IntPair'
+
+export function runB()
+	let p = IntPair.create(7)
+	print("b {p.a} {p.b}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 3 4
+b 7 7
+```
+
 <!-- test: error.duplicate-type-same-file -->
 Two `type` declarations of one name in one file. Undiagnosed, the second layout would simply replace
 the first in the registry, so a field the first declared would vanish.
@@ -393,6 +447,78 @@ end 'main'
 ```
 ```maxoncstderr
 error E3006: <fragment>:12:13: duplicate definition of 'Box' — already declared as `type Box`
+```
+
+<!-- test: error.duplicate-type-across-directories -->
+The same two `type` declarations in two directories: a nominal name is whole-program, so a directory does not make room for it.
+```maxon
+// --- file: a/a.maxon
+typealias Small = int(0 to 100)
+
+export type Box
+	export var v as Small
+end 'Box'
+
+// --- file: b/b.maxon
+typealias Small = int(0 to 100)
+
+export type Box
+	export var w as Small
+end 'Box'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: b/<fragment>:12:13: duplicate definition of 'Box' — already declared as `type Box`
+```
+
+<!-- test: error.duplicate-private-type-across-directories -->
+Two FILE-PRIVATE `type Box` declarations in two directories still collide: a nominal name is whole-program however visible it is.
+```maxon
+// --- file: a/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+let G = Box.create()
+
+export function runA()
+	print("a {G.n}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+type Box
+	export var label as String
+
+	static function create() returns Self
+		return Self{label: "b"}
+	end 'create'
+end 'Box'
+
+let H = Box.create()
+
+export function runB()
+	print("b {H.label}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: b/<fragment>:20:6: duplicate definition of 'Box' — already declared as `type Box`
 ```
 
 

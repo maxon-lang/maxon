@@ -1203,14 +1203,9 @@ end 'commitDiagnostics'
 // Both arms blame the newcomer — its own file, its own name token — and name the incumbent's KEYWORD,
 // which is the half that is invisible from the line being reported. The
 // incumbent's PATH is deliberately not in the text: a second absolute path inside a message is
-// machine-dependent and unmatchable in a spec golden.
+// machine-dependent and unmatchable in a `maxoncstderr` block.
 function commitTypeNameDecls(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
-	for decl in artifact.typeNameDecls 'each'
-		match project.typeNameDecls.record(decl, directories: signatures.fileModuleDirectories) 'collision'
-			accepted then break 'collision'
-			collides(winner) then reportTypeNameCollision(project, decl: decl, winner: winner)
-		end 'collision'
-	end 'each'
+	reportTypeNameCollisions(project, collisions: project.typeNameDecls.recordAll(artifact.typeNameDecls, directories: signatures.fileModuleDirectories))
 end 'commitTypeNameDecls'
 
 // Type-name collision is not transitive — d1's `enum Box` collides with d2's, d2's collides with an alias
@@ -1224,6 +1219,48 @@ module function commitTypeNameDeclsInPathOrder(project Project, artifacts FilePa
 		commitTypeNameDecls(project, artifact: artifact, signatures: signatures)
 	end 'eachInPathOrder'
 end 'commitTypeNameDeclsInPathOrder'
+
+typealias TypeNameDeclsByFile = Map with (String, TypeNameDeclArray)
+
+module function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathArray, directories ModuleDirectoryByFile) returns TypeNameCollisionArray
+	var collisions = TypeNameCollisionArray.create()
+
+	if decls.isEmpty() 'nothingDeclared'
+		return collisions
+	end 'nothingDeclared'
+
+	var byFile = TypeNameDeclsByFile.create()
+
+	for decl in decls 'eachDecl'
+		let file = decl.claim.declFilePath.toString()
+		var declared = try byFile.get(file) otherwise TypeNameDeclArray.create()
+		declared.push(decl)
+		byFile.upsert(file, value: declared)
+	end 'eachDecl'
+
+	var registry = TypeNameRegistry.create()
+
+	for entry in sourceFilesInPathOrder(paths) 'eachInPathOrder'
+		let path = try paths.get(entry.position) otherwise panic("nominalNameCollisionsOf: paths.get OOB at {entry.position} below count {paths.count()}")
+		let declared = try byFile.get(path.toString()) otherwise continue
+
+		for collision in registry.recordAll(declared, directories: directories) 'eachCollisionHere'
+			if isTypeAliasDecl(collision.decl.claim.kind) or isTypeAliasDecl(collision.winner.claim.kind) 'anAliasIsInvolved'
+				continue
+			end 'anAliasIsInvolved'
+
+			collisions.push(collision)
+		end 'eachCollisionHere'
+	end 'eachInPathOrder'
+
+	return collisions
+end 'nominalNameCollisionsOf'
+
+module function reportTypeNameCollisions(project Project, collisions TypeNameCollisionArray)
+	for collision in collisions 'eachCollision'
+		reportTypeNameCollision(project, decl: collision.decl, winner: collision.winner)
+	end 'eachCollision'
+end 'reportTypeNameCollisions'
 
 module function sourceFilesInPathOrder(paths FilePathArray) returns SourceFileInPathOrderArray
 	var ordered = SourceFileInPathOrderArray.create()
@@ -1624,7 +1661,7 @@ end 'commitFunctionTypeAliases'
 //
 // INSTANCES are the rows this file's parse minted, re-adopted by every merge: the index is restored to its
 // baseline before each fold, and after an edit elsewhere it is a different index altogether, so a row's id is
-// whatever THIS merge's source-path order gives it.
+// whatever THIS merge's file order gives it.
 //
 // ⚠ **A RENUMBERING IS APPLIED IN PLACE, AND ONE RECORD CAN BE REACHED TWICE** (a binding filed in several
 // places), so a renumbering must not move an id it already moved. An instance renumbering is safe when no id it
@@ -1636,43 +1673,68 @@ function renumberArtifact(project Project, artifact FileParseArtifact, signature
 	let names = TypeIdRemap.unmoved() if artifact.typeIdsAreProjectGlobal else project.typeNames.foldInto(artifact.typeNames)
 	artifact.typeIdsAreProjectGlobal = true
 
-	var direct = GenericInstanceIdMap.create()
-	var intoTheBand = GenericInstanceIdMap.create()
-	var outOfTheBand = GenericInstanceIdMap.create()
-	var targets = GenericInstanceIdSet.create()
+	var moves = InstanceMoves.create()
 
 	for position in 0 upto artifact.instanceIdsInUse.count() 'eachRow'
 		let inUse = try artifact.instanceIdsInUse.get(position) otherwise panic("renumberArtifact: instanceIdsInUse.get OOB at {position}")
 		let target = try adopted.get(position) otherwise panic("renumberArtifact: the merge adopted {adopted.count()} rows of an artifact holding {artifact.instanceIdsInUse.count()}")
-
-		if inUse != target 'moves'
-			direct.upsert(inUse, value: target)
-			intoTheBand.upsert(inUse, value: BandInstanceIdBase + position)
-			outOfTheBand.upsert(BandInstanceIdBase + position, value: target)
-			targets.insert(target)
-		end 'moves'
+		moves.add(inUse, target: target, scratch: BandInstanceIdBase + position)
 	end 'eachRow'
 
-	if movesOntoAMovedId(direct, targets: targets) 'throughTheBand'
-		rewriteTypeIds(project, artifact: artifact, remap: TypeIdRemap.unmoved().movingInstances(intoTheBand))
-		rewriteTypeIds(project, artifact: artifact, remap: names.movingInstances(outOfTheBand))
-	end 'throughTheBand' else 'direct'
-		rewriteTypeIds(project, artifact: artifact, remap: names.movingInstances(direct))
-	end 'direct'
-
+	moves.applyTo(project, artifact: artifact, names: names)
 	artifact.instanceIdsInUse = adopted
 end 'renumberArtifact'
 
-// Would moving `moves` in place move some id twice — is an id it moves FROM also one it moves TO?
-function movesOntoAMovedId(moves GenericInstanceIdMap, targets GenericInstanceIdSet) returns bool
-	for (source, _) in moves 'eachMove'
-		if targets.contains(source) 'aSourceIsATarget'
-			return true
-		end 'aSourceIsATarget'
-	end 'eachMove'
+type InstanceMoves
+	var direct as GenericInstanceIdMap
+	var intoTheBand as GenericInstanceIdMap
+	var outOfTheBand as GenericInstanceIdMap
+	var targets as GenericInstanceIdSet
 
-	return false
-end 'movesOntoAMovedId'
+	static function create() returns InstanceMoves
+		return Self{direct: GenericInstanceIdMap.create(), intoTheBand: GenericInstanceIdMap.create(), outOfTheBand: GenericInstanceIdMap.create(), targets: GenericInstanceIdSet.create()}
+	end 'create'
+
+	function add(inUse GenericInstanceId, target GenericInstanceId, scratch GenericInstanceId)
+		if inUse != target 'moves'
+			self.direct.upsert(inUse, value: target)
+			self.intoTheBand.upsert(inUse, value: scratch)
+			self.outOfTheBand.upsert(scratch, value: target)
+			self.targets.insert(target)
+		end 'moves'
+	end 'add'
+
+	function movesOntoAMovedId() returns bool
+		for (source, _) in self.direct 'eachMove'
+			if self.targets.contains(source) 'aSourceIsATarget'
+				return true
+			end 'aSourceIsATarget'
+		end 'eachMove'
+
+		return false
+	end 'movesOntoAMovedId'
+
+	function applyTo(project Project, artifact FileParseArtifact, names TypeIdRemap)
+		if self.movesOntoAMovedId() 'throughTheBand'
+			rewriteTypeIds(project, artifact: artifact, remap: TypeIdRemap.unmoved().movingInstances(self.intoTheBand))
+			rewriteTypeIds(project, artifact: artifact, remap: names.movingInstances(self.outOfTheBand))
+		end 'throughTheBand' else 'direct'
+			rewriteTypeIds(project, artifact: artifact, remap: names.movingInstances(self.direct))
+		end 'direct'
+	end 'applyTo'
+end 'InstanceMoves'
+
+export function rebaseArtifact(project Project, artifact FileParseArtifact, rebase ParseRebase)
+	var moves = InstanceMoves.create()
+	var scratch = BandInstanceIdBase + (artifact.instanceIdsInUse.count() as GenericInstanceId)
+
+	for (original, current) in rebase.instances 'eachBaselineRow'
+		moves.add(original, target: current, scratch: scratch)
+		scratch = scratch + 1
+	end 'eachBaselineRow'
+
+	moves.applyTo(project, artifact: artifact, names: TypeIdRemap.unmoved().movingInterfaces(rebase.interfaces))
+end 'rebaseArtifact'
 
 // The id each of the artifact's parse rows is adopted under by this merge — every artifact no real parse built
 // has none.
@@ -1735,13 +1797,57 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 	artifact.inferredInstantiationSites = sites
 end 'rewriteTypeIds'
 
-// The op with the type it carries renumbered. Four variants carry one; every other carries none.
+export function footprintOf(project Project, artifact FileParseArtifact, signatures ProgramSignatures) returns ParseFootprint
+	if artifact.typeIdsAreProjectGlobal 'alreadyMerged'
+		panic("footprintOf: a stashed artifact already carries program-wide name ids — a parse is stashed before its merge, while every name id it holds is its own file's")
+	end 'alreadyMerged'
+
+	let moduleWatcher = TypeIdRemap.watching(FileLocalNamesBase)
+	rewriteTypeIds(project, artifact: artifact, remap: moduleWatcher)
+
+	var instances = GenericInstanceIdSet.create()
+	var names = ObservedNameSet.create()
+	var interfaces = ObservedInterfaceSet.create()
+	absorbWatched(moduleWatcher, instances: instances, names: names, interfaces: interfaces)
+
+	match artifact.parseMints 'mints'
+		none then break 'mints'
+		minted(mints) then watchMints(mints, instances: instances, names: names, interfaces: interfaces)
+	end 'mints'
+
+	return signatures.footprintOf(instances, names: names, dispatchedInterfaces: interfaces)
+end 'footprintOf'
+
+function watchMints(mints LocalInstanceMints, instances GenericInstanceIdSet, names ObservedNameSet, interfaces ObservedInterfaceSet)
+	let watcher = TypeIdRemap.watching(mints.typeNameBaseline)
+	mints.watchedBy(watcher)
+	absorbWatched(watcher, instances: instances, names: names, interfaces: interfaces)
+end 'watchMints'
+
+function absorbWatched(watcher TypeIdRemap, instances GenericInstanceIdSet, names ObservedNameSet, interfaces ObservedInterfaceSet)
+	for id in watcher.seenInstances 'eachInstance'
+		instances.insert(id)
+	end 'eachInstance'
+
+	for id in watcher.seenNames 'eachName'
+		names.insert(id)
+	end 'eachName'
+
+	for index in watcher.seenInterfaces 'eachInterface'
+		interfaces.insert(index)
+	end 'eachInterface'
+end 'absorbWatched'
+
+// The op with the type it carries renumbered. Four variants carry a type and the two witness
+// dispatches an interface declaration index; every other carries none.
 function renumberedOp(op MaxonOp, remap TypeIdRemap) returns MaxonOp
 	return match op 'op'
 		literal(result, value, valueType) gives MaxonOp.literal(result, value: value, valueType: remapMaxonType(valueType, remap: remap))
 		loadIndirect(result, addr, offset, valueType) gives MaxonOp.loadIndirect(result, addr: addr, offset: offset, valueType: remapMaxonType(valueType, remap: remap))
 		storeIndirect(addr, offset, value, valueType) gives MaxonOp.storeIndirect(addr, offset: offset, value: value, valueType: remapMaxonType(valueType, remap: remap))
 		sizeofType(result, targetType) gives MaxonOp.sizeofType(result, targetType: remapMaxonType(targetType, remap: remap))
+		witnessDispatch(result, args, witness, methodIndex, interfaceDeclIndex, isVoid, isThrowing) gives MaxonOp.witnessDispatch(result, args: args, witness: witness, methodIndex: methodIndex, interfaceDeclIndex: remap.applyInterface(interfaceDeclIndex), isVoid: isVoid, isThrowing: isThrowing)
+		witnessTryDispatch(result, errorFlag, args, witness, methodIndex, interfaceDeclIndex, isVoid) gives MaxonOp.witnessTryDispatch(result, errorFlag: errorFlag, args: args, witness: witness, methodIndex: methodIndex, interfaceDeclIndex: remap.applyInterface(interfaceDeclIndex), isVoid: isVoid)
 		call or
 			ret or
 			retVoid or
@@ -1763,8 +1869,6 @@ function renumberedOp(op MaxonOp, remap TypeIdRemap) returns MaxonOp
 			tryAwait or
 			constArrayLiteral or
 			switch or
-			witnessDispatch or
-			witnessTryDispatch or
 			panicAbortValue or
 			errorFlagEncode or
 			serviceSpawn or

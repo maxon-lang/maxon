@@ -37,7 +37,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/word-operator-mixed-operands/bool-and-int.test:4:15: operator 'and' requires both operands to be the same type (both bool or both int)
+error E3005: specs/word-operator-mixed-operands/bool-and-int.maxon:4:15: operator 'and' requires both operands to be the same type (both bool or both int)
 ```
 
 <!-- test: int-and-bool -->
@@ -52,7 +52,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/word-operator-mixed-operands/int-and-bool.test:4:12: operator 'and' requires both operands to be the same type (both bool or both int)
+error E3005: specs/word-operator-mixed-operands/int-and-bool.maxon:4:12: operator 'and' requires both operands to be the same type (both bool or both int)
 ```
 
 <!-- test: int-or-bool -->
@@ -67,7 +67,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/word-operator-mixed-operands/int-or-bool.test:4:12: operator 'or' requires both operands to be the same type (both bool or both int)
+error E3005: specs/word-operator-mixed-operands/int-or-bool.maxon:4:12: operator 'or' requires both operands to be the same type (both bool or both int)
 ```
 
 <!-- test: bool-xor-int -->
@@ -82,5 +82,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/word-operator-mixed-operands/bool-xor-int.test:4:15: operator 'xor' requires both operands to be the same type (both bool or both int)
+error E3005: specs/word-operator-mixed-operands/bool-xor-int.maxon:4:15: operator 'xor' requires both operands to be the same type (both bool or both int)
 ```

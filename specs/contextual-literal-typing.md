@@ -122,7 +122,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/contextual-literal-typing/int-vs-float-error.test:5:7: type mismatch: 'cannot compare int with float'
+error E3005: specs/contextual-literal-typing/int-vs-float-error.maxon:5:7: type mismatch: 'cannot compare int with float'
 ```
 
 <!-- test: float-vs-int-error -->
@@ -137,7 +137,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/contextual-literal-typing/float-vs-int-error.test:5:7: type mismatch: 'cannot compare float with int'
+error E3005: specs/contextual-literal-typing/float-vs-int-error.maxon:5:7: type mismatch: 'cannot compare float with int'
 ```
 
 <!-- test: int-literal-vs-float-error -->
@@ -151,7 +151,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/contextual-literal-typing/int-literal-vs-float-error.test:4:7: type mismatch: 'cannot compare float with int'
+error E3005: specs/contextual-literal-typing/int-literal-vs-float-error.maxon:4:7: type mismatch: 'cannot compare float with int'
 ```
 
 <!-- test: float-literal-vs-int-error -->
@@ -165,7 +165,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/contextual-literal-typing/float-literal-vs-int-error.test:4:7: type mismatch: 'cannot compare int with float'
+error E3005: specs/contextual-literal-typing/float-literal-vs-int-error.maxon:4:7: type mismatch: 'cannot compare int with float'
 ```
 
 <!-- test: explicit-cast-int-to-float -->

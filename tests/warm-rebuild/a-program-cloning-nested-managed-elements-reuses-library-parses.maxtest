@@ -1,0 +1,9 @@
+let ManagedCloneReusedPassLine = "verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold + library parses reused across programs)"
+
+test 'a program that deep-clones an array of nested managed records leaves the shared index at its baseline for every library parse it reuses'
+	let staged = stagedFixture("managed-clone", caseLabel: "a-program-cloning-nested-managed-elements-reuses-library-parses")
+	let run = spawnVerify(staged)
+
+	Expect.contains(run.stdout, needle: ManagedCloneReusedPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report every library parse reused by programs that clone an array of three-level managed records. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
+end 'a program that deep-clones an array of nested managed records leaves the shared index at its baseline for every library parse it reuses'

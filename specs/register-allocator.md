@@ -18,7 +18,7 @@ These tests exercise register allocation with progressively increasing difficult
 
 ## Tests
 
-⚠ This file carries no `RequiredIR:<target>` blocks: the compiler's spec parser has no `RequiredIR` arm, and `SpecParser.isUnimplementedFenceOpen` refuses the fence rather than walking past it. What pins the emitted code here is each case's MINTED FRAGMENT GOLDEN, which records what this compiler emits.
+⚠ This file carries no `RequiredIR:<target>` blocks: the compiler's spec parser has no `RequiredIR` arm, and `SpecParser.isUnimplementedFenceOpen` refuses the fence rather than walking past it. Nothing in this file pins the emitted code; it is visible with `--emit-ir`.
 
 ### Level 1: Basic Value Tracking
 

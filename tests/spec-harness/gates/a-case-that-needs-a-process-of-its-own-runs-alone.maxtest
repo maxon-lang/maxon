@@ -1,0 +1,16 @@
+let OwnProcessSpecName = "own-process"
+
+test 'a case marked process own runs in a process of its own while the other run cases still batch'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: OwnProcessSpecName, testNames: ["own-process.first", "own-process.second", "own-process.third"], broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(2, programs: 1, alone: 1), broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a case marked process own runs alone")
+end 'a case marked process own runs in a process of its own while the other run cases still batch'

@@ -512,14 +512,12 @@ The other single-op arm. `InlineManagedPrimitives` emits one fast arm per stride
 `guardIndexInRange`, so a rewrite that reached only the word arm would leave every `ByteArray` and
 every String element on a seven-instruction guard.
 
-⛔ **THIS PARAGRAPH SAID *"the fragment shows the byte arm's `cmp`/`jae`"*, AND THE FRAGMENT HAS NEVER
-CONTAINED ONE** — checked at the file, on this version and on the one before it: zero `aboveEqual`,
-ten `belowEqual`. It is still the UNSIGNED guard, spelled the other way round. Every index here is a
-LITERAL, so the operand fold moves the constant into the compare and swaps it, and `__im_byte`'s guard
-comes out `cmp length, -1` / `jbe` — the same slow arm reached by the same unsigned reading. The
-two-register `cmp index, length` / `jae` is what `a-runtime-negative-index-is-refused` pins, and its
-fragment is the one that carries it. **What this case pins is the STRIDE — that the byte arm has a
-guard of this family at all — not a mnemonic.**
+Every index here is a LITERAL, so the operand fold moves the constant into the compare and swaps it,
+and the emitted code (`--emit-ir`) shows `__im_byte`'s guard as `cmp length, -1` / `jbe` — the UNSIGNED
+guard spelled the other way round, the same slow arm reached by the same unsigned reading. The
+two-register `cmp index, length` / `jae` is in the emitted code of `a-runtime-negative-index-is-refused`.
+**What this case pins is the STRIDE — that the byte arm has a guard of this family at all — not a
+mnemonic.**
 ```maxon
 typealias Byte = int(0 to 255)
 typealias Bytes = Array with Byte

@@ -274,8 +274,8 @@ The compiler's own design named this pass and **deferred it** (`FoldConstOperand
 `DEVLOG.md:348`) for one stated reason: *"it would collapse the test programs to `mov r8,k` and erase
 the codegen the fragments exist to show."*
 
-⭐ **That reason expired on 2026-08-27**: goldens are informational by the user's ruling, and golden
-drift is out of the whole rung process.
+⭐ **Emitted code is pinned only where a case asks for it**: an `ir-specs/` case carries a
+` ```TargetIr:<lane> ` pin per native lane, and a fold that moves one re-mints it.
 
 **MEASURED**: `2 + 3 * 4` emits `mov rcx,3 ; imul rcx,rcx,4 ; lea rcx,[rcx+2]` — three instructions
 for the constant 14. After inlining, `x*31+y` with `x=3, y=4` emits the full six-instruction sequence
@@ -406,7 +406,7 @@ for a VALUE, not for an EXPRESSION. `scale-test`'s own `c_long` knob (`a + 1`, `
 distinct expressions sharing one operand, so every probe walked one long chain: **CPU ×1.77 ×2.07 ×2.28
 ×2.79 ×3.12 across a DOUBLING ladder while allocations stayed linear at ×1.89.** Mixing both halves of
 the expression into the key fixed it with no allocation change and no change to the emitted code
-anywhere (6,801 goldens, 0 differing), taking the phase from 5.38e9 to 1.48e9 ticks at rung 5.
+anywhere, taking the phase from 5.38e9 to 1.48e9 ticks at rung 5.
 
 **Left open**: `const` unification, which carries an ABI-constrained-use hazard — MEASURED here: 369
 of nbody's 524 `movRegImm32` are duplicates within one function, and most are call arguments a merge
@@ -547,9 +547,8 @@ on a corpus whose pressure knob is one function with N loops where N grows with 
 
 ⭐⭐ **A BOUND WAS IMPOSED, AND IT WAS MEASURED INTO EXISTENCE RATHER THAN ASSUMED — `RULE 3`: A LOOP
 HOLDING A CALL HOISTS NOTHING, ARITHMETIC INCLUDED.** The first cut bounded only LOADS that way (Rule 1
-already refuses them), and the minted goldens are what caught the rest: **48 `map` fragments gained +96
-`loadRegSlot` and +48 `storeSlotReg`**, and every one of their frames grew, because a hoisted value in a
-call-heavy loop is COLD-SPILLED rather than kept. In `Map.grow` the entire trade was one
+already refuses them), and that let arithmetic hoist out of call-heavy loops, where every frame it touched
+grew, because a hoisted value in a call-heavy loop is COLD-SPILLED rather than kept. In `Map.grow` the entire trade was one
 `leaRegRegImm32` replaced by one `loadRegSlot` — an ALU op for a memory op, which is a loss at equal
 instruction count. `EC13` had measured the other end of the same fact (the compiler REFUSES rather than spills,
 so one reused expression across a call was an `E5001`); this is what the same hazard looks like when the
@@ -557,21 +556,17 @@ allocator does not refuse.
 
 ⇒ It is a structural rule, not a budget with a number to justify. It costs the anchor nothing (`EC15`
 made that loop call-free) and `regalloc/many-call-crossing` nothing (nine invariant computations still
-leave its loop — that loop holds no call), and both were checked before it was adopted. **419 of the 466
-moved goldens went back** when it landed, and the `scripts/emitted-code-count.py` corpus returned to
-byte-identical.
+leave its loop — that loop holds no call), and both were checked before it was adopted. When it landed,
+the `scripts/emitted-code-count.py` corpus returned to byte-identical.
 
 **PRESSURE**: zero `E5001` in a 6,818-case run, and `EC13`'s red case
 `witness-dispatch-inside-a-pressured-loop` stays green. It is not free even so —
-`regalloc/many-call-crossing`'s fragment gained one `pushReg r13`, the price of nine values hoisted out
+`regalloc/many-call-crossing`'s emitted code gained one `pushReg r13`, the price of nine values hoisted out
 of a call-free loop. ⚠ Rule 3 sees MEMBER blocks only, so a call on a loop-EXIT path is not counted: a
 gap in the heuristic, not in the safety argument, and the same one `EC13`'s barrier note records.
 
 **GATES**: x64-windows **6,818 passed, 0 failed, exit 0** (6,812 + 6 new) and wasm32-wasi **6,358
-passed, 0 failed, exit 0** (6,352 + 6); **47** goldens re-minted from ONE unfiltered run and re-verified
-at zero drift, 6 added. ⭐ That number was **466 before Rule 3**, which gave 419 of them back — the
-clearest single statement of what the bound is worth: nine tenths of this pass's effect on the committed
-corpus was spill churn in call-heavy loops. New `specs/loop-invariant-code-motion.md`, 6 cases including **two
+passed, 0 failed, exit 0** (6,352 + 6). New `specs/loop-invariant-code-motion.md`, 6 cases including **two
 sabotage-verified controls**: disabling Rule 1 turns `a-loop-that-writes-keeps-its-loads-inside` red
 with a WRONG ANSWER (exit 1), and disabling Rule 2a moves exactly the two fragments whose pins it is.
 
@@ -716,8 +711,7 @@ what the new analysis matches on, gaining only an `isBinaryArithImm()` predicate
 skipped the use walk for functions with no scale multiply, through a SECOND `blockRefs` → `opRefs`
 descent — and two descents over the same ops fail here in the PERMISSIVE direction and in silence: a
 pre-scan that came to visit fewer ops than the record walk would stop the fold for that whole
-function, and the goldens would simply be MINTED showing the unfolded three-instruction chain with
-nothing red anywhere. One descent, 0.4% of compile CPU.
+function, with nothing red anywhere. One descent, 0.4% of compile CPU.
 
 ⚠ **THE FIRST CUT COST +47% OF `phase:encode`'s ALLOCATIONS, AND ONLY THE CONTROL SAW IT.** The index
 was a RECORD with a `none()` default, and a record-typed default is CONSTRUCTED at every call — of an
@@ -835,8 +829,7 @@ THE FOURTH TIME THIS WORKSTREAM'S INSTRUMENTS COULD NOT EXPRESS A ROW.** The sub
 only six of them. The binary size and the timed A/B are the instruments that can see it.
 
 **GATES**: x64-windows **6,931 passed, 0 failed, exit 0** (6,929 + 2 new) and wasm32-wasi **6,415 passed, 0
-failed, exit 0** (6,413 + 2); **21 goldens re-minted** from ONE unfiltered run and re-verified at zero drift,
-2 added. **Self-host fixpoint: stage-2 == stage-3, BYTE-IDENTICAL (9,280,084 bytes).** E3070 was re-probed
+failed, exit 0** (6,413 + 2). **Self-host fixpoint: stage-2 == stage-3, BYTE-IDENTICAL (9,280,084 bytes).** E3070 was re-probed
 on the changed route (an element borrowed out of the buffer, then `managed.clear()` under it) and gives the
 identical diagnostic at the identical line and column before and after.
 
@@ -1010,18 +1003,14 @@ attributed A/B. The `--metrics` reading above is the attribution, on a far reale
 **GATES**: x64-windows **6,822 passed, 0 failed, exit 0** (6,818 + 4 new) and wasm32-wasi **6,361
 passed, 0 failed, exit 0** (6,358 + 3 — the panic-trace case is x64-only by its own `targets:` marker);
 **zero `E5001` in either run**, and `EC13`'s knife-edge case
-`generic-hash-table-regalloc/…witness-dispatch-inside-a-pressured-loop` is not merely green: **its
-golden is BYTE-IDENTICAL** — this row put no extra pressure on the case built to sit exactly at the
-register pool. (Its sibling `…rehash-loop-forwards-hidden-parameters` did move, and is one of the
-1,008.) **1,008 goldens re-minted** from ONE unfiltered run and
-re-verified at zero drift, 4 added. **Self-host fixpoint: stage-2 == stage-3, BYTE-IDENTICAL**
-(9,004,190 bytes). The **89 `Stack trace:` blocks across 19 spec files are byte-identical**:
-the panic rule is untouched by the reorder, and a moved trace would have been a FAILURE rather than a
-golden note.
+`generic-hash-table-regalloc/…witness-dispatch-inside-a-pressured-loop` stays green. **Self-host
+fixpoint: stage-2 == stage-3, BYTE-IDENTICAL** (9,004,190 bytes). The **89 `Stack trace:` blocks
+across 19 spec files are byte-identical**: the panic rule is untouched by the reorder, and a moved
+trace is a FAILURE.
 
 **Cases added** to `specs/inline-leaves.md`, 4:
 `an-accessor-that-becomes-a-leaf-after-the-managed-rewrite-is-inlined` (the gate — `Array.isEmpty` is
-spliced, and the fragment holds no `callDirect Array.isEmpty`);
+spliced, and the emitted code holds no `callDirect Array.isEmpty`);
 `a-whole-loop-over-an-array-becomes-a-leaf` (`total` is spliced into `main` and does not survive
 dead-function elimination at all);
 `the-panic-rule-holds-when-the-argument-is-an-inlined-element` (the guard tests a value
@@ -1077,7 +1066,7 @@ COMPILER'S ON THE OTHER.** `strengthReduceDivision` asks `targetLowersMulHigh` a
 NOTHING where the answer is `false`: **wasm32 has no `i64.mul_high_s` at all** (four 32×32 products
 and their carries, ~20 instructions against the one `i64.div_s` it would replace), and **arm64 HAS the
 instruction — `SMULH Xd, Xn, Xm`, a plain three-address form strictly nicer than x64's — and has no
-`TargetOp` for it.** So no arm64 or wasm golden moves for this row, and adding that op is what turns
+`TargetOp` for it.** So no arm64 or wasm code moves for this row, and adding that op is what turns
 that lane on. Filed, not taken: this is the most arithmetically dangerous row of the workstream and it
 was not worth doubling on a lane this host cannot execute.
 
@@ -1141,7 +1130,7 @@ by the LITERAL (reduced) and by a **runtime value of the same magnitude** (not r
 type `int(2 to 1000000)` proves it non-zero, so `Parser.emitDivOrMod` emits a bare `idiv` with no
 guard and no `try`), and asserts the two agree. Twelve edge dividends — `i64.min`, `i64.max`, `0`,
 `±1`, `±2`, `±7`, `-2^62`, `±10^9+7` — against eleven divisors chosen so every arm of both sequences
-is taken. A wrong magic is a wrong exit code, not a moved golden.
+is taken. A wrong magic is a wrong exit code.
 
 ⚠ **THE REFERENCE HAD TO BE A REAL CALL, AND THAT IS THE [[green-case-proved-nothing-sabotage]]
 SHAPE.** A reference small enough for `inlineLeaves` to splice with its literal argument would have
@@ -1219,10 +1208,7 @@ delta is a flat constant that never enters the allocator's pressure at all.
 
 **GATES**: x64-windows **6,834 passed, 0 failed, exit 0** (6,827 + 7 new) and wasm32-wasi **6,372
 passed, 0 failed, exit 0** (6,366 + 6 — the range-check control is `targets: x64-windows, x64-linux`);
-**zero `E5001` in either run**. **772 goldens re-minted** from ONE unfiltered run and re-verified at
-zero drift (6,834 compared, 0 differ), 7 added — and **every one of the 772 is on the x64-windows
-lane**, which is the target gate reading itself back: not one arm64 or wasm32 fragment moved.
-**Self-host fixpoint: stage-2 == stage-3, BYTE-IDENTICAL (9,033,004 bytes)** — the gate `EC17` found
+**zero `E5001` in either run**. **Self-host fixpoint: stage-2 == stage-3, BYTE-IDENTICAL (9,033,004 bytes)** — the gate `EC17` found
 the suite structurally cannot give, and the one that matters most for a row that rewrites arithmetic:
 the compiler compiles itself with its own reduced divisions and lands on the same bytes.
 
@@ -1345,8 +1331,8 @@ existence, 0 becomes 1 per iteration, and the compiler REFUSES rather than spill
 on a program that compiled before. **Found by the independent review, not by any gate**: the suite was
 6,827 green with zero `E5001` either way. `valueDiesAtItsOnlyReader` now asks "read exactly once" AND
 "defined in the same block", which closes the range inside one block and is exact; the LEFT half stays
-necessary-but-not-sufficient, and with the RIGHT half exact its imprecision can only cost **a golden
-that moved for nothing**.
+necessary-but-not-sufficient, and with the RIGHT half exact its imprecision can only cost **a swap
+that saves nothing**.
 
 `scripts/emitted-code-count.py`, committed corpus, before → after. Every other column is
 byte-identical, as it must be — this row selects no instruction differently:
@@ -1417,8 +1403,7 @@ it. The trend row in `docs/optimization-log.md` carries the same numbers.
 
 **GATES**: x64-windows **6,827 passed, 0 failed, exit 0** (6,822 + 5 new) and wasm32-wasi **6,366 passed, 0 failed, exit 0** (6,361 + 5);
 **zero `E5001` in either run**, and `EC13`'s knife-edge case
-`generic-hash-table-regalloc/…witness-dispatch-inside-a-pressured-loop` stays green. **497
-goldens re-minted** from ONE unfiltered run and re-verified at zero drift, 5 added. **Self-host
+`generic-hash-table-regalloc/…witness-dispatch-inside-a-pressured-loop` stays green. **Self-host
 fixpoint: stage-2 == stage-3, BYTE-IDENTICAL (9,006,975 bytes).**
 
 **Cases added** to the new `specs/commute-for-coalescing.md`, 5, four of them CONTROLS and every
@@ -1428,7 +1413,7 @@ one sabotage-verified against the committed fragments:
 |---|---|---|
 | `a-commutative-op-with-a-dying-right-operand-needs-no-copy` (the gate) | `let swap = false` | EXACTLY this one; the four controls byte-identical |
 | `a-commutative-op-whose-both-operands-survive-keeps-its-copy` | invert the dying-`rhs` test | this one and the gate; the other three byte-identical |
-| `a-non-commutative-op-keeps-its-copy` | drop `binOpcodeIsCommutative` | **RED, exit 1** — a wrong answer, not a golden |
+| `a-non-commutative-op-keeps-its-copy` | drop `binOpcodeIsCommutative` | **RED, exit 1** — a wrong answer |
 | `a-float-multiply-keeps-its-copy` | call the rule from `lowerFloatBinOp` | EXACTLY this one |
 | `an-integer-add-is-not-commuted` | `add gives true` in the roster | EXACTLY this one |
 
@@ -1566,9 +1551,8 @@ shape and gets the whole win. ⇒ the spread across programs is `EC14`'s lesson 
 shape before predicting the win.
 
 **GATES**: x64-windows **6,954 passed, 0 failed** (6,946 + 8 new) and wasm32-wasi **6,423 passed,
-0 failed** (6,415 + 8); **661 goldens re-minted** from ONE unfiltered run and re-verified at **0
-differing**; self-host **fixpoint stage-2 == stage-3, byte-identical (9,224,484 bytes)**, and the
-**whole suite passes UNDER stage-2 (6,954 / 0, 0 goldens differing)** — the half the fixpoint cannot
+0 failed** (6,415 + 8); self-host **fixpoint stage-2 == stage-3, byte-identical (9,224,484 bytes)**,
+and the **whole suite passes UNDER stage-2 (6,954 / 0)** — the half the fixpoint cannot
 stand in for. New
 `specs/unsigned-bounds-guard.md`, 8 cases. ⛔ Sabotage (`BoundsCompareOperandType = StdType.i64`,
 the one token that drops the negative half): **six of the eight go RED**, at exit 101, exit 1 ×2,
@@ -1795,14 +1779,14 @@ membership record and ONE rebuild of `func.blockRefs` — no per-loop allocation
 function with N loops; the loopless function is gated on the pre-drop topology and never builds the
 second one. Shared by x64 and arm64 through the ISA-neutral rosters (`unconditionalBranchTargetOf`,
 `condBranchTargetOf`); wasm never reaches this tier. Pinned by `specs/loop-rotation-layout.md` (14
-cases: the shape in its fragment golden, and controls for a zero-iteration and a one-iteration loop, a
+cases: the shape case, and controls for a zero-iteration and a one-iteration loop, a
 nest, a `while` with `continue`, a `while` with two jump latches, a nest whose inner header is the outer
 latch, a sunk slow arm re-entering the chain, a range check firing inside the loop, a header chain of
 guarded loads, a `break`, an early `return`, and two refused `while true` shapes). In the shape case's
-golden `copyTail`'s versioned copy loop is `forstep#23: lea` falling into
+emitted code `copyTail`'s versioned copy loop is `forstep#23: lea` falling into
 `forhdr#22: cmp; jcc less, __rc_ok#36` with `forexit` next; the pre-rotation layout is inferred from
-the same golden's slow-loop entry and `EC29`'s description (`jmp` latch behind a not-taken `jcc`), no
-golden holding it. Interleaved A/B against a control built from c7e0ed04, n=11 ×5: 2,519 → 2,408 ms (−4.4%, beyond both arms' spread); n=12 32,993 → 31,883 ms (ratio to C 1.59 → 1.53); the compiler's self-compile 44,566 → 38,602 ms (−13.4%); census ops 2518 → 2517 and jmp 42 → 41, since each elided back-edge `jmp` is offset by the entry `jmp` the unswitched sibling loop now needs. Scale ladder against a control built by the slot from the same commit: `branchCleanup` 444,571 → 509,343 allocations at rung 5 (×1.91 → ×1.89 per doubling; the second topology build and the rotation tables per looped function), `loopInvariantCodeMotion` 52,803 → 61,729 allocations and 31.5 → 29.1 MB (the bucketed seed).
+the same program's slow-loop entry and `EC29`'s description (`jmp` latch behind a not-taken `jcc`).
+Interleaved A/B against a control built from c7e0ed04, n=11 ×5: 2,519 → 2,408 ms (−4.4%, beyond both arms' spread); n=12 32,993 → 31,883 ms (ratio to C 1.59 → 1.53); the compiler's self-compile 44,566 → 38,602 ms (−13.4%); census ops 2518 → 2517 and jmp 42 → 41, since each elided back-edge `jmp` is offset by the entry `jmp` the unswitched sibling loop now needs. Scale ladder against a control built by the slot from the same commit: `branchCleanup` 444,571 → 509,343 allocations at rung 5 (×1.91 → ×1.89 per doubling; the second topology build and the rotation tables per looped function), `loopInvariantCodeMotion` 52,803 → 61,729 allocations and 31.5 → 29.1 MB (the bucketed seed).
 
 **`EC31` · Established-guard folding — a guard asked once per record, not once per access.** — ✅
 **CLOSED 2026-09-11 (round 9 of the fannkuch loop).** A per-instruction sample profile of the round-8
@@ -1883,7 +1867,7 @@ cost this one only redistributed.
 prologues and epilogues, the argument moves, the call-crossing spills and each callee's entry re-running the array
 shape guards. `inlineLeaves` now has a second admission: a function named by exactly one direct `call` in the module —
 and by nothing else: no `tryCall`, `funcAddr`, `.rdata` slot, entry, test, compiler-owned root, function-value thunk
-target or golden request — is spliced into its caller whatever its size, in post-order waves over the direct-call graph
+target or ` ```RequiredRuntime ` request — is spliced into its caller whatever its size, in post-order waves over the direct-call graph
 (a cycle's members are all refused before any retires), unless it throws, takes a by-reference parameter, carries the
 green-thread stack guard, or its live set plus the caller's live-across set at the site exceeds the unswitcher's
 register budget. The splice reuses the leaf splicer (`SiteSplicer`); a spliced body is emptied so no later pass walks
@@ -2008,8 +1992,8 @@ jump-table pass that does not exist; re-measure before quoting it).
 - ✅ **arm64 is CURRENT, and both rungs now execute there.** `EC18`'s `SMULH` landed with the
   three-address op AArch64 spells it as, so `StrengthReduceDivision` no longer declines the lane;
   `EC16`'s memory half landed narrowed to the `S`-bit form; and `EC11` runs from
-  `Targets/Shared/BranchCleanup.maxon`, which both backends call. Both arm64 golden lanes were minted
-  on a Mac that runs them, so the codegen is compared against a reference rather than read.
+  `Targets/Shared/BranchCleanup.maxon`, which both backends call. Both arm64 lanes carry
+  `TargetIr` pins in `ir-specs/`, so the codegen is compared against a reference rather than read.
 - ✅ **CLOSED 2026-08-30 — `f(obj.managedField)` WHERE THE CALLEE FREES THAT FIELD.** The compiler handed a managed
   field read straight to a call with no refcount at all (`emitFieldLoad`: *"a receiver load, an argument, a
   chain hop are all transient and owe nothing"* — the ARGUMENT clause was false), and nothing checked that
@@ -2047,15 +2031,9 @@ jump-table pass that does not exist; re-measure before quoting it).
   through another argument's contents; a WITNESS dispatch, whose receiver the door is not given; and a record
   freed while a LATER argument of the same call is being evaluated. See
   `Parser.callReachesBorrowedArgumentStorage`.
-- ✅ **ALL FOUR GOLDEN LANES ARE CURRENT.** `specs/fragments/` holds four, and three of them are
-  minted on this Mac, which runs arm64-macos natively and both Linux lanes through OrbStack. MEASURED:
-  `x64-windows` 7,189 fragments / 694 carrying `__im_slow`, `arm64-macos` 7,086 / 684, `arm64-linux`
-  7,083 / 684, `x64-linux` 7,117 / 688 — so every lane carries `EC1`'s inline-primitives output rather
-  than predating it, and the counts track each other. `orRegReg` survives in 28 `x64-linux` fragments,
-  not 1,202: the pre-`A2` bounds guard is gone from the corpus.
-  ⚠ **`x64-windows` is the one lane that CANNOT be minted here** — the frontend's `os()` follows the
-  host, so a regen on this machine writes the wrong values — which is why a change that moves its
-  goldens has to be minted on a Windows checkout, and why nothing in this session touches them.
+- **Emitted code is pinned in `ir-specs/`**, one `TargetIr:<lane>` block per native lane in each case
+  that carries any. A pin is compared against the compile, so any host checks and re-mints every lane
+  (`maxon spec-test ir-specs --target=<lane> --update-required --filter=<spec>/`).
 - **`EC19`'s ladder disagreement is still OPEN** — +1.45% emitted bytes at rung 5, attributed to
   `regalloc:splitting`, unexplained.
 - `W219` (a file-private `let` unified across files), and `E3092` cannot see a default argument's
@@ -2132,9 +2110,8 @@ landed by rows in this document, none of them visible to the spec suite:
 
 ⇒ **A row that changes a pass owes a self-compile, not only a suite run.** All three are repaired and
 the fixpoint holds byte-identically; this is filed here rather than in a row because it is about the
-instrument. ⛔ `git status specs/fragments/`
-measures nothing, and since 2026-08-27 neither does golden drift. To show what a rung did to emitted
-code, **disassemble or use `--emit-ir` / `--emit-ir-runtime`** and count.
+instrument. To show what a rung did to emitted code, **disassemble or use `--emit-ir` /
+`--emit-ir-runtime`** and count; `ir-specs/` pins only the cases that carry a `TargetIr` block.
 
 ### Reproducing this document's measurements
 

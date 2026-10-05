@@ -1472,27 +1472,31 @@ the work-stealing threshold (≥2), idle worker Ps lift the extra GTs
 off P[0]'s queue and run their subprocess waits on their own OS
 threads.
 
-⭐ **THE ASSERTION IS A RATIO AGAINST A BASELINE MEASURED IN THE SAME
-RUN, AND THAT IS WHAT MAKES IT MEAN ANYTHING ON A BUSY MACHINE.** Four
-overlapped waits cost about what one costs; four sequential waits cost
-four. So the subject — *did these overlap* — is the quotient, and any
-absolute millisecond bound is a claim about the HOST rather than about
-the scheduler. On an idle host the ratio reads about 1 where
-sequential dispatch would read 4.0. The `× 2` threshold sits between
-them with room on both sides, and a loaded machine inflates the two
-sides together instead of tripping the gate.
+⭐ **THE ASSERTION IS ABOUT WHEN THE FOUR FINISH RELATIVE TO EACH OTHER,
+INSIDE ONE BATCH, SO A CHANGE IN MACHINE LOAD CANNOT MOVE IT.** The
+program records the time, since the batch started, at which each await
+returns. Overlapped children all finish about one child-duration after
+the start, so the four times sit close together. Children run one after
+another finish one child-duration apart, so the last finishes about
+three child-durations after the first.
 
-The solo baseline runs through the same `async`/`await` pair as the
-four, so it prices the promise machinery too and the quotient isolates
-the overlap alone. The 8000ms test timeout covers both phases.
+The yardstick is the FIRST completion time, measured in the same window:
+no child can finish before its own duration has passed, so the first
+completion is at least one child-duration, on any host and at any load.
+The case fails when the spread between the first and last completion
+reaches TWICE that first completion. Sequential dispatch spreads them
+about three durations, which that bound refuses; a loaded parallel run
+spreads them only by its spawn and wake-up skew, which stays far below
+two full child-durations.
 ```maxon
 typealias SubP = Promise with (CollectedOutput, SubprocessError)
 typealias SubPArray = Array with SubP
+typealias ChildTally = int(0 to 4)
 
-// One spelling, because the solo baseline must run the SAME work the four ran —
-// a second copy is a place for the two to drift apart, and the ratio is only a
-// measurement of overlap while they do not.
-function pingArgs() returns StringArray
+let ChildCount = 4 as ChildTally
+let SpreadAllowanceInFirstCompletions = 2 as DurationMs
+
+function sleepArgs() returns StringArray
 	var argv = StringArray.create()
 	#if os(Windows)
 	argv.push("/c")
@@ -1504,7 +1508,7 @@ function pingArgs() returns StringArray
 	argv.push("1")
 	#endif
 	return argv
-end 'pingArgs'
+end 'sleepArgs'
 
 function main() returns ExitCode
 	#if os(Windows)
@@ -1512,39 +1516,37 @@ function main() returns ExitCode
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sleep") otherwise return 7)
 	#endif
-	let count = 4
 	var promises = SubPArray.create()
 
 	let start = Clock.nowMs()
-	var i = 0
-	while i < count 'spawn'
-		promises.push(async Subprocess.run(exe.clone(), arguments: pingArgs()))
-		i = i + 1
+	var spawned = 0 as ChildTally
+	while spawned < ChildCount 'spawn'
+		promises.push(async Subprocess.run(exe.clone(), arguments: sleepArgs()))
+		spawned = spawned + 1
 	end 'spawn'
+
+	var awaited = 0 as ChildTally
+	var firstCompletion = 0 as DurationMs
+	var lastCompletion = 0 as DurationMs
 	for p in promises 'drain'
 		let r = try await p otherwise return 2
 		if not r.succeeded() 'check-success'
 			return 3
 		end 'check-success'
+
+		let completedAt = Clock.elapsedMs(start)
+		if awaited == 0 'isFirst'
+			firstCompletion = completedAt
+		end 'isFirst'
+
+		lastCompletion = completedAt
+		awaited = awaited + 1
 	end 'drain'
-	let elapsed = Clock.elapsedMs(start)
 
-	// The baseline, priced in this same run and through the same async/await
-	// pair, so the quotient below isolates the overlap from everything else
-	// the machine is doing.
-	let soloStart = Clock.nowMs()
-	let solo = try await (async Subprocess.run(exe, arguments: pingArgs())) otherwise return 5
-	if not solo.succeeded() 'check-solo'
-		return 6
-	end 'check-solo'
-	let single = Clock.elapsedMs(soloStart)
-
-	// Four overlapped cost about one; four in sequence cost four. Half way
-	// between is the widest bound that still refuses sequential dispatch,
-	// and it scales with the host instead of asserting one.
-	if elapsed >= single * 2 'check-parallel'
+	if lastCompletion - firstCompletion >= firstCompletion * SpreadAllowanceInFirstCompletions 'check-overlap'
 		return 4
-	end 'check-parallel'
+	end 'check-overlap'
+
 	return 0
 end 'main'
 ```
@@ -2123,6 +2125,7 @@ child exit 0
 
 <!-- test: subprocess-a-stdin-pipe-that-cannot-be-created-reports-the-creations-own-error -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- process: own -->
 A spawn whose stdin pipe cannot be created fails with the error the creation itself reported, not one from a
 later call made on the handle that was never created. A Windows pipe is named `mx` followed by sixteen digits
 spelling the spawning process's id and a per-process sequence number, so a PowerShell child this program starts

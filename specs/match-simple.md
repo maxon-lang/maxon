@@ -456,7 +456,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/match-simple/error.match-enum-default.test:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
+error E2046: specs/match-simple/error.match-enum-default.maxon:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: match-enum.expression -->
@@ -509,7 +509,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/match-simple/error.match-expression-fallthrough.test:5:14: unexpected token: 'and'
+error E2001: specs/match-simple/error.match-expression-fallthrough.maxon:5:14: unexpected token: 'and'
 ```
 
 <!-- test: error.match-fallthrough-with-return -->
@@ -523,7 +523,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2025: specs/fragments/match-simple/error.match-fallthrough-with-return.test:5:20: match fallthrough with return: 'cannot combine 'fallthrough' with 'return''
+error E2025: specs/match-simple/error.match-fallthrough-with-return.maxon:5:20: match fallthrough with return: 'cannot combine 'fallthrough' with 'return''
 ```
 
 <!-- test: error.match-enum-not-exhaustive -->
@@ -543,7 +543,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-simple/error.match-enum-not-exhaustive.test:13:2: match on enum 'Color' is not exhaustive, missing: blue
+error E2026: specs/match-simple/error.match-enum-not-exhaustive.maxon:13:2: match on enum 'Color' is not exhaustive, missing: blue
 ```
 
 <!-- test: error.match-duplicate-pattern -->
@@ -558,7 +558,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/match-simple/error.match-duplicate-pattern.test:6:3: duplicate pattern in match: '1'
+error E2027: specs/match-simple/error.match-duplicate-pattern.maxon:6:3: duplicate pattern in match: '1'
 ```
 
 <!-- test: error.match-missing-block-id -->
@@ -572,7 +572,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2042: specs/fragments/match-simple/error.match-missing-block-id.test:4:9: missing block identifier
+error E2042: specs/match-simple/error.match-missing-block-id.maxon:4:9: missing block identifier
 ```
 
 <!-- test: error.match-mismatched-block-id -->
@@ -586,7 +586,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2043: specs/fragments/match-simple/error.match-mismatched-block-id.test:7:2: block identifier mismatch: expected 'check', got 'wrong'
+error E2043: specs/match-simple/error.match-mismatched-block-id.maxon:7:2: block identifier mismatch: expected 'check', got 'wrong'
 ```
 
 <!-- test: error.match-default-not-last -->
@@ -601,7 +601,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2029: specs/fragments/match-simple/error.match-default-not-last.test:6:3: 'default' case must be the last case in match
+error E2029: specs/match-simple/error.match-default-not-last.maxon:6:3: 'default' case must be the last case in match
 ```
 
 <!-- test: error.match-not-exhaustive -->
@@ -615,7 +615,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-simple/error.match-not-exhaustive.test:7:2: match is not exhaustive: add a 'default' arm
+error E2026: specs/match-simple/error.match-not-exhaustive.maxon:7:2: match is not exhaustive: add a 'default' arm
 ```
 
 <!-- test: error.match-duplicate-bool-pattern -->
@@ -646,7 +646,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/match-simple/error.match-duplicate-bool-pattern.test:8:3: duplicate pattern in match: 'true'
+error E2027: specs/match-simple/error.match-duplicate-bool-pattern.maxon:8:3: duplicate pattern in match: 'true'
 ```
 
 <!-- test: match-arm-field-assignment -->

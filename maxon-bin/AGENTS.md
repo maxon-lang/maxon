@@ -145,7 +145,7 @@ restart the MCP server when you need the new one to answer.
 >   before anything is built in it.
 >
 > ⚠ These tools **EDIT** the tree they are pointed at: `run_spec_test` with `updateRequired: true`
-> rewrites that tree's committed goldens, `run_scale_test` with `note:` writes a row into its
+> re-mints that tree's inline spec blocks, `run_scale_test` with `note:` writes a row into its
 > `docs/optimization-log.md`, and `fmt` rewrites files in place.
 
 | Task | Tool |
@@ -165,7 +165,7 @@ refusal is by ARRIVAL against the tool roster, so it covers `mmTrace` and `dumpS
 argument nobody thought to reject. A contributor argument sent to a server started WITHOUT `--dev` is
 refused the same way.
 
-Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite.
+Always pair `updateRequired` with a `filter` — unfiltered, it re-mints the inline blocks of every selected case in the suite.
 
 ⛔ **`build`'s `target:` IS A TRIPLE WHEN IT PARSES AS ONE OF THE FIVE, AND A PROJECT TARGET OTHERWISE.**
 `wasm32-wasi` becomes `--target=wasm32-wasi`; any other value becomes a positional naming a target of
@@ -180,12 +180,13 @@ which pays the startup per file and runs each on one worker. A comma is part of 
 the whole run, naming it, so a typo'd member cannot run nowhere while the rest reads green. (`maxon test`
 lowercases its patterns and also splits a value on commas.)
 
-The runner has no `--verbose` (it always prints a line per test), no `--no-batch` (its batching is
-`RunStrategy`, chosen by target and host) and no `--debug-info`; it does have `--network`.
+The runner has no `--verbose` (it always prints a line per test), no `--no-batch` (`--batch=off` turns
+off program batching; how a lane's executions are grouped is `RunStrategy`, chosen by target and host)
+and no `--debug-info`; it does have `--network`.
 
 ### Common flags
 
-- `--filter=PATTERN` (repeatable), `--update-required`, `--rewrite-drifted-goldens`, `--log=CATEGORY:LEVEL` (e.g. `--log=ir:debug`),
+- `--filter=PATTERN` (repeatable), `--update-required`, `--batch=on|off`, `--log=CATEGORY:LEVEL` (e.g. `--log=ir:debug`),
   `--workers=<n>`, `--target=ARCH-OS`, `--network`.
 - ⛔ **There is no `--mm-trace` on any command.** The driver refuses an unimplemented flag loudly
   (`Main.MaxonArgs.parse`, which cites this very spelling as the reason it must), so a leak is read off
@@ -375,22 +376,26 @@ no doc comment, which is how it finds them.
 
 ## Spec files
 
-- **Golden drift needs no attention.** The goldens under `specs/fragments/<target>/` are reference, not
-  a gate. A default run MINTS a golden a case has none of, on the host where that case passed, and
-  leaves an existing one as it is — a golden whose bytes differ from this run's compile is REPORTED as
-  drift (`N drifted` beside `0 failed`, the differences in a note on stderr) and the case keeps the
-  verdict its assertions earned. `--update-required --filter=<spec>` rewrites a committed golden, and
-  `--rewrite-drifted-goldens` rewrites the drifted ones of cases that passed. Whatever a local run
-  minted or rewrote is committed with the change (`git add -A specs/`) — never measured, investigated,
-  explained or reverted.
-- **CI records the lanes this host cannot run.** Every CI lane runs the suite with
-  `--rewrite-drifted-goldens`, and on a push to `main` the `record-goldens` job commits what the lanes
-  wrote as `github-actions[bot]` (`scripts/record-goldens.sh`). An arm64 golden a change leaves unminted
-  or drifted is therefore nothing to act on. To apply a pull request's goldens locally,
-  `scripts/fetch-goldens.sh <run-id>`.
+- **`specs/` pins no emitted code; `ir-specs/` is the emitted-code suite.** `maxon spec-test
+  ir-specs` runs the cases whose subject is the emitted code; each carries a ` ```TargetIr:<lane> ` block per
+  native lane (`x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux`) holding the Target IR the compiler
+  renders for it, and a block for the lane being run is a GATE: a differing compile fails the case and shows
+  the first differing line. A pin is compared against the COMPILE, so `--target=arm64-macos` on Windows checks
+  it too (the cases report NOTRUN). A change that moves emitted code re-mints the pins it moves with
+  `--update-required --filter=<spec>/` on each lane, reads the diff, and commits it with the change; CI runs
+  `spec-test ir-specs` natively on every lane beside the suite.
+- **A default run batches.** A spec's plain run cases compile into the fewest programs whose type names and
+  extension methods do not overlap and run once each; a case whose end marker is missing or reports green
+  threads still live, and every case of a program that exited non-zero, reruns alone from the same binary,
+  and output outside every marker FAILS every case of that program. A batched FAIL is compiled alone only
+  to diagnose it: a solo PASS turns into a FAIL naming the batching gap, which is fixed by a new
+  `SoloReason` or a `<!-- process: own -->` marker. `SpecBatch.placementOf` is the one list of reasons a
+  case runs alone. `--batch=off` runs every case alone, and the summary line says how many ran batched
+  in how many programs.
 - A spec fence the harness does not read (` ```RequiredIR ` among them) is refused, naming the case.
-- `--update-required` re-mints the trace-capture blocks (` ```mm-trace `, ` ```log-trace `) in a spec
-  file but **not** its `maxoncstderr` blocks — an error-code renumber moves those by hand.
+- `--update-required` re-mints the trace-capture blocks (` ```mm-trace `, ` ```log-trace `) and the
+  ` ```TargetIr:<lane> ` pins in a spec file but **not** its `maxoncstderr` blocks — an error-code renumber
+  moves those by hand.
 
 ## ⚠ A running MCP server keeps answering from the compiler it was started as
 

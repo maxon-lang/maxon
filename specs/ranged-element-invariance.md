@@ -67,7 +67,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-element-invariance/narrow-element-rejected-where-wide-expected.test:14:2: argument type mismatch for 'col': expected 'WideCol', got 'NarrowCol'
+error E3005: specs/ranged-element-invariance/narrow-element-rejected-where-wide-expected.maxon:14:2: argument type mismatch for 'col': expected 'WideCol', got 'NarrowCol'
 ```
 
 <!-- test: wide-element-rejected-where-narrow-expected -->
@@ -89,7 +89,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-element-invariance/wide-element-rejected-where-narrow-expected.test:14:9: argument type mismatch for 'col': expected 'NarrowCol', got 'WideCol'
+error E3005: specs/ranged-element-invariance/wide-element-rejected-where-narrow-expected.maxon:14:9: argument type mismatch for 'col': expected 'NarrowCol', got 'WideCol'
 ```
 
 <!-- test: matching-ranged-element-still-works -->

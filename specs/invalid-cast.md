@@ -42,7 +42,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/invalid-cast/error.string-to-int.test:6:14: Cannot cast from String to int
+error E3009: specs/invalid-cast/error.string-to-int.maxon:6:14: Cannot cast from String to int
 ```
 
 <!-- test: error.struct-to-int -->
@@ -65,7 +65,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/invalid-cast/error.struct-to-int.test:15:14: Cannot cast from struct to int
+error E3009: specs/invalid-cast/error.struct-to-int.maxon:15:14: Cannot cast from struct to int
 ```
 
 <!-- test: error.struct-to-string -->
@@ -87,7 +87,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/invalid-cast/error.struct-to-string.test:14:14: Cannot cast from struct to String
+error E3009: specs/invalid-cast/error.struct-to-string.maxon:14:14: Cannot cast from struct to String
 ```
 
 <!-- test: error.function-to-int -->
@@ -106,7 +106,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/invalid-cast/error.function-to-int.test:11:14: Cannot cast from function to int
+error E3009: specs/invalid-cast/error.function-to-int.maxon:11:14: Cannot cast from function to int
 ```
 
 <!-- test: valid.compatible-casts-still-compile -->

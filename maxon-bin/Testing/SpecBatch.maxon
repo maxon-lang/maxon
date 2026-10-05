@@ -1,0 +1,1210 @@
+// A spec's batchable run cases (`placementOf`, `claimedPlacementOf`) compile into the fewest programs
+// whose claims do not conflict (`BatchGroup.admits`): a nominal type name is whole-program
+// (specs/type-name-collision.md), and an extension method declared in two files is E3006. The claims
+// come from one front-end pass per case (`Compiler.claimsOfSources`); source text is read only to
+// rewrite `main` and to find unused exports. Each case is staged in a directory of its own so
+// its file-private names stay apart, its `main` becomes an exported `__spec_case_<n>`, and a
+// generated entry runs the cases its `--select=` list names between BEGIN and END markers that
+// carry each case's exit code and the live green-thread count `__Builtins.gtQuiesce()` reports.
+//
+// The entry quiesces after each case because a case's services and coroutines otherwise run on
+// after its `main` returns and land their output past its END marker. A case left with live
+// threads, and every case of a program that exited non-zero, reruns alone from the same binary,
+// never recompiled. The default `Log` sink is a registry-owned service alive until exit, so a case
+// that logs through it reads a count of 1 and reruns alone; that is why the count is a marker field
+// and not an exit code. On a target with no command line (wasm32) the entry cannot read
+// `--select=`, so it runs every case and a case it cannot read fails.
+//
+// Batching recovers nothing silently. Output outside every marker fails every case of the program:
+// some case ran code before `main` that the up-front checks missed, and the runner must be fixed to
+// keep it out. A case the batch compile refuses but that compiles alone fails the same way. A batched
+// FAIL is compiled alone only to diagnose it (`withBatchedFailuresDiagnosed`).
+module let MinBatchedCases = 2
+let MaxBatchCompileAttempts = 4
+let BatchProgramName = "__batch"
+let BatchSourceDirSuffix = ".src"
+let BatchCaseDirPrefix = "case"
+let BatchCaseFileName = "main.maxon"
+let BatchEntryFileName = "__spec_batch_entry.maxon"
+let BatchEntrySymbol = "__spec_batch_main"
+let BatchRunType = "__SpecBatchRun"
+let BatchIndexAlias = "__SpecBatchIndex"
+let BatchLeftAlias = "__SpecBatchLeft"
+let BatchCaseRunnerPrefix = "__spec_case_"
+
+let BatchMarkerWrapper = "@@maxon-spec@@"
+let BatchBeginTag = ">"
+let BatchEndTag = "<"
+let BatchFieldEnd = ";"
+
+let BatchSelectedExit = 0
+
+let MainSignatureReturningExitCode = "function main() returns ExitCode"
+let MainSignatureReturningNothing = "function main()"
+let MainSignatureOpening = "function main("
+let MainCallOpening = "main("
+let MainEndLine = "end 'main'"
+let ExportedSignaturePrefix = "export function "
+let ExitCodeReturns = " returns ExitCode"
+let SourceCarriageReturn = "\r"
+let AsciiDigitZero = 0x30
+let AsciiDigitNine = 0x39
+let AsciiUpperA = 0x41
+let AsciiUpperZ = 0x5A
+let AsciiLowerA = 0x61
+let AsciiLowerZ = 0x7A
+let AsciiUnderscore = 0x5F
+let MainSignatureQualifiers = ["export ", "module ", "public ", "async "]
+
+let CommandLineReader = "CommandLine"
+let ExecutablePathReader = "executablePath"
+let RuntimeStateReader = "__Builtins"
+let DebugStreamReader = "__DebugStream"
+let ProcessStateWriters = ["Log", "Logger", "LogSink", "TraceCapture"]
+let GreenThreadQuiesceCall = "__Builtins.gtQuiesce()"
+let BatchNothingOutstanding = 0
+let FileMacro = "__file__"
+let LineMacro = "__line__"
+let SourceLineBreak = "\n"
+let UnusedExportModifiers = ["export ", "module "]
+
+module enum SoloReason
+	compileError
+	pinsStderr
+	takesArgs
+
+	// The batch program's argv carries its `--select=` list, and its executable is the batch's.
+	readsCommandLine
+	readsItsExecutable
+
+	// `__Builtins.` is the only door a program has to runtime counters, and earlier cases move them.
+	readsRuntimeState
+
+	// `Log`, `Logger`, `LogSink` and `TraceCapture` set process-wide state a later case would inherit.
+	sharesProcessState
+
+	// A multi-file program refuses an export nothing uses (E3092, E3094).
+	exportsFromItsFile
+
+	// `__DebugStream.` name ids are numbered across the whole program.
+	numbersNamesProgramWide
+
+	// The case declares a name the standard library also declares, so every other case's use of that
+	// name would change meaning (`StringError`, `ByteArray`, `InitableFromStringLiteral`).
+	shadowsALibraryName
+	needsStdin
+	pinsProcessors
+	withdrawsPreemption
+	usesNetwork
+	needsItsOwnProcess
+
+	// A top-level initializer runs program code before `main`, so its output would land outside every
+	// case's markers (`Compiler.claimsOfSources`).
+	initializesAtRunTime
+
+	// The up-front initializer query could not stage or check the case; its own compile reports why.
+	refusedByTheFrontEnd
+	runsAlone
+	capturesTrace
+	tracesAsync
+	buildsDebugInfo
+	stagesOwnTiers
+	spansFiles
+	readsItsPosition
+	pinsEmittedCode
+	unrecognisedMain
+end 'SoloReason'
+
+module enum MainShape
+	returnsExitCode
+	returnsNothing
+end 'MainShape'
+
+module union Placement
+	together(shape MainShape)
+	apart(reason SoloReason)
+end 'Placement'
+
+union MainShapeLookup
+	found(shape MainShape)
+	unrecognised
+end 'MainShapeLookup'
+
+// Read from the text because the rewrite to `__spec_case_<n>` is textual; any shape it does not
+// recognise answers `unrecognised`, and the case runs alone.
+function mainShapeOf(source String) returns MainShapeLookup
+	var found = MainShapeLookup.unrecognised
+	var mains = 0 as TestTally
+	var ends = 0 as TestTally
+
+	for rawLine in source.split(SourceLineBreak) 'eachLine'
+		let line = rawLine.trimEnd(CharacterSet.newlines())
+
+		if line.startsWith(MainSignatureOpening) 'opensMain'
+			mains = mains + 1
+
+			if line == MainSignatureReturningExitCode 'returnsCode'
+				found = MainShapeLookup.found(MainShape.returnsExitCode)
+			end 'returnsCode' else if line == MainSignatureReturningNothing 'returnsNothing'
+				found = MainShapeLookup.found(MainShape.returnsNothing)
+			end 'returnsNothing' else 'otherShape'
+				return MainShapeLookup.unrecognised
+			end 'otherShape'
+
+			continue
+		end 'opensMain'
+
+		if line == MainEndLine 'closesMain'
+			ends = ends + 1
+			continue
+		end 'closesMain'
+
+		if namesMainElsewhere(line) 'namesMainElsewhere'
+			return MainShapeLookup.unrecognised
+		end 'namesMainElsewhere'
+	end 'eachLine'
+
+	if mains != 1 or ends != 1 'notExactlyOne'
+		return MainShapeLookup.unrecognised
+	end 'notExactlyOne'
+
+	return found
+end 'mainShapeOf'
+
+function namesMainElsewhere(line String) returns bool
+	for qualifier in MainSignatureQualifiers 'eachQualifier'
+		if line.startsWith("{qualifier}{MainSignatureOpening}") 'qualifiedMain'
+			return true
+		end 'qualifiedMain'
+	end 'eachQualifier'
+
+	let pieces = line.split(MainCallOpening)
+
+	for (iter, piece) in pieces.withIterator() 'eachPiece'
+		if iter.index() + 1 == pieces.count() 'afterTheLastCall'
+			break
+		end 'afterTheLastCall'
+
+		if not endsWithIdentifierCharacter(piece) 'aCallOfMain'
+			return true
+		end 'aCallOfMain'
+	end 'eachPiece'
+
+	return false
+end 'namesMainElsewhere'
+
+function endsWithIdentifierCharacter(piece String) returns bool
+	let bytes = piece.toByteArray()
+
+	if bytes.isEmpty() 'nothingBefore'
+		return false
+	end 'nothingBefore'
+
+	let last = try bytes.get(bytes.count() - 1) otherwise panic("endsWithIdentifierCharacter: the last of {bytes.count()} bytes is in bounds")
+	return isIdentifierByte(last)
+end 'endsWithIdentifierCharacter'
+
+function isIdentifierByte(value Byte) returns bool
+	let isDigit = value >= AsciiDigitZero and value <= AsciiDigitNine
+	let isUpper = value >= AsciiUpperA and value <= AsciiUpperZ
+	let isLower = value >= AsciiLowerA and value <= AsciiLowerZ
+	return isDigit or isUpper or isLower or value == AsciiUnderscore
+end 'isIdentifierByte'
+
+function pinsStderrOf(test SpecTest) returns bool
+	return match test.expectation 'e'
+		run(_, stderr, _, _) gives match stderr 'pin'
+			pinned gives true
+			unpinned gives false
+		end 'pin'
+
+		compilerError gives false
+	end 'e'
+end 'pinsStderrOf'
+
+function expectsCompileError(test SpecTest) returns bool
+	return match test.expectation 'e'
+		compilerError gives true
+		run gives false
+	end 'e'
+end 'expectsCompileError'
+
+function pinsLinkedPayload(test SpecTest) returns bool
+	return test.pinsLinkedSection() or not test.runtimeNames.isEmpty()
+end 'pinsLinkedPayload'
+
+function needsStdin(test SpecTest) returns bool
+	return match test.stdin 'stdin'
+		closed gives false
+		held or
+			delayed gives true
+	end 'stdin'
+end 'needsStdin'
+
+function pinsProcessors(test SpecTest) returns bool
+	return match test.procs 'procs'
+		unset gives false
+		pinned gives true
+	end 'procs'
+end 'pinsProcessors'
+
+function withdrawsPreemption(test SpecTest) returns bool
+	return match test.preempt 'preempt'
+		unset gives false
+		off gives true
+	end 'preempt'
+end 'withdrawsPreemption'
+
+function usesNetwork(test SpecTest) returns bool
+	return match test.network 'network'
+		none gives false
+		live gives true
+	end 'network'
+end 'usesNetwork'
+
+// The reasons a case runs alone that its spec text states; `claimedPlacementOf` asks the rest of the
+// front end's claims. Together they are the one list of `SoloReason`s.
+module function placementOf(test SpecTest, irAction IrAction) returns Placement
+	if expectsCompileError(test) 'compileError'
+		return Placement.apart(SoloReason.compileError)
+	end 'compileError'
+
+	if pinsStderrOf(test) 'pinsStderr'
+		return Placement.apart(SoloReason.pinsStderr)
+	end 'pinsStderr'
+
+	if not test.programArgs.isEmpty() 'takesArgs'
+		return Placement.apart(SoloReason.takesArgs)
+	end 'takesArgs'
+
+	if declaresUnusedExports(test.source) 'exportsFromItsFile'
+		return Placement.apart(SoloReason.exportsFromItsFile)
+	end 'exportsFromItsFile'
+
+	if needsStdin(test) 'needsStdin'
+		return Placement.apart(SoloReason.needsStdin)
+	end 'needsStdin'
+
+	if pinsProcessors(test) 'pinsProcessors'
+		return Placement.apart(SoloReason.pinsProcessors)
+	end 'pinsProcessors'
+
+	if withdrawsPreemption(test) 'withdrawsPreemption'
+		return Placement.apart(SoloReason.withdrawsPreemption)
+	end 'withdrawsPreemption'
+
+	if usesNetwork(test) 'usesNetwork'
+		return Placement.apart(SoloReason.usesNetwork)
+	end 'usesNetwork'
+
+	if test.process != SpecProcess.shared 'needsItsOwnProcess'
+		return Placement.apart(SoloReason.needsItsOwnProcess)
+	end 'needsItsOwnProcess'
+
+	if test.runs != SpecRuns.shared 'runsAlone'
+		return Placement.apart(SoloReason.runsAlone)
+	end 'runsAlone'
+
+	if traceCaptureMode(test) 'capturesTrace'
+		return Placement.apart(SoloReason.capturesTrace)
+	end 'capturesTrace'
+
+	if test.asyncTrace 'tracesAsync'
+		return Placement.apart(SoloReason.tracesAsync)
+	end 'tracesAsync'
+
+	if test.debugInfo 'buildsDebugInfo'
+		return Placement.apart(SoloReason.buildsDebugInfo)
+	end 'buildsDebugInfo'
+
+	if not test.stdlibOverlays.isEmpty() or not test.runtimeFiles.isEmpty() 'stagesOwnTiers'
+		return Placement.apart(SoloReason.stagesOwnTiers)
+	end 'stagesOwnTiers'
+
+	if test.isMultiFile() 'spansFiles'
+		return Placement.apart(SoloReason.spansFiles)
+	end 'spansFiles'
+
+	if test.pinsTargetIr or pinsLinkedPayload(test) or irAction.needsIr() 'pinsEmittedCode'
+		return Placement.apart(SoloReason.pinsEmittedCode)
+	end 'pinsEmittedCode'
+
+	return match mainShapeOf(test.source) 'main'
+		found(shape) gives Placement.together(shape)
+		unrecognised gives Placement.apart(SoloReason.unrecognisedMain)
+	end 'main'
+end 'placementOf'
+
+function declaresUnusedExports(source String) returns bool
+	for rawLine in source.split(SourceLineBreak) 'eachLine'
+		for modifier in UnusedExportModifiers 'eachModifier'
+			if rawLine.startsWith(modifier) 'marked'
+				return true
+			end 'marked'
+		end 'eachModifier'
+	end 'eachLine'
+
+	return false
+end 'declaresUnusedExports'
+
+typealias ClaimedNameSet = Set with String
+
+module type BatchClaim
+	export let nominals as StringArray
+	export let aliases as StringArray
+	export let extensionKeys as StringArray
+	export let mentioned as ClaimedNameSet
+
+	module static function of(claims SourceClaims) returns BatchClaim
+		var mentioned = ClaimedNameSet.create()
+
+		for name in claims.mentionedNames 'eachMention'
+			mentioned.insert(name)
+		end 'eachMention'
+
+		return Self{nominals: claims.declaredNominals, aliases: claims.declaredAliases, extensionKeys: claims.extensionMethodKeys, mentioned: mentioned}
+	end 'of'
+
+	module function declares(name String) returns bool
+		return self.nominals.contains(name) or self.aliases.contains(name)
+	end 'declares'
+
+	// A declared nominal conflicts with any mention of it, since the name is whole-program. A declared
+	// typealias conflicts only with a case that mentions the name without declaring it, which would
+	// read this case's alias in place of the library's; two cases that both declare it may share.
+	module function meansAnotherCasesName(other BatchClaim) returns bool
+		for nominal in self.nominals 'eachNominal'
+			if other.mentioned.contains(nominal) 'otherNamesIt'
+				return true
+			end 'otherNamesIt'
+		end 'eachNominal'
+
+		for alias in self.aliases 'eachAlias'
+			if not other.declares(alias) and other.mentioned.contains(alias) 'otherMeansTheLibrarys'
+				return true
+			end 'otherMeansTheLibrarys'
+		end 'eachAlias'
+
+		return false
+	end 'meansAnotherCasesName'
+
+	module function sharesAnExtensionMethodWith(other BatchClaim) returns bool
+		for key in self.extensionKeys 'eachKey'
+			if other.extensionKeys.contains(key) 'sameKey'
+				return true
+			end 'sameKey'
+		end 'eachKey'
+
+		return false
+	end 'sharesAnExtensionMethodWith'
+end 'BatchClaim'
+
+typealias BatchClaimArray = Array with BatchClaim
+
+module type ClaimedMember
+	export let member as BatchMember
+	export let claim as BatchClaim
+
+	module static function create(member BatchMember, claim BatchClaim) returns ClaimedMember
+		return Self{member: member, claim: claim}
+	end 'create'
+end 'ClaimedMember'
+
+module typealias ClaimedMemberArray = Array with ClaimedMember
+
+module type BatchGroup
+	export let members as BatchMemberArray
+	let claims as BatchClaimArray
+
+	module static function create() returns BatchGroup
+		return Self{members: BatchMemberArray.create(), claims: BatchClaimArray.create()}
+	end 'create'
+
+	module function admits(claim BatchClaim) returns bool
+		for held in self.claims 'eachHeld'
+			if claim.sharesAnExtensionMethodWith(held) or claim.meansAnotherCasesName(held) or held.meansAnotherCasesName(claim) 'conflicts'
+				return false
+			end 'conflicts'
+		end 'eachHeld'
+
+		return true
+	end 'admits'
+
+	module function admit(claimed ClaimedMember)
+		self.members.push(claimed.member)
+		self.claims.push(claimed.claim)
+	end 'admit'
+end 'BatchGroup'
+
+module typealias BatchGroupArray = Array with BatchGroup
+
+module function partitionedByClaims(candidates ClaimedMemberArray) returns BatchGroupArray
+	var groups = BatchGroupArray.create()
+
+	for claimed in candidates 'eachMember'
+		var placed = false
+
+		for position in 0 upto groups.count() 'eachGroup'
+			var group = try groups.get(position) otherwise panic("SpecBatch: group {position} is in bounds of the {groups.count()} groups")
+
+			if group.admits(claimed.claim) 'free'
+				group.admit(claimed)
+				placed = true
+				break
+			end 'free'
+		end 'eachGroup'
+
+		if not placed 'needsAGroup'
+			var group = BatchGroup.create()
+			group.admit(claimed)
+			groups.push(group)
+		end 'needsAGroup'
+	end 'eachMember'
+
+	return groups
+end 'partitionedByClaims'
+
+module union ClaimAnswer
+	answered(claims SourceClaims)
+	refused
+end 'ClaimAnswer'
+
+module union ClaimedPlacement
+	together(claimed ClaimedMember)
+	apart(reason SoloReason)
+end 'ClaimedPlacement'
+
+module function claimedPlacementOf(member BatchMember, answer ClaimAnswer) returns ClaimedPlacement
+	return match answer 'answer'
+		answered(claims) gives claimedPlacementFor(member, claims: claims)
+		refused gives ClaimedPlacement.apart(SoloReason.refusedByTheFrontEnd)
+	end 'answer'
+end 'claimedPlacementOf'
+
+function claimedPlacementFor(member BatchMember, claims SourceClaims) returns ClaimedPlacement
+	if claims.moduleInit == ModuleInitNeed.runsProgramCode 'initializesAtRunTime'
+		return ClaimedPlacement.apart(SoloReason.initializesAtRunTime)
+	end 'initializesAtRunTime'
+
+	if not claims.shadowedLibraryNames.isEmpty() 'shadowsALibraryName'
+		return ClaimedPlacement.apart(SoloReason.shadowsALibraryName)
+	end 'shadowsALibraryName'
+
+	if namesAny(claims, words: [CommandLineReader]) 'readsCommandLine'
+		return ClaimedPlacement.apart(SoloReason.readsCommandLine)
+	end 'readsCommandLine'
+
+	if namesAny(claims, words: [ExecutablePathReader]) 'readsItsExecutable'
+		return ClaimedPlacement.apart(SoloReason.readsItsExecutable)
+	end 'readsItsExecutable'
+
+	if namesAny(claims, words: [RuntimeStateReader]) 'readsRuntimeState'
+		return ClaimedPlacement.apart(SoloReason.readsRuntimeState)
+	end 'readsRuntimeState'
+
+	if namesAny(claims, words: ProcessStateWriters) 'sharesProcessState'
+		return ClaimedPlacement.apart(SoloReason.sharesProcessState)
+	end 'sharesProcessState'
+
+	if namesAny(claims, words: [DebugStreamReader]) 'numbersNamesProgramWide'
+		return ClaimedPlacement.apart(SoloReason.numbersNamesProgramWide)
+	end 'numbersNamesProgramWide'
+
+	if namesAny(claims, words: [FileMacro, LineMacro]) 'readsItsPosition'
+		return ClaimedPlacement.apart(SoloReason.readsItsPosition)
+	end 'readsItsPosition'
+
+	return ClaimedPlacement.together(ClaimedMember.create(member, claim: BatchClaim.of(claims)))
+end 'claimedPlacementFor'
+
+function namesAny(claims SourceClaims, words StringArray) returns bool
+	for word in words 'eachWord'
+		if claims.mentionedNames.contains(word) 'mentioned'
+			return true
+		end 'mentioned'
+	end 'eachWord'
+
+	return false
+end 'namesAny'
+
+module type BatchMember
+	export let testIndex as ElementIndex
+	export let shape as MainShape
+
+	module static function create(testIndex ElementIndex, shape MainShape) returns BatchMember
+		return Self{testIndex: testIndex, shape: shape}
+	end 'create'
+end 'BatchMember'
+
+module typealias BatchMemberArray = Array with BatchMember
+
+function batchCaseName(caseIndex ElementIndex) returns String
+	return "{BatchCaseRunnerPrefix}{caseIndex}"
+end 'batchCaseName'
+
+function batchCaseSource(test SpecTest, caseIndex ElementIndex) returns String
+	let name = batchCaseName(caseIndex)
+	var lines = StringArray.create()
+
+	for rawLine in test.source.split(SourceLineBreak) 'eachLine'
+		let line = rawLine.trimEnd(CharacterSet.newlines())
+		let lineEnding = SourceCarriageReturn if rawLine.endsWith(SourceCarriageReturn) else ""
+
+		if line == MainSignatureReturningExitCode 'exitCodeSignature'
+			lines.push("{ExportedSignaturePrefix}{name}(){ExitCodeReturns}{lineEnding}")
+		end 'exitCodeSignature' else if line == MainSignatureReturningNothing 'bareSignature'
+			lines.push("{ExportedSignaturePrefix}{name}(){lineEnding}")
+		end 'bareSignature' else if line == MainEndLine 'endLabel'
+			lines.push("end '{name}'{lineEnding}")
+		end 'endLabel' else 'untouched'
+			lines.push(rawLine)
+		end 'untouched'
+	end 'eachLine'
+
+	return "{joinedWith(lines, separator: SourceLineBreak)}{SourceLineBreak}"
+end 'batchCaseSource'
+
+// Asked of the target's facilities: without a command line the entry cannot select one case, and
+// without green threads it has nothing to quiesce (`gtQuiesce` would be E3104).
+type EntryFacilities
+	export let selects as bool
+	export let quiesces as bool
+
+	static function of(target Target) returns EntryFacilities
+		return Self{selects: targetProvidesFacility(target, facility: HostFacility.commandLine), quiesces: targetProvidesFacility(target, facility: HostFacility.greenThreads)}
+	end 'of'
+
+	function indent() returns String
+		return "\t\t" if self.selects else "\t"
+	end 'indent'
+end 'EntryFacilities'
+
+function endedCaseSource(index ElementIndex, codeText String, facilities EntryFacilities) returns String
+	let outstanding = GreenThreadQuiesceCall if facilities.quiesces else "{BatchNothingOutstanding}"
+	return "{facilities.indent()}{BatchRunType}.ended({index}, code: {codeText}, outstanding: {outstanding})\n"
+end 'endedCaseSource'
+
+function batchEntrySource(members BatchMemberArray, facilities EntryFacilities) returns String
+	let begun = "{BatchMarkerWrapper}{BatchBeginTag}\{index\}{BatchFieldEnd}"
+	let ended = "{BatchMarkerWrapper}{BatchEndTag}\{index\}{BatchFieldEnd}\{code\}{BatchFieldEnd}\{outstanding\}{BatchFieldEnd}"
+
+	var source = "// Generated by `maxon spec-test` — this file exists only in the staging tree. See SpecBatch.\n\n"
+	source.append("export typealias {BatchIndexAlias} = int(0 to {members.count()})\n\n")
+
+	source.append("export typealias {BatchLeftAlias} = int(i64.min to i64.max)\n\n")
+	source.append("export type {BatchRunType}\n")
+
+	if facilities.selects 'definesSelection'
+		source.append(selectionMembersSource(BatchIndexAlias))
+	end 'definesSelection'
+
+	source.append("\texport static function began(index {BatchIndexAlias})\n")
+	source.append("\t\tprint(\"{begun}\\n\")\n")
+	source.append("\t\tprintError(\"{begun}\\n\")\n")
+	source.append("\tend 'began'\n\n")
+	source.append("\texport static function ended(index {BatchIndexAlias}, code ExitCode, outstanding {BatchLeftAlias})\n")
+	source.append("\t\tprint(\"{ended}\\n\")\n")
+	source.append("\t\tprintError(\"{ended}\\n\")\n")
+	source.append("\tend 'ended'\n")
+	source.append("end '{BatchRunType}'\n\n")
+
+	source.append("export function {BatchEntrySymbol}() returns ExitCode\n")
+
+	if facilities.selects 'readsSelection'
+		source.append("\tlet selection = {BatchRunType}.selection()\n\n")
+	end 'readsSelection'
+
+	let indent = facilities.indent()
+
+	for (iter, member) in members.withIterator() 'eachCase'
+		let index = iter.index()
+
+		if facilities.selects 'opensCase'
+			source.append("\tif {BatchRunType}.selected(selection, index: {index}) 'case{index}'\n")
+		end 'opensCase'
+
+		source.append("{indent}{BatchRunType}.began({index})\n")
+
+		match member.shape 'shape'
+			returnsExitCode then source.append("{indent}let code{index} = {batchCaseName(index)}()\n{endedCaseSource(index, codeText: "code{index}", facilities: facilities)}")
+			returnsNothing then source.append("{indent}{batchCaseName(index)}()\n{endedCaseSource(index, codeText: "{BatchSelectedExit}", facilities: facilities)}")
+		end 'shape'
+
+		if facilities.selects 'closesCase'
+			source.append("\tend 'case{index}'\n")
+		end 'closesCase'
+
+		source.append("\n")
+	end 'eachCase'
+
+	source.append("\treturn {BatchSelectedExit}\n")
+	source.append("end '{BatchEntrySymbol}'\n")
+	return source
+end 'batchEntrySource'
+
+function mintedNamesForBatchEntry() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(BatchIndexAlias.toByteArray())
+	names.push(BatchLeftAlias.toByteArray())
+	names.push(BatchRunType.toByteArray())
+	names.push(BatchEntrySymbol.toByteArray())
+	return names
+end 'mintedNamesForBatchEntry'
+
+module type BatchProgram
+	export let exePath as FilePath
+	export let members as BatchMemberArray
+	export let stdlibDir as String
+	export let runtimeDir as String
+	export let writtenFiles as FilePathArray
+	export let selects as bool
+
+	module static function create(exePath FilePath, members BatchMemberArray, stdlibDir String, runtimeDir String, writtenFiles FilePathArray, selects bool) returns BatchProgram
+		return Self{exePath: exePath, members: members, stdlibDir: stdlibDir, runtimeDir: runtimeDir, writtenFiles: writtenFiles, selects: selects}
+	end 'create'
+
+	module function allCases() returns TestRunIndexArray
+		var cases = TestRunIndexArray.create()
+
+		for index in 0 upto self.members.count() 'eachMember'
+			cases.push(index)
+		end 'eachMember'
+
+		return cases
+	end 'allCases'
+end 'BatchProgram'
+
+module union BatchBuild
+	built(program BatchProgram, ticks CpuTicks)
+	notBuilt(answer CompileAnswer, refused TestRunIndexArray)
+end 'BatchBuild'
+
+function batchProgramNameOf(ordinal ElementIndex) returns String
+	return "{BatchProgramName}{ordinal}"
+end 'batchProgramNameOf'
+
+function batchSourceRoot(tempDir FilePath, ordinal ElementIndex) returns FilePath
+	return tempDir.join("{batchProgramNameOf(ordinal)}{BatchSourceDirSuffix}")
+end 'batchSourceRoot'
+
+function batchExePath(tempDir FilePath, ordinal ElementIndex, exeExtension String) returns FilePath
+	return try FilePath.from("{tempDir.join(batchProgramNameOf(ordinal)).toString()}{exeExtension}") otherwise panic("SpecBatch: the output path of batch program {ordinal} under {tempDir.toString()} is not a valid path")
+end 'batchExePath'
+
+function stageBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, facilities EntryFacilities) returns GeneratedBuild throws TestStagingError
+	var build = try GeneratedBuild.begin(batchSourceRoot(tempDir, ordinal: ordinal))
+
+	for (iter, member) in members.withIterator() 'eachMember'
+		let test = try tests.get(member.testIndex) otherwise panic("SpecBatch: batch member {iter.index()} names test {member.testIndex}, past the {tests.count()} the spec selected")
+		let caseIndex = iter.index()
+		let path = build.root.join("{BatchCaseDirPrefix}{caseIndex}").join(BatchCaseFileName)
+		var names = ByteArrayArray.create()
+		names.push(batchCaseName(caseIndex).toByteArray())
+		try build.addSource(path, content: batchCaseSource(test, caseIndex: caseIndex), mintedNames: names)
+	end 'eachMember'
+
+	try build.addSource(build.root.join(BatchEntryFileName), content: batchEntrySource(members, facilities: facilities), mintedNames: mintedNamesForBatchEntry())
+	build.fixRoot()
+	return build
+end 'stageBatch'
+
+function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchBuild
+	let stdlibDir = try locateStdlibDir() otherwise return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: missingStdlibReason()), refused: TestRunIndexArray.create())
+	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: missingRuntimeReason()), refused: TestRunIndexArray.create())
+	let facilities = EntryFacilities.of(effectiveTarget)
+	let staged = try stageBatch(tempDir, ordinal: ordinal, tests: tests, members: members, facilities: facilities) otherwise (e) 'notStaged'
+		return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: stagingRefusalReason(e)), refused: TestRunIndexArray.create())
+	end 'notStaged'
+
+	let exePath = batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension)
+
+	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: TreeLockHold.none())
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), entryFunction: BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, session: session) otherwise (e) 'didNotCompile'
+		reportCompileError(e, sink: session.diagnostics)
+		let answer = CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text())
+		return BatchBuild.notBuilt(answer, refused: membersNamedIn(answer.diagnostics, ordinal: ordinal, count: members.count()))
+	end 'didNotCompile'
+
+	var written = FilePathArray.create()
+
+	for path in staged.buildTargets 'eachTarget'
+		if not path.equals(staged.root) 'aStagedFile'
+			written.push(path)
+		end 'aStagedFile'
+	end 'eachTarget'
+
+	return BatchBuild.built(BatchProgram.create(exePath, members: members, stdlibDir: stdlibDir.toString(), runtimeDir: runtimeDir.toString(), writtenFiles: written, selects: facilities.selects), ticks: product.totalCpuTicks)
+end 'buildBatch'
+
+module typealias BatchRefusalMap = Map with (ElementIndex, String)
+
+module type BatchOutcome
+	export let build as BatchBuild
+	export let refusals as BatchRefusalMap
+
+	module static function create(build BatchBuild, refusals BatchRefusalMap) returns BatchOutcome
+		return Self{build: build, refusals: refusals}
+	end 'create'
+end 'BatchOutcome'
+
+function diagnosticsNaming(diagnostics String, ordinal ElementIndex, caseIndex ElementIndex) returns String
+	var named = StringArray.create()
+
+	for line in diagnostics.split(SourceLineBreak) 'eachLine'
+		if namesCase(line, ordinal: ordinal, caseIndex: caseIndex) 'namesIt'
+			named.push(line.trim())
+		end 'namesIt'
+	end 'eachLine'
+
+	return joinedWith(named, separator: SourceLineBreak)
+end 'diagnosticsNaming'
+
+function membersNamedIn(diagnostics String, ordinal ElementIndex, count ElementIndex) returns TestRunIndexArray
+	var named = TestRunIndexArray.create()
+
+	for index in 0 upto count 'eachMember'
+		if namesCase(diagnostics, ordinal: ordinal, caseIndex: index) 'namesIt'
+			named.push(index)
+		end 'namesIt'
+	end 'eachMember'
+
+	return named
+end 'membersNamedIn'
+
+function namesCase(text String, ordinal ElementIndex, caseIndex ElementIndex) returns bool
+	for separator in [PathSeparator, WindowsPathSeparator] 'eachSeparator'
+		if text.contains("{batchProgramNameOf(ordinal)}{BatchSourceDirSuffix}{separator}{BatchCaseDirPrefix}{caseIndex}{separator}") 'namesIt'
+			return true
+		end 'namesIt'
+	end 'eachSeparator'
+
+	return false
+end 'namesCase'
+
+function membersWithout(members BatchMemberArray, positions TestRunIndexArray) returns BatchMemberArray
+	var kept = BatchMemberArray.create()
+
+	for (iter, member) in members.withIterator() 'eachMember'
+		if not positions.contains(iter.index()) 'stays'
+			kept.push(member)
+		end 'stays'
+	end 'eachMember'
+
+	return kept
+end 'membersWithout'
+
+module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchOutcome
+	var remaining = members.clone()
+	var refusals = BatchRefusalMap.create()
+	var last = BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: "no batch compile was attempted"), refused: TestRunIndexArray.create())
+
+	for _ in 0 upto MaxBatchCompileAttempts 'eachAttempt'
+		if remaining.isEmpty() 'noneLeft'
+			break
+		end 'noneLeft'
+
+		last = buildBatch(tempDir, ordinal: ordinal, tests: tests, members: remaining, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+
+		match last 'attempt'
+			built then return BatchOutcome.create(last, refusals: refusals)
+			notBuilt(answer, refused) then remaining = noteRefused(refusals, answer: answer, ordinal: ordinal, refused: refused, remaining: remaining)
+		end 'attempt'
+
+		if attemptRefusedNothing(last) 'nothingToDrop'
+			break
+		end 'nothingToDrop'
+	end 'eachAttempt'
+
+	noteAllRefused(refusals, last: last, remaining: remaining)
+	return BatchOutcome.create(last, refusals: refusals)
+end 'buildBatchDroppingRefused'
+
+function noteRefused(refusals BatchRefusalMap, answer CompileAnswer, ordinal ElementIndex, refused TestRunIndexArray, remaining BatchMemberArray) returns BatchMemberArray
+	for position in refused 'eachRefused'
+		let member = try remaining.get(position) otherwise panic("SpecBatch: the batch compile named case {position}, past the {remaining.count()} it was built from")
+		noteRefusal(refusals, testIndex: member.testIndex, diagnostics: diagnosticsNaming(answer.diagnostics, ordinal: ordinal, caseIndex: position))
+	end 'eachRefused'
+
+	return membersWithout(remaining, positions: refused)
+end 'noteRefused'
+
+function noteRefusal(refusals BatchRefusalMap, testIndex ElementIndex, diagnostics String)
+	match targetRefusalIn(CompileAnswer.create(CompileVerdict.reportedDiagnostics, diagnostics: diagnostics)) 'refusal'
+		refused then return
+		notRefused then refusals.upsert(testIndex, value: diagnostics)
+	end 'refusal'
+end 'noteRefusal'
+
+function noteAllRefused(refusals BatchRefusalMap, last BatchBuild, remaining BatchMemberArray)
+	match last 'last'
+		built then return
+		notBuilt(answer, _) then noteEveryRefused(refusals, answer: answer, remaining: remaining)
+	end 'last'
+end 'noteAllRefused'
+
+function noteEveryRefused(refusals BatchRefusalMap, answer CompileAnswer, remaining BatchMemberArray)
+	for member in remaining 'eachMember'
+		noteRefusal(refusals, testIndex: member.testIndex, diagnostics: answer.diagnostics.trim())
+	end 'eachMember'
+end 'noteEveryRefused'
+
+function attemptRefusedNothing(attempt BatchBuild) returns bool
+	return match attempt 'attempt'
+		built gives false
+		notBuilt(_, refused) gives refused.isEmpty()
+	end 'attempt'
+end 'attemptRefusedNothing'
+
+type MarkedRegion
+	export let index as ElementIndex
+	export var body as String
+	export var ended as bool
+	export var code as ExitCodeValue
+	export var outstanding as TestTally
+
+	static function create(index ElementIndex, body String) returns MarkedRegion
+		return Self{index: index, body: body, ended: false, code: 0, outstanding: 0}
+	end 'create'
+end 'MarkedRegion'
+
+typealias MarkedRegionArray = Array with MarkedRegion
+typealias RegionPositionMap = Map with (ElementIndex, ElementIndex)
+
+type MarkedStream
+	export var regions as MarkedRegionArray
+	export var clean as bool
+	var firstBegunAt as RegionPositionMap
+	var firstEndedAt as RegionPositionMap
+
+	static function create() returns MarkedStream
+		return Self{regions: MarkedRegionArray.create(), clean: true, firstBegunAt: RegionPositionMap.create(), firstEndedAt: RegionPositionMap.create()}
+	end 'create'
+
+	function open(region MarkedRegion)
+		if not self.firstBegunAt.contains(region.index) 'theFirstBegin'
+			self.firstBegunAt.upsert(region.index, value: self.regions.count())
+		end 'theFirstBegin'
+
+		self.regions.push(region)
+	end 'open'
+
+	function noteLastEnded(index ElementIndex)
+		if not self.firstEndedAt.contains(index) 'theFirstEnd'
+			self.firstEndedAt.upsert(index, value: self.regions.count() - 1)
+		end 'theFirstEnd'
+	end 'noteLastEnded'
+
+	function begunRegionFor(index ElementIndex) returns RegionLookup
+		return self.regionAt(try self.firstBegunAt.get(index) otherwise return RegionLookup.absent)
+	end 'begunRegionFor'
+
+	function endedRegionFor(index ElementIndex) returns RegionLookup
+		return self.regionAt(try self.firstEndedAt.get(index) otherwise return RegionLookup.absent)
+	end 'endedRegionFor'
+
+	function regionAt(position ElementIndex) returns RegionLookup
+		return RegionLookup.found(try self.regions.get(position) otherwise panic("MarkedStream.regionAt: position {position} is past the {self.regions.count()} region(s) its index was taken from"))
+	end 'regionAt'
+end 'MarkedStream'
+
+union MarkerField
+	read(text String, rest String)
+	unterminated
+end 'MarkerField'
+
+function markerFieldIn(text String) returns MarkerField
+	let end_ = try text.findFirst(BatchFieldEnd) otherwise return MarkerField.unterminated
+	let after = try text.indexAfter(end_) otherwise return MarkerField.unterminated
+	return MarkerField.read(text.slice(text.startIndex(), endIndex: end_), rest: text.slice(after, endIndex: text.endIndex()))
+end 'markerFieldIn'
+
+function parseMarkedStream(text String) returns MarkedStream
+	var stream = MarkedStream.create()
+	let pieces = text.split(BatchMarkerWrapper)
+
+	for (iter, piece) in pieces.withIterator() 'eachPiece'
+		if iter.index() == 0 'beforeTheFirstMarker'
+			if not piece.trim().isEmpty() 'strayText'
+				stream.clean = false
+			end 'strayText'
+
+			continue
+		end 'beforeTheFirstMarker'
+
+		if piece.startsWith(BatchBeginTag) 'aBegin'
+			noteBegin(stream, piece: piece)
+			continue
+		end 'aBegin'
+
+		if piece.startsWith(BatchEndTag) 'anEnd'
+			noteEnd(stream, piece: piece)
+			continue
+		end 'anEnd'
+
+		stream.clean = false
+	end 'eachPiece'
+
+	return stream
+end 'parseMarkedStream'
+
+function noteBegin(stream MarkedStream, piece String)
+	match markerFieldIn(afterFirstCharacter(piece)) 'index'
+		unterminated then stream.clean = false
+		read(digits, rest) then openRegion(stream, digits: digits, rest: rest)
+	end 'index'
+end 'noteBegin'
+
+function openRegion(stream MarkedStream, digits String, rest String)
+	match markedIndexOf(digits) 'index'
+		unreadable then stream.clean = false
+		read(index) then stream.open(MarkedRegion.create(index, body: afterFirstCharacter(rest)))
+	end 'index'
+end 'openRegion'
+
+function noteEnd(stream MarkedStream, piece String)
+	match markerFieldIn(afterFirstCharacter(piece)) 'index'
+		unterminated then stream.clean = false
+		read(digits, rest) then noteEndIndex(stream, digits: digits, rest: rest)
+	end 'index'
+end 'noteEnd'
+
+function noteEndIndex(stream MarkedStream, digits String, rest String)
+	match markedIndexOf(digits) 'index'
+		unreadable then stream.clean = false
+		read(index) then noteEndCode(stream, index: index, rest: rest)
+	end 'index'
+end 'noteEndIndex'
+
+function noteEndCode(stream MarkedStream, index ElementIndex, rest String)
+	match markerFieldIn(rest) 'code'
+		unterminated then stream.clean = false
+		read(digits, tail) then noteOutstanding(stream, index: index, code: digits, rest: tail)
+	end 'code'
+end 'noteEndCode'
+
+function noteOutstanding(stream MarkedStream, index ElementIndex, code String, rest String)
+	match markerFieldIn(rest) 'outstanding'
+		unterminated then stream.clean = false
+		read(digits, tail) then closeRegion(stream, index: index, code: code, outstanding: digits, tail: tail)
+	end 'outstanding'
+end 'noteOutstanding'
+
+function closeRegion(stream MarkedStream, index ElementIndex, code String, outstanding String, tail String)
+	var region = try stream.regions.get(stream.regions.count() - 1) otherwise 'noOpenRegion'
+		stream.clean = false
+		return
+	end 'noOpenRegion'
+
+	let exitCode = try int.fromString(code) otherwise 'unreadableCode'
+		stream.clean = false
+		return
+	end 'unreadableCode'
+
+	let left = try int.fromString(outstanding) otherwise 'unreadableOutstanding'
+		stream.clean = false
+		return
+	end 'unreadableOutstanding'
+
+	if region.index != index or region.ended or exitCode < 0 or exitCode > u32.max or left < 0 'mismatched'
+		stream.clean = false
+		return
+	end 'mismatched'
+
+	region.ended = true
+	region.code = exitCode as ExitCodeValue
+	region.outstanding = left as TestTally
+	stream.noteLastEnded(index)
+
+	if not tail.trim().isEmpty() 'strayText'
+		stream.clean = false
+	end 'strayText'
+end 'closeRegion'
+
+function afterFirstCharacter(text String) returns String
+	let past = try text.indexAfter(text.startIndex()) otherwise return ""
+	return text.slice(past, endIndex: text.endIndex())
+end 'afterFirstCharacter'
+
+union MarkedIndex
+	read(index ElementIndex)
+	unreadable
+end 'MarkedIndex'
+
+function markedIndexOf(digits String) returns MarkedIndex
+	let parsed = try int.fromString(digits) otherwise return MarkedIndex.unreadable
+
+	if parsed < 0 'negative'
+		return MarkedIndex.unreadable
+	end 'negative'
+
+	return MarkedIndex.read(parsed as ElementIndex)
+end 'markedIndexOf'
+
+union RegionLookup
+	found(region MarkedRegion)
+	absent
+end 'RegionLookup'
+
+module union BatchReading
+	observed(capture ProcessCapture)
+	unobserved
+	failed(reason String)
+
+	module function needsRerun() returns bool
+		return match self 'reading'
+			unobserved gives true
+			observed or
+				failed gives false
+		end 'reading'
+	end 'needsRerun'
+end 'BatchReading'
+
+module typealias BatchReadingArray = Array with BatchReading
+
+let OutsideTheMarkers = "the batch program printed outside the case markers — a case runs code before main that the batching checks did not catch; the runner must keep it out of batches"
+let UnreadableOnThisTarget = "the batch program's output for this case could not be read (a crash, or no end marker), and this target cannot run a single case of the program again"
+
+module function readBatch(batch ProcessCapture, caseCount ElementIndex, selects bool) returns BatchReadingArray
+	var readings = BatchReadingArray.create()
+	let unreadable = unreadableReading(selects)
+	let process = batchProcessTrusted(batch)
+	let stdout = parseMarkedStream(batch.stdout)
+	let stderr = parseMarkedStream(batch.stderr)
+
+	for index in 0 upto caseCount 'eachCase'
+		if not process 'untrusted'
+			readings.push(unreadable)
+			continue
+		end 'untrusted'
+
+		if not stdout.clean or not stderr.clean 'outputOutsideTheMarkers'
+			readings.push(BatchReading.failed(OutsideTheMarkers))
+			continue
+		end 'outputOutsideTheMarkers'
+
+		if leftWorkRunning(stdout, index: index) or leftWorkRunning(stderr, index: index) 'leftWork'
+			readings.push(unreadable)
+			continue
+		end 'leftWork'
+
+		let reading = readingOf(stdout, stderr: stderr, index: index)
+		readings.push(unreadable if reading.needsRerun() else reading)
+	end 'eachCase'
+
+	return readings
+end 'readBatch'
+
+module function unreadBatch(caseCount ElementIndex, selects bool) returns BatchReadingArray
+	var readings = BatchReadingArray.create()
+	readings.refill(caseCount, value: unreadableReading(selects))
+	return readings
+end 'unreadBatch'
+
+function unreadableReading(selects bool) returns BatchReading
+	return BatchReading.unobserved if selects else BatchReading.failed(UnreadableOnThisTarget)
+end 'unreadableReading'
+
+function leftWorkRunning(stream MarkedStream, index ElementIndex) returns bool
+	return match stream.endedRegionFor(index) 'region'
+		found(region) gives region.outstanding != 0
+		absent gives false
+	end 'region'
+end 'leftWorkRunning'
+
+function batchProcessTrusted(batch ProcessCapture) returns bool
+	return batch.exitCode == BatchSelectedExit
+end 'batchProcessTrusted'
+
+function readingOf(stdout MarkedStream, stderr MarkedStream, index ElementIndex) returns BatchReading
+	match stdout.endedRegionFor(index) 'out'
+		absent then return BatchReading.unobserved
+		found(outRegion) then return readingFrom(outRegion, errLookup: stderr.endedRegionFor(index))
+	end 'out'
+end 'readingOf'
+
+function readingFrom(out MarkedRegion, errLookup RegionLookup) returns BatchReading
+	match errLookup 'err'
+		absent then return BatchReading.unobserved
+		found(errRegion) then return agreeingReading(out, err: errRegion)
+	end 'err'
+end 'readingFrom'
+
+function agreeingReading(out MarkedRegion, err MarkedRegion) returns BatchReading
+	if out.code != err.code 'disagree'
+		return BatchReading.unobserved
+	end 'disagree'
+
+	return BatchReading.observed(ProcessCapture.create(out.code, stdout: out.body, stderr: err.body))
+end 'agreeingReading'
+
+module function readAlone(observation RunObservation, caseIndex ElementIndex) returns RunObservation
+	return match observation 'observed'
+		completed(capture) gives readAloneCapture(capture, caseIndex: caseIndex)
+		failed or
+			notRequired or
+			notRunnableHere gives observation
+	end 'observed'
+end 'readAlone'
+
+function readAloneCapture(capture ProcessCapture, caseIndex ElementIndex) returns RunObservation
+	let stdout = parseMarkedStream(capture.stdout)
+	let stderr = parseMarkedStream(capture.stderr)
+
+	if not entryBegan(stdout, stderr: stderr, index: caseIndex) 'diedBeforeTheEntry'
+		return RunObservation.failed("the batch program died before case {caseIndex} began — a case runs code before main that failed, and the batching checks did not catch it; the runner must keep it out of batches")
+	end 'diedBeforeTheEntry'
+
+	if capture.exitCode != BatchSelectedExit 'theProcessSaidItDied'
+		return RunObservation.completed(ProcessCapture.create(capture.exitCode, stdout: bodyOrWhole(stdout, index: caseIndex, whole: capture.stdout), stderr: bodyOrWhole(stderr, index: caseIndex, whole: capture.stderr)))
+	end 'theProcessSaidItDied'
+
+	if not stdout.clean or not stderr.clean 'outputOutsideTheMarkers'
+		return RunObservation.failed(OutsideTheMarkers)
+	end 'outputOutsideTheMarkers'
+
+	match readingOf(stdout, stderr: stderr, index: caseIndex) 'reading'
+		observed(own) then return RunObservation.completed(own)
+		unobserved then return RunObservation.failed("the batch program ran case {caseIndex} alone and exited {BatchSelectedExit}, but never said the case finished")
+		failed(reason) then return RunObservation.failed(reason)
+	end 'reading'
+end 'readAloneCapture'
+
+function entryBegan(stdout MarkedStream, stderr MarkedStream, index ElementIndex) returns bool
+	return regionBegan(stdout, index: index) or regionBegan(stderr, index: index)
+end 'entryBegan'
+
+function regionBegan(stream MarkedStream, index ElementIndex) returns bool
+	return match stream.begunRegionFor(index) 'region'
+		found gives true
+		absent gives false
+	end 'region'
+end 'regionBegan'
+
+function bodyOrWhole(stream MarkedStream, index ElementIndex, whole String) returns String
+	return match stream.begunRegionFor(index) 'region'
+		found(region) gives region.body
+		absent gives whole
+	end 'region'
+end 'bodyOrWhole'
+
+export type BatchTally
+	export let batched as TestTally
+	export let programs as TestTally
+	export let alone as TestTally
+
+	export static function create(batched TestTally, programs TestTally, alone TestTally) returns BatchTally
+		return Self{batched: batched, programs: programs, alone: alone}
+	end 'create'
+
+	export static function zero() returns BatchTally
+		return Self{batched: 0, programs: 0, alone: 0}
+	end 'zero'
+
+	export function plus(other BatchTally) returns BatchTally
+		return Self{batched: self.batched + other.batched, programs: self.programs + other.programs, alone: self.alone + other.alone}
+	end 'plus'
+
+	export function summaryLine() returns String
+		return "{batched} run case(s) ran batched in {programs} program(s); {alone} ran alone"
+	end 'summaryLine'
+end 'BatchTally'

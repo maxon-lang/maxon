@@ -68,8 +68,8 @@ inconvenience: the capacity the shared rule is asked against is **six** per file
 seven- and eight-argument cases overflow on x64 and still fit in registers on arm64, while the
 twenty-two-argument one overflows everywhere. `wasm32-wasi`'s parameters are plain locals with no
 register file at all, so it covers the front-end half — the ABI slot count, the diagnostics — and
-nothing about slots. Each target's golden pins where ITS boundary falls, which is exactly the
-cross-target agreement worth pinning: the same source, the same answer, three different placements.
+nothing about slots. Each target's emitted code shows where ITS boundary falls: the same source,
+the same answer, three different placements.
 
 ## Tests
 
@@ -282,7 +282,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/stack-arguments/argument-slots-are-capped-and-the-cap-is-stated.test:4:10: Unsupported: a function with 65 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a witness per interface-typed parameter, a layout descriptor for a generic that reads `sizeof`, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
+error E2015: specs/stack-arguments/argument-slots-are-capped-and-the-cap-is-stated.maxon:4:10: Unsupported: a function with 65 argument slots — more than the 64 a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a witness per interface-typed parameter, a layout descriptor for a generic that reads `sizeof`, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file
 ```
 
 <!-- test: a-spawn-keeps-the-lower-async-argument-ceiling -->
@@ -306,7 +306,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/stack-arguments/a-spawn-keeps-the-lower-async-argument-ceiling.test:9:16: Unsupported: `async wide7(…)` passes 7 arguments — more than the 6 a spawn can carry. A spawned call's arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the argument registers, so a spawn has no stack-argument path even though an ordinary call does. Call it directly, or pass fewer arguments
+error E2015: specs/stack-arguments/a-spawn-keeps-the-lower-async-argument-ceiling.maxon:9:16: Unsupported: `async wide7(…)` passes 7 arguments — more than the 6 a spawn can carry. A spawned call's arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the argument registers, so a spawn has no stack-argument path even though an ordinary call does. Call it directly, or pass fewer arguments
 ```
 
 <!-- test: every-argument-of-a-wide-call-is-distinct -->

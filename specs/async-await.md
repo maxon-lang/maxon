@@ -533,7 +533,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/async-await/async-await.error.non-promise.test:4:16: 'await' requires a promise value from 'async', got integer
+error E3005: specs/async-await/async-await.error.non-promise.maxon:4:16: 'await' requires a promise value from 'async', got integer
 ```
 
 <!-- test: async-await.error.no-yield -->
@@ -551,7 +551,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3073: specs/fragments/async-await/async-await.error.no-yield.test:9:11: 'async heavyCompute(5)' — function never yields; 'async' is for I/O-concurrent work only
+error E3073: specs/async-await/async-await.error.no-yield.maxon:9:11: 'async heavyCompute(5)' — function never yields; 'async' is for I/O-concurrent work only
 ```
 
 <!-- test: async-await.storage.bind-error-through-storage -->
@@ -661,7 +661,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3098: specs/fragments/async-await/async-await.error.storage-erases-error-type.test:17:7: cannot store a promise from a function that throws 'TaskError' in 'BadPromise': it names the result type only, which would erase the error type — declare the storage as 'Promise with (T, TaskError)' so 'try await' can bind and release the error
+error E3098: specs/async-await/async-await.error.storage-erases-error-type.maxon:17:7: cannot store a promise from a function that throws 'TaskError' in 'BadPromise': it names the result type only, which would erase the error type — declare the storage as 'Promise with (T, TaskError)' so 'try await' can bind and release the error
 ```
 
 <!-- test: async-await.error.storage-names-wrong-error-type -->
@@ -693,7 +693,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3098: specs/fragments/async-await/async-await.error.storage-names-wrong-error-type.test:21:7: 'WrongPromise' names the error type 'OtherError', but this promise's function throws 'TaskError'
+error E3098: specs/async-await/async-await.error.storage-names-wrong-error-type.maxon:21:7: 'WrongPromise' names the error type 'OtherError', but this promise's function throws 'TaskError'
 ```
 
 <!-- test: async-await.error.propagate-type-mismatch -->
@@ -731,7 +731,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/async-await/async-await.error.propagate-type-mismatch.test:20:11: try propagates 'AError' but enclosing function throws 'BError' — add 'otherwise' to convert
+error E3059: specs/async-await/async-await.error.propagate-type-mismatch.maxon:20:11: try propagates 'AError' but enclosing function throws 'BError' — add 'otherwise' to convert
 ```
 
 <!-- test: async-await.error.propagate-type-mismatch-through-storage -->
@@ -774,7 +774,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/async-await/async-await.error.propagate-type-mismatch-through-storage.test:24:11: try propagates 'TaskError' but enclosing function throws 'WrapError' — add 'otherwise' to convert
+error E3059: specs/async-await/async-await.error.propagate-type-mismatch-through-storage.maxon:24:11: try propagates 'TaskError' but enclosing function throws 'WrapError' — add 'otherwise' to convert
 ```
 
 <!-- test: async-await.error.double-await -->
@@ -801,7 +801,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3142: specs/fragments/async-await/async-await.error.double-await.test:10:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+error E3142: specs/async-await/async-await.error.double-await.maxon:10:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-await.error.double-await-in-loop -->
@@ -827,7 +827,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: specs/fragments/async-await/async-await.error.double-await-in-loop.test:10:13: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3100: specs/async-await/async-await.error.double-await-in-loop.maxon:10:13: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
 ```
 
 <!-- test: async-await.linear.await-in-exclusive-branches -->
@@ -879,7 +879,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3142: specs/fragments/async-await/async-await.error.double-await-through-alias.test:11:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+error E3142: specs/async-await/async-await.error.double-await-through-alias.maxon:11:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-await.error.double-await-through-alias-in-branch -->
@@ -908,7 +908,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3142: specs/fragments/async-await/async-await.error.double-await-through-alias-in-branch.test:13:19: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+error E3142: specs/async-await/async-await.error.double-await-through-alias-in-branch.maxon:13:19: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-await.error.double-await-alias-outlives-rebind -->
@@ -936,7 +936,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3142: specs/fragments/async-await/async-await.error.double-await-alias-outlives-rebind.test:12:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+error E3142: specs/async-await/async-await.error.double-await-alias-outlives-rebind.maxon:12:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-await.linear.rearm-after-await -->
@@ -1075,7 +1075,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3142: specs/fragments/async-await/async-await.error.double-await-after-ternary-arm.test:13:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+error E3142: specs/async-await/async-await.error.double-await-after-ternary-arm.maxon:13:17: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-await.error.await-without-try -->
@@ -1103,7 +1103,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/async-await/async-await.error.await-without-try.test:15:11: throwing function requires try: 'await' on a promise from a function that throws 'TaskError' drops the error and leaks its payload — use 'try await'
+error E3057: specs/async-await/async-await.error.await-without-try.maxon:15:11: throwing function requires try: 'await' on a promise from a function that throws 'TaskError' drops the error and leaks its payload — use 'try await'
 ```
 
 <!-- test: async-await.cancel -->
@@ -1742,7 +1742,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-compiler-owned-static.test:3:16: Unsupported: `async __ManagedFile.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it
+error E2015: specs/async-await/async-await.error.qualified-spawn-compiler-owned-static.maxon:3:16: Unsupported: `async __ManagedFile.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it
 ```
 
 <!-- test: async-await.error.qualified-spawn-container-alias-static -->
@@ -1758,7 +1758,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-container-alias-static.test:6:16: Unsupported: `async TallyArray.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it
+error E2015: specs/async-await/async-await.error.qualified-spawn-container-alias-static.maxon:6:16: Unsupported: `async TallyArray.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it
 ```
 
 <!-- test: async-await.error.qualified-spawn-primitive-static -->
@@ -1773,7 +1773,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-primitive-static.test:4:20: Unsupported: `async int.fromString(…)` — a primitive's static resolves to the compiler-minted callee `__int_fromString`, and a spawn records no callee but the one the author wrote. Call it directly
+error E2015: specs/async-await/async-await.error.qualified-spawn-primitive-static.maxon:4:20: Unsupported: `async int.fromString(…)` — a primitive's static resolves to the compiler-minted callee `__int_fromString`, and a spawn records no callee but the one the author wrote. Call it directly
 ```
 
 <!-- test: async-await.error.qualified-spawn-instance-receiver -->
@@ -1804,7 +1804,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-instance-receiver.test:19:16: Unsupported: `async c.…` spawns a method on a VALUE, and a spawn has no receiver: its arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its ownership. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument
+error E2015: specs/async-await/async-await.error.qualified-spawn-instance-receiver.maxon:19:16: Unsupported: `async c.…` spawns a method on a VALUE, and a spawn has no receiver: its arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the ABI argument registers, and nothing there carries a receiver or its ownership. Spawn a free function or a `Type.staticMethod(…)` that takes the value as an argument
 ```
 
 <!-- test: async-await.error.qualified-spawn-union-case -->
@@ -1825,7 +1825,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-union-case.test:10:16: Unsupported: `async Move.…` — `Move` is an enum or union, so `Move.<case>(…)` builds a case rather than calling a function. There is nothing there for a green thread to run
+error E2015: specs/async-await/async-await.error.qualified-spawn-union-case.maxon:10:16: Unsupported: `async Move.…` — `Move` is an enum or union, so `Move.<case>(…)` builds a case rather than calling a function. There is nothing there for a green thread to run
 ```
 
 <!-- test: async-await.error.qualified-spawn-generic-instance-constructor -->
@@ -1850,7 +1850,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/async-await/async-await.error.qualified-spawn-generic-instance-constructor.test:13:23: Unsupported: `async StrBox.create(…)` — `StrBox` names a generic INSTANCE, and the promise a spawn mints is typed from the callee's declared return, which names the generic base rather than the instance this alias fixes. Awaiting it would hand back a value at the wrong type. Call it directly
+error E2015: specs/async-await/async-await.error.qualified-spawn-generic-instance-constructor.maxon:13:23: Unsupported: `async StrBox.create(…)` — `StrBox` names a generic INSTANCE, and the promise a spawn mints is typed from the callee's declared return, which names the generic base rather than the instance this alias fixes. Awaiting it would hand back a value at the wrong type. Call it directly
 ```
 
 <!-- test: async-await.error.spawn-longer-chain-is-not-the-qualified-shape -->
@@ -1864,7 +1864,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/async-await/async-await.error.spawn-longer-chain-is-not-the-qualified-shape.test:3:19: Expected '(' but got '.'
+error E2010: specs/async-await/async-await.error.spawn-longer-chain-is-not-the-qualified-shape.maxon:3:19: Expected '(' but got '.'
 ```
 
 <!-- test: async-await.qualified-spawn-namespace-free-call -->
@@ -1888,6 +1888,94 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: two-directories-each-spawn-their-own-file-private-function-of-one-name -->
+Each directory spawns its own file-private `slowTally`, and each spawn binds the declaration its own file holds.
+```maxon
+// --- file: a/a.maxon
+typealias Tally = int(0 to 100)
+
+function slowTally(n Tally) returns Tally
+	sleep(1)
+	return n
+end 'slowTally'
+
+export function runA()
+	let p = async slowTally(1)
+	print("a {await p}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+typealias Tally = int(0 to 100)
+
+function slowTally(n Tally) returns Tally
+	sleep(1)
+	return n + 10
+end 'slowTally'
+
+export function runB()
+	let p = async slowTally(2)
+	print("b {await p}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 1
+b 12
+```
+
+<!-- test: two-directories-each-spawn-their-own-file-private-function-of-one-name-and-different-signatures -->
+The same pair with different parameter lists: each spawn still binds its own file's declaration.
+```maxon
+// --- file: a/a.maxon
+typealias Tally = int(0 to 100)
+
+function fetch(n Tally) returns Tally
+	sleep(1)
+	return n + 1
+end 'fetch'
+
+export function runA()
+	let p = async fetch(1)
+	print("a {await p}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+typealias Tally = int(0 to 100)
+
+function fetch(n Tally, extra Tally) returns Tally
+	sleep(1)
+	return n + extra
+end 'fetch'
+
+export function runB()
+	let p = async fetch(2, extra: 5)
+	print("b {await p}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 2
+b 7
 ```
 
 <!-- test: an-awaited-range-bound-in-a-for-source -->

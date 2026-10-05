@@ -20,8 +20,8 @@
 // ⭐ **THE GATING RULE.** Two levels, and both are load-bearing:
 //   • **COMPILE TIME — `--debugstream` off implies ZERO INSTRUCTIONS.** Not a branch that is never
 //     taken: no call, no store, no header word. A normal build's emitted code is byte-identical to that
-//     of a compiler carrying no instrument at all, which is what keeps the suite's committed `.test` fragment
-//     goldens from drifting. The gate is asked where an event's ARGUMENTS are built — `MmRuntime`'s and
+//     of a compiler carrying no instrument at all, which is what keeps the suite's `TargetIr` pins
+//     matching. The gate is asked where an event's ARGUMENTS are built — `MmRuntime`'s and
 //     `GtRuntime`'s event emitters — because those ops would already be in the block by the time a gate
 //     inside `emitMmEvent` or `emitSchedEvent` could decline them.
 //   • **RUN TIME — `__ds_base == 0` implies an INLINE BAIL BEFORE ANY CALL.** A `--debugstream` binary
@@ -745,7 +745,7 @@ let DsEnvNameRdataPrefix = "__ds_env_"
 
 // Opt-in per build, and that is a correctness property: with the flag off not one instruction changes —
 // the box header does not grow, `__mm_alloc`'s arity does not change, no event site is branched over —
-// and the committed `.test` goldens depend on it.
+// and the `TargetIr` pins depend on it.
 export let DebugStreamFlag = "--debugstream"
 
 // ⭐⭐ **DOES THIS BUILD CARRY THE PRODUCER? ONE ANSWER, FOR EVERY PART THAT MUST AGREE.** Four things ride
@@ -1246,10 +1246,10 @@ end 'emitReserveEntry'
 // entry.
 //
 // ⭐⭐ **SEEN MOVE, WITH ITS CONTROL — because a field that reads 0 everywhere and a field nobody looks at
-// are indistinguishable in a golden.** A `--debugstream` program that spawns eight services and logs one
-// event per message, under `maxon monitor --filter=log`, 16 events: **P0×5, P1×8, P2×2, P3×1** at
-// the default, and **P0×16** under `MAXON_MAX_PROCS=1` — a hard zero reads as the second in both cases.
-// ⚠ **NO SPEC CASE ASSERTS THIS AND NONE CAN**: `SpecTestRunner.normalizeTrace` strips
+// are indistinguishable in a trace.** A `--debugstream` program that spawns eight services and logs
+// one event per message, under `maxon monitor --filter=log`, 16 events: **P0×5, P1×8, P2×2, P3×1**
+// at the default, and **P0×16** under `MAXON_MAX_PROCS=1` — a hard zero reads as the second in both
+// cases. ⚠ **NO SPEC CASE ASSERTS THIS AND NONE CAN**: `SpecTestRunner.normalizeTrace` strips
 // `gt=0x<hex> P<n>` from every decoded log line, deliberately, because WHICH processor ran an event is a
 // property of the RUN — the same reason the timestamp goes. The stamp is EXERCISED by all 17
 // `debugstream-log-events` cases and its VALUE is pinned by the measurement above and nothing else.

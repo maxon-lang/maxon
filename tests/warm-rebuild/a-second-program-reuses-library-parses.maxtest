@@ -1,0 +1,9 @@
+let LibraryReusedPassLine = "verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold + library parses reused across programs)"
+
+test 'a second program compiled in the same session reuses every library parse and equals its cold compile'
+	let staged = stagedFixture("library-reuse", caseLabel: "a-second-program-reuses-library-parses")
+	let run = spawnVerify(staged)
+
+	Expect.contains(run.stdout, needle: LibraryReusedPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report every library parse reused by a second program. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
+end 'a second program compiled in the same session reuses every library parse and equals its cold compile'

@@ -62,11 +62,6 @@ let MaxonTestEntryFileName = "__maxon_test_entry.maxon"
 // sentence naming the limit rather than a range violation inside generated text nobody wrote.
 let MaxTestsPerRun = 1000000
 
-// A list of run indices — what a `--select=` value is rendered from, and what one process launch is
-// asked to run. Its own alias because the ORDER is the run's declaration order rather than an
-// incidental one: it is what the report reads back, index for index.
-export typealias TestRunIndexArray = Array with ElementIndex
-
 // A discovered test paired with its position in the whole run. The pair rather than a bare index because
 // the generated call needs the symbol and the generated guard needs the index, and splitting them across
 // two parallel arrays is one fact stored twice.
@@ -268,11 +263,7 @@ export function stageTestBuild(stagingRoot FilePath, projectRoot FilePath, group
 		panic("stageTestBuild: asked to stage a build with no test groups. A zero-test run is the command's to report and exit on; there is no dispatcher to generate for it.")
 	end 'nothingToDispatch'
 
-	if not Directory.create(stagingRoot) 'noStagingRoot'
-		throw TestStagingError.refused("could not create the staging directory {stagingRoot.toString()}")
-	end 'noStagingRoot'
-
-	purgeFilesIn(stagingRoot)
+	var build = try GeneratedBuild.begin(stagingRoot)
 
 	var sources = MaxonSourcePathArray.create()
 
@@ -281,78 +272,35 @@ export function stageTestBuild(stagingRoot FilePath, projectRoot FilePath, group
 	// and not instead of it.
 	_ = try collectMaxonSources(projectRoot, into: sources, selection: SourceSelection.productionAndTests) otherwise throw TestStagingError.refused("could not walk {projectRoot.toString()} for the project's sources")
 
-	var buildTargets = MaxonSourcePathArray.create()
-	var compilerWrittenSources = CompilerWrittenSourceArray.create()
-	var stagedSourceOrigins = StagedSourceOriginArray.create()
-
 	for source in sources 'eachSource'
-		let staged = try stageOneSource(stagingRoot, projectRoot: projectRoot, source: source, groups: groups)
-		buildTargets.push(staged.path)
-		stagedSourceOrigins.push(staged.origin)
-
-		if not staged.mintedNames.isEmpty() 'generated'
-			compilerWrittenSources.push(CompilerWrittenSource.create(staged.path, mintedNames: staged.mintedNames))
-		end 'generated'
+		try stageOneSource(build, projectRoot: projectRoot, source: source, groups: groups)
 	end 'eachSource'
 
-	let entryPath = stagingRoot.join("{MaxonTestEntryFileName}")
-	try writeStagedFile(entryPath, content: entrySource(groups))
-	buildTargets.push(entryPath)
-	compilerWrittenSources.push(CompilerWrittenSource.create(entryPath, mintedNames: mintedNamesForEntry()))
+	try build.addSource(stagingRoot.join("{MaxonTestEntryFileName}"), content: entrySource(groups), mintedNames: mintedNamesForEntry())
+	build.fixRoot()
 
-	// LAST, so every file above is registered before the walk reaches it and the walk finds nothing new —
-	// the directory is here to fix the project ROOT, not to contribute a unit. See `buildTargets`.
-	buildTargets.push(stagingRoot)
-
-	return StagedTestBuild.create(buildTargets, compilerWrittenSources: compilerWrittenSources, stagedSourceOrigins: stagedSourceOrigins, root: stagingRoot, groups: groups)
+	return StagedTestBuild.create(build.buildTargets, compilerWrittenSources: build.compilerWrittenSources, stagedSourceOrigins: build.stagedSourceOrigins, root: stagingRoot, groups: groups)
 end 'stageTestBuild'
-
-// One staged file: where it landed, and the reserved names this compiler declared in it.
-//
-// ⚠ **EMPTY IS THE WHOLE ANSWER TO "DID THIS COMPILER WRITE ANY OF IT", AND THERE IS NO SECOND FLAG.**
-// A dispatcher always declares its runner, so a copied-verbatim file and a dispatcher-carrying one can
-// never both answer empty; a bool beside this list would be that same fact written twice, free to drift
-// from it.
-type StagedSource
-	export let path as FilePath
-	export let mintedNames as ByteArrayArray
-
-	// What this copy is a copy OF, and how much of it the author wrote. Always present, because
-	// `stageOneSource` only ever produces copies — the one staged file that is nobody's copy is the
-	// generated entry, which this function does not write.
-	export let origin as StagedSourceOrigin
-
-	static function create(path FilePath, mintedNames ByteArrayArray, origin StagedSourceOrigin) returns StagedSource
-		return Self{path: path, mintedNames: mintedNames, origin: origin}
-	end 'create'
-end 'StagedSource'
 
 // Copy ONE of the project's sources into the staging tree, with its dispatcher appended if it holds tests.
 // The relative path is preserved — see this file's header for the two things that depend on it.
-function stageOneSource(stagingRoot FilePath, projectRoot FilePath, source FilePath, groups TestFileGroupArray) returns StagedSource throws TestStagingError
+function stageOneSource(build GeneratedBuild, projectRoot FilePath, source FilePath, groups TestFileGroupArray) throws TestStagingError
 	let relative = try source.relativeTo(projectRoot) otherwise throw TestStagingError.refused("{source.toString()} is not under the project root {projectRoot.toString()}, so it has no place in the staged tree")
-	let stagedPath = stagingRoot.join(relative)
+	let stagedPath = build.root.join(relative)
 	let content = try File.readText(source) otherwise throw TestStagingError.refused("could not read {source.toString()}")
 
 	// Everything with no group — the project's ordinary sources, and any `.maxtest` file that declares
 	// no `test` — is copied byte for byte. Its bytes stay the AUTHOR's, which is exactly what keeps it
 	// out of `compilerWrittenSources` and so out of the reserved-name exemption.
-	let holder = groupOfFile(groups, file: source)
-	let dispatcher = match holder 'holdsTests'
-		found(group) gives fileDispatcherSource(group)
-		absent gives ""
+	//
+	// EMPTY minted names are the `absent` arm's answer and only ever that: a dispatcher DECLARES its
+	// runner, so a group always mints exactly the one name.
+	match groupOfFile(groups, file: source) 'holdsTests'
+		found(group) then try build.addSource(stagedPath, content: "{content}{fileDispatcherSource(group)}", mintedNames: mintedNamesForDispatcher(group))
+		absent then try build.addSource(stagedPath, content: content, mintedNames: ByteArrayArray.create())
 	end 'holdsTests'
 
-	try writeStagedFile(stagedPath, content: "{content}{dispatcher}")
-
-	// EMPTY is the `absent` arm's answer and only ever that: a dispatcher DECLARES its runner, so a group
-	// always mints exactly the one name here.
-	let minted = match holder 'mintedHere'
-		found(group) gives mintedNamesForDispatcher(group)
-		absent gives ByteArrayArray.create()
-	end 'mintedHere'
-
-	return StagedSource.create(stagedPath, mintedNames: minted, origin: StagedSourceOrigin.create(stagedPath, reportedPath: source))
+	build.recordOrigin(StagedSourceOrigin.create(stagedPath, reportedPath: source))
 end 'stageOneSource'
 
 // ⭐ **THE RESERVED NAMES THE APPENDED DISPATCHER DECLARES — read off the group rather than written out
@@ -378,18 +326,6 @@ function mintedNamesForEntry() returns ByteArrayArray
 	names.push(MaxonTestEntrySymbol.toByteArray())
 	return names
 end 'mintedNamesForEntry'
-
-// Write one staged file, creating the directory it lands in. Both failures are refusals rather than panics:
-// a staging root the process cannot write is an environment problem the caller reports.
-function writeStagedFile(path FilePath, content String) throws TestStagingError
-	let parent = try path.parent() otherwise throw TestStagingError.refused("could not derive a directory for {path.toString()}")
-
-	if not Directory.create(parent) 'noSubdir'
-		throw TestStagingError.refused("could not create the directory {parent.toString()}")
-	end 'noSubdir'
-
-	try File.writeText(path, content: content) otherwise throw TestStagingError.refused("could not write {path.toString()}")
-end 'writeStagedFile'
 
 // The handler is the block form of `otherwise` setting a variable: control continues past it, so
 // one report site serves pass and fail alike.
@@ -436,27 +372,11 @@ function entrySource(groups TestFileGroupArray) returns String
 	let beganLine = wrapped("{TestProtocolBeganTag}{TestProtocolSeparatorInMaxonSource}\{index\}")
 	let endedLine = wrapped("{TestProtocolEndedTag}{TestProtocolSeparatorInMaxonSource}\{index\}{TestProtocolSeparatorInMaxonSource}\{outcome\}{TestProtocolSeparatorInMaxonSource}\{nanos\}")
 
-	// The needle is bracketed with the SAME character the runner brackets its output with, taken from the
-	// one constant — a selection that named test 3 and matched 13 would be exactly those two disagreeing.
-	let selectionNeedle = "{TestSelectIndexBracket}\{index\}{TestSelectIndexBracket}"
-
 	var source = "// Generated by `maxon test` — this file exists only in the staging tree. See TestDispatcher.\n\n"
 	source.append("export typealias {MaxonTestIndexAlias} = int(0 to {MaxTestsPerRun})\n\n")
 
 	source.append("export type {MaxonTestHelperType}\n")
-	source.append("\t// The run's selection, read once. ABSENT means every test — what a human running this\n")
-	source.append("\t// binary by hand gets — and is a DIFFERENT setting from an EMPTY selection, which selects\n")
-	source.append("\t// nothing.\n")
-	source.append("\texport static function selection() returns String\n")
-	source.append("\t\treturn try CommandLine.getOptionValue(\"{TestSelectOptionName}\") otherwise \"{TestSelectAll}\"\n")
-	source.append("\tend 'selection'\n\n")
-
-	source.append("\texport static function selected(selection String, index {MaxonTestIndexAlias}) returns bool\n")
-	source.append("\t\tif selection == \"{TestSelectAll}\" 'all'\n")
-	source.append("\t\t\treturn true\n")
-	source.append("\t\tend 'all'\n\n")
-	source.append("\t\treturn selection.contains(\"{selectionNeedle}\")\n")
-	source.append("\tend 'selected'\n\n")
+	source.append(selectionMembersSource(MaxonTestIndexAlias))
 
 	source.append("\t// Written BEFORE the body runs, which is what makes a process death attributable: the last\n")
 	source.append("\t// test to begin and never end is the one that killed it. `printError` writes straight to the\n")

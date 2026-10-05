@@ -25,8 +25,9 @@ any other edit.
   minutes later. Your correctness proof is your `--filter`ed specs staying green while you iterate.
 - **Invoked standalone**: the full suite and the commit are yours, at the end, once.
 
-**Either way, golden drift is not your concern.** Every golden your runs mint, rewrite or delete stays
-exactly as it lies, for whoever commits to commit as it is. Do not measure, investigate or revert it.
+**Either way, a `TargetIr` pin your change moves is a gate in `ir-specs/`.** Re-mint it with
+`--update-required --filter=<spec>/` and leave the re-minted file exactly as it lies, for whoever
+commits.
 
 ## The mandate — UNSCALABLE ALGORITHMS (user directive)
 
@@ -162,8 +163,8 @@ Each hot spot found, with `file:line` and its **complexity before and after**, a
 `scale-test` per-phase tables** before and after — the raw per-rung numbers, since the ladder doubles
 and the RATIO between rungs is the growth. There is no verdict and no exponent table to paste.
 
-**Do NOT claim codegen neutrality from the golden fragments.** They are REFERENCE MATERIAL and nothing
-measures them (user ruling). If you need to show that a pass changed how the compiler RUNS without
+**Do NOT claim codegen neutrality from the `ir-specs/` pins alone.** They cover the corpus's emitted-code
+cases, not every program. If you need to show that a pass changed how the compiler RUNS without
 changing what it EMITS, disassemble or use `--emit-ir-runtime=<names>` and say what you read.
 
 **Never claim a measurement you did not take** — and if you could not make something faster, say so

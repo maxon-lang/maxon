@@ -1,5 +1,5 @@
 // VerifyWarmRebuild — the warm-rebuild gate. `verify-warm-rebuild <file>`
-// asserts four independent properties of the incremental query spine and prints a
+// asserts five independent properties of the incremental query spine and prints a
 // clear PASS/FAIL per property, so the driver exits 0 iff ALL hold.
 //
 //   1. Determinism (byte-identity): two independent COLD compiles of the same
@@ -10,6 +10,10 @@
 //      and only the memos that actually read that input may miss.
 //   4. Warm equals cold: a compile that reuses the memos of files an edit did not touch must emit
 //      exactly what a cold compile of the edited program emits.
+//   5. Library reuse: a second program (the input plus a probe declaring its own interface) and a
+//      third declaring none of the input's type names, compiled in one session, are served every
+//      library parse with no footprint drift and emit what a cold compile of each emits. A program
+//      that shadows a library name parses the library cold and never consults the store.
 //
 // ⚠ **(3) IS THE ONE WITH TEETH.** (1) and (2) both prove a memo is STABLE; neither can catch the
 // opposite failure — a memo that stays valid after an input it read has CHANGED — and that is the
@@ -81,11 +85,12 @@ export function verifyWarmRebuild(inputPath FilePath, target Target) returns boo
 	let cacheOk = try verifyCacheHit(inputPath, target: target)
 	let invalidationOk = try verifyInvalidation(inputPath, target: target)
 	let warmOk = try verifyWarmCompileMatchesCold(inputPath, target: target)
+	let libraryReuse = try verifyLibraryParseReuse(inputPath, target: target)
 
-	let allOk = determinismOk and cacheOk and invalidationOk and warmOk
+	let allOk = determinismOk and cacheOk and invalidationOk and warmOk and libraryReuse.held()
 
 	if allOk 'passed'
-		print("verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold)\n")
+		print("verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold + {libraryReuse.clause()})\n")
 		return true
 	end 'passed'
 
@@ -778,6 +783,176 @@ function reportWarmFail(detail String) returns bool
 	printError("FAIL warm: a warm compile after a bytes-only edit emitted different bytes from a cold compile of the edited program — {detail}\n")
 	return false
 end 'reportWarmFail'
+
+// --- Property 5: library parses reused across programs ---
+
+let LibraryReuseProbeText = "enum LibraryReuseProbeKind\n\tfirst\n\tsecond\nend 'LibraryReuseProbeKind'\n\ninterface LibraryReuseProbeShape\n\tfunction isFirst() returns bool\nend 'LibraryReuseProbeShape'\n\ntype LibraryReuseProbeRecord implements LibraryReuseProbeShape\n\tlet kind as LibraryReuseProbeKind\n\n\tstatic function create(kind LibraryReuseProbeKind) returns LibraryReuseProbeRecord\n\t\treturn Self\{kind: kind\}\n\tend 'create'\n\n\tfunction isFirst() returns bool\n\t\treturn self.kind == LibraryReuseProbeKind.first\n\tend 'isFirst'\nend 'LibraryReuseProbeRecord'\n\ntypealias LibraryReuseProbeRecords = Array with LibraryReuseProbeRecord\n\nfunction libraryReuseProbe() returns bool\n\tvar records = LibraryReuseProbeRecords.create()\n\trecords.push(LibraryReuseProbeRecord.create(LibraryReuseProbeKind.first))\n\tlet held = try records.get(0) otherwise return false\n\treturn held.isFirst()\nend 'libraryReuseProbe'"
+let LibraryReusedClause = "library parses reused across programs"
+let LibraryParsedColdClause = "library parsed cold (shadowed)"
+
+union LibraryReuseOutcome
+	failed
+	reused
+	parsedCold
+
+	function held() returns bool
+		return match self 'outcome'
+			failed gives false
+			reused or
+				parsedCold gives true
+		end 'outcome'
+	end 'held'
+
+	function clause() returns String
+		return match self 'outcome'
+			reused gives LibraryReusedClause
+			parsedCold gives LibraryParsedColdClause
+			failed panic("LibraryReuseOutcome.clause: a failed property has no clause — the verdict line is printed only when every property held")
+		end 'outcome'
+	end 'clause'
+end 'LibraryReuseOutcome'
+
+function loadProbedProject(inputPath FilePath, target Target, session CompileSession) returns Project throws CompileError
+	var project = try loadProject([inputPath], target: target, session: session)
+	let edited = try lastAuthoredSourceOf(project)
+	fileChanged(project, path: edited.path, content: "{edited.content}\n{LibraryReuseProbeText}\n")
+	return project
+end 'loadProbedProject'
+
+function verifyLibraryParseReuse(inputPath FilePath, target Target) returns LibraryReuseOutcome throws CompileError
+	let session = CompileSession.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.create(), treeLock: TreeLockHold.none())
+	var primer = try loadReplacedProject(inputPath, target: target, session: session, firstFileText: PrimerMainText)
+	_ = try compileToCodeResult(primer)
+
+	var first = try loadProject([inputPath], target: target, session: session)
+	let firstResult = try compileToCodeResult(first)
+	let verdict = (try queryProgramSignatures(first)).libraryParseSharing
+
+	var coldFirst = try loadProject([inputPath], target: target, session: CompileSession.printing())
+	let coldFirstResult = try compileToCodeResult(coldFirst)
+
+	var second = try loadProbedProject(inputPath, target: target, session: session)
+	let secondResult = try compileToCodeResult(second)
+
+	var cold = try loadProbedProject(inputPath, target: target, session: CompileSession.printing())
+	let coldResult = try compileToCodeResult(cold)
+	let storeIsBounded = sharedStoreIsBounded(primer, second: second)
+
+	var third = try loadReplacedProject(inputPath, target: target, session: session, firstFileText: RenamedProgramText)
+	let thirdResult = try compileToCodeResult(third)
+
+	var coldThird = try loadReplacedProject(inputPath, target: target, session: CompileSession.printing(), firstFileText: RenamedProgramText)
+	let coldThirdResult = try compileToCodeResult(coldThird)
+
+	let firstMatchesCold = reusedMatchesCold(firstResult, cold: coldFirstResult, subject: "the program compiled after a primer of another shape")
+	let secondMatchesCold = reusedMatchesCold(secondResult, cold: coldResult, subject: "a second program")
+	let thirdMatchesCold = reusedMatchesCold(thirdResult, cold: coldThirdResult, subject: "a third program declaring none of the first's type names")
+
+	if not (firstMatchesCold and secondMatchesCold and thirdMatchesCold and storeIsBounded) 'aPropertyFailed'
+		return LibraryReuseOutcome.failed
+	end 'aPropertyFailed'
+
+	if verdict == LibraryParseSharing.shareable 'theStoreIsOpen'
+		return libraryReuseOutcome(primer, second: second, third: third)
+	end 'theStoreIsOpen'
+
+	return libraryColdOutcome(first, second: second, verdict: verdict)
+end 'verifyLibraryParseReuse'
+
+function reusedMatchesCold(reused CodeResult, cold CodeResult, subject String) returns bool
+	return match compareCodeResults(reused, right: cold) 'outcome'
+		allIdentical gives true
+		sectionDiffers(detail) gives reportLibraryReuseDiffers(subject, detail: detail)
+	end 'outcome'
+end 'reusedMatchesCold'
+
+let PrimerMainText = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let PrimerBlankText = "// verify-warm-rebuild: the primer program declares nothing here.\n"
+let RenamedProgramText = "enum RenamedProbeDirection\n\tnorth\n\teast\nend 'RenamedProbeDirection'\n\nenum RenamedProbeSurface\n\tpaved\n\tgravel\nend 'RenamedProbeSurface'\n\ntypealias RenamedProbeMeters = int(0 to 1000)\n\ninterface RenamedProbeMeasured\n\tfunction metres() returns RenamedProbeMeters\nend 'RenamedProbeMeasured'\n\ntype RenamedProbeLeg implements RenamedProbeMeasured\n\tlet heading as RenamedProbeDirection\n\tlet surface as RenamedProbeSurface\n\tlet length as RenamedProbeMeters\n\n\tstatic function create(heading RenamedProbeDirection, surface RenamedProbeSurface, length RenamedProbeMeters) returns RenamedProbeLeg\n\t\treturn Self\{heading: heading, surface: surface, length: length\}\n\tend 'create'\n\n\tfunction metres() returns RenamedProbeMeters\n\t\treturn self.length\n\tend 'metres'\nend 'RenamedProbeLeg'\n\nunion RenamedProbeStep\n\tleg(value RenamedProbeLeg)\n\trest\nend 'RenamedProbeStep'\n\nunion RenamedProbeWeather\n\tclear\n\train(millimetres RenamedProbeMeters)\nend 'RenamedProbeWeather'\n\ntypealias RenamedProbeLegs = Array with RenamedProbeLeg\ntypealias RenamedProbeRoutes = Array with RenamedProbeLegs\ntypealias RenamedProbeNames = Map with (String, RenamedProbeMeters)\n\nfunction main() returns ExitCode\n\tvar legs = RenamedProbeLegs.create()\n\tlegs.push(RenamedProbeLeg.create(RenamedProbeDirection.north, surface: RenamedProbeSurface.paved, length: 5))\n\n\tvar routes = RenamedProbeRoutes.create()\n\troutes.push(legs)\n\n\tvar names = RenamedProbeNames.create()\n\tnames.upsert(\"first\", value: 5)\n\n\tlet step = RenamedProbeStep.leg(try legs.get(0) otherwise return 1)\n\tlet weather = RenamedProbeWeather.rain(2)\n\tvar travelled = 0 as RenamedProbeMeters\n\n\tmatch step 'inspect'\n\t\tleg(value) then travelled = value.metres()\n\t\trest then travelled = 0\n\tend 'inspect'\n\n\tmatch weather 'sky'\n\t\tclear then travelled = travelled + 1\n\t\train(millimetres) then travelled = travelled + millimetres\n\tend 'sky'\n\n\tlet wanted = try names.get(\"first\") otherwise 0\n\n\tif routes.count() == 1 and travelled > wanted 'aRoute'\n\t\treturn 0\n\tend 'aRoute'\n\n\treturn 1\nend 'main'"
+
+function loadReplacedProject(inputPath FilePath, target Target, session CompileSession, firstFileText String) returns Project throws CompileError
+	var project = try loadProject([inputPath], target: target, session: session)
+	var firstPlaced = false
+
+	for index in 0 upto project.db.sourcePaths.count() 'eachSource'
+		let source = editableSourceAt(project, index: index)
+
+		if isLibrarySourceFile(project, path: source.path) 'libraryFile'
+			continue
+		end 'libraryFile'
+
+		fileChanged(project, path: source.path, content: PrimerBlankText if firstPlaced else firstFileText)
+		firstPlaced = true
+	end 'eachSource'
+
+	return project
+end 'loadReplacedProject'
+
+let LibraryParseVariantsPerFile = 2 as QueryCount
+
+function sharedStoreIsBounded(primer Project, second Project) returns bool
+	let admitted = second.db.shareableTokenHashes.count() as QueryCount
+	let held = sharedMemoEntryCount(second)
+	let parsesHeld = sharedParseEntryCount(second)
+	let firstReadNothing = assertCounterMove("the first program of a session reads no token stream out of the empty store (sharedTokenHits)", before: NoCounterMove, after: primer.db.sharedTokenHits, expectedDelta: NoCounterMove)
+	let holdsWhatWasAdmitted = assertCounterMove("the store holds exactly the byte-contents admitted — {held} held, {admitted} admitted", before: NoCounterMove, after: held, expectedDelta: admitted)
+	var secondReadTokens = true
+	var parsesAreBounded = true
+
+	if second.db.sharedTokenHits == NoCounterMove 'neverFired'
+		printError("FAIL: the second program of a session read no token stream out of the store (sharedTokenHits), so every other property here passed over a mechanism that never fired\n")
+		secondReadTokens = false
+	end 'neverFired'
+
+	if parsesHeld > admitted * LibraryParseVariantsPerFile 'outgrewItsVariants'
+		printError("FAIL: the store holds {parsesHeld} library parse artifacts for {admitted} admitted files, past the {LibraryParseVariantsPerFile} (bodies built, bodies skipped) a file can have — the store grows with the programs compiled rather than with the library\n")
+		parsesAreBounded = false
+	end 'outgrewItsVariants'
+
+	return firstReadNothing and holdsWhatWasAdmitted and secondReadTokens and parsesAreBounded
+end 'sharedStoreIsBounded'
+
+function reportLibraryReuseDiffers(which String, detail String) returns bool
+	printError("FAIL library reuse: {which}, compiled in a session whose store holds other programs' library parses, emitted different bytes from a cold compile of it — {detail}\n")
+	return false
+end 'reportLibraryReuseDiffers'
+
+function libraryReuseOutcome(primer Project, second Project, third Project) returns LibraryReuseOutcome
+	let admitted = second.db.shareableTokenHashes.count()
+	let firstReadNothing = assertCounterMove("the primer program of a session reads no library parse out of the empty store (sharedParseHits)", before: NoCounterMove, after: primer.db.sharedParseHits, expectedDelta: NoCounterMove)
+	let secondReusedEveryFile = everyLibraryParseServed("the second program", program: second)
+	let thirdReusedEveryFile = everyLibraryParseServed("the third program, which declares none of the first's type names", program: third)
+
+	if not (firstReadNothing and secondReusedEveryFile and thirdReusedEveryFile) 'aPropertyFailed'
+		printError("FAIL library reuse: the store did not serve every library parse to the second and third programs (see above)\n")
+		return LibraryReuseOutcome.failed
+	end 'aPropertyFailed'
+
+	print("PASS library reuse: {second.db.sharedParseReusedFiles.count()} of {admitted} library parse artifacts, published by the primer and the programs after it ({primer.db.sharedParsePublishes} publishes, {second.db.sharedParseDrifts} drifted), served to a second program that differs by an enum, a type, an array of it and a function ({second.db.sharedParseHits} hits, {second.db.sharedParseMisses} misses) and to a third that shares none of the first's type names ({third.db.sharedParseHits} hits, {third.db.sharedParseMisses} misses, {third.db.sharedParseDrifts} drifted), each compiling to what a cold compile of it emits\n")
+	return LibraryReuseOutcome.reused
+end 'libraryReuseOutcome'
+
+function everyLibraryParseServed(who String, program Project) returns bool
+	let admitted = program.db.shareableTokenHashes.count()
+	let reusedFiles = program.db.sharedParseReusedFiles.count()
+	let served = assertCounterMove("every library file's parse is served to {who} ({reusedFiles} of {admitted} files)", before: NoCounterMove, after: reusedFiles as QueryCount, expectedDelta: admitted as QueryCount)
+	let neverDrifted = assertCounterMove("no held library parse has its footprint move under {who} (sharedParseDrifts)", before: NoCounterMove, after: program.db.sharedParseDrifts, expectedDelta: NoCounterMove)
+	return served and neverDrifted
+end 'everyLibraryParseServed'
+
+function libraryColdOutcome(first Project, second Project, verdict LibraryParseSharing) returns LibraryReuseOutcome
+	let neverPublished = assertCounterMove("a program that shares no library parse publishes none (sharedParsePublishes)", before: NoCounterMove, after: first.db.sharedParsePublishes + second.db.sharedParsePublishes, expectedDelta: NoCounterMove)
+	let neverServed = assertCounterMove("a program that shares no library parse reads none out of the store (sharedParseHits)", before: NoCounterMove, after: first.db.sharedParseHits + second.db.sharedParseHits, expectedDelta: NoCounterMove)
+	let neverAsked = assertCounterMove("a program that shares no library parse never consults the store (sharedParseMisses)", before: NoCounterMove, after: first.db.sharedParseMisses + second.db.sharedParseMisses, expectedDelta: NoCounterMove)
+
+	if not (neverPublished and neverServed and neverAsked) 'aPropertyFailed'
+		printError("FAIL library reuse: the store was consulted for a program whose library parse is refused ({verdict.name}) (see above)\n")
+		return LibraryReuseOutcome.failed
+	end 'aPropertyFailed'
+
+	print("PASS library reuse: library parsed cold ({verdict.name}); the store was never consulted and a second program compiles to what a cold compile of it emits\n")
+	return LibraryReuseOutcome.parsedCold
+end 'libraryColdOutcome'
 
 // The last source file in fold order that is not library source, owned (`editableSourceAt`).
 function lastAuthoredSourceOf(project Project) returns EditableSource throws CompileError

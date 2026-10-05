@@ -43,15 +43,15 @@ an access paid after the shape guards left the loop.
   inside it) is not versioned, its accesses load the length afresh, and its checks stay.
 
 ⚠ A green case here proves nothing on its own — a check that is deleted was one the program never
-failed. The evidence is the committed fragments of the shape cases (no bound compare in the loop
-body) and the CONTROLS, each a program whose index CAN exceed the length and whose fallback the
+failed. The evidence is the emitted code (`--emit-ir`) of the shape cases (no bound compare in the loop
+body), which nothing in the suite pins, and the CONTROLS, each a program whose index CAN exceed the length and whose fallback the
 program reads back.
 
 ## Tests
 
 <!-- test: a-loop-to-the-length-needs-no-bound-check -->
 The commonest shape. `total`'s loop runs to `a.count()`, the length the bound checks compare against;
-in the fragment the loop body is the element load and the add, with no compare against the length.
+in the emitted code (`--emit-ir`) the loop body is the element load and the add, with no compare against the length.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
@@ -153,7 +153,7 @@ end 'main'
 
 <!-- test: one-index-checked-once-per-iteration -->
 Inside a versioned loop, the first access checks `i` against the hoisted length and every later
-access on `i` is decided by that check: `double`'s fragment holds one bound compare per iteration,
+access on `i` is decided by that check: `double`'s emitted code (`--emit-ir`) holds one bound compare per iteration,
 not three.
 ```maxon
 typealias Word = int(i64.min to i64.max)

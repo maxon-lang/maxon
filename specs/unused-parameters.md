@@ -60,7 +60,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-parameters/single-unused.test:5:25: unused variable: 'b'
+error E3012: specs/unused-parameters/single-unused.maxon:5:25: unused variable: 'b'
 ```
 
 <!-- test: multiple-unused -->
@@ -77,7 +77,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-parameters/multiple-unused.test:5:26: unused variable: 'b'
+error E3012: specs/unused-parameters/multiple-unused.maxon:5:26: unused variable: 'b'
 ```
 
 <!-- test: all-used-ok -->
@@ -137,7 +137,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2053: specs/fragments/unused-parameters/void-function-unused.test:10:15: the second and later arguments must be named ('name: value')
+error E2053: specs/unused-parameters/void-function-unused.maxon:10:15: the second and later arguments must be named ('name: value')
 ```
 
 <!-- test: method-on-non-conforming-type-still-errors -->
@@ -163,5 +163,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-parameters/method-on-non-conforming-type-still-errors.test:8:18: unused variable: 'unused'
+error E3012: specs/unused-parameters/method-on-non-conforming-type-still-errors.maxon:8:18: unused variable: 'unused'
 ```

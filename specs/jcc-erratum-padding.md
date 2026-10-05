@@ -29,12 +29,12 @@ places it at RVA `0x1000`.
 
 The scope is the TargetOps of compiled functions. A hand-assembled sequence places its own branches
 through the shared `encodeJcc`/`encodeJmp` primitives and is left byte-exact: the runtime chunks
-(`specs/emitted-runtime-body.md` pins their bytes), the system-stack shim an `iatCall` becomes in a
+(`ir-specs/emitted-runtime-body.md` pins their bytes), the system-stack shim an `iatCall` becomes in a
 program with the green-thread scheduler, the prologue's stack-probe walk, and the dense-match jump
 table. arm64 needs none of this: its instructions are four bytes on four-byte alignment, so none
 straddles a fetch line, and its cores carry no such erratum.
 
-The padding is bytes, not ops. A fragment golden renders TargetOps, so it records the shape of the
+The padding is bytes, not ops. The rendered Target IR shows TargetOps, so it shows the shape of the
 loop the case below compiles and its exit code records the answer; the placement itself is below the
 IR, and is read off the emitted binary with a disassembler, which is how `tests/profile`'s
 green-thread corpus measures it: two loops of the same text, sampled in proportion to their work.
@@ -43,7 +43,7 @@ green-thread corpus measures it: two loops of the same text, sampled in proporti
 
 <!-- test: a-tight-loops-back-edge-never-straddles-a-32-byte-boundary -->
 A counted loop whose back edge is a `cmp`/`jcc` pair, the unit the erratum most often lands on. The
-exit code is the loop's answer; the golden records the loop's shape.
+exit code is the loop's answer; the rendered Target IR shows the loop's shape.
 ```maxon
 typealias Rounds = int(0 to 1000000)
 

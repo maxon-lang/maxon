@@ -245,5 +245,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/try-block-otherwise-divergent/error.unused-binding-panic.test:21:13: unused variable: 'e'
+error E3012: specs/try-block-otherwise-divergent/error.unused-binding-panic.maxon:21:13: unused variable: 'e'
 ```

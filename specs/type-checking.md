@@ -23,7 +23,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/method-call-wrong-self-type.test:6:6: argument type mismatch for 'other': expected 'StringArray', got 'String'
+error E3005: specs/type-checking/method-call-wrong-self-type.maxon:6:6: argument type mismatch for 'other': expected 'StringArray', got 'String'
 ```
 
 <!-- test: method-call-wrong-element-type -->
@@ -38,7 +38,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/method-call-wrong-element-type.test:7:6: argument type mismatch for 'value': expected 'Int', got 'String'
+error E3005: specs/type-checking/method-call-wrong-element-type.maxon:7:6: argument type mismatch for 'value': expected 'Int', got 'String'
 ```
 
 <!-- test: function-call-string-where-int-expected -->
@@ -56,7 +56,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/function-call-string-where-int-expected.test:10:2: argument type mismatch for 'n': expected 'Integer', got 'String'
+error E3005: specs/type-checking/function-call-string-where-int-expected.maxon:10:2: argument type mismatch for 'n': expected 'Integer', got 'String'
 ```
 
 <!-- test: function-call-primitive-where-struct-expected -->
@@ -76,7 +76,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/function-call-primitive-where-struct-expected.test:12:2: argument type mismatch for 'arr': expected 'IntegerArray', got 'int'
+error E3005: specs/type-checking/function-call-primitive-where-struct-expected.maxon:12:2: argument type mismatch for 'arr': expected 'IntegerArray', got 'int'
 ```
 
 <!-- test: function-call-wrong-struct-type -->
@@ -109,7 +109,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/function-call-wrong-struct-type.test:25:2: argument type mismatch for 'p': expected 'Point', got 'Size'
+error E3005: specs/type-checking/function-call-wrong-struct-type.maxon:25:2: argument type mismatch for 'p': expected 'Point', got 'Size'
 ```
 
 <!-- test: stdlib-function-call-wrong-type -->
@@ -120,7 +120,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/stdlib-function-call-wrong-type.test:3:2: argument type mismatch for 'value': expected 'String', got 'int'
+error E3005: specs/type-checking/stdlib-function-call-wrong-type.maxon:3:2: argument type mismatch for 'value': expected 'String', got 'int'
 ```
 
 <!-- test: implicit-method-call-wrong-type -->
@@ -141,7 +141,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/implicit-method-call-wrong-type.test:9:8: argument type mismatch for 'value': expected 'Int', got 'String'
+error E3005: specs/type-checking/implicit-method-call-wrong-type.maxon:9:8: argument type mismatch for 'value': expected 'Int', got 'String'
 ```
 
 <!-- test: array-of-different-element-types -->
@@ -158,7 +158,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/array-of-different-element-types.test:9:7: argument type mismatch for 'other': expected 'IntArray', got 'StringArray'
+error E3005: specs/type-checking/array-of-different-element-types.maxon:9:7: argument type mismatch for 'other': expected 'IntArray', got 'StringArray'
 ```
 
 <!-- test: typealias-forward-reference -->
@@ -230,7 +230,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2012: specs/fragments/type-checking/error.circular-typealias-self-reference.test:2:26: Circular typealias dependency: A
+error E2012: specs/type-checking/error.circular-typealias-self-reference.maxon:2:26: Circular typealias dependency: A
 ```
 
 <!-- test: error.circular-typealias-mutual -->
@@ -244,5 +244,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2012: specs/fragments/type-checking/error.circular-typealias-mutual.test:2:11: Circular typealias dependency: A -> B -> A
+error E2012: specs/type-checking/error.circular-typealias-mutual.maxon:2:11: Circular typealias dependency: A -> B -> A
 ```

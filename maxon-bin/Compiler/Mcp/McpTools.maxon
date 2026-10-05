@@ -622,9 +622,9 @@ function specTestArgv(reqDoc JsonDoc, args OptionalNode, directory String, filte
 	argv.push(SpecTestCommandName)
 
 	let updateRequired = getOptionalBoolArg(reqDoc, args: args, key: "updateRequired", defaultVal: false)
-	let goldenWrites = GoldenWrites.updateRequired if updateRequired else GoldenWrites.mintMissing
+	let batchRuns = getOptionalBoolArg(reqDoc, args: args, key: "batch", defaultVal: true)
 	let includeNetwork = getOptionalBoolArg(reqDoc, args: args, key: "network", defaultVal: false)
-	argv.append(specSelectionArgv(directory, filterPatterns: filterPatterns, goldenWrites: goldenWrites, includeNetwork: includeNetwork))
+	argv.append(specSelectionArgv(directory, filterPatterns: filterPatterns, mode: SpecRunMode.create(updateRequired, batchRuns: batchRuns), includeNetwork: includeNetwork))
 
 	argv.append(valuedOptionOf(reqDoc, args: args, key: TargetOption, prefix: TargetFlagPrefix))
 	argv.append(wholeOptionOf(reqDoc, args: args, key: WorkersOption, prefix: WorkersFlagPrefix))

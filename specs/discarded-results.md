@@ -96,7 +96,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/pure-function-discarded.test:10:2: result of pure function 'double' must be used
+error E3064: specs/discarded-results/pure-function-discarded.maxon:10:2: result of pure function 'double' must be used
 ```
 
 <!-- test: pure-function-let-discard -->
@@ -114,7 +114,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/pure-function-let-discard.test:10:2: result of pure function 'double' must be used
+error E3064: specs/discarded-results/pure-function-let-discard.maxon:10:2: result of pure function 'double' must be used
 ```
 
 <!-- test: pure-method-underscore-discard -->
@@ -128,7 +128,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/pure-method-underscore-discard.test:4:2: result of pure function 'String.count' must be used
+error E3064: specs/discarded-results/pure-method-underscore-discard.maxon:4:2: result of pure function 'String.count' must be used
 ```
 
 <!-- test: pure-function-used -->
@@ -167,7 +167,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/fragments/discarded-results/impure-function-discarded.test:13:2: result of 'incrementAndGet' is not used (use '_ = expr' to discard)
+error E3065: specs/discarded-results/impure-function-discarded.maxon:13:2: result of 'incrementAndGet' is not used (use '_ = expr' to discard)
 ```
 
 <!-- test: impure-method-statement-discarded -->
@@ -200,7 +200,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/fragments/discarded-results/impure-method-statement-discarded.test:19:4: result of 'Counter.bump' is not used (use '_ = expr' to discard)
+error E3065: specs/discarded-results/impure-method-statement-discarded.maxon:19:4: result of 'Counter.bump' is not used (use '_ = expr' to discard)
 ```
 
 ⭐ **EVERY BARE-STATEMENT DOOR FILES THE SAME VERDICT, AND THIS PINS ONE THE TWO CASES ABOVE DO NOT REACH.**
@@ -245,7 +245,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/fragments/discarded-results/impure-field-chain-statement-discarded.test:29:10: result of 'Inner.bump' is not used (use '_ = expr' to discard)
+error E3065: specs/discarded-results/impure-field-chain-statement-discarded.maxon:29:10: result of 'Inner.bump' is not used (use '_ = expr' to discard)
 ```
 
 <!-- test: impure-static-member-statement-discarded -->
@@ -272,7 +272,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/fragments/discarded-results/impure-static-member-statement-discarded.test:13:8: result of 'Clock.tick' is not used (use '_ = expr' to discard)
+error E3065: specs/discarded-results/impure-static-member-statement-discarded.maxon:13:8: result of 'Clock.tick' is not used (use '_ = expr' to discard)
 ```
 
 <!-- test: pure-static-member-statement-discarded -->
@@ -294,7 +294,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/pure-static-member-statement-discarded.test:11:8: result of pure function 'Clock.now' must be used
+error E3064: specs/discarded-results/pure-static-member-statement-discarded.maxon:11:8: result of pure function 'Clock.now' must be used
 ```
 
 <!-- test: void-static-member-statement-ok -->
@@ -438,7 +438,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/discarded-results/underscore-not-prefix-suppression.test:4:6: unused variable: 'x'
+error E3012: specs/discarded-results/underscore-not-prefix-suppression.maxon:4:6: unused variable: 'x'
 ```
 
 <!-- test: underscore-exact-discard -->
@@ -450,7 +450,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/discarded-results/underscore-exact-discard.test:4:2: expected a function call
+error E3067: specs/discarded-results/underscore-exact-discard.maxon:4:2: expected a function call
 ```
 
 <!-- test: tuple-partial-discard -->
@@ -486,7 +486,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/tuple-all-discard-pure.test:10:2: result of pure function 'makePair' must be used
+error E3064: specs/discarded-results/tuple-all-discard-pure.maxon:10:2: result of pure function 'makePair' must be used
 ```
 
 <!-- test: math-intrinsic-discarded -->
@@ -503,7 +503,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/math-intrinsic-discarded.test:3:2: result of pure function 'round' must be used
+error E3064: specs/discarded-results/math-intrinsic-discarded.maxon:3:2: result of pure function 'round' must be used
 ```
 
 <!-- test: transitive-impure -->
@@ -526,7 +526,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/fragments/discarded-results/transitive-impure.test:15:2: result of 'computeAndPrint' is not used (use '_ = expr' to discard)
+error E3065: specs/discarded-results/transitive-impure.maxon:15:2: result of 'computeAndPrint' is not used (use '_ = expr' to discard)
 ```
 
 <!-- test: try-pure-let-discard -->
@@ -551,7 +551,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/try-pure-let-discard.test:17:2: result of pure function 'parseNum' must be used
+error E3064: specs/discarded-results/try-pure-let-discard.maxon:17:2: result of pure function 'parseNum' must be used
 ```
 
 <!-- test: try-impure-let-discard -->
@@ -660,7 +660,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/pure-array-read-underscore-discard.test:8:2: result of pure function 'Array.first' must be used
+error E3064: specs/discarded-results/pure-array-read-underscore-discard.maxon:8:2: result of pure function 'Array.first' must be used
 ```
 
 A read that MOVES the element out is not one of them: `pop` vacates the slot, so the call changes the
@@ -702,7 +702,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/map-get-underscore-discard.test:8:2: result of pure function 'Map.get' must be used
+error E3064: specs/discarded-results/map-get-underscore-discard.maxon:8:2: result of pure function 'Map.get' must be used
 ```
 
 <!-- test: set-contains-underscore-discard -->
@@ -718,7 +718,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/set-contains-underscore-discard.test:8:2: result of pure function 'Set.contains' must be used
+error E3064: specs/discarded-results/set-contains-underscore-discard.maxon:8:2: result of pure function 'Set.contains' must be used
 ```
 
 ⚠ The compiler reports the member's registration name, which for an un-overloaded member is the bare
@@ -762,7 +762,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/method-call-statement-discarded.test:8:6: result of pure function 'Array.count' must be used
+error E3064: specs/discarded-results/method-call-statement-discarded.maxon:8:6: result of pure function 'Array.count' must be used
 ```
 
 The chainable rule holds at this door too: a builder step written for its receiver is legal on a line of
@@ -921,7 +921,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/discarded-results/error.underscore-discard-of-an-intrinsic.test:3:2: expected a function call
+error E3067: specs/discarded-results/error.underscore-discard-of-an-intrinsic.maxon:3:2: expected a function call
 ```
 
 <!-- test: error.underscore-discard-of-a-field-read -->
@@ -943,7 +943,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/discarded-results/error.underscore-discard-of-a-field-read.test:14:2: expected a function call
+error E3067: specs/discarded-results/error.underscore-discard-of-a-field-read.maxon:14:2: expected a function call
 ```
 
 <!-- test: error.underscore-discard-of-an-arithmetic-expression -->
@@ -958,7 +958,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/discarded-results/error.underscore-discard-of-an-arithmetic-expression.test:7:2: expected a function call
+error E3067: specs/discarded-results/error.underscore-discard-of-an-arithmetic-expression.maxon:7:2: expected a function call
 ```
 
 ⭐⭐ **THE ONE CALL-FREE DISCARD THAT STAYS LEGAL IS A BARE BINDING NAME, BECAUSE E3012 LEAVES NOWHERE ELSE
@@ -1062,7 +1062,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/error.pure-throwing-call-statement-in-a-test-body.test:17:2: result of pure function 'parseNum' must be used
+error E3064: specs/discarded-results/error.pure-throwing-call-statement-in-a-test-body.maxon:17:2: result of pure function 'parseNum' must be used
 ```
 
 <!-- test: try-pure-propagating-discard -->
@@ -1094,7 +1094,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/try-pure-propagating-discard.test:17:2: result of pure function 'parseNum' must be used
+error E3064: specs/discarded-results/try-pure-propagating-discard.maxon:17:2: result of pure function 'parseNum' must be used
 ```
 
 <!-- test: try-block-pure-discard -->
@@ -1127,5 +1127,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/try-block-pure-discard.test:18:3: result of pure function 'parseNum' must be used
+error E3064: specs/discarded-results/try-block-pure-discard.maxon:18:3: result of pure function 'parseNum' must be used
 ```

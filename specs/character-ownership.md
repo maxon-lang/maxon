@@ -259,7 +259,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/character-ownership/string-and-character-do-not-compare.test:5:7: type mismatch: 'cannot compare String with Character'
+error E3005: specs/character-ownership/string-and-character-do-not-compare.maxon:5:7: type mismatch: 'cannot compare String with Character'
 ```
 
 <!-- test: print-takes-a-string-not-a-character -->
@@ -273,7 +273,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/character-ownership/print-takes-a-string-not-a-character.test:4:2: argument type mismatch for 'value': expected 'String', got 'Character'
+error E3005: specs/character-ownership/print-takes-a-string-not-a-character.maxon:4:2: argument type mismatch for 'value': expected 'String', got 'Character'
 ```
 
 <!-- test: character-parameter-and-equality -->
@@ -550,7 +550,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/character-ownership/iterating-a-string-locks-its-source.test:8:4: cannot assign to immutable variable: 's'
+error E2013: specs/character-ownership/iterating-a-string-locks-its-source.maxon:8:4: cannot assign to immutable variable: 's'
 ```
 
 <!-- test: mutating-a-string-being-iterated-is-refused -->
@@ -573,7 +573,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/character-ownership/mutating-a-string-being-iterated-is-refused.test:8:5: cannot pass 's' to function that mutates parameter 'self' (in main)
+error E3019: specs/character-ownership/mutating-a-string-being-iterated-is-refused.maxon:8:5: cannot pass 's' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: a-character-array-takes-a-borrowed-literal -->
@@ -663,7 +663,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/character-ownership/panic-takes-a-string-not-a-character.test:4:8: 'panic' requires a string literal, but its argument is Character
+error E3005: specs/character-ownership/panic-takes-a-string-not-a-character.maxon:4:8: 'panic' requires a string literal, but its argument is Character
 ```
 
 <!-- test: an-array-literal-element-is-not-a-character -->
@@ -680,7 +680,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/character-ownership/an-array-literal-element-is-not-a-character.test:3:11: Unsupported: an array literal element of type 'Character' — a literal's elements are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)
+error E2015: specs/character-ownership/an-array-literal-element-is-not-a-character.maxon:3:11: Unsupported: an array literal element of type 'Character' — a literal's elements are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)
 ```
 
 <!-- test: a-single-byte-literal-adopts-on-the-left-too -->
@@ -784,7 +784,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/character-ownership/a-character-binding-is-never-retyped-by-an-int.test:4:7: type mismatch: 'cannot compare Character with int'
+error E3005: specs/character-ownership/a-character-binding-is-never-retyped-by-an-int.maxon:4:7: type mismatch: 'cannot compare Character with int'
 ```
 
 <!-- test: a-module-level-character-initializer-is-not-a-constant -->
@@ -802,7 +802,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/character-ownership/a-module-level-character-initializer-is-not-a-constant.test:2:12: Expected constant expression, got '-'
+error E2004: specs/character-ownership/a-module-level-character-initializer-is-not-a-constant.maxon:2:12: Expected constant expression, got '-'
 ```
 
 <!-- test: a-character-range-needs-both-bounds -->
@@ -879,7 +879,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/character-ownership/a-cluster-has-no-integer-reading.test:4:8: type mismatch: 'cannot compare int with Character'
+error E3005: specs/character-ownership/a-cluster-has-no-integer-reading.maxon:4:8: type mismatch: 'cannot compare int with Character'
 ```
 
 <!-- test: an-ascii-array-literal-is-a-character-array-too -->
@@ -896,5 +896,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/character-ownership/an-ascii-array-literal-is-a-character-array-too.test:3:11: Unsupported: an array literal element of type 'Character' — a literal's elements are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)
+error E2015: specs/character-ownership/an-ascii-array-literal-is-a-character-array-too.maxon:3:11: Unsupported: an array literal element of type 'Character' — a literal's elements are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)
 ```

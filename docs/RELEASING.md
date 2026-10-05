@@ -227,7 +227,7 @@ rebuilds.
 **`CHANGELOG.md` is written by hand**, for people installing a compiler rather than changing one.
 
 ⭐ **A commit subject is not a changelog entry.** MEASURED on `v0.1.0..HEAD`: 21 commits, of which
-about six mean anything to a reader — the rest are CI, spec goldens, docs and the release tooling
+about six mean anything to a reader — the rest are CI, spec pins, docs and the release tooling
 itself. Generating the entry and then correcting it means rewriting seventeen lines of twenty-one,
 which is hand-writing with extra ceremony.
 

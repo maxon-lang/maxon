@@ -36,8 +36,7 @@ terminator had become a fall-through falls into whatever is laid down next: the 
 answer wrong (the sums 6 and 15 come back and no panic fires), while the two `otherwise <value>`
 controls stay green because the block that follows the sunk arm in that layout is the handler
 itself, which is the value the arm would have produced. The first case stays green under both: its
-exit code cannot see layout, and the layout it describes is recorded in its fragment golden, which a
-run compares and reports as drift rather than as a failure.
+exit code cannot see layout, and the layout it describes is visible with `--emit-ir`.
 
 ## Tests
 

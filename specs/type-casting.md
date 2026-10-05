@@ -226,7 +226,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-casting/error.int-literal-out-of-range.test:6:14: Value 256 is outside the range of 'Byte' (int(0 to 255))
+error E3005: specs/type-casting/error.int-literal-out-of-range.maxon:6:14: Value 256 is outside the range of 'Byte' (int(0 to 255))
 ```
 
 <!-- test: error.negative-literal-to-byte -->
@@ -240,7 +240,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-casting/error.negative-literal-to-byte.test:6:13: Value -1 is outside the range of 'Byte' (int(0 to 255))
+error E3005: specs/type-casting/error.negative-literal-to-byte.maxon:6:13: Value -1 is outside the range of 'Byte' (int(0 to 255))
 ```
 
 <!-- test: error.float-to-int -->
@@ -254,7 +254,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.float-to-int.test:6:14: Cannot cast from float to int
+error E3009: specs/type-casting/error.float-to-int.maxon:6:14: Cannot cast from float to int
 ```
 
 <!-- test: error.bool-to-int -->
@@ -269,7 +269,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.bool-to-int.test:7:12: Cannot cast from bool to int
+error E3009: specs/type-casting/error.bool-to-int.maxon:7:12: Cannot cast from bool to int
 ```
 
 <!-- test: error.bool-to-float -->
@@ -284,7 +284,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.bool-to-float.test:7:12: Cannot cast from bool to float
+error E3009: specs/type-casting/error.bool-to-float.maxon:7:12: Cannot cast from bool to float
 ```
 
 <!-- test: error.bool-to-byte -->
@@ -299,7 +299,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.bool-to-byte.test:7:12: Cannot cast from bool to int
+error E3009: specs/type-casting/error.bool-to-byte.maxon:7:12: Cannot cast from bool to int
 ```
 
 <!-- test: error.int-to-bool -->
@@ -310,7 +310,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.int-to-bool.test:3:12: Cannot cast from int to bool
+error E3009: specs/type-casting/error.int-to-bool.maxon:3:12: Cannot cast from int to bool
 ```
 
 <!-- test: error.float-to-bool -->
@@ -321,7 +321,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.float-to-bool.test:3:14: Cannot cast from float to bool
+error E3009: specs/type-casting/error.float-to-bool.maxon:3:14: Cannot cast from float to bool
 ```
 
 <!-- test: error.byte-to-bool -->
@@ -336,7 +336,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.byte-to-bool.test:7:12: Cannot cast from int to bool
+error E3009: specs/type-casting/error.byte-to-bool.maxon:7:12: Cannot cast from int to bool
 ```
 
 ### Unneeded Casts (Compile Error E3010)
@@ -367,7 +367,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.same-type-int.test:11:12: unneeded cast: 'Integer' already fits in 'Integer'
+error E3010: specs/type-casting/error.unneeded.same-type-int.maxon:11:12: unneeded cast: 'Integer' already fits in 'Integer'
 ```
 
 <!-- test: error.unneeded.same-type-float -->
@@ -386,7 +386,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.same-type-float.test:11:12: unneeded cast: 'Float' already fits in 'Float'
+error E3010: specs/type-casting/error.unneeded.same-type-float.maxon:11:12: unneeded cast: 'Float' already fits in 'Float'
 ```
 
 <!-- test: error.unneeded.same-type-byte -->
@@ -401,7 +401,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.same-type-byte.test:7:12: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/type-casting/error.unneeded.same-type-byte.maxon:7:12: unneeded cast: 'Byte' already fits in 'Byte'
 ```
 
 <!-- test: error.unneeded.literal-named-argument -->
@@ -945,7 +945,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.same-alias-byte.test:7:12: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/type-casting/error.unneeded.same-alias-byte.maxon:7:12: unneeded cast: 'Byte' already fits in 'Byte'
 ```
 
 <!-- test: error.unneeded.same-alias-int -->
@@ -964,7 +964,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.same-alias-int.test:11:12: unneeded cast: 'Integer' already fits in 'Integer'
+error E3010: specs/type-casting/error.unneeded.same-alias-int.maxon:11:12: unneeded cast: 'Integer' already fits in 'Integer'
 ```
 
 <!-- test: error.unneeded.same-alias-float -->
@@ -983,7 +983,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.same-alias-float.test:11:12: unneeded cast: 'Float' already fits in 'Float'
+error E3010: specs/type-casting/error.unneeded.same-alias-float.maxon:11:12: unneeded cast: 'Float' already fits in 'Float'
 ```
 
 <!-- test: widening-byte-to-integer-is-a-real-cast -->
@@ -1033,7 +1033,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.contested-alias-quoted-as-source-spells-it.test:7:36: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/type-casting/error.unneeded.contested-alias-quoted-as-source-spells-it.maxon:7:36: unneeded cast: 'Byte' already fits in 'Byte'
 ```
 
 <!-- test: a-contested-alias-cast-to-another-alias-is-a-real-cast -->
@@ -1094,7 +1094,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.call-result-same-alias.test:10:26: unneeded cast: 'Score' already fits in 'Score'
+error E3010: specs/type-casting/error.unneeded.call-result-same-alias.maxon:10:26: unneeded cast: 'Score' already fits in 'Score'
 ```
 
 E3010 is a recoverable diagnostic: the parser keeps walking the function so every
@@ -1114,9 +1114,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.multiple-in-one-function.test:7:12: unneeded cast: 'Byte' already fits in 'Byte'
-error E3010: specs/fragments/type-casting/error.unneeded.multiple-in-one-function.test:8:12: unneeded cast: 'Byte' already fits in 'Byte'
-error E3010: specs/fragments/type-casting/error.unneeded.multiple-in-one-function.test:9:12: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/type-casting/error.unneeded.multiple-in-one-function.maxon:7:12: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/type-casting/error.unneeded.multiple-in-one-function.maxon:8:12: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/type-casting/error.unneeded.multiple-in-one-function.maxon:9:12: unneeded cast: 'Byte' already fits in 'Byte'
 ```
 
 <!-- test: error.unneeded.multiple-across-functions -->
@@ -1142,8 +1142,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.multiple-across-functions.test:6:12: unneeded cast: 'Byte' already fits in 'Byte'
-error E3010: specs/fragments/type-casting/error.unneeded.multiple-across-functions.test:11:12: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/type-casting/error.unneeded.multiple-across-functions.maxon:6:12: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/type-casting/error.unneeded.multiple-across-functions.maxon:11:12: unneeded cast: 'Byte' already fits in 'Byte'
 ```
 
 ### Cast applied to a control-flow expression
@@ -1257,7 +1257,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-struct-field-read.test:14:19: unneeded cast: 'Narrow' already fits in 'Narrow'
+error E3010: specs/type-casting/error.unneeded.through-a-struct-field-read.maxon:14:19: unneeded cast: 'Narrow' already fits in 'Narrow'
 ```
 
 <!-- test: a-struct-field-read-cast-to-another-alias-is-a-real-cast -->
@@ -1294,7 +1294,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/type-casting/error.unneeded.through-a-try-otherwise-result.test:5:13: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/type-casting/error.unneeded.through-a-try-otherwise-result.maxon:5:13: unneeded cast: 'Byte' already fits in 'Byte'
 ```
 
 <!-- test: a-try-otherwise-result-cast-to-another-alias-is-a-real-cast -->
@@ -1406,7 +1406,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3131: specs/fragments/type-casting/error.a-generic-instance-is-not-a-cast-target.test:14:12: Cannot cast to 'NarrowCol': a container's elements have a storage layout of their own, so 'WideCol' cannot be retagged as one — build the container with the element type you need, or convert it element by element
+error E3131: specs/type-casting/error.a-generic-instance-is-not-a-cast-target.maxon:14:12: Cannot cast to 'NarrowCol': a container's elements have a storage layout of their own, so 'WideCol' cannot be retagged as one — build the container with the element type you need, or convert it element by element
 ```
 
 <!-- test: a-scalar-alias-is-still-a-cast-target -->

@@ -9,11 +9,11 @@
 // WHAT GATES IT. Two things, and they are the SUITE, not a pass inside the compiler:
 //   * RUNNING a spec test proves the allocation is CORRECT. A value left in the wrong register
 //     computes the wrong answer, and the test's exit-code assertion catches it end-to-end.
-//   * The committed `.test` GOLDENS prove the code did not get WORSE. An extra spill, a lost
-//     coalesce, a needlessly widened live range: each still returns the right answer, so only the
-//     pinned Target IR can see it. The goldens also reach where the run cannot — one execution
-//     takes ONE path, but the golden pins EVERY block of the function. `SpecTestRunner.
-//     checkTestFragment` compares them and FAILS on a mismatch; `--update-required` regenerates.
+//   * The `TargetIr` pins in `ir-specs/` prove the code did not get WORSE, for the cases that carry
+//     one. An extra spill, a lost coalesce, a needlessly widened live range: each still returns the
+//     right answer, so only the pinned Target IR can see it. A pin also reaches where the run
+//     cannot — one execution takes ONE path, but the pin covers EVERY block of the function.
+//     `maxon spec-test ir-specs` FAILS on a mismatch; `--update-required` re-mints.
 // (There is no third, symbolic gate: it would verify, at ~10% of every compile, a property the two
 // above already decide. The one non-allocation check worth keeping, the CFG `condBranch`-index sweep,
 // lives in `TargetLiveness.checkCondBranchIndex`, where it runs on EVERY build rather than only under

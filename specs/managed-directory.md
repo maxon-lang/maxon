@@ -179,7 +179,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/managed-directory/managed-directory.next-without-try.test:4:10: throwing function requires try: 'next'
+error E3057: specs/managed-directory/managed-directory.next-without-try.maxon:4:10: throwing function requires try: 'next'
 ```
 
 <!-- test: managed-directory.search-and-list -->
@@ -311,7 +311,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3072: specs/fragments/managed-directory/managed-directory.error-direct-construction.test:3:29: '__ManagedDirectory' is a compiler builtin type and cannot be constructed directly
+error E3072: specs/managed-directory/managed-directory.error-direct-construction.maxon:3:29: '__ManagedDirectory' is a compiler builtin type and cannot be constructed directly
 ```
 
 ### the compiler's own cases

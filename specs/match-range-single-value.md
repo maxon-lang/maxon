@@ -31,7 +31,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/match-range-single-value/error.int-to-same.test:5:3: range pattern '5 to 5' covers a single value; use the bare value instead
+error E2027: specs/match-range-single-value/error.int-to-same.maxon:5:3: range pattern '5 to 5' covers a single value; use the bare value instead
 ```
 
 <!-- test: error.int-upto-by-one -->
@@ -45,7 +45,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/match-range-single-value/error.int-upto-by-one.test:5:3: range pattern '5 upto 6' covers a single value; use the bare value instead
+error E2027: specs/match-range-single-value/error.int-upto-by-one.maxon:5:3: range pattern '5 upto 6' covers a single value; use the bare value instead
 ```
 
 <!-- test: error.char-to-same -->
@@ -59,7 +59,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/match-range-single-value/error.char-to-same.test:5:3: range pattern ''a' to 'a'' covers a single value; use the bare value instead
+error E2027: specs/match-range-single-value/error.char-to-same.maxon:5:3: range pattern ''a' to 'a'' covers a single value; use the bare value instead
 ```
 
 <!-- test: error.char-upto-adjacent -->
@@ -73,7 +73,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/match-range-single-value/error.char-upto-adjacent.test:5:3: range pattern ''a' upto 'b'' covers a single value; use the bare value instead
+error E2027: specs/match-range-single-value/error.char-upto-adjacent.maxon:5:3: range pattern ''a' upto 'b'' covers a single value; use the bare value instead
 ```
 
 <!-- test: ok.int-multi-value-range -->

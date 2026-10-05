@@ -47,13 +47,14 @@ becomes `const 0`, the branch takes the proceed arm, the arm it dropped goes wit
 reached, and the loads and arithmetic that fed the compare and now feed nothing are retired.
 
 ⚠ A green case here proves nothing on its own — a folded guard and an asked guard compute the same thing
-whenever the guard would have passed. The evidence is the committed fragment of the first two cases and
-the CONTROLS below, each of which puts a fact the rule must NOT hold under a value the program reads back.
+whenever the guard would have passed. The fold shows in the emitted code (`--emit-ir`) of the first two
+cases, which nothing in the suite pins; what the suite runs are the CONTROLS below, each of which puts a
+fact the rule must NOT hold under a value the program reads back.
 
 ## Tests
 
 <!-- test: a-second-store-on-a-record-asks-no-shape-guard -->
-The shape the pass was opened for. `swapFirstTwo`'s fragment: the first read proves `length > 1`, so the
+The shape the pass was opened for. `swapFirstTwo`'s emitted code (`--emit-ir`): the first read proves `length > 1`, so the
 read at 0 and both writes carry no bound check; the first write asks the three shape guards, so the second
 write is the store alone.
 ```maxon
@@ -86,7 +87,7 @@ end 'main'
 <!-- test: a-loop-after-a-store-on-its-record-enters-without-tests -->
 The loop shape. The write at 1 proves `count`'s three shape predicates before the loop, so every test
 in the chain `unswitchInvariantGuards` put before it folds and the slow version loses its only way in:
-`carry`'s fragment holds one copy of the loop, and the chain's blocks hold only the hoisted length and
+`carry`'s emitted code (`--emit-ir`) holds one copy of the loop, and the chain's blocks hold only the hoisted length and
 buffer loads.
 ```maxon
 typealias Word = int(i64.min to i64.max)

@@ -109,7 +109,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/union-scalar-backing/error.unknown-union-case.test:11:3: unknown union case: 'triangle'
+error E3034: specs/union-scalar-backing/error.unknown-union-case.maxon:11:3: unknown union case: 'triangle'
 ```
 
 

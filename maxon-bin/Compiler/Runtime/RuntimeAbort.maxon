@@ -213,10 +213,11 @@ export enum RuntimeAbort
 	// same thing of the address a future lane really returns.
 	slabArenaBaseNotGranuleAligned = 91
 
-	// ⛔⛔ `__sched_checkdead`: a SCHEDULER DEADLOCK — Go's `checkdead` and its `"all goroutines are asleep -
-	// deadlock!"`. Every machine is idle, no timer is pending, no child is parked and no overlapped read is in
-	// flight, while `main` has not completed: nothing can ever make a green thread runnable again, so `main`
-	// can never finish.
+	// ⛔⛔ `__sched_checkdead`: a SCHEDULER DEADLOCK — Go's `checkdead` and its `"all goroutines are
+	// asleep - deadlock!"`. Every machine is idle, no timer is pending, no child is parked and no
+	// overlapped read is in flight, while `main` has not completed: nothing can ever make a green
+	// thread runnable again, so `main` can never finish. A thread parked in `__gt_quiesce` turns that
+	// finding into its answer instead: the check readies it as stuck rather than aborting.
 	//
 	// ⭐ **AN `awaitAny` REACHES IT ON THE SAME ARGUMENT, K THREADS INSTEAD OF ONE.** ⚠ An **EMPTY** array
 	// reaches it too, and correctly: awaiting any of zero promises can never complete.
@@ -231,13 +232,14 @@ export enum RuntimeAbort
 	schedulerDeadlock = 92
 
 	// `__gt_register_park`: the park note carries a kind it does not register. `GtRuntime`'s
-	// `GtParkKindTimer` / `GtParkKindNetpoll` / `GtParkKindNetpollAny` / `GtParkKindMailbox` / `GtParkKindAwait` /
-	// `GtParkKindAwaitAny` are the kinds it registers, and `GtParkKindYield` and `GtParkKindPreempt` are placed by
-	// the strand runner and never reach it — so any other value is a COMPILER bug rather than a program's, and it
-	// is silent without this: the thread would be suspended having been registered on NO store at all, which is a
-	// hang three functions away from its cause. It is a separate code from `schedulerDeadlock` above, this registry's
-	// founding rule: a runtime that cannot register a park and a scheduler that has nothing left to run are two
-	// different faults.
+	// `GtParkKind.timer` / `GtParkKind.netpoll` / `GtParkKind.netpollAny` / `GtParkKind.mailbox` /
+	// `GtParkKind.awaitPromise` / `GtParkKind.awaitAny` / `GtParkKind.quiesce` are the kinds it
+	// registers, and `GtParkKind.yielded` and `GtParkKind.preempt` are placed by the strand runner and
+	// never reach it — so any other value is a COMPILER bug rather than a program's, and it is silent
+	// without this: the thread would be suspended having been registered on NO store at all, which is
+	// a hang three functions away from its cause. It is a separate code from `schedulerDeadlock`
+	// above, this registry's founding rule: a runtime that cannot register a park and a scheduler that
+	// has nothing left to run are two different faults.
 	//
 	// ⛔ The kinds are enumerated by NAME rather than counted, so that the next one has to be spelled here to
 	// be believed; do not reintroduce a bare number.
@@ -441,6 +443,10 @@ export enum RuntimeAbort
 	// `__rand_fill`: the array handed to `__Builtins.fillRandom` does not own its buffer — a zero-copy
 	// view or an image literal — so the kernel would write into bytes another holder reads.
 	randomFillTargetNotOwned = 122
+
+	// `__gt_register_park`: a second green thread parked in `__gt_quiesce` while another was already
+	// waiting. The waiter is one word naming one thread, the one the last thread to finish wakes.
+	schedulerQuiesceWaiterTaken = 123
 
 	// ⚠ **108 IS VACANT, NOT REUSABLE.** The fault it would name — `__np_pd_open` / `__np_pd_release` finding
 	// a green thread still PUBLISHED on a direction word of the record they are about to reset — is not a

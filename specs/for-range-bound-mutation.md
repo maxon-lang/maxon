@@ -118,5 +118,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/for-range-bound-mutation/array-source-stays-locked.test:11:7: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3019: specs/for-range-bound-mutation/array-source-stays-locked.maxon:11:7: cannot pass 'arr' to function that mutates parameter 'self' (in main)
 ```

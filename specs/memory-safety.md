@@ -988,7 +988,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/memory-safety/eq-requires-equatable.test:16:7: type mismatch: 'cannot compare struct with struct'
+error E3005: specs/memory-safety/eq-requires-equatable.maxon:16:7: type mismatch: 'cannot compare struct with struct'
 ```
 
 <!-- test: shared-record-not-written-through-a-field-assign -->

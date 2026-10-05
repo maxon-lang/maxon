@@ -86,7 +86,7 @@ addresses themselves are non-deterministic (ASLR), so only the resolved function
 arm64 walks the same chain as x64: AArch64's `stp x29, x30` frame record holds the caller's frame pointer
 and the return address in the same two words x64's saved-RBP chain does — which is why one pair of
 offsets serves both walkers — and every arm64 function including a leaf gets a real frame record. ⚠ A
-Mach-O runs only on macOS, so on any other host an arm64-macos case is compiled and its golden compared
+Mach-O runs only on macOS, so on any other host an arm64-macos case is compiled
 while the execution is skipped, and the runner reports it as NOT PASSED rather than counting it.
 
 <!-- test: divide-by-zero -->
@@ -652,8 +652,8 @@ error E3055: <fragment>:10:10: try requires a throwing function: this `mod` cann
 #### A range that excludes BOTH `0` and `-1` still buys the unguarded divide
 The proof is what keeps the guard off the common path, so its precision is worth a case: `int(i64.min
 to -2)` is wholly negative — it admits neither hazard — and `specs/division.md`'s
-`ranged-divisor-excluding-minus-one-is-still-a-bare-idiv` holds the golden that shows no `cmp` was
-emitted. Here the point is only that a NEGATIVE divisor is not treated as suspicious merely for
+`ranged-divisor-excluding-minus-one-is-still-a-bare-idiv` is the case whose emitted code holds no
+`cmp`. Here the point is only that a NEGATIVE divisor is not treated as suspicious merely for
 being negative: `-13 mod -5` is `-3`, the remainder taking the DIVIDEND's sign.
 ```maxon
 typealias BelowMinusOne = int(i64.min to -2)
@@ -1365,7 +1365,7 @@ Stack trace:
 ### Deliberate access violation produces a clean panic (arm64-macOS)
 ⚠⚠ **A Mach-O RUNS ONLY ON macOS**, so on any other host the runner reports this NOT RUN and refuses to
 count it — which is why its target list excludes every other lane rather than marking it as a restriction
-about the FEATURE. A fragment is minted from a RUN, so its golden exists only because a Mac minted it.
+about the FEATURE.
 
 ⭐ **ON arm64-macOS IT ANSWERS FRAME FOR FRAME WITH THE x64 CASE ABOVE.** The handler
 reads Darwin's `ucontext`, recovers the faulting frame and walks out through `main` to `mrt_start` — so the

@@ -31,20 +31,35 @@ export function stagedFixture(fixture String, caseLabel String) returns FilePath
 	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
 	clearStagedFiles(staged)
 
-	for stored in listing(fixtureDir("{FixturesDirName}{PathSeparator}{fixture}")) 'eachStored'
-		let storedName = stored.filename()
+	stageStoredSources(fixtureDir("{FixturesDirName}{PathSeparator}{fixture}"), into: staged)
+
+	return staged
+end 'stagedFixture'
+
+function stageStoredSources(stored FilePath, into FilePath)
+	for entry in listing(stored) 'eachStored'
+		let storedName = entry.filename()
+
+		if Directory.isDirectory(entry) 'aSubdirectory'
+			let subdirectory = into.join(storedName)
+
+			if not Directory.create(subdirectory) 'couldNotCreate'
+				panic("warm-rebuild tests: the gate could not run — could not create {subdirectory.toString()}.")
+			end 'couldNotCreate'
+
+			stageStoredSources(entry, into: subdirectory)
+			continue
+		end 'aSubdirectory'
 
 		if not storedName.endsWith(StoredFixtureSuffix) 'notAStoredSource'
 			continue
 		end 'notAStoredSource'
 
 		let stagedName = storedName.replace(StoredFixtureSuffix, with: "")
-		let body = try File.readText(stored) otherwise panic("warm-rebuild tests: the gate could not run — could not read the stored fixture {stored.toString()}.")
-		try File.writeText(staged.join(stagedName), content: body) otherwise panic("warm-rebuild tests: the gate could not run — could not stage {stagedName} into {staged.toString()}.")
+		let body = try File.readText(entry) otherwise panic("warm-rebuild tests: the gate could not run — could not read the stored fixture {entry.toString()}.")
+		try File.writeText(into.join(stagedName), content: body) otherwise panic("warm-rebuild tests: the gate could not run — could not stage {stagedName} into {into.toString()}.")
 	end 'eachStored'
-
-	return staged
-end 'stagedFixture'
+end 'stageStoredSources'
 
 // `<compiler> verify-warm-rebuild <staged>`, run in the staging tree.
 export function spawnVerify(staged FilePath) returns CollectedOutput

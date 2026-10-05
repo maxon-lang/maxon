@@ -1,0 +1,19 @@
+let ContainerGlobalsSpecName = "container-globals"
+
+test 'a global built by a library container is answered without a panic and every case passes'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: ContainerGlobalsSpecName, testNames: ["container-globals.plain", "container-globals.vector", "container-globals.array", "container-globals.map", "container-globals.member-reads"], broken: broken)
+
+	if said.contains("DIED") 'aWorkerDied'
+		broken.push("a spec worker died. It said:\n{said}\n")
+	end 'aWorkerDied'
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a global built by a library container is answered without a panic")
+end 'a global built by a library container is answered without a panic and every case passes'

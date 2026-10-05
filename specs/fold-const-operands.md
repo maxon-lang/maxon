@@ -192,7 +192,7 @@ end 'main'
 <!-- test: an-identity-chain-folds-in-one-pass -->
 `(x * 1) + 0` — the shape an enum ordinal's accumulator actually produces, and the one that needs
 the fold to see through ITSELF: the `add`'s operand is the `mul`'s result, which is being removed in
-the same walk. Both go, and the golden below is where that shows.
+the same walk. Both go, and the emitted code is where that shows.
 
 ```maxon
 function main() returns ExitCode
@@ -219,28 +219,4 @@ end 'main'
 ```
 ```exitcode
 37
-```
-
-<!-- test: the-emitted-runtime-is-folded-too -->
-`__managed_fill` and `__managed_get` — two bodies the compiler installs after the pipeline, so the
-pipeline's own run of the pass never saw them. Every `movRegImm32 <reg>, <k>` immediately followed
-by a `cmpRegReg` against that register is an unfolded compare; the golden shows `cmpRegImm32`
-instead, and no `movRegImm32` feeding a compare at all.
-
-`refill` is what reaches both: it fills a window through `__managed_fill` and the `get` reads one
-slot back out.
-
-```maxon
-function main() returns ExitCode
-	var a = [1, 2, 3]
-	a.refill(6, value: 7)
-	return (try a.get(5) otherwise 9) as ExitCode
-end 'main'
-```
-```exitcode
-7
-```
-```RequiredRuntime
-__managed_fill
-__managed_get
 ```

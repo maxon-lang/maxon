@@ -8,8 +8,8 @@ Each language feature must have a spec file in the `specs/` directory that serve
 
 1. **YAML Frontmatter** - Metadata about the feature
 2. **Documentation** - User-facing prose and examples, read by people; nothing extracts it
-3. **Tests** - Test cases, generated into per-target fragment trees
-   (`specs/fragments/<target>/<spec>/<test>.test`)
+3. **Tests** - Test cases, each a program the harness compiles and checks. The cases whose subject is the
+   emitted code live in the sibling directory `ir-specs/`, which `maxon spec-test ir-specs` runs.
 
 ## Spec File Structure
 
@@ -119,22 +119,30 @@ Stack trace:
 The fences the harness reads are the `*Fence` constants in `maxon-bin/Testing/SpecParser.maxon`. A case
 that opens any other tagged fence, such as ` ```RequiredIR `, is refused, naming the case and the fence.
 
-Three things pin what the compiler emits, and only the third is a gate:
+Three things pin what the compiler emits:
 
-- **The minted fragment golden**, `specs/fragments/<target>/<spec>/<test>.test`, which records the Target
-  IR of every function the case's own source declares. A case with no golden mints one on the host where
-  it passed; a golden whose bytes differ is reported as drift and changes no verdict. Goldens are
-  **reference, not a gate** (user ruling, 2026-08-02) — see `SpecTestRunner.maxon`'s fragment-layout note
-  for why a gate there hides real defects. `--update-required --filter=<spec>` rewrites them, and
-  `--rewrite-drifted-goldens` rewrites the ones that drifted (see [Test Fragment Files](#test-fragment-files)).
-- **A `RequiredRuntime` block**, which opts a body the golden would otherwise withhold — an emitted
-  runtime function, or a `stdlib/` body the program reaches — into that same golden, one name per line.
-  `specs/emitted-runtime-body.md` is the subject and the canonical example. It is still a golden, so it
-  is still reference; and it says nothing about the run, so it does not satisfy `pinsAnyResult` — a case
-  carrying it still owes an exit code, a stdout or a stderr block.
+- **A `TargetIr:<target>` block** holds the Target IR the compiler renders for the case on that lane: every
+  function the case's own source declares, plus the bodies a `RequiredRuntime` block names. It is a gate on
+  the lane it names. When the run's lane has a block, a compile that renders different text fails the case
+  and the failure shows the first differing line; only the block for the run's own lane is compared. The
+  fence is always qualified, and the target is one of `x64-windows`, `x64-linux`, `arm64-macos` or `arm64-linux`: an
+  unqualified fence, or `wasm32-wasi`, which renders no Target IR, is refused, naming the case. A pin is
+  compared against the COMPILE, so a lane this host cannot run (`--target=arm64-macos` on Windows) still
+  checks it. A case carrying any `TargetIr` block always compiles and runs on its own. The cases that pin
+  emitted code live in `ir-specs/`.
+- **A `RequiredRuntime` block**, which opts a body the Target IR would otherwise withhold — an emitted
+  runtime function, or a `stdlib/` body the program reaches — into the rendering, one name per line.
+  `ir-specs/emitted-runtime-body.md` is the subject and the canonical example. It says nothing about the
+  run, so it does not satisfy `pinsAnyResult` — a case carrying it still owes an exit code, a stdout or a
+  stderr block.
 - **A `tests/` case over `--emit-ir` or `--emit-ir-runtime=<name>` output**, which spawns the compiler at
   a fixture and reads the printed IR itself. This is where an emitted-code property that must go RED
   belongs; `tests/emitted-runtime/` is the corpus, and `tests/README.md` states what each one costs.
+
+`--update-required --filter=<spec>/` re-mints the `TargetIr:<lane>` block of this run's lane in the spec
+file, in place: it replaces a case's block, or adds one after the case's last block. A spec that holds any
+`TargetIr` block is an IR spec, and every selected case of it that passed (or compiled, on a lane this
+host cannot run) gets a block; a spec gains blocks only once it holds one.
 
 ### Rdata Verification
 
@@ -310,6 +318,7 @@ line:
 | `<!-- preempt: off -->` | Run the program with `MAXON_PREEMPT=off` in its environment, so the monitor takes no processor from the thread holding it; `off` is the only value |
 | `<!-- stdin: hold -->` / `<!-- stdin: delayed -->` | Give the program a stdin that blocks. `hold` is a pipe nobody ever writes to, so a read blocks for the program's whole life; `delayed` writes one line about a second after the program's first stdout byte and closes, so the read blocks and then completes. Without the marker stdin is the null device and every read answers at once with EOF |
 | `<!-- runs: alone -->` | Run the case's program with no other case's program running beside it: the harness runs a spec's `alone` cases as a job of their own, after every other job has finished, and starts nothing else while it runs. It is for a program whose peak memory is set by a runtime limit, such as a green thread's stack grown to its 1 GiB maximum; `alone` is the only value |
+| `<!-- process: own -->` | Keep the case out of every batch program: it compiles and runs in a program of its own. It is for a case that observes state the whole process shares, which no check of its source can see (a named resource an earlier case still holds, a per-process counter). `runs: alone` also changes when the case is scheduled; `own` changes only which process it runs in, and is the only value |
 
 A case holds one block of each kind: one ` ```maxon ` program, one ` ```exitcode `, one each of the portable
 ` ```stdout `, ` ```stderr ` and ` ```maxoncstderr `, one target-qualified block per target, and one
@@ -366,9 +375,9 @@ mm_free String #1
 ```
 ````
 
-The trace is normalized so goldens are stable across runs and machines:
+The trace is normalized so the blocks are stable across runs and machines:
 timestamps and depth indentation are stripped, and allocation ids (`#<id>`) are
-densely renumbered `1, 2, 3, …` by first appearance. Regenerate the golden with
+densely renumbered `1, 2, 3, …` by first appearance. Regenerate the block with
 `--update-required`, which writes it over the case's existing block, or after the case's last line when
 it has none, in the file's own line ending. The run refuses to write into a spec file that changed after
 it was parsed.
@@ -376,10 +385,10 @@ it was parsed.
 **Event order is not normalized, and is not stable once a second green thread
 produces events.** The debug stream is one shared ring carrying no sequence
 number and no thread id, so with two producers the decoded order is the order
-they took the lock rather than the order the program ran — and the golden is
+they took the lock rather than the order the program ran — and the block is
 compared by exact string equality. A case that traces concurrent work must
 therefore pin `<!-- procs: 1 -->`: one processor is one producer, which makes
-ring order program order and the committed golden the only order the program
+ring order program order and the committed block the only order the program
 can produce. An ` ```exitcode ` block may accompany it (checked against
 the monitor's returned child exit code); an ` ```stdout ` block, if present, is
 checked via a separate untraced run since the monitor interleaves trace lines
@@ -446,96 +455,97 @@ end 'main'
 
 ## Workflow
 
-### Test Fragment Files
+### Staged files and diagnostic paths
 
-Test fragment files — the goldens — are written by the test runner and stored under `specs/fragments/<target>/<spec-name>/<test-name>.test` (e.g. `specs/fragments/x64-windows/arithmetic/addition.test`). The target is the run's effective target, never the host: a golden records the code that was generated. They are machine-maintained — edit the spec file, not the fragment — but agents reading them should understand the format so they don't confuse a golden with an expectation.
+A case compiles from a scratch directory under `<spec dir>/.spec-tmp/`, which `.gitignore` covers. A
+```maxoncstderr block names the case's file as `<spec directory>/<spec>/<test>.maxon:<line>:<column>` — for
+a case in `specs/arrays.md` named `push`, `specs/arrays/push.maxon:3:5` — or by the placeholder
+`<fragment>:3:5`. Whichever spelling an expectation uses, the harness rewrites it and the compiler's
+output to one form before comparing, so the path decides nothing. A multi-file case keeps the directory
+prefix of each file ahead of the name (`app/specs/arrays/push.maxon:10:13`).
 
-A golden is reference, not a gate. A run mints one for a case that has none, on the host where that case passed, and leaves the ones that exist as they are: a committed golden whose bytes differ from this run's compile is reported as drift, and the case keeps the verdict its assertions earned. Two flags rewrite a committed golden, and they are refused together:
+### Batched runs
 
-- `--update-required` (with a `--filter`) rewrites the golden of every selected case that passed on this host, drifted or not, and re-mints the trace-capture blocks in the spec files.
-- `--rewrite-drifted-goldens` rewrites each golden that drifted, for a case that passed on this host, and leaves the spec files as they are.
+A default run compiles a spec's plain run cases into the fewest programs whose declared names do not
+overlap and runs each program once; `--batch=off` compiles and runs every case on its own. A nominal type
+name (`type`, `enum`, `union`, `interface`) is whole-program, and so is an extension method of one
+signature on one type, so two cases declaring the same name land in different programs, and so do a case
+declaring a nominal type and another case that names that word (a `typealias` of it, or the library's own type
+of that name), and a case declaring a `typealias` and another that names the word without declaring it. The
+declared and mentioned names come from the compiler's own front end, one pass per case
+(`Compiler.claimsOfSources`). Each batched case
+sits in its own directory, so its file-private names stay its own, with its `main` renamed to an exported
+`__spec_case_<n>`, and a generated entry runs the cases selected by `--select=`
+between begin and end markers carrying each case's exit code. After each case's `main` returns and before
+its end marker, the entry calls `__Builtins.gtQuiesce()`, which waits for every service and coroutine the
+case left running, so their output lands between the markers, and the end marker carries the count that is
+still outstanding. On wasm32-wasi the entry skips that call and the end marker carries 0. A case's stdout and
+stderr are the bytes between its markers. A case whose end marker is missing or reports work still
+outstanding (a service the runtime owns for the whole program, such as the default log sink, counts), and
+every case of a program that exited non-zero (a panic, a crash, a leak at exit 101 or 75), runs
+again ALONE from the same binary with `--select=<n>`, and its verdict comes from that run. A case a program's
+compile refuses is dropped from the program so the rest still run, and compiled alone: when it builds, the
+case FAILS with the batch compile's diagnostic and a message saying the batching checks missed it, which is
+a batching gap the runner must close; when it does not build alone either (a target refusal such as E3104,
+or a real error), its own compile decides it as for any case. A program that does not compile at all is
+treated the same way for every case it held. Output outside the markers belongs to no single case: a
+`static` or module-level initializer runs before `main` for every case of a program, so what it prints
+lands ahead of the first marker, and a `--select=` rerun of the same binary prints it too. A program whose
+run left such output FAILS every one of its cases, and so does a case whose alone rerun died before the
+entry began, each with a message naming the cause: a case ran code before `main` that the batching checks
+did not catch, and the runner must keep it out of batches. A batched case
+that FAILS is compiled and run alone to diagnose the failure: when it passes alone the case FAILS with a
+message saying it passes alone but fails batched, which is a batching gap (a missing check, or a case
+that needs `<!-- process: own -->`); when it fails alone too, the solo failure is the verdict. The case
+counts as run alone either way, and a batched PASS stands. A target with no command line (wasm32-wasi)
+cannot read `--select=`, so its entry runs every case, and a case whose output cannot be read there is
+diagnosed the same way.
 
-**CI records the goldens of every lane**, including the arm64 lanes a developer's machine may not run. Each CI lane runs the suite with `--rewrite-drifted-goldens` and uploads the goldens it minted or rewrote as a `goldens-<target>` artifact; the step fails only when the suite changed a path other than that lane's own goldens. On a push to `main`, the `record-goldens` job runs `scripts/record-goldens.sh`, which commits those goldens to `main` as `github-actions[bot]`, red lanes included, since a golden is written only for a case that passed. When a later commit on `main` changed `maxon-bin/`, `stdlib/`, `runtime/` or `specs/*.md`, it leaves the recording to that commit's own run. The job pushes to `main` directly, so a branch protection rule on `main` would refuse it.
+These cases always compile and run on their own: a compile-error case; a case pinning `stderr`; an `Args`
+marker; a `stdin`, `procs`, `preempt`, `network`, `process: own` or `runs: alone` marker; an `MmTrace`, `LogTrace`,
+`AsyncTrace` or `DebugInfo` marker; a stdlib-overlay or runtime-file section; a multi-file case;
+`__file__` or `__line__` in the source; a `TargetIr`, `RequiredRuntime`, `RequiredData` or
+`RequiredRdata` block; a top-level `export` or `module` declaration, which a multi-file program refuses
+when no other file uses it (E3092, E3094); and a `main` that is not exactly
+`function main() returns ExitCode` or `function main()` with one `end 'main'`. So does a case whose source
+names one of these words anywhere, a `typealias` included: `CommandLine` or `executablePath`, which read
+the batch program's own argv and path; `__Builtins`, whose runtime counters earlier cases move;
+`__DebugStream`, whose name-id table is numbered across the whole program; and `Log`, `Logger`, `LogSink`
+or `TraceCapture`, which set state the whole process shares. A case declaring any name the standard library
+also declares (an enum such as `StringError`, an alias such as `ByteArray`, an interface such as
+`InitableFromStringLiteral`) runs alone too, because every other case's use of that name would change meaning.
 
-For a pull request's run, or a run whose recording was left to a later commit, apply its goldens from the repository root with `scripts/fetch-goldens.sh <run-id>` (it uses `gh`). It places the files under `specs/fragments/`, ready to review and commit.
+So does a case whose own module-level `var`, `let` or `static` initializers run program code, which the
+compiler's front end answers before any batch is built (`ModuleInitNeed.runsProgramCode`): such an initializer
+runs before `main` for every case of a program, so its effects would belong to no case. A case the front end
+refuses is placed alone, and its own compile reports why.
 
-#### Fragment Format
-
-A fragment records the case's source, what the program was given, and what the compiler produced. A run case:
-
-```
-// Test: <test-name>
-<maxon source>
----
-Args: <argv, only when the case names any>
-ExitCode: <N, or `unpinned` when the case pins only a stream>
----
-<the Target IR the compiler generated>
-```
-
-A compiler-error case has no IR; the diagnostic the compiler actually produced takes its place, with every compiled file's path rewritten to the stable `<fragment>` token:
-
-```
-// Test: <test-name>
-<maxon source>
----
-CompilerError:
-<normalized compiler stderr>
-```
-
-The `// Test:` header is exactly one line, and the source section is byte-for-byte the file the compiler was handed — so a `line:col` in the diagnostic reads directly against it. Pinned stdout and stderr blocks are not in the fragment: they are test inputs, checked by the run, and a golden only tracks the code.
-
-#### Example (run case)
-
-```
-// Test: addition
-function main() returns ExitCode
-	return 10 + 5
-end 'main'
----
-ExitCode: 15
----
-data {
-  ...
-}
-```
-
-#### Example (compiler-error case)
-
-```
-// Test: error.duplicate-typealias-same-file
-typealias Score = int(0 to 100)
-typealias Score = int(0 to 200)
-
-function main() returns ExitCode
-	return 0
-end 'main'
----
-CompilerError:
-error E3061: <fragment>:3:11: Duplicate typealias 'Score'
-```
+The line under `N passed, M failed` counts them: `N run case(s) ran batched in M program(s); K ran alone`.
 
 #### Commands
 
 ```bash
-# Run only tests matching a pattern; a case with no golden mints one, a drifted golden is reported
+# Run only tests matching a pattern
 ./maxon-bin/.maxon/maxon.exe spec-test --filter=arithmetic
 
 # Run several specs in one run: every case any pattern selects
 ./maxon-bin/.maxon/maxon.exe spec-test --filter=arithmetic/ --filter=tuples/
 
-# Rewrite the committed goldens of the matching cases
-./maxon-bin/.maxon/maxon.exe spec-test --update-required --filter=arithmetic
+# Run every case on its own
+./maxon-bin/.maxon/maxon.exe spec-test --batch=off --filter=arithmetic/
 
-# Rewrite only the goldens that drifted, for cases that passed
-./maxon-bin/.maxon/maxon.exe spec-test --rewrite-drifted-goldens
+# The Target IR suite, on this host's lane and on another lane's compile
+./maxon-bin/.maxon/maxon.exe spec-test ir-specs
+./maxon-bin/.maxon/maxon.exe spec-test ir-specs --target=arm64-macos
 
-# Apply the goldens a CI run wrote
-scripts/fetch-goldens.sh <run-id>
+# Re-mint the inline blocks (trace captures, TargetIr pins) of the matching cases
+./maxon-bin/.maxon/maxon.exe spec-test ir-specs --update-required --filter=static-variables/
 ```
 
 #### Adding Tests
 
 1. Create or edit `specs/<feature-name>.md`.
-2. Run `spec-test --filter=<feature-name>` — a passing case with no golden mints one.
-3. Implement until tests pass. Never edit fragments directly; edit the spec file and let the runner mint or, under `--update-required` or `--rewrite-drifted-goldens`, rewrite.
+2. Run `spec-test --filter=<feature-name>`.
+3. Implement until tests pass. A case that pins emitted code belongs in `ir-specs/<feature-name>.md`: write
+   its program and result blocks, add a `TargetIr:<lane>` block for the lane you run (any content), and
+   run `spec-test ir-specs --update-required --filter=<feature-name>/` on each lane.

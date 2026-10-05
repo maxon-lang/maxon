@@ -180,6 +180,28 @@ let DeclShapeDeclaredConformance = 55 as HashDigest
 let DeclShapeConformanceBinding = 72 as HashDigest
 let DeclShapeModuleDirectory = 128 as HashDigest
 let DeclShapeFileBoundary = 129 as HashDigest
+let AuthorChainSalt = 130 as HashDigest
+let LibraryChainSalt = 131 as HashDigest
+let DeclShapeTypeNameTable = 132 as HashDigest
+let DeclShapeDefaultDeclaration = 133 as HashDigest
+
+// Which hash chain a signature event feeds. `libraryHash` (library and whole chains) keys a shared
+// library parse, and `hash` (all three) keys a project's parse memo: the whole-program hash moves
+// with every user declaration, so a key built on it would never let a second program reuse a
+// library parse.
+export enum HashEventSource
+	author
+	library
+	whole
+end 'HashEventSource'
+
+export enum LibraryParseSharing
+	undecided
+	shareable
+	shadowed
+	namesOverlap
+	rootInsideStdlib
+end 'LibraryParseSharing'
 
 // ⭐ **THE `implements` LIST'S CONTRIBUTION TO A DECLARATION'S CONTENT HASH — ONE STATEMENT, BOTH KINDS AND
 // BOTH HALVES.** The reason the list must ride is the same on each and it is `recordStruct`'s rule: a
@@ -724,8 +746,8 @@ export typealias StoredGlobalCount = int(0 to u64.max)
 //     an available reading of the spec.
 //   • What the old comment correctly saw is that a `var` needs something a `let` never did: a
 //     **LABEL**. A constant inlines at every read, so there is no slot and no name in the IR. A
-//     var's slot is real, and a label carrying a FILE PATH would put a temp directory into every
-//     golden fragment and into the emitted binary.
+//     var's slot is real, and a label carrying a FILE PATH would put a temp directory into the
+//     rendered Target IR and into the emitted binary.
 //
 // It concluded that the key therefore could not be scoped. The actual conclusion is that these are
 // TWO facts and want two fields: **keep ONE key, and DERIVE the label from it** (`dataLabelFor`) —
@@ -767,7 +789,7 @@ end 'fileScopedDeclKey'
 // suite's globals still land in `.data`, still take their stores, and the program still returns the
 // right answer. The claim it "would be classified `rdata` and fault on its first store" was false.
 //
-// So what it buys is READABILITY — `__data_counter` in a golden fragment says what it is.
+// So what it buys is READABILITY — `__data_counter` in the rendered Target IR says what it is.
 //
 // ⭐ **THIS IS THE ONLY COPY OF THIS STRING.** A future name-based classifier single-sources its
 // prefix HERE.
@@ -1336,6 +1358,62 @@ end 'ManagedGlobal'
 
 export typealias ManagedGlobalArray = Array with ManagedGlobal
 
+// What a program's own top-level initializers do before `main`. Building records prints nothing, so only
+// `runsProgramCode` keeps a spec case out of a batch program.
+export enum ModuleInitNeed
+	none
+	buildsRecords
+	runsProgramCode
+end 'ModuleInitNeed'
+
+enum InitializerShape
+	scalar
+	records
+	runsCode
+end 'InitializerShape'
+
+let ContainerCreateInitializerTokenCount = 5 as ElementIndex
+
+function initializerTokenAt(tokens TokenArray, decl TopLevelDecl, offset ElementIndex) returns Token
+	return try tokens.get(decl.initStart + offset) otherwise panic("initializerTokenAt: initializer token {decl.initStart + offset} of '{String.from(decl.name)}' is not below the declaring file's {tokens.count()} tokens")
+end 'initializerTokenAt'
+
+function widenedInitializerShape(shape InitializerShape, by InitializerShape) returns InitializerShape
+	return match shape 'shape'
+		runsCode gives InitializerShape.runsCode
+		records gives InitializerShape.runsCode if by == InitializerShape.runsCode else InitializerShape.records
+		scalar gives by
+	end 'shape'
+end 'widenedInitializerShape'
+
+function initializerShapeOfToken(kind TokenKind, previous TokenKind) returns InitializerShape
+	if kind == TokenKind.leftParen 'aParenthesis'
+		return InitializerShape.runsCode if tokenKindEndsAValue(previous) else InitializerShape.scalar
+	end 'aParenthesis'
+
+	if tokenKindIsScalarShaped(kind) 'scalar'
+		return InitializerShape.scalar
+	end 'scalar'
+
+	if tokenKindIsRecordShaped(kind) 'records'
+		return InitializerShape.records
+	end 'records'
+
+	return InitializerShape.runsCode
+end 'initializerShapeOfToken'
+
+function tokenKindEndsAValue(kind TokenKind) returns bool
+	return kind == TokenKind.identifier or kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace or kind == TokenKind.selfType or kind == TokenKind.self or kind == TokenKind.int or kind == TokenKind.float or kind == TokenKind.bool or kind == TokenKind.cstring
+end 'tokenKindEndsAValue'
+
+function tokenKindIsScalarShaped(kind TokenKind) returns bool
+	return kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.true or kind == TokenKind.false or kind == TokenKind.identifier or kind == TokenKind.plus or kind == TokenKind.minus or kind == TokenKind.star or kind == TokenKind.slash or kind == TokenKind.mod or kind == TokenKind.and or kind == TokenKind.or or kind == TokenKind.not or kind == TokenKind.xor or kind == TokenKind.shl or kind == TokenKind.shr or kind == TokenKind.as or kind == TokenKind.int or kind == TokenKind.float or kind == TokenKind.bool or kind == TokenKind.sizeof or kind == TokenKind.countof or kind == TokenKind.selfType or kind == TokenKind.rightParen
+end 'tokenKindIsScalarShaped'
+
+function tokenKindIsRecordShaped(kind TokenKind) returns bool
+	return kind == TokenKind.stringLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.charLiteral or kind == TokenKind.leftBracket or kind == TokenKind.rightBracket or kind == TokenKind.comma
+end 'tokenKindIsRecordShaped'
+
 // Which green threads may count a managed global's record, and so what `__module_init` owes it in a program
 // that spawns a service.
 export union GlobalThreadReach
@@ -1832,7 +1910,7 @@ export type TopLevelDecl
 	// declaration order and hands each STORED decl its bare name, disambiguated ONLY where an
 	// earlier decl already took that label. So the common program gets `__data_counter` and the
 	// pathological one gets `__data_counter` + `__data_counter$1` — and NEITHER carries a file path,
-	// which is what keeps a golden fragment free of the temp directory the spec runner compiled in.
+	// which is what keeps the Target IR free of the temp directory the spec runner compiled in.
 	export var dataLabel as DataSlotLabel
 
 	// ⭐⭐ **WAS THIS BINDING DECLARED BY THE STDLIB CORPUS?** Stdlib is loaded into EVERY compile whether the
@@ -6104,8 +6182,8 @@ end 'directCascadeCalleeOf'
 // questions at different tiers — forbidding, recognizing, and here MINTING — and a signature index owning
 // the parser's reservation, or the reverse, would be the worse coupling. The language rule binds them,
 // not a shared symbol. A drift between the three is LOUD rather than silent: this one's value reaches
-// every emitted per-type symbol of a contested instance, so changing it alone moves goldens, and
-// emptying it hangs the loop.
+// every emitted per-type symbol of a contested instance, so changing it alone renames those
+// symbols, and emptying it hangs the loop.
 let ReservedTypeNamePrefix = b"__"
 
 // ⭐⭐ **THE NAME the compiler SYNTHESIZES THE ARRAY RECORD UNDER WHEN NO LISTED MODULE DECLARES ONE
@@ -6569,7 +6647,7 @@ function inlineRangedAliasBits(alias RangedTypeAlias) returns BitWidth throws In
 end 'inlineRangedAliasBits'
 
 // ⭐⭐ **THE SLOT A PAYLOAD-FREE ENUM'S VALUE OCCUPIES — the narrowest width holding every declared TAG
-// (`specs/enum-narrow-storage.md`).** A payload-free enum's value IS its tag (`Parser.emitEnumTagOf`), so
+// (`ir-specs/enum-narrow-storage.md`).** A payload-free enum's value IS its tag (`Parser.emitEnumTagOf`), so
 // the set the slot must hold is exactly `caseTags`, and the min/max of that set is what the ladder is asked.
 //
 // ⭐⭐ **THE TAG SET IS THE RIGHT QUESTION AT EVERY BACKING, AND THAT IS WHY THERE IS NO `EnumBacking`
@@ -7200,8 +7278,9 @@ export let ManagedFileIndexParamName = b"index"
 // ⚠ **THE TWO REFUSALS EACH MISFILE ONE NAME:** `createCursor` is an INSTANCE method that the
 // static refusal calls a static, and `fromCString` (genuinely `isStatic: true`) is what the member
 // refusal calls a member. Neither is a false statement about BUILDABILITY, which
-// is what the sentences are for; correcting the category costs 34 committed goldens, since the `are not built`
-// clause is a literal in the message rather than rendered from a list the way the roster now is.
+// is what the sentences are for; correcting the category changes the message, since the
+// `are not built` clause is a literal in the message rather than rendered from a list the way the
+// roster is.
 export let ManagedMemoryCreateMethod = b"create"
 
 // ⭐ **`fromCString(cstr)` — A NUL-TERMINATED POINTER BACK INTO A BUFFER**, `toCString()`'s dual and the
@@ -8017,10 +8096,10 @@ end 'citedNameHeadOf'
 // arithmetic property a cross-target-identical digest needs, already shipping on every target because the
 // query spine keys on it. 64 bits is the width the collision argument rests on: at N = 10^4 distinct tuple
 // types P(collision) ≈ N²/2^65 ≈ 5×10⁻¹², where a 40-bit digest would be ≈ 5×10⁻⁵ — a number a real program
-// can hit. Do not shorten it to make a golden prettier; `recordTupleElementToken` panics on a collision, and
-// that panic is a compile that STOPS.
+// can hit. Do not shorten it to make the rendered Target IR prettier; `recordTupleElementToken`
+// panics on a collision, and that panic is a compile that STOPS.
 //
-// ⚠ The basis and prime are baked into committed goldens and into emitted symbols on every target:
+// ⚠ The basis and prime are baked into emitted symbols on every target:
 // changing either renames every nested tuple in the tree.
 //
 // The rendering is HEX, the same `0-9a-f` the compiler already spells a machine value in. The alphabet is
@@ -8193,7 +8272,7 @@ typealias GenericAliasSpellingBitsMap = Map with (GenericInstanceId, DeclaredSur
 // The generic-alias names whose declarations name DIFFERENT instances ⇒ every declaration of each, by
 // declaring file. EMPTY for every program in the corpus — see
 // `ProgramSignatures.settleGenericAliasContest` for why that emptiness is what keeps every interned
-// instance, every mangled symbol and every committed golden where it was.
+// instance and every mangled symbol where it was.
 typealias ContestedGenericAliasMap = Map with (ByteArray, GenericAliasByDeclaringFile)
 
 // The generic-alias names ONE ROUND of the contest found declarations disagreeing about — the first pass's
@@ -8917,8 +8996,12 @@ export type GenericInstanceRegistry
 	// The baseline rows a merge cleared the speculative mark of, so restoring the baseline can set it back.
 	var mergeNamedRows as GenericInstanceIdArray
 
+	var copyDemanded as GenericInstanceIdSet
+	var parseCopyDemandedRows as GenericInstanceIdSet
+	var mergeCopyDemandedRows as GenericInstanceIdArray
+
 	export static function create() returns GenericInstanceRegistry
-		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedElementCountColumn.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(), baselineCount: 0, parseBandOpen: false, parseNamedRows: GenericInstanceIdSet.create(), mergeNamedRows: GenericInstanceIdArray.create()}
+		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedElementCountColumn.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create(), baselineCount: 0, parseBandOpen: false, parseNamedRows: GenericInstanceIdSet.create(), mergeNamedRows: GenericInstanceIdArray.create(), copyDemanded: GenericInstanceIdSet.create(), parseCopyDemandedRows: GenericInstanceIdSet.create(), mergeCopyDemandedRows: GenericInstanceIdArray.create()}
 	end 'create'
 
 	export function settleBaseline()
@@ -8932,6 +9015,7 @@ export type GenericInstanceRegistry
 
 		self.parseBandOpen = true
 		self.parseNamedRows = GenericInstanceIdSet.create()
+		self.parseCopyDemandedRows = GenericInstanceIdSet.create()
 	end 'openParseBand'
 
 	// The rows the open parse minted, in mint order, and the baseline rows it named — handed back before the registry is cut
@@ -8949,10 +9033,17 @@ export type GenericInstanceRegistry
 			named.push(id)
 		end 'eachNamed'
 
+		var demanded = GenericInstanceIdArray.create()
+
+		for id in self.parseCopyDemandedRows 'eachCopyDemanded'
+			demanded.push(id)
+		end 'eachCopyDemanded'
+
 		self.restoreBaseline()
 		self.parseBandOpen = false
 		self.parseNamedRows = GenericInstanceIdSet.create()
-		return ParseBandInstances.create(rows, namedRows: named)
+		self.parseCopyDemandedRows = GenericInstanceIdSet.create()
+		return ParseBandInstances.create(rows, namedRows: named, copyDemandedRows: demanded)
 	end 'closeParseBand'
 
 	// Cut every row added since the baseline and put back every speculative mark a merge cleared.
@@ -8987,6 +9078,14 @@ export type GenericInstanceRegistry
 		end 'eachNamedByAMerge'
 
 		self.mergeNamedRows = GenericInstanceIdArray.create()
+
+		// Cleared before each fold's parses, so which instances count as copied does not depend on the order
+		// earlier merges ran in.
+		for id in self.mergeCopyDemandedRows 'eachCopyDemandedByAMerge'
+			_ = self.copyDemanded.remove(id)
+		end 'eachCopyDemandedByAMerge'
+
+		self.mergeCopyDemandedRows = GenericInstanceIdArray.create()
 	end 'restoreBaseline'
 
 	export function noteFingerprint(fingerprint IndexFingerprint, group String)
@@ -8999,6 +9098,9 @@ export type GenericInstanceRegistry
 		fingerprint.note("byBase", value: self.byBase.count())
 		fingerprint.note("parseNamedRows", value: self.parseNamedRows.count())
 		fingerprint.note("mergeNamedRows", value: self.mergeNamedRows.count() as EntryCount)
+		fingerprint.note("copyDemanded", value: self.copyDemanded.count())
+		fingerprint.note("parseCopyDemandedRows", value: self.parseCopyDemandedRows.count())
+		fingerprint.note("mergeCopyDemandedRows", value: self.mergeCopyDemandedRows.count() as EntryCount)
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
 
@@ -9024,6 +9126,48 @@ export type GenericInstanceRegistry
 			self.mergeNamedRows.push(id)
 		end 'aBaselineRow'
 	end 'markNamed'
+
+	export function noteCopyDemanded(id GenericInstanceId)
+		if self.parseBandOpen 'aParseIsAsking'
+			self.parseCopyDemandedRows.insert(id)
+			return
+		end 'aParseIsAsking'
+
+		self.markCopyDemanded(id)
+	end 'noteCopyDemanded'
+
+	export function markCopyDemanded(id GenericInstanceId)
+		if self.copyDemanded.contains(id) 'alreadyDemanded'
+			return
+		end 'alreadyDemanded'
+
+		self.copyDemanded.insert(id)
+		self.mergeCopyDemandedRows.push(id)
+	end 'markCopyDemanded'
+
+	export function copyDemandedIds() returns GenericInstanceIdArray
+		var ids = GenericInstanceIdArray.create()
+
+		for id in self.copyDemanded 'eachMerged'
+			ids.push(id)
+		end 'eachMerged'
+
+		if self.parseBandOpen 'aParseIsAsking'
+			for id in self.parseCopyDemandedRows 'eachOfTheParse'
+				ids.push(id)
+			end 'eachOfTheParse'
+		end 'aParseIsAsking'
+
+		return ids
+	end 'copyDemandedIds'
+
+	export function instanceIsCopyDemanded(id GenericInstanceId) returns bool
+		if self.parseBandOpen and self.parseCopyDemandedRows.contains(id) 'demandedByThisParse'
+			return true
+		end 'demandedByThisParse'
+
+		return self.copyDemanded.contains(id)
+	end 'instanceIsCopyDemanded'
 
 	// The id the row stored at `position` is known by. The storage-to-id direction of `positionOf`.
 	export function idAtPosition(position GenericInstanceId) returns GenericInstanceId
@@ -9105,6 +9249,10 @@ export type GenericInstanceRegistry
 		self.recordBase(baseId, id: id)
 		return id
 	end 'intern'
+
+	export function find(baseId TypeNameId, args MaxonTypeArray, fixedSize InstanceSize) returns GenericInstanceId throws MapError
+		return try self.index.get(self.instanceKey(baseId, args: args, fixedSize: fixedSize))
+	end 'find'
 
 	// The source named row `existing`. A parse's own row, and every row outside a parse, loses its speculative
 	// mark on the spot; a BASELINE row named during a parse is only noted, for the merge to apply.
@@ -9369,7 +9517,7 @@ export type GenericAliasEntry
 	// (`stdlib/String.maxon:50`) took the display name of `Array with Byte` away from `stdlib/File.maxon`'s
 	// file-scope `ByteArray`, so every diagnostic quoting that type changed word — *expected 'Bytes', got
 	// 'ByteMemory'*. That build (which also lacked `publishNestedGenericAlias`'s two gates) read ten corpus
-	// failures across five specs and 839 drifting golden fragments; SEVEN of the ten are this field's ALONE
+	// failures across five specs; SEVEN of the ten are this field's ALONE
 	// — `String` and `Character` are not generic, so their `ByteMemory` reaches this door whatever those
 	// gates say. The bare key is a way to WRITE the type, never a claim on how the compiler QUOTES it.
 	//
@@ -10843,6 +10991,12 @@ export union FunctionNameResolution
 	undeclared
 end 'FunctionNameResolution'
 
+export enum DeclarationNearness
+	ownDirectory
+	root
+	elsewhere
+end 'DeclarationNearness'
+
 // ⭐⭐ **ALL EIGHT SWEEP FACTS TRAVEL TOGETHER ON A RE-KEY.** The two contests
 // that move a declaration — a free function declared in more than one DIRECTORY, and a `static` member whose
 // name an instance member of its type also wears — must not disagree about which facts a move may carry,
@@ -11284,8 +11438,7 @@ export type ProgramSignatures
 	//
 	// ⭐ **A NAME WHOSE DECLARATIONS NAME ONE INSTANCE IS NOT IN HERE**, and that is the load-bearing half.
 	// Two files declaring `typealias Counts = Array with Count` over one `Count` intern the SAME instance, so
-	// there is nothing to choose between and nothing moves — which is the entire existing corpus, and why not
-	// one golden changes.
+	// there is nothing to choose between and nothing moves — which is the entire existing corpus.
 	var contestedGenericAliases as GenericAliasContestTable
 
 	// ⭐⭐ **THE GENERIC-ALIAS NAMES MORE THAN ONE DECLARATION MENTIONS** — the gate that makes the whole
@@ -11956,6 +12109,14 @@ export type ProgramSignatures
 	// declaration probe pointed at a constant, a 7 → 8 edit re-parses every file in the project; the
 	// gate's `invalidation` property is what keeps it that way.
 	export var hash as HashDigest
+	var hashSource as HashEventSource
+	var authorChainState as HashDigest
+	var libraryChainState as HashDigest
+	var wholeChainState as HashDigest
+	export var libraryHash as HashDigest
+	export var libraryParseSharing as LibraryParseSharing
+	var authorDeclaredNames as HashDigestSet
+	var libraryMeantNames as HashDigestSet
 
 	// ⭐ **THE NAMES OF EVERY MANAGED TOP-LEVEL BINDING IN THE PROGRAM** — `let` AND `var` — written
 	// once per managed binding by `settleManagedValue`, read once per probe by
@@ -12164,7 +12325,7 @@ export type ProgramSignatures
 
 	// Does any declaration OTHER than the corpus's carry the marker? The gate `isArrayBaseName` puts in front
 	// of the scan — false for every program that declares no container of its own, which is the whole
-	// existing corpus and every one of its goldens.
+	// existing corpus.
 	var hasNonCorpusArrayConformer as bool
 
 	// ⭐⭐ **THE NAME A LISTED STDLIB MODULE DECLARES THE RECORD UNDER — the fold target for every
@@ -12187,7 +12348,11 @@ export type ProgramSignatures
 	var qualifiedNominalHeads as DeclaredTypeNameSet
 	var topLevelBindingSites as TopLevelBindingSiteMap
 	var writtenTypeClaims as CrossKindContestMap
+	var claimedTypeClaims as CrossKindContestMap = CrossKindContestMap.create()
+	var recordsTypeClaims as bool = false
 	var aliasFamiliesBesideNominals as DeclaredTypeNameSet
+	var headerTypeNameDecls as TypeNameDeclArray
+	var nominalNameCollisions as TypeNameCollisionArray
 
 	// ⭐ **EVERY SOURCE FILE'S MODULE DIRECTORY** — path ⇒ its directory relative to the compile
 	// anchor, `/`-joined (see `deriveModuleDirectory`). Written once per file by `Queries.foldOneFileInto`,
@@ -12320,7 +12485,6 @@ export type ProgramSignatures
 	// (`QueryDatabase.InstantiatedByAParse`) — instantiated for every question this index answers, the descriptor
 	// scan's included.
 	var instantiatedByAParse as InstantiatedTypeNameSet = InstantiatedTypeNameSet.create()
-	var instantiatedByAParseDigest as HashDigest = 0
 
 	var genericTemplates as GenericFunctionTemplateMap = GenericFunctionTemplateMap.create()
 	var genericInstancesBySite as GenericFunctionInstancesBySite = GenericFunctionInstancesBySite.create()
@@ -12340,7 +12504,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, cascadeWalkRoots: ByteArrayArray.create(), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.createForSource(0), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), opaqueByRefBareNames: ByRefBareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), stdlibShadowSpellings: StdlibShadowSpellingArray.create(), authorQualifiedNominals: QualifiedNominalMap.create(), libraryQualifiedNominals: QualifiedNominalMap.create(), qualifiedNominalHeads: DeclaredTypeNameSet.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: CrossKindContestMap.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, cascadeWalkRoots: ByteArrayArray.create(), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.createForSource(0), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), opaqueByRefBareNames: ByRefBareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), hashSource: HashEventSource.whole, authorChainState: Hasher.empty(), libraryChainState: Hasher.empty(), wholeChainState: Hasher.empty(), libraryHash: Hasher.empty(), libraryParseSharing: LibraryParseSharing.undecided, authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), stdlibShadowSpellings: StdlibShadowSpellingArray.create(), authorQualifiedNominals: QualifiedNominalMap.create(), libraryQualifiedNominals: QualifiedNominalMap.create(), qualifiedNominalHeads: DeclaredTypeNameSet.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: CrossKindContestMap.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision ---
@@ -12370,6 +12534,252 @@ export type ProgramSignatures
 		end 'aFileTheCompilerLoadedFromItsLibrary'
 	end 'recordFileModuleDirectory'
 
+	export function attributeHashEventsTo(source HashEventSource)
+		if self.baseline.settled 'pastTheBaseline'
+			panic("ProgramSignatures.attributeHashEventsTo: the baseline is settled, so its hash chains are final and a parse writes none — nothing may attribute hash events to a source now")
+		end 'pastTheBaseline'
+
+		if self.hashSource == source 'alreadyThere'
+			return
+		end 'alreadyThere'
+
+		self.saveActiveChain()
+		self.hashSource = source
+		self.hash = self.chainStateOf(source)
+	end 'attributeHashEventsTo'
+
+	function saveActiveChain()
+		match self.hashSource 'active'
+			author then self.authorChainState = self.hash
+			library then self.libraryChainState = self.hash
+			whole then self.wholeChainState = self.hash
+		end 'active'
+	end 'saveActiveChain'
+
+	function chainStateOf(source HashEventSource) returns HashDigest
+		return match source 'chain'
+			author gives self.authorChainState
+			library gives self.libraryChainState
+			whole gives self.wholeChainState
+		end 'chain'
+	end 'chainStateOf'
+
+	export function noteDeclaredName(name ByteArray)
+		match self.hashSource 'source'
+			author then self.authorDeclaredNames.insert(mixBytes(Hasher.empty(), bytes: name))
+			library then self.noteMentionedName(name)
+			whole then break 'source'
+		end 'source'
+	end 'noteDeclaredName'
+
+	export function noteMentionedName(name ByteArray)
+		match self.hashSource 'source'
+			library then self.insertMeantName(name)
+			author or
+				whole then break 'source'
+		end 'source'
+	end 'noteMentionedName'
+
+	function insertMeantName(name ByteArray)
+		self.libraryMeantNames.insert(mixBytes(Hasher.empty(), bytes: name))
+
+		let owner = try declaringTypeOf(name) otherwise return
+		self.libraryMeantNames.insert(mixBytes(Hasher.empty(), bytes: owner))
+	end 'insertMeantName'
+
+	function mixTypeNameTable(state HashDigest, upTo TypeNameId) returns HashDigest
+		var out = state
+
+		for id in 0 upto upTo 'eachName'
+			out = mixBytes(out, bytes: self.nameOfId(id))
+		end 'eachName'
+
+		return out
+	end 'mixTypeNameTable'
+
+	function mixInstanceRows(state HashDigest, upTo GenericInstanceId) returns HashDigest
+		var out = state
+
+		for id in 0 upto upTo 'eachRow'
+			out = self.mixInstanceRow(out, id: id)
+		end 'eachRow'
+
+		return out
+	end 'mixInstanceRows'
+
+	function mixInstanceRow(state HashDigest, id GenericInstanceId) returns HashDigest
+		return Hasher.combined(Hasher.combined(self.mixGenericInstance(Hasher.combined(state, value: DeclShapeInstanceRow), id: id), value: (try self.genericInstances.instanceFixedCount(id) otherwise UnsizedHashWord) as HashDigest), value: SpeculativeRowMark if self.genericInstances.instanceIsSpeculative(id) else NamedRowMark)
+	end 'mixInstanceRow'
+
+	export function footprintOf(instances GenericInstanceIdSet, names ObservedNameSet, dispatchedInterfaces ObservedInterfaceSet) returns ParseFootprint
+		var pending = GenericInstanceIdArray.create()
+
+		for id in instances 'eachSeen'
+			pending.push(id)
+		end 'eachSeen'
+
+		var cursor = 0 as ElementIndex
+
+		while cursor < pending.count() 'untilTheClosure'
+			let id = try pending.get(cursor) otherwise panic("ProgramSignatures.footprintOf: pending.get OOB at {cursor} below count {pending.count()}")
+			cursor = cursor + 1
+			names.insert(self.genericInstances.instanceBaseId(id))
+
+			let watcher = TypeIdRemap.watching(i64.max)
+			_ = remapMaxonTypes(self.genericInstances.instanceArgs(id), remap: watcher)
+
+			for nested in watcher.seenInstances 'eachNested'
+				if not instances.contains(nested) 'aNewRow'
+					instances.insert(nested)
+					pending.push(nested)
+				end 'aNewRow'
+			end 'eachNested'
+
+			for name in watcher.seenNames 'eachName'
+				names.insert(name)
+			end 'eachName'
+		end 'untilTheClosure'
+
+		pending.sort()
+
+		var footprint = ParseFootprint.create()
+
+		for id in pending 'eachRow'
+			footprint.rows.push(FootprintRow.create(id, baseId: self.genericInstances.instanceBaseId(id), args: self.genericInstances.instanceArgs(id).clone(), fixedSize: self.genericInstances.instanceFixedSize(id), speculative: self.genericInstances.instanceIsSpeculative(id), compiledName: self.mangleGenericInstance(id).clone()))
+		end 'eachRow'
+
+		for name in names 'eachNameInTheFootprint'
+			footprint.nameIds.push(name)
+			footprint.nameBytes.push(self.nameOfId(name).clone())
+		end 'eachNameInTheFootprint'
+
+		var declared = InterfaceIndexArray.create()
+
+		for index in dispatchedInterfaces 'eachDispatchedInterface'
+			declared.push(index)
+		end 'eachDispatchedInterface'
+
+		declared.sort()
+
+		for index in declared 'eachInterfaceInTheFootprint'
+			footprint.interfaces.push(FootprintInterface.create(index, name: self.interfaceNameAtDeclIndex(index).clone()))
+		end 'eachInterfaceInTheFootprint'
+
+		return footprint
+	end 'footprintOf'
+
+	export function rebaseFor(footprint ParseFootprint) returns ParseRebase throws SharedMemoMiss
+		self.requireAtBaseline("the rebase of a shared library parse")
+		var names = NameIdMap.create()
+		var highest = 0 as TypeNameId
+
+		for (position, id) in footprint.nameIds.withIterator() 'eachName'
+			let bytes = try footprint.nameBytes.get(position.index()) otherwise panic("ProgramSignatures.rebaseFor: nameBytes.get OOB at {position.index()} — the footprint's two name columns are filled together")
+			names.upsert(id, value: try self.typeNames.idOf(bytes) otherwise throw SharedMemoMiss.footprintMoved)
+
+			if id > highest 'aNewHighest'
+				highest = id
+			end 'aNewHighest'
+		end 'eachName'
+
+		var dense = TypeNameIdArray.create()
+
+		for id in 0 to highest 'eachSlot'
+			dense.push(try names.get(id) otherwise id)
+		end 'eachSlot'
+
+		var instances = GenericInstanceIdMap.create()
+		let remap = TypeIdRemap.create(dense, namesBase: 0, instances: instances)
+
+		for row in footprint.rows 'eachRow'
+			let current = try self.genericInstances.find(remap.applyName(row.baseId), args: remapMaxonTypes(row.args, remap: remap), fixedSize: row.fixedSize) otherwise throw SharedMemoMiss.footprintMoved
+
+			if self.genericInstances.instanceIsSpeculative(current) != row.speculative or not self.mangleGenericInstance(current).equals(row.compiledName) 'aGuessBecameAFact'
+				throw SharedMemoMiss.footprintMoved
+			end 'aGuessBecameAFact'
+
+			instances.upsert(row.id, value: current)
+		end 'eachRow'
+
+		var movedInterfaces = InterfaceIndexMap.create()
+
+		for held in footprint.interfaces 'eachDispatchedInterface'
+			let current = try self.interfaceDeclIndexOf(held.name) otherwise throw SharedMemoMiss.footprintMoved
+
+			if current != held.declIndex 'theInterfaceMoved'
+				movedInterfaces.upsert(held.declIndex, value: current)
+			end 'theInterfaceMoved'
+		end 'eachDispatchedInterface'
+
+		return ParseRebase.create(names, instances: instances, interfaces: movedInterfaces, nameBaseline: self.typeNames.baselineNameCount())
+	end 'rebaseFor'
+
+	export function rebasedMintsAbsentFromTheBaseline(mints LocalInstanceMints, rebase ParseRebase) returns LocalInstanceMints throws SharedMemoMiss
+		let rebased = mints.rebased(rebase)
+
+		for row in rebased.rows 'eachMintedRow'
+			if row.baseId >= rebased.typeNameBaseline 'aNameThisParseInterned'
+				continue
+			end 'aNameThisParseInterned'
+
+			_ = try self.genericInstances.find(row.baseId, args: row.args, fixedSize: row.fixedSize) otherwise continue
+			throw SharedMemoMiss.footprintMoved
+		end 'eachMintedRow'
+
+		return rebased
+	end 'rebasedMintsAbsentFromTheBaseline'
+
+	export function toldAnswersHold(mints LocalInstanceMints, overrides RowSetOverrideTable) returns bool
+		for key in mints.rowSetAnswers.order 'eachQuestion'
+			let told = try mints.rowSetAnswers.records.get(key) otherwise panic("ProgramSignatures.toldAnswersHold: the log orders a question it holds no record of")
+			let expected = try overrides.answerFor(key) otherwise self.answerOverTheRows(told.query)
+
+			if rowSetAnswerIsAffirmative(told.answer) != rowSetAnswerIsAffirmative(expected) 'theAnswerMoved'
+				return false
+			end 'theAnswerMoved'
+		end 'eachQuestion'
+
+		return true
+	end 'toldAnswersHold'
+
+	function instantiatedDigestExcluding(excluded HashDigestSet) returns HashDigest
+		var members = Hasher.empty()
+
+		for name in self.instantiatedByAParse 'eachName'
+			if not nameIsExcluded(name, excluded: excluded) 'aLibraryName'
+				members = members xor mixBytes(Hasher.empty(), bytes: name)
+			end 'aLibraryName'
+		end 'eachName'
+
+		return members
+	end 'instantiatedDigestExcluding'
+
+	function finishHashChains()
+		self.saveActiveChain()
+		self.libraryHash = Hasher.combined(Hasher.combined(self.libraryChainState, value: LibraryChainSalt), value: self.wholeChainState)
+		self.hash = Hasher.combined(Hasher.combined(self.authorChainState, value: AuthorChainSalt), value: self.libraryHash)
+		self.hashSource = HashEventSource.whole
+		self.libraryParseSharing = self.decidedLibraryParseSharing()
+	end 'finishHashChains'
+
+	function decidedLibraryParseSharing() returns LibraryParseSharing
+		if self.rootIsUnderStdlibDirectory 'theProjectIsTheLibrary'
+			return LibraryParseSharing.rootInsideStdlib
+		end 'theProjectIsTheLibrary'
+
+		if self.hasStdlibShadowRenames() 'aLibraryTypeIsShadowed'
+			return LibraryParseSharing.shadowed
+		end 'aLibraryTypeIsShadowed'
+
+		for name in self.authorDeclaredNames 'eachAuthorName'
+			if self.libraryMeantNames.contains(name) 'theLibraryMeansIt'
+				return LibraryParseSharing.namesOverlap
+			end 'theLibraryMeansIt'
+		end 'eachAuthorName'
+
+		return LibraryParseSharing.shareable
+	end 'decidedLibraryParseSharing'
+
 	// The token stream `decl`'s initializer range indexes. A miss is a compiler bug: the fold keeps the stream of every
 	// file it records a binding of, until `evaluateInitializers` has settled every one.
 	function declTokensOf(decl TopLevelDecl) returns TokenArray
@@ -12387,6 +12797,23 @@ export type ProgramSignatures
 	export function moduleDirectoryOf(path FilePath) returns String
 		return self.moduleDirectoryOfPathText(path.toString())
 	end 'moduleDirectoryOf'
+
+	// The one display rule for a source file: `__file__`, caller-file defaults, contested-instance notes and
+	// generic instance names all use it. The module directory is joined in because two directories can hold
+	// files of one name; a root file is unique by name alone.
+	export function projectRelativeFileDisplay(path FilePath) returns String
+		let directory = self.moduleDirectoryOf(path)
+
+		if directory.isEmpty() 'aRootFile'
+			return path.filename()
+		end 'aRootFile'
+
+		return "{directory}{ModuleDirectorySeparator}{path.filename()}"
+	end 'projectRelativeFileDisplay'
+
+	export function genericInstanceNameOf(template GenericFunctionTemplate, arguments GenericFunctionArgumentArray) returns ByteArray
+		return template.instanceName(arguments, declaringFile: self.projectRelativeFileDisplay(template.declFilePath))
+	end 'genericInstanceNameOf'
 
 	// The same answer for a caller already holding the STRINGIFIED path — which is the map's key, so a
 	// `contestedGenericAliases` group (keyed by declaring-file text, `GenericAliasByDeclaringFile`) reads it
@@ -12453,7 +12880,17 @@ export type ProgramSignatures
 		var claims = try self.writtenTypeClaims.get(name) otherwise TypeNameClaimArray.create()
 		claims.push(claim)
 		self.writtenTypeClaims.upsert(name, value: claims)
+
+		if self.recordsTypeClaims 'aSourceClaimsFoldIsAsking'
+			var kept = try self.claimedTypeClaims.get(name) otherwise TypeNameClaimArray.create()
+			kept.push(claim)
+			self.claimedTypeClaims.upsert(name, value: kept)
+		end 'aSourceClaimsFoldIsAsking'
 	end 'noteWrittenTypeClaim'
+
+	export function recordTypeClaims()
+		self.recordsTypeClaims = true
+	end 'recordTypeClaims'
 
 	export function settleAliasFamiliesBesideNominals()
 		for (name, claims) in self.writtenTypeClaims 'eachWrittenName'
@@ -12465,6 +12902,37 @@ export type ProgramSignatures
 
 		self.writtenTypeClaims = CrossKindContestMap.create()
 	end 'settleAliasFamiliesBesideNominals'
+
+	export function noteHeaderTypeNameDecl(decl TypeNameDecl)
+		self.headerTypeNameDecls.push(decl)
+	end 'noteHeaderTypeNameDecl'
+
+	export function settleNominalNameCollisions(paths FilePathArray)
+		var declared = TypeNameDeclArray.create()
+
+		for decl in self.headerTypeNameDecls 'eachHeaderDecl'
+			if isCompilerOwnedTypeName(decl.name) or (not decl.claim.declaredByTheCorpus and bytesStartWith(decl.name, prefix: ReservedTypeNamePrefix)) 'theParserRefusesTheName'
+				continue
+			end 'theParserRefusesTheName'
+
+			declared.push(self.libraryDeclarationUnderItsMintedName(decl))
+		end 'eachHeaderDecl'
+
+		self.nominalNameCollisions = nominalNameCollisionsOf(declared, paths: paths, directories: self.fileModuleDirectories)
+		self.headerTypeNameDecls = TypeNameDeclArray.create()
+	end 'settleNominalNameCollisions'
+
+	function libraryDeclarationUnderItsMintedName(decl TypeNameDecl) returns TypeNameDecl
+		if not decl.claim.declaredByTheCorpus or isTypeAliasDecl(decl.claim.kind) 'notALibraryNominal'
+			return decl
+		end 'notALibraryNominal'
+
+		return TypeNameDecl.create(self.stdlibShadowRenameOf(decl.name), claim: decl.claim, nameLine: decl.nameLine, nameColumn: decl.nameColumn)
+	end 'libraryDeclarationUnderItsMintedName'
+
+	export function collidingNominalDeclarations() returns TypeNameCollisionArray
+		return self.nominalNameCollisions
+	end 'collidingNominalDeclarations'
 
 	export function isAliasFamilyBesideANominal(name ByteArray) returns bool
 		return self.aliasFamiliesBesideNominals.contains(name)
@@ -12485,6 +12953,42 @@ export type ProgramSignatures
 	export function noteUserDeclaredTypeName(name ByteArray)
 		self.userDeclaredTypeNames.insert(name)
 	end 'noteUserDeclaredTypeName'
+
+	export function userDeclaredNominalNames() returns StringArray
+		return self.userDeclaredTypeNamesOfKind(false)
+	end 'userDeclaredNominalNames'
+
+	export function userDeclaredAliasNames() returns StringArray
+		return self.userDeclaredTypeNamesOfKind(true)
+	end 'userDeclaredAliasNames'
+
+	function userDeclaredTypeNamesOfKind(aliases bool) returns StringArray
+		var names = StringArray.create()
+
+		for (name, claims) in self.claimedTypeClaims 'eachWrittenName'
+			for claim in claims 'eachClaim'
+				if not claim.declaredByTheCorpus and isTypeAliasDecl(claim.kind) == aliases 'anAuthorsDeclarationOfThisKind'
+					names.push(String.from(name))
+					break
+				end 'anAuthorsDeclarationOfThisKind'
+			end 'eachClaim'
+		end 'eachWrittenName'
+
+		names.sort(function(left String, right String) gives left.compare(right))
+		return names
+	end 'userDeclaredTypeNamesOfKind'
+
+	export function userExtensionMethodKeys() returns StringArray
+		var keys = StringArray.create()
+
+		for (qualified, _) in self.extensionMethodDeclFiles 'eachExtensionMethod'
+			if not self.stdlibPublishedExtensionMethods.contains(qualified) 'anAuthorsMethod'
+				keys.push(String.from(qualified))
+			end 'anAuthorsMethod'
+		end 'eachExtensionMethod'
+
+		return keys
+	end 'userExtensionMethodKeys'
 
 	export function noteQualifiedNominal(qualifier String, member ByteArray, kind TypeDeclKind, declaredByTheLibrary bool)
 		let qualified = namespaceQualifiedName(qualifier, name: member)
@@ -12650,7 +13154,16 @@ export type ProgramSignatures
 	export function noteDefaultDeclaration(declaration DefaultDeclaration)
 		self.defaultDeclarationList.push(declaration)
 		self.spawnsAnyServiceSettled = false
+		self.mixIntoWholeChain(DeclShapeDefaultDeclaration, bytes: declaration.key)
 	end 'noteDefaultDeclaration'
+
+	function mixIntoWholeChain(shape HashDigest, bytes ByteArray)
+		match self.hashSource 'source'
+			whole then self.hash = mixBytes(Hasher.combined(self.hash, value: shape), bytes: bytes)
+			author or
+				library then self.wholeChainState = mixBytes(Hasher.combined(self.wholeChainState, value: shape), bytes: bytes)
+		end 'source'
+	end 'mixIntoWholeChain'
 
 	export function defaultDeclarations() returns DefaultDeclarationArray
 		return self.defaultDeclarationList
@@ -13820,6 +14333,7 @@ export type ProgramSignatures
 		// memo valid. (`DeclShapeContestedExtensionMethod` needs one precisely because THAT contest is minted by
 		// the parser, leaving nothing here to move.)
 		self.hash = self.mixDeclaration(self.hash, name: key, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, declFilePath: declFilePath, takesReceiver: takesReceiver, opaqueParams: opaqueParams)
+		self.noteDeclaredName(key)
 	end 'record'
 
 	// ⭐⭐ **NOTE ONE DECLARATION AGAINST THE `static`/INSTANCE CONTEST, AND ANSWER THE KEY IT BELONGS UNDER** —
@@ -14343,6 +14857,7 @@ export type ProgramSignatures
 	// files, are still a contest, answered by the parameter-spelling mint and E3006.
 	export function noteExtensionPublishedMethod(qualified ByteArray, takesReceiver bool, declFilePath FilePath, isStdlibSource bool) returns bool
 		self.extensionPublishedMethods.insert(extensionMemberKindKey(qualified, takesReceiver: takesReceiver))
+		self.noteDeclaredName(qualified)
 
 		if let firstDeclFile = try self.extensionMethodDeclFiles.get(qualified) 'anExtensionAlreadyPublishedIt'
 			if firstDeclFile.equals(declFilePath) 'theSameFileAgain'
@@ -14556,7 +15071,20 @@ export type ProgramSignatures
 		end 'eachEdge'
 
 		self.hash = state
+		self.noteNamesAClosureReaches(info.bareName, calls: info.forwardCalls, authorStatesIt: info.reassignsAnyParam())
 	end 'recordParamReassign'
+
+	function noteNamesAClosureReaches(bareName ByteArray, calls ForwardCallArray, authorStatesIt bool)
+		self.noteMentionedName(bareName)
+
+		if authorStatesIt 'anAuthorsSeed'
+			self.noteDeclaredName(bareName)
+		end 'anAuthorsSeed'
+
+		for call in calls 'eachSpelling'
+			self.noteMentionedName(forwardCallName(call))
+		end 'eachSpelling'
+	end 'noteNamesAClosureReaches'
 
 	// Add one function's immutable-global-return raw material to the index AND fold it into the hash — the one
 	// write, for `recordParamReassign`'s reason. A function that states nothing is not recorded, so the common
@@ -14586,6 +15114,7 @@ export type ProgramSignatures
 		end 'eachEdge'
 
 		self.hash = state
+		self.noteNamesAClosureReaches(info.bareName, calls: info.returnCalls, authorStatesIt: true)
 	end 'recordGlobalAliasReturn'
 
 	// ⭐⭐ **MAY A CALL TO `callee` HAND BACK A `let`-DECLARED GLOBAL'S OWN RECORD?** — the ONE door the
@@ -15293,6 +15822,8 @@ export type ProgramSignatures
 
 	function mixFreshReturnForward(shape HashDigest, typeName ByteArray, callee ByteArray)
 		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: shape), bytes: typeName), bytes: callee)
+		self.noteMentionedName(callee)
+		self.noteMentionedName(typeName)
 	end 'mixFreshReturnForward'
 
 	// ⭐⭐⭐ **THE LEAST FIXPOINT THAT CLOSES `returnsAFreshRecord` OVER FORWARDING CALLS, AT ANY DEPTH.** A
@@ -16526,10 +17057,6 @@ export type ProgramSignatures
 	// none, which `SemanticCheck.validateCall` then refuses (E3095, E3004, E3008). The uncontested answer is
 	// asked first because every bare call in the program crosses this line, and it allocates nothing.
 	export function nameABareCallBinds(bareName ByteArray, readerFilePath FilePath) returns ByteArray
-		if not self.isContestedFreeFunction(bareName) 'oneMeaningEverywhere'
-			return bareName
-		end 'oneMeaningEverywhere'
-
 		return match self.resolveBareFunctionName(bareName, readerFilePath: readerFilePath) 'resolution'
 			declaration(name) gives name
 			ambiguous or
@@ -16564,6 +17091,20 @@ export type ProgramSignatures
 
 		return FunctionNameResolution.ambiguous(visible)
 	end 'resolveBareFunctionName'
+
+	export function nearnessOf(declFilePath FilePath, readerFilePath FilePath) returns DeclarationNearness
+		let declDirectory = self.moduleDirectoryOf(declFilePath)
+
+		if declDirectory.equals(self.moduleDirectoryOf(readerFilePath)) 'theReadersOwnDirectory'
+			return DeclarationNearness.ownDirectory
+		end 'theReadersOwnDirectory'
+
+		if declDirectory.isEmpty() 'theRoot'
+			return DeclarationNearness.root
+		end 'theRoot'
+
+		return DeclarationNearness.elsewhere
+	end 'nearnessOf'
 
 	function resolveQualifiedFunctionName(written ByteArray, bare ByteArray) returns FunctionNameResolution
 		if not self.resolvesAsNamespaceQualifiedFunction(written) 'notADirectoryQualifiedFunction'
@@ -17085,8 +17626,11 @@ export type ProgramSignatures
 		// run (a cycle rewrites its members' outcomes from the inside).
 		for j in 0 upto self.decls.count() 'eachOutcome'
 			let decl = self.declAt(j)
+			self.attributeHashEventsTo(HashEventSource.library if self.declaredByTheCorpus(decl.declFilePath) else HashEventSource.author)
 			self.hash = self.mixConstant(self.hash, decl: decl)
 		end 'eachOutcome'
+
+		self.attributeHashEventsTo(HashEventSource.whole)
 
 		self.declTokenStreams = DeclTokenStreamMap.create()
 	end 'evaluateInitializers'
@@ -17094,12 +17638,12 @@ export type ProgramSignatures
 	// ⭐ **GIVE EVERY TOP-LEVEL `var` ITS `.data` LABEL — the second half of the key/label split**
 	// (see `topLevelStorageKey`). The KEY answers "which declaration is this?" and is scoped by file;
 	// the LABEL answers "which slot does the IR name?" and must not be, because a label carrying a
-	// path would land in every golden fragment and in the emitted binary.
+	// path would land in every `TargetIr` pin and in the emitted binary.
 	//
 	// **BARE NAME, SUFFIXED ONLY ON COLLISION.** Two file-private `counter`s have DIFFERENT keys and
 	// would want the SAME label; the second one to be reached takes `__data_counter$1`. So:
 	//   • the ordinary program — every global uniquely named — gets stable, readable, path-free
-	//     labels, and its goldens never mention a temp directory;
+	//     labels, and its rendered Target IR never mentions a temp directory;
 	//   • the pathological one is CORRECT rather than aliased — `global-file-private-same-name.md` answers
 	//     118, where aliasing `bumpA` onto featB's slot would answer 212.
 	//
@@ -19033,6 +19577,113 @@ export type ProgramSignatures
 
 		return entries
 	end 'managedGlobals'
+
+	export function programModuleInitNeed() returns ModuleInitNeed
+		for declaration in self.defaultDeclarations() 'eachDefault'
+			if not declaration.isStdlibSource 'theProgramsOwn'
+				return ModuleInitNeed.runsProgramCode
+			end 'theProgramsOwn'
+		end 'eachDefault'
+
+		var need = ModuleInitNeed.none
+
+		for i in 0 upto self.decls.count() 'each'
+			let decl = self.declAt(i)
+
+			if decl.declaredByTheCorpus 'theLibrarys'
+				continue
+			end 'theLibrarys'
+
+			match self.initializerShapeOf(decl) 'shape'
+				scalar then continue
+				records then need = ModuleInitNeed.buildsRecords
+				runsCode then return ModuleInitNeed.runsProgramCode
+			end 'shape'
+		end 'each'
+
+		return need
+	end 'programModuleInitNeed'
+
+	// Read off the initializer's tokens and default-deny: a token not explicitly scalar- or record-shaped
+	// runs code. A member read is scalar only as `.min`/`.max` or an enum or union case, and a comparison
+	// runs code because it calls `equals`/`compare` on the program's own types. Over-reporting only costs
+	// a spec case its batch; under-reporting would print outside every case's markers.
+	function initializerShapeOf(decl TopLevelDecl) returns InitializerShape
+		let tokens = self.declPreparedTokensOf(decl).tokens
+
+		if self.initializerIsALibraryContainerCreate(tokens, decl: decl) 'anEmptyLibraryContainer'
+			return InitializerShape.records
+		end 'anEmptyLibraryContainer'
+
+		var shape = InitializerShape.scalar
+		var previousToken = Token.create(TokenKind.equals, line: 0, column: 0)
+
+		for position in decl.initStart upto decl.initEnd 'eachToken'
+			let token = try tokens.get(position) otherwise panic("ProgramSignatures.initializerShapeOf: initializer token {position} of '{String.from(decl.name)}' is not below the declaring file's {tokens.count()} tokens")
+
+			if tokenKindIsSkippedLayout(token.kind) 'layout'
+				continue
+			end 'layout'
+
+			var tokenShape = initializerShapeOfToken(token.kind, previous: previousToken.kind)
+
+			if token.kind == TokenKind.dot 'aMemberRead'
+				tokenShape = self.memberReadShape(tokens, position: position, head: previousToken, limit: decl.initEnd)
+			end 'aMemberRead'
+
+			shape = widenedInitializerShape(shape, by: tokenShape)
+
+			if shape == InitializerShape.runsCode 'settled'
+				return shape
+			end 'settled'
+
+			previousToken = token
+		end 'eachToken'
+
+		return shape
+	end 'initializerShapeOf'
+
+	function initializerIsALibraryContainerCreate(tokens TokenArray, decl TopLevelDecl) returns bool
+		if decl.initEnd != decl.initStart + ContainerCreateInitializerTokenCount 'notTheFactoryShape'
+			return false
+		end 'notTheFactoryShape'
+
+		let head = initializerTokenAt(tokens, decl: decl, offset: 0)
+		let method = initializerTokenAt(tokens, decl: decl, offset: 2)
+
+		if head.kind != TokenKind.identifier or initializerTokenAt(tokens, decl: decl, offset: 1).kind != TokenKind.dot or method.kind != TokenKind.identifier or not method.value.equals(CreateMethod) 'notAFactoryCall'
+			return false
+		end 'notAFactoryCall'
+
+		if initializerTokenAt(tokens, decl: decl, offset: 3).kind != TokenKind.leftParen or initializerTokenAt(tokens, decl: decl, offset: 4).kind != TokenKind.rightParen 'hasArguments'
+			return false
+		end 'hasArguments'
+
+		if not self.isGenericAliasFor(head.value, readerFilePath: decl.declFilePath) 'notAGenericAlias'
+			return false
+		end 'notAGenericAlias'
+
+		let base = self.genericInstanceBaseName(self.genericAliasInstanceFrom(head.value, readerFilePath: decl.declFilePath))
+		return self.isBuiltinGenericBaseName(base) or not (self.containsStructInAnyFile(base) or self.containsEnumInAnyFile(base))
+	end 'initializerIsALibraryContainerCreate'
+
+	function memberReadShape(tokens TokenArray, position ElementIndex, head Token, limit ElementIndex) returns InitializerShape
+		if head.kind != TokenKind.identifier or position + 1 >= limit 'notANamedMember'
+			return InitializerShape.runsCode
+		end 'notANamedMember'
+
+		let member = try tokens.get(position + 1) otherwise panic("ProgramSignatures.memberReadShape: member token {position + 1} is not below the declaring file's {tokens.count()} tokens")
+
+		if member.kind == TokenKind.identifier and (member.value.equals(MinBoundField) or member.value.equals(MaxBoundField)) 'aRangeBound'
+			return InitializerShape.scalar
+		end 'aRangeBound'
+
+		if self.containsEnumInAnyFile(head.value) 'aCaseOfADeclaredEnumOrUnion'
+			return InitializerShape.scalar
+		end 'aCaseOfADeclaredEnumOrUnion'
+
+		return InitializerShape.runsCode
+	end 'memberReadShape'
 
 	// The callee roster `ManagedGlobal.initCallees` carries, flattened out of the union `declInitializerCall`
 	// answers with. A fresh empty array for the `none` arm rather than a shared one: this is asked once per
@@ -22607,8 +23258,8 @@ export type ProgramSignatures
 	//
 	// ⚠ The rounds are JACOBI — every key is read out of `keys` and written into `next` — so no row can see
 	// a sibling refined earlier in the same round. That is what makes the result independent of map
-	// iteration order, and the mint hex, the mangled symbols built from it and every golden that prints one
-	// stable across hosts.
+	// iteration order, and the mint hex, the mangled symbols built from it and every rendered Target
+	// IR that prints one stable across hosts.
 	//
 	// The bound is one round per name plus one: an acyclic chain of contested slots is at most that deep, so
 	// reaching it with the keys still moving means a cycle, which has no settled key and cannot be minted
@@ -26382,11 +27033,12 @@ export type ProgramSignatures
 	// `[1.5, 2.5]` literal collects and then builds through `__managed_create` + pushes like any other.
 	//
 	// ⚠⚠ **IT ASKED "IS THE ELEMENT NARROWER THAN A MACHINE WORD" UNTIL THIS SPEC, AND THAT EXCLUDED THE
-	// MACHINE WORD FOR A REASON NO PROGRAM COULD SEE — golden stability.** `specs/codegen-internals.md`
-	// states the rule with no width in it (*"Constant array literals (declared with `let`) are stored in
-	// the `.rdata` section"*) and pins `[10, 20, 30]` as `i64[] 10, 20, 30`; under the narrow gate that
-	// literal reached `__managed_create` + three `__managed_push` and the section held no such bytes
-	// AT ALL. Width was never the question; whether the slot owns its own bytes is.
+	// MACHINE WORD FOR A REASON NO PROGRAM COULD SEE — output stability.**
+	// `specs/codegen-internals.md` states the rule with no width in it (*"Constant array literals
+	// (declared with `let`) are stored in the `.rdata` section"*) and pins `[10, 20, 30]` as
+	// `i64[] 10, 20, 30`; under the narrow gate that literal reached `__managed_create` + three
+	// `__managed_push` and the section held no such bytes AT ALL. Width was never the question;
+	// whether the slot owns its own bytes is.
 	export function arrayElementMayBeConstantBlob(id GenericInstanceId) returns bool
 		return not self.containerElementIsManaged(id) and not self.containerElementIsOpaque(id)
 	end 'arrayElementMayBeConstantBlob'
@@ -27776,7 +28428,7 @@ export type ProgramSignatures
 	//
 	// ⚠ **ON EVERY PROGRAM IN THE CORPUS THIS IS A NO-OP AFTER STEP 1**, and step 1 is one walk of a map
 	// that is EMPTY unless two files declare one name. That is not an optimization — it is the proof that
-	// nothing this rung does can move a golden.
+	// nothing this rung does can move the emitted code.
 	export function settleRangeScopedInstances()
 		self.typeAliases.settleRangeContests(self.crossKindScopedAliasNames())
 
@@ -27831,9 +28483,9 @@ export type ProgramSignatures
 	// ⚠ **ON EVERY PROGRAM IN THE CORPUS THE FIXPOINT DOES NOT RUN AT ALL** — no generic-alias name is
 	// mentioned by two declarations, so nothing can disagree, nothing is minted, and the contest indexes stay
 	// the shared empties. That is not an optimization; it is the proof that nothing here can move an interned
-	// instance or a golden, and it is measured: with the gate, the contest costs the ladder NOTHING. (Without
-	// it, the round's own first pass cost one map plus an entry per generic-alias NAME — +40 allocations at
-	// rung 0 rising to +452 at rung 5, for a question whose answer is "none".)
+	// instance or a symbol, and it is measured: with the gate, the contest costs the ladder NOTHING.
+	// (Without it, the round's own first pass cost one map plus an entry per generic-alias NAME — +40
+	// allocations at rung 0 rising to +452 at rung 5, for a question whose answer is "none".)
 	// ⛔ **THE GATE WRAPS THE FIXPOINT AND NOT THE WHOLE FUNCTION.** `rekeyScopedGenericAliases` below
 	// is the ONE place a declared alias is re-keyed to its declaring file's instance, for RANGES and
 	// for ARGUMENTS both — so an early return in front of it on the GENERIC contest alone skips the
@@ -28461,7 +29113,7 @@ export type ProgramSignatures
 	// happens to declare.
 	//
 	// An ENUM field reaches the `undeclared` arm and so is never admitted, which
-	// `specs/ranged-int-bit-packing.md` requires: enums are not packed (`specs/enum-narrow-storage.md`
+	// `specs/ranged-int-bit-packing.md` requires: enums are not packed (`ir-specs/enum-narrow-storage.md`
 	// owns their slot).
 	function inlineFieldBitsOf(declared MaxonType, declFilePath FilePath) returns BitWidth throws InlineFieldLookup
 		let tag = maxonTypeTag(declared)
@@ -28858,8 +29510,8 @@ export type ProgramSignatures
 	// over it.
 	//
 	// ⭐ **THE NAME SIDE IS UNCHANGED, so nothing emitted moves.** `mangleTypeArg` already answers with the
-	// name for both tags (`tagMayNameAggregate`), so this re-tagging cannot rename a symbol, a descriptor or
-	// a golden — it only stops one type being interned twice.
+	// name for both tags (`tagMayNameAggregate`), so this re-tagging cannot rename a symbol or a
+	// descriptor — it only stops one type being interned twice.
 	function promiseAggregateArgAsName(inner MaxonType) returns MaxonType
 		if not tagNamesADeclaredType(maxonTypeTag(inner)) 'namesNoDeclaredType'
 			return inner
@@ -29153,7 +29805,7 @@ export type ProgramSignatures
 	// `<base> with String` and one instance per declared struct/union are interned, and the parser looks up
 	// whichever the first element resolves to. An UNREFERENCED instance gets no descriptor or destructor
 	// synthesized (both gate on usage), so this is bounded registry entries — not codegen — and it leaves
-	// int-only-array programs' goldens untouched.
+	// int-only-array programs' emitted code untouched.
 	//
 	// ⚠ **TWO BASES ASK IT, and both ask it about the SAME literal.** An `[<identifier>…]` gives its `Array`
 	// instance; a `List from [<identifier>…]` gives the `List` its members build, whose element type is the one
@@ -29194,8 +29846,7 @@ export type ProgramSignatures
 	//     gid's numeric value — `mangleGenericInstance` is structural (base name + arg manglings) precisely so
 	//     that a symbol is stable across cold and warm builds — and the one reader that walks the registry in
 	//     gid order (`ParseStaging.checkTypeSymbolNamespace`) uses it only to decide which of a COLLIDING pair
-	//     is blamed as the newcomer. VERIFIED rather than argued: the full suite regenerates every
-	//     `specs/fragments/` golden and not one of the 2,372 pre-existing ones moved a byte.
+	//     is blamed as the newcomer.
 	//
 	// What the hoist does rest on is that nothing between the sweep's last fold and this call READS a generic
 	// instance — the sweep only records — so no reader can observe the difference between "interned early" and
@@ -29523,10 +30174,8 @@ export type ProgramSignatures
 	// program's structure and identical across cold and warm builds and across walk orders, so a tuple
 	// argument satisfies the rule for the same reason every other tag does.
 	//
-	// ⚠ **THAT ARM IS UNPINNED.** No committed x64 fragment carries such
-	// a label today — every tuple name in `specs/fragments/x64-windows/` is a `__destruct_` symbol,
-	// which is a DIFFERENT speller — so nothing here would go red if the arm regressed. Absence of a red is
-	// not evidence that the arm cannot be reached.
+	// ⚠ **THAT ARM IS UNPINNED.** No `TargetIr` pin carries such a label, so nothing here would go red
+	// if the arm regressed. Absence of a red is not evidence that the arm cannot be reached.
 	export function mangleTypeArg(t MaxonType) returns String
 		let tag = maxonTypeTag(t)
 
@@ -29557,7 +30206,7 @@ export type ProgramSignatures
 		// overload-registration join, and it is injective in the id, which is all a lookup key needs. It is
 		// only ever a LOOKUP key (the opaque array never gets a synthesized `__destruct_<mangled>` nor its own
 		// descriptor — it drops through `__managed_decref` and reads the enclosing instance's descriptor), and no
-		// committed fragment on any target carries such a label today.
+		// `TargetIr` pin carries such a label.
 		if tag == ValueTypeTag.typeParameter 'opaqueParam'
 			return "T{(typeNameIdOf(t) as ParsedInt):x}"
 		end 'opaqueParam'
@@ -29960,9 +30609,8 @@ export type ProgramSignatures
 	// `nested-contest-mints-onto-a-second-contested-name` for the case that pins it.
 	//
 	// ⚠ **ON CONTEST ONLY, WHICH IS A COST DECISION.** Prefixing unconditionally would move the mangled
-	// symbol in 108 committed goldens across four targets, 45 of them on hosts that cannot be regenerated
-	// here. Minting only for a contest — which is an ERROR without it — moves no name that ever compiled, so
-	// every golden stays byte-identical.
+	// symbol of every instance it applies to. Minting only for a contest — which is an ERROR without
+	// it — moves no name that ever compiled.
 	//
 	// ⚠ **RE-PROBED, NOT PREFIXED ONCE.** `__Box_String` could itself be declared, and the loop
 	// TERMINATES because each pass makes the candidate strictly longer while the declaration set is
@@ -31883,6 +32531,10 @@ export type ProgramSignatures
 						continue
 					end 'aRowE3017AlreadyOwns'
 
+					if kind == TypeArgInstantiationKind.uncopyableElement and self.isArrayBaseName(owner.declaringTypeName) and not self.arrayInstanceMayBeCopied(id) 'nothingCopiesIt'
+						continue
+					end 'nothingCopiesIt'
+
 					return TypeArgKindMatch.instance(self.instantiationSiteOf(id) if kindIsARefusal(kind) else InstantiationSiteLookup.unwritten)
 				end 'eachInstance'
 			end 'instantiated'
@@ -32070,6 +32722,50 @@ export type ProgramSignatures
 
 		return self.typeIsManaged(t, from: self.typeNames)
 	end 'typeArgIsManagedElement'
+
+	// The element-copy refusal fires only for an `Array` instance some code copies, directly or through a
+	// generic body that copies an array of its own parameter.
+	function arrayInstanceMayBeCopied(id GenericInstanceId) returns bool
+		if self.genericInstances.instanceIsCopyDemanded(id) 'copiedWhereItIsWritten'
+			return true
+		end 'copiedWhereItIsWritten'
+
+		for hop in self.instantiationOriginChain(id) 'eachEnclosingInstantiation'
+			if self.genericBodyCopiesAnArrayOfItsParameter(self.genericInstanceBaseName(hop)) 'itsBodyCopies'
+				return true
+			end 'itsBodyCopies'
+		end 'eachEnclosingInstantiation'
+
+		return false
+	end 'arrayInstanceMayBeCopied'
+
+	function genericBodyCopiesAnArrayOfItsParameter(declaringTypeName ByteArray) returns bool
+		for demanded in self.genericInstances.copyDemandedIds() 'eachDemanded'
+			let args = self.genericInstances.instanceArgs(demanded)
+
+			if args.count() == 0 'noElement'
+				continue
+			end 'noElement'
+
+			let element = try args.get(0) otherwise panic("ProgramSignatures.genericBodyCopiesAnArrayOfItsParameter: args.get OOB at 0 below a non-empty list")
+
+			if maxonTypeTag(element) != ValueTypeTag.typeParameter 'notAParameter'
+				continue
+			end 'notAParameter'
+
+			let owner = try self.typeParamOwnerOf(typeParamIdOf(element)) otherwise continue
+
+			if owner.declaringTypeName.equals(declaringTypeName) 'itsOwnParameter'
+				return true
+			end 'itsOwnParameter'
+		end 'eachDemanded'
+
+		return false
+	end 'genericBodyCopiesAnArrayOfItsParameter'
+
+	export function noteArrayCopyDemanded(id GenericInstanceId)
+		self.genericInstances.noteCopyDemanded(id)
+	end 'noteArrayCopyDemanded'
 
 	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT OPAQUE ARRAY ELEMENT
 	// UNCOPYABLE?** The FRONT-END gate for an opaque `slice`/`clone`/`append`: the shared
@@ -35754,6 +36450,18 @@ export type ProgramSignatures
 		return self.returnTypes.contains(callee)
 	end 'declaresCallee'
 
+	export function declaresCalleeVisibleFrom(callee ByteArray, readerFilePath FilePath) returns bool
+		if self.isContestedFreeFunction(callee) 'severalDirectoriesDeclareIt'
+			return match self.resolveBareFunctionName(callee, readerFilePath: readerFilePath) 'resolution'
+				declaration or
+					ambiguous gives true
+				undeclared gives false
+			end 'resolution'
+		end 'severalDirectoriesDeclareIt'
+
+		return self.declaresCallee(callee) and self.keyDeclaresAFunctionVisibleFrom(callee, readerFilePath: readerFilePath)
+	end 'declaresCalleeVisibleFrom'
+
 	// The one answer to "does a call to this name have a definition", for the parser's deferral doors
 	// and SemanticCheck's deferral trace alike. `declaresCallee` goes first: it is one map lookup, and
 	// `isCompilerInternalCallee` can allocate.
@@ -36128,6 +36836,7 @@ export type ProgramSignatures
 	// output holds instance ids, so a parse memo keyed on a hash that did not move when the rows did would
 	// hand a warm rebuild ids that name other instances.
 	export function settleBaseline()
+		self.attributeHashEventsTo(HashEventSource.whole)
 		self.settleTypeNameClaimIndex()
 		self.closeGlobalAliasReturns()
 		self.closeByRefForwarding()
@@ -36135,16 +36844,22 @@ export type ProgramSignatures
 		_ = self.sweptConformanceIndex()
 		self.indexCanonicalInstanceNames()
 
-		for id in 0 upto self.genericInstances.count() 'eachRow'
-			self.hash = Hasher.combined(Hasher.combined(self.mixGenericInstance(Hasher.combined(self.hash, value: DeclShapeInstanceRow), id: id), value: (try self.genericInstances.instanceFixedCount(id) otherwise UnsizedHashWord) as HashDigest), value: SpeculativeRowMark if self.genericInstances.instanceIsSpeculative(id) else NamedRowMark)
-		end 'eachRow'
+		let noExcludedNames = HashDigestSet.create()
+
+		// The instance rows and the name table feed the author chain alone: a shared library parse is
+		// rebased onto whatever ids they hold, so they stay out of its key. The body-scan facts feed both
+		// chains, the library one without what the author declared.
+		self.attributeHashEventsTo(HashEventSource.author)
+		self.hash = self.mixInstanceRows(self.hash, upTo: self.genericInstances.count())
 
 		// Which methods carry the hidden descriptor and count parameters is decided by scanning BODIES, so an edit
 		// that leaves every declaration alone can still change the ABI a caller's parse emits against.
-		self.hash = mixNameSet(Hasher.combined(self.hash, value: DeclShapeDescriptorNeeds), names: self.descriptorNeeds)
-		self.hash = mixNameSet(Hasher.combined(self.hash, value: DeclShapeFixedElementCountNeeds), names: self.fixedElementCountNeeds)
-		self.hash = Hasher.combined(Hasher.combined(self.hash, value: DeclShapeInstantiatedByAParse), value: self.instantiatedByAParseDigest)
-		self.hash = Hasher.combined(self.mixGenericTemplates(Hasher.combined(self.hash, value: DeclShapeGenericInstances)), value: self.genericInstancesDigest)
+		self.hash = self.mixBodyScanFacts(self.hash, excluding: noExcludedNames)
+		self.hash = self.mixTypeNameTable(Hasher.combined(self.hash, value: DeclShapeTypeNameTable), upTo: self.typeNames.count())
+
+		self.attributeHashEventsTo(HashEventSource.whole)
+		self.hash = self.mixBodyScanFacts(self.hash, excluding: self.authorDeclaredNames)
+		self.finishHashChains()
 
 		self.genericInstances.settleBaseline()
 		self.typeNames.settleBaseline()
@@ -36152,6 +36867,13 @@ export type ProgramSignatures
 		self.journal = IndexJournal.create()
 		self.baseline = IndexBaseline.create(self.crossFileConstantReads.count(), canonicalNamesIndexedThrough: self.canonicalNamesIndexedThrough, arrayByteInstance: self.arrayByteInstance, arrayByteInstanceComputed: self.arrayByteInstanceComputed, deepCloneWalkReadInstances: self.deepCloneWalkReadInstances, someRecordHoldsAnInterfaceValue: self.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: self.recordsHoldingAnInterfaceValueCounted, fingerprint: self.fingerprint(FingerprintDetail.valuesOnly))
 	end 'settleBaseline'
+
+	function mixBodyScanFacts(state HashDigest, excluding HashDigestSet) returns HashDigest
+		var out = mixNameSet(Hasher.combined(state, value: DeclShapeDescriptorNeeds), names: self.descriptorNeeds, excluding: excluding)
+		out = mixNameSet(Hasher.combined(out, value: DeclShapeFixedElementCountNeeds), names: self.fixedElementCountNeeds, excluding: excluding)
+		out = Hasher.combined(Hasher.combined(out, value: DeclShapeInstantiatedByAParse), value: self.instantiatedDigestExcluding(excluding))
+		return Hasher.combined(self.mixGenericTemplates(Hasher.combined(out, value: DeclShapeGenericInstances), excluding: excluding), value: self.genericInstancesDigest)
+	end 'mixBodyScanFacts'
 
 	// Before any declaration is folded: every whole-program answer computed from here on counts these types as
 	// instantiated, and the settled hash carries them, so a parse memo keyed on it moves when they do.
@@ -36163,7 +36885,6 @@ export type ProgramSignatures
 		end 'eachFiled'
 
 		self.instantiatedByAParse = names
-		self.instantiatedByAParseDigest = filed.digest
 	end 'adoptInstantiatedByAParse'
 
 	export function adoptGenericFunctionInstances(filed RequestedGenericInstances)
@@ -36326,7 +37047,7 @@ export type ProgramSignatures
 		return member.conformer.equals(conformer) and conformanceSatisfiesInterface(self.interfaces, declaredName: interfaceName, wanted: member.interfaceName)
 	end 'constraintExtensionDeclares'
 
-	function templateOfInstance(instance GenericFunctionInstance) returns GenericFunctionTemplate
+	module function templateOfInstance(instance GenericFunctionInstance) returns GenericFunctionTemplate
 		let templates = try self.genericTemplates.get(instance.templateKey) otherwise panic("ProgramSignatures.templateOfInstance: the instance '{String.from(instance.instanceName)}' is filed under the template key '{String.from(instance.templateKey)}', which declares no template")
 
 		for template in templates 'eachTemplate'
@@ -36338,12 +37059,16 @@ export type ProgramSignatures
 		panic("ProgramSignatures.templateOfInstance: no template of '{String.from(instance.templateKey)}' is declared at '{String.from(instance.siteKey)}', where the instance '{String.from(instance.instanceName)}' was inferred")
 	end 'templateOfInstance'
 
-	function mixGenericTemplates(state HashDigest) returns HashDigest
+	function mixGenericTemplates(state HashDigest, excluding HashDigestSet) returns HashDigest
 		var mixed = state
 
 		for (key, templates) in self.genericTemplates 'eachKey'
+			if nameIsExcluded(key, excluded: excluding) 'anExcludedFunction'
+				continue
+			end 'anExcludedFunction'
+
 			for template in templates 'eachTemplate'
-				mixed = mixBytes(Hasher.combined(mixed, value: DeclShapeGenericTemplate), bytes: template.instanceName(GenericFunctionArgumentArray.create()))
+				mixed = mixBytes(Hasher.combined(mixed, value: DeclShapeGenericTemplate), bytes: self.genericInstanceNameOf(template, arguments: GenericFunctionArgumentArray.create()))
 				mixed = mixBytes(mixed, bytes: key)
 
 				for slot in template.paramSlots 'eachSlot'
@@ -36458,7 +37183,7 @@ export type ProgramSignatures
 		self.restoreJournaledWrites()
 		self.requireAtBaseline("the parse of {filePath.toString()}")
 
-		return LocalInstanceMints.create(bandNames, typeNameBaseline: typeNameBaseline, rows: band.rows, namedRows: band.namedRows, tupleLayouts: tupleLayouts, substitutionOrigins: origins, constantReads: constantReads, tupleAliases: bandAliases, rowSetAnswers: log.told)
+		return LocalInstanceMints.create(bandNames, typeNameBaseline: typeNameBaseline, rows: band.rows, namedRows: band.namedRows, copyDemandedRows: band.copyDemandedRows, tupleLayouts: tupleLayouts, substitutionOrigins: origins, constantReads: constantReads, tupleAliases: bandAliases, rowSetAnswers: log.told)
 	end 'closeParseBand'
 
 	// Undo every merge since the settle, so the fold that follows redoes them from its artifacts.
@@ -36619,6 +37344,10 @@ export type ProgramSignatures
 		for id in mints.namedRows 'eachNamed'
 			self.genericInstances.markNamed(id)
 		end 'eachNamed'
+
+		for id in mints.copyDemandedRows 'eachCopyDemanded'
+			self.genericInstances.markCopyDemanded(remap.applyInstance(id))
+		end 'eachCopyDemanded'
 
 		for origin in mints.substitutionOrigins 'eachOrigin'
 			self.recordSubstitutionOrigin(remap.applyInstance(origin.instance), through: remap.applyInstance(origin.through))
@@ -36942,14 +37671,30 @@ let LivenessBuildsADefault = 0x9B05688C2B3E6C1F as HashDigest
 
 // A set's digest whatever order it iterates in: each member is digested alone and the digests are combined by
 // `xor`, which commutes.
-function mixNameSet(state HashDigest, names DescriptorNeedNameSet) returns HashDigest
+function nameIsExcluded(name ByteArray, excluded HashDigestSet) returns bool
+	if excluded.contains(mixBytes(Hasher.empty(), bytes: name)) 'itself'
+		return true
+	end 'itself'
+
+	let owner = try declaringTypeOf(name) otherwise return false
+
+	return excluded.contains(mixBytes(Hasher.empty(), bytes: owner))
+end 'nameIsExcluded'
+
+function mixNameSet(state HashDigest, names DescriptorNeedNameSet, excluding HashDigestSet) returns HashDigest
 	var members = Hasher.empty()
+	var counted = 0
 
 	for name in names 'eachName'
+		if nameIsExcluded(name, excluded: excluding) 'anExcludedName'
+			continue
+		end 'anExcludedName'
+
 		members = members xor mixBytes(Hasher.empty(), bytes: name)
+		counted = counted + 1
 	end 'eachName'
 
-	return Hasher.combined(Hasher.combined(state, value: members), value: names.count() as HashDigest)
+	return Hasher.combined(Hasher.combined(state, value: members), value: counted as HashDigest)
 end 'mixNameSet'
 
 // What `ProgramSignatures.settleBaseline` recorded: the scalars and append counts a restore puts back, and the
@@ -37140,9 +37885,10 @@ export typealias LocalInstanceRowArray = Array with LocalInstanceRow
 type ParseBandInstances
 	export let rows as LocalInstanceRowArray
 	export let namedRows as GenericInstanceIdArray
+	export let copyDemandedRows as GenericInstanceIdArray
 
-	static function create(rows LocalInstanceRowArray, namedRows GenericInstanceIdArray) returns ParseBandInstances
-		return Self{rows: rows, namedRows: namedRows}
+	static function create(rows LocalInstanceRowArray, namedRows GenericInstanceIdArray, copyDemandedRows GenericInstanceIdArray) returns ParseBandInstances
+		return Self{rows: rows, namedRows: namedRows, copyDemandedRows: copyDemandedRows}
 	end 'create'
 end 'ParseBandInstances'
 
@@ -37178,6 +37924,7 @@ export type LocalInstanceMints
 	export let typeNameBaseline as TypeNameId
 	export let rows as LocalInstanceRowArray
 	export let namedRows as GenericInstanceIdArray
+	export let copyDemandedRows as GenericInstanceIdArray
 	export let tupleLayouts as StructLayoutArray
 	export let substitutionOrigins as SubstitutionOriginArray
 	export let constantReads as NameInFileArray
@@ -37187,9 +37934,66 @@ export type LocalInstanceMints
 	// every merge (`ProgramSignatures.rowSetAnswersThatMoved`).
 	export let rowSetAnswers as RowSetAnswerLog
 
-	static function create(typeNames ByteArrayArray, typeNameBaseline TypeNameId, rows LocalInstanceRowArray, namedRows GenericInstanceIdArray, tupleLayouts StructLayoutArray, substitutionOrigins SubstitutionOriginArray, constantReads NameInFileArray, tupleAliases TupleAliasRecordArray, rowSetAnswers RowSetAnswerLog) returns LocalInstanceMints
-		return Self{typeNames: typeNames, typeNameBaseline: typeNameBaseline, rows: rows, namedRows: namedRows, tupleLayouts: tupleLayouts, substitutionOrigins: substitutionOrigins, constantReads: constantReads, tupleAliases: tupleAliases, rowSetAnswers: rowSetAnswers}
+	static function create(typeNames ByteArrayArray, typeNameBaseline TypeNameId, rows LocalInstanceRowArray, namedRows GenericInstanceIdArray, copyDemandedRows GenericInstanceIdArray, tupleLayouts StructLayoutArray, substitutionOrigins SubstitutionOriginArray, constantReads NameInFileArray, tupleAliases TupleAliasRecordArray, rowSetAnswers RowSetAnswerLog) returns LocalInstanceMints
+		return Self{typeNames: typeNames, typeNameBaseline: typeNameBaseline, rows: rows, namedRows: namedRows, copyDemandedRows: copyDemandedRows, tupleLayouts: tupleLayouts, substitutionOrigins: substitutionOrigins, constantReads: constantReads, tupleAliases: tupleAliases, rowSetAnswers: rowSetAnswers}
 	end 'create'
+
+	export function watchedBy(watcher TypeIdRemap)
+		_ = self.remappedThrough(watcher, baseline: self.typeNameBaseline)
+	end 'watchedBy'
+
+	export function rebased(rebase ParseRebase) returns LocalInstanceMints
+		var names = TypeNameIdArray.create()
+		let newBaseline = rebase.nameBaseline
+		let bandCount = self.typeNames.count() as TypeNameId
+
+		for id in 0 upto self.typeNameBaseline + bandCount 'eachName'
+			if id < self.typeNameBaseline 'aBaselineName'
+				names.push(try rebase.names.get(id) otherwise id)
+				continue
+			end 'aBaselineName'
+
+			names.push(id - self.typeNameBaseline + newBaseline)
+		end 'eachName'
+
+		return self.remappedThrough(TypeIdRemap.create(names, namesBase: 0, instances: rebase.instances), baseline: newBaseline)
+	end 'rebased'
+
+	function remappedThrough(remap TypeIdRemap, baseline TypeNameId) returns LocalInstanceMints
+		var rebasedRows = LocalInstanceRowArray.create()
+
+		for row in self.rows 'eachRow'
+			rebasedRows.push(LocalInstanceRow.create(remap.applyName(row.baseId), args: remapMaxonTypes(row.args, remap: remap), fixedSize: row.fixedSize, speculative: row.speculative))
+		end 'eachRow'
+
+		var named = GenericInstanceIdArray.create()
+
+		for id in self.namedRows 'eachNamedRow'
+			named.push(remap.applyInstance(id))
+		end 'eachNamedRow'
+
+		var demanded = GenericInstanceIdArray.create()
+
+		for id in self.copyDemandedRows 'eachCopyDemandedRow'
+			demanded.push(remap.applyInstance(id))
+		end 'eachCopyDemandedRow'
+
+		var layouts = StructLayoutArray.create()
+
+		for layout in self.tupleLayouts 'eachTuple'
+			let copy = layout.clone()
+			remapStructLayoutFieldTypes(copy, remap: remap)
+			layouts.push(copy)
+		end 'eachTuple'
+
+		var origins = SubstitutionOriginArray.create()
+
+		for origin in self.substitutionOrigins 'eachOrigin'
+			origins.push(SubstitutionOrigin.create(remap.applyInstance(origin.instance), through: remap.applyInstance(origin.through)))
+		end 'eachOrigin'
+
+		return Self.create(self.typeNames, typeNameBaseline: baseline, rows: rebasedRows, namedRows: named, copyDemandedRows: demanded, tupleLayouts: layouts, substitutionOrigins: origins, constantReads: self.constantReads, tupleAliases: self.tupleAliases, rowSetAnswers: self.rowSetAnswers)
+	end 'remappedThrough'
 end 'LocalInstanceMints'
 
 typealias FingerprintValueArray = Array with EntryCount

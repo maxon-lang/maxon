@@ -444,7 +444,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling/error.propagate-from-non-throwing-function.test:17:9: type mismatch: 'try propagates 'MyError' but the enclosing function declares no 'throws' — the error has nowhere to go and would be dropped; add 'otherwise' to handle it, or declare 'throws MyError''
+error E3059: specs/error-handling/error.propagate-from-non-throwing-function.maxon:17:9: type mismatch: 'try propagates 'MyError' but the enclosing function declares no 'throws' — the error has nowhere to go and would be dropped; add 'otherwise' to handle it, or declare 'throws MyError''
 ```
 
 <!-- test: error.main-cannot-throw -->
@@ -459,7 +459,7 @@ function main() returns ExitCode throws MyError
 end 'main'
 ```
 ```maxoncstderr
-error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: main cannot throw: 'main'
+error E3054: specs/error-handling/error.main-cannot-throw.maxon:7:10: main cannot throw: 'main'
 ```
 
 <!-- test: error.throws-but-can-never-throw -->
@@ -629,7 +629,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling/error.otherwise-type-mismatch.test:15:12: type mismatch: 'otherwise type 'float' does not match expected type 'int''
+error E3059: specs/error-handling/error.otherwise-type-mismatch.maxon:15:12: type mismatch: 'otherwise type 'float' does not match expected type 'int''
 ```
 
 <!-- test: error.void-try-otherwise-value -->
@@ -679,7 +679,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/error-handling/error.throwing-function-requires-try.test:15:12: throwing function requires try: 'mayFail'
+error E3057: specs/error-handling/error.throwing-function-requires-try.maxon:15:12: throwing function requires try: 'mayFail'
 ```
 
 <!-- test: error.throwing-method-requires-try -->
@@ -700,7 +700,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/error-handling/error.throwing-method-requires-try.test:13:12: throwing function requires try: 'mayFail'
+error E3057: specs/error-handling/error.throwing-method-requires-try.maxon:13:12: throwing function requires try: 'mayFail'
 ```
 
 <!-- test: error.try-on-non-throwing-function -->
@@ -719,7 +719,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:11:12: try requires a throwing function: 'noFail' does not throw'
+error E3055: specs/error-handling/error.try-on-non-throwing-function.maxon:11:12: try requires a throwing function: 'noFail' does not throw'
 ```
 
 <!-- test: error.try-on-non-throwing-method -->
@@ -737,7 +737,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.test:10:12: try requires a throwing function: 'foo' does not throw'
+error E3055: specs/error-handling/error.try-on-non-throwing-method.maxon:10:12: try requires a throwing function: 'foo' does not throw'
 ```
 
 <!-- test: error.try-on-non-throwing-instance-method -->
@@ -769,7 +769,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling/error.try-on-non-throwing-instance-method.test:18:10: try requires a throwing function: 'Counter.bump' does not throw'
+error E3055: specs/error-handling/error.try-on-non-throwing-instance-method.maxon:18:10: try requires a throwing function: 'Counter.bump' does not throw'
 ```
 
 <!-- test: error.otherwise-without-try -->
@@ -790,7 +790,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3058: specs/fragments/error-handling/error.otherwise-without-try.test:13:22: otherwise requires try expression
+error E3058: specs/error-handling/error.otherwise-without-try.maxon:13:22: otherwise requires try expression
 ```
 
 <!-- test: error.otherwise-ignore-in-assignment -->
@@ -813,7 +813,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment.test:15:12: type mismatch: 'a `try` used for its value needs a value on the error path too, but this `otherwise` handler catches the error without producing one (`otherwise ignore`, or a handler block that runs off its end) — give it a fallback value with `otherwise <expr>`, or make every path of the handler terminate (`return`/`throw`/`break`/`continue`)'
+error E3059: specs/error-handling/error.otherwise-ignore-in-assignment.maxon:15:12: type mismatch: 'a `try` used for its value needs a value on the error path too, but this `otherwise` handler catches the error without producing one (`otherwise ignore`, or a handler block that runs off its end) — give it a fallback value with `otherwise <expr>`, or make every path of the handler terminate (`return`/`throw`/`break`/`continue`)'
 ```
 
 <!-- test: error.otherwise-block-fallthrough-in-assignment -->
@@ -841,7 +841,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling/error.otherwise-block-fallthrough-in-assignment.test:18:12: type mismatch: 'a `try` used for its value needs a value on the error path too, but this `otherwise` handler catches the error without producing one (`otherwise ignore`, or a handler block that runs off its end) — give it a fallback value with `otherwise <expr>`, or make every path of the handler terminate (`return`/`throw`/`break`/`continue`)'
+error E3059: specs/error-handling/error.otherwise-block-fallthrough-in-assignment.maxon:18:12: type mismatch: 'a `try` used for its value needs a value on the error path too, but this `otherwise` handler catches the error without producing one (`otherwise ignore`, or a handler block that runs off its end) — give it a fallback value with `otherwise <expr>`, or make every path of the handler terminate (`return`/`throw`/`break`/`continue`)'
 ```
 
 <!-- test: error.void-try-in-assignment -->
@@ -863,7 +863,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling/error.void-try-in-assignment.test:12:12: type mismatch: ''mayFail' does not return a value'
+error E3059: specs/error-handling/error.void-try-in-assignment.maxon:12:12: type mismatch: ''mayFail' does not return a value'
 ```
 
 <!-- test: error.binding-match-single-case -->
@@ -2169,7 +2169,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling/error.otherwise-wrong-struct.test:32:10: type mismatch: 'otherwise type 'BoxB' does not match expected type 'BoxA''
+error E3059: specs/error-handling/error.otherwise-wrong-struct.maxon:32:10: type mismatch: 'otherwise type 'BoxB' does not match expected type 'BoxA''
 ```
 
 <!-- test: error.throwing-float-return -->

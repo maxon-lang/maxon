@@ -6,13 +6,14 @@
 // for `specs/filepath.md`'s 26 separator-printing cases (see
 // `TargetStdoutFencePrefix`, and `TargetCompilerErrorFencePrefix` for the two twins
 // that do the same for a COMPILER diagnostic and for a run's stderr);
-// `RequiredRdata` pins a read-only section no other golden can see (see
-// `RequiredRdataFence`); `Args` carries a program's own argv (see `ArgsMarker`).
+// `RequiredRdata` pins a read-only section no `TargetIr` pin can see (see
+// `RequiredRdataFence`); `Args` carries a program's own argv (see `ArgsMarker`);
+// `TargetIr:<lane>` pins the Target IR the compile renders for one lane (see `TargetIrFence`).
 //
 // MULTI-FILE TESTS — `// --- file: <name>`.
 //
-// ⚠ **THE CONVENTION IS THE CORPUS'S, NOT THIS PARSER'S.** `/specs` and its committed fragments
-// already use it in hundreds of places, so a second, harness-only multi-file syntax would be this
+// ⚠ **THE CONVENTION IS THE CORPUS'S, NOT THIS PARSER'S.** `/specs` already uses it in hundreds
+// of places, so a second, harness-only multi-file syntax would be this
 // project's signature bug — one fact written down twice — in the one place it would be hardest to
 // notice, because both would "work".
 //
@@ -24,9 +25,6 @@
 //   • forward slashes make subdirectories — and a `.` or `..` segment is REJECTED, because these
 //     names are written to a temp directory and `..` walks out of it. The refusal happens at the WRITE,
 //     which is the point where the escape would actually happen — see SpecTestRunner.writeSourceFiles.
-//
-// The golden `.test` fragment shows the MERGED block, markers and all, so what a reviewer reads is what
-// a spec author wrote.
 
 // --- Spec-markdown grammar tokens ---
 // Named (not inline literals) because these strings are a format contract shared
@@ -163,14 +161,14 @@ let DebugInfoMarker = "<!-- DebugInfo"
 // ⭐⭐ **WHICH FAMILY OF THE DEBUG STREAM A CAPTURE CASE ASSERTS.** Both families ride the SAME shared-memory
 // ring, are built the same way (`--debugstream`) and are read by the same consumer (`maxon monitor`), and
 // they differ in exactly four derived things: the marker that requests one, the fence that holds the
-// golden, the `--filter=` the monitor is given, and the prefix a decoded line of that family starts with.
+// block, the `--filter=` the monitor is given, and the prefix a decoded line of that family starts with.
 // That is why this is ONE mode with a family rather than two capture modes — a second copy of the build
 // flag, the target restriction, the normalizer, the remint and the splice is five places for the two to
 // drift.
 //
 // ⚠ **THE TWO ASK DIFFERENT QUESTIONS OF THE SAME PROGRAM.** `mm` is the RUNTIME talking about itself —
 // what the program allocated, retained and freed. `log` is the PROGRAM's own sentences, written through
-// the `__DebugStream` builtin. A case selects one; asking for both at once would need a golden whose lines
+// the `__DebugStream` builtin. A case selects one; asking for both at once would need a block whose lines
 // interleave two families, which no reader has wanted.
 export enum TraceFamily
 	// The memory manager's own events — `mm_alloc` / `mm_incref` / `mm_decref` / `mm_free`.
@@ -332,6 +330,13 @@ let RunsMarker = "<!-- runs:"
 // The one value `RunsMarker` recognizes, for `NetworkLiveValue`'s reason.
 let RunsAloneValue = "alone"
 
+// `<!-- process: own -->`: a case that observes state the whole process shares (its own pid, a spawn
+// sequence, a named resource an earlier case still holds) says so, because the batching checks read
+// source and cannot see it. It keeps the case out of every batch program and nothing more; `runs: alone`
+// is the stronger marker, an exclusive job after every other.
+let ProcessMarker = "<!-- process:"
+let ProcessOwnValue = "own"
+
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
 let ArgSeparator = " "
@@ -450,7 +455,7 @@ let TargetStderrFencePrefix = "```Stderr:"
 let MmTraceFence = "```mm-trace"
 let LogTraceFence = "```log-trace"
 
-// The fence a family's golden lives in. Read by the parser (which claims the block) and by the splice
+// The fence a family's block lives in. Read by the parser (which claims the block) and by the splice
 // (which writes one), so the two cannot come to disagree about which fence holds which family.
 export function traceFenceOf(family TraceFamily) returns String
 	return match family 'f'
@@ -466,7 +471,7 @@ end 'traceFenceOf'
 // ⭐⭐ **```RequiredRdata IS ITS TWIN, AND IT CLOSES THE SAME BLINDNESS ONE SECTION OVER.** A
 // `.rdata` payload registered under a STRUCTURAL label (`registerRdataConstantLabeled` — witness
 // tables, `__layout_*` descriptors, the UCD tables) does not advance `GlobalDataTable.nextStringId`,
-// so it shifts read-only OFFSETS without moving any label a golden fragment prints: the fragment
+// so it shifts read-only OFFSETS without moving any label the Target IR prints: the IR
 // shows which label a `lea` names and nothing shows what is IN it.
 //
 // The two are ONE mechanism taking a `LinkedSectionKind` (see `LinkedSection.maxon`): one fence
@@ -486,15 +491,15 @@ end 'traceFenceOf'
 let RequiredDataFence = "```RequiredData"
 let RequiredRdataFence = "```RequiredRdata"
 
-// ⭐⭐ **THE WITHHELD FUNCTIONS THIS TEST'S GOLDEN RENDERS — one name per line, and the reason is that
+// ⭐⭐ **THE WITHHELD FUNCTIONS THIS TEST'S TARGET IR RENDERS — one name per line, and the reason is that
 // a compiled program CONTAINS more than its author DECLARES.**
 //
-// A golden fragment shows only the functions parsed from the PROGRAM's own source
-// (`TargetPrinter.isSuppliedFunction`), so two families carry NO golden at all: the emitted runtime —
+// The rendered Target IR shows only the functions parsed from the PROGRAM's own source
+// (`TargetPrinter.isSuppliedFunction`), so two families are absent from it: the emitted runtime —
 // the entry stub, the allocator, the whole `__str_*`/`__managed_*` family — and the LIBRARY, every
 // body the compiler compiled out of `stdlib/` into this same module. The runtime miss is measured rather than
 // feared: `__str_bytes_view`'s owed-base arm holds an incref whose loss is a use-after-free that
-// BALANCES (the matching release goes with it), so the exit code, the leak gate and every fragment
+// BALANCES (the matching release goes with it), so the exit code, the leak gate and every pin
 // stayed green over it together.
 //
 // ⚠ **A STDLIB NAME IS SPELLED HERE JUST AS AN EMITTED ONE IS** — `String.trim`, `Array.reserve` — and
@@ -503,13 +508,22 @@ let RequiredRdataFence = "```RequiredRdata"
 // naming it renders nothing and is refused (`TargetPrinter.requireEveryNameRendered`).
 //
 // ⚠ **IT IS OPT-IN PER TEST, AND THAT IS THE WHOLE DESIGN.** Rendering the runtime everywhere would
-// inject thousands of identical lines into every one of the corpus's goldens and move all of them at
-// once on any runtime change; a test without this block renders byte-identically to one written
-// before the block existed.
+// inject thousands of identical lines into every case's rendered IR and move every pin at
+// once on any runtime change; a test without this block renders only its own functions.
 //
 // ⚠ It is NOT a result block: it says nothing about the RUN, so it does not satisfy
-// `pinsAnyResult` — a case carrying only this would compile, render a golden and check no behaviour.
+// `pinsAnyResult` — a case carrying only this would compile, render Target IR and check no behaviour.
 let RequiredRuntimeFence = "```RequiredRuntime"
+
+// A pin is always qualified by its lane, because one lane's Target IR means nothing on another; the
+// bare fence is recognised only to be refused. A mismatch fails the case, and `--update-required`
+// re-mints it.
+let TargetIrFence = "```TargetIr"
+let TargetIrQualifiedFencePrefix = "```TargetIr:"
+
+export function targetIrFenceFor(target Target) returns String
+	return "{TargetIrQualifiedFencePrefix}{targetToString(target)}"
+end 'targetIrFenceFor'
 
 // The three-backtick delimiter. Markdown spells OPEN and CLOSE the same way, so one name serves
 // both readers: `readFence` looking for the end of a block, and `isUnimplementedFenceOpen` looking
@@ -627,7 +641,7 @@ export typealias SpecSectionPinArray = Array with SpecSectionPin
 // IT WHOLE TEST CASES DROP SILENTLY.** An exit code that is the one half of a run expectation with
 // no "unpinned" state makes the parser push a test only `if haveExitCode`, so a `/specs` case that
 // pins ONLY stdout — which is legal, because the success expectation is built from ANY result block
-// — is consumed as a full test boundary and then thrown away. No test, no golden, and NOTHING IN
+// — is consumed as a full test boundary and then thrown away. No test, and NOTHING IN
 // THE OUTPUT SAYING SO: the case simply is not in the count.
 //
 // ⚠ **MEASURED WHEN IT FIRST BIT: all 3 cases of `specs/init-from-literal.md` vanished** — the file
@@ -678,8 +692,8 @@ export type SpecSourceFile
 	export let source as String
 
 	// Add this to a line number the COMPILER reports for this file, and you get the line number in
-	// the MERGED fragment — which is what the golden shows and what every `/specs` expectation was
-	// authored against (`specs/fragments/<spec>/<test>.test:11:9`). Without it a multi-file
+	// the MERGED fragment — which is what every `/specs` expectation was
+	// authored against (`specs/<spec>/<test>.maxon:11:9`). Without it a multi-file
 	// diagnostic names a line nobody can find: the compiler saw `main.maxon:2`, the reviewer is
 	// holding a merged file where that line is 11.
 	//
@@ -705,7 +719,7 @@ export typealias TargetKeyArray = Array with String
 export typealias ProgramArgArray = Array with String
 
 // ⭐⭐ **WHETHER A CASE ASSERTS A DEBUG-STREAM TRACE, WHICH FAMILY, AND WHAT IT EXPECTS — THREE STATES IN
-// ONE FIELD.** A case can be in capture MODE with no golden yet (the authoring state: a bare
+// ONE FIELD.** A case can be in capture MODE with no block yet (the authoring state: a bare
 // `<!-- MmTrace -->` / `<!-- LogTrace -->` marker, which `--update-required` turns into a block), or in
 // mode WITH one, or not in mode at all. Two fields — a bool and a String — would need "" to mean "no
 // block", and an EMPTY trace is a legitimate expectation: it is exactly what a program that allocates
@@ -719,13 +733,13 @@ export union SpecTraceCapture
 	// Not a capture case: built and run exactly as any other.
 	off
 
-	// In capture mode with no golden. The program is built with `--debugstream` and run under the
+	// In capture mode with no block. The program is built with `--debugstream` and run under the
 	// monitor, and the trace is compared against NOTHING — so the case fails unless the family it
 	// names is silent, and `--update-required` mints the block that makes it a real assertion, at
 	// `insertAt`: the empty slice after the case's last non-blank line.
 	unpinned(family TraceFamily, insertAt TraceSlice)
 
-	// In capture mode with a golden, normalized and compared line for line. `span` is the block,
+	// In capture mode with a block, normalized and compared line for line. `span` is the block,
 	// fences included, which a re-mint replaces.
 	pinned(family TraceFamily, trace String, span TraceSlice)
 end 'SpecTraceCapture'
@@ -826,14 +840,24 @@ export enum SpecRuns
 	alone
 end 'SpecRuns'
 
+export enum SpecProcess
+	shared
+
+	own
+end 'SpecProcess'
+
+export union SpecTargetIr
+	unpinned(insertAt TraceSlice)
+	pinned(text String, span TraceSlice)
+end 'SpecTargetIr'
+
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
 export type SpecTest
 	export let name as String
 
-	// The block VERBATIM — markers and all. This is what the golden `.test` fragment shows and, for
-	// a single-file test, what is compiled. It is never re-derived from `sourceFiles`: the merged
-	// text is the thing the spec author wrote, and a round-trip through the split would let the two
-	// drift.
+	// The block VERBATIM — markers and all. For a single-file test, this is what is compiled. It is
+	// never re-derived from `sourceFiles`: the merged text is the thing the spec author wrote, and a
+	// round-trip through the split would let the two drift.
 	export let source as String
 	export let expectation as SpecExpectation
 
@@ -858,7 +882,7 @@ export type SpecTest
 	// WAS selected, WAS compiled and was refused by the target; that one is counted and reported.
 	export let unsupportedTargets as TargetKeyArray
 
-	// The emitted runtime functions this test's golden renders (a ```RequiredRuntime block). It rides
+	// The emitted runtime functions this test's Target IR renders (a ```RequiredRuntime block). It rides
 	// on the TEST rather than on the expectation because it is not something the run is checked
 	// against: it changes what the COMPILE is asked to print, which is a property of how this test is
 	// built (like `targets`), not of what its execution must do.
@@ -894,7 +918,7 @@ export type SpecTest
 	//
 	// ⚠ The EXPECTATION rides here too, unlike `asyncTrace`'s, because a capture block IS the
 	// assertion — there is no other slot on `SpecExpectation` it could land in, and putting the mode on
-	// the test and the golden on the expectation would be the one fact in two places this file's
+	// the test and the block on the expectation would be the one fact in two places this file's
 	// `asyncTrace` note already refuses.
 	export let traceCapture as SpecTraceCapture
 
@@ -925,11 +949,18 @@ export type SpecTest
 	// dispatches that job.
 	export let runs as SpecRuns
 
+	export let process as SpecProcess
+
+	export let targetIr as SpecTargetIr
+
+	// A pin for any lane, this run's or another's.
+	export let pinsTargetIr as bool
+
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, targetIr SpecTargetIr, pinsTargetIr bool) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, targetIr: targetIr, pinsTargetIr: pinsTargetIr}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -1212,6 +1243,11 @@ union CaseProgram
 	absent
 end 'CaseProgram'
 
+union TargetIrBlock
+	read(text String, span TraceSlice)
+	absent
+end 'TargetIrBlock'
+
 union MarkedTraceFamily
 	marked(family TraceFamily)
 	none
@@ -1279,8 +1315,12 @@ type CaseBuilder
 	// runs beside others, not a default standing in for an unread marker.
 	var runs as SpecRuns
 
+	var process as SpecProcess
+	var targetIrBlock as TargetIrBlock
+	var pinsAnyLane as bool
+
 	static function create(name String, markerIndex ElementIndex, specPath FilePath, effectiveTargetKey String) returns CaseBuilder
-		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(), claimedDirectives: CaseDirectiveArray.create(), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(), unsupportedTargets: TargetKeyArray.create(), runtimeNames: RuntimeFunctionNameArray.create(), programArgs: ProgramArgArray.create(), asyncTrace: false, debugInfo: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared}
+		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(), claimedDirectives: CaseDirectiveArray.create(), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(), unsupportedTargets: TargetKeyArray.create(), runtimeNames: RuntimeFunctionNameArray.create(), programArgs: ProgramArgArray.create(), asyncTrace: false, debugInfo: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, targetIrBlock: TargetIrBlock.absent, pinsAnyLane: false}
 	end 'create'
 
 	function refuseCrowdedLine(openings StringArray, line String, lineIndex ElementIndex)
@@ -1334,6 +1374,7 @@ type CaseBuilder
 			preempt then preempt = parsePreemptValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 			stdin then stdin = parseStdinValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 			runs then runs = parseRunsValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
+			process then process = parseProcessValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 		end 'directive'
 	end 'readDirective'
 
@@ -1413,11 +1454,17 @@ type CaseBuilder
 			return pushSectionPin(lines, openIndex: index, testName: name, fence: RequiredRdataFence, section: LinkedSectionKind.readOnly, pins: sectionPins, specPath: specPath)
 		end 'readOnlyPin'
 
+		if fenceLine.startsWith(TargetIrFence) 'targetIrBlock'
+			if fenceLine == TargetIrFence or fenceLine.startsWith(TargetIrQualifiedFencePrefix) 'aTargetIrPin'
+				return self.readTargetIrPin(lines, index: index, fenceLine: fenceLine)
+			end 'aTargetIrPin'
+		end 'targetIrBlock'
+
 		if fenceLine.startsWith(RequiredRuntimeFence) 'runtimeBlock'
 			return pushRuntimeNames(lines, openIndex: index, testName: name, names: runtimeNames, specPath: specPath)
 		end 'runtimeBlock'
 
-		// The two capture goldens. Either is a result check in its own right (see `MmTraceFence`), and either
+		// The two capture blocks. Either is a result check in its own right (see `MmTraceFence`), and either
 		// puts the case into capture mode on its own — the matching marker beside it is then a second
 		// statement of one fact rather than a requirement.
 		if fenceLine.startsWith(MmTraceFence) 'mmTraceBlock'
@@ -1445,6 +1492,35 @@ type CaseBuilder
 		return afterUnclaimedLine(lines, index: index, fenceLine: fenceLine, specPath: specPath, site: site)
 	end 'readLine'
 
+	function readTargetIrPin(lines StringArray, index ElementIndex, fenceLine String) returns ElementIndex
+		if fenceLine == TargetIrFence 'unqualified'
+			panic("SpecParser: {specPath.toString()}:{index + 1}: test '{name}' opens a bare `{TargetIrFence}` fence. A Target IR pin is always qualified by the lane it was rendered for (`{TargetIrQualifiedFencePrefix}<target>`, one of {pinnableTargetKeyList()}), because the text of one lane means nothing on another")
+		end 'unqualified'
+
+		let qualifier = valueAfterKey(fenceLine, key: TargetIrQualifiedFencePrefix)
+
+		if not namesPinnableTarget(qualifier) 'unpinnableLane'
+			panic("SpecParser: {specPath.toString()}:{index + 1}: test '{name}' carries the fence '{fenceLine}' naming '{qualifier}', which is not a lane that renders Target IR ({pinnableTargetKeyList()}). A pin nothing can compare changes nothing while reading as a gate")
+		end 'unpinnableLane'
+
+		self.claimBlock(fenceLine, lineIndex: index)
+		let block = readFence(lines, openIndex: index, specPath: specPath)
+		pinsAnyLane = true
+
+		if qualifier == effectiveTargetKey 'namesThisTarget'
+			targetIrBlock = TargetIrBlock.read(block.text, span: TraceSlice.create(index, blockEnd: block.nextIndex))
+		end 'namesThisTarget'
+
+		return block.nextIndex
+	end 'readTargetIrPin'
+
+	function settledTargetIr(lines StringArray, caseEnd ElementIndex) returns SpecTargetIr
+		return match targetIrBlock 'block'
+			absent gives SpecTargetIr.unpinned(sliceAfterLastContent(lines, markerIndex: markerIndex, caseEnd: caseEnd))
+			read(text, span) gives SpecTargetIr.pinned(text, span: span)
+		end 'block'
+	end 'settledTargetIr'
+
 	function readCaptureBlock(lines StringArray, index ElementIndex, family TraceFamily) returns ElementIndex
 		self.claimBlock(captureBlockKind(), lineIndex: index)
 		let block = readFence(lines, openIndex: index, specPath: specPath)
@@ -1467,7 +1543,7 @@ type CaseBuilder
 		end 'program'
 
 		let traceCapture = self.settledCapture(lines, caseEnd: caseEnd)
-		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs)
+		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinsTargetIr: pinsAnyLane)
 	end 'build'
 
 	function settledCapture(lines StringArray, caseEnd ElementIndex) returns SpecTraceCapture
@@ -1506,8 +1582,8 @@ type CaseBuilder
 		if compilerError.isPinned() 'rejected'
 			// `SpecExpectation.compilerError` has nowhere to carry these, so without the refusal they would
 			// be dropped and the case would pass over them.
-			if sectionPins.count() > 0 or runtimeNames.count() > 0 'pinsOnARejectedCase'
-				panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
+			if sectionPins.count() > 0 or runtimeNames.count() > 0 or pinsAnyLane 'pinsOnARejectedCase'
+				panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence}/{TargetIrQualifiedFencePrefix}<target> block. A case that never links produces no image to read a section out of and no IR to render or compare, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
 			end 'pinsOnARejectedCase'
 
 			match traceCapture 'traceCaptureOnARejectedCase'
@@ -1562,7 +1638,7 @@ end 'afterUnclaimedLine'
 
 function refuseUnreadFence(fenceLine String, lineIndex ElementIndex, specPath FilePath, site UnreadCommentSite)
 	let consequence = match site 'where'
-		insideCase(name) gives "test '{name}' opens a fence this parser does not implement: '{fenceLine}'. The fences a case may open are the whole set this parser reads, so this block is silently skipped: it pins NOTHING while reading as coverage. Delete it (what pins the emitted code here is the minted fragment golden) or implement the fence"
+		insideCase(name) gives "test '{name}' opens a fence this parser does not implement: '{fenceLine}'. The fences a case may open are the whole set this parser reads, so this block is silently skipped: it pins NOTHING while reading as coverage. Delete it, or implement the fence"
 		outsideAnyCase gives "the `{TestsHeading}` region opens a fence outside any case: '{fenceLine}'. Only a `{TestMarker} NAME -->` line opens a case, so a program or expectation no marker opened runs nowhere, with nothing reported. Put it under its case's marker, or make it prose (a bare `{FenceDelimiter}` or `{ProseFenceOpen}` block)"
 	end 'where'
 
@@ -1641,10 +1717,10 @@ function pushRuntimeNames(lines StringArray, openIndex ElementIndex, testName St
 	// ⚠ **THE REFUSAL THE COMPILER'S OWN CANNOT REACH.** `TargetPrinter.requireEveryNameRendered`
 	// catches a MISSPELLED name, but it only ever runs on a `--emit-ir-runtime=` the runner emitted —
 	// and the runner emits nothing for a block that listed nothing. An empty block therefore renders
-	// the same golden a test WITHOUT the block renders, for ever, while claiming a gate on an emitted
+	// the same IR a test WITHOUT the block renders, for ever, while claiming a gate on an emitted
 	// body. See `refuseVacuousDirective`.
 	if names.count() == before 'noNames'
-		refuseVacuousDirective(testName, fence: RequiredRuntimeFence, remedy: "name the emitted functions it renders (`__str_bytes_view`, `mrt_start`, one per line), or delete the block. An empty one renders no body at all, so the golden is byte-identical to a test that never asked")
+		refuseVacuousDirective(testName, fence: RequiredRuntimeFence, remedy: "name the emitted functions it renders (`__str_bytes_view`, `mrt_start`, one per line), or delete the block. An empty one renders no body at all, so the IR is byte-identical to a test that never asked")
 	end 'noNames'
 
 	return block.nextIndex
@@ -1668,7 +1744,7 @@ end 'refuseVacuousDirective'
 // a run expectation are asked as a group — a fifth half added to `SpecExpectation.run` without a clause
 // here would be a result block that still counts as no result.
 function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, traceCapture SpecTraceCapture) returns bool
-	// A capture GOLDEN is a result check; the bare MARKER is not — it is a request for one, and a case
+	// A capture BLOCK is a result check; the bare MARKER is not — it is a request for one, and a case
 	// carrying only that has nothing to compare until `--update-required` has run. Both are capture mode,
 	// and only one of them is an assertion, which is the distinction the three-state field exists to make.
 	match traceCapture 'trace'
@@ -2017,6 +2093,7 @@ enum CaseDirective
 	preempt
 	stdin
 	runs
+	process
 
 	function spelling() returns String
 		return match self 'directive'
@@ -2032,6 +2109,7 @@ enum CaseDirective
 			preempt gives PreemptMarker
 			stdin gives StdinMarker
 			runs gives RunsMarker
+			process gives ProcessMarker
 		end 'directive'
 	end 'spelling'
 
@@ -2048,7 +2126,8 @@ enum CaseDirective
 				procs or
 				preempt or
 				stdin or
-				runs gives false
+				runs or
+				process gives false
 		end 'directive'
 	end 'isFlag'
 end 'CaseDirective'
@@ -2121,6 +2200,28 @@ end 'requireSupportedTargetKey'
 
 // Asked of the compiler's own roster rather than a table here, so a target that lands or leaves
 // cannot leave this check describing the old set.
+function namesPinnableTarget(key String) returns bool
+	for candidate in supportedTargets() 'each'
+		if targetToString(candidate) == key and emitsTargetIr(candidate) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+
+	return false
+end 'namesPinnableTarget'
+
+function pinnableTargetKeyList() returns String
+	var keys = StringArray.create()
+
+	for candidate in supportedTargets() 'each'
+		if emitsTargetIr(candidate) 'pinnable'
+			keys.push(targetToString(candidate))
+		end 'pinnable'
+	end 'each'
+
+	return joinedWith(keys, separator: RosterSeparator)
+end 'pinnableTargetKeyList'
+
 function namesSupportedTarget(key String) returns bool
 	for candidate in supportedTargets() 'each'
 		if targetToString(candidate) == key 'hit'
@@ -2190,14 +2291,17 @@ let RosterSeparator = ", "
 // a marker the file states and the harness declines — arriving through a value rather than through a
 // missing arm.
 function parseNetworkValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecNetwork
+	requireSoleMarkerValue(opening, marker: NetworkMarker, accepted: NetworkLiveValue, lineIndex: lineIndex, specPath: specPath, testName: testName, consequence: "It says the case opens a socket to a REAL EXTERNAL HOST, so a default run leaves it out and `--network` brings it back; an unrecognized value would quietly read as 'reaches no host' and put the case back in the default gate")
+	return SpecNetwork.live
+end 'parseNetworkValue'
+
+function requireSoleMarkerValue(opening String, marker String, accepted String, lineIndex ElementIndex, specPath FilePath, testName String, consequence String)
 	let value = markerValueOf(opening)
 
-	if value == NetworkLiveValue 'live'
-		return SpecNetwork.live
-	end 'live'
-
-	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{NetworkMarker} {value} -->`, and '{NetworkLiveValue}' is the only value this marker takes. It says the case opens a socket to a REAL EXTERNAL HOST, so a default run leaves it out and `--network` brings it back; an unrecognized value would quietly read as 'reaches no host' and put the case back in the default gate")
-end 'parseNetworkValue'
+	if value != accepted 'unrecognized'
+		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{marker} {value} -->`, and '{accepted}' is the only value this marker takes. {consequence}")
+	end 'unrecognized'
+end 'requireSoleMarkerValue'
 
 // How many processors a `<!-- procs: … -->` marker asks for.
 //
@@ -2271,13 +2375,8 @@ end 'specRequestedProcessorsIn'
 // malformed `MAXON_PREEMPT` too (`SchedRuntime.emitResolvePreemptSwitch`); this refusal comes first, at
 // parse, so the file's claim never reaches a child.
 function parsePreemptValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecPreempt
-	let value = markerValueOf(opening)
-
-	if value == String.from(PreemptEnvOffValue) 'off'
-		return SpecPreempt.off
-	end 'off'
-
-	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{PreemptMarker} {value} -->`, and '{String.from(PreemptEnvOffValue)}' is the only value this marker takes. It becomes `{String.from(PreemptEnvName)}={String.from(PreemptEnvOffValue)}` in the environment of this case's program alone, so the monitor takes no processor from the thread holding it; absence already says the default, and an unrecognized value would quietly run the case under preemption and report its order as though the switch had been honoured")
+	requireSoleMarkerValue(opening, marker: PreemptMarker, accepted: String.from(PreemptEnvOffValue), lineIndex: lineIndex, specPath: specPath, testName: testName, consequence: "It becomes `{String.from(PreemptEnvName)}={String.from(PreemptEnvOffValue)}` in the environment of this case's program alone, so the monitor takes no processor from the thread holding it; absence already says the default, and an unrecognized value would quietly run the case under preemption and report its order as though the switch had been honoured")
+	return SpecPreempt.off
 end 'parsePreemptValue'
 
 // Whether a `<!-- runs: … -->` marker takes the case out of the shared pool.
@@ -2285,14 +2384,14 @@ end 'parsePreemptValue'
 // ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A `shared`**, for `parseNetworkValue`'s reason exactly: a defaulted
 // value would run the case beside a full pool, which is the one condition the marker exists to keep it from.
 function parseRunsValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecRuns
-	let value = markerValueOf(opening)
-
-	if value == RunsAloneValue 'alone'
-		return SpecRuns.alone
-	end 'alone'
-
-	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{RunsMarker} {value} -->`, and '{RunsAloneValue}' is the only value this marker takes. It runs the case's program with no other job in flight; absence already says the case shares the pool, and an unrecognized value would quietly run it beside every other worker")
+	requireSoleMarkerValue(opening, marker: RunsMarker, accepted: RunsAloneValue, lineIndex: lineIndex, specPath: specPath, testName: testName, consequence: "It runs the case's program with no other job in flight; absence already says the case shares the pool, and an unrecognized value would quietly run it beside every other worker")
+	return SpecRuns.alone
 end 'parseRunsValue'
+
+function parseProcessValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecProcess
+	requireSoleMarkerValue(opening, marker: ProcessMarker, accepted: ProcessOwnValue, lineIndex: lineIndex, specPath: specPath, testName: testName, consequence: "It keeps the case out of every batch program; absence already says the case may share a process, and an unrecognized value would quietly batch it")
+	return SpecProcess.own
+end 'parseProcessValue'
 
 // What a `<!-- stdin: … -->` marker asks the child's fd 0 to be.
 //
@@ -2389,35 +2488,6 @@ function parseProgramArgs(opening String) returns ProgramArgArray
 
 	return args
 end 'parseProgramArgs'
-
-// ⭐ THE INVERSE OF `parseProgramArgs` — argv written back out as the `<!-- Args: … -->` payload it was
-// read from, for the `Args:` line of a committed golden (`SpecTestRunner.fragmentArgsLine`).
-//
-// It lives HERE, beside the parser, because the QUOTING RULE IS ONE FACT. A renderer written in the
-// runner would be a second, independent statement of what a quote means, free to drift from the split
-// that produced these very strings — and the drift would put a line into a golden claiming the program
-// received arguments it never got, which is the one thing the golden is read to find out.
-//
-// TWO SHAPES MUST BE QUOTED or the payload stops denoting the argv it came from: an EMPTY argument
-// (which contributes no characters and would otherwise vanish — `command-line-args.empty-string-arg`
-// writes exactly this) and one CONTAINING A SPACE (which would read back as two arguments).
-//
-// An argument containing a QUOTE is UNREACHABLE rather than unhandled: `parseProgramArgs` consumes
-// every `"` as a toggle, so no argument it produces can carry one, and `SpecTest.programArgs` has no
-// other source. It panics rather than emit a line that would re-read as a different argv.
-export function renderProgramArgs(args ProgramArgArray) returns String
-	var payload = TextJoiner.create(ArgSeparator)
-
-	for arg in args 'eachArg'
-		if arg.contains(ArgQuote) 'unwritable'
-			panic("SpecParser.renderProgramArgs: argument '{arg}' contains a quote, which parseProgramArgs consumes as a toggle and can therefore never produce — an argv reaching here with one did not come from an `<!-- Args: … -->` marker")
-		end 'unwritable'
-
-		payload.push("{ArgQuote}{arg}{ArgQuote}" if arg.isEmpty() or arg.contains(ArgSeparator) else arg)
-	end 'eachArg'
-
-	return payload.build()
-end 'renderProgramArgs'
 
 // The one line terminator this harness builds and splits its text on. EXPORTED because three files
 // join lines with it and the runner splits captured output on it, and a bare `"\n"` is exactly the

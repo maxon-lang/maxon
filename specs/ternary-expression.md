@@ -500,7 +500,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/ternary-expression/ternary-expression.error.unused-loopvar-before-ternary.test:6:6: unused variable: 'outer'
+error E3012: specs/ternary-expression/ternary-expression.error.unused-loopvar-before-ternary.maxon:6:6: unused variable: 'outer'
 ```
 
 <!-- test: ternary-expression.error.type-mismatch -->
@@ -511,7 +511,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2028: specs/fragments/ternary-expression/ternary-expression.error.type-mismatch.test:3:13: ternary expression type mismatch: true branch is 'int' but false branch is 'String'
+error E2028: specs/ternary-expression/ternary-expression.error.type-mismatch.maxon:3:13: ternary expression type mismatch: true branch is 'int' but false branch is 'String'
 ```
 
 <!-- test: ternary-expression.error.non-bool-condition -->
@@ -522,7 +522,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2028: specs/fragments/ternary-expression/ternary-expression.error.non-bool-condition.test:3:13: ternary expression requires a bool condition, got 'int'
+error E2028: specs/ternary-expression/ternary-expression.error.non-bool-condition.maxon:3:13: ternary expression requires a bool condition, got 'int'
 ```
 
 <!-- test: ternary-expression.error.struct-type-mismatch -->
@@ -558,7 +558,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2028: specs/fragments/ternary-expression/ternary-expression.error.struct-type-mismatch.test:22:23: ternary expression type mismatch: true branch is 'Cat' but false branch is 'Dog'
+error E2028: specs/ternary-expression/ternary-expression.error.struct-type-mismatch.maxon:22:23: ternary expression type mismatch: true branch is 'Cat' but false branch is 'Dog'
 ```
 
 <!-- test: ternary-expression.logical-op-condition -->
@@ -1005,7 +1005,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3004: specs/fragments/ternary-expression/ternary-expression.error.owned-string-arm-undeclared-call.test:3:25: call to undefined function 'undefinedThing'
+error E3004: specs/ternary-expression/ternary-expression.error.owned-string-arm-undeclared-call.maxon:3:25: call to undefined function 'undefinedThing'
 ```
 
 <!-- test: ternary-expression.ownership.result-stored-in-container -->
@@ -1387,7 +1387,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2028: specs/fragments/ternary-expression/ternary-expression.error.function-arm-signature-mismatch.test:14:16: ternary expression type mismatch: true branch is 'fn(Integer) returns Integer' but false branch is 'fn(Integer, Integer) returns Integer'
+error E2028: specs/ternary-expression/ternary-expression.error.function-arm-signature-mismatch.maxon:14:16: ternary expression type mismatch: true branch is 'fn(Integer) returns Integer' but false branch is 'fn(Integer, Integer) returns Integer'
 ```
 
 <!-- test: ternary-expression.error.function-arm-signature-mismatch-forward-ref -->
@@ -1415,5 +1415,5 @@ function binary(a Integer, b Integer) returns Integer
 end 'binary'
 ```
 ```maxoncstderr
-error E2028: specs/fragments/ternary-expression/ternary-expression.error.function-arm-signature-mismatch-forward-ref.test:6:16: ternary expression type mismatch: true branch is 'fn(Integer) returns Integer' but false branch is 'fn(Integer, Integer) returns Integer'
+error E2028: specs/ternary-expression/ternary-expression.error.function-arm-signature-mismatch-forward-ref.maxon:6:16: ternary expression type mismatch: true branch is 'fn(Integer) returns Integer' but false branch is 'fn(Integer, Integer) returns Integer'
 ```

@@ -107,7 +107,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-string-and-int.test:4:10: match arms give incompatible types: 'int' vs 'String'
+error E3005: specs/match-expr-divergent-class/error.match-gives-string-and-int.maxon:4:10: match arms give incompatible types: 'int' vs 'String'
 ```
 
 <!-- test: error.match-gives-float-and-string -->
@@ -122,7 +122,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-float-and-string.test:4:10: match arms give incompatible types: 'String' vs 'float'
+error E3005: specs/match-expr-divergent-class/error.match-gives-float-and-string.maxon:4:10: match arms give incompatible types: 'String' vs 'float'
 ```
 
 <!-- test: error.match-gives-bool-and-int -->
@@ -137,7 +137,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-bool-and-int.test:4:10: match arms give incompatible types: 'bool' vs 'int'
+error E3005: specs/match-expr-divergent-class/error.match-gives-bool-and-int.maxon:4:10: match arms give incompatible types: 'bool' vs 'int'
 ```
 
 <!-- test: error.match-gives-two-structs -->
@@ -170,7 +170,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-two-structs.test:22:10: match arms give incompatible types: 'Cup' vs 'Box'
+error E3005: specs/match-expr-divergent-class/error.match-gives-two-structs.maxon:22:10: match arms give incompatible types: 'Cup' vs 'Box'
 ```
 
 <!-- test: error.match-gives-two-unions -->
@@ -197,7 +197,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-two-unions.test:16:10: match arms give incompatible types: 'Toggle' vs 'Shape'
+error E3005: specs/match-expr-divergent-class/error.match-gives-two-unions.maxon:16:10: match arms give incompatible types: 'Toggle' vs 'Shape'
 ```
 
 <!-- test: error.match-gives-union-and-int -->
@@ -227,7 +227,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-union-and-int.test:19:10: match arms give incompatible types: 'int' vs 'Holder'
+error E3005: specs/match-expr-divergent-class/error.match-gives-union-and-int.maxon:19:10: match arms give incompatible types: 'int' vs 'Holder'
 ```
 
 <!-- test: match-gives-same-type -->
@@ -259,5 +259,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-string-and-int-cast.test:4:12: match arms give incompatible types: 'int' vs 'String'
+error E3005: specs/match-expr-divergent-class/error.match-gives-string-and-int-cast.maxon:4:12: match arms give incompatible types: 'int' vs 'String'
 ```

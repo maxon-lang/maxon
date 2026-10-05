@@ -613,5 +613,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/string-index/error.find-first-without-try.test:4:8: throwing function requires try: 'stdlib.String.findFirst'
+error E3057: specs/string-index/error.find-first-without-try.maxon:4:8: throwing function requires try: 'stdlib.String.findFirst'
 ```

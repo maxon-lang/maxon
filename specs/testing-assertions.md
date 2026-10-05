@@ -152,7 +152,7 @@ all held
 ```
 
 <!-- test: every-matcher-reports-its-failure -->
-Every matcher on its failing path, in roster order. This is the format golden.
+Every matcher on its failing path, in roster order. Its `stderr` block pins the format.
 ```maxon
 // --- file: main.maxon
 function main() returns ExitCode
@@ -560,7 +560,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/testing-assertions/error.forgotten-try.test:4:9: throwing function requires try: 'stdlib.Expect.equal'
+error E3057: specs/testing-assertions/error.forgotten-try.maxon:4:9: throwing function requires try: 'stdlib.Expect.equal'
 ```
 
 <!-- test: error.forgotten-try-names-an-overload-by-its-source-name -->
@@ -580,5 +580,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/testing-assertions/error.forgotten-try-names-an-overload-by-its-source-name.test:4:9: throwing function requires try: 'stdlib.Expect.equal'
+error E3057: specs/testing-assertions/error.forgotten-try-names-an-overload-by-its-source-name.maxon:4:9: throwing function requires try: 'stdlib.Expect.equal'
 ```

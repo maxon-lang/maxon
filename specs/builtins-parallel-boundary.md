@@ -144,45 +144,6 @@ end 'main'
 3
 ```
 
-<!-- test: builtins-parallel-boundary.checkpoint-body-is-runtime-source -->
-⭐⭐ **THE CHECKPOINT'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE THAT
-SEES IT.** `runtime/ParallelBoundary.maxon` writes `__parallel_boundary` as `__Raw.ownFrame()` and nothing
-else, and the block below renders what the back end made of that: a prologue, an epilogue, a `ret`. Every
-other case in this file watches the CALL; only a rendered body says the callee exists and what it costs. An
-op appearing here is a row that stopped being a directive, and a body with a frame reservation is a
-checkpoint that has started paying for storage it does not use.
-
-⚠ **AND IT CANNOT, BY ITSELF, CATCH A REGRESSION IN `ownFrame` — READ THIS BEFORE TRUSTING IT.** A
-`RequiredRuntime` block ALSO marks the function it names never-inline for that one compile
-(`InlineLeaves.goldenRequestedFunctions`), so this body would be rendered here even by a compiler that had
-stopped honouring `IrFunction.keepsItsOwnFrame` and spliced the checkpoint away everywhere else. What
-actually guards the rule is the `call __parallel_boundary` standing in every OTHER golden that reaches one —
-`statement-position` above, and the `sched-*`, `builtins-mm-counters`, `builtins-cpu-parallel`,
-`debugstream-log-events` and `runtime-scratch-reclaim` families. This case pins the far end of that call;
-those pin that the call is still there.
-
-⚠ `main` calls the checkpoint TWICE, through a function that is itself called twice, so neither the leaf
-rule nor the called-once rule has a single site to move: the golden pins the body that runs rather than an
-emitted leftover.
-```maxon
-function checkpoint()
-	__Builtins.parallelBoundary()
-	__Builtins.parallelBoundary()
-end 'checkpoint'
-
-function main() returns ExitCode
-	checkpoint()
-	checkpoint()
-	return 4
-end 'main'
-```
-```exitcode
-4
-```
-```RequiredRuntime
-__parallel_boundary
-```
-
 <!-- test: builtins-parallel-boundary.error.value-position-rejected -->
 It returns nothing, so reading its result is reading a value that is not there — the same rejection
 `__Builtins.sleep`'s result gets, quoting the QUALIFIED name the user wrote.

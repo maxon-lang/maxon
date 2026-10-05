@@ -481,7 +481,7 @@ box `main` allocates and a `spawn`ed service drops is released by whichever mach
 `SlabRuntime`'s remote-free road, a CAS push onto the SPAN's own Treiber stack, credited to the PUSHER. So
 what it counts is frees PERFORMED across processors rather than frees received. `service-torture` and
 `service-fanin-torture` drive thousands of those, and this counter is what observes them; it is per-P and summed like
-`schedStealCount()`, so it costs no `.data` word and no golden churn.
+`schedStealCount()`, so it costs no `.data` word.
 
 ⭐⭐ **WHAT THIS CASE PINS IS THE HALF THAT IS DETERMINISTIC: AT ONE PROCESSOR THE ANSWER IS EXACTLY ZERO.**
 Every free in a one-P program is local by construction, so a counter that ever answers non-zero here is

@@ -4104,7 +4104,9 @@ Every file in one directory shares that directory's namespace.
 ### Visibility
 
 Top-level declarations — functions, types, enums, unions, typealiases, variables — are **private to their
-file** unless marked. Three modifiers widen that:
+file** unless marked: only that file may name them. The name of a type, enum, union or interface is still
+the whole program's, so a second declaration of it anywhere is **E3006** (see
+[Bare Names and Ambiguity](#bare-names-and-ambiguity)). Three modifiers widen visibility:
 
 | Modifier | Visible to | Checked for unused exports |
 |----------|------------|----------------------------|
@@ -4254,14 +4256,24 @@ Otherwise the call is ambiguous, **E3095**, in every form it takes — plain, un
 `async` (`Ambiguous bare-name call to 'describe': more than one visible declaration matches it. Qualify it
 as one of: alpha.describe, beta.describe`) — worded for a function value or an enum case's backing where
 the name is one. A call (`api.format(...)`), a function value (`let f = api.format`) and a function-backed
-enum case (`plain = api.format`) all accept the qualified form.
+enum case (`plain = api.format`) all accept the qualified form. A call to a generic function first keeps the
+declarations its arguments fit, then the nearest of those: one in the calling file's own directory, then
+one at the project root, then any other — so an overload of another arity in a farther directory serves the
+calls the nearer one cannot take.
+
+**Only a declaration the file can see counts**, for every kind of name. A project type named like a
+primitive (`byte`, say) and declared where a file cannot see it leaves that name the primitive in that file.
+What a call knows about its callee comes from the declaration it binds, too: whether the callee never
+returns (its body ends in `panic`) or can only throw, and which generic template it instantiates.
 
 **Every candidate is nameable.** Two type declarations of one name that can both be named from outside
 their files may not share a directory: two typealiases are **E3061** and a pair involving a type, enum,
 union or interface is **E3006**. Two typealiases of one name in one file are **E3061** too. The declaration
 kept is the earlier one in a file, and across files the one in the file whose absolute path, with `/`
-separators, sorts first byte by byte; each other one is reported at its name. Declarations in different directories coexist — a typealias in one and a type in another
-included — and a file-private declaration coexists with anything, since only its own file can name it.
+separators, sorts first byte by byte; each other one is reported at its name. Declarations in different directories
+coexist — a typealias in one and a type in another included — and a file-private typealias coexists with
+anything, since only its own file can name it. A type, enum, union or interface name is the whole program's:
+two of them sharing a name are **E3006** wherever they sit and whatever their modifiers.
 
 Every typealias a `public` standard-library signature names is itself `public`, so a value can always be cast
 to the alias a library signature asks for (`x as ElementIndex`). A standard-library typealias with no modifier
@@ -5643,6 +5655,7 @@ Nothing in Maxon is undefined behaviour. At run time:
 | `__Builtins.slabCensusTally` asked for a mode it does not implement, or walking a heap it cannot describe | exit code **119** |
 | a deep copy of an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled | exit code **120** |
 | on x64-windows, the green-thread scheduler starting up with a thread-local slot Windows placed past the 64 slots of the thread's own block | exit code **121** |
+| a second green thread calling `__Builtins.gtQuiesce()` while another is waiting in it | exit code **123** |
 | deadlock | exit code **92** |
 
 `maxon execute` and `maxon test` report these exit codes; see the [CLI reference](CLI_REFERENCE.md).

@@ -1809,7 +1809,7 @@ export type StdToX64Lowering
 	//     second reader that comes BEFORE this op leaves `lhs` dying here anyway; the swap then removes
 	//     nothing. Answering that exactly needs a use POSITION, a dense per-function column on the
 	//     isel's hot path, and it is not bought here.
-	// ⇒ Because the `rhs` half is exact, the imprecision on `lhs` costs a golden that MOVED FOR NOTHING
+	// ⇒ Because the `rhs` half is exact, the imprecision on `lhs` costs a pin that MOVED FOR NOTHING
 	// and can never cost an instruction AT THE OP: the swapped order's reuse input provably dies, so no
 	// copy is recorded for it whatever `lhs` was doing.
 	//
@@ -1837,7 +1837,7 @@ export type StdToX64Lowering
 	// SAYING SO IS THE POINT.** It names which arms below emit a two-address instruction, and nothing
 	// holds the two in step: change an arm's instruction and this roster stays green and stale.
 	// Today that is cheap — a wrong answer costs a MISSED commute (a copy that stays) or a USELESS one
-	// (a swap that moves a golden and nothing else), because every commutative integer opcode currently
+	// (a swap that moves a pin and nothing else), because every commutative integer opcode currently
 	// selects a SYMMETRIC instruction and the swap is legal whether or not the instruction is
 	// destructive. **That is a property of the present arms, not an invariant**: an arm that selected an
 	// ASYMMETRIC instruction for a commutative opcode (BMI's `andn`, a scaled `lea` for `mul`) would
@@ -1869,7 +1869,7 @@ export type StdToX64Lowering
 	// (`dest ⟸ lhs`) — the only shape whose operand order can cost a copy. Read against the arms
 	// below, one by one:
 	//   • `add`  — `leaRegRegReg`, a THREE-operand address computation with an independent
-	//              destination. Commuting it would move a golden and save nothing.
+	//              destination. Commuting it would move the rendered Target IR and save nothing.
 	//   • `sub`/`mul`/`bitAnd`/`bitOr`/`bitXor` — `sub`/`imul`/`and`/`or`/`xor`, all destructive.
 	//   • the shifts — `shl`/`sar`/`shr` are destructive in `lhs`, but their COUNT is pinned to CL
 	//                  and is not interchangeable with the value being shifted at all.
@@ -2519,7 +2519,7 @@ export type StdToX64Lowering
 	//
 	// ⛔⛔ **EVERY STACK STORE IS EMITTED BEFORE EVERY REGISTER MOVE, AND THAT ORDER IS A CORRECTNESS
 	// REQUIREMENT, NOT A STYLE.** Computing the stack args FIRST may clobber RCX/RDX/R8/R9, so the argument
-	// registers are loaded last — and the corpus proves it: `specs/x64-stack-arg-disp32.md` returns
+	// registers are loaded last — and the corpus proves it: `ir-specs/x64-stack-arg-disp32.md` returns
 	// 400 instead of 200 under source-order emission.
 	//
 	// The reason is that a stack store's SOURCE may still need materializing, and materializing it takes a

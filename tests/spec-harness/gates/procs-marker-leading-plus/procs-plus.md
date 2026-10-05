@@ -9,7 +9,7 @@ the scheduler resolved; `procs-marker-leading-plus.maxtest`, beside this directo
 a copy of it and requires the case to RUN and to print `procs=4`.
 
 **Its expected stdout is DELIBERATELY WRONG, and it must stay wrong**: the test reads what it printed out
-of the failure's `actual:`, which a passing case does not print, and a failing case mints no golden.
+of the failure's `actual:`, which a passing case does not print.
 
 ## Tests
 

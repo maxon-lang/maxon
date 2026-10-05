@@ -74,7 +74,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/enum-match-only/error.enum-eq.test:11:7: cannot compare union values using '==', use 'match' instead
+error E3066: specs/enum-match-only/error.enum-eq.maxon:11:7: cannot compare union values using '==', use 'match' instead
 ```
 
 <!-- test: error.enum-ne -->
@@ -95,7 +95,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/enum-match-only/error.enum-ne.test:11:7: cannot compare union values using '!=', use 'match' instead
+error E3066: specs/enum-match-only/error.enum-ne.maxon:11:7: cannot compare union values using '!=', use 'match' instead
 ```
 
 <!-- test: error.enum-lt -->
@@ -117,7 +117,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/enum-match-only/error.enum-lt.test:11:7: cannot compare union values using '<', use 'match' instead
+error E3066: specs/enum-match-only/error.enum-lt.maxon:11:7: cannot compare union values using '<', use 'match' instead
 ```
 
 <!-- test: error.enum-eq-method -->
@@ -146,7 +146,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/enum-match-only/error.enum-eq-method.test:9:11: cannot compare union values using '==', use 'match' instead
+error E3066: specs/enum-match-only/error.enum-eq-method.maxon:9:11: cannot compare union values using '==', use 'match' instead
 ```
 
 <!-- test: error.enum-eq-associated -->
@@ -169,7 +169,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/enum-match-only/error.enum-eq-associated.test:13:7: cannot compare union values using '==', use 'match' instead
+error E3066: specs/enum-match-only/error.enum-eq-associated.maxon:13:7: cannot compare union values using '==', use 'match' instead
 ```
 
 <!-- test: union-return -->
@@ -227,7 +227,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/enum-match-only/error.return-wrong-union.test:15:2: Cannot return 'Palette' from function declared to return 'Shape'
+error E3005: specs/enum-match-only/error.return-wrong-union.maxon:15:2: Cannot return 'Palette' from function declared to return 'Shape'
 ```
 
 <!-- test: error.callarg-wrong-union-borrowed -->
@@ -262,7 +262,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/enum-match-only/error.callarg-wrong-union-borrowed.test:20:9: argument type mismatch for 'e': expected 'BoxA', got 'BoxB'
+error E3005: specs/enum-match-only/error.callarg-wrong-union-borrowed.maxon:20:9: argument type mismatch for 'e': expected 'BoxA', got 'BoxB'
 ```
 
 <!-- test: error.callarg-wrong-union-consumed -->
@@ -299,7 +299,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/enum-match-only/error.callarg-wrong-union-consumed.test:22:16: argument type mismatch for 'inner': expected 'BoxA', got 'BoxB'
+error E3005: specs/enum-match-only/error.callarg-wrong-union-consumed.maxon:22:16: argument type mismatch for 'inner': expected 'BoxA', got 'BoxB'
 ```
 
 <!-- test: error.callarg-int-to-union -->
@@ -325,7 +325,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/enum-match-only/error.callarg-int-to-union.test:15:9: argument type mismatch for 'e': expected 'BoxA', got 'int'
+error E3005: specs/enum-match-only/error.callarg-int-to-union.maxon:15:9: argument type mismatch for 'e': expected 'BoxA', got 'int'
 ```
 
 <!-- test: callarg-union-same-type -->
@@ -371,7 +371,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/enum-match-only/error.default-without-throws.test:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
+error E2046: specs/enum-match-only/error.default-without-throws.maxon:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: default-throws-statement -->

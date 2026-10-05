@@ -1,0 +1,16 @@
+let UnbatchableSpecName = "unbatchable"
+
+test 'a stderr case, an Args case and a compile-error case stay out of the batch the plain run cases share'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: UnbatchableSpecName, testNames: ["unbatchable.plain-first", "unbatchable.plain-second", "unbatchable.pins-stderr", "unbatchable.takes-args", "unbatchable.refused"], broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(2, programs: 1, alone: 2), broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "unbatchable cases run alone")
+end 'a stderr case, an Args case and a compile-error case stay out of the batch the plain run cases share'

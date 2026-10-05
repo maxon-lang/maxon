@@ -1,0 +1,79 @@
+let PanicMidBatchSpecName = "panic-mid-batch"
+let PanicMidBatchSpecFileName = "panic-mid-batch.md"
+let PanicMidBatchOne = "panic-mid-batch.one"
+let PanicMidBatchTwo = "panic-mid-batch.two"
+let PanicMidBatchThree = "panic-mid-batch.three"
+let ThirdExitCodeBlock = "```exitcode\n4\n```"
+let WrongThirdExitCodeBlock = "```exitcode\n5\n```"
+let NextPassVerdict = "\nPASS "
+let NextFailVerdict = "\nFAIL "
+let PanicWord = "panic"
+let ExitWord = "exit"
+
+test 'an unexpected crash mid-batch fails only its own case and names the crash'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: PanicMidBatchSpecName, testNames: [PanicMidBatchOne, PanicMidBatchThree], broken: broken)
+	collectCrashNotAttributed(said, broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(2, programs: 1, alone: 1), broken: broken)
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with a crashed case in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "an unexpected crash mid-batch is attributed to its own case")
+end 'an unexpected crash mid-batch fails only its own case and names the crash'
+
+test 'a wrong expectation after a crash mid-batch fails only its own case'
+	let staged = stagedGateFixture()
+	let specPath = staged.join(PanicMidBatchSpecFileName)
+	let text = withoutCarriageReturns(readStagedText(specPath))
+
+	if not text.contains(ThirdExitCodeBlock) 'fixtureMoved'
+		discardStaging(staged)
+		panic("spec-harness tests: the gate could not run - {PanicMidBatchSpecFileName} no longer holds the third case's exit-code block it plants a wrong one over.")
+	end 'fixtureMoved'
+
+	writeStagedText(specPath, content: text.replace(ThirdExitCodeBlock, with: WrongThirdExitCodeBlock))
+
+	let run = runSpecTest(staged, includeNetwork: false)
+	discardStaging(staged)
+
+	let said = everythingSaid(run)
+	let thirdFailed = failVerdictPrefix(testLabel(PanicMidBatchSpecName, testName: PanicMidBatchThree))
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: PanicMidBatchSpecName, testNames: [PanicMidBatchOne], broken: broken)
+	collectCrashNotAttributed(said, broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(1, programs: 1, alone: 2), broken: broken)
+
+	if not said.contains(thirdFailed) 'thirdDidNotFail'
+		broken.push("'{PanicMidBatchThree}' expects the wrong exit code and did not FAIL. Expected '{thirdFailed}', and the run said:\n{said}\n")
+	end 'thirdDidNotFail'
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with failing cases in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "a failure after a crash mid-batch is its own case's")
+end 'a wrong expectation after a crash mid-batch fails only its own case'
+
+function collectCrashNotAttributed(said String, broken StringArray)
+	let prefix = failVerdictPrefix(testLabel(PanicMidBatchSpecName, testName: PanicMidBatchTwo))
+	let afterPrefix = said.split(prefix)
+
+	if afterPrefix.count() < 2 'didNotFail'
+		broken.push("'{PanicMidBatchTwo}' crashed and did not FAIL. Expected '{prefix}', and the run said:\n{said}\n")
+		return
+	end 'didNotFail'
+
+	let tail = try afterPrefix.get(1) otherwise panic("spec-harness tests: a split with at least two parts has a second one")
+	let untilPass = try tail.split(NextPassVerdict).get(0) otherwise panic("spec-harness tests: a split always has a first part")
+	let detail = try untilPass.split(NextFailVerdict).get(0) otherwise panic("spec-harness tests: a split always has a first part")
+
+	if not detail.contains(PanicWord) and not detail.contains(ExitWord) 'crashUnnamed'
+		broken.push("'{PanicMidBatchTwo}' FAILED, but its failure names neither the {PanicWord} nor the {ExitWord} code. Its failure reads:\n{detail}\n")
+	end 'crashUnnamed'
+end 'collectCrashNotAttributed'

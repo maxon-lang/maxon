@@ -447,7 +447,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/default-values/default-values.error.param-default-trailing-tokens.test:4:37: Expected 'end of default value' but got 'zzz'
+error E2010: specs/default-values/default-values.error.param-default-trailing-tokens.maxon:4:37: Expected 'end of default value' but got 'zzz'
 ```
 
 ### Error: An exponent without a decimal point is not a float default either
@@ -470,5 +470,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/default-values/default-values.error.param-default-exponent-without-point.test:4:30: Expected 'end of default value' but got 'e100'
+error E2010: specs/default-values/default-values.error.param-default-exponent-without-point.maxon:4:30: Expected 'end of default value' but got 'e100'
 ```

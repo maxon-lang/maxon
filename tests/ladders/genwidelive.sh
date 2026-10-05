@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # N call results, ALL live simultaneously in ONE straight-line basic block — the maximum
 # simultaneous liveness a single block can carry, and the exact shape
-# `specs/x64-large-frame-arg7.md` is the N=800 rung of. Both modes return 7.
+# `ir-specs/x64-large-frame-arg7.md` is the N=800 rung of. Both modes return 7.
 #
 # ⚠ NOT the same shape as `gen12i.sh`, which is N units each holding a handful of values
 # live across ONE call: there the live set is bounded by the unit, and although the whole

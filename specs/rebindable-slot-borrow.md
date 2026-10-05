@@ -141,7 +141,7 @@ violation.
 
 The promotion here is the `binding` door (`let old = name`), and that door still COPIES:
 `promoteBorrowedToOwned` routes it to `promoteToOwnedString`, the `__mm_alloc` + `__str_copy` pair
-this case's golden shows. COPYING is not every door's protocol: a HAND-OFF (`return` / `gives`, or a
+this case's emitted code shows. COPYING is not every door's protocol: a HAND-OFF (`return` / `gives`, or a
 merge edge) and a DURABLE store into a field, element or column both take a REFERENCE instead
 (`retainBorrowedByteRecord` → `__str_retain`), because Maxon is single-ownership with reference
 semantics and a copy the author did not write makes the caller's value stop being the callee's. Nor

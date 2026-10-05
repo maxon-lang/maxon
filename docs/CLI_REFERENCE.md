@@ -689,6 +689,14 @@ maxon build app.maxon --log=error            # only errors
 the names that file interned and the arena bytes they occupy, what its table reserved ahead of them, and
 how many times the table rehashed or had to grow.
 
+**The shared library memo.** A process that compiles many programs — a `spec-test` worker, the MCP
+server, the language server — keeps each library file's tokens and parse across compiles, and
+`--log=compiler:debug` prints one `shared stdlib memo` line per compile: the token, active-token and
+producer-mask hits, the files admitted and held, then the parse artifacts held, the parse hits, misses and
+publishes, how many held parses missed because ids they reference moved, and whether this program may
+share library parses at all (`shareable`, or the reason it parses the library cold: `shadowed`,
+`namesOverlap`, `rootInsideStdlib`).
+
 **The census by tag.** [`--census-by-tag`](#maxon-build) adds a third table under the residency one: the
 live heap at each phase boundary broken down by the type each allocation was tagged with. It prints the
 top five buckets for every phase sampled, then the whole table for the phase whose *live* level was
@@ -2482,8 +2490,9 @@ Runs `maxon spec-test` and returns `passed`, `failed`, `total`, `summaryParsed`,
 | Argument | Type | Description |
 |----------|------|-------------|
 | `filter` | string or array of strings | One `--filter=` per pattern, each a case-sensitive substring of the `<spec>/<test>` label. The run takes every case any pattern selects; a pattern that selects nothing refuses the run, and an empty pattern is a tool error. A comma is part of a pattern. |
-| `directory` | string | Spec directory (default `specs`) |
-| `updateRequired` | boolean | `--update-required`: rewrite the committed IR goldens. Always pair it with `filter`; unfiltered, it rewrites every golden. |
+| `directory` | string | Spec directory (default `specs`; `ir-specs` is the Target IR suite) |
+| `updateRequired` | boolean | `--update-required`: re-mint the inline blocks in the spec files, the trace-capture blocks and the `TargetIr` pins. Always pair it with `filter`; unfiltered, it re-mints every selected case's blocks. |
+| `batch` | boolean | `--batch=off` when false: every run case is compiled and run on its own. The default, true, runs a spec's plain run cases batched, as the fewest programs whose type names do not overlap. |
 | `log` | string | `--log=` value, such as `ir:debug` |
 | `network` | boolean | `--network`: also run the cases that reach a real external host |
 | `target` | string | `--target=` value, such as `wasm32-wasi` |
@@ -2561,18 +2570,14 @@ case is compiled inside this process, so the compiler under test is the executab
 | `--workers=<n>` | Run on `<n>` persistent worker processes (default: this machine's count, shown by `maxon help spec-test`). `1` is the same pool with one worker, not a serial mode, and output is identical for every count. |
 | `--target=<cpu>-<os>` | Cross-compile each selected test for that target and run it under the vendored runtime. |
 | `--network` | Also run the cases that open a socket to a real external host. A default run names every case it left out. |
-| `--update-required` | Rewrite the committed IR goldens instead of checking against them, and re-mint the trace-capture blocks in the spec files. Review the diff, and pair it with `--filter`: unfiltered, it rewrites every golden. |
-| `--rewrite-drifted-goldens` | Rewrite each committed IR golden that differs from this run's output, for a case that passed on this host. A failing case keeps its golden, and spec files are left as they are. Review the diff. |
+| `--batch=on\|off` | `on` (the default) compiles a spec's plain run cases into the fewest programs whose type names do not overlap and runs each once, rerunning alone any case that did not finish cleanly. `off` compiles and runs every case on its own. Any other value is refused. |
+| `--update-required` | Re-mint the inline blocks a run checks, in the spec files themselves: the trace-capture blocks, and the `TargetIr:<lane>` pin of this run's lane for every selected case of a spec that holds any pin. A pin is compiled, not run, so a lane this host cannot execute still re-mints. Review the diff, and pair it with `--filter`: unfiltered, it re-mints every selected case's blocks. |
 
-`--update-required` and `--rewrite-drifted-goldens` are refused together:
-`error: --rewrite-drifted-goldens cannot be combined with --update-required` (the flags are named in the
-order typed).
-
-The run prints one line per test, then `N passed, M failed` and lines for skipped, not-run and drifted
-cases. A golden whose text differs from this run's output is reported as drift and does not fail the
-case; `--update-required` and `--rewrite-drifted-goldens` rewrite one, and a golden the run rewrote is not
-reported as drift. The compiler repository's CI runs the suite with `--rewrite-drifted-goldens` on each
-target it tests, and a push to `main` commits the goldens those runs wrote.
+The run prints one line per test, then `N passed, M failed`, the line `N run case(s) ran batched in M
+program(s); K ran alone`, and lines for skipped and not-run cases. A case whose spec carries a
+`TargetIr:<lane>` block for the lane being run fails when the Target IR the compiler renders differs from
+the block, and the failure shows the first differing line. The Target IR suite lives in its own
+directory, `maxon spec-test ir-specs`.
 
 It refuses to start, with exit **2** and nothing run, when the compiler binary is older than the sources
 it was built from, or when another command holds the checkout's [tree lock](#the-tree-lock).
@@ -2589,7 +2594,8 @@ maxon spec-test --filter=arrays/a-pushed-element-survives-the-push
 maxon spec-test --filter=arrays/ --filter=tuples/   # two specs, one run
 maxon spec-test --target=wasm32-wasi
 maxon spec-test --filter=strings --update-required
-maxon spec-test --rewrite-drifted-goldens
+maxon spec-test ir-specs --target=x64-linux
+maxon spec-test --batch=off --filter=arrays/
 ```
 
 ### `maxon scale-test`
@@ -2629,7 +2635,12 @@ maxon verify-recheck <file|dir>
 - **`verify-warm-rebuild`** checks that the query layer is deterministic (two cold compiles agree byte
   for byte) and incremental (a rebuild reuses cached work, and each kind of edit invalidates exactly what
   it should), and that a compile reusing the memos of files an edit left alone emits exactly what a cold
-  compile of the edited program emits. A file with compile errors reports them and exits 1.
+  compile of the edited program emits. It also compiles, in one session, a second program (the file plus a
+  probe that declares its own types and an interface) and a third that shares none of the file's type
+  names, and checks that both are served every library file's parse from the session's store and emit what
+  a cold compile of each emits; for a program that shadows a library name it checks instead that the
+  library is parsed cold, and the `PASS` line says `library parsed cold (shadowed)`. A file with compile
+  errors reports them and exits 1.
 - **`verify-recheck`** checks that one project can be re-checked the way an editor does: two checks of
   unchanged input agree, and a diagnostic introduced by an edit clears when the edit is undone. It takes
   `--define=<name>=<value>` as `build` does, so a define is checked on every re-check.

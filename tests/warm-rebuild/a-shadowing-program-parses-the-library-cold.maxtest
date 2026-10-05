@@ -1,0 +1,9 @@
+let LibraryParsedColdPassLine = "verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold + library parsed cold (shadowed)"
+
+test 'a program that shadows a library type parses the library cold and still equals its cold compile'
+	let staged = stagedFixture("shadowing", caseLabel: "a-shadowing-program-parses-the-library-cold")
+	let run = spawnVerify(staged)
+
+	Expect.contains(run.stdout, needle: LibraryParsedColdPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report the library parsed cold for a program whose `Clock` shadows the library's. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
+end 'a program that shadows a library type parses the library cold and still equals its cold compile'

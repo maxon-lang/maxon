@@ -249,18 +249,161 @@ function programSourceByteCount(project Project) returns SourceByteCount
 	return total
 end 'programSourceByteCount'
 
-export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
-	if signaturesCacheValid(project) 'hit'
-		project.db.signatureHits = project.db.signatureHits + 1
+// What one front-end pass over a spec case's own files answers for the batching runner, so the runner
+// reads no source text for it. `mentionedNames` is every identifier written: a safe superset of the
+// names the case refers to.
+export type SourceClaims
+	export let moduleInit as ModuleInitNeed
+	export let declaredNominals as StringArray
+	export let declaredAliases as StringArray
+	export let extensionMethodKeys as StringArray
+	export let shadowedLibraryNames as StringArray
+	export let mentionedNames as StringArray
 
-		// The sweep reads no liveness, so the memo's key omits the live keys and a hit adopts the current
-		// ones.
-		project.db.signatureCache.value.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
-		return project.db.signatureCache.value
-	end 'hit'
+	export static function create(moduleInit ModuleInitNeed, declaredNominals StringArray, declaredAliases StringArray, extensionMethodKeys StringArray, shadowedLibraryNames StringArray, mentionedNames StringArray) returns SourceClaims
+		return Self{moduleInit: moduleInit, declaredNominals: declaredNominals, declaredAliases: declaredAliases, extensionMethodKeys: extensionMethodKeys, shadowedLibraryNames: shadowedLibraryNames, mentionedNames: mentionedNames}
+	end 'create'
+end 'SourceClaims'
 
-	project.db.signatureMisses = project.db.signatureMisses + 1
+typealias SourceNameSet = Set with String
 
+function foldedUserFilesOf(project Project, recordingClaims bool) returns UserFileFold throws CompileError
+	var signatures = newProgramSignatures(project)
+
+	if recordingClaims 'aClaimsFold'
+		signatures.recordTypeClaims()
+	end 'aClaimsFold'
+
+	var userPaths = MaxonSourcePathArray.create()
+
+	for path in project.db.sourcePaths 'eachFile'
+		userPaths.push(path)
+	end 'eachFile'
+
+	try foldEveryDeclaration(project, signatures: signatures, userPaths: userPaths, stdlibPaths: MaxonSourcePathArray.create())
+	return UserFileFold.create(signatures, paths: userPaths)
+end 'foldedUserFilesOf'
+
+function extensionMethodKeysWritten(project Project, signatures ProgramSignatures) returns StringArray throws CompileError
+	var keys = signatures.userExtensionMethodKeys()
+	var seen = SourceNameSet.create()
+
+	for key in keys 'eachFoldedKey'
+		seen.insert(key)
+	end 'eachFoldedKey'
+
+	for site in signatures.extensionDeclSites 'eachExtensionSite'
+		var reader = try siteFileReader(project, signatures: signatures, path: site.path, buildsBodies: false)
+		var written = ByteArrayArray.create()
+		reader.methodKeysOfAnUndeclaredExtension(site, into: written)
+
+		for key in written 'eachWrittenKey'
+			let name = String.from(key)
+
+			if not seen.contains(name) 'notListedYet'
+				seen.insert(name)
+				keys.push(name)
+			end 'notListedYet'
+		end 'eachWrittenKey'
+	end 'eachExtensionSite'
+
+	keys.sort(function(left String, right String) gives left.compare(right))
+	return keys
+end 'extensionMethodKeysWritten'
+
+function foldExtensionsOfUserFiles(project Project, signatures ProgramSignatures) throws CompileError
+	signatures.settleCrossKindContests()
+	signatures.settleFunctionAliasShapeContests()
+	signatures.settleRangeScopedInstances()
+	signatures.settleGenericAliasContest()
+	signatures.internLiteralContainerInstances()
+	signatures.rewriteRecordedReturnTypes(RecordedReturnTypeRule.declaredStruct)
+	signatures.settleInlineRecordGeometry()
+	settleProjectInlineRecordGeometry(project, signatures: signatures)
+	try foldInterfaceDeclarations(project, signatures: signatures)
+	try foldConformanceClauses(project, signatures: signatures)
+	try foldExtensionDeclarations(project, signatures: signatures)
+end 'foldExtensionsOfUserFiles'
+
+type UserFileFold
+	export let signatures as ProgramSignatures
+	export let paths as MaxonSourcePathArray
+
+	static function create(signatures ProgramSignatures, paths MaxonSourcePathArray) returns UserFileFold
+		return Self{signatures: signatures, paths: paths}
+	end 'create'
+end 'UserFileFold'
+
+export function claimsOfUserFiles(project Project) returns SourceClaims throws CompileError
+	let fold = try foldedUserFilesOf(project, recordingClaims: true)
+	try foldExtensionsOfUserFiles(project, signatures: fold.signatures)
+	let nominals = fold.signatures.userDeclaredNominalNames()
+	let aliases = fold.signatures.userDeclaredAliasNames()
+	let mentioned = try identifierNamesWritten(project, paths: fold.paths)
+	let shadowed = try namesTheLibraryAlsoDeclares(project, nominals: nominals, aliases: aliases)
+	let extensionKeys = try extensionMethodKeysWritten(project, signatures: fold.signatures)
+	return SourceClaims.create(fold.signatures.programModuleInitNeed(), declaredNominals: nominals, declaredAliases: aliases, extensionMethodKeys: extensionKeys, shadowedLibraryNames: shadowed, mentionedNames: mentioned)
+end 'claimsOfUserFiles'
+
+function identifierNamesWritten(project Project, paths MaxonSourcePathArray) returns StringArray throws CompileError
+	var names = StringArray.create()
+	var seen = SourceNameSet.create()
+
+	for path in paths 'eachFile'
+		let tokens = try queryActiveTokens(project, path: path)
+
+		for i in 0 upto tokens.count() 'eachToken'
+			let token = try tokens.get(i) otherwise panic("identifierNamesWritten: tokens.get OOB at {i} below count {tokens.count()}")
+
+			if token.kind != TokenKind.identifier 'notAName'
+				continue
+			end 'notAName'
+
+			let name = String.from(token.value)
+
+			if seen.contains(name) 'alreadyListed'
+				continue
+			end 'alreadyListed'
+
+			seen.insert(name)
+			names.push(name)
+		end 'eachToken'
+	end 'eachFile'
+
+	return names
+end 'identifierNamesWritten'
+
+function namesTheLibraryAlsoDeclares(project Project, nominals StringArray, aliases StringArray) returns StringArray throws CompileError
+	var shadowed = StringArray.create()
+
+	if nominals.isEmpty() and aliases.isEmpty() 'nothingToShadowWith'
+		return shadowed
+	end 'nothingToShadowWith'
+
+	var library = SourceNameSet.create()
+
+	let libraryNames = try libraryDeclaredTypeNames(project)
+
+	for name in libraryNames 'eachLibraryName'
+		library.insert(String.from(name))
+	end 'eachLibraryName'
+
+	for name in nominals 'eachNominal'
+		if library.contains(name) 'theLibraryDeclaresIt'
+			shadowed.push(name)
+		end 'theLibraryDeclaresIt'
+	end 'eachNominal'
+
+	for name in aliases 'eachAlias'
+		if library.contains(name) and not shadowed.contains(name) 'theLibraryDeclaresIt'
+			shadowed.push(name)
+		end 'theLibraryDeclaresIt'
+	end 'eachAlias'
+
+	return shadowed
+end 'namesTheLibraryAlsoDeclares'
+
+function newProgramSignatures(project Project) returns ProgramSignatures
 	var signatures = ProgramSignatures.create(project.target.os)
 
 	// Only the project table is sized from the whole program: it accumulates every file's names and is
@@ -274,6 +417,68 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
 	// query) sees the answer rather than the seeded `false`. See `livesUnderStdlibDirectory`.
 	signatures.rootIsUnderStdlibDirectory = rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: Directory.currentPath())
+
+	return signatures
+end 'newProgramSignatures'
+
+function foldEveryDeclaration(project Project, signatures ProgramSignatures, userPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray) throws CompileError
+	// Which declarations carry the array-literal marker, ahead of both halves: the fold itself asks,
+	// so the answer cannot come from the fold — the same ordering argument the contest below makes.
+	var extents = BlockExtentsByPath.create()
+	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths, extents: extents)
+	try contestStdlibDeclarationsAgainstUserNames(project, signatures: signatures, stdlibPaths: stdlibPaths)
+	signatures.settleNominalNameCollisions(project.db.sourcePaths)
+
+	for path in userPaths 'eachUserFile'
+		try requireStillWanted(project)
+		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false, extents: extents)
+	end 'eachUserFile'
+
+	for path in stdlibPaths 'eachStdlibFile'
+		try requireStillWanted(project)
+		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: true, extents: extents)
+	end 'eachStdlibFile'
+
+	signatures.attributeHashEventsTo(HashEventSource.whole)
+
+	// The instances the compiler mints for itself (array literals, byte strings, the `from […]`
+	// containers). Below the contest deliberately: their base is the corpus's array record, whose
+	// spelling the contest above may move, so performing this per file would file a program-wide memo
+	// under a name that, in a program declaring its own `type Array`, belongs to the program's
+	// container.
+	signatures.internWellKnownContainerInstances()
+
+	// The companions of every service the program spawns (`T.request` / `T.handle`), minted from the
+	// candidates the pre-fold token walk noted. Below the contest and
+	// `internWellKnownContainerInstances`, so which `type Calc` a spawn names is settled before it is
+	// asked; above `allFilesFolded = true`, so every whole-program normalization from here down treats
+	// a companion as the ordinary layout it is.
+	synthesizeServiceCompanions(signatures)
+
+	// From here on an absence in the index MEANS the program does not declare the name. Above this
+	// line, inside the loop, an absence means only that the declaring file has not been swept yet —
+	// which is why the parser's whole-program semantic checks read this flag before spending anything
+	// on a verdict they would have to throw away.
+	signatures.allFilesFolded = true
+	signatures.settleAliasImplementsClauses()
+
+	// Before anything can read an enum case's function: the contest that decides the name is complete only now.
+	signatures.settleFunctionBackedEnumCases()
+end 'foldEveryDeclaration'
+
+export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
+	if signaturesCacheValid(project) 'hit'
+		project.db.signatureHits = project.db.signatureHits + 1
+
+		// The sweep reads no liveness, so the memo's key omits the live keys and a hit adopts the current
+		// ones.
+		project.db.signatureCache.value.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
+		return project.db.signatureCache.value
+	end 'hit'
+
+	project.db.signatureMisses = project.db.signatureMisses + 1
+
+	var signatures = newProgramSignatures(project)
 
 	// The sweep is partitioned by provenance, user files first, stdlib files second. The shadow
 	// contest is decided ahead of both halves, off the declarations `discoverWholeProgramTokenFacts`
@@ -301,45 +506,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 		userPaths.push(path)
 	end 'eachFile'
 
-	// Which declarations carry the array-literal marker, ahead of both halves: the fold itself asks,
-	// so the answer cannot come from the fold — the same ordering argument the contest below makes.
-	var extents = BlockExtentsByPath.create()
-	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths, extents: extents)
-	try contestStdlibDeclarationsAgainstUserNames(project, signatures: signatures, stdlibPaths: stdlibPaths)
-
-	for path in userPaths 'eachUserFile'
-		try requireStillWanted(project)
-		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false, extents: extents)
-	end 'eachUserFile'
-
-	for path in stdlibPaths 'eachStdlibFile'
-		try requireStillWanted(project)
-		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: true, extents: extents)
-	end 'eachStdlibFile'
-
-	// The instances the compiler mints for itself (array literals, byte strings, the `from […]`
-	// containers). Below the contest deliberately: their base is the corpus's array record, whose
-	// spelling the contest above may move, so performing this per file would file a program-wide memo
-	// under a name that, in a program declaring its own `type Array`, belongs to the program's
-	// container.
-	signatures.internWellKnownContainerInstances()
-
-	// The companions of every service the program spawns (`T.request` / `T.handle`), minted from the
-	// candidates the pre-fold token walk noted. Below the contest and
-	// `internWellKnownContainerInstances`, so which `type Calc` a spawn names is settled before it is
-	// asked; above `allFilesFolded = true`, so every whole-program normalization from here down treats
-	// a companion as the ordinary layout it is.
-	synthesizeServiceCompanions(signatures)
-
-	// From here on an absence in the index MEANS the program does not declare the name. Above this
-	// line, inside the loop, an absence means only that the declaring file has not been swept yet —
-	// which is why the parser's whole-program semantic checks read this flag before spending anything
-	// on a verdict they would have to throw away.
-	signatures.allFilesFolded = true
-	signatures.settleAliasImplementsClauses()
-
-	// Before anything can read an enum case's function: the contest that decides the name is complete only now.
-	signatures.settleFunctionBackedEnumCases()
+	try foldEveryDeclaration(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths)
 
 	// Every file is folded in; now the top-level constants can be evaluated, and not one moment
 	// earlier — a constant's initializer may name a constant declared later in its own file or in a
@@ -416,6 +583,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// its two name memos derived lazily by the parse, which must only ever read them.
 	try requireStillWanted(project)
 	try foldInterfaceDeclarations(project, signatures: signatures)
+	signatures.attributeHashEventsTo(HashEventSource.whole)
 
 	// Only now can an `implements` clause be read to its end: whether a comma opens a second argument
 	// or a second interface is the named interface's `uses` arity, which the line above is what
@@ -423,11 +591,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// between these two lines: after the interface fold because that is the arity, before the
 	// extension fold because `conformsTo` is the relation that pass expands over.
 	try foldConformanceClauses(project, signatures: signatures)
+	signatures.attributeHashEventsTo(HashEventSource.whole)
 
 	// Every `extension <Interface>`'s methods, onto every conformer — strictly after the two lines
 	// above, which is what makes an extension's signatures render types exactly as the real parse
 	// will, and what puts every conformer into the relation this walks.
 	try foldExtensionDeclarations(project, signatures: signatures)
+	signatures.attributeHashEventsTo(HashEventSource.whole)
 
 	// Only now can a swept `named` be told from an interface: the line above fills the interface
 	// registry, so a type the sweep recorded before it — a struct field, a declared return type —
@@ -457,6 +627,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// scan's opaque-array seed interns a generic alias instance and an instance minted after the
 	// warming walk derives its name memos lazily, by the parse, which must only ever read them.
 	try foldDescriptorNeeds(project, signatures: signatures)
+	signatures.attributeHashEventsTo(HashEventSource.whole)
 
 	// Every instantiation's compiled and canonical names, for the same "the whole program is known
 	// now" reason: the parse reads both, and each memo behind them is a write, which a per-file
@@ -477,7 +648,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	let holding = sharedMemoEntryCount(project)
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.compiler).debug("shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding")
+		compilerLogger(CompilerLogGroup.compiler).debug("shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding, {sharedParseEntryCount(project)} parse artifact(s) held, {project.db.sharedParseHits} parse hit(s), {project.db.sharedParseMisses} parse miss(es), {project.db.sharedParsePublishes} parse publish(es), {project.db.sharedParseDrifts} parse(s) whose referenced ids moved, library parses {signatures.libraryParseSharing.name}")
 	end 'debugging'
 
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: signatureMemoKey(project), computed: true)
@@ -623,6 +794,7 @@ end 'libraryConeAnchor'
 function discoverWholeProgramTokenFacts(project Project, signatures ProgramSignatures, userPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray, extents BlockExtentsByPath) throws CompileError
 	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: userPaths, isStdlibSource: false, extents: extents)
 	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: stdlibPaths, isStdlibSource: true, extents: extents)
+	signatures.attributeHashEventsTo(HashEventSource.whole)
 	signatures.settleAliasFamiliesBesideNominals()
 end 'discoverWholeProgramTokenFacts'
 
@@ -639,6 +811,7 @@ function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatu
 		var gate = SpawnGate.always
 		var gateEnd = 0 as ElementIndex
 		let isRuntimeSource = not isStdlibSource and isRuntimeSourceFile(project, path: path)
+		signatures.attributeHashEventsTo(hashEventSourceOf(isStdlibSource, isRuntimeSource: isRuntimeSource))
 
 		// Derived here, once, before any file's declarations are folded, so every later reader (the
 		// type-name admission, the sweep's `module`-tier questions, the real parse, the constant
@@ -647,10 +820,18 @@ function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatu
 		let moduleDirectory = moduleDirectoryForFile(project, path: path, livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), livesUnderRuntimeDirectory: isRuntimeSource)
 		signatures.recordFileModuleDirectory(path, moduleDirectory: moduleDirectory, isLibrary: isStdlibSource or isRuntimeSource)
 
-		if not isRuntimeSource 'declaresNamesOutsideItsTier'
-			let reader = Parser.structuralReader(tokens, job: parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: false), signatures: signatures, anchors: project.readerAnchors)
+		let reader = Parser.structuralReader(tokens, job: parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: false), signatures: signatures, anchors: project.readerAnchors)
+		let headers = reader.topLevelDeclarationHeaders()
 
-			let headers = reader.topLevelDeclarationHeaders()
+		if isRuntimeSource 'declaresNamesOnlyTheLibraryMeans'
+			for header in headers.types 'eachRuntimeHeader'
+				signatures.noteDeclaredName(header.name)
+			end 'eachRuntimeHeader'
+
+			for binding in headers.bindings 'eachRuntimeBinding'
+				signatures.noteDeclaredName(binding.name)
+			end 'eachRuntimeBinding'
+		end 'declaresNamesOnlyTheLibraryMeans' else 'declaresNamesOutsideItsTier'
 			extents.upsert(path.toString(), value: reader.blockExtents())
 
 			for header in headers.types 'eachHeader'
@@ -659,6 +840,7 @@ function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatu
 
 			for binding in headers.bindings 'eachBinding'
 				signatures.noteTopLevelBinding(binding.name, site: TopLevelBindingSite.create(binding.visibility, declFilePath: path))
+				signatures.noteDeclaredName(binding.name)
 			end 'eachBinding'
 		end 'declaresNamesOutsideItsTier'
 
@@ -869,11 +1051,15 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 end 'contestStdlibDeclarationsAgainstUserNames'
 
 function noteTopLevelTypeDeclaration(signatures ProgramSignatures, header TypeDeclarationHeader, path FilePath, moduleDirectory String, isStdlibSource bool)
+	signatures.noteDeclaredName(header.name)
+
 	if not isStdlibSource 'anAuthorsDeclaration'
 		signatures.noteUserDeclaredTypeName(header.name)
 	end 'anAuthorsDeclaration'
 
-	signatures.noteWrittenTypeClaim(header.name, claim: TypeNameClaim.create(header.kind, declFilePath: path, visibility: header.visibility, declaredByTheCorpus: isStdlibSource))
+	let claim = TypeNameClaim.create(header.kind, declFilePath: path, visibility: header.visibility, declaredByTheCorpus: isStdlibSource)
+	signatures.noteWrittenTypeClaim(header.name, claim: claim)
+	signatures.noteHeaderTypeNameDecl(TypeNameDecl.create(header.name, claim: claim, nameLine: header.nameLine, nameColumn: header.nameColumn))
 
 	if not isTypeAliasDecl(header.kind) and (isProgramWideTier(header.visibility) or not isStdlibSource) 'aQualifiedSpellingToNote'
 		signatures.noteQualifiedNominal(qualifierForNamespace(namespaceForModuleDirectory(moduleDirectory)), member: header.name, kind: header.kind, declaredByTheLibrary: isStdlibSource)
@@ -1258,7 +1444,7 @@ end 'foldDescriptorNeeds'
 // the settled index, and the key its artifact is stamped with.
 export union ParseQuery
 	memoized(artifact FileParseArtifact)
-	needed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, keyHash HashDigest)
+	needed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp)
 end 'ParseQuery'
 
 // ⚠ A miss parses against the index as it stands, so it is legal only while no fold has merged into that index — a
@@ -1268,7 +1454,7 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 
 	return match query 'query'
 		memoized(artifact) gives artifact
-		needed(job, tokens, overrides, keyHash) gives parsedHere(project, path: path, job: job, tokens: tokens, overrides: overrides, keyHash: keyHash)
+		needed(job, tokens, overrides, stamp) gives parsedHere(project, path: path, job: job, tokens: tokens, overrides: overrides, stamp: stamp)
 	end 'query'
 end 'queryParseOps'
 
@@ -1287,7 +1473,9 @@ module function parseQueryOf(project Project, path FilePath) returns ParseQuery 
 	let isStdlibSource = isStdlibSourceFile(project, path: path)
 	let buildsBodies = buildsBodiesFor(project, path: path, isStdlibSource: isStdlibSource)
 	let overrides = project.db.rowSetOverrides.of(path)
-	let keyHash = try currentParseMemoKey(project, path: path, signatureHash: Hasher.combined(signatures.hash, value: signatures.livenessDigestParsedBy(path)), buildsBodies: buildsBodies, overrides: overrides)
+	let contentHash = (try sourceEntryOf(project, path: path)).contentHash
+	let liveness = signatures.livenessDigestParsedBy(path)
+	let keyHash = currentParseMemoKey(project, contentHash: contentHash, signatureHash: Hasher.combined(signatures.hash, value: liveness), buildsBodies: buildsBodies, overrides: overrides)
 
 	if let memo = try project.db.parseCache.get(path) 'memoized'
 		if memo.keyHash == keyHash 'hit'
@@ -1302,25 +1490,33 @@ module function parseQueryOf(project Project, path FilePath) returns ParseQuery 
 		project.db.parseMissPaths.push(path.toString())
 	end 'probeArmed'
 
+	let job = parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
+	let sharing = sharedParsePlanOf(project, job: job, contentHash: contentHash, signatures: signatures, overrides: overrides, liveness: liveness)
+
+	if let served = try sharedParseOf(project, plan: sharing, signatures: signatures, overrides: overrides) 'servedByTheStore'
+		project.db.parseCache.upsert(path, value: ParseMemo.create(served, keyHash: keyHash))
+		return ParseQuery.memoized(served)
+	end 'servedByTheStore'
+
 	let tokens = try queryActiveTokens(project, path: path)
-	return ParseQuery.needed(parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: buildsBodies), tokens: tokens, overrides: overrides, keyHash: keyHash)
+	return ParseQuery.needed(job, tokens: tokens, overrides: overrides, stamp: ParseStamp.create(keyHash, sharing: sharing))
 end 'parseQueryOf'
 
-function parsedHere(project Project, path FilePath, job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, keyHash HashDigest) returns FileParseArtifact
+function parsedHere(project Project, path FilePath, job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp) returns FileParseArtifact
 	// Opens only NOW, after the tokens query has returned, so it bills the parse alone and never
 	// absorbs the lexing it depends on.
 	let parseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.parse)
 	let outcome = parseFile(job, tokens: tokens, overrides: overrides, signatures: programSignaturesIn(project, asker: "parsedHere"))
 	recordPhase(project, phase: CompilePhase.parse, probe: parseProbe)
 
-	return landParseOutcome(project, path: path, outcome: outcome, keyHash: keyHash)
+	return landParseOutcome(project, path: path, outcome: outcome, stamp: stamp)
 end 'parsedHere'
 
 // What a compile keeps of one file's parse, wherever it ran: a clean artifact is memoized, and a refusal is
 // reported.
-module function landParseOutcome(project Project, path FilePath, outcome FileParseOutcome, keyHash HashDigest) returns FileParseArtifact
+module function landParseOutcome(project Project, path FilePath, outcome FileParseOutcome, stamp ParseStamp) returns FileParseArtifact
 	return match outcome 'outcome'
-		parsed(artifact) gives memoizedArtifact(project, path: path, artifact: artifact, keyHash: keyHash)
+		parsed(artifact) gives memoizedArtifact(project, path: path, artifact: artifact, stamp: stamp)
 		failed(error, blame, salvaged) gives reportFailedParse(project, path: path, error: error, blame: blame, salvaged: salvaged)
 	end 'outcome'
 end 'landParseOutcome'
@@ -1380,9 +1576,10 @@ end 'parseStoppedInside'
 // diagnostics ride the artifact and every fold that merges it re-reports them. Stamped through the very
 // `keyHash` value that failed to validate the memo, not a second computation of it, so the stamp and the check
 // cannot disagree about what a parse depends on.
-function memoizedArtifact(project Project, path FilePath, artifact FileParseArtifact, keyHash HashDigest) returns FileParseArtifact
+function memoizedArtifact(project Project, path FilePath, artifact FileParseArtifact, stamp ParseStamp) returns FileParseArtifact
 	artifact.module.assertAllBlocksTerminated()
-	project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: keyHash))
+	project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: stamp.keyHash))
+	stashParse(project, plan: stamp.sharing, artifact: artifact)
 	return artifact
 end 'memoizedArtifact'
 
@@ -1413,6 +1610,9 @@ function queryAllModuleOn(project Project, pool FrontEndPool, directories Namesp
 		unchecked then break 'directories'
 	end 'directories'
 
+	project.retiredWorkers.release()
+	try refuseCollidingNominalDeclarations(project, pool: pool)
+
 	if allModuleCacheValid(project) 'hit'
 		project.db.allModuleHits = project.db.allModuleHits + 1
 		return project.db.allModuleCache.value
@@ -1442,6 +1642,21 @@ function refuseUnnameableNamespaceDirectories(project Project, pool FrontEndPool
 		try refuseCompile(project)
 	end 'aDirectoryCannotBeNamed'
 end 'refuseUnnameableNamespaceDirectories'
+
+// Refused before any file is parsed: a nominal name is one identity in one interner, so once one
+// file's declaration is filed another file's own `Self{…}` can never bind its declaration. A
+// collision therefore reports E3006 alone.
+function refuseCollidingNominalDeclarations(project Project, pool FrontEndPool) throws CompileError
+	try pool.lexEveryFile(project)
+	let collisions = (try queryProgramSignatures(project)).collidingNominalDeclarations()
+
+	if collisions.isEmpty() 'noNameIsDeclaredTwice'
+		return
+	end 'noNameIsDeclaredTwice'
+
+	reportTypeNameCollisions(project, collisions: collisions)
+	try refuseCompile(project)
+end 'refuseCollidingNominalDeclarations'
 
 module function lexEveryFileOnAPool(project Project) throws CompileError
 	var pool = FrontEndPool.create()
@@ -1565,10 +1780,11 @@ function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns Ma
 
 	let pathOrderProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
 	let pathOrder = sourceFilesInPathOrder(project.db.sourcePaths)
+	let emissionOrder = sourceFilesInEmissionOrder(project)
 	recordPhase(project, phase: CompilePhase.merge, probe: pathOrderProbe)
 
 	while true 'untilTheFoldStands'
-		match try foldVerdict(project, pool: pool, signatures: signatures, into: merged, moved: moved, pathOrder: pathOrder) 'verdict'
+		match try foldVerdict(project, pool: pool, signatures: signatures, into: merged, moved: moved, pathOrder: pathOrder, emissionOrder: emissionOrder) 'verdict'
 			stands then break 'untilTheFoldStands'
 			answersMoved or
 				indexMoved then folds = folds + 1
@@ -1581,12 +1797,110 @@ function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns Ma
 		merged = MaxonModule.create()
 	end 'untilTheFoldStands'
 
+	publishStandingParses(project)
+
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
 		compilerLogger(CompilerLogGroup.compiler).debug("merge: {folds} fold(s) of {project.db.sourcePaths.count()} file(s)")
 	end 'debugging'
 
 	return merged
 end 'foldEveryFileIntoAModule'
+
+let EmissionPathSeparator = "/"
+
+enum EmissionTier
+	author
+	stdlib
+	runtime
+end 'EmissionTier'
+
+type EmissionSlot
+	let tier as EmissionTier
+	let components as ByteArrayArray
+	export let position as ElementIndex
+
+	static function create(tier EmissionTier, components ByteArrayArray, position ElementIndex) returns EmissionSlot
+		return Self{tier: tier, components: components, position: position}
+	end 'create'
+
+	function compare(other EmissionSlot) returns Ordering
+		let byTier = self.tier.ordinal.compare(other.tier.ordinal)
+
+		if byTier != Ordering.equalTo 'tiersDiffer'
+			return byTier
+		end 'tiersDiffer'
+
+		let shared = self.components.count() if self.components.count() < other.components.count() else other.components.count()
+
+		for i in 0 upto shared 'eachComponent'
+			let mine = try self.components.get(i) otherwise panic("EmissionSlot.compare: components.get OOB at {i} below the shared count {shared}")
+			let theirs = try other.components.get(i) otherwise panic("EmissionSlot.compare: components.get OOB at {i} below the shared count {shared}")
+			let byComponent = compareBytesOrdinally(mine, right: theirs)
+
+			if byComponent != Ordering.equalTo 'componentsDiffer'
+				return byComponent
+			end 'componentsDiffer'
+		end 'eachComponent'
+
+		return self.components.count().compare(other.components.count())
+	end 'compare'
+end 'EmissionSlot'
+
+typealias EmissionSlotArray = Array with EmissionSlot
+
+function emissionTierOf(project Project, path FilePath) returns EmissionTier
+	if isStdlibSourceFile(project, path: path) 'theStdlib'
+		return EmissionTier.stdlib
+	end 'theStdlib'
+
+	if isRuntimeSourceFile(project, path: path) 'theRuntime'
+		return EmissionTier.runtime
+	end 'theRuntime'
+
+	return EmissionTier.author
+end 'emissionTierOf'
+
+function emissionComponentsOf(project Project, path FilePath, tier EmissionTier, cwd FilePath) returns ByteArrayArray
+	let resolved = path.resolve(cwd)
+	let anchor = namespaceAnchorFor(project, cwd: cwd, livesUnderStdlibDirectory: tier == EmissionTier.stdlib, livesUnderRuntimeDirectory: tier == EmissionTier.runtime)
+	let relative = try resolved.relativeTo(anchor) otherwise resolved
+	var components = ByteArrayArray.create()
+
+	for component in relative.toString().replace(FilePath.separator(), with: EmissionPathSeparator).split(EmissionPathSeparator) 'eachComponent'
+		components.push(component.toByteArray())
+	end 'eachComponent'
+
+	return components
+end 'emissionComponentsOf'
+
+// The order the merge folds artifacts in, which numbers blobs and everything emitted after them. It
+// is a key and not `sourcePaths`' order, which is the host's directory listing and would compile
+// one program to different bytes on different hosts; the walks stay unsorted and the order is fixed
+// here, where it is decided. An author file outside the root keys by its resolved path, so its
+// place depends on where the checkout lives. A tie panics, because it would fall back to listing
+// order.
+function sourceFilesInEmissionOrder(project Project) returns EmissionSlotArray
+	let cwd = Directory.currentPath()
+	var slots = EmissionSlotArray.create()
+
+	for (iter, path) in project.db.sourcePaths.withIterator() 'eachSourcePath'
+		let tier = emissionTierOf(project, path: path)
+		slots.push(EmissionSlot.create(tier, components: emissionComponentsOf(project, path: path, tier: tier, cwd: cwd), position: iter.index()))
+	end 'eachSourcePath'
+
+	slots.sort(function(left EmissionSlot, right EmissionSlot) gives left.compare(right))
+
+	for i in 1 upto slots.count() 'eachAdjacentPair'
+		let earlier = try slots.get(i - 1) otherwise panic("sourceFilesInEmissionOrder: slots.get OOB at {i - 1}")
+		let later = try slots.get(i) otherwise panic("sourceFilesInEmissionOrder: slots.get OOB at {i}")
+
+		if earlier.compare(later) == Ordering.equalTo 'aTie'
+			panic("sourceFilesInEmissionOrder: source files {earlier.position} and {later.position} have one emission key — the merge order would fall back to the order the directory walk found them in")
+		end 'aTie'
+	end 'eachAdjacentPair'
+
+	return slots
+end 'sourceFilesInEmissionOrder'
 
 typealias FoldCount = int(1 to u64.max)
 
@@ -1604,21 +1918,21 @@ end 'FoldVerdict'
 // the next fold does not run, and a refusal may be one a store without its descriptor earned; the fold's own
 // diagnostics are withdrawn with it, and the next fold reports afresh. A row a merge holds is an instance the
 // program really mints whether or not every file merged, so the type is filed either way.
-function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, moved InstantiatedTypeNameSet, pathOrder SourceFileInPathOrderArray) returns FoldVerdict throws CompileError
+function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, moved InstantiatedTypeNameSet, pathOrder SourceFileInPathOrderArray, emissionOrder EmissionSlotArray) returns FoldVerdict throws CompileError
 	let diagnosticsBeforeTheFold = project.diagnostics.count()
 	resetMergeTargets(project, signatures: signatures)
 	signatures.restoreBaseline()
 
 	var artifacts = try pool.parseEveryFile(project, signatures: signatures)
 
-	for position in 0 upto artifacts.count() 'eachArtifact'
+	for entry in emissionOrder 'eachArtifactInEmissionOrder'
 		try requireStillWanted(project)
-		var artifact = try artifacts.get(position) otherwise panic("foldVerdict: artifacts.get OOB at {position}")
+		var artifact = try artifacts.get(entry.position) otherwise panic("foldVerdict: artifacts.get OOB at {entry.position} below count {artifacts.count()}")
 		logTypeNameTable(artifact)
 		let mergeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
 		mergeArtifact(project, target: into, artifact: artifact, signatures: signatures)
 		recordPhase(project, phase: CompilePhase.merge, probe: mergeProbe)
-	end 'eachArtifact'
+	end 'eachArtifactInEmissionOrder'
 
 	let typeNameProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
 	commitTypeNameDeclsInPathOrder(project, artifacts: artifacts, pathOrder: pathOrder, signatures: signatures)
@@ -2116,8 +2430,15 @@ end 'parseJobFor'
 // `tokens` is a parameter rather than a `queryActiveTokens` call in here because a caller deliberately
 // fetches them outside its phase probe, so that a `signatures` phase never absorbs the lexing it depends on.
 function fileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray, isStdlibSource bool, buildsBodies bool) returns Parser
-	return Parser.create(tokens, job: parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: buildsBodies), signatures: signatures, anchors: project.readerAnchors)
+	let job = parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
+	signatures.attributeHashEventsTo(hashEventSourceOf(job.isStdlibSource, isRuntimeSource: job.isRuntimeSource))
+
+	return Parser.create(tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
 end 'fileReader'
+
+function hashEventSourceOf(isStdlibSource bool, isRuntimeSource bool) returns HashEventSource
+	return HashEventSource.library if isStdlibSource or isRuntimeSource else HashEventSource.author
+end 'hashEventSourceOf'
 
 // ⭐⭐ **THREE STATES, AND ONLY `stdlib/` IS THE LAZY ONE.**
 //
@@ -2571,13 +2892,13 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		unexportedFieldAccess(typeName, fieldName, line, column) gives Diagnostic.create(ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
 		immutableMutatingCall(name, functionName, line, column) gives Diagnostic.create(ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(name, paramName: String.from(ReceiverSourceSpelling), functionName: functionName), line: line, column: column, filePath: path)
 
-		// Pinned byte-for-byte by the `maxoncstderr` goldens in `match-statements.md`/`match-simple.md`
+		// Pinned byte-for-byte by the `maxoncstderr` blocks in `match-statements.md`/`match-simple.md`
 		// and `function-declaration.md`. Its raisers are listed on the union arm and deliberately not
 		// here — a copy of that list here would go stale silently as it grows.
 		strayToken(got, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "unexpected token: '{got}'", line: line, column: column, filePath: path)
 
 		// The FILE-SCOPE shape of the same code, pinned byte-for-byte by `lexer-edge-cases.md`'s
-		// `maxoncstderr` goldens. Why it is a second variant rather than another raiser on `strayToken`
+		// `maxoncstderr` blocks. Why it is a second variant rather than another raiser on `strayToken`
 		// is argued on the union arm.
 		expectedDeclaration(got, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "Expected function declaration, got '{got}'", line: line, column: column, filePath: path)
 		expectedNewlineAfterBlockLabel(got, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "Expected newline after block label, got '{got}'", line: line, column: column, filePath: path)
@@ -2592,7 +2913,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		duplicateTestName(first, second, symbol, line, column) gives Diagnostic.create(ErrorCode.semanticDuplicateTestName, message: "duplicate test name: '{first}' and '{second}' both compile to '{symbol}'", line: line, column: column, filePath: path)
 
 		// The THIRD shape of E2001. Pinned byte-for-byte by
-		// `closure-self/error-self-in-free-function-closure`'s `maxoncstderr` golden. Why it is a variant
+		// `closure-self/error-self-in-free-function-closure`'s `maxoncstderr` block. Why it is a variant
 		// of its own rather than another raiser on `strayToken` is argued on the union arm.
 		selfOutsideInstanceMethod(line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "'self' can only be used inside instance methods", line: line, column: column, filePath: path)
 
@@ -2611,8 +2932,8 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		ambiguousTypeAlias(name, candidates, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousTypeAlias, message: ambiguousNameMessage("type name '{name}'", candidates: candidates), line: line, column: column, filePath: path)
 
 		// The scalar-match arms. Each carries the code its meaning is registered under in
-		// `ErrorCodeRegistry.maxon`, and each message is pinned byte-for-byte by the `maxoncstderr` goldens
-		// in `match-statements.md`/`match-simple.md`.
+		// `ErrorCodeRegistry.maxon`, and each message is pinned byte-for-byte by the `maxoncstderr`
+		// blocks in `match-statements.md`/`match-simple.md`.
 		matchFallthroughWithReturn(line, column) gives Diagnostic.create(ErrorCode.matchFallthroughWithReturn, message: "match fallthrough with return: 'cannot combine 'fallthrough' with 'return''", line: line, column: column, filePath: path)
 		matchNotExhaustive(subject, line, column) gives Diagnostic.create(ErrorCode.matchNotExhaustive, message: "{subject} is not exhaustive: add a 'default' arm", line: line, column: column, filePath: path)
 		matchDuplicatePattern(pattern, line, column) gives Diagnostic.create(ErrorCode.matchDuplicatePattern, message: "duplicate pattern in match: '{pattern}'", line: line, column: column, filePath: path)
@@ -2623,9 +2944,9 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		matchBlockStatement(keyword, line, column) gives Diagnostic.create(ErrorCode.matchBlockStatement, message: "block-opening statement '{keyword}' is not allowed in a match arm; use a function call instead", line: line, column: column, filePath: path)
 
 		// The enum/union arms. For an ENUM every message is pinned byte-for-byte by
-		// `maxoncstderr` goldens. For a UNION the messages that name the construct print the DECLARED
+		// `maxoncstderr` blocks. For a UNION the messages that name the construct print the DECLARED
 		// keyword via `kindWord`: E3034 (unknown-case) is conditional and so matches; E2026/E2046 print
-		// "union" rather than a hardcoded "enum". No union `maxoncstderr` golden gates these yet.
+		// "union" rather than a hardcoded "enum". No union `maxoncstderr` block gates these.
 		enumDuplicateCase(caseName, line, column) gives Diagnostic.create(ErrorCode.enumDuplicateCase, message: "duplicate enum case: '{caseName}'", line: line, column: column, filePath: path)
 		enumDuplicateRawValue(rawValue, line, column) gives Diagnostic.create(ErrorCode.enumDuplicateRawValue, message: "duplicate raw value: '{rawValue}'", line: line, column: column, filePath: path)
 		enumRawValueTypeMismatch(detail, line, column) gives Diagnostic.create(ErrorCode.enumRawValueTypeMismatch, message: "raw value type mismatch: '{detail}'", line: line, column: column, filePath: path)
@@ -2647,7 +2968,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		enumMatchNotExhaustive(kindWord, typeName, missing, line, column) gives Diagnostic.create(ErrorCode.matchNotExhaustive, message: "match on {kindWord} '{typeName}' is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
 
 		// The synthesized error union's five, plus E3084. `/specs/try-block.md` pins four of them as
-		// `maxoncstderr` goldens, so this text IS the contract.
+		// `maxoncstderr` blocks, so this text IS the contract.
 		errorUnionMatchNotExhaustive(missing, line, column) gives Diagnostic.create(ErrorCode.matchNotExhaustive, message: "match on error union is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
 		errorUnionMatchDefaultMustThrow(line, column) gives Diagnostic.create(ErrorCode.matchDefaultEnumMustThrow, message: "'default' in a match on an error union must be followed by 'throws <error>' or 'panic(\"message\")'", line: line, column: column, filePath: path)
 		errorUnionAmbiguousBareCase(caseName, line, column) gives Diagnostic.create(ErrorCode.unionMatchPatternAmbiguous, message: "case '{caseName}' is shared by multiple union members; qualify with 'EnumName.{caseName}'", line: line, column: column, filePath: path)
@@ -2663,7 +2984,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		matchOrChainNeedsOwnLine(line, column) gives Diagnostic.create(ErrorCode.matchOrChainNeedsOwnLine, message: "each alternative of a match arm's 'or'-chain needs its own line: break the line after 'or'", line: line, column: column, filePath: path)
 		matchSingleValueRange(pattern, line, column) gives Diagnostic.create(ErrorCode.matchDuplicatePattern, message: "range pattern '{pattern}' covers a single value; use the bare value instead", line: line, column: column, filePath: path)
 
-		// Pinned byte-for-byte by `enum-match-only.md` `maxoncstderr` goldens.
+		// Pinned byte-for-byte by `enum-match-only.md` `maxoncstderr` blocks.
 		unionNotComparable(op, line, column) gives Diagnostic.create(ErrorCode.semanticEnumNotComparable, message: "cannot compare union values using '{op}', use 'match' instead", line: line, column: column, filePath: path)
 
 		// The OPERATOR half of the existential-identity rule; its METHOD half is the `unsupported` arm
@@ -2671,17 +2992,17 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		existentialNotComparable(op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot compare values held at an interface type using '{op}': {ExistentialPairUnprovableReason}, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares", line: line, column: column, filePath: path)
 
 		// ⚠ The E3068 sentence is pinned byte-for-byte only in its NON-NEGATED form —
-		// `reference-identity.md`'s `primitive-error` `maxoncstderr` golden pins `'is'` for `a is b`. For
+		// `reference-identity.md`'s `primitive-error` `maxoncstderr` block pins `'is'` for `a is b`. For
 		// `a is not b` this interpolates the operator and says `'is not'`, naming what was written; that
 		// is deliberate, not an oversight, and only the non-negated form is gated.
 		refIdentityOnPrimitive(op, line, column) gives Diagnostic.create(ErrorCode.refIdentityOnPrimitive, message: "'{op}' requires reference types (structs), not primitive values", line: line, column: column, filePath: path)
 		refIdentityTypeMismatch(op, left, right, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{op}' requires both operands to be the same type, got '{left}' and '{right}'", line: line, column: column, filePath: path)
 
-		// Pinned byte-for-byte by `reserved-double-underscore.md` `maxoncstderr` goldens.
+		// Pinned byte-for-byte by `reserved-double-underscore.md` `maxoncstderr` blocks.
 		reservedIdentifier(name, line, column) gives Diagnostic.create(ErrorCode.reservedIdentifier, message: "identifier '{name}' is reserved: declarations starting with '__' are reserved for compiler internals", line: line, column: column, filePath: path)
 
 		// The reservation's SECOND arm — same code, a different name set and a different reason. Pinned
-		// byte-for-byte by `reserved-self.md`'s `maxoncstderr` golden.
+		// byte-for-byte by `reserved-self.md`'s `maxoncstderr` block.
 		reservedReceiverName(line, column) gives Diagnostic.create(ErrorCode.reservedIdentifier, message: "identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code", line: line, column: column, filePath: path)
 		reservedFaultProbeName(line, column) gives Diagnostic.create(ErrorCode.reservedIdentifier, message: "identifier 'maxon_force_segfault' is reserved: it is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()`", line: line, column: column, filePath: path)
 
@@ -2692,13 +3013,13 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 
 		// E3058/E3059/E2049 render the parser's error-handling diagnostics (the `SourceParseError` variants are
 		// declared in `Parser.maxon`; this is their render half). Pinned by the
-		// `error-handling.md`/`match-statements.md` `maxoncstderr` goldens.
+		// `error-handling.md`/`match-statements.md` `maxoncstderr` blocks.
 		otherwiseWithoutTry(line, column) gives Diagnostic.create(ErrorCode.otherwiseRequiresTry, message: "otherwise requires try expression", line: line, column: column, filePath: path)
 		errorTypeMismatch(detail, line, column) gives Diagnostic.create(ErrorCode.errorTypeMismatch, message: "type mismatch: '{detail}'", line: line, column: column, filePath: path)
 		tryBlockFormInMatchArm(isOtherwiseForm, line, column) gives Diagnostic.create(ErrorCode.matchBlockStatement, message: tryBlockFormMessage(isOtherwiseForm), line: line, column: column, filePath: path)
 
 		// The two block-form `try` refusals. The first sentence is pinned byte-for-byte by
-		// `try-block.md`'s `maxoncstderr` golden.
+		// `try-block.md`'s `maxoncstderr` block.
 		tryBlockNoThrows(label, line, column) gives Diagnostic.create(ErrorCode.tryBlockNoThrows, message: "try block contains no throwing calls: '{label}'", line: line, column: column, filePath: path)
 		tryBlockMissingOtherwise(missingBinding, line, column) gives Diagnostic.create(ErrorCode.otherwiseBlockMissingBinding, message: tryBlockMissingOtherwiseMessage(missingBinding), line: line, column: column, filePath: path)
 		tryOnNonThrowing(callee, line, column) gives Diagnostic.create(ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: '{callee}' does not throw'", line: line, column: column, filePath: path)
@@ -2772,7 +3093,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// statements.
 		emptyBlock(label, line, column) gives Diagnostic.create(ErrorCode.semanticEmptyBlock, message: "empty block: '{label}'", line: line, column: column, filePath: path)
 
-		// Pinned as `maxoncstderr` goldens by `specs/return-statement.md` and `specs/break.md`, for
+		// Pinned as `maxoncstderr` blocks by `specs/return-statement.md` and `specs/break.md`, for
 		// `return`, `break` and `continue` alike — the keyword is interpolated rather than the sentence
 		// written three times. Raised from the parser for `emptyBlock`'s reason: the statement-list loop
 		// is the one place that knows a terminator was not the last statement of its block.

@@ -336,7 +336,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2053: specs/fragments/method-calls/error-method-unnamed-args.test:19:15: the second and later arguments must be named ('name: value')
+error E2053: specs/method-calls/error-method-unnamed-args.maxon:19:15: the second and later arguments must be named ('name: value')
 ```
 
 <!-- test: method-named-args-reorder -->
@@ -405,7 +405,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2053: specs/fragments/method-calls/error-static-method-unnamed-args.test:12:27: the second and later arguments must be named ('name: value')
+error E2053: specs/method-calls/error-static-method-unnamed-args.maxon:12:27: the second and later arguments must be named ('name: value')
 ```
 
 <!-- test: error-instance-method-too-many-args -->
@@ -432,7 +432,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/method-calls/error-instance-method-too-many-args.test:19:4: 'Counter.increment' expects 1 argument(s) but 2 were provided
+error E3036: specs/method-calls/error-instance-method-too-many-args.maxon:19:4: 'Counter.increment' expects 1 argument(s) but 2 were provided
 ```
 
 ### Calling a method that does not exist

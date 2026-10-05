@@ -137,7 +137,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/structs/error.let-struct-field-assign.test:16:2: cannot assign to immutable variable: 'p'
+error E2013: specs/structs/error.let-struct-field-assign.maxon:16:2: cannot assign to immutable variable: 'p'
 ```
 
 <!-- test: error.let-field-assign -->
@@ -161,7 +161,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/structs/error.let-field-assign.test:16:2: cannot assign to field 'Config.version' because it is immutable (declare with 'var' to make it mutable)
+error E2013: specs/structs/error.let-field-assign.maxon:16:2: cannot assign to field 'Config.version' because it is immutable (declare with 'var' to make it mutable)
 ```
 
 <!-- test: simple-type -->
@@ -375,7 +375,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/structs/error.return-wrong-struct.test:21:2: Cannot return 'BoxB' from function declared to return 'BoxA'
+error E3005: specs/structs/error.return-wrong-struct.maxon:21:2: Cannot return 'BoxB' from function declared to return 'BoxA'
 ```
 
 <!-- test: error.return-union-as-scalar -->
@@ -410,7 +410,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/structs/error.return-union-as-scalar.test:17:2: Cannot return 'Holder' from function declared to return 'Integer'
+error E3005: specs/structs/error.return-union-as-scalar.maxon:17:2: Cannot return 'Holder' from function declared to return 'Integer'
 ```
 
 <!-- test: error.callarg-wrong-struct-consumed -->
@@ -451,7 +451,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/structs/error.callarg-wrong-struct-consumed.test:26:16: argument type mismatch for 'inner': expected 'BoxA', got 'BoxB'
+error E3005: specs/structs/error.callarg-wrong-struct-consumed.maxon:26:16: argument type mismatch for 'inner': expected 'BoxA', got 'BoxB'
 ```
 
 <!-- test: error.callarg-wrong-struct-borrowed -->
@@ -489,7 +489,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/structs/error.callarg-wrong-struct-borrowed.test:26:9: argument type mismatch for 'x': expected 'BoxA', got 'BoxB'
+error E3005: specs/structs/error.callarg-wrong-struct-borrowed.maxon:26:9: argument type mismatch for 'x': expected 'BoxA', got 'BoxB'
 ```
 
 <!-- test: self-returned-from-a-method -->

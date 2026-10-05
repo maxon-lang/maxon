@@ -367,7 +367,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3004: specs/fragments/match-owned-value-flow/gives-owned-string-arm-undeclared-call.test:5:17: call to undefined function 'undefinedThing'
+error E3004: specs/match-owned-value-flow/gives-owned-string-arm-undeclared-call.maxon:5:17: call to undefined function 'undefinedThing'
 ```
 
 <!-- test: gives-immutable-binding-is-co-owned -->

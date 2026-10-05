@@ -11,8 +11,7 @@ reaches a network.
 
 **Its expected stdout is DELIBERATELY WRONG, and it must stay wrong.** What the test needs from the
 `--network` run is evidence that the case RAN, and it reads that off the case's FAIL verdict line: a
-failing case's verdict says as clearly as a passing one that it was selected, compiled and executed, and
-a failing case mints no golden (`SpecTestRunner.checkTestFragment` mints only when the verdict allows it).
+failing case's verdict says as clearly as a passing one that it was selected, compiled and executed.
 
 ## Tests
 

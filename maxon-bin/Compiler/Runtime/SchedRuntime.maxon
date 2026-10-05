@@ -436,7 +436,7 @@ let MOffNextP = MOffOsThreadHandle + (PointerSlotBytes as ByteOffset)
 // site that closes by construction.
 //
 // ⚠ **A `.data`-free slot, for `POffStealCount`'s reason** — a `.data` word appears in the `data {` section
-// of every green-thread golden in the corpus, and this is per-machine state, not program state.
+// of every green-thread program's Target IR, and this is per-machine state, not program state.
 let MOffSpinning = MOffNextP + (PointerSlotBytes as ByteOffset)
 
 // The two states, named for `PStatusUnused`/`PStatusActive`'s reason one field family up: the CAS that
@@ -859,9 +859,9 @@ let POffSchedTick = 0x80 as ByteOffset
 
 // ⭐ **HOW MANY GREEN THREADS THIS P HAS STOLEN — the reading `__Builtins.schedStealCount()` sums.** It is a
 // per-P word and not a `.data` counter because a `.data` word is
-// visible in every golden's `data {` section, so one added here would move the emitted image of every
-// green-thread program in the corpus to carry a number nothing but a torture harness reads. Owner-written,
-// like `schedTick`, and summed across `__sched_procs` by `__sched_steal_count`.
+// visible in the rendered Target IR's `data {` section, so one added here would move the emitted
+// image of every green-thread program to carry a number nothing but a torture harness reads.
+// Owner-written, like `schedTick`, and summed across `__sched_procs` by `__sched_steal_count`.
 let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
 
 // ⭐⭐ **HOW MANY TIMES THIS PROCESSOR HAS BEEN RETAKEN FROM A MACHINE STUCK IN A KERNEL CALL — the reading
@@ -869,9 +869,10 @@ let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
 // rather than that its output merely came out in a better order.**
 //
 // ⚠ **A PER-P WORD AND NOT A `.data` COUNTER, FOR `POffStealCount`'s REASON EXACTLY** — a `.data` word appears
-// in the `data {` section of every green-thread golden in the corpus, and this is per-processor state. It sits
-// beside the steal count because the two are the same shape asked of the same array, which is why they are
-// summed by ONE parameterised body (`buildSchedPerProcSum`) rather than by two copies of one loop.
+// in the `data {` section of every green-thread program's IR, and this is per-processor state. It
+// sits beside the steal count because the two are the same shape asked of the same array, which is
+// why they are summed by ONE parameterised body (`buildSchedPerProcSum`) rather than by two copies
+// of one loop.
 //
 // ⚠ **SYSMON IS ITS ONLY WRITER, SO IT IS A PLAIN LOAD/ADD/STORE.** There is one sysmon thread; nothing else
 // steps it, and a reader that wants it exact reads it after its work has finished, which is when it is.
@@ -886,7 +887,7 @@ let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 // every free down the local arm would leave both tortures and the whole suite green.
 //
 // ⚠ **A PER-P WORD AND NOT A `.data` COUNTER, FOR `POffStealCount`'s REASON EXACTLY** — a `.data` word
-// appears in the `data {` section of every green-thread golden in the corpus, and this is per-processor
+// appears in the `data {` section of every green-thread program's IR, and this is per-processor
 // state. It sits beside the two counters above because it is the same shape asked of the same array, which
 // is why all three are summed by ONE parameterised body (`buildSchedPerProcSum`).
 //
@@ -1451,7 +1452,7 @@ let PollerMaxWaitMs = 1000 * 1000 * 1000 as ParsedInt
 // that matters — `windows` would answer `true` before that lane had a P/M substrate to hand a processor to.
 //
 // ⭐ **IT ALSO KEEPS A LANE WITHOUT THE SUBSTRATE FREE OF THE MONITOR'S `.data` WORDS**, which would otherwise
-// put lines in the `data {` block of every green-thread golden.
+// put lines in the `data {` block of every green-thread program's rendered Target IR.
 export function targetBracketsBlockingSyscalls(target Target) returns bool
 	return targetProvidesFacility(target, facility: HostFacility.greenThreads)
 end 'targetBracketsBlockingSyscalls'
@@ -2101,8 +2102,8 @@ end 'emitLoadCurrentGt'
 // `MOffCurrentGt` is 0 — an M that exists but is running nothing at this instant — stamps exactly the same
 // `gt=0 P0` as the no-scheduler arms. The pair is therefore ambiguous between "no scheduler" and "a live,
 // idle P0", and nothing is wrong today only because its one consumer (`DebugStreamRuntime`) has its
-// `gt=0x… P<n>` text stripped by `normalizeTrace` before any golden sees it. A consumer that wanted to TELL
-// THE TWO APART would need a third answer here, not a cleverer reading of these two.
+// `gt=0x… P<n>` text stripped by `normalizeTrace` before a capture sees it. A consumer that wanted
+// to TELL THE TWO APART would need a third answer here, not a cleverer reading of these two.
 //
 // It terminates `cur` and returns the block to CONTINUE IN, whose two block args are the answers — the shape
 // every branching emit helper in this runtime uses, because the Std tier has no select.
@@ -5522,8 +5523,8 @@ end 'buildSchedArenaCarve'
 // all that differ, and a second copy of this loop would be one fact written twice.
 //
 // ⚠ **IT SUMS RATHER THAN READING A GLOBAL, BECAUSE A `.data` WORD APPEARS IN THE `data {` SECTION OF EVERY
-// GREEN-THREAD PROGRAM's GOLDEN.** Counting is per-P and the summing happens here, in a function no program
-// that does not ask for it carries (`DeadFunctionElimination`).
+// GREEN-THREAD PROGRAM's RENDERED TARGET IR.** Counting is per-P and the summing happens here, in a
+// function no program that does not ask for it carries (`DeadFunctionElimination`).
 //
 // ⚠ **THE READ IS NOT ATOMIC AND DOES NOT NEED TO BE**, even for `POffRemoteFreeCount`, whose WRITE is atomic
 // to serialise its many producers against each other. Each counter is one aligned word, so every value the
@@ -6111,16 +6112,21 @@ function emitSchedMachinesRunning(module StdModule, block IrBlock, ids ValueMint
 end 'emitSchedMachinesRunning'
 
 function buildSchedCheckdead(module StdModule)
-	var func = IrFunction.createFromStd(SchedCheckdeadName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
-	var ids = ValueMinter.create(0)
+	var func = IrFunction.createFromStd(SchedCheckdeadName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var nobodyRunning = module.addBlock(func, label: b"cdnobody", heat: BlockHeat.normal)
 	var nothingPending = module.addBlock(func, label: b"cdnothing", heat: BlockHeat.normal)
+	var mainNeverFinishes = module.addBlock(func, label: b"cdmainstuck", heat: BlockHeat.normal)
+	var quiescerGivesUp = module.addBlock(func, label: b"cdquiesce", heat: BlockHeat.normal)
 	var notMainRunning = module.addBlock(func, label: b"cdnotmain", heat: BlockHeat.normal)
 	var deadlocked = module.addBlock(func, label: b"cddeadlock", heat: BlockHeat.normal)
 	var stuck = module.addBlock(func, label: b"cdstuck", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"cddone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let m = 0 as ValueId
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let running = emitSchedMachinesRunning(module, block: entry, ids: ids)
@@ -6132,7 +6138,22 @@ function buildSchedCheckdead(module StdModule)
 
 	let phase = emitLoadAcquireGlobalWord(module, block: nothingPending, label: SchedPhaseLabel, ids: ids)
 	let mainRunning = emitSchedPhaseIs(module, block: nothingPending, phase: phase, want: SchedPhase.mainRunning, ids: ids)
-	module.setTerminator(nothingPending, op: StdOp.condBranch(mainRunning, thenBlockId: deadlocked.id, elseBlockId: notMainRunning.id))
+	module.setTerminator(nothingPending, op: StdOp.condBranch(mainRunning, thenBlockId: mainNeverFinishes.id, elseBlockId: notMainRunning.id))
+
+	// With a thread parked in `__gt_quiesce`, this finding is that thread's answer rather than a
+	// deadlock: it is readied with the stuck word set, and this machine's own event is set so the wait
+	// it is about to enter returns to run it.
+	let quiescer = emitLoadAcquireGlobalWord(module, block: mainNeverFinishes, label: GtQuiesceWaiterLabel, ids: ids)
+	let aQuiescerWaits = emitCmp(module, block: mainNeverFinishes, a: quiescer, b: emitConst(module, block: mainNeverFinishes, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(mainNeverFinishes, op: StdOp.condBranch(aQuiescerWaits, thenBlockId: quiescerGivesUp.id, elseBlockId: deadlocked.id))
+
+	let vacated = emitBin(module, block: quiescerGivesUp, a: emitConst(module, block: quiescerGivesUp, value: 0, ids: ids), b: quiescer, opcode: StdBinOpcode.sub, ids: ids)
+	_ = emitGlobalAccumulate(module, block: quiescerGivesUp, label: GtQuiesceWaiterLabel, delta: vacated, multiM: true, ids: ids)
+	_ = emitGlobalAccumulate(module, block: quiescerGivesUp, label: GtQuiesceStuckLabel, delta: emitConst(module, block: quiescerGivesUp, value: OneMore, ids: ids), multiM: true, ids: ids)
+	_ = emitGtReadyLocked(module, block: quiescerGivesUp, gt: quiescer, ids: ids)
+	module.appendOp(quiescerGivesUp, op: StdOp.osSetEvent(emitLoadField(module, block: quiescerGivesUp, record: m, offset: MOffParkEvent, ids: ids)))
+	module.setTerminator(quiescerGivesUp, op: StdOp.branch(doneBlock.id))
+
 	emitRuntimeAbort(module, func: func, block: deadlocked, abort: RuntimeAbort.schedulerDeadlock, ids: ids)
 
 	let draining = emitSchedPhaseIs(module, block: notMainRunning, phase: phase, want: SchedPhase.draining, ids: ids)
@@ -6540,7 +6561,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// machine on `__sched_midle`) is in place together or not at all, and the deadlock check sees this machine
 	// counted idle.
 	var joined = emitSchedMidlePutLocked(module, func: func, cur: parkJoin, m: m, ids: ids)
-	module.appendOp(joined, op: StdOp.call(ids.mint(), callee: SchedCheckdeadName, args: ValueIdArray.create()))
+	module.appendOp(joined, op: StdOp.call(ids.mint(), callee: SchedCheckdeadName, args: argsOf(m)))
 	emitSchedLockLeave(module, block: joined, ids: ids)
 	module.setTerminator(joined, op: StdOp.branch(doWait.id))
 
@@ -7761,11 +7782,12 @@ end 'buildGtAsyncPreemptPark'
 //
 // ⭐ **THE PREEMPTION SWITCH RIDES THE THREAD'S ARGUMENT.** `MAXON_PREEMPT` is resolved here, on the main
 // thread, once (`emitResolvePreemptSwitch`), and reaches `__sysmon` as its `lpParameter` rather than as a
-// `.data` word, which would shift every later word's offset in every green-thread golden. With it off the
-// monitor still reads the shutdown flag, sleeps deeply on an all-idle scheduler, takes the stale netpoll
-// look and starts a machine for an overdue timer on an idle processor; what it stops doing is taking a
-// processor from the thread holding it (`buildSchedRetake`) — so a CPU-bound strand then starves `main` at
-// one processor, which is the cost a case carrying `<!-- preempt: off -->` accepts.
+// `.data` word, which would shift every later word's offset in every green-thread image. With it
+// off the monitor still reads the shutdown flag, sleeps deeply on an all-idle scheduler, takes the
+// stale netpoll look and starts a machine for an overdue timer on an idle processor; what it stops
+// doing is taking a processor from the thread holding it (`buildSchedRetake`) — so a CPU-bound
+// strand then starves `main` at one processor, which is the cost a case carrying
+// `<!-- preempt: off -->` accepts.
 //
 // ⛔ **GATE SITE 2 OF 4 — see `targetBracketsBlockingSyscalls`.** On a lane with no bracket the monitor is not
 // built at all (gate site 1), so there is nothing to start: `cur` falls straight through to `cont`.

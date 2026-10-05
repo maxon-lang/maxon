@@ -341,7 +341,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.non-exported-function-cross-file.test:11:9: function 'privateHelper' is not exported
+error E3008: specs/export-keyword/error.non-exported-function-cross-file.maxon:11:9: function 'privateHelper' is not exported
 ```
 
 <!-- test: error.typealias-with-unknown-element-type -->
@@ -357,7 +357,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/export-keyword/error.typealias-with-unknown-element-type.test:2:33: Unknown type 'UnknownType'
+error E3011: specs/export-keyword/error.typealias-with-unknown-element-type.maxon:2:33: Unknown type 'UnknownType'
 ```
 
 <!-- test: exported-type-cross-file -->
@@ -404,8 +404,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.non-exported-type-cross-file.test:16:11: type 'InternalPoint' is not exported
-error E3008: specs/fragments/export-keyword/error.non-exported-type-cross-file.test:15:10: type 'InternalPoint' is not exported
+error E3008: specs/export-keyword/error.non-exported-type-cross-file.maxon:16:11: type 'InternalPoint' is not exported
+error E3008: specs/export-keyword/error.non-exported-type-cross-file.maxon:15:10: type 'InternalPoint' is not exported
 ```
 
 <!-- test: error.a-non-exported-types-static-is-refused-across-files -->
@@ -425,7 +425,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-non-exported-types-static-is-refused-across-files.test:11:9: type 'InternalPoint' is not exported
+error E3008: specs/export-keyword/error.a-non-exported-types-static-is-refused-across-files.maxon:11:9: type 'InternalPoint' is not exported
 ```
 
 <!-- test: error.a-non-exported-generic-type-field-read-across-files-names-its-visibility -->
@@ -454,7 +454,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-non-exported-generic-type-field-read-across-files-names-its-visibility.test:20:12: type 'Box' is not exported
+error E3008: specs/export-keyword/error.a-non-exported-generic-type-field-read-across-files-names-its-visibility.maxon:20:12: type 'Box' is not exported
 ```
 
 <!-- test: error.a-hidden-types-field-write-is-refused-through-a-value -->
@@ -484,7 +484,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-types-field-write-is-refused-through-a-value.test:20:4: type 'Box' is not exported
+error E3008: specs/export-keyword/error.a-hidden-types-field-write-is-refused-through-a-value.maxon:20:4: type 'Box' is not exported
 ```
 
 <!-- test: error.a-hidden-types-method-is-refused-through-a-value -->
@@ -517,7 +517,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-types-method-is-refused-through-a-value.test:24:12: type 'Box' is not exported
+error E3008: specs/export-keyword/error.a-hidden-types-method-is-refused-through-a-value.maxon:24:12: type 'Box' is not exported
 ```
 
 <!-- test: error.a-hidden-types-extension-method-is-refused-through-a-value -->
@@ -556,7 +556,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-types-extension-method-is-refused-through-a-value.test:30:18: type 'Inner' is not exported
+error E3008: specs/export-keyword/error.a-hidden-types-extension-method-is-refused-through-a-value.maxon:30:18: type 'Inner' is not exported
 ```
 
 <!-- test: error.a-hidden-enums-method-is-refused-through-a-value -->
@@ -591,7 +591,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-enums-method-is-refused-through-a-value.test:24:12: type 'Mode' is not exported
+error E3008: specs/export-keyword/error.a-hidden-enums-method-is-refused-through-a-value.maxon:24:12: type 'Mode' is not exported
 ```
 
 <!-- test: error.a-hidden-enums-accessor-is-refused-through-a-value -->
@@ -619,7 +619,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-enums-accessor-is-refused-through-a-value.test:19:17: type 'Mode' is not exported
+error E3008: specs/export-keyword/error.a-hidden-enums-accessor-is-refused-through-a-value.maxon:19:17: type 'Mode' is not exported
 ```
 
 <!-- test: a-hidden-type-answers-through-an-exported-interface -->
@@ -698,7 +698,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-interfaces-method-is-refused-through-a-value.test:32:12: type 'Shape' is not exported
+error E3008: specs/export-keyword/error.a-hidden-interfaces-method-is-refused-through-a-value.maxon:32:12: type 'Shape' is not exported
 ```
 
 <!-- test: error.a-hidden-types-to-string-is-refused-through-interpolation -->
@@ -735,7 +735,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-types-to-string-is-refused-through-interpolation.test:28:10: type 'Point' is not exported
+error E3008: specs/export-keyword/error.a-hidden-types-to-string-is-refused-through-interpolation.maxon:28:10: type 'Point' is not exported
 ```
 
 <!-- test: error.a-hidden-types-equals-is-refused-through-the-equality-operator -->
@@ -777,7 +777,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-types-equals-is-refused-through-the-equality-operator.test:30:16: type 'Point' is not exported
+error E3008: specs/export-keyword/error.a-hidden-types-equals-is-refused-through-the-equality-operator.maxon:30:16: type 'Point' is not exported
 ```
 
 <!-- test: error.a-hidden-types-compare-is-refused-through-an-ordering-operator -->
@@ -827,7 +827,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-types-compare-is-refused-through-an-ordering-operator.test:38:16: type 'Point' is not exported
+error E3008: specs/export-keyword/error.a-hidden-types-compare-is-refused-through-an-ordering-operator.maxon:38:16: type 'Point' is not exported
 ```
 
 <!-- test: error.a-hidden-types-iteration-is-refused-through-a-for-loop -->
@@ -895,7 +895,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-types-iteration-is-refused-through-a-for-loop.test:56:2: type 'Seq' is not exported
+error E3008: specs/export-keyword/error.a-hidden-types-iteration-is-refused-through-a-for-loop.maxon:56:2: type 'Seq' is not exported
 ```
 
 <!-- test: error.a-hidden-enum-is-refused-through-a-match -->
@@ -926,7 +926,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-enum-is-refused-through-a-match.test:20:2: type 'Mode' is not exported
+error E3008: specs/export-keyword/error.a-hidden-enum-is-refused-through-a-match.maxon:20:2: type 'Mode' is not exported
 ```
 
 <!-- test: error.a-hidden-unions-payload-is-refused-through-a-match-binding -->
@@ -958,7 +958,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-unions-payload-is-refused-through-a-match-binding.test:22:2: type 'Reading' is not exported
+error E3008: specs/export-keyword/error.a-hidden-unions-payload-is-refused-through-a-match-binding.maxon:22:2: type 'Reading' is not exported
 ```
 
 <!-- test: error.a-hidden-enum-is-refused-through-interpolation -->
@@ -986,7 +986,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-hidden-enum-is-refused-through-interpolation.test:19:10: type 'Mode' is not exported
+error E3008: specs/export-keyword/error.a-hidden-enum-is-refused-through-interpolation.maxon:19:10: type 'Mode' is not exported
 ```
 
 <!-- test: a-hidden-types-values-sort-through-the-librarys-comparable-witness -->
@@ -1081,7 +1081,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.non-exported-enum-cross-file.test:10:10: type 'InternalStatus' is not exported
+error E3008: specs/export-keyword/error.non-exported-enum-cross-file.maxon:10:10: type 'InternalStatus' is not exported
 ```
 
 <!-- test: error.a-non-exported-unions-case-spawned-across-files -->
@@ -1102,8 +1102,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/export-keyword/error.a-non-exported-unions-case-spawned-across-files.test:12:16: Unsupported: `async Shape.…` — `Shape` is an enum or union, so `Shape.<case>(…)` builds a case rather than calling a function. There is nothing there for a green thread to run
-error E3008: specs/fragments/export-keyword/error.a-non-exported-unions-case-spawned-across-files.test:12:16: type 'Shape' is not exported
+error E2015: specs/export-keyword/error.a-non-exported-unions-case-spawned-across-files.maxon:12:16: Unsupported: `async Shape.…` — `Shape` is an enum or union, so `Shape.<case>(…)` builds a case rather than calling a function. There is nothing there for a green thread to run
+error E3008: specs/export-keyword/error.a-non-exported-unions-case-spawned-across-files.maxon:12:16: type 'Shape' is not exported
 ```
 
 <!-- test: error.a-non-exported-unions-case-construction-across-files -->
@@ -1127,8 +1127,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.a-non-exported-unions-case-construction-across-files.test:14:2: type 'Shape' is not exported
-error E3008: specs/fragments/export-keyword/error.a-non-exported-unions-case-construction-across-files.test:12:10: type 'Shape' is not exported
+error E3008: specs/export-keyword/error.a-non-exported-unions-case-construction-across-files.maxon:14:2: type 'Shape' is not exported
+error E3008: specs/export-keyword/error.a-non-exported-unions-case-construction-across-files.maxon:12:10: type 'Shape' is not exported
 ```
 
 <!-- test: exported-typealias-cross-file -->
@@ -1158,8 +1158,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3062: specs/fragments/export-keyword/error.non-exported-typealias-cross-file.test:3:11: unused typealias: 'InternalScore'
-error E3008: specs/fragments/export-keyword/error.non-exported-typealias-cross-file.test:7:16: typealias 'InternalScore' is not exported
+error E3062: specs/export-keyword/error.non-exported-typealias-cross-file.maxon:3:11: unused typealias: 'InternalScore'
+error E3008: specs/export-keyword/error.non-exported-typealias-cross-file.maxon:7:16: typealias 'InternalScore' is not exported
 ```
 
 <!-- test: error.duplicate-typealias-same-file -->
@@ -1172,7 +1172,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3061: specs/fragments/export-keyword/error.duplicate-typealias-same-file.test:3:11: Duplicate typealias 'Score'
+error E3061: specs/export-keyword/error.duplicate-typealias-same-file.maxon:3:11: Duplicate typealias 'Score'
 ```
 
 <!-- test: non-exported-type-same-file -->
@@ -1252,7 +1252,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/export-keyword/error.non-exported-var-cross-file.test:7:10: Undefined variable 'secret'
+error E2004: specs/export-keyword/error.non-exported-var-cross-file.maxon:7:10: Undefined variable 'secret'
 ```
 
 <!-- test: non-exported-enum-same-file -->
@@ -1331,8 +1331,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.hidden-alias-const-and-body-cast.test:6:14: typealias 'Dead' is not exported
-error E3062: specs/fragments/export-keyword/error.hidden-alias-const-and-body-cast.test:3:11: unused typealias: 'Dead'
+error E3008: specs/export-keyword/error.hidden-alias-const-and-body-cast.maxon:6:14: typealias 'Dead' is not exported
+error E3062: specs/export-keyword/error.hidden-alias-const-and-body-cast.maxon:3:11: unused typealias: 'Dead'
 ```
 
 ### A hidden alias of every form is refused in every type position
@@ -1601,7 +1601,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.non-exported-static-read-cross-file.test:16:17: static 'Holder.cached' is not exported
+error E3008: specs/export-keyword/error.non-exported-static-read-cross-file.maxon:16:17: static 'Holder.cached' is not exported
 ```
 
 <!-- test: error.non-exported-static-constant-assign-cross-file -->
@@ -1627,7 +1627,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.non-exported-static-constant-assign-cross-file.test:9:10: static 'Counter.hits' is not exported
+error E3008: specs/export-keyword/error.non-exported-static-constant-assign-cross-file.maxon:9:10: static 'Counter.hits' is not exported
 ```
 
 <!-- test: error.hidden-alias-as-a-top-level-container-create -->
@@ -1652,7 +1652,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.hidden-alias-as-a-top-level-container-create.test:12:9: typealias 'Smalls' is not exported
+error E3008: specs/export-keyword/error.hidden-alias-as-a-top-level-container-create.maxon:12:9: typealias 'Smalls' is not exported
 ```
 
 <!-- test: error.hidden-alias-as-a-top-level-set-from-head -->
@@ -1677,5 +1677,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.hidden-alias-as-a-top-level-set-from-head.test:12:9: typealias 'Counts' is not exported
+error E3008: specs/export-keyword/error.hidden-alias-as-a-top-level-set-from-head.maxon:12:9: typealias 'Counts' is not exported
 ```

@@ -306,7 +306,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2011: specs/fragments/literals/error.int-overflow.test:3:10: Integer literal '99999999999999999999' is outside the range of int (-9223372036854775808 to 9223372036854775807)
+error E2011: specs/literals/error.int-overflow.maxon:3:10: Integer literal '99999999999999999999' is outside the range of int (-9223372036854775808 to 9223372036854775807)
 ```
 
 <!-- test: error.hex-overflow -->
@@ -317,7 +317,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2011: specs/fragments/literals/error.hex-overflow.test:3:10: Integer literal '0x1ffffffffffffffff' is outside the range of int (-9223372036854775808 to 9223372036854775807)
+error E2011: specs/literals/error.hex-overflow.maxon:3:10: Integer literal '0x1ffffffffffffffff' is outside the range of int (-9223372036854775808 to 9223372036854775807)
 ```
 
 <!-- test: error.binary-overflow -->
@@ -328,7 +328,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2011: specs/fragments/literals/error.binary-overflow.test:3:10: Integer literal '0b10000000000000000000000000000000000000000000000000000000000000000' is outside the range of int (-9223372036854775808 to 9223372036854775807)
+error E2011: specs/literals/error.binary-overflow.maxon:3:10: Integer literal '0b10000000000000000000000000000000000000000000000000000000000000000' is outside the range of int (-9223372036854775808 to 9223372036854775807)
 ```
 
 <!-- test: error.octal-overflow -->
@@ -339,7 +339,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2011: specs/fragments/literals/error.octal-overflow.test:3:10: Integer literal '0o2000000000000000000000' is outside the range of int (-9223372036854775808 to 9223372036854775807)
+error E2011: specs/literals/error.octal-overflow.maxon:3:10: Integer literal '0o2000000000000000000000' is outside the range of int (-9223372036854775808 to 9223372036854775807)
 ```
 
 <!-- test: error.float-overflow -->
@@ -350,7 +350,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2011: specs/fragments/literals/error.float-overflow.test:3:10: Float literal '1.0e999' is outside the range of float
+error E2011: specs/literals/error.float-overflow.maxon:3:10: Float literal '1.0e999' is outside the range of float
 ```
 
 <!-- test: i64-min-literal -->

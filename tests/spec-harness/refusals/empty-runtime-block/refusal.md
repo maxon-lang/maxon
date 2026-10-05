@@ -5,7 +5,7 @@ feature: harness-refusal-empty-runtime-block
 
 `SpecParser.pushRuntimeNames` refuses an empty block: the runner suppresses
 `--emit-ir-runtime=` when the list is empty, so the compiler's own misspelling refusal never
-runs and the golden is byte-identical to a test that never asked.
+runs and the rendered Target IR is byte-identical to a test that never asked.
 
 ## Tests
 

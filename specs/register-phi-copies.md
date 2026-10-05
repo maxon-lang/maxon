@@ -176,8 +176,8 @@ A CYCLE AND A LEAF ON THE SAME EDGE, which pins the ORDER. `a`, `b`, `c` rotate 
 `phi_a ← reg(b)`, `phi_b ← reg(c)`, `phi_c ← reg(a)`, `phi_d ← reg(a)`. Nothing reads
 `d`, so `phi_d` is nobody's source: it is the LEAF, and it must be emitted BEFORE the
 cycle is broken. Emit the `xchg` first and `reg(a)` no longer holds the old `a`, so `d`
-silently captures a post-swap value — a wrong answer, with no crash and no golden
-anomaly beyond the move order itself.
+silently captures a post-swap value — a wrong answer, with no crash and nothing in
+the emitted code beyond the move order itself.
 Four iterations from `(1,2,3)` with `d` trailing `a`: `d` takes 1, 2, 3, 1 while
 `(a,b,c)` goes `(2,3,1)` → `(3,1,2)` → `(1,2,3)` → `(2,3,1)`. Final `a=2, b=3, c=1, d=1`,
 so `a*1000 + b*100 + c*10 + d = 2311`.

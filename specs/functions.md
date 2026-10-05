@@ -233,7 +233,7 @@ An early parameter (`a`) is passed as a NON-FIRST argument (`y: a`) to an intern
 while a LATER parameter (`c`) is live ACROSS that call. The entry parameter captures form
 a parallel copy out of the incoming ABI registers, so `a`'s capture destination must never
 be colored onto `c`'s incoming register (`rax`) — otherwise `a`'s capture would clobber
-`c` before `c`'s own capture reads it (a read-after-clobber miscompile). The fragment shows
+`c` before `c`'s own capture reads it (a read-after-clobber miscompile). The emitted code (`--emit-ir`) shows
 `a` captured into a non-argument register (`rsi`), leaving `rax` intact for `c`'s capture.
 `combine(10, b: 20, c: 30)` computes `diff(20, y: 10)` = 10, then `+ c` = 10 + 30 = 40.
 ```maxon

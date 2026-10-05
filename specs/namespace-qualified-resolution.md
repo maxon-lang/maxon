@@ -122,7 +122,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: app/specs/fragments/namespace-qualified-resolution/error.qualified-alias-out-of-its-own-range.test:10:13: Value 50 is outside the range of 'legacy.Score' (int(0 to 10))
+error E3005: app/specs/namespace-qualified-resolution/error.qualified-alias-out-of-its-own-range.maxon:10:13: Value 50 is outside the range of 'legacy.Score' (int(0 to 10))
 ```
 
 <!-- test: error.a-qualified-alias-beside-a-same-named-type-takes-its-own-declarations-range -->
@@ -148,7 +148,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: app/specs/fragments/namespace-qualified-resolution/error.a-qualified-alias-beside-a-same-named-type-takes-its-own-declarations-range.test:16:19: Value 300 is outside the range of 'stdlib.Byte' (int(0 to 255))
+error E3005: app/specs/namespace-qualified-resolution/error.a-qualified-alias-beside-a-same-named-type-takes-its-own-declarations-range.maxon:16:19: Value 300 is outside the range of 'stdlib.Byte' (int(0 to 255))
 ```
 
 
@@ -263,7 +263,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: app/specs/fragments/namespace-qualified-resolution/error.qualified-call-to-non-exported-function.test:15:15: function 'hiddenHelper' is not exported
+error E3008: app/specs/namespace-qualified-resolution/error.qualified-call-to-non-exported-function.maxon:15:15: function 'hiddenHelper' is not exported
 ```
 
 
@@ -288,7 +288,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: app/specs/fragments/namespace-qualified-resolution/error.multi-segment-qualified-call-to-module-scoped-function.test:15:9: function 'scopedHelper' is module-scoped and not visible from this directory
+error E3088: app/specs/namespace-qualified-resolution/error.multi-segment-qualified-call-to-module-scoped-function.maxon:15:9: function 'scopedHelper' is module-scoped and not visible from this directory
 ```
 
 
@@ -311,7 +311,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: app/specs/fragments/namespace-qualified-resolution/error.module-tier-alias-is-not-nameable-outside-its-subtree.test:11:16: typealias 'feature.Level' is module-scoped and not visible from this directory
+error E3088: app/specs/namespace-qualified-resolution/error.module-tier-alias-is-not-nameable-outside-its-subtree.maxon:11:16: typealias 'feature.Level' is module-scoped and not visible from this directory
 ```
 
 
@@ -342,7 +342,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: app/specs/fragments/namespace-qualified-resolution/error.hidden-alias-as-a-qualified-static-call-head.test:14:13: typealias 'lib.ScoreArray' is not exported
+error E3008: app/specs/namespace-qualified-resolution/error.hidden-alias-as-a-qualified-static-call-head.maxon:14:13: typealias 'lib.ScoreArray' is not exported
 ```
 
 
@@ -364,7 +364,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3061: api/specs/fragments/namespace-qualified-resolution/error.same-directory-underlying-conflict-is-reported-once.test:6:18: Duplicate typealias 'Score'
+error E3061: api/specs/namespace-qualified-resolution/error.same-directory-underlying-conflict-is-reported-once.maxon:6:18: Duplicate typealias 'Score'
 ```
 
 
@@ -474,7 +474,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: dir/specs/fragments/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.test:10:17: duplicate definition of function 'pick#' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: dir/specs/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.maxon:10:17: duplicate definition of function 'pick#' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 
@@ -506,7 +506,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.test:10:17: duplicate definition of function 'pick#' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: specs/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.maxon:10:17: duplicate definition of function 'pick#' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 
@@ -527,7 +527,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: beta/specs/fragments/namespace-qualified-resolution/error.two-main-declarations-in-different-directories-still-collide.test:8:10: Duplicate function 'main'
+error E3006: beta/specs/namespace-qualified-resolution/error.two-main-declarations-in-different-directories-still-collide.maxon:8:10: Duplicate function 'main'
 ```
 
 
@@ -894,6 +894,51 @@ end 'main'
 ```
 ```stdout
 true 8
+```
+
+
+<!-- test: contested-bare-call-resolves-past-a-file-private-competitor-of-the-same-signature -->
+The same pair with identical signatures: `b/`'s exported `larger` returns the smaller argument, so `a 7 main 2` is only reachable with each call reaching its own declaration.
+```maxon
+// --- file: a/a.maxon
+typealias Count = int(0 to 100)
+
+function larger(a Count, b Count) returns Count
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+export function runA()
+	print("a {larger(3, b: 7)}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+export typealias Count = int(0 to 100)
+
+export function larger(a Count, b Count) returns Count
+	if a > b 'first'
+		return b
+	end 'first'
+
+	return a
+end 'larger'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	print("main {larger(10, b: 2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 7
+main 2
 ```
 
 
@@ -1526,7 +1571,7 @@ export function create() returns Integer
 end 'create'
 ```
 ```maxoncstderr
-error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type.test:21:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+error E3006: Point/specs/namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type.maxon:21:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
 ```
 
 
@@ -1566,7 +1611,7 @@ export function create() returns Integer
 end 'create'
 ```
 ```maxoncstderr
-error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-is-named-when-its-file-is-compiled-first.test:5:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+error E3006: Point/specs/namespace-qualified-resolution/error.contested-free-function-is-named-when-its-file-is-compiled-first.maxon:5:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
 ```
 
 
@@ -1611,7 +1656,7 @@ export function create() returns Integer
 end 'create'
 ```
 ```maxoncstderr
-error E3006: Point/specs/fragments/namespace-qualified-resolution/error.contested-free-function-collides-with-a-fieldless-method.test:20:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+error E3006: Point/specs/namespace-qualified-resolution/error.contested-free-function-collides-with-a-fieldless-method.maxon:20:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
 ```
 
 
@@ -1693,7 +1738,7 @@ E3095's candidate list with THREE competitors, declared in an order the sorted o
 preserve (`zulu`, `alpha`, `mid`). The list is rendered lexicographically because the compiler's `Map` is
 open-addressed and its iteration is SLOT order — a function of two file paths' hashes — so an
 unsorted list would reorder itself on a rename, on table growth, or on a host whose paths hash
-differently, against a message pinned by this golden. Sorting is what makes the message reproducible.
+differently, against a message pinned by this case's `maxoncstderr` block. Sorting is what makes the message reproducible.
 ```maxon
 // --- file: zulu/f.maxon
 export typealias Integer = int(0 to 125)
@@ -1722,7 +1767,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: app/specs/fragments/namespace-qualified-resolution/error.three-way-ambiguous-bare-call.test:25:9: Ambiguous bare-name call to 'pick': more than one visible declaration matches it. Qualify it as one of: alpha.pick, mid.pick, zulu.pick
+error E3095: app/specs/namespace-qualified-resolution/error.three-way-ambiguous-bare-call.maxon:25:9: Ambiguous bare-name call to 'pick': more than one visible declaration matches it. Qualify it as one of: alpha.pick, mid.pick, zulu.pick
 ```
 
 
@@ -1757,7 +1802,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-default-is-not-inherited.test:18:49: 'beta.pick' expects 1 argument(s) but 0 were provided
+error E3036: app/specs/namespace-qualified-resolution/error.contested-free-function-default-is-not-inherited.maxon:18:49: 'beta.pick' expects 1 argument(s) but 0 were provided
 ```
 
 
@@ -1897,7 +1942,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-throws-is-not-inherited.test:20:10: try requires a throwing function: 'beta.pick' does not throw'
+error E3055: app/specs/namespace-qualified-resolution/error.contested-free-function-throws-is-not-inherited.maxon:20:10: try requires a throwing function: 'beta.pick' does not throw'
 ```
 
 

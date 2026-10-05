@@ -31,7 +31,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-file-open-read-int.test:3:29: argument type mismatch for 'path': expected '__ManagedMemory', got 'int'
+error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-file-open-read-int.maxon:3:29: argument type mismatch for 'path': expected '__ManagedMemory', got 'int'
 ```
 
 <!-- test: builtin-type-checking.error-managed-file-write-int -->
@@ -58,7 +58,7 @@ function main() returns ExitCode throws TestFileError
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-file-write-int.test:19:27: argument type mismatch for 'managed': expected '__ManagedMemory', got 'int'
+error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-file-write-int.maxon:19:27: argument type mismatch for 'managed': expected '__ManagedMemory', got 'int'
 ```
 
 <!-- test: builtin-type-checking.error-managed-directory-open-search-int -->
@@ -69,7 +69,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-directory-open-search-int.test:3:34: argument type mismatch for 'path': expected '__ManagedMemory', got 'int'
+error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-directory-open-search-int.maxon:3:34: argument type mismatch for 'path': expected '__ManagedMemory', got 'int'
 ```
 
 <!-- test: builtin-type-checking.error-managed-memory-set-length-string -->
@@ -81,7 +81,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-memory-set-length-string.test:4:10: argument type mismatch for 'newLength': expected 'int', got 'String'
+error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-memory-set-length-string.maxon:4:10: argument type mismatch for 'newLength': expected 'int', got 'String'
 ```
 
 <!-- test: builtin-type-checking.error-managed-memory-append-int -->
@@ -93,7 +93,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-memory-append-int.test:4:10: argument type mismatch for 'other': expected '__ManagedMemory', got 'int'
+error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-memory-append-int.maxon:4:10: argument type mismatch for 'other': expected '__ManagedMemory', got 'int'
 ```
 
 <!-- test: builtin-type-checking.error-managed-socket-tcp-connect-int -->
@@ -104,7 +104,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-managed-socket-tcp-connect-int.test:3:31: argument type mismatch for 'host': expected '__ManagedMemory', got 'int'
+error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-socket-tcp-connect-int.maxon:3:31: argument type mismatch for 'host': expected '__ManagedMemory', got 'int'
 ```
 
 ### `cstring` parameters

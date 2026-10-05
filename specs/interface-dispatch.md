@@ -490,7 +490,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/interface-dispatch/dispatch-nonconforming-error.test:23:9: argument type mismatch for 'r': type 'NotRunnable' does not implement interface 'Runnable'
+error E3005: specs/interface-dispatch/dispatch-nonconforming-error.maxon:23:9: argument type mismatch for 'r': type 'NotRunnable' does not implement interface 'Runnable'
 ```
 
 
@@ -1144,7 +1144,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-returning-function-cannot-throw.test:24:10: Unsupported: a THROWING function's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a return hands back one register plus a second, but on a throwing function that second register already carries the error flag — there is exactly one of it and both halves want it. Declare the function without `throws` — a non-throwing function returns the witness half in that same second register — or return a concrete type and report the error some other way
+error E2015: specs/interface-dispatch/error.interface-returning-function-cannot-throw.maxon:24:10: Unsupported: a THROWING function's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a return hands back one register plus a second, but on a throwing function that second register already carries the error flag — there is exactly one of it and both halves want it. Declare the function without `throws` — a non-throwing function returns the witness half in that same second register — or return a concrete type and report the error some other way
 ```
 
 
@@ -1179,7 +1179,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/interface-dispatch/error.interface-return-of-a-nonconformer.test:17:2: return type mismatch in 'make': type 'Gadget' does not implement interface 'Producer'
+error E3005: specs/interface-dispatch/error.interface-return-of-a-nonconformer.maxon:17:2: return type mismatch in 'make': type 'Gadget' does not implement interface 'Producer'
 ```
 
 
@@ -1204,7 +1204,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3121: specs/fragments/interface-dispatch/error.interface-return-of-a-float.test:9:2: Cannot return a `float` from 'pick', which is declared to return the interface type 'Ranked': a value held at an interface type is a two-word fat pointer `(value, witness)` whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Ranked', or declare the return type as `float`
+error E3121: specs/interface-dispatch/error.interface-return-of-a-float.maxon:9:2: Cannot return a `float` from 'pick', which is declared to return the interface type 'Ranked': a value held at an interface type is a two-word fat pointer `(value, witness)` whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Ranked', or declare the return type as `float`
 ```
 
 
@@ -1246,7 +1246,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.function-value-of-an-interface-returning-function.test:29:10: Unsupported: a function value's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
+error E2015: specs/interface-dispatch/error.function-value-of-an-interface-returning-function.maxon:29:10: Unsupported: a function value's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
 ```
 
 
@@ -1287,7 +1287,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.closure-returning-an-interface.test:29:22: Unsupported: a function value's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
+error E2015: specs/interface-dispatch/error.closure-returning-an-interface.maxon:29:22: Unsupported: a function value's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
 ```
 
 
@@ -2384,7 +2384,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3121: specs/fragments/interface-dispatch/error.float-cannot-be-held-at-an-interface.test:9:9: Cannot pass a `float` as '_', which is declared at the interface type 'Comparable': a value held at an interface type is a two-word fat pointer `(value, witness)` whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`
+error E3121: specs/interface-dispatch/error.float-cannot-be-held-at-an-interface.maxon:9:9: Cannot pass a `float` as '_', which is declared at the interface type 'Comparable': a value held at an interface type is a two-word fat pointer `(value, witness)` whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or take the parameter as a `float`
 ```
 
 <!-- test: error.existentials-cannot-be-compared -->
@@ -2432,7 +2432,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/interface-dispatch/error.existentials-cannot-be-compared.test:23:11: cannot compare values held at an interface type using '==': two values held at one interface may have different dynamic types, and nothing here can prove they match, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares
+error E3005: specs/interface-dispatch/error.existentials-cannot-be-compared.maxon:23:11: cannot compare values held at an interface type using '==': two values held at one interface may have different dynamic types, and nothing here can prove they match, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares
 ```
 
 <!-- test: error.closure-parameter-at-an-interface-type -->
@@ -2476,7 +2476,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.closure-parameter-at-an-interface-type.test:21:19: Unsupported: a closure parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called indirectly, through a call that reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
+error E2015: specs/interface-dispatch/error.closure-parameter-at-an-interface-type.maxon:21:19: Unsupported: a closure parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called indirectly, through a call that reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
 ```
 
 <!-- test: error.interface-typed-requirement-parameter -->
@@ -2536,7 +2536,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-requirement-parameter.test:21:15: Unsupported: an interface requirement's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold. Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains
+error E2015: specs/interface-dispatch/error.interface-typed-requirement-parameter.maxon:21:15: Unsupported: an interface requirement's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold. Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains
 ```
 
 <!-- test: error.interface-typed-requirement-parameter-through-a-type-parameter -->
@@ -2599,7 +2599,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-requirement-parameter-through-a-type-parameter.test:21:15: Unsupported: an interface requirement's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold. Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains
+error E2015: specs/interface-dispatch/error.interface-typed-requirement-parameter-through-a-type-parameter.maxon:21:15: Unsupported: an interface requirement's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold. Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains
 ```
 
 <!-- test: error.interface-typed-parameter-on-a-throwing-requirement -->
@@ -2657,7 +2657,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-parameter-on-a-throwing-requirement.test:25:15: Unsupported: an interface requirement's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold. Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains
+error E2015: specs/interface-dispatch/error.interface-typed-parameter-on-a-throwing-requirement.maxon:25:15: Unsupported: an interface requirement's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument, so the witness half is dropped and the impl dispatches through whatever the next slot happens to hold. Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains
 ```
 
 <!-- test: interface-dispatch.interface-parameter-on-a-plain-function-still-compiles -->
@@ -2761,7 +2761,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-type-parameter.test:20:30: Unsupported: a function type's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called indirectly, through a call that reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
+error E2015: specs/interface-dispatch/error.interface-typed-function-type-parameter.maxon:20:30: Unsupported: a function type's parameter declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called indirectly, through a call that reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
 ```
 
 <!-- test: error.function-value-of-an-interface-taking-function -->
@@ -2907,7 +2907,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-tuple-element.test:20:19: Unsupported: a tuple element declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
+error E2015: specs/interface-dispatch/error.interface-typed-tuple-element.maxon:20:19: Unsupported: a tuple element declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
 ```
 
 <!-- test: error.interface-typed-tuple-element-in-a-parameter -->
@@ -2942,7 +2942,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-tuple-element-in-a-parameter.test:20:18: Unsupported: a tuple element declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
+error E2015: specs/interface-dispatch/error.interface-typed-tuple-element-in-a-parameter.maxon:20:18: Unsupported: a tuple element declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
 ```
 
 <!-- test: error.interface-typed-tuple-element-in-a-return -->
@@ -2976,7 +2976,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-tuple-element-in-a-return.test:20:26: Unsupported: a tuple element declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
+error E2015: specs/interface-dispatch/error.interface-typed-tuple-element-in-a-return.maxon:20:26: Unsupported: a tuple element declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a tuple is a synthesized struct, so an element is a field slot: one machine word. Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument
 ```
 
 <!-- test: interface-dispatch.tuples-over-concrete-types-still-compile -->
@@ -3040,7 +3040,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-requirement-return.test:9:18: Unsupported: an interface requirement's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a requirement is dispatched through a witness-table slot whose signature is rebuilt from the requirement's rendered return-type NAME, a spelling no interface has — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
+error E2015: specs/interface-dispatch/error.interface-typed-requirement-return.maxon:9:18: Unsupported: an interface requirement's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a requirement is dispatched through a witness-table slot whose signature is rebuilt from the requirement's rendered return-type NAME, a spelling no interface has — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
 ```
 
 <!-- test: error.interface-typed-function-type-return -->
@@ -3066,7 +3066,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/interface-dispatch/error.interface-typed-function-type-return.test:8:38: Unsupported: a function type's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
+error E2015: specs/interface-dispatch/error.interface-typed-function-type-return.maxon:8:38: Unsupported: a function type's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
 ```
 
 <!-- test: dispatch-arg-per-instance-alias-mismatch-error -->

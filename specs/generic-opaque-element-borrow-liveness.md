@@ -86,7 +86,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.a-self-overwriting-swap-through-get-and-set.test:17:15: cannot mutate 'managed' via 'set' while it is borrowed by 'a' (borrowed at line 15)
+error E3070: specs/generic-opaque-element-borrow-liveness/error.a-self-overwriting-swap-through-get-and-set.maxon:17:15: cannot mutate 'managed' via 'set' while it is borrowed by 'a' (borrowed at line 15)
 ```
 
 <!-- test: error.a-three-way-rotate-through-get-and-set -->
@@ -131,8 +131,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.a-three-way-rotate-through-get-and-set.test:18:15: cannot mutate 'managed' via 'set' while it is borrowed by 'a' (borrowed at line 15)
-error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.a-three-way-rotate-through-get-and-set.test:19:15: cannot mutate 'managed' via 'set' while it is borrowed by 'b' (borrowed at line 16)
+error E3070: specs/generic-opaque-element-borrow-liveness/error.a-three-way-rotate-through-get-and-set.maxon:18:15: cannot mutate 'managed' via 'set' while it is borrowed by 'a' (borrowed at line 15)
+error E3070: specs/generic-opaque-element-borrow-liveness/error.a-three-way-rotate-through-get-and-set.maxon:19:15: cannot mutate 'managed' via 'set' while it is borrowed by 'b' (borrowed at line 16)
 ```
 
 <!-- test: error.a-borrow-displaced-by-a-set-is-refused-even-when-it-is-never-stored -->
@@ -173,7 +173,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.a-borrow-displaced-by-a-set-is-refused-even-when-it-is-never-stored.test:17:15: cannot mutate 'managed' via 'set' while it is borrowed by 'a' (borrowed at line 15)
+error E3070: specs/generic-opaque-element-borrow-liveness/error.a-borrow-displaced-by-a-set-is-refused-even-when-it-is-never-stored.maxon:17:15: cannot mutate 'managed' via 'set' while it is borrowed by 'a' (borrowed at line 15)
 ```
 
 <!-- test: error.the-bare-spelling-is-the-same-write -->
@@ -217,7 +217,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.the-bare-spelling-is-the-same-write.test:17:7: cannot mutate 'self' via 'set' while it is borrowed by 'a' (borrowed at line 15)
+error E3070: specs/generic-opaque-element-borrow-liveness/error.the-bare-spelling-is-the-same-write.maxon:17:7: cannot mutate 'self' via 'set' while it is borrowed by 'a' (borrowed at line 15)
 ```
 
 <!-- test: error.a-trivial-instantiation-of-a-refused-body-is-refused-with-it -->
@@ -261,7 +261,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.a-trivial-instantiation-of-a-refused-body-is-refused-with-it.test:19:15: cannot mutate 'managed' via 'set' while it is borrowed by 'a' (borrowed at line 17)
+error E3070: specs/generic-opaque-element-borrow-liveness/error.a-trivial-instantiation-of-a-refused-body-is-refused-with-it.maxon:19:15: cannot mutate 'managed' via 'set' while it is borrowed by 'a' (borrowed at line 17)
 ```
 
 <!-- test: a-set-fed-from-another-container-is-not-a-conflict -->
@@ -463,7 +463,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/generic-opaque-element-borrow-liveness/error.a-write-nested-inside-another-writes-arguments.test:6:9: cannot mutate 'xs' via 'set' while it is borrowed by 'borrowed' (borrowed at line 5)
+error E3070: specs/generic-opaque-element-borrow-liveness/error.a-write-nested-inside-another-writes-arguments.maxon:6:9: cannot mutate 'xs' via 'set' while it is borrowed by 'borrowed' (borrowed at line 5)
 ```
 
 <!-- test: a-trivial-element-container-is-untouched -->

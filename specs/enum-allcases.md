@@ -217,5 +217,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/enum-allcases/enum-allcases.error-enum.test:10:11: allCases is not available on unions
+error E4006: specs/enum-allcases/enum-allcases.error-enum.maxon:10:11: allCases is not available on unions
 ```

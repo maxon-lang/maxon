@@ -134,8 +134,8 @@ invoke one without the runner, and here it cannot.
 
 ⇒ What is pinned here is the relaxation's COMPILE-TIME half, which is all of it that a program can
 observe without a runner: it admits a bare `try` on a foreign error inside a `test`, and it admits
-one NOWHERE ELSE. The runtime half — the `__TestReport.threw` report itself — is pinned by the
-minted fragment goldens of the first TWO cases below, and end to end through `maxon test` by
+one NOWHERE ELSE. The runtime half — the `__TestReport.threw` report itself — is visible in the
+emitted code of the first TWO cases below, and is pinned end to end through `maxon test` by
 `tests/test-command`'s `uncaught-throw` and `implied-try` fixtures.
 
 <!-- test: bare-try-on-a-foreign-error-compiles -->
@@ -144,10 +144,10 @@ below: the SAME `try lookup()` over the SAME foreign error, moved from an ordina
 a `test`. There it is E3059; here it compiles. Nothing else distinguishes the two, so this pair is
 the narrowing stated as a difference rather than as a description.
 
-⚠ **THE GOLDEN IS WHERE THE SUBSTITUTED HANDLER IS VISIBLE.** The exit code cannot see it — `main`
-returns 0 and nothing invokes the test — so the minted fragment golden is what records that
+⚠ **THE EMITTED CODE IS WHERE THE SUBSTITUTED HANDLER IS VISIBLE.** The exit code cannot see it — `main`
+returns 0 and nothing invokes the test — so the emitted code is what shows that
 `__test_tolerates_a_foreign_error` reports through `__TestReport.threw` and then throws
-`TestFailure.assertion`, rather than propagating `ApiError`. Read it when you mint it.
+`TestFailure.assertion`, rather than propagating `ApiError`.
 ```maxon
 // --- file: suite.maxtest
 enum ApiError implements Error
@@ -182,7 +182,7 @@ un-enrol it again, because the enrolment belongs to the terminated error edge an
 `restoreMoveMark`, whose owned-binding height no longer matches the mark `finishTerminatedTry` rewinds
 to. The scalar case above cannot see it — it enrols nothing — which is exactly why this case exists.
 
-The callee can RETURN as well as throw, so the ok edge is reachable and the golden shows both edges: the
+The callee can RETURN as well as throw, so the ok edge is reachable and the emitted code shows both edges: the
 report, the `__str_decref` of the interpolation, the `__destruct_ApiError` of the box and the
 `TestFailure` throw on one; the statement after the `try`, with no drop of anything, on the other.
 ```maxon
@@ -239,7 +239,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/test-uncaught-throw/error.function-does-not-relax.test:16:2: try propagates 'ApiError' but enclosing function throws 'OwnError' — add 'otherwise' to convert
+error E3059: specs/test-uncaught-throw/error.function-does-not-relax.maxon:16:2: try propagates 'ApiError' but enclosing function throws 'OwnError' — add 'otherwise' to convert
 ```
 
 <!-- test: error.closure-in-a-test-is-not-a-test -->
@@ -274,12 +274,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/test-uncaught-throw/error.closure-in-a-test-is-not-a-test.test:19:36: try without otherwise requires the enclosing function to have 'throws'
+error E2001: specs/test-uncaught-throw/error.closure-in-a-test-is-not-a-test.maxon:19:36: try without otherwise requires the enclosing function to have 'throws'
 ```
 
 <!-- test: implied-try-foreign-error -->
 The no-`try` twin of `bare-try-on-a-foreign-error-compiles`: the test body is an implied `try`, so a
-bare throwing call compiles to the same handler. The golden must show the same `__TestReport.threw`
+bare throwing call compiles to the same handler. The emitted code shows the same `__TestReport.threw`
 report and `TestFailure` throw as the `try` form.
 ```maxon
 // --- file: suite.maxtest
@@ -985,7 +985,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/test-uncaught-throw/error.implied-try-closure-still-needs-try.test:19:36: throwing function requires try: 'lookup'
+error E3057: specs/test-uncaught-throw/error.implied-try-closure-still-needs-try.maxon:19:36: throwing function requires try: 'lookup'
 ```
 <!-- test: implied-try-explicit-try-of-a-rebranded-call -->
 An explicit `try` on a parenthesized call renamed to another brand of the same instance claims the call:

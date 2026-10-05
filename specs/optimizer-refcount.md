@@ -23,12 +23,10 @@ patterns known to produce `mm_incref` / `mm_decref` traffic:
 - union-with-managed-payload matching
 - closure capturing a managed value
 
-The scoreboard is each case's minted fragment golden: the emitted code, with
-every `__mm_incref` / `__mm_decref` the compiler places. It is never
-hand-written — it is regenerated via
-`maxon spec-test --filter=optimizer-refcount --update-required`.
+The scoreboard is each case's emitted code (`--emit-ir`), with
+every `__mm_incref` / `__mm_decref` the compiler places.
 
-When a refcount optimization fires, the golden changes. The diff **is** the
+When a refcount optimization fires, the emitted code changes. The diff **is** the
 measured impact: fewer `__mm_incref` / `__mm_decref` calls means less runtime
 refcount traffic. Reviewing the diff is how the optimization is kept correct —
 the allocations must stay the same, and the suite's leak gate (exit 101) fails
@@ -224,15 +222,16 @@ end 'main'
 
 ⚠ THIS CASE CARRIES NO `RequiredIR:<target>` BLOCK. The compiler's spec parser has an arm for neither
 `x64-windows` nor `wasm32-wasi`, so such a block would be read by nobody while reading as coverage, and
-`SpecParser.isUnimplementedFenceOpen` refuses the fence rather than walking past it. What pins the
-emitted code here is this case's minted fragment golden, which records what this compiler emits.
+`SpecParser.isUnimplementedFenceOpen` refuses the fence rather than walking past it. Nothing in this case pins
+the emitted code; it is visible with `--emit-ir`.
 
 ## Regression tests — sibling aliases cleaned up in one block
 
 An immutable `let` of an immutable binding is an ALIAS: it borrows the
 source and takes no reference of its own, so no incref/decref bracket
-surrounds its scope. These fragments pin that when several such aliases
-end in the same block.
+surrounds its scope. These cases end several such aliases in the same
+block; the emitted code (`--emit-ir`) shows no bracket for any of them,
+and nothing in the suite pins that.
 
 <!-- test: prefix-kill-sibling-cleanup -->
 Two aliases, `b` of `a` and `d` of `c`, whose scopes end in the same
@@ -351,9 +350,8 @@ end 'main'
 An alias passed to a throwing callee through `try` stays a borrow: the
 call does not make it take a reference, so no incref/decref bracket
 surrounds the alias. A callee that stores its argument durably takes its
-own reference instead. The fragment golden is the authoritative
-assertion — its diff after a future change catches an accidental
-bracket.
+own reference instead. The emitted code (`--emit-ir`) is where an
+accidental bracket shows.
 
 <!-- test: try-call-borrow-only-window -->
 Alias assignment `let b = a` in an inner block, followed by a try-call
@@ -533,7 +531,7 @@ it reaches a retention — borrows the global and takes no reference.
 A module-level managed struct global is read borrow-only inside a
 function — it reads a single field and returns a scalar comparison. The
 load carries no incref/decref bracket: neither call appears in the
-golden.
+emitted code.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

@@ -30,10 +30,9 @@ the divisor — and every value live across the `idiv` — OUT of `RAX`/`RDX`. I
 this from `idivReg`'s implicit-register masks (`implicitDefs = {RAX, RDX}`): the
 liveness pass forbids those registers for anything crossing the op, and forbids
 them for the divisor operand directly (which dies at the `idiv`, so the live-across
-sweep alone would miss it). The tests below pin the whole sequence: they RUN, so a
-dividend that never reached `RAX` or a divisor colored into `RDX` computes the wrong
-quotient and the exit-code assertion catches it, and their committed `.test` goldens
-pin the emitted `mov rax` / `cqo` / `idiv` sequence itself against regression.
+sweep alone would miss it). The tests below RUN, so a dividend that never reached `RAX`
+or a divisor colored into `RDX` computes the wrong quotient and the exit-code assertion
+catches it; the emitted `mov rax` / `cqo` / `idiv` sequence itself is visible with `--emit-ir`.
 
 ⭐ **DIVIDE-BY-ZERO IS A LANGUAGE-LEVEL THROW, NOT A HARDWARE TRAP.** `/` and `mod` are FALLIBLE: a divisor the compiler cannot prove non-zero makes the
 divide a throwing operation, so it must sit in a `try (a / b) otherwise …` or the program is refused
@@ -41,7 +40,7 @@ with E3057; a divisor it holds as the constant 0 is refused outright with E3103;
 proves non-zero — a non-zero literal, or a ranged type whose range excludes 0 — compiles to the bare
 `idiv` sequence above with no check, no branch and no call. `specs/safety.md` owns the rule and
 its tests; every divide in THIS file is deliberately over a provably non-zero divisor, so the
-sequence the goldens pin is the unguarded one.
+sequence they emit is the unguarded one.
 
 ⚠ **`/` AND `mod` PART WAYS AT `i64.min` BY `-1`.** `a mod -1` is `0` for every `a`, so `mod` guards
 its divisor against `-1` as well as `0` and answers `0`. `i64.min / -1` has no representable quotient:
@@ -66,7 +65,7 @@ is dividend-independent, and it reuses the one `-1` constant for both the compar
 which is why the third instruction is an `add` and not a `sub`.
 
 ⚠ **THE PROOF IS WHAT KEEPS IT OFF THE COMMON PATH, and every divide in this file is evidence: none
-of their goldens carries it.** A divisor that is a literal OTHER THAN `-1`, or a variable the
+of them emits it.** A divisor that is a literal OTHER THAN `-1`, or a variable the
 parser folded to one, or a ranged type whose range excludes `-1` — `int(1 to 1000)` included — emits none
 of those four instructions. `/` never emits them at all.
 
@@ -75,21 +74,21 @@ divisor might be `-1` and whose dividend might be `i64.min` tests `(dividend xor
 -1)` against `0` and branches to `panic: integer overflow` ahead of the divide — one compare-and-branch on
 the hot path, because there is no quotient to repair the operands toward. The same proof removes it: a
 divisor excluding `-1`, or a dividend whose type or value excludes `i64.min`, and the divide is bare —
-which is every divide in this file, so none of their goldens carries it. `safety.md`'s two
+which is every divide in this file, so none of them emits it. `safety.md`'s two
 `…-int-min-over-minus-one` cases are the ones that do.
 
 ⚠ **A LITERAL `-1` IS THE EXCEPTION, AND IT IS NOT OPTIMIZED AWAY: `a mod -1` EMITS THE GUARD AND AN
 `idiv` FOR AN ANSWER THAT IS STATICALLY `0`.** The guard fires on the value the compiler can see, so the
-emitted code is the same eight instructions any other unprovable divisor gets — visible in
-`safety.md`'s `mod-by-a-minus-one-literal-is-zero` golden. The parser DOES fold the result into its
+emitted code is the same eight instructions any other unprovable divisor gets — visible in the
+emitted code of `safety.md`'s `mod-by-a-minus-one-literal-is-zero`. The parser DOES fold the result into its
 constant domain (which is what keeps `100 / (10 mod -1)` an E3103 rather than a runtime throw), but
 `foldConstants` — rewriting a folded expression to a single `mov` — is deliberately deferred for the whole
 language (`FoldConstOperands`' header), and a `mod` by `-1` is not the place to make an exception.
 
-⚠ **`safe` IS A FRESH SSA VALUE, NOT AN OVERWRITE OF THE DIVISOR** — and the goldens show the allocator
+⚠ **`safe` IS A FRESH SSA VALUE, NOT AN OVERWRITE OF THE DIVISOR** — and the emitted code shows the allocator
 reusing the divisor's register for it whenever the divisor is dead after the divide, which is the
 correct thing to do and looks alarming. `divisor-is-read-after-a-checked-divide` below is what turns
-that from a reading of one golden into a checked claim: a divisor still live afterwards must come back
+that from a reading of the emitted code into a checked claim: a divisor still live afterwards must come back
 UNCHANGED, including the zero that took the error edge.
 
 ## Tests
@@ -217,10 +216,10 @@ end 'main'
 `specs/safety.md` owns the RULE — what throws, what is refused, what is caught. These own its
 CODE, because the exemption's whole claim is about what is emitted and an exit code cannot see the
 difference between a bare divide and a guarded one. Per the relational-assertions rule, a case that
-merely runs pins nothing here: the `.test` goldens are the assertion.
+merely runs pins nothing here: the emitted code (`--emit-ir`) is where the difference shows.
 
 <!-- test: ranged-divisor-is-a-bare-idiv -->
-A divisor whose declared range EXCLUDES 0 is the escape hatch, and this is what it buys: the golden
+A divisor whose declared range EXCLUDES 0 is the escape hatch, and this is what it buys: the emitted code
 holds the same `mov rax` / `cqo` / `idivReg` sequence `div-simple` does, with no `cmp`, no `or`, no
 branch and no error flag anywhere near it. The divisor is a PARAMETER, so nothing folds it — the
 range is doing all the work. `100 / 7 = 14`, `100 mod 7 = 2`, `14 + 2 = 16`.
@@ -241,7 +240,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: checked-divide-keeps-the-idiv -->
-And this is what a CHECKED divide buys: the golden still holds an `idivReg`, because the guard is two
+And this is what a CHECKED divide buys: the emitted code still holds an `idivReg`, because the guard is two
 instructions and no branch (`flag = divisor == 0`, `safe = divisor or flag`) rather than a call or a
 skipped divide. That is the whole reason the fixed-register cases in this file could have been
 written either way. `d` comes from an opaque call, so it cannot be folded; `100 / 7 = 14`.
@@ -350,11 +349,11 @@ caught divisionByZero
 ```
 
 <!-- test: ranged-divisor-excluding-minus-one-is-still-a-bare-idiv -->
-⭐ **THE `mod` OVERFLOW GUARD IS ABSENT WHEN THE RANGE RULES `-1` OUT**, and only a golden can
+⭐ **THE `mod` OVERFLOW GUARD IS ABSENT WHEN THE RANGE RULES `-1` OUT**, and only the emitted code can
 say so — an exit code cannot tell four elided instructions from four emitted ones.
 `ranged-divisor-is-a-bare-idiv` above already covers a POSITIVE range; this one is wholly NEGATIVE
 (`int(i64.min to -2)`), which is the case that would fall to the guard if the proof had been written
-as "the range is positive" instead of "the range excludes `-1`". The golden holds the same
+as "the range is positive" instead of "the range excludes `-1`". The emitted code holds the same
 `mov rax`/`cqo`/`idivReg` sequence with no `cmp` and no `and` anywhere near it. `-13 mod -5` is `-3`
 (the remainder takes the DIVIDEND's sign), and `-3 + 45 = 42`.
 ```maxon

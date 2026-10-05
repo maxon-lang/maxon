@@ -74,7 +74,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/variables/var-explicit-type-error.test:3:7: Expected '=' but got ':'
+error E2010: specs/variables/var-explicit-type-error.maxon:3:7: Expected '=' but got ':'
 ```
 
 <!-- test: let-explicit-type-error -->
@@ -86,5 +86,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/variables/let-explicit-type-error.test:3:7: Expected '=' but got ':'
+error E2010: specs/variables/let-explicit-type-error.maxon:3:7: Expected '=' but got ':'
 ```

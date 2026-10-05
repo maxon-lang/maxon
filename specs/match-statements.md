@@ -622,7 +622,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/match-statements/error.match-enum-default.test:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
+error E2046: specs/match-statements/error.match-enum-default.maxon:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: match-enum.expression -->
@@ -696,7 +696,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/match-statements/error.match-expression-fallthrough.test:5:14: unexpected token: 'and'
+error E2001: specs/match-statements/error.match-expression-fallthrough.maxon:5:14: unexpected token: 'and'
 ```
 
 <!-- test: error.match-fallthrough-with-return -->
@@ -710,7 +710,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2025: specs/fragments/match-statements/error.match-fallthrough-with-return.test:5:20: match fallthrough with return: 'cannot combine 'fallthrough' with 'return''
+error E2025: specs/match-statements/error.match-fallthrough-with-return.maxon:5:20: match fallthrough with return: 'cannot combine 'fallthrough' with 'return''
 ```
 
 <!-- test: error.match-enum-not-exhaustive -->
@@ -730,7 +730,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-statements/error.match-enum-not-exhaustive.test:13:2: match on enum 'Color' is not exhaustive, missing: blue
+error E2026: specs/match-statements/error.match-enum-not-exhaustive.maxon:13:2: match on enum 'Color' is not exhaustive, missing: blue
 ```
 
 <!-- test: error.match-duplicate-pattern -->
@@ -745,7 +745,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/match-statements/error.match-duplicate-pattern.test:6:3: duplicate pattern in match: '1'
+error E2027: specs/match-statements/error.match-duplicate-pattern.maxon:6:3: duplicate pattern in match: '1'
 ```
 
 <!-- test: error.match-type-mismatch -->
@@ -759,7 +759,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2028: specs/fragments/match-statements/error.match-type-mismatch.test:5:3: pattern type 'String' does not match scrutinee type 'int'
+error E2028: specs/match-statements/error.match-type-mismatch.maxon:5:3: pattern type 'String' does not match scrutinee type 'int'
 ```
 
 <!-- test: error.match-missing-block-id -->
@@ -773,7 +773,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2042: specs/fragments/match-statements/error.match-missing-block-id.test:4:9: missing block identifier
+error E2042: specs/match-statements/error.match-missing-block-id.maxon:4:9: missing block identifier
 ```
 
 <!-- test: error.match-mismatched-block-id -->
@@ -787,7 +787,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2043: specs/fragments/match-statements/error.match-mismatched-block-id.test:7:2: block identifier mismatch: expected 'check', got 'wrong'
+error E2043: specs/match-statements/error.match-mismatched-block-id.maxon:7:2: block identifier mismatch: expected 'check', got 'wrong'
 ```
 
 <!-- test: error.match-default-not-last -->
@@ -802,7 +802,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2029: specs/fragments/match-statements/error.match-default-not-last.test:6:3: 'default' case must be the last case in match
+error E2029: specs/match-statements/error.match-default-not-last.maxon:6:3: 'default' case must be the last case in match
 ```
 
 <!-- test: error.match-block-statement -->
@@ -818,7 +818,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2049: specs/fragments/match-statements/error.match-block-statement.test:5:10: block-opening statement 'if' is not allowed in a match arm; use a function call instead
+error E2049: specs/match-statements/error.match-block-statement.maxon:5:10: block-opening statement 'if' is not allowed in a match arm; use a function call instead
 ```
 
 <!-- test: error.match-not-exhaustive -->
@@ -832,7 +832,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-statements/error.match-not-exhaustive.test:7:2: match is not exhaustive: add a 'default' arm
+error E2026: specs/match-statements/error.match-not-exhaustive.maxon:7:2: match is not exhaustive: add a 'default' arm
 ```
 
 ### Single-Statement `try` Forms in Match Arms
@@ -1015,7 +1015,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2049: specs/fragments/match-statements/error.match-try-block-form.test:12:10: block-form 'try ... end' is not allowed in a match arm; use a single-statement try form (e.g. 'try call()' or 'try call() otherwise panic(...)') instead
+error E2049: specs/match-statements/error.match-try-block-form.maxon:12:10: block-form 'try ... end' is not allowed in a match arm; use a single-statement try form (e.g. 'try call()' or 'try call() otherwise panic(...)') instead
 ```
 
 <!-- test: error.match-otherwise-block-form -->
@@ -1047,7 +1047,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2049: specs/fragments/match-statements/error.match-otherwise-block-form.test:12:35: block-form 'try ... otherwise 'label' ... end' is not allowed in a match arm; use 'otherwise panic("...")', 'otherwise ignore', or 'otherwise return/throw/...' instead
+error E2049: specs/match-statements/error.match-otherwise-block-form.maxon:12:35: block-form 'try ... otherwise 'label' ... end' is not allowed in a match arm; use 'otherwise panic("...")', 'otherwise ignore', or 'otherwise return/throw/...' instead
 ```
 
 <!-- test: match-string.simple -->
@@ -1403,7 +1403,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2028: specs/fragments/match-statements/error.match-character-pattern-on-int-scrutinee.test:5:3: pattern type 'Character' does not match scrutinee type 'int'
+error E2028: specs/match-statements/error.match-character-pattern-on-int-scrutinee.maxon:5:3: pattern type 'Character' does not match scrutinee type 'int'
 ```
 
 <!-- test: match-character-literal-pattern-is-its-codepoint -->

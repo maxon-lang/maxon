@@ -505,7 +505,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3087: specs/fragments/if-try/error.if-try-redundant-contains-get.test:8:7: redundant 'Map.contains' followed by 'Map.get' on 'm': use 'if let v = try m.get(key)' (or 'if var') instead — performs one lookup instead of two
+error E3087: specs/if-try/error.if-try-redundant-contains-get.maxon:8:7: redundant 'Map.contains' followed by 'Map.get' on 'm': use 'if let v = try m.get(key)' (or 'if var') instead — performs one lookup instead of two
 ```
 
 <!-- test: error.if-try-redundant-contains-get-field-receiver -->
@@ -540,7 +540,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3087: specs/fragments/if-try/error.if-try-redundant-contains-get-field-receiver.test:13:18: redundant 'Map.contains' followed by 'Map.get' on 'holder.cache': use 'if let v = try holder.cache.get(key)' (or 'if var') instead — performs one lookup instead of two
+error E3087: specs/if-try/error.if-try-redundant-contains-get-field-receiver.maxon:13:18: redundant 'Map.contains' followed by 'Map.get' on 'holder.cache': use 'if let v = try holder.cache.get(key)' (or 'if var') instead — performs one lookup instead of two
 ```
 
 <!-- test: error.if-try-non-throwing -->
@@ -562,7 +562,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/if-try/error.if-try-non-throwing.test:10:5: try requires a throwing function: 'noThrow' does not throw'
+error E3055: specs/if-try/error.if-try-non-throwing.maxon:10:5: try requires a throwing function: 'noThrow' does not throw'
 ```
 
 <!-- test: if-try-binding-struct-multiple-managed-fields -->
@@ -872,7 +872,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3124: specs/fragments/if-try/error.if-try-discards-a-result.test:15:5: 'if try' discards the result of 'answer': only a call that returns nothing may be tested bare — bind the result with 'if let'
+error E3124: specs/if-try/error.if-try-discards-a-result.maxon:15:5: 'if try' discards the result of 'answer': only a call that returns nothing may be tested bare — bind the result with 'if let'
 ```
 
 <!-- test: error.if-try-discards-a-non-bool-result -->
@@ -903,7 +903,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3124: specs/fragments/if-try/error.if-try-discards-a-non-bool-result.test:17:5: 'if try' discards the result of 'mayFail': only a call that returns nothing may be tested bare — bind the result with 'if let'
+error E3124: specs/if-try/error.if-try-discards-a-non-bool-result.maxon:17:5: 'if try' discards the result of 'mayFail': only a call that returns nothing may be tested bare — bind the result with 'if let'
 ```
 
 <!-- test: if-try-void-callee-runs-its-effect -->
@@ -1018,7 +1018,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/if-try/error.if-try-pure-result-is-not-saved-by-discard.test:17:9: result of pure function 'pureFail' must be used
+error E3064: specs/if-try/error.if-try-pure-result-is-not-saved-by-discard.maxon:17:9: result of pure function 'pureFail' must be used
 ```
 
 <!-- test: if-try-binding-uses-the-result -->
@@ -1080,7 +1080,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/if-try/error.if-try-binds-a-void-result.test:14:13: type mismatch: ''runStep' does not return a value'
+error E3059: specs/if-try/error.if-try-binds-a-void-result.maxon:14:13: type mismatch: ''runStep' does not return a value'
 ```
 
 <!-- test: error.if-try-discards-a-void-result -->
@@ -1108,5 +1108,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/if-try/error.if-try-discards-a-void-result.test:14:13: type mismatch: ''runStep' does not return a value'
+error E3059: specs/if-try/error.if-try-discards-a-void-result.maxon:14:13: type mismatch: ''runStep' does not return a value'
 ```

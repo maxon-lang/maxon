@@ -148,7 +148,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/unicode-escape/unicode-escape.invalid-too-few-digits.test:3:10: Invalid unicode escape '\u00': expected 4 hex digits in character literal
+error E1004: specs/unicode-escape/unicode-escape.invalid-too-few-digits.maxon:3:10: Invalid unicode escape '\u00': expected 4 hex digits in character literal
 ```
 
 <!-- test: unicode-escape.invalid-too-few-digits-byte-string -->
@@ -165,7 +165,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/unicode-escape/unicode-escape.invalid-too-few-digits-byte-string.test:3:14: Invalid unicode escape '\u12': expected 4 hex digits in byte string literal
+error E1004: specs/unicode-escape/unicode-escape.invalid-too-few-digits-byte-string.maxon:3:14: Invalid unicode escape '\u12': expected 4 hex digits in byte string literal
 ```
 
 <!-- test: unicode-escape.nonfirst-escape-column -->
@@ -185,5 +185,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/unicode-escape/unicode-escape.nonfirst-escape-column.test:3:16: Invalid unicode escape '\u12': expected 4 hex digits in byte string literal
+error E1004: specs/unicode-escape/unicode-escape.nonfirst-escape-column.maxon:3:16: Invalid unicode escape '\u12': expected 4 hex digits in byte string literal
 ```

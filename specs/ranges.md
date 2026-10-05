@@ -399,7 +399,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/ranges/ranges.float-bounds-refused.test:4:11: Unsupported: a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a 'float'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it
+error E2015: specs/ranges/ranges.float-bounds-refused.maxon:4:11: Unsupported: a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a 'float'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it
 ```
 
 <!-- test: ranges.bool-bounds-refused -->
@@ -415,7 +415,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/ranges/ranges.bool-bounds-refused.test:4:11: Unsupported: a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a 'bool'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it
+error E2015: specs/ranges/ranges.bool-bounds-refused.maxon:4:11: Unsupported: a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a 'bool'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it
 ```
 
 <!-- test: ranges.mixed-bounds-blames-the-float-half -->
@@ -431,7 +431,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/ranges/ranges.mixed-bounds-blames-the-float-half.test:4:13: Unsupported: a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a 'float'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it
+error E2015: specs/ranges/ranges.mixed-bounds-blames-the-float-half.maxon:4:13: Unsupported: a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a 'float'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it
 ```
 
 <!-- test: ranges.ranged-alias-parameter-bound-stays-legal -->
@@ -471,7 +471,7 @@ codepoint into a fresh owned record — the dual of `__char_at`, which copies by
 Every other character-range case in this file and in `character-ownership.md` uses `'a'`…`'z'`, so only the
 ASCII arm runs there; the 2-, 3- and 4-byte arms — each with its own lead-byte floor, its own shift ladder and
 its own continuation bytes — run only here. This case is what says they are correct, because a lead-byte constant paired with the wrong shift is a wrong ANSWER that no equality walk
-and no golden fragment would name.
+would name.
 
 It also pins the OWNERSHIP of the wide arms: each trip allocates a record `__str_decref` must reclaim, so a
 missed drop on any arm is the runner's exit 101 rather than a wrong string.

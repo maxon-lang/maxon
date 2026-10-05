@@ -367,7 +367,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2064: specs/fragments/compiler-directives-positions/error.unknown-predicate.test:3:6: Unknown conditional compilation function 'wibble'. Expected 'os', 'arch', 'testing', 'rcSanitize', 'leakReport', or 'debugstream'.
+error E2064: specs/compiler-directives-positions/error.unknown-predicate.maxon:3:6: Unknown conditional compilation function 'wibble'. Expected 'os', 'arch', 'testing', 'rcSanitize', 'leakReport', or 'debugstream'.
 ```
 
 <!-- test: error.unterminated-if -->
@@ -380,7 +380,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2063: specs/fragments/compiler-directives-positions/error.unterminated-if.test:3:1: Unterminated '#if' -- the region is still open at end of file. Every '#if' needs a matching '#endif'
+error E2063: specs/compiler-directives-positions/error.unterminated-if.maxon:3:1: Unterminated '#if' -- the region is still open at end of file. Every '#if' needs a matching '#endif'
 ```
 
 <!-- test: error.stray-endif -->
@@ -392,7 +392,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2063: specs/fragments/compiler-directives-positions/error.stray-endif.test:4:1: '#endif' has no matching '#if'
+error E2063: specs/compiler-directives-positions/error.stray-endif.maxon:4:1: '#endif' has no matching '#if'
 ```
 
 <!-- test: error.orphan-else -->
@@ -407,7 +407,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2063: specs/fragments/compiler-directives-positions/error.orphan-else.test:4:1: '#else' has no matching '#if'
+error E2063: specs/compiler-directives-positions/error.orphan-else.maxon:4:1: '#else' has no matching '#if'
 ```
 
 <!-- test: error.trailing-condition-tokens -->
@@ -428,7 +428,7 @@ end 'main'
 #endif
 ```
 ```maxoncstderr
-error E2065: specs/fragments/compiler-directives-positions/error.trailing-condition-tokens.test:2:17: Unexpected text after the '#if' condition -- a condition ends at the end of its own line
+error E2065: specs/compiler-directives-positions/error.trailing-condition-tokens.maxon:2:17: Unexpected text after the '#if' condition -- a condition ends at the end of its own line
 ```
 
 <!-- test: error.malformed-condition -->
@@ -447,7 +447,7 @@ end 'main'
 #endif
 ```
 ```maxoncstderr
-error E2065: specs/fragments/compiler-directives-positions/error.malformed-condition.test:5:15: Malformed '#if' condition. Expected a predicate call -- 'os', 'arch', 'testing', 'rcSanitize', 'leakReport', or 'debugstream' -- optionally combined with 'and', 'or', 'not' and parentheses
+error E2065: specs/compiler-directives-positions/error.malformed-condition.maxon:5:15: Malformed '#if' condition. Expected a predicate call -- 'os', 'arch', 'testing', 'rcSanitize', 'leakReport', or 'debugstream' -- optionally combined with 'and', 'or', 'not' and parentheses
 ```
 
 <!-- test: error.dead-branch-lexically-invalid -->
@@ -465,7 +465,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1002: specs/fragments/compiler-directives-positions/error.dead-branch-lexically-invalid.test:3:10: Unterminated string literal
+error E1002: specs/compiler-directives-positions/error.dead-branch-lexically-invalid.maxon:3:10: Unterminated string literal
 ```
 
 <!-- test: directives.second-else-is-dead -->

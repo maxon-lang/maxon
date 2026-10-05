@@ -170,8 +170,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3017: specs/fragments/enum-hashable/error.associated-value-enum-not-hashable.test:10:11: Type 'Container' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
-error E3017: specs/fragments/enum-hashable/error.associated-value-enum-not-hashable.test:10:11: Type 'Container' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
+error E3017: specs/enum-hashable/error.associated-value-enum-not-hashable.maxon:10:11: Type 'Container' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: specs/enum-hashable/error.associated-value-enum-not-hashable.maxon:10:11: Type 'Container' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
 ```
 
 <!-- test: char-backed-enum-as-map-key -->

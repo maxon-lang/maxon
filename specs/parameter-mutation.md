@@ -73,7 +73,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/let-array-to-mutating-param-error.test:11:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)
+error E3019: specs/parameter-mutation/let-array-to-mutating-param-error.maxon:11:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)
 ```
 
 <!-- test: var-array-to-mutating-param-ok -->
@@ -140,7 +140,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/transitive-let-array-error.test:15:2: cannot pass 'a' to function that mutates parameter 'd' (in main)
+error E3019: specs/parameter-mutation/transitive-let-array-error.maxon:15:2: cannot pass 'a' to function that mutates parameter 'd' (in main)
 ```
 
 <!-- test: let-to-field-writing-callee-error -->
@@ -169,7 +169,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/let-to-field-writing-callee-error.test:18:2: cannot pass 'a' to function that mutates parameter 'b' (in main)
+error E3019: specs/parameter-mutation/let-to-field-writing-callee-error.maxon:18:2: cannot pass 'a' to function that mutates parameter 'b' (in main)
 ```
 
 <!-- test: transitive-let-field-write-error -->
@@ -202,7 +202,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/transitive-let-field-write-error.test:22:2: cannot pass 'a' to function that mutates parameter 'b' (in main)
+error E3019: specs/parameter-mutation/transitive-let-field-write-error.maxon:22:2: cannot pass 'a' to function that mutates parameter 'b' (in main)
 ```
 
 <!-- test: async-transitive-let-array-error -->
@@ -232,7 +232,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/async-transitive-let-array-error.test:18:9: cannot pass 'a' to function that mutates parameter 'd' (in main)
+error E3019: specs/parameter-mutation/async-transitive-let-array-error.maxon:18:9: cannot pass 'a' to function that mutates parameter 'd' (in main)
 ```
 
 <!-- test: recursive-let-array-error -->
@@ -257,7 +257,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/recursive-let-array-error.test:15:2: cannot pass 'a' to function that mutates parameter 'd' (in main)
+error E3019: specs/parameter-mutation/recursive-let-array-error.maxon:15:2: cannot pass 'a' to function that mutates parameter 'd' (in main)
 ```
 
 <!-- test: mutually-recursive-let-array-error -->
@@ -286,7 +286,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/mutually-recursive-let-array-error.test:19:2: cannot pass 'a' to function that mutates parameter 'd' (in main)
+error E3019: specs/parameter-mutation/mutually-recursive-let-array-error.maxon:19:2: cannot pass 'a' to function that mutates parameter 'd' (in main)
 ```
 
 <!-- test: mutually-recursive-var-array-ok -->
@@ -338,7 +338,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/labelled-arg-to-mutating-param-error.test:11:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)
+error E3019: specs/parameter-mutation/labelled-arg-to-mutating-param-error.maxon:11:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)
 ```
 
 <!-- test: let-arg-at-unmutated-position-ok -->
@@ -383,7 +383,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/let-arg-at-mutated-position-error.test:12:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)
+error E3019: specs/parameter-mutation/let-arg-at-mutated-position-error.maxon:12:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)
 ```
 
 <!-- test: temporary-arg-to-mutating-param-ok -->
@@ -424,7 +424,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/let-string-to-appending-param-error.test:11:9: cannot pass 't' to function that mutates parameter 's' (in main)
+error E3019: specs/parameter-mutation/let-string-to-appending-param-error.maxon:11:9: cannot pass 't' to function that mutates parameter 's' (in main)
 ```
 
 <!-- test: var-string-to-appending-param-ok -->
@@ -612,7 +612,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/let-global-string-to-appending-param-error.test:12:9: cannot pass 'GREETING' to function that mutates parameter 's' (in main)
+error E3019: specs/parameter-mutation/let-global-string-to-appending-param-error.maxon:12:9: cannot pass 'GREETING' to function that mutates parameter 's' (in main)
 ```
 
 <!-- test: var-global-string-to-appending-param-ok -->
@@ -681,7 +681,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/let-alias-of-parameter-to-mutating-param-error.test:11:2: cannot pass 'a' to function that mutates parameter 'd' (in caller)
+error E3019: specs/parameter-mutation/let-alias-of-parameter-to-mutating-param-error.maxon:11:2: cannot pass 'a' to function that mutates parameter 'd' (in caller)
 ```
 
 <!-- test: var-alias-of-parameter-to-mutating-param-ok -->
@@ -1051,7 +1051,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/let-self-field-passed-to-mutating-param-error.test:17:3: cannot pass 'items' to function that mutates parameter 'd' (in Bag.add)
+error E3019: specs/parameter-mutation/let-self-field-passed-to-mutating-param-error.maxon:17:3: cannot pass 'items' to function that mutates parameter 'd' (in Bag.add)
 ```
 
 <!-- test: returned-alias-written-in-the-callee -->
@@ -1077,7 +1077,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/returned-alias-written-in-the-callee.test:14:2: cannot pass 'a' to function that mutates parameter 'p' (in main)
+error E3019: specs/parameter-mutation/returned-alias-written-in-the-callee.maxon:14:2: cannot pass 'a' to function that mutates parameter 'p' (in main)
 ```
 
 <!-- test: let-record-written-through-an-alias-in-the-callee -->
@@ -1104,5 +1104,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/let-record-written-through-an-alias-in-the-callee.test:16:2: cannot pass 'a' to function that mutates parameter 'p' (in main)
+error E3019: specs/parameter-mutation/let-record-written-through-an-alias-in-the-callee.maxon:16:2: cannot pass 'a' to function that mutates parameter 'p' (in main)
 ```

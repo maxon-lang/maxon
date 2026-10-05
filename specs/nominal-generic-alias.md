@@ -26,7 +26,7 @@ sumYs(xs as Ys)    // a re-brand: no operation survives to codegen
 sumYs([1, 2, 3])   // a literal carries no brand and fits any
 ```
 
-A cast between two brands of one instance is a pure re-brand — the golden for `as-rebrands-both-ways`
+A cast between two brands of one instance is a pure re-brand — the emitted code of `as-rebrands-both-ways`
 shows the retag folded away. A cast to a DIFFERENT instance is still E3131, for the storage reason
 `type-casting.md` states.
 
@@ -585,7 +585,7 @@ error E3016: <fragment>:10:6: Partial interface implementation: type 'Sack' has 
 ### `as` — a re-brand costs nothing, and a different instance is still not a cast target
 
 <!-- test: as-rebrands-both-ways -->
-The cast changes the brand and nothing else — the golden shows no operation surviving for either `as`.
+The cast changes the brand and nothing else — the emitted code shows no operation surviving for either `as`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Xs = Array with Integer

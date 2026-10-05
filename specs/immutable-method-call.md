@@ -33,7 +33,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/push-on-let-array-error.test:8:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3019: specs/immutable-method-call/push-on-let-array-error.maxon:8:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: append-on-let-string-error -->
@@ -48,7 +48,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/append-on-let-string-error.test:5:4: cannot pass 's' to function that mutates parameter 'self' (in main)
+error E3019: specs/immutable-method-call/append-on-let-string-error.maxon:5:4: cannot pass 's' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: append-on-string-parameter-ok -->
@@ -101,7 +101,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/pass-let-string-through-inline-if-error.test:9:2: cannot pass 'g' to function that mutates parameter 's' (in main)
+error E3019: specs/immutable-method-call/pass-let-string-through-inline-if-error.maxon:9:2: cannot pass 'g' to function that mutates parameter 's' (in main)
 ```
 
 <!-- test: pass-let-string-through-try-otherwise-error -->
@@ -127,7 +127,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/pass-let-string-through-try-otherwise-error.test:11:2: cannot pass 'g' to function that mutates parameter 's' (in main)
+error E3019: specs/immutable-method-call/pass-let-string-through-try-otherwise-error.maxon:11:2: cannot pass 'g' to function that mutates parameter 's' (in main)
 ```
 
 <!-- test: push-on-let-alias-of-parameter-error -->
@@ -150,7 +150,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/push-on-let-alias-of-parameter-error.test:7:4: cannot pass 'a' to function that mutates parameter 'self' (in grow)
+error E3019: specs/immutable-method-call/push-on-let-alias-of-parameter-error.maxon:7:4: cannot pass 'a' to function that mutates parameter 'self' (in grow)
 ```
 
 <!-- test: insert-on-let-set-ok -->
@@ -232,7 +232,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/set-on-let-array-error.test:8:10: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3019: specs/immutable-method-call/set-on-let-array-error.maxon:8:10: cannot pass 'arr' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: read-on-let-array-ok -->
@@ -401,7 +401,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/push-on-let-self-field-array-error.test:13:9: cannot pass 'items' to function that mutates parameter 'self' (in Bag.add)
+error E3019: specs/immutable-method-call/push-on-let-self-field-array-error.maxon:13:9: cannot pass 'items' to function that mutates parameter 'self' (in Bag.add)
 ```
 
 ⭐⭐ **AND A CHAIN THROUGH A MODULE-LEVEL `let` REFUSES IT TOO, WHICH IS THE HALF NO DOOR COULD SEE.** The
@@ -471,7 +471,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/returned-alias-to-a-mutating-parameter.test:13:2: cannot pass 'g' to function that mutates parameter 's' (in main)
+error E3019: specs/immutable-method-call/returned-alias-to-a-mutating-parameter.maxon:13:2: cannot pass 'g' to function that mutates parameter 's' (in main)
 ```
 
 <!-- test: let-record-written-through-a-returned-container -->
@@ -493,7 +493,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/let-record-written-through-a-returned-container.test:11:10: cannot pass 'a' to function that mutates parameter 'self' (in main)
+error E3019: specs/immutable-method-call/let-record-written-through-a-returned-container.maxon:11:10: cannot pass 'a' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: let-record-alias-of-a-parameter-passed-through-a-call -->
@@ -526,5 +526,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/let-record-alias-of-a-parameter-passed-through-a-call.test:12:2: cannot pass 'q' to function that mutates parameter 's' (in tagIt)
+error E3019: specs/immutable-method-call/let-record-alias-of-a-parameter-passed-through-a-call.maxon:12:2: cannot pass 'q' to function that mutates parameter 's' (in tagIt)
 ```

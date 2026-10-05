@@ -32,7 +32,8 @@ matches that chain at instruction selection and hands the whole address to the m
   materialised anyway, so folding it into the address would ADD an instruction rather than remove one.
   `a-scaled-address-with-no-memory-reader-is-still-one-lea` carries that control as its SECOND
   function, beside the one that folds — which is what says the condition is load-bearing rather than
-  tidy: the shared multiply's `imul` survives in the committed fragment and both its `+` stay plain.
+  tidy: the shared multiply's `imul` survives in the emitted code (`--emit-ir`) and both its `+` stay
+  plain.
 - **The chain must be in ONE BLOCK.** SSA makes a cross-block fold *correct* — the add's def dominates
   the memory op, so its own operands do too — but the live ranges of `base` and `index` would then
   stretch across a block boundary in place of a single value's, and the compiler REFUSES rather than spills
@@ -76,7 +77,7 @@ x64's SIB byte, and both narrowings are the encoding's rather than a conservatis
   12-bit one belongs to the immediate-offset form, which has no index register.
 
 Every element access the language spells is a `word64` at stride 8 and offset 0, which satisfies both —
-so the arm64 fragments show `loadRegBaseIndexScale`/`storeBaseIndexScaleReg` exactly where the x64 ones
+so the arm64 emitted code (`--emit-ir`) shows `loadRegBaseIndexScale`/`storeBaseIndexScaleReg` exactly where the x64 ones
 do. A chain outside those terms keeps its own `arm64AddLsl` and the access reads the result.
 `StdLoweringShared.indexedFormCarries` states each ISA's reach once; `TargetDialect.arm64AddLsl` and
 `TargetDialect.loadRegBaseIndexScale` carry the encodings.
@@ -164,10 +165,10 @@ fold into.
 
 `sharedScaling` computes the same `i * 8` and reads it THREE times, so the multiply must be
 materialised anyway: folding it into either `+` would have added an instruction rather than removed
-one. Its `imulRegRegImm32 …, 8` therefore SURVIVES in the committed fragment and both its `+` stay a
-plain `leaRegRegReg`. ⭐ That surviving `imul` is the control: delete the `containsRepeat` check in
-`ScaledIndexFolds.tryIndexedAddress` and this fragment gains a scaled `lea` while keeping the `imul`,
-which is one instruction MORE than it started with.
+one. Its `imulRegRegImm32 …, 8` therefore SURVIVES in the emitted code (`--emit-ir`) and both its `+`
+stay a plain `leaRegRegReg`. ⭐ That surviving `imul` is the reading, and nothing in the suite pins it:
+delete the `containsRepeat` check in `ScaledIndexFolds.tryIndexedAddress` and this case's emitted code
+gains a scaled `lea` while keeping the `imul`, which is one instruction MORE than it started with.
 
 Both are fed from a loop counter so nothing here is constant-folded away.
 ```maxon
@@ -209,14 +210,14 @@ The stride-1 arm, which has no multiply to absorb: `index * 1` is folded to `ind
 stays a `loadRegBaseDisp.byte`. A fold that rewrote this would be changing code that was already one
 instruction shorter than the scaled form.
 
-⚠ The fragment shows BOTH arms, and that is the point of reading it here rather than in the integer
+⚠ The emitted code (`--emit-ir`) shows BOTH arms, and that is the point of reading it here rather than in the integer
 case: `emitStrideDispatch` emits the word arm (one `loadRegBaseIndexScale`) and the byte arm
 (`leaRegRegReg` + `loadRegBaseDisp.byte`) side by side even for a ByteArray. ⚠ **Static stride
 specialization deliberately does NOT remove the arm this program never takes** — a byte-stamped container's record is stride 1
 or the machine word (a shared generic body creates its `Array with Element` at the word slot and hands
 it back under a substituted concrete type), so the fork is exactly the question that distinguishes them.
 `specs/static-stride-specialization.md` carries the case that fails without it.
-The INTEGER cases above are where it does fire, and their fragments show no fork at all.
+The INTEGER cases above are where it does fire, and their emitted code shows no fork at all.
 ```maxon
 typealias Byte = int(0 to 255)
 typealias Total = int(0 to u64.max)

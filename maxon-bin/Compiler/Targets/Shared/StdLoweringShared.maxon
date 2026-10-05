@@ -270,9 +270,7 @@ end 'unaryResultClass'
 // does NOT make the MAPPING shared — it only makes both copies spell the same member names. Change
 // `ceil` to `towardNegative` in one isel and neither site reads as wrong: x64 would quietly compute
 // `floor` where the program said `ceil` while arm64 stayed correct, and the answer — not the build —
-// is what breaks. Worse asymmetrically: the x64 half is pinned by committed goldens
-// (`roundsdRegReg.towardPositive`), the arm64 half only by goldens no Windows or Linux host can
-// regenerate, so the copy with the weaker gate is the one free to drift.
+// is what breaks.
 //
 // `sqrt`, `abs` and BOTH bitcasts are deliberately absent, for two different reasons: neither
 // `sqrt` nor `abs` is a `roundsd`/`frint` at all (each has its own lowering on each ISA), and a bitcast
@@ -475,7 +473,7 @@ end 'runtimeChunkArgFloatMask'
 // the moment an argument can OVERFLOW, because "which slot" then means two different things — an index within one
 // register FILE, and an index into the single merged outgoing STACK area — and a hand-written counter that
 // gets either one wrong is exactly the class of bug the corpus already pins twice (see
-// `specs/x64-stack-arg-disp32.md`).
+// `ir-specs/x64-stack-arg-disp32.md`).
 //
 // Every answer comes from the same two inputs: the per-argument `ArgFloatMask` (which BOTH ends already
 // hold — see its header) and the target's per-file register capacity. So neither side walks Std types here,
@@ -918,7 +916,7 @@ export type ScaledIndexFolds
 	// the use walk for the many functions with no element access. Two descents over the same ops is the
 	// failure this file's own header warns about, and here it fails SILENTLY IN THE PERMISSIVE
 	// DIRECTION: had the pre-scan ever come to visit fewer ops than the record walk, the whole function
-	// would simply stop folding, and the goldens would be MINTED showing the unfolded three-instruction
+	// would simply stop folding, and the pins would be MINTED showing the unfolded three-instruction
 	// chain with nothing red anywhere. The use walk itself is `collectFunctionValueUses`, which is
 	// StdDialect's and shared with `FoldConstOperands` — so this type owns one descent and borrows one.
 	export function computeForFunction(module StdModule, func IrFunction, memoryForm IndexedMemoryForm)

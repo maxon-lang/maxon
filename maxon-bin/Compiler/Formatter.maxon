@@ -1723,7 +1723,7 @@ module function spacesIndent(width RequestedIndentWidth) returns FormatOptions t
 	return FormatOptions.spaces(width as IndentWidth)
 end 'spacesIndent'
 
-// Where a source stops being Maxon and becomes committed golden text.
+// Where a source stops being Maxon: its `---` separator line, if it has one.
 union SectionSeparator
 	at(offset ByteOffset)
 	absent
@@ -1731,9 +1731,9 @@ end 'SectionSeparator'
 
 /// Format `source`. A source the lexer REJECTS comes back unchanged.
 ///
-/// ⭐⭐ **THE `---` SPLIT.** A `.test` fragment carries its golden sections (`ExitCode:`, `CompiledIR`)
-/// below a `---` separator line. The lexer has no rule for such a line — it lexes `---` as three `minus`
-/// tokens — so without the split the formatter walks on and RE-LAYS-OUT the golden sections as though
+/// ⭐⭐ **THE `---` SPLIT.** A source may carry non-Maxon sections below a `---` separator line. The
+/// lexer has no rule for such a line — it lexes `---` as three `minus` tokens — so without the
+/// split the formatter walks on and RE-LAYS-OUT those sections as though
 /// they were Maxon, destroying the tail.
 export function format(source String, options FormatOptions = FormatOptions.tabs()) returns String
 	let bytes = source.toByteArray()

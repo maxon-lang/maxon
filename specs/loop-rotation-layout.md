@@ -39,8 +39,8 @@ header that branches into two hot in-loop arms before any exit test), when its e
 pay (its conditional aims at an exit block that does not sit right after the latch), or when the
 walk reaches the latch or another loop's header.
 
-A rotated loop's exit code cannot see its layout; the shape case below records it in its fragment
-golden, which a run compares and reports as drift. The controls run every path the reorder moves:
+A rotated loop's exit code cannot see its layout; the shape case below shows it in its emitted
+code (`--emit-ir`). The controls run every path the reorder moves:
 the guard failing before the first iteration, one iteration, a nest of two rotated loops, a `while`
 with `continue` (a conditional back edge left in place beside the rotated jump latch), a `while`
 whose `continue` arm carries work (two jump latches, the physically last one rotated), a nest whose
@@ -436,7 +436,7 @@ conditional aimed at the exit. The exit block is laid out between the header and
 right after the latch, so moving the header behind the latch would leave both branch instructions
 in the iteration and add an entry branch: the loop is refused and laid out as it was, its latch
 still branching to the header. In that unrotated layout the exit block IS physically next after the
-header, so the golden shows the inversion already fired there — `spin: jcc notEqual, ifcont` with
+header, so the emitted code shows the inversion already fired there — `spin: jcc notEqual, ifcont` with
 `whileexit` falling through — and the `jcc exit; jmp body` above is the shape the transform read
 before the elision ran.
 ```maxon

@@ -124,7 +124,7 @@
 // (a live range crossing a call is confined to the callee-saved registers, and this compiler refuses rather
 // than spills).
 
-// The block labels this pass mints. They reach the committed goldens, so they are short, prefixed
+// The block labels this pass mints. They reach the rendered Target IR, so they are short, prefixed
 // `__im_` (inline-managed, disjoint from `InsertRangeChecks`' `__rc_`), and each names WHAT THE BLOCK IT
 // LABELS DOES rather than which guard sent control there.
 //
@@ -247,7 +247,7 @@ export function inlineManagedPrimitives(project Project, module StdModule)
 
 		// ⭐ A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED — the same reachability fact
 		// `insertRangeChecks` and `lowerMaxonToStd` skip on, stated the same way. Here it is purely cost:
-		// this pass registers no `.rdata` and so cannot move a golden through `nextStringId` the way those
+		// this pass registers no `.rdata` and so cannot move a label through `nextStringId` the way those
 		// two could, and `eliminateDeadFunctions` drops the function before isel either way. What it buys
 		// is not doing per-block work for the large unreachable tail of every listed stdlib module.
 		if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
@@ -1077,8 +1077,8 @@ type PrimitiveInliner
 		// whose managed call minted the HIGHEST ids in the function — `try xs.set(…) otherwise return` as the
 		// last statement of a void body mints nothing after the `tryCall` — hands the minter a floor at or
 		// below `resultId`, and the slow arm's fresh results come back as the very ids the continuation is
-		// about to take as block args: TWO DEFINITIONS OF ONE VALUE, which this tier does not refuse, no
-		// golden reads back, and the allocator would resolve by whatever its liveness happened to compute.
+		// about to take as block args: TWO DEFINITIONS OF ONE VALUE, which this tier does not refuse and
+		// the allocator would resolve by whatever its liveness happened to compute.
 		// Seeding first is the same one walk at the same one site per function, on a function that still
 		// holds the call. See `PrimitiveInliner.ids` for why the seeding is lazy at all.
 		//

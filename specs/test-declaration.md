@@ -62,7 +62,7 @@ sanitize alike are refused, naming both.
 
 ## Tests
 
-⚠ **WHAT PINS THE EMITTED CODE HERE IS EACH CASE'S MINTED FRAGMENT GOLDEN.** The spec parser has no
+⚠ **NOTHING HERE PINS THE EMITTED CODE; `--emit-ir` RENDERS IT.** The spec parser has no
 `RequiredIR` arm, so such a block would be read by nobody while reading as coverage, and
 `SpecParser.isUnimplementedFenceOpen` refuses the fence rather than walking past it.
 
@@ -113,7 +113,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2008: specs/fragments/test-declaration/error.mismatched-end-label.test:5:1: Mismatched end label: expected 'adds two numbers', got 'adds three numbers'
+error E2008: specs/test-declaration/error.mismatched-end-label.maxon:5:1: Mismatched end label: expected 'adds two numbers', got 'adds three numbers'
 ```
 
 <!-- test: implied-throws-accepts-bare-try -->
@@ -179,7 +179,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/test-declaration/error.rejects-parameters.test:3:25: Expected newline after block label, got '('
+error E2001: specs/test-declaration/error.rejects-parameters.maxon:3:25: Expected newline after block label, got '('
 ```
 
 <!-- test: error.rejects-returns -->
@@ -195,7 +195,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/test-declaration/error.rejects-returns.test:3:26: Expected newline after block label, got 'returns'
+error E2001: specs/test-declaration/error.rejects-returns.maxon:3:26: Expected newline after block label, got 'returns'
 ```
 
 <!-- test: error.outside-test-file -->
@@ -211,7 +211,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2058: specs/fragments/test-declaration/error.outside-test-file.test:3:1: a 'test' declaration is only allowed in a file whose name ends in '.maxtest'; rename 'regular.maxon' to 'regular.maxtest', or move this declaration into one
+error E2058: specs/test-declaration/error.outside-test-file.maxon:3:1: a 'test' declaration is only allowed in a file whose name ends in '.maxtest'; rename 'regular.maxon' to 'regular.maxtest', or move this declaration into one
 ```
 
 <!-- test: error.duplicate-sanitized-name -->
@@ -232,7 +232,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3107: specs/fragments/test-declaration/error.duplicate-sanitized-name.test:7:6: duplicate test name: 'adds two' and 'adds-two' both compile to '__test_adds_two'
+error E3107: specs/test-declaration/error.duplicate-sanitized-name.maxon:7:6: duplicate test name: 'adds two' and 'adds-two' both compile to '__test_adds_two'
 ```
 
 <!-- test: error.empty-name -->
@@ -248,7 +248,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2059: specs/fragments/test-declaration/error.empty-name.test:3:6: a 'test' declaration's name cannot be empty
+error E2059: specs/test-declaration/error.empty-name.maxon:3:6: a 'test' declaration's name cannot be empty
 ```
 
 <!-- test: test-stays-an-ordinary-identifier -->
@@ -295,21 +295,16 @@ end 'main'
 Nothing in the program calls a test, so dead-function elimination would drop it. Tests are
 roots instead.
 
-⚠⚠ **THE GOLDEN CANNOT MINT ITSELF HONEST — READ IT WHEN YOU MINT IT.** The pin here is the
-fragment golden (see the note above), which renders this program's own functions and must
-therefore name `__test_is_kept_alive` under its mangled name. But a golden minted while the
-symbol was being DROPPED would record its absence and then compare equal for ever — a pin of the
-bug rather than of the rule. Nothing in the runner can catch that, because a mint has nothing to
-compare against by definition. The exit code below cannot catch it either: `main` returns 0
-whether the test survived or not.
+⚠⚠ **THE EXIT CODE CANNOT SEE WHETHER THE TEST SURVIVED.** `main` returns 0 whether it did or
+not. The emitted code (see the note above) renders this program's own functions, and is where
+`__test_is_kept_alive` shows under its mangled name.
 
-⚠ `ExitCode` is SHADOWED, and it has to be: rendering the emitted code makes every type in
-the program's signature part of the assertion, and the stdlib's `ExitCode` is host-width —
+⚠ `ExitCode` is SHADOWED: rendering the emitted code shows every type in the program's
+signature, and the stdlib's `ExitCode` is host-width —
 `u32` under `int(0 to u32.max)` on Windows, `u8` under `int(0 to 255)` on Linux, macOS and
-wasi (`stdlib/Process.maxon`). A golden naming one of them is a HOST fact recorded on every
-lane that mints one, so a golden minted on Windows would read `-> u32` and fail on arm64-macos
-against an identical compiler. A fixed range makes every lane's golden say the same thing. Do not
-"simplify" this back to the stdlib alias.
+wasi (`stdlib/Process.maxon`). A rendering naming one of them is a HOST fact, so Windows would read
+`-> u32` where arm64-macos reads `-> u8` from an identical compiler. A fixed range makes every lane's
+emitted code say the same thing. Do not "simplify" this back to the stdlib alias.
 ```maxon
 // --- file: kept.maxtest
 test 'is kept alive'

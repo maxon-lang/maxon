@@ -1243,7 +1243,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4014: specs/fragments/ownership/cycle-direct-self-ref.test:4:6: type 'Node' contains a reference cycle (via Node → next: Node); recursive type references are not allowed
+error E4014: specs/ownership/cycle-direct-self-ref.maxon:4:6: type 'Node' contains a reference cycle (via Node → next: Node); recursive type references are not allowed
 ```
 
 <!-- test: cycle-enum-self-ref -->
@@ -1261,7 +1261,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4014: specs/fragments/ownership/cycle-enum-self-ref.test:4:7: type 'Link' contains a reference cycle (via Link → link.next: Link); recursive type references are not allowed
+error E4014: specs/ownership/cycle-enum-self-ref.maxon:4:7: type 'Link' contains a reference cycle (via Link → link.next: Link); recursive type references are not allowed
 ```
 
 <!-- test: cycle-indirect-via-container -->
@@ -1279,7 +1279,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4014: specs/fragments/ownership/cycle-indirect-via-container.test:4:6: type 'Folder' contains a reference cycle (via Folder → children: FolderArray → Folder); recursive type references are not allowed
+error E4014: specs/ownership/cycle-indirect-via-container.maxon:4:6: type 'Folder' contains a reference cycle (via Folder → children: FolderArray → Folder); recursive type references are not allowed
 ```
 
 <!-- test: cycle-mutual-recursion -->
@@ -1298,7 +1298,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4014: specs/fragments/ownership/cycle-mutual-recursion.test:2:6: type 'A' contains a reference cycle (via A → b: B → a: A); recursive type references are not allowed
+error E4014: specs/ownership/cycle-mutual-recursion.maxon:2:6: type 'A' contains a reference cycle (via A → b: B → a: A); recursive type references are not allowed
 ```
 
 <!-- test: cycle-through-an-interface -->

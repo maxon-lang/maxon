@@ -207,7 +207,7 @@ registers rather than a heap record, so the call allocates nothing. Returning th
 is what makes this observable — the heap lowering is still the fallback for every tuple and every
 shape that does not fit the gate.
 
-⭐ **THE ASSERTION IS THE ABSENCE OF A `__Tuple2` LINE.** Everything the golden below does hold is
+⭐ **THE ASSERTION IS THE ABSENCE OF A `__Tuple2` LINE.** Everything the block below does hold is
 the interpolation `print` builds — one `InterpolationScratch` per `{…}` and the `StringRecord` they
 are copied into, the same shape `mm-trace.md`'s `heap-alloc-free` pins. A `__Tuple2` line reappearing
 here is the value convention ceasing to cover `pair`, which is the regression to chase.
@@ -435,14 +435,14 @@ end 'main'
 <!-- MmTrace -->
 RED: today a `(bool, Num)` return is a heap `__Tuple2` on every call, because a bool half is read as
 an `i1` and the two-register convention admits only whole-word halves — so a `__Tuple2` alloc, decref
-and free appear in the trace below and this case fails on the golden.
+and free appear in the trace below and this case fails on its `mm-trace` block.
 
 A `bool` is a whole return-register value like any other: a pair of a bool and an integer is a VALUE,
 and the call must allocate nothing, exactly as `(Num, Num)` already does in
 `small-tuple-return-allocates-nothing`. Both `return` shapes here are fresh two-word boxes nothing
 else in `classify` can see, and `main`'s only uses of the pair are the two half reads.
 
-⭐ **THE ASSERTION IS THE ABSENCE OF A `__Tuple2` LINE.** The golden holds the interpolation `print`
+⭐ **THE ASSERTION IS THE ABSENCE OF A `__Tuple2` LINE.** The block holds the interpolation `print`
 builds and nothing else — one `InterpolationScratch` per `{…}` (five bytes for the bool's text, 21 for
 the integer's) and the `StringRecord` they are copied into.
 ```maxon
@@ -488,7 +488,7 @@ trace below carries a `__Tuple2` alloc, decref and free per call site.
 The bool on the other end of the pair, and called TWICE so the result cannot be the frame-local a
 called-once leaf earns: the register arm is what deletes the box here. Each call builds a fresh
 two-word box, each call site reads both halves and drops the box through the trivial `__mm_decref`,
-so nothing allocates at either end and the golden is the interpolation alone.
+so nothing allocates at either end and the block is the interpolation alone.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -575,11 +575,11 @@ is a `__destruct___Tuple2.String.String` cascade instead, the call site cannot t
 `current()` keeps the heap convention for that whole program — which is what makes handing the two words
 over as owned impossible to get wrong.
 
-⛔ **THE GOLDEN IS THE PIN, AND IT HOLDS EVERY ALLOCATION THE Map MACHINERY ITSELF MAKES AND NOT ONE
+⛔ **THE `mm-trace` BLOCK IS THE PIN, AND IT HOLDS EVERY ALLOCATION THE Map MACHINERY ITSELF MAKES AND NOT ONE
 `__Tuple2` LINE.** A per-iteration record coming back — by the value convention ceasing to cover
 `current()`, or by the loop body gaining a use of the pair that is neither a half read nor the drop — puts
 three of them there and turns this red. Its ids are densely renumbered by first appearance, so a
-regenerated golden shifts every later `#n`; regenerate it with `--update-required`, never by hand.
+regenerated block shifts every later `#n`; regenerate it with `--update-required`, never by hand.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntMap = Map with (Integer, Integer)
@@ -1281,7 +1281,7 @@ file's `value-tuple-escaping-into-array-stays-heap` element size and the answer 
 ⭐ Every position a tuple alias can hold that the declaration SWEEP reads: a struct field (whose drop
 cascade must reach it), a method return, a free-function return, a tuple SLOT, an `Array` element and a
 union payload. The alias file declares nothing but aliases, so the two cases emit the same functions and
-their goldens must read alike. Returns 2 + 4 + 6 + 8 + 10 + 12 + 14 + 16 = 72.
+their emitted code must read alike. Returns 2 + 4 + 6 + 8 + 10 + 12 + 14 + 16 = 72.
 ```maxon
 // --- file: alias.maxon
 export typealias Int = int(i64.min to i64.max)

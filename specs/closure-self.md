@@ -139,5 +139,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/closure-self/error-self-in-free-function-closure.test:3:27: 'self' can only be used inside instance methods
+error E2001: specs/closure-self/error-self-in-free-function-closure.maxon:3:27: 'self' can only be used inside instance methods
 ```

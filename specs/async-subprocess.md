@@ -236,41 +236,6 @@ typealias Integer = int(i64.min to i64.max)
 50
 ```
 
-<!-- test: async-subprocess.posix-an-already-exited-child-gets-no-record -->
-<!-- unsupported-targets: x64-windows -->
-⛔⛔ **`-ESRCH` IS AN ANSWER, NOT A DESCRIPTOR, AND IT MUST NEVER REACH THE RECORD TABLE.** Its neighbour
-above pins that an already-exited child is reaped rather than refused; this one pins the road the refusal
-travels. `__np_child_open` answers the negative errno, and the open RETURNS on that edge; callers see
-`-ESRCH` and take their own road. A block that fell through into `__np_pd_adopt` instead would use
-**-3 as the table index**. The bound is a signed compare, so `-3 < capacity` reads as *inside the table*,
-and `table + 8*(-3)` is the word 24 bytes BEFORE it: either a wild value readied as a green thread, or a
-fresh record's address written over eight bytes belonging to something else.
-
-⚠ **ONE LAP, AND THE ONE IS THE WHOLE POINT.** `posix-a-child-that-has-already-exited` runs fifty and
-CANNOT catch this. From the second
-lap the record table exists, so `table - 24` lands in live heap and the damage is silent; on the FIRST
-`runProcess` of a process the table is unborn, the load is from a fixed wild address, and losing the race
-is a hard SIGSEGV naming `__np_pd_adopt`. So `main` spawns exactly once and does nothing before it.
-
-⚠ **IT IS PROBABILISTIC IN THE SAME WAY ITS NEIGHBOUR IS, AND LESS LIKELY TO FIRE.** It fires rarely
-even under heavy concurrency on a loaded machine, and far more rarely on an idle one. What makes it worth keeping is that its failure is a crash naming the function, not a wrong number.
-```maxon
-function once() returns Integer
-	return try __Builtins.runProcess("exit 7") otherwise 99
-end 'once'
-
-function main() returns ExitCode
-	return once() as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-7
-```
-```RequiredRuntime
-__np_child_open
-```
-
 <!-- test: async-subprocess.posix-multi-concurrent -->
 <!-- unsupported-targets: x64-windows -->
 ⭐ **THE CONCURRENCY CASE — SEVERAL CHILDREN THROUGH THE NETPOLL AT ONCE.** Three children are spawned

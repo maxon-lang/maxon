@@ -242,7 +242,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/union-cases/union-payload.error.wrong-enum.test:17:32: type mismatch: 'expected Color, got Shade'
+error E3005: specs/union-cases/union-payload.error.wrong-enum.maxon:17:32: type mismatch: 'expected Color, got Shade'
 ```
 
 <!-- test: union-payload.error.wrong-struct -->
@@ -279,7 +279,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/union-cases/union-payload.error.wrong-struct.test:25:36: type mismatch: 'expected Color, got Shade'
+error E3005: specs/union-cases/union-payload.error.wrong-struct.maxon:25:36: type mismatch: 'expected Color, got Shade'
 ```
 
 <!-- test: union-payload.matching-payload-types -->

@@ -574,3 +574,58 @@ end 'main'
 2 1
 appended inner string, long enough to allocate
 ```
+
+<!-- test: an-array-no-code-copies-may-hold-an-element-clone-cannot-copy -->
+`b/`'s `Holders` holds a handle element no clone can copy, and nothing copies a `Holders`, so it compiles; `a/`'s clone of its own array still works.
+```maxon
+// --- file: a/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var name as String
+	export var value as Integer
+
+	static function create(name String, value Integer) returns Self
+		return Self{name: name, value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+export function runA()
+	var src = ItemArray.create()
+	src.push(Item.create("first item long enough to heap allocate", value: 10))
+	let copy = src.clone()
+	print("a {copy.count()}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+type Holder
+	export var f as __ManagedFile
+
+	static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+end 'Holder'
+
+typealias Holders = Array with Holder
+
+export function runB()
+	var a = Holders.create()
+	print("b {a.count()}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 1
+b 0
+```

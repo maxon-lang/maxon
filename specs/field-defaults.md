@@ -245,7 +245,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/field-defaults/field-defaults.missing-type-annotation-errors.test:6:14: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.
+error E2004: specs/field-defaults/field-defaults.missing-type-annotation-errors.maxon:6:14: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.
 ```
 
 ### Error: A field default must consume everything up to the end of its line
@@ -276,7 +276,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/field-defaults/field-defaults.error.trailing-tokens.test:5:23: Expected 'end of default value' but got 'zzz'
+error E2010: specs/field-defaults/field-defaults.error.trailing-tokens.maxon:5:23: Expected 'end of default value' but got 'zzz'
 ```
 
 ### A field default in a GENERIC type reads the layout descriptor

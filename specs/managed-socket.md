@@ -38,7 +38,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3072: specs/fragments/managed-socket/managed-socket.error-direct-construction.test:3:26: '__ManagedSocket' is a compiler builtin type and cannot be constructed directly
+error E3072: specs/managed-socket/managed-socket.error-direct-construction.maxon:3:26: '__ManagedSocket' is a compiler builtin type and cannot be constructed directly
 ```
 
 <!-- test: managed-socket.connect-bad-host -->

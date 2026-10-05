@@ -379,10 +379,7 @@ later slice": **any `Hashable + Equatable` type is a `Map` key** — `map.md`'s 
 pins a user `Point` doing exactly that. What is refused here is a type that implements NEITHER, which the
 ordinary `where`-constraint check reports against `Map`'s own declared clause.
 
-The id stands rather than being corrected because it names two COMMITTED golden fragments, one of them
-`x64-linux`, which cannot be regenerated on this host — orphaning a cross-target golden to fix a
-name would trade a stale word for a lost measurement. The note is the cheaper honest fix; see
-`spec-marker-can-be-a-sentence` for why the wording is called out at all rather than left to be
+The heading and this note carry the true reading; see `spec-marker-can-be-a-sentence` for why the wording is called out at all rather than left to be
 believed.
 ```maxon
 typealias Val = int(i64.min to i64.max)

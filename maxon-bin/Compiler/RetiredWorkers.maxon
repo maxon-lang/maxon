@@ -1,0 +1,40 @@
+export type WorkerRetirees uses Handle
+	typealias HandleColumn = Array with Handle
+
+	var handles as HandleColumn
+
+	export static function create() returns Self
+		return Self{handles: HandleColumn.create()}
+	end 'create'
+
+	export function keep(retired HandleColumn)
+		self.handles.append(retired)
+	end 'keep'
+
+	export function release()
+		self.handles.clear()
+	end 'release'
+end 'WorkerRetirees'
+
+// The pools' worker handles, held until a compile's measurement has closed. Dropping the last
+// handle to a service starts its asynchronous teardown, which allocates inside whatever measured
+// bracket is open when it runs, so a handle dropped mid-compile makes identical compiles report
+// different memory totals.
+//
+// ⚠ Every exit path of a compile calls `release`: a handle still held at process exit is a service
+// that never ends and an exit that never comes, and an LSP or MCP project outlives any one compile.
+export type RetiredWorkers
+	export var frontEnd as FrontEndRetirees
+	export var stdPass as StdPassRetirees
+	export var backend as BackendRetirees
+
+	export static function create() returns RetiredWorkers
+		return Self{frontEnd: FrontEndRetirees.create(), stdPass: StdPassRetirees.create(), backend: BackendRetirees.create()}
+	end 'create'
+
+	export function release()
+		self.frontEnd.release()
+		self.stdPass.release()
+		self.backend.release()
+	end 'release'
+end 'RetiredWorkers'

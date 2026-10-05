@@ -497,7 +497,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3068: specs/fragments/inline-records/inline-records.is-on-an-inline-record-is-refused.test:16:7: 'is' requires reference types (structs), not primitive values
+error E3068: specs/inline-records/inline-records.is-on-an-inline-record-is-refused.maxon:16:7: 'is' requires reference types (structs), not primitive values
 ```
 
 <!-- test: inline-records.try-otherwise-over-a-factory-returning-one -->
@@ -713,7 +713,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/inline-records/inline-records.field-range-check-at-the-door.test:9:15: Value 4 is outside the range of 'Quad' (int(0 to 3))
+error E3005: specs/inline-records/inline-records.field-range-check-at-the-door.maxon:9:15: Value 4 is outside the range of 'Quad' (int(0 to 3))
 ```
 
 <!-- test: inline-records.runtime-field-range-check -->
@@ -841,7 +841,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/inline-records/inline-records.no-equals-is-still-refused.test:16:7: type mismatch: 'cannot compare struct with struct'
+error E3005: specs/inline-records/inline-records.no-equals-is-still-refused.maxon:16:7: type mismatch: 'cannot compare struct with struct'
 ```
 
 <!-- test: inline-records.as-an-existential -->

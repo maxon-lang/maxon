@@ -102,14 +102,15 @@ export function valueIsMarked(column ValueMarkColumn, value ValueId) returns boo
 end 'valueIsMarked'
 
 // The DISTINCT case targets of a dense `switch`'s block-id table, in FIRST-APPEARANCE order, with
-// `exclude` (the default) removed — the "which successors does this table actually have?" question the
-// CFG asks at every tier (Maxon await-CFG walk, Target CFG build, wasm landing structure). A dense table
-// REPEATS a block across many slots (a range/`or` arm fills several), so the distinct set is small — but
-// the array is `span` slots long (up to 4096), and deduping it with a per-slot linear membership scan is
-// O(span × distinct), which is QUADRATIC in the arm count of an all-distinct dense match (span ≈ distinct
-// ≈ N — the bytecode/keyword-dispatch shape a jump table is FOR). The hash set makes it O(span): one pass,
-// O(1) membership. Shared here — beside `BlockIdArray` — so the three tiers that need it call ONE
-// implementation rather than each spelling the same quadratic loop.
+// `exclude` (the default) removed — the "which successors does this table actually have?" question
+// the CFG asks at every tier (Maxon await-CFG walk, Target CFG build, wasm landing structure). A
+// dense table REPEATS a block across many slots (a range/`or` arm fills several), so the distinct
+// set is small — but the array is `span` slots long (up to 4096), and deduping it with a per-slot
+// linear membership scan is O(span × distinct), which is QUADRATIC in the arm count of an
+// all-distinct dense match (span ≈ distinct ≈ N — the bytecode/keyword-dispatch shape a jump table
+// is FOR). The open-addressed table makes it O(span): one pass, O(1) membership. Shared here —
+// beside `BlockIdArray` — so the three tiers that need it call ONE implementation rather than each
+// spelling the same quadratic loop.
 export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId) returns BlockIdArray
 	var out = BlockIdArray.create()
 
@@ -117,40 +118,55 @@ export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId)
 		return out
 	end 'noSlots'
 
-	// ⛔⛔ **A DENSE COLUMN OVER THE ID SPACE, NOT A HASH SET — AND THAT IS A REACHABILITY FACT BEFORE IT IS
-	// A COST ONE.** A `Set with BlockId` probes through the element's `hash`, which is a WITNESS DISPATCH,
-	// and this function is on the register allocator's POOL-WORKER path: the CFG build reaches it for every
-	// jump-table block of every function. A message that dispatches somewhere the compiler cannot name makes
-	// every address-taken function in the program message-reachable (E3143's widening), which refused the
-	// whole pool over a module `var` in the query engine that no allocator code goes near.
-	//
-	// It costs no more asymptotically and hashes nothing: block ids are FUNCTION-LOCAL and dense
-	// (`IrFunction.nextBlockId` counts from zero), so this is the same sizing every other dense column in
-	// the allocator already takes — `FuncTopology.localByBlockId` is a column over exactly this id space.
-	var highest = exclude
-
-	for target in caseTargets 'eachSlotForTheBound'
-		if target > highest 'higher'
-			highest = target
-		end 'higher'
-	end 'eachSlotForTheBound'
-
-	var seen = BoolArray.create()
-	seen.resize((highest + 1) as ElementIndex)
+	// Not a `Set with BlockId`: its probe dispatches `hash` through a witness, and this runs on the
+	// register allocator's pool workers, where a dispatch the compiler cannot name makes every
+	// address-taken function message-reachable and refuses the pool (E3143). Sized by the case count
+	// rather than the function's id space, because it is built once per jump-table block and an
+	// id-space column makes that quadratic.
+	let capacity = ((caseTargets.count() + 1) * SwitchSlotsPerTarget + 1) as ElementIndex
+	var slots = SwitchSlotArray.create()
+	slots.refill(capacity, value: EmptySwitchSlot)
 
 	// Seeding with `exclude` drops every default/hole slot in the same membership test that dedups the
 	// real targets — no separate `!= exclude` compare per slot.
-	try seen.set(exclude, value: true) otherwise panic("distinctSwitchTargets: the seen column is sized past `exclude`, which the bound above folds in")
+	_ = claimSwitchSlot(slots, id: exclude)
 
 	for target in caseTargets 'eachSlot'
-		if not (try seen.get(target) otherwise panic("distinctSwitchTargets: the seen column is sized past every case target, which the bound above folds in")) 'fresh'
-			try seen.set(target, value: true) otherwise panic("distinctSwitchTargets: the seen column is sized past every case target, which the bound above folds in")
+		if claimSwitchSlot(slots, id: target) 'fresh'
 			out.push(target)
 		end 'fresh'
 	end 'eachSlot'
 
 	return out
 end 'distinctSwitchTargets'
+
+let SwitchSlotsPerTarget = 2
+let EmptySwitchSlot = 0 as ElementIndex
+
+typealias SwitchSlotArray = Array with ElementIndex
+
+function claimSwitchSlot(slots SwitchSlotArray, id BlockId) returns bool
+	let held = id + 1
+	let capacity = slots.count()
+	var probe = try (id mod capacity) otherwise panic("claimSwitchSlot: a table of no slots reached the probe")
+
+	while true 'probing'
+		let occupant = try slots.get(probe) otherwise panic("claimSwitchSlot: slot {probe} is past the {capacity} the table holds")
+
+		if occupant == EmptySwitchSlot 'vacant'
+			try slots.set(probe, value: held) otherwise panic("claimSwitchSlot: slot {probe} was just read")
+			return true
+		end 'vacant'
+
+		if occupant == held 'alreadyClaimed'
+			return false
+		end 'alreadyClaimed'
+
+		probe = try ((probe + 1) mod capacity) otherwise panic("claimSwitchSlot: a table of no slots reached the probe")
+	end 'probing'
+
+	panic("claimSwitchSlot: the probe left its loop, which only a claim or a repeat ends")
+end 'claimSwitchSlot'
 
 // Linear membership over a BlockId list — the "does this list already hold this id?" question. Used for a
 // ONE-SHOT scan over a bounded list (the critical-edge retarget asks whether a switch's table names the

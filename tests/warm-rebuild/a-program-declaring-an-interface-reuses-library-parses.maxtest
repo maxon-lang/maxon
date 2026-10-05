@@ -1,0 +1,9 @@
+let InterfaceAheadPassLine = "verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold + library parses reused across programs)"
+
+test 'a program that declares an interface ahead of the library ones still reuses the library parses that dispatch through them'
+	let staged = stagedFixture("iterating", caseLabel: "a-program-declaring-an-interface-reuses-library-parses")
+	let run = spawnVerify(staged)
+
+	Expect.contains(run.stdout, needle: InterfaceAheadPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report every library parse reused by a second program that declares an interface, over a library parse that dispatches through an interface the library declares. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
+end 'a program that declares an interface ahead of the library ones still reuses the library parses that dispatch through them'

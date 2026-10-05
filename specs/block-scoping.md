@@ -57,7 +57,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/block-scoping/for-iterator-immutable.test:5:3: cannot assign to immutable variable: 'item'
+error E2013: specs/block-scoping/for-iterator-immutable.maxon:5:3: cannot assign to immutable variable: 'item'
 ```
 
 <!-- test: for-iterator-not-accessible-after -->
@@ -71,7 +71,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/block-scoping/for-iterator-not-accessible-after.test:7:9: Undefined variable 'x'
+error E2004: specs/block-scoping/for-iterator-not-accessible-after.maxon:7:9: Undefined variable 'x'
 ```
 
 <!-- test: for-body-var-not-accessible-after -->
@@ -85,7 +85,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/block-scoping/for-body-var-not-accessible-after.test:7:9: Undefined variable 'inside'
+error E2004: specs/block-scoping/for-body-var-not-accessible-after.maxon:7:9: Undefined variable 'inside'
 ```
 
 <!-- test: for-destructured-immutable -->
@@ -99,7 +99,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/block-scoping/for-destructured-immutable.test:5:3: cannot assign to immutable variable: 'value'
+error E2013: specs/block-scoping/for-destructured-immutable.maxon:5:3: cannot assign to immutable variable: 'value'
 ```
 
 <!-- test: for-destructured-not-accessible-after -->
@@ -113,7 +113,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/block-scoping/for-destructured-not-accessible-after.test:7:9: Undefined variable 'key'
+error E2004: specs/block-scoping/for-destructured-not-accessible-after.maxon:7:9: Undefined variable 'key'
 ```
 
 <!-- test: if-body-var-not-accessible-after -->
@@ -126,7 +126,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/block-scoping/if-body-var-not-accessible-after.test:6:9: Undefined variable 'x'
+error E2004: specs/block-scoping/if-body-var-not-accessible-after.maxon:6:9: Undefined variable 'x'
 ```
 
 <!-- test: if-else-body-var-not-accessible-after -->
@@ -141,7 +141,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/block-scoping/if-else-body-var-not-accessible-after.test:8:9: Undefined variable 'y'
+error E2004: specs/block-scoping/if-else-body-var-not-accessible-after.maxon:8:9: Undefined variable 'y'
 ```
 
 <!-- test: while-body-var-not-accessible-after -->
@@ -156,7 +156,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/block-scoping/while-body-var-not-accessible-after.test:8:9: Undefined variable 'x'
+error E2004: specs/block-scoping/while-body-var-not-accessible-after.maxon:8:9: Undefined variable 'x'
 ```
 
 <!-- test: outer-var-accessible-in-block -->

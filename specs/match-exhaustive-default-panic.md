@@ -191,7 +191,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-exhaustive-default-panic/error.no-default-statement.test:7:2: match is not exhaustive: add a 'default' arm
+error E2026: specs/match-exhaustive-default-panic/error.no-default-statement.maxon:7:2: match is not exhaustive: add a 'default' arm
 ```
 
 <!-- test: error.no-default-expression -->
@@ -206,7 +206,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-exhaustive-default-panic/error.no-default-expression.test:7:2: match expression is not exhaustive: add a 'default' arm
+error E2026: specs/match-exhaustive-default-panic/error.no-default-expression.maxon:7:2: match expression is not exhaustive: add a 'default' arm
 ```
 
 <!-- test: error.enum-default-plain -->
@@ -226,5 +226,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/match-exhaustive-default-panic/error.enum-default-plain.test:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
+error E2046: specs/match-exhaustive-default-panic/error.enum-default-plain.maxon:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```

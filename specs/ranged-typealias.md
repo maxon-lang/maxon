@@ -213,7 +213,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.float-cast-out-of-range.test:5:16: Value 500 is outside the range of 'Pct' (float(0 to 100))
+error E3005: specs/ranged-typealias/error.float-cast-out-of-range.maxon:5:16: Value 500 is outside the range of 'Pct' (float(0 to 100))
 ```
 
 ### Float range check: NEGATIVE bounds
@@ -233,7 +233,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.float-negative-bound-out-of-range.test:5:17: Value -200 is outside the range of 'Neg' (float(-100 to -1))
+error E3005: specs/ranged-typealias/error.float-negative-bound-out-of-range.maxon:5:17: Value -200 is outside the range of 'Neg' (float(-100 to -1))
 ```
 
 <!-- test: float-negative-bound-in-range -->
@@ -259,7 +259,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.float-straddling-zero-out-of-range.test:5:15: Value -2.5 is outside the range of 'Unit' (float(-1 to 1))
+error E3005: specs/ranged-typealias/error.float-straddling-zero-out-of-range.maxon:5:15: Value -2.5 is outside the range of 'Unit' (float(-1 to 1))
 ```
 
 <!-- test: float-straddling-zero-in-range -->
@@ -418,7 +418,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.return-float-literal-out-of-range.test:5:2: Value 500 is outside the range of 'Pct' (float(0 to 100))
+error E3005: specs/ranged-typealias/error.return-float-literal-out-of-range.maxon:5:2: Value 500 is outside the range of 'Pct' (float(0 to 100))
 ```
 
 ### Error: top-level let float cast out of range
@@ -434,7 +434,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.top-level-float-cast-out-of-range.test:4:17: Value 500 is outside the range of 'Pct' (float(0 to 100))
+error E3005: specs/ranged-typealias/error.top-level-float-cast-out-of-range.maxon:4:17: Value 500 is outside the range of 'Pct' (float(0 to 100))
 ```
 
 <!-- test: top-level-float-cast-in-range -->
@@ -1101,7 +1101,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.return-literal-out-of-range.test:5:2: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
+error E3005: specs/ranged-typealias/error.return-literal-out-of-range.maxon:5:2: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
 ```
 
 ### Error: literal out of range
@@ -1116,7 +1116,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.literal-out-of-range.test:5:13: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
+error E3005: specs/ranged-typealias/error.literal-out-of-range.maxon:5:13: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
 ```
 
 ### Error: negative literal out of range
@@ -1131,7 +1131,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5:13: Value -5 is outside the range of 'Positive' (int(1 to 100))
+error E3005: specs/ranged-typealias/error.negative-out-of-range.maxon:5:13: Value -5 is outside the range of 'Positive' (int(1 to 100))
 ```
 
 ### Type-qualified bound: u32.max
@@ -1347,7 +1347,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3062: specs/fragments/ranged-typealias/unused-typealias.test:2:11: unused typealias: 'Score'
+error E3062: specs/ranged-typealias/unused-typealias.maxon:2:11: unused typealias: 'Score'
 ```
 
 ### Unused typealias with used typealias
@@ -1363,7 +1363,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3062: specs/fragments/ranged-typealias/unused-typealias-with-used.test:3:11: unused typealias: 'Age'
+error E3062: specs/ranged-typealias/unused-typealias-with-used.maxon:3:11: unused typealias: 'Age'
 ```
 
 ### Error: unrepresentable range
@@ -1377,7 +1377,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.unrepresentable-range.test:2:17: Mismatched type bounds: 'i64.min' and 'u64.max' must reference the same type
+error E3005: specs/ranged-typealias/error.unrepresentable-range.maxon:2:17: Mismatched type bounds: 'i64.min' and 'u64.max' must reference the same type
 ```
 
 ### Error: negative literal lower with u64.max upper
@@ -1393,7 +1393,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.negative-low-u64-max.test:2:17: Integer range cannot span both negative values and above i64.max: 'int(-1 to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead
+error E3005: specs/ranged-typealias/error.negative-low-u64-max.maxon:2:17: Integer range cannot span both negative values and above i64.max: 'int(-1 to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead
 ```
 
 ### Error: mismatched type bounds
@@ -1407,7 +1407,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.mismatched-type-bounds.test:2:17: Mismatched type bounds: 'i8.min' and 'i32.max' must reference the same type
+error E3005: specs/ranged-typealias/error.mismatched-type-bounds.maxon:2:17: Mismatched type bounds: 'i8.min' and 'i32.max' must reference the same type
 ```
 
 ### Range identifier in variable assignment
@@ -1492,7 +1492,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.otherwise-outside-ranged-return.test:13:10: otherwise value -1 is outside the range of 'Score' (int(0 to 100))
+error E3005: specs/ranged-typealias/error.otherwise-outside-ranged-return.maxon:13:10: otherwise value -1 is outside the range of 'Score' (int(0 to 100))
 ```
 
 The same check must fire on a value that overruns the range's **upper** end. This twin is not
@@ -1517,7 +1517,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.otherwise-above-ranged-return.test:13:10: otherwise value 101 is outside the range of 'Score' (int(0 to 100))
+error E3005: specs/ranged-typealias/error.otherwise-above-ranged-return.maxon:13:10: otherwise value 101 is outside the range of 'Score' (int(0 to 100))
 ```
 
 ### Error: bare sized type shorthand not allowed
@@ -1531,7 +1531,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2003: specs/fragments/ranged-typealias/error.bare-shorthand.test:2:21: Bare sized type 'i64' is not allowed. Use explicit range syntax, e.g. 'int(i64.min to i64.max)'
+error E2003: specs/ranged-typealias/error.bare-shorthand.maxon:2:21: Bare sized type 'i64' is not allowed. Use explicit range syntax, e.g. 'int(i64.min to i64.max)'
 ```
 
 ### ⭐⭐ A DECLARED LOWER BOUND OF 0 REFUSES A WRITTEN NEGATIVE — the upper being `u64.max` does not repeal it
@@ -1566,7 +1566,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.written-negative-into-unsigned-full-alias.test:9:9: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
+error E3005: specs/ranged-typealias/error.written-negative-into-unsigned-full-alias.maxon:9:9: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
 ```
 
 ### The unsigned extreme, written as `u64.max`, is admitted
@@ -1673,7 +1673,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.written-negative-into-a-partial-unsigned-alias.test:5:13: Value -1 is outside the range of 'Big' (int(5 to 18446744073709551615))
+error E3005: specs/ranged-typealias/error.written-negative-into-a-partial-unsigned-alias.maxon:5:13: Value -1 is outside the range of 'Big' (int(5 to 18446744073709551615))
 ```
 
 ### Every door owes the same verdict — the RETURN, and a TOP-LEVEL `let`
@@ -1694,7 +1694,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.written-negative-returned-into-unsigned-full-alias.test:5:2: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
+error E3005: specs/ranged-typealias/error.written-negative-returned-into-unsigned-full-alias.maxon:5:2: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
 ```
 
 ⛔ **THE TOP-LEVEL `let` DOOR REACHES THE SAME VERDICT BY A DIFFERENT ROUTE, FOR EVERY RANGE — not
@@ -1716,7 +1716,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.written-negative-in-a-top-level-let.test:4:18: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
+error E3005: specs/ranged-typealias/error.written-negative-in-a-top-level-let.maxon:4:18: Value -1 is outside the range of 'Slot' (int(0 to 18446744073709551615))
 ```
 
 ### A NARROW range's top-level `let` gets the same repair
@@ -1736,7 +1736,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.written-negative-in-a-top-level-let-narrow.test:4:14: Value -1 is outside the range of 'Narrow' (int(0 to 100))
+error E3005: specs/ranged-typealias/error.written-negative-in-a-top-level-let-narrow.maxon:4:14: Value -1 is outside the range of 'Narrow' (int(0 to 100))
 ```
 
 ### A SIGNED range still takes its negatives
@@ -1844,7 +1844,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.unsigned-max-upper-literal-out-of-range.test:5:12: Value 3 is outside the range of 'Big' (int(5 to 18446744073709551615))
+error E3005: specs/ranged-typealias/error.unsigned-max-upper-literal-out-of-range.maxon:5:12: Value 3 is outside the range of 'Big' (int(5 to 18446744073709551615))
 ```
 
 ### ⭐⭐ A NEGATIVE UPPER BOUND IS A REAL BOUND — only the UNSIGNED-MAX shape has an unbounded one
@@ -2016,7 +2016,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.top-level-cast-out-of-range.test:4:15: Value 300 is outside the range of 'SmallByte' (int(0 to 10))
+error E3005: specs/ranged-typealias/error.top-level-cast-out-of-range.maxon:4:15: Value 300 is outside the range of 'SmallByte' (int(0 to 10))
 ```
 
 ### Top-level let cast in range
@@ -2070,7 +2070,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.field-default-out-of-range.test:8:10: Value 500 is outside the range of 'Percent' (int(0 to 100))
+error E3005: specs/ranged-typealias/error.field-default-out-of-range.maxon:8:10: Value 500 is outside the range of 'Percent' (int(0 to 100))
 ```
 
 ### Error: field store out of range
@@ -2094,7 +2094,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.field-store-out-of-range.test:14:4: Value 500 is outside the range of 'Percent' (int(0 to 100))
+error E3005: specs/ranged-typealias/error.field-store-out-of-range.maxon:14:4: Value 500 is outside the range of 'Percent' (int(0 to 100))
 ```
 
 ### Error: array element out of range
@@ -2114,7 +2114,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.array-push-out-of-range.test:7:4: Value 500 is outside the range of 'Percent' (int(0 to 100))
+error E3005: specs/ranged-typealias/error.array-push-out-of-range.maxon:7:4: Value 500 is outside the range of 'Percent' (int(0 to 100))
 ```
 
 ### Field store: runtime panic
@@ -2616,7 +2616,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.crossfile-call-argument-uses-callee-range.test:19:10: Value 500 is outside the range of 'Limit' (int(0 to 10))
+error E3005: specs/ranged-typealias/error.crossfile-call-argument-uses-callee-range.maxon:19:10: Value 500 is outside the range of 'Limit' (int(0 to 10))
 ```
 
 ### Error: float literal call argument out of range
@@ -2640,7 +2640,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.float-call-argument-out-of-range.test:9:15: Value 500 is outside the range of 'Pct' (float(0 to 100))
+error E3005: specs/ranged-typealias/error.float-call-argument-out-of-range.maxon:9:15: Value 500 is outside the range of 'Pct' (float(0 to 100))
 ```
 
 ### Float call argument in range
@@ -3579,7 +3579,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.two-aliases-over-one-range-are-two-instances.test:15:10: argument type mismatch for 'c': expected 'RegCountColumn', got 'DenseColumn'
+error E3005: specs/ranged-typealias/error.two-aliases-over-one-range-are-two-instances.maxon:15:10: argument type mismatch for 'c': expected 'RegCountColumn', got 'DenseColumn'
 ```
 
 <!-- test: error.two-aliases-over-different-ranges-are-still-two-types -->
@@ -3602,7 +3602,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.two-aliases-over-different-ranges-are-still-two-types.test:14:9: argument type mismatch for 'c': expected 'NarrowColumn', got 'WideColumn'
+error E3005: specs/ranged-typealias/error.two-aliases-over-different-ranges-are-still-two-types.maxon:14:9: argument type mismatch for 'c': expected 'NarrowColumn', got 'WideColumn'
 ```
 
 <!-- test: error.a-diagnostic-names-the-alias-the-site-wrote -->
@@ -3637,7 +3637,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.a-diagnostic-names-the-alias-the-site-wrote.test:23:9: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
+error E3005: specs/ranged-typealias/error.a-diagnostic-names-the-alias-the-site-wrote.maxon:23:9: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
 ```
 
 <!-- test: error.a-call-results-type-is-named-by-its-callees-returns-clause -->
@@ -3686,7 +3686,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.a-call-results-type-is-named-by-its-callees-returns-clause.test:23:9: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
+error E3005: specs/ranged-typealias/error.a-call-results-type-is-named-by-its-callees-returns-clause.maxon:23:9: argument type mismatch for 'c': expected 'NarrowCol', got 'OtherCol'
 ```
 
 ## A bare `int`/`float` is not a type — the ranged-typealias rule at every position
@@ -3713,7 +3713,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.bare-int-parameter.test:2:16: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
+error E3005: specs/ranged-typealias/error.bare-int-parameter.maxon:2:16: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
 ```
 
 <!-- test: error.bare-float-return -->
@@ -3728,7 +3728,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.bare-float-return.test:2:25: Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)
+error E3005: specs/ranged-typealias/error.bare-float-return.maxon:2:25: Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)
 ```
 
 <!-- test: error.bare-int-struct-field -->
@@ -3744,7 +3744,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.bare-int-struct-field.test:3:18: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
+error E3005: specs/ranged-typealias/error.bare-int-struct-field.maxon:3:18: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
 ```
 
 <!-- test: error.cast-to-bare-int -->
@@ -3760,7 +3760,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.cast-to-bare-int.test:6:15: Cannot cast to bare 'int'. Define a typealias with range constraints, e.g., 'value as MyInt' where 'typealias MyInt = int(0 to 100)'
+error E3005: specs/ranged-typealias/error.cast-to-bare-int.maxon:6:15: Cannot cast to bare 'int'. Define a typealias with range constraints, e.g., 'value as MyInt' where 'typealias MyInt = int(0 to 100)'
 ```
 
 <!-- test: error.top-level-const-cast-to-bare-int -->
@@ -3777,7 +3777,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.top-level-const-cast-to-bare-int.test:2:21: Cannot cast to bare 'int'. Define a typealias with range constraints, e.g., 'value as MyInt' where 'typealias MyInt = int(0 to 100)'
+error E3005: specs/ranged-typealias/error.top-level-const-cast-to-bare-int.maxon:2:21: Cannot cast to bare 'int'. Define a typealias with range constraints, e.g., 'value as MyInt' where 'typealias MyInt = int(0 to 100)'
 ```
 
 <!-- test: the-typealias-rhs-admits-the-keyword -->
@@ -3823,7 +3823,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.a-tuple-in-a-parameter-is-not-an-rhs.test:4:19: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
+error E3005: specs/ranged-typealias/error.a-tuple-in-a-parameter-is-not-an-rhs.maxon:4:19: Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)
 ```
 
 <!-- test: sizeof-admits-the-keyword -->

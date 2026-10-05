@@ -1,0 +1,28 @@
+let NoFragmentsSpecName = "no-fragments"
+let GoldenWord = "golden"
+
+test 'a spec-test run writes no fragments directory and reports no golden'
+	let staged = stagedGateFixture()
+	let run = runSpecTest(staged, includeNetwork: false)
+	let fragmentsLeft = Directory.exists(staged.join(FragmentsDirName))
+	discardStaging(staged)
+
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: NoFragmentsSpecName, testNames: ["no-fragments.runs", "no-fragments.refused"], broken: broken)
+
+	if fragmentsLeft 'fragmentsWritten'
+		broken.push("the run left a `{FragmentsDirName}/` directory in the spec directory. It said:\n{said}\n")
+	end 'fragmentsWritten'
+
+	if said.contains(GoldenWord) 'goldenReported'
+		broken.push("the run's output still speaks of a {GoldenWord}. It said:\n{said}\n")
+	end 'goldenReported'
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()} with every case passing. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "spec-test writes no fragments")
+end 'a spec-test run writes no fragments directory and reports no golden'

@@ -265,7 +265,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3083: specs/fragments/try-block/error.try-block-no-throws.test:3:5: try block contains no throwing calls: 'work'
+error E3083: specs/try-block/error.try-block-no-throws.maxon:3:5: try block contains no throwing calls: 'work'
 ```
 
 <!-- test: error.try-block-no-match -->
@@ -294,7 +294,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3084: specs/fragments/try-block/error.try-block-no-match.test:18:19: otherwise block must contain a match on the error binding 'e'
+error E3084: specs/try-block/error.try-block-no-match.maxon:18:19: otherwise block must contain a match on the error binding 'e'
 ```
 
 <!-- test: error.try-block-non-exhaustive-union -->
@@ -341,7 +341,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/try-block/error.try-block-non-exhaustive-union.test:37:9: match on error union is not exhaustive, missing: ErrA.bang, ErrB.splat
+error E2026: specs/try-block/error.try-block-non-exhaustive-union.maxon:37:9: match on error union is not exhaustive, missing: ErrA.bang, ErrB.splat
 ```
 
 <!-- test: error.try-block-default-plain-union -->
@@ -387,7 +387,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/try-block/error.try-block-default-plain-union.test:35:13: 'default' in a match on an error union must be followed by 'throws <error>' or 'panic("message")'
+error E2046: specs/try-block/error.try-block-default-plain-union.maxon:35:13: 'default' in a match on an error union must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: try-block.bare-unambiguous-patterns -->
@@ -480,7 +480,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3085: specs/fragments/try-block/error.try-block-ambiguous-bare.test:35:13: case 'notFound' is shared by multiple union members; qualify with 'EnumName.notFound'
+error E3085: specs/try-block/error.try-block-ambiguous-bare.maxon:35:13: case 'notFound' is shared by multiple union members; qualify with 'EnumName.notFound'
 ```
 
 <!-- test: try-block.array-get-success -->
@@ -947,7 +947,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3035: specs/fragments/try-block/error.try-block-multi-union-assoc-wrong-binding-count.test:36:18: wrong binding count: 'ErrA.bad' expects 2 associated value(s), got 1
+error E3035: specs/try-block/error.try-block-multi-union-assoc-wrong-binding-count.maxon:36:18: wrong binding count: 'ErrA.bad' expects 2 associated value(s), got 1
 ```
 
 <!-- test: try-block.array-many-ops -->

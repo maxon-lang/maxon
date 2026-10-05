@@ -9,11 +9,12 @@
 // `refs` is that plus the loop itself (the last one to go FREES it, which is what lets the loop outlive the
 // handles it is draining for).
 //
-// ⭐⭐ **NO NEW `.data` WORD, AND THAT IS A GOLDEN ARGUMENT AS WELL AS A DESIGN ONE.** Mailbox state is
-// per-STRUCT, in the heap, reached from the handle box. A `.data` word would need a `MultiMSharing` class
-// (`SchedRuntime.pushRuntimeGlobal` PANICS without one) and would shift every label after it, re-minting
-// **every heap program's golden in the suite** — `SlabRuntime`'s own header records that cost for the
-// allocator's lock, which lives in its state region for exactly this reason.
+// ⭐⭐ **NO NEW `.data` WORD, AND THAT IS A LAYOUT ARGUMENT AS WELL AS A DESIGN ONE.** Mailbox state
+// is per-STRUCT, in the heap, reached from the handle box. A `.data` word would need a
+// `MultiMSharing` class (`SchedRuntime.pushRuntimeGlobal` PANICS without one) and would shift every
+// label after it, moving **every heap program's `data {` table** — `SlabRuntime`'s own header
+// records that cost for the allocator's lock, which lives in its state region for exactly this
+// reason.
 //
 // ⛔⛔ **HARD RULE, AND IT IS WHY THE RECEIVE PARK IS DEFERRED: NO MAILBOX LOCK IS EVER HELD ACROSS
 // `__gt_context_switch`.** Both platform locks are recursive on the WRONG IDENTITY — a Win32
@@ -71,7 +72,7 @@ let MboxOffAbandonFn = 0x30 as ByteOffset
 //
 // ⚠ EXPORTED, unlike its six siblings, because the site that WRITES it is the Maxon-tier `<T>.__loop`
 // (`ServiceLoop`) while the site that reads it is `__mbox_service_exit` here — the two files must spell one
-// number, which is `GtParkKindMailbox`'s rule read from the other end.
+// number, which is `GtParkKind`'s rule read from the other end.
 export let MboxOffShutdownReply = 0x38 as ByteOffset
 let MboxStructSize = 0x40 as ParsedInt
 
@@ -558,7 +559,7 @@ function buildMboxRecv(module StdModule)
 	// registration a sender can arrive, find `parkedGt` still 0 and wake nobody — and the re-check is what
 	// notices. Resuming re-enters `attempt`, which takes the lock and asks again, so a spurious wake costs a
 	// loop iteration and nothing else.
-	emitGtPark(module, ids: ids, cur: park, kind: GtParkKindMailbox, arg: mbox, cont: attempt)
+	emitGtPark(module, ids: ids, cur: park, kind: GtParkKind.mailbox.rawValue, arg: mbox, cont: attempt)
 
 	module.functions.push(func)
 end 'buildMboxRecv'

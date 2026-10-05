@@ -30,7 +30,7 @@ error E3001: No 'main' function found
 function 
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-keyword.test:2:10: Expected identifier but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-function-keyword.maxon:2:10: Expected identifier but got 'newline'
 ```
 
 <!-- test: truncated-after-function-name -->
@@ -38,7 +38,7 @@ error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-ke
 function main
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-name.test:2:14: Expected '(' but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-function-name.maxon:2:14: Expected '(' but got 'newline'
 ```
 
 <!-- test: truncated-mid-param-list -->
@@ -46,7 +46,7 @@ error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-na
 function main(
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-mid-param-list.test:2:15: Expected identifier but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-mid-param-list.maxon:2:15: Expected identifier but got 'newline'
 ```
 
 <!-- test: truncated-after-param-name -->
@@ -54,7 +54,7 @@ error E2010: specs/fragments/lexer-parser-robustness/truncated-mid-param-list.te
 function main(x
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-param-name.test:2:16: Expected 'a type' but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-param-name.maxon:2:16: Expected 'a type' but got 'newline'
 ```
 
 <!-- test: truncated-after-param-colon -->
@@ -62,7 +62,7 @@ error E2010: specs/fragments/lexer-parser-robustness/truncated-after-param-name.
 function main(x:
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-param-colon.test:2:16: Expected 'a type' but got ':'
+error E2010: specs/lexer-parser-robustness/truncated-after-param-colon.maxon:2:16: Expected 'a type' but got ':'
 ```
 
 <!-- test: truncated-after-close-paren -->
@@ -70,7 +70,7 @@ error E2010: specs/fragments/lexer-parser-robustness/truncated-after-param-colon
 function main()
 ```
 ```maxoncstderr
-error E2007: specs/fragments/lexer-parser-robustness/truncated-after-close-paren.test:3:1: Unexpected end of input
+error E2007: specs/lexer-parser-robustness/truncated-after-close-paren.maxon:3:1: Unexpected end of input
 ```
 
 <!-- test: truncated-after-returns -->
@@ -78,7 +78,7 @@ error E2007: specs/fragments/lexer-parser-robustness/truncated-after-close-paren
 function main() returns
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-returns.test:2:24: Expected 'a type' but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-returns.maxon:2:24: Expected 'a type' but got 'newline'
 ```
 
 <!-- test: truncated-after-return-type -->
@@ -86,7 +86,7 @@ error E2010: specs/fragments/lexer-parser-robustness/truncated-after-returns.tes
 function main() returns ExitCode
 ```
 ```maxoncstderr
-error E2007: specs/fragments/lexer-parser-robustness/truncated-after-return-type.test:3:1: Unexpected end of input
+error E2007: specs/lexer-parser-robustness/truncated-after-return-type.maxon:3:1: Unexpected end of input
 ```
 
 ### Truncations: source ends mid-statement (body-level)
@@ -97,7 +97,7 @@ function main() returns ExitCode
 	let
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-let.test:3:5: Expected identifier but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-let.maxon:3:5: Expected identifier but got 'newline'
 ```
 
 <!-- test: truncated-after-let-name -->
@@ -106,7 +106,7 @@ function main() returns ExitCode
 	let x
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-let-name.test:3:7: Expected '=' but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-let-name.maxon:3:7: Expected '=' but got 'newline'
 ```
 
 <!-- test: truncated-after-let-eq -->
@@ -115,7 +115,7 @@ function main() returns ExitCode
 	let x =
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-let-eq.test:3:9: Expected expression but got '(empty)'
+error E2004: specs/lexer-parser-robustness/truncated-after-let-eq.maxon:3:9: Expected expression but got '(empty)'
 ```
 
 <!-- test: truncated-after-binary-op -->
@@ -124,7 +124,7 @@ function main() returns ExitCode
 	let x = 1 +
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-binary-op.test:3:13: Expected expression but got '(empty)'
+error E2004: specs/lexer-parser-robustness/truncated-after-binary-op.maxon:3:13: Expected expression but got '(empty)'
 ```
 
 <!-- test: truncated-after-dot -->
@@ -133,7 +133,7 @@ function main() returns ExitCode
 	let x = (5).
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-dot.test:3:14: Expected identifier but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-dot.maxon:3:14: Expected identifier but got 'newline'
 ```
 
 <!-- test: truncated-after-open-paren -->
@@ -142,7 +142,7 @@ function main() returns ExitCode
 	let x = (
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-open-paren.test:3:11: Expected expression but got '(empty)'
+error E2004: specs/lexer-parser-robustness/truncated-after-open-paren.maxon:3:11: Expected expression but got '(empty)'
 ```
 
 <!-- test: truncated-after-arg-comma -->
@@ -151,7 +151,7 @@ function main() returns ExitCode
 	let x = f(1,
 ```
 ```maxoncstderr
-error E2053: specs/fragments/lexer-parser-robustness/truncated-after-arg-comma.test:3:14: the second and later arguments must be named ('name: value')
+error E2053: specs/lexer-parser-robustness/truncated-after-arg-comma.maxon:3:14: the second and later arguments must be named ('name: value')
 ```
 
 <!-- test: truncated-after-open-bracket -->
@@ -160,7 +160,7 @@ function main() returns ExitCode
 	let x = [
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-open-bracket.test:4:1: Expected expression but got 'end of file'
+error E2004: specs/lexer-parser-robustness/truncated-after-open-bracket.maxon:4:1: Expected expression but got 'end of file'
 ```
 
 <!-- test: truncated-after-if-keyword -->
@@ -169,7 +169,7 @@ function main() returns ExitCode
 	if
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-if-keyword.test:3:4: Expected expression but got '(empty)'
+error E2004: specs/lexer-parser-robustness/truncated-after-if-keyword.maxon:3:4: Expected expression but got '(empty)'
 ```
 
 <!-- test: truncated-after-if-cond -->
@@ -178,7 +178,7 @@ function main() returns ExitCode
 	if true
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-if-cond.test:3:9: Expected 'character literal' but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-if-cond.maxon:3:9: Expected 'character literal' but got 'newline'
 ```
 
 <!-- test: truncated-after-if-label -->
@@ -187,7 +187,7 @@ function main() returns ExitCode
 	if true 'p'
 ```
 ```maxoncstderr
-error E2007: specs/fragments/lexer-parser-robustness/truncated-after-if-label.test:4:1: Unexpected end of input
+error E2007: specs/lexer-parser-robustness/truncated-after-if-label.maxon:4:1: Unexpected end of input
 ```
 
 <!-- test: truncated-after-while -->
@@ -196,7 +196,7 @@ function main() returns ExitCode
 	while true
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-while.test:3:12: Expected 'character literal' but got 'newline'
+error E2010: specs/lexer-parser-robustness/truncated-after-while.maxon:3:12: Expected 'character literal' but got 'newline'
 ```
 
 <!-- test: truncated-after-match -->
@@ -205,7 +205,7 @@ function main() returns ExitCode
 	match 1
 ```
 ```maxoncstderr
-error E2042: specs/fragments/lexer-parser-robustness/truncated-after-match.test:3:9: missing block identifier
+error E2042: specs/lexer-parser-robustness/truncated-after-match.maxon:3:9: missing block identifier
 ```
 
 <!-- test: truncated-after-match-label -->
@@ -214,7 +214,7 @@ function main() returns ExitCode
 	match 1 'm'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/truncated-after-match-label.test:4:1: Expected expression but got 'end of file'
+error E2004: specs/lexer-parser-robustness/truncated-after-match-label.maxon:4:1: Expected expression but got 'end of file'
 ```
 
 <!-- test: truncated-after-return-keyword -->
@@ -223,7 +223,7 @@ function main() returns ExitCode
 	return
 ```
 ```maxoncstderr
-error E3013: specs/fragments/lexer-parser-robustness/truncated-after-return-keyword.test:3:2: missing return value: 'main' declares a return type, so every 'return' must carry a value
+error E3013: specs/lexer-parser-robustness/truncated-after-return-keyword.maxon:3:2: missing return value: 'main' declares a return type, so every 'return' must carry a value
 ```
 
 ### Mid-keyword: keyword classifier corners
@@ -233,7 +233,7 @@ error E3013: specs/fragments/lexer-parser-robustness/truncated-after-return-keyw
 functio
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/mid-keyword-functio.test:2:1: Expected function declaration, got 'functio'
+error E2001: specs/lexer-parser-robustness/mid-keyword-functio.maxon:2:1: Expected function declaration, got 'functio'
 ```
 
 <!-- test: mid-keyword-retur -->
@@ -243,7 +243,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/mid-keyword-retur.test:3:2: unexpected token: 'retur'
+error E2001: specs/lexer-parser-robustness/mid-keyword-retur.maxon:3:2: unexpected token: 'retur'
 ```
 
 <!-- test: mid-keyword-els -->
@@ -259,7 +259,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/mid-keyword-els.test:6:2: unexpected token: 'els'
+error E2001: specs/lexer-parser-robustness/mid-keyword-els.maxon:6:2: unexpected token: 'els'
 ```
 
 <!-- test: mid-keyword-whil -->
@@ -272,7 +272,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/mid-keyword-whil.test:3:2: unexpected token: 'whil'
+error E2001: specs/lexer-parser-robustness/mid-keyword-whil.maxon:3:2: unexpected token: 'whil'
 ```
 
 <!-- test: mid-keyword-matc -->
@@ -284,7 +284,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/mid-keyword-matc.test:3:2: unexpected token: 'matc'
+error E2001: specs/lexer-parser-robustness/mid-keyword-matc.maxon:3:2: unexpected token: 'matc'
 ```
 
 <!-- test: mid-keyword-functin-typo -->
@@ -292,7 +292,7 @@ error E2001: specs/fragments/lexer-parser-robustness/mid-keyword-matc.test:3:2: 
 functin main()
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/mid-keyword-functin-typo.test:2:1: Expected function declaration, got 'functin'
+error E2001: specs/lexer-parser-robustness/mid-keyword-functin-typo.maxon:2:1: Expected function declaration, got 'functin'
 ```
 
 <!-- test: keyword-prefix-ident -->
@@ -333,7 +333,7 @@ end 'main'
 Function main()
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/near-keyword-uppercase.test:2:1: Expected function declaration, got 'Function'
+error E2001: specs/lexer-parser-robustness/near-keyword-uppercase.maxon:2:1: Expected function declaration, got 'Function'
 ```
 
 ### Random bytes: small fixed pseudo-random byte blobs
@@ -343,7 +343,7 @@ error E2001: specs/fragments/lexer-parser-robustness/near-keyword-uppercase.test
 q1};+(=*foo,)bar
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-printable-garbage-1.test:2:1: Expected function declaration, got 'q1'
+error E2001: specs/lexer-parser-robustness/random-printable-garbage-1.maxon:2:1: Expected function declaration, got 'q1'
 ```
 
 <!-- test: random-printable-garbage-2 -->
@@ -351,7 +351,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-printable-garbage-1.
 abc 123 def!? xyz
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-printable-garbage-2.test:2:1: Expected function declaration, got 'abc'
+error E2001: specs/lexer-parser-robustness/random-printable-garbage-2.maxon:2:1: Expected function declaration, got 'abc'
 ```
 
 <!-- test: random-printable-garbage-3 -->
@@ -359,7 +359,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-printable-garbage-2.
 foo: bar baz; qux | zap
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-printable-garbage-3.test:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-printable-garbage-3.maxon:2:1: Expected function declaration, got 'foo'
 ```
 
 <!-- test: random-operator-soup-1 -->
@@ -367,7 +367,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-printable-garbage-3.
 +-*/=<>(){}[]
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-operator-soup-1.test:2:1: Expected function declaration, got '+'
+error E2001: specs/lexer-parser-robustness/random-operator-soup-1.maxon:2:1: Expected function declaration, got '+'
 ```
 
 <!-- test: random-operator-soup-2 -->
@@ -375,7 +375,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-operator-soup-1.test
 == != <= >= && || << >>
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-operator-soup-2.test:2:1: Expected function declaration, got '=='
+error E2001: specs/lexer-parser-robustness/random-operator-soup-2.maxon:2:1: Expected function declaration, got '=='
 ```
 
 <!-- test: random-operator-soup-3 -->
@@ -383,7 +383,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-operator-soup-2.test
 .....,,,,;;;;
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-operator-soup-3.test:2:1: Expected function declaration, got '.'
+error E2001: specs/lexer-parser-robustness/random-operator-soup-3.maxon:2:1: Expected function declaration, got '.'
 ```
 
 <!-- test: random-mixed-delim-1 -->
@@ -391,7 +391,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-operator-soup-3.test
 ({[)}](})[){[(])}
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-mixed-delim-1.test:2:1: Expected function declaration, got '('
+error E2001: specs/lexer-parser-robustness/random-mixed-delim-1.maxon:2:1: Expected function declaration, got '('
 ```
 
 <!-- test: random-mixed-delim-2 -->
@@ -399,7 +399,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-mixed-delim-1.test:2
 (((]]]{{{)))
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-mixed-delim-2.test:2:1: Expected function declaration, got '('
+error E2001: specs/lexer-parser-robustness/random-mixed-delim-2.maxon:2:1: Expected function declaration, got '('
 ```
 
 <!-- test: random-mixed-delim-3 -->
@@ -407,7 +407,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-mixed-delim-2.test:2
 [}({)]}{[(
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-mixed-delim-3.test:2:1: Expected function declaration, got '['
+error E2001: specs/lexer-parser-robustness/random-mixed-delim-3.maxon:2:1: Expected function declaration, got '['
 ```
 
 <!-- test: random-backslash-in-source-1 -->
@@ -417,7 +417,7 @@ the lexer's identifier scanner stops at the backslash without crashing.
 foo\x80\xFF\xC2bar
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-1.test:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-1.maxon:2:1: Expected function declaration, got 'foo'
 ```
 
 <!-- test: random-backslash-in-source-2 -->
@@ -425,7 +425,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-
 \xE9\xCA\xFE\xBA\xBE
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-2.test:2:1: Expected function declaration, got '\'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-2.maxon:2:1: Expected function declaration, got '\'
 ```
 
 <!-- test: random-backslash-in-source-bell -->
@@ -433,7 +433,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-
 foo\x07bar
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-bell.test:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-bell.maxon:2:1: Expected function declaration, got 'foo'
 ```
 
 <!-- test: random-backslash-in-source-vtab -->
@@ -441,7 +441,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-
 foo\x0Bbaz
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-vtab.test:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-vtab.maxon:2:1: Expected function declaration, got 'foo'
 ```
 
 <!-- test: random-backslash-in-source-formfeed -->
@@ -449,7 +449,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-
 foo\x0Cqux
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-formfeed.test:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-formfeed.maxon:2:1: Expected function declaration, got 'foo'
 ```
 
 <!-- test: random-backslash-in-source-null -->
@@ -457,7 +457,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-
 foo\x00bar
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-null.test:2:1: Expected function declaration, got 'foo'
+error E2001: specs/lexer-parser-robustness/random-backslash-in-source-null.maxon:2:1: Expected function declaration, got 'foo'
 ```
 
 ### Pathological structure: deep / repeated input
@@ -467,7 +467,7 @@ error E2001: specs/fragments/lexer-parser-robustness/random-backslash-in-source-
 ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/deep-parens-open-only.test:2:1: Expected function declaration, got '('
+error E2001: specs/lexer-parser-robustness/deep-parens-open-only.maxon:2:1: Expected function declaration, got '('
 ```
 
 <!-- test: deep-parens-balanced-empty -->
@@ -475,7 +475,7 @@ error E2001: specs/fragments/lexer-parser-robustness/deep-parens-open-only.test:
 ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/deep-parens-balanced-empty.test:2:1: Expected function declaration, got '('
+error E2001: specs/lexer-parser-robustness/deep-parens-balanced-empty.maxon:2:1: Expected function declaration, got '('
 ```
 
 <!-- test: deep-braces-open-only -->
@@ -483,7 +483,7 @@ error E2001: specs/fragments/lexer-parser-robustness/deep-parens-balanced-empty.
 {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/deep-braces-open-only.test:2:1: Expected function declaration, got '{'
+error E2001: specs/lexer-parser-robustness/deep-braces-open-only.maxon:2:1: Expected function declaration, got '{'
 ```
 
 <!-- test: deep-brackets-open-only -->
@@ -491,7 +491,7 @@ error E2001: specs/fragments/lexer-parser-robustness/deep-braces-open-only.test:
 [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/deep-brackets-open-only.test:2:1: Expected function declaration, got '['
+error E2001: specs/lexer-parser-robustness/deep-brackets-open-only.maxon:2:1: Expected function declaration, got '['
 ```
 
 <!-- test: deep-mixed-delimiters -->
@@ -499,7 +499,7 @@ error E2001: specs/fragments/lexer-parser-robustness/deep-brackets-open-only.tes
 ({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[({[
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/deep-mixed-delimiters.test:2:1: Expected function declaration, got '('
+error E2001: specs/lexer-parser-robustness/deep-mixed-delimiters.maxon:2:1: Expected function declaration, got '('
 ```
 
 <!-- test: long-binop-chain -->
@@ -537,7 +537,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/lexer-parser-robustness/long-method-chain-truncated.test:3:14: Unsupported: 'int' has no method named 'a' — a builtin-typed receiver supplies `hash`, `equals`, `compare`, `toString`, `clone`
+error E2015: specs/lexer-parser-robustness/long-method-chain-truncated.maxon:3:14: Unsupported: 'int' has no method named 'a' — a builtin-typed receiver supplies `hash`, `equals`, `compare`, `toString`, `clone`
 ```
 
 <!-- test: interpolation-nesting-deep -->
@@ -563,7 +563,7 @@ inner
 ))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/unmatched-close-paren-many.test:2:1: Expected function declaration, got ')'
+error E2001: specs/lexer-parser-robustness/unmatched-close-paren-many.maxon:2:1: Expected function declaration, got ')'
 ```
 
 <!-- test: unmatched-close-brace-many -->
@@ -571,7 +571,7 @@ error E2001: specs/fragments/lexer-parser-robustness/unmatched-close-paren-many.
 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 ```
 ```maxoncstderr
-error E2001: specs/fragments/lexer-parser-robustness/unmatched-close-brace-many.test:2:1: Expected function declaration, got '}'
+error E2001: specs/lexer-parser-robustness/unmatched-close-brace-many.maxon:2:1: Expected function declaration, got '}'
 ```
 
 <!-- test: comment-with-many-asterisks -->
@@ -590,7 +590,7 @@ end 'main'
 function function function function
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/repeated-keyword.test:2:19: Expected '(' but got 'function'
+error E2010: specs/lexer-parser-robustness/repeated-keyword.maxon:2:19: Expected '(' but got 'function'
 ```
 
 ### Truncated literals: partial tokens at unusual boundaries
@@ -606,7 +606,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1002: specs/fragments/lexer-parser-robustness/unterminated-string-followed-by-code.test:3:10: Unterminated string literal
+error E1002: specs/lexer-parser-robustness/unterminated-string-followed-by-code.maxon:3:10: Unterminated string literal
 ```
 
 <!-- test: unterminated-interp -->
@@ -621,7 +621,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1002: specs/fragments/lexer-parser-robustness/unterminated-interp.test:3:11: Unterminated string literal
+error E1002: specs/lexer-parser-robustness/unterminated-interp.maxon:3:11: Unterminated string literal
 ```
 
 <!-- test: unterminated-interp-mid-expr -->
@@ -632,7 +632,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/lexer-parser-robustness/unterminated-interp-mid-expr.test:3:12: Expected expression but got 'interpolation end'
+error E2004: specs/lexer-parser-robustness/unterminated-interp-mid-expr.maxon:3:12: Expected expression but got 'interpolation end'
 ```
 
 <!-- test: unterminated-block-comment-with-newlines -->
@@ -645,7 +645,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1007: specs/fragments/lexer-parser-robustness/unterminated-block-comment-with-newlines.test:2:1: Unterminated block comment
+error E1007: specs/lexer-parser-robustness/unterminated-block-comment-with-newlines.maxon:2:1: Unterminated block comment
 ```
 
 <!-- test: bad-hex-escape-string -->
@@ -656,7 +656,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/lexer-parser-robustness/bad-hex-escape-string.test:3:10: Invalid hex escape '\xZZ': expected 2 hex digits in string interpolation
+error E1004: specs/lexer-parser-robustness/bad-hex-escape-string.maxon:3:10: Invalid hex escape '\xZZ': expected 2 hex digits in string interpolation
 ```
 
 <!-- test: bad-hex-escape-char -->
@@ -667,7 +667,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/lexer-parser-robustness/bad-hex-escape-char.test:3:10: Invalid hex escape '\xZZ': expected 2 hex digits in character literal
+error E1004: specs/lexer-parser-robustness/bad-hex-escape-char.maxon:3:10: Invalid hex escape '\xZZ': expected 2 hex digits in character literal
 ```
 
 <!-- test: short-unicode-escape -->
@@ -678,7 +678,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/lexer-parser-robustness/short-unicode-escape.test:3:10: Invalid unicode escape '\u12': expected 4 hex digits in string interpolation
+error E1004: specs/lexer-parser-robustness/short-unicode-escape.maxon:3:10: Invalid unicode escape '\u12': expected 4 hex digits in string interpolation
 ```
 
 <!-- test: non-hex-unicode-escape -->
@@ -689,5 +689,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/lexer-parser-robustness/non-hex-unicode-escape.test:3:10: Invalid unicode escape '\uZZZZ': expected 4 hex digits in string interpolation
+error E1004: specs/lexer-parser-robustness/non-hex-unicode-escape.maxon:3:10: Invalid unicode escape '\uZZZZ': expected 4 hex digits in string interpolation
 ```

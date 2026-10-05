@@ -70,33 +70,21 @@
 //                                                     and keeps the LAST one to say what a dead worker
 //                                                     was doing; it drops them all before counting
 //                                                     records — see `emitWorkerStep`
-//       WORKER_SINGLE_RESULT:<verdict>:<golden>:<spec>:<test>:<payload>
+//       WORKER_SINGLE_RESULT:<verdict>:<spec>:<test>:<payload>
 //                                                     exactly one per test of the job, in declaration
-//                                                     order. <verdict> is PASS / FAIL / SKIP / NOTRUN
-//                                                     and <golden> is NOPIN / SAME / DRIFT / MINT /
-//                                                     NOREC — two INDEPENDENT facts, which is why they
-//                                                     are two fields and not ten markers. <payload> is
-//                                                     owned by at most one of them and is escaped onto
-//                                                     this one line. See the record note below
-//
-//                                                     ⛔ THIS ENTRY LISTED FOUR SEPARATE MARKERS —
-//                                                     `WORKER_SINGLE_RESULT/FAIL/DRIFT/SKIP` — FOR
-//                                                     LONGER THAN THEY EXISTED. The consolidation is
-//                                                     documented thirty lines down and this block, the
-//                                                     one place a reader looks FIRST for the wire, went
-//                                                     on describing the wire it replaced
+//                                                     order. <verdict> is PASS / FAIL / SKIP / NOTRUN.
+//                                                     <payload> is the verdict's text — a FAIL's reason,
+//                                                     a SKIP's refusals — escaped onto this one line
+//       WORKER_JOB_BATCH:<batched>:<programs>:<alone>
+//                                                     exactly once per job, immediately BEFORE that
+//                                                     job's WORKER_JOB_CPU: how many run cases shared a
+//                                                     program, in how many programs, and how many ran
+//                                                     alone
 //       WORKER_JOB_CPU:<ticks>:<reported>:<unreported>
 //                                                     exactly once per job, immediately BEFORE that
 //                                                     job's WORKER_READY: what compiling this spec's
 //                                                     tests cost (see SpecTestRunner's
 //                                                     cumulative-CPU indicator)
-//
-// ⚠ DRIFT RIDES THE RESULT RECORD RATHER THAN ADDING A LINE, and the count check below is why: the
-// parent matches a job's records against its plan ONE PER TEST, and an extra line per drifted golden
-// would have to weaken that into "one or two". Four kinds over two independent facts costs nothing
-// because the combinations that would need more cannot occur — a FAILING test never reaches the golden
-// step at all (`recordFragmentAndCleanup`), and neither does a SKIPPED one — so every record still
-// names exactly one test, exactly once.
 //
 // ⚠ A SKIP IS A RECORD, NOT AN ABSENCE, and that is the whole safety of the mechanism: a case the
 // target cannot express is still SELECTED by the parent, still planned, still reported, and still
@@ -167,6 +155,7 @@
 let WorkerReadyMarker = "WORKER_READY"
 let WorkerResultMarker = "WORKER_SINGLE_RESULT:"
 let WorkerJobCpuMarker = "WORKER_JOB_CPU:"
+let WorkerJobBatchMarker = "WORKER_JOB_BATCH:"
 let WorkerStepMarker = "WORKER_STEP:"
 let JobSinglesPrefix = "JOB:singles:"
 let JobAlonePrefix = "JOB:alone:"
@@ -183,7 +172,7 @@ let ProtocolFieldSep = ":"
 // ⚠ THERE IS NO `verdict` ARM, AND THAT IS A DECISION WITH A MEASUREMENT UNDER IT. `runOneSpec` is
 // three passes — compile every test, execute the ones that need it, then finish every verdict — and
 // only the first two contain a step that can BLOCK (an in-process compile, a spawned program). The
-// third compares captured output against the spec, compares a golden fragment and deletes scratch
+// third compares captured output against the spec and deletes scratch
 // files: local work, no subprocess, and the whole of it for the corpus's largest spec (161 tests)
 // sits inside the grace `TestProgressDeadlineMs` carries for exactly this. A step kind whose whole
 // pass is cheaper than the noise on the bound would be a line per test that bought nothing.
@@ -195,33 +184,10 @@ end 'WorkerStep'
 let StepCompileToken = "COMPILE"
 let StepRunToken = "RUN"
 
-// ⭐⭐ **ONE RECORD SHAPE, TWO TOKEN FIELDS — BECAUSE A RESULT IS TWO INDEPENDENT FACTS.**
-//
-// `WORKER_SINGLE_RESULT:<verdict>:<golden>:<spec>:<test>:<payload>`
-//
-// ⛔ **A MARKER PER COMBINATION DOES NOT SCALE, AND THAT IS MEASURED RATHER THAN PREDICTED.** The wire
-// carried four markers for four (verdict, golden) pairs. Adding ONE verdict (`notRunHere`) and the three
-// golden answers that were folded into a single `none` (compared / minted / unrecorded) turns those four
-// into TEN — the same distinction, drift, spelled once per verdict, in a decode chain where the copies
-// could only be kept in agreement by hand. The two facts are orthogonal in `SpecTestRunner`
-// (`TestOutcome` and `GoldenDrift` are deliberately separate types); they are orthogonal here too.
-//
-// ⚠ **THERE IS EXACTLY ONE PAYLOAD SLOT AND AT MOST ONE OWNER FOR IT, BY CONSTRUCTION.** A verdict owns
-// it when it carries text (`fail`'s reason, `skipped`'s refusals); the golden owns it when it drifted;
-// nothing owns it otherwise. The two can never both want it, because a case that FAILED or was SKIPPED
-// never reaches the golden step at all (`recordFragmentAndCleanup`). `recordPayload` asks the verdict
-// first and the golden second; `decodeWorkerLine` reads it back in the same order and PANICS on a
-// combination that claims two owners or leaves an unclaimed field non-empty — a protocol break between
-// two halves of this one file, not a field to be silently read by the wrong half.
 let VerdictPassToken = "PASS"
 let VerdictFailToken = "FAIL"
 let VerdictSkipToken = "SKIP"
 let VerdictNotRunToken = "NOTRUN"
-let GoldenNotPinnedToken = "NOPIN"
-let GoldenComparedToken = "SAME"
-let GoldenDriftedToken = "DRIFT"
-let GoldenMintedToken = "MINT"
-let GoldenUnrecordedToken = "NOREC"
 
 // How long the dispatcher parks when no worker has an answer ready.
 //
@@ -674,7 +640,7 @@ end 'popHeaviestJob'
 // job included. Print none and the parent waits forever on a line that is never coming; print two
 // and the next job's drain ends early, with that job's records read as the job after it. A blank
 // line, which consumed no job, therefore owes no READY. All three READY sites are below.
-export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool) returns ExitCode
+export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns ExitCode
 	silenceCompilerLogging()
 
 	var stdin = Console.stdin()
@@ -705,7 +671,7 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 			let prefix = jobPrefixOf(runs)
 
 			if job.startsWith(prefix) 'thisKind'
-				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos)
+				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos)
 				ran = true
 				break
 			end 'thisKind'
@@ -759,8 +725,8 @@ end 'silenceCompilerLogging'
 // when it dies, so panicking routes this diagnostic through `abortOnDeadWorker`, which prints it.
 // Returning quietly instead would leave the parent to notice a missing record and abort with no
 // idea why.
-function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap)
-	let run = try runOneSpec(specDir, specName: specName, runs: runs, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos) otherwise (e) 'specFailed'
+function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap)
+	let run = try runOneSpec(specDir, specName: specName, runs: runs, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos) otherwise (e) 'specFailed'
 		reportCompileError(e)
 		panic("spec worker: could not run spec '{specName}' — see the error above")
 	end 'specFailed'
@@ -771,7 +737,8 @@ function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatt
 
 	// LAST, after every record — the parent takes it off the end of the drained lines before it
 	// checks the records against its plan. See this file's protocol note.
-	print("{WorkerJobCpuMarker}{run.cpu.ticks}{ProtocolFieldSep}{run.cpu.reported}{ProtocolFieldSep}{run.cpu.unreported}\n")
+	print("{jobCountsLine(WorkerJobBatchMarker, first: run.batch.batched as ParsedCount, second: run.batch.programs as ParsedCount, third: run.batch.alone as ParsedCount)}\n")
+	print("{jobCountsLine(WorkerJobCpuMarker, first: run.cpu.ticks as ParsedCount, second: run.cpu.reported as ParsedCount, third: run.cpu.unreported as ParsedCount)}\n")
 end 'runSpecJob'
 
 // ⭐⭐ **THE BREADCRUMB: WHAT THIS WORKER IS ABOUT TO DO NEXT.** Printed by `SpecTestRunner` immediately
@@ -836,8 +803,7 @@ end 'stepVerb'
 // `decodeWorkerLine`, which reads the same five fields back in the same order.
 function recordLine(specName String, result SpecTestResult) returns String
 	let verdict = verdictToken(result.outcome)
-	let golden = goldenToken(result.golden)
-	return "{WorkerResultMarker}{verdict}{ProtocolFieldSep}{golden}{ProtocolFieldSep}{specName}{ProtocolFieldSep}{result.testName}{ProtocolFieldSep}{encodeRecordPayload(recordPayload(result))}"
+	return "{WorkerResultMarker}{verdict}{ProtocolFieldSep}{specName}{ProtocolFieldSep}{result.testName}{ProtocolFieldSep}{encodeRecordPayload(recordPayload(result))}"
 end 'recordLine'
 
 function verdictToken(outcome TestOutcome) returns String
@@ -849,48 +815,23 @@ function verdictToken(outcome TestOutcome) returns String
 	end 'verdict'
 end 'verdictToken'
 
-function goldenToken(golden GoldenDrift) returns String
-	return match golden 'reference'
-		notPinned gives GoldenNotPinnedToken
-		matched gives GoldenComparedToken
-		drifted gives GoldenDriftedToken
-		minted gives GoldenMintedToken
-		unrecorded gives GoldenUnrecordedToken
-	end 'reference'
-end 'goldenToken'
-
-// The record's one text field, taken from whichever axis owns it. The verdict is asked FIRST and the
-// golden only when the verdict declined it — the ownership rule in the protocol note above, executed
-// rather than restated: a verdict that carries text is one that never reached the golden step.
 function recordPayload(result SpecTestResult) returns String
 	return match result.outcome 'verdict'
 		fail(reason) gives reason
 		skipped(refusals) gives refusals
 		pass or
-			notRunHere gives goldenPayload(result.golden)
+			notRunHere gives ""
 	end 'verdict'
 end 'recordPayload'
-
-// A golden's text, which only `drifted` has. Every other arm is a bare fact about whether a comparison
-// happened, and an empty field is exactly what "nothing to say" is on this wire.
-function goldenPayload(golden GoldenDrift) returns String
-	return match golden 'reference'
-		drifted(detail) gives detail
-		notPinned or
-			matched or
-			minted or
-			unrecorded gives ""
-	end 'reference'
-end 'goldenPayload'
 
 // ============================================================================================
 // THE RECORD PAYLOAD — a multi-line message on a line-based wire
 // ============================================================================================
 
 // Escape a record's message onto ONE line. Both payload-carrying kinds need it: a failure reason and
-// a golden-drift report are each genuinely multi-line (see `checkCompilerError` and
-// `checkTestFragment`), and an un-escaped newline in one would not corrupt a single record — it would
-// desynchronise the parent's reader for the rest of the job.
+// a skip's refusals are each genuinely multi-line (see `checkCompilerError`), and an un-escaped
+// newline in one would not corrupt a single record — it would desynchronise the parent's reader for
+// the rest of the job.
 //
 // Backslash FIRST, so the newline and CR rules that follow cannot double-escape the backslashes
 // this rule just inserted.
@@ -977,16 +918,15 @@ type WorkerRecord
 	export let specName as String
 	export let testName as String
 	export let outcome as TestOutcome
-	export let golden as GoldenDrift
 
-	static function create(specName String, testName String, outcome TestOutcome, golden GoldenDrift) returns WorkerRecord
-		return Self{specName: specName, testName: testName, outcome: outcome, golden: golden}
+	static function create(specName String, testName String, outcome TestOutcome) returns WorkerRecord
+		return Self{specName: specName, testName: testName, outcome: outcome}
 	end 'create'
 end 'WorkerRecord'
 
-// `WORKER_SINGLE_RESULT:<verdict>:<golden>:<spec>:<test>:<payload>` — four structural cuts, then the
-// payload whole. Only the first four separators are structural; the payload keeps every colon it
-// contains, which a failure reason and a golden difference are both full of.
+// `WORKER_SINGLE_RESULT:<verdict>:<spec>:<test>:<payload>` — three structural cuts, then the
+// payload whole. Only the first three separators are structural; the payload keeps every colon it
+// contains, which a failure reason is full of.
 //
 // Neither name field can contain the separator — a spec name is a FILE STEM and a test name comes from
 // a `<!-- test: NAME -->` marker — so the cuts are unambiguous.
@@ -995,24 +935,12 @@ function decodeWorkerLine(line String) returns WorkerRecord
 		panic("spec worker pool: a worker emitted a line that is not a {WorkerResultMarker} record: '{line}'")
 	end 'notARecord'
 
-	let verdict = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerResultMarker), expected: "golden", line: line)
-	let golden = splitAtFieldSep(verdict.rest, expected: "spec", line: line)
-	let spec = splitAtFieldSep(golden.rest, expected: "test", line: line)
+	let verdict = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerResultMarker), expected: "spec", line: line)
+	let spec = splitAtFieldSep(verdict.rest, expected: "test", line: line)
 	let test = splitAtFieldSep(spec.rest, expected: "payload", line: line)
 	let payload = decodeRecordPayload(test.rest)
 
-	// ⚠ The verdict is asked first, exactly as `recordPayload` wrote it. A verdict that owns the
-	// payload leaves the golden with none, and `decodeGolden` is told so — that is the ownership rule
-	// read back, and the only place it could be got wrong.
-	let outcome = decodeVerdict(verdict.field, payload: payload, line: line)
-	let claimed = match outcome 'claim'
-		fail or
-			skipped gives true
-		pass or
-			notRunHere gives false
-	end 'claim'
-
-	return WorkerRecord.create(spec.field, testName: test.field, outcome: outcome, golden: decodeGolden(golden.field, payload: payload, verdictClaimedIt: claimed, line: line))
+	return WorkerRecord.create(spec.field, testName: test.field, outcome: decodeVerdict(verdict.field, payload: payload, line: line))
 end 'decodeWorkerLine'
 
 function decodeVerdict(token String, payload String, line String) returns TestOutcome
@@ -1034,41 +962,6 @@ function decodeVerdict(token String, payload String, line String) returns TestOu
 
 	panic("spec worker pool: '{token}' is not one of the {VerdictPassToken}/{VerdictFailToken}/{VerdictSkipToken}/{VerdictNotRunToken} verdict tokens: '{line}'")
 end 'decodeVerdict'
-
-// `verdictClaimedIt` is how the ONE payload slot stays unambiguous without a second copy of the rule:
-// a golden that would take the payload while the verdict already has it is the protocol break the note
-// above says cannot happen, so it is a panic rather than a silently duplicated field.
-function decodeGolden(token String, payload String, verdictClaimedIt bool, line String) returns GoldenDrift
-	if token == GoldenDriftedToken 'isDrift'
-		if verdictClaimedIt 'twoOwners'
-			panic("spec worker pool: a record claims BOTH a payload-carrying verdict and {GoldenDriftedToken}, so its one payload field has two owners: '{line}'")
-		end 'twoOwners'
-
-		return GoldenDrift.drifted(payload)
-	end 'isDrift'
-
-	if not verdictClaimedIt and not payload.isEmpty() 'unclaimedPayload'
-		panic("spec worker pool: a record carries a payload no field owns — neither its verdict nor its '{token}' golden takes one: '{line}'")
-	end 'unclaimedPayload'
-
-	if token == GoldenNotPinnedToken 'isNotPinned'
-		return GoldenDrift.notPinned
-	end 'isNotPinned'
-
-	if token == GoldenComparedToken 'isCompared'
-		return GoldenDrift.matched
-	end 'isCompared'
-
-	if token == GoldenMintedToken 'isMinted'
-		return GoldenDrift.minted
-	end 'isMinted'
-
-	if token == GoldenUnrecordedToken 'isUnrecorded'
-		return GoldenDrift.unrecorded
-	end 'isUnrecorded'
-
-	panic("spec worker pool: '{token}' is not one of the {GoldenNotPinnedToken}/{GoldenComparedToken}/{GoldenDriftedToken}/{GoldenMintedToken}/{GoldenUnrecordedToken} golden tokens: '{line}'")
-end 'decodeGolden'
 
 // One structural separator consumed: the field in front of it, and everything behind it.
 type RecordSplit
@@ -1108,27 +1001,56 @@ end 'splitAtFieldSep'
 // Removing it here rather than teaching `resultsFromLines` to skip it keeps that function's count
 // check exact: it still compares record count against plan count with no allowance for an extra line.
 function takeJobCpuRecord(lines StringArray, specName String) returns SuiteCpuTally
-	let last = try lines.pop() otherwise panic("spec worker pool: '{specName}' returned no lines at all, so it cannot have printed its {WorkerJobCpuMarker} record")
-
-	if not last.startsWith(WorkerJobCpuMarker) 'notTheCpuRecord'
-		panic("spec worker pool: '{specName}' ended with '{last}' where its {WorkerJobCpuMarker} record should be")
-	end 'notTheCpuRecord'
-
-	let ticks = splitAtFieldSep(sliceAfterPrefix(last, prefix: WorkerJobCpuMarker), expected: "reported-count", line: last)
-	let reported = splitAtFieldSep(ticks.rest, expected: "unreported-count", line: last)
-
-	return SuiteCpuTally.create(decodeCpuField(ticks.field, what: "tick total", line: last) as CpuTicks, reported: decodeCpuField(reported.field, what: "reported count", line: last) as TestTally, unreported: decodeCpuField(reported.rest, what: "unreported count", line: last) as TestTally)
+	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobCpuMarker, names: JobCountNames.create("tick total", second: "reported count", third: "unreported count"))
+	return SuiteCpuTally.create(counts.first as CpuTicks, reported: counts.second as TestTally, unreported: counts.third as TestTally)
 end 'takeJobCpuRecord'
 
-// One decimal field of the CPU record. `parseCount` is the suite's ONE decimal parser (see
-// ScaleTestRunner, where its `ScaleError` is named for the harness that first needed it); the numbers
-// it reads here were printed by this same file moments ago, so a failure is a protocol break rather
-// than bad input. The caller narrows: the three fields are one tick total and two test counts.
-function decodeCpuField(raw String, what String, line String) returns ParsedCount
+function takeJobBatchRecord(lines StringArray, specName String) returns BatchTally
+	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobBatchMarker, names: JobCountNames.create("batched count", second: "program count", third: "alone count"))
+	return BatchTally.create(counts.first as TestTally, programs: counts.second as TestTally, alone: counts.third as TestTally)
+end 'takeJobBatchRecord'
+
+type JobCountNames
+	export let first as String
+	export let second as String
+	export let third as String
+
+	static function create(first String, second String, third String) returns JobCountNames
+		return Self{first: first, second: second, third: third}
+	end 'create'
+end 'JobCountNames'
+
+type JobCounts
+	export let first as ParsedCount
+	export let second as ParsedCount
+	export let third as ParsedCount
+
+	static function create(first ParsedCount, second ParsedCount, third ParsedCount) returns JobCounts
+		return Self{first: first, second: second, third: third}
+	end 'create'
+end 'JobCounts'
+
+function jobCountsLine(marker String, first ParsedCount, second ParsedCount, third ParsedCount) returns String
+	return "{marker}{first}{ProtocolFieldSep}{second}{ProtocolFieldSep}{third}"
+end 'jobCountsLine'
+
+function takeJobCounts(lines StringArray, specName String, marker String, names JobCountNames) returns JobCounts
+	let last = try lines.pop() otherwise panic("spec worker pool: '{specName}' returned no {marker} record where one was owed")
+
+	if not last.startsWith(marker) 'notTheRecord'
+		panic("spec worker pool: '{specName}' ended with '{last}' where its {marker} record should be")
+	end 'notTheRecord'
+
+	let first = splitAtFieldSep(sliceAfterPrefix(last, prefix: marker), expected: names.second, line: last)
+	let second = splitAtFieldSep(first.rest, expected: names.third, line: last)
+	return JobCounts.create(decodeJobCount(first.field, marker: marker, what: names.first, line: last), second: decodeJobCount(second.field, marker: marker, what: names.second, line: last), third: decodeJobCount(second.rest, marker: marker, what: names.third, line: last))
+end 'takeJobCounts'
+
+function decodeJobCount(raw String, marker String, what String, line String) returns ParsedCount
 	return try parseCount(raw) otherwise (e) 'unreadableField'
-		panic("spec worker pool: a {WorkerJobCpuMarker} record carries an unreadable {what}: '{line}' ({scaleErrorText(e)})")
+		panic("spec worker pool: a {marker} record carries an unreadable {what}: '{line}' ({scaleErrorText(e)})")
 	end 'unreadableField'
-end 'decodeCpuField'
+end 'decodeJobCount'
 
 // Turn one worker's drained lines into that spec's results, in the order the parent decided they
 // must appear.
@@ -1157,7 +1079,7 @@ function resultsFromLines(lines StringArray, plan SpecPlan) returns SpecTestResu
 		// Built from the PARENT's own names, which the check above has just proved equal to the
 		// worker's. The report is therefore assembled entirely from the parent's plan; nothing
 		// that crossed a pipe reaches the printed line but the failure reason.
-		results.push(SpecTestResult.create(plan.specName, testName: expectedTest, outcome: record.outcome, golden: record.golden))
+		results.push(SpecTestResult.create(plan.specName, testName: expectedTest, outcome: record.outcome))
 	end 'eachRecord'
 
 	return results
@@ -1362,18 +1284,18 @@ type PersistentWorkerHandle
 	//
 	// `harnessExe` is both the worker and the compiler under test, because a worker compiles in process.
 	//
-	// `filterPatterns`, `goldenWrites`, `includeNetwork` and the effective target must be forwarded: a
+	// `filterPatterns`, `mode`, `includeNetwork` and the effective target must be forwarded: a
 	// worker that selected a different set than the parent counted returns records the parent never
 	// asked for, and `resultsFromLines` panics. This list is this function's selection parameters; a new
 	// one joins it in the same edit.
-	static function spawnNoWait(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle throws SubprocessError
+	static function spawnNoWait(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle throws SubprocessError
 		var argv = StringArray.create()
 		argv.push(SpecTestCommandName)
 		argv.push(WorkerPersistentFlag)
 
 		// WHICH directory and WHICH cases, emitted by the one function both re-emitters of this command
 		// line read — see `Main.specSelectionArgv`.
-		argv.append(specSelectionArgv(specDir.toString(), filterPatterns: filterPatterns, goldenWrites: goldenWrites, includeNetwork: includeNetwork))
+		argv.append(specSelectionArgv(specDir.toString(), filterPatterns: filterPatterns, mode: mode, includeNetwork: includeNetwork))
 
 		// Forward the effective target ONLY when it differs from the host the worker would otherwise
 		// default to. A worker is this exe relaunched; with no `--target` it resolves
@@ -1561,8 +1483,8 @@ end 'deadWorkerStderr'
 // synthesizing it honest rather than a guess.
 //
 // ⚠ **EXACTLY ONE RECORD PER SELECTED TEST, NO MORE AND NO FEWER** — the accounting
-// `resultsFromLines` enforces for a job that DID answer. Nothing here is a pass, nothing is a skip and
-// nothing is a golden: the run is red, and every test of the spec says why in the same words.
+// `resultsFromLines` enforces for a job that DID answer. Nothing here is a pass and nothing is a skip:
+// the run is red, and every test of the spec says why in the same words.
 //
 // ⛔ **NOT A RETRY.** The job is FAILED, never re-dispatched. `abortOnDeadWorker`'s own reasoning is
 // the reason: rerouting a dead worker's job to a surviving one would turn a hard bug into an
@@ -1572,7 +1494,7 @@ function deadJobResults(plan SpecPlan, reason String) returns SpecTestResultArra
 	var results = SpecTestResultArray.create()
 
 	for testName in plan.testNames 'eachTest'
-		results.push(SpecTestResult.create(plan.specName, testName: testName, outcome: TestOutcome.fail(reason), golden: GoldenDrift.notPinned))
+		results.push(SpecTestResult.create(plan.specName, testName: testName, outcome: TestOutcome.fail(reason)))
 	end 'eachTest'
 
 	return results
@@ -1973,6 +1895,7 @@ export type PoolRun
 	export let results as SpecTestResultArray
 	export let failedWorkers as WorkerTally
 	export let cpu as SuiteCpuTally
+	export let batch as BatchTally
 	export let poolSize as WorkerCount
 
 	// The cases this run passed over and owes the reader a sentence about, from the parent's own plan walk
@@ -1983,8 +1906,8 @@ export type PoolRun
 
 	export let unmatchedPatterns as FilterPatternArray
 
-	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, poolSize WorkerCount, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray) returns PoolRun
-		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, poolSize: poolSize, excluded: excluded, unmatchedPatterns: unmatchedPatterns}
+	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, batch BatchTally, poolSize WorkerCount, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray) returns PoolRun
+		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, poolSize: poolSize, excluded: excluded, unmatchedPatterns: unmatchedPatterns}
 	end 'create'
 end 'PoolRun'
 
@@ -2021,7 +1944,7 @@ end 'takeDispatchableJob'
 // `harnessExe` is THIS executable — what each worker process is relaunched as, and (since every test
 // is compiled in process) the compiler under test as well. See `spawnNoWait` for why that is one
 // parameter again and not two.
-export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, workerCount WorkerCount, effectiveTarget Target, includeNetwork bool, treeLock TreeLockHold) returns PoolRun throws CompileError
+export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, workerCount WorkerCount, effectiveTarget Target, includeNetwork bool, treeLock TreeLockHold) returns PoolRun throws CompileError
 	// Asked here rather than in `scale-test`: a gate only the instrument's own command reaches is one
 	// nobody runs on the way to a merge.
 	requireScaleHistoryRefusalsFire()
@@ -2045,10 +1968,10 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		//
 		// The excluded census rides out here too: a run whose whole selection was live-network reaches
 		// this return, and "no tests selected" alone would hide the cause.
-		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0, cpu: SuiteCpuTally.zero(), poolSize: workerCount, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
+		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), poolSize: workerCount, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
 	end 'selectsNothing'
 
-	try prepareSharedDirs(specDir, effectiveTarget: effectiveTarget)
+	try prepareSharedDirs(specDir)
 
 	// ⭐⭐ **TWO QUEUES, AND THE `alone` ONE IS SERVED ONLY BY AN IDLE POOL** — `takeDispatchableJob`.
 	var jobQueue = SpecJobArray.create()
@@ -2073,7 +1996,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		poolSize = jobCount as WorkerCount
 	end 'moreWorkersThanJobs'
 
-	var workers = spawnPool(harnessExe, count: poolSize, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+	var workers = spawnPool(harnessExe, count: poolSize, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 
 	// Per-slot state as PARALLEL ARRAYS rather than one array of slot structs: the in-flight drain
 	// Promise cannot live inside a struct the loop also keeps mutating (see `drainResultsThunk`),
@@ -2146,6 +2069,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// per worker is what makes it independent of the pool size: which worker ran which spec changes
 	// with the scheduling, the set of jobs does not.
 	var cpu = SuiteCpuTally.zero()
+	var batch = BatchTally.zero()
 
 	// The watchdog's whole state. `dispatched + completed` counts every progress event this loop can
 	// make, so a poll that finds it unchanged since the previous poll found nothing moving — which is
@@ -2232,7 +2156,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 				// The dead handle is released HERE and the slot given a fresh worker, so `shutdownPool`
 				// neither shuts down a corpse nor counts it twice: the death is tallied once, now.
 				handle.releaseAfterDeath()
-				try workers.set(readySlot, value: spawnReadyWorker(harnessExe, workerId: handle.workerId, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)) otherwise panic("runSpecPool: workers.set({readySlot}) is in bounds by construction")
+				try workers.set(readySlot, value: spawnReadyWorker(harnessExe, workerId: handle.workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)) otherwise panic("runSpecPool: workers.set({readySlot}) is in bounds by construction")
 				try busy.set(readySlot, value: false) otherwise panic("runSpecPool: busy.set({readySlot}) is in bounds by construction")
 
 				deadWorkers = deadWorkers + 1
@@ -2256,6 +2180,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 			// plan, one per test with no allowance for a line of any other kind.
 			var records = recordLinesOf(lines)
 			cpu = cpu.plus(takeJobCpuRecord(records, specName: job.specName))
+			batch = batch.plus(takeJobBatchRecord(records, specName: job.specName))
 
 			try buckets.set(job.planIndex, value: resultsFromLines(records, plan: plan)) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
 			completed = completed + 1
@@ -2318,7 +2243,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		panic("runSpecPool: the compile-CPU tally covers {cpu.tests()} test(s) but the run reported {results.count()} — a job's {WorkerJobCpuMarker} record was counted against the wrong job")
 	end 'cpuCoverageGap'
 
-	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, poolSize: poolSize, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
+	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, poolSize: poolSize, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
 end 'runSpecPool'
 
 // The buckets, in plan order — the suite's report, assembled at last from answers that arrived in
@@ -2339,7 +2264,7 @@ end 'concatBuckets'
 // per-spec subdirectory under each root, so the only thing they could race on is the creation of
 // the shared parent — and `Directory.create`'s mkdir -p from N processes at once is exactly that
 // race.
-function prepareSharedDirs(specDir FilePath, effectiveTarget Target) throws CompileError
+function prepareSharedDirs(specDir FilePath) throws CompileError
 	let tempRoot = specTempRootDir(specDir)
 
 	if not Directory.create(tempRoot) 'noTempRoot'
@@ -2356,18 +2281,6 @@ function prepareSharedDirs(specDir FilePath, effectiveTarget Target) throws Comp
 	if not Directory.create(runWorkingDir) 'noRunWorkingDir'
 		throw CompileError.directoryNotFound(runWorkingDir)
 	end 'noRunWorkingDir'
-
-	// A fragments root that cannot be created is NOT a gate — `checkTestFragment` swallows the
-	// ensuing write error and the behaviour tests still run — so unlike the scratch root, a failure
-	// here is not fatal. It is created up front only so that N workers do not race to make it.
-	//
-	// ⚠ BOTH CONDITIONS MIRROR `runOneSpec` EXACTLY, and they have to: this is the parent's half of a
-	// path whose other half the workers compute in their own processes. Keyed off a different target,
-	// the parent would create the host's root while the workers wrote into the target's; gated on a
-	// different predicate, it would scaffold a tree for a target that writes no goldens at all.
-	if emitsTargetIr(effectiveTarget) 'hasGoldens'
-		_ = Directory.create(fragmentsRootDir(specDir, target: effectiveTarget))
-	end 'hasGoldens'
 end 'prepareSharedDirs'
 
 // Two-phase startup: fire all N spawns back to back, THEN drain the N hellos.
@@ -2375,11 +2288,11 @@ end 'prepareSharedDirs'
 // A worker that cannot be spawned, or that says anything other than WORKER_READY, is a PANIC.
 // There is no degraded mode to fall back to, and a pool that quietly ran with fewer workers than
 // it was asked for would be a harness lying about what it did.
-function spawnPool(harnessExe FilePath, count WorkerCount, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandleArray
+function spawnPool(harnessExe FilePath, count WorkerCount, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandleArray
 	var workers = PersistentWorkerHandleArray.create()
 
 	for i in 0 upto count 'spawnPhase'
-		workers.push(spawnWorker(harnessExe, workerId: i, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork))
+		workers.push(spawnWorker(harnessExe, workerId: i, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork))
 	end 'spawnPhase'
 
 	for i in 0 upto count 'readyPhase'
@@ -2393,8 +2306,8 @@ end 'spawnPool'
 // ONE worker's spawn, without its hello — the half `spawnPool` fires N of and a respawn fires one of.
 // Shared so the command line a worker is launched with, and the sentence a failure to launch it
 // prints, exist once.
-function spawnWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
-	return try PersistentWorkerHandle.spawnNoWait(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork) otherwise (e) 'spawnFailed'
+function spawnWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
+	return try PersistentWorkerHandle.spawnNoWait(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork) otherwise (e) 'spawnFailed'
 		panic("spec worker pool: could not spawn worker {workerId}: {e.displayReason()}")
 	end 'spawnFailed'
 end 'spawnWorker'
@@ -2414,8 +2327,8 @@ end 'awaitWorkerHello'
 // It keeps the DEAD worker's id, deliberately. The id is a SLOT number everywhere it is read (the
 // wedge report indexes by it, and so does every message), so minting a new one would make the report
 // stop lining up with the pool it describes.
-function spawnReadyWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
-	var handle = spawnWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+function spawnReadyWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
+	var handle = spawnWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 	awaitWorkerHello(handle)
 	return handle
 end 'spawnReadyWorker'

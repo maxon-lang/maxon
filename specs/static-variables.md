@@ -991,7 +991,7 @@ immutable one only read. `3 + 4 + 6 + 2`.
 
 ⚠ **`untouched` DOES NOT REACH THE BINARY**: nothing names it, so dead-global
 elimination drops its slot, the `__managed_create`/`__managed_push` run that would build it and the `__managed_decref` that
-would free it — which is why the golden's `.data` holds `grow` and `fixed` alone. The declaration contributes
+would free it — which is why the emitted `.data` holds `grow` and `fixed` alone. The declaration contributes
 nothing to the answer, and what the case pins is the pair that matters here: `grow`
 and `fixed` are TWO LIVE array globals sharing one `__module_init`, so the prune is per-global rather
 than per-init.
@@ -2723,230 +2723,6 @@ end 'main'
 1
 ```
 
-<!-- test: data-section-bool-1byte -->
-A single bool global occupies 1 byte in the .data section.
-
-```maxon
-var flag = true
-
-function main() returns ExitCode
-	if flag 'read'
-		return 0
-	end 'read'
-	return 1
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredData
-i8 1
-```
-
-<!-- test: data-section-i64-8byte -->
-A single i64 global occupies 8 bytes in the .data section.
-
-```maxon
-var counter = 42
-
-function main() returns ExitCode
-	return counter - 42
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredData
-i64 42
-```
-
-<!-- test: data-section-f64-8byte -->
-A single f64 global occupies 8 bytes in the .data section.
-
-```maxon
-var pi = 3.14
-
-function main() returns ExitCode
-	if pi > 3.0 'read'
-		return 0
-	end 'read'
-	return 1
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredData
-f64 3.14
-```
-
-<!-- test: data-section-f64-8byte-folded -->
-A FOLDED float initializer lays down the same 8 bytes as the literal: `3.0 + 0.14` produces `3.14`, the strongest proof the constant evaluator produced a NUMBER (folded with the host's f64) and not a summed bit pattern (byte-identical to the literal `3.14`).
-
-```maxon
-var pi = 3.0 + 0.14
-
-function main() returns ExitCode
-	if pi > 3.0 'read'
-		return 0
-	end 'read'
-	return 1
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredData
-f64 3.14
-```
-
-<!-- test: data-section-bool-then-i64-sorted -->
-A bool and i64 global: sorted largest-first, no padding needed.
-
-```maxon
-var flag = false
-var counter = 42
-
-function main() returns ExitCode
-	if flag 'read'
-		return 1
-	end 'read'
-	return counter - 42
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredData
-i64 42
-i8 0
-```
-
-<!-- test: data-section-bool-true-then-i64 -->
-A true bool and i64: sorted largest-first, no padding needed.
-
-```maxon
-var flag = true
-var counter = 99
-
-function main() returns ExitCode
-	if flag 'read'
-		return counter - 99
-	end 'read'
-	return 1
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredData
-i64 99
-i8 1
-```
-
-<!-- test: data-section-i64-then-bool -->
-An i64 followed by a bool: no padding needed since bool has 1-byte alignment.
-
-```maxon
-var counter = 7
-var flag = true
-
-function main() returns ExitCode
-	if flag 'read'
-		return counter - 7
-	end 'read'
-	return 1
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredData
-i64 7
-i8 1
-```
-
-<!-- test: data-section-multiple-bools -->
-Multiple consecutive bools occupy 1 byte each with no padding.
-
-```maxon
-var a = true
-var b = false
-var c = true
-
-function main() returns ExitCode
-	if a and c and (b == false) 'read'
-		return 0
-	end 'read'
-	return 1
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredData
-i8 1
-i8 0
-i8 1
-```
-
-<!-- test: data-section-mixed-types -->
-Mixed bool, i64, f64 globals sorted largest-first, no padding.
-
-```maxon
-var flag = true
-var count = 10
-var ratio = 2.5
-
-function main() returns ExitCode
-	if flag and (count == 10) and (ratio > 2.0) 'read'
-		return 0
-	end 'read'
-	return 1
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredData
-i64 10
-f64 2.5
-i8 1
-```
-
-<!-- test: data-section-runtime-word-after-a-bool-is-aligned -->
-The runtime's words are laid out after the program's own globals, and each is still naturally aligned:
-a 1-byte user global is followed by seven bytes of padding before the scheduler's 8-byte worker mark.
-An arm64 exclusive load or store faults on an address that is not a multiple of its width.
-
-```maxon
-var flag = true
-
-function main() returns ExitCode
-	let workers = __Builtins.schedMaxActiveWorkers()
-
-	if flag 'read'
-		return workers - 1
-	end 'read'
-
-	return 1
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredData
-i8 1
-i8 0
-i8 0
-i8 0
-i8 0
-i8 0
-i8 0
-i8 0
-i64 1
-```
-
 <!-- test: data-section-bool-global-with-green-threads-runs -->
 A program whose own globals end on a 1-byte slot starts the scheduler, whose words it lays out after
 them, and runs a coroutine to completion.
@@ -3511,7 +3287,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/static-variables/error.a-top-level-string-literal-init-still-needs-the-conformance.test:10:16: Type 'Tag' does not conform to InitableFromStringLiteral
+error E3005: specs/static-variables/error.a-top-level-string-literal-init-still-needs-the-conformance.maxon:10:16: Type 'Tag' does not conform to InitableFromStringLiteral
 ```
 
 ### A PAYLOAD-FREE ENUM CASE IS A CONSTANT
@@ -3966,7 +3742,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/static-variables/error.an-array-literal-may-not-mix-two-enums.test:12:23: Unsupported: an array literal with mixed element types — every element must have the same type as the first
+error E2015: specs/static-variables/error.an-array-literal-may-not-mix-two-enums.maxon:12:23: Unsupported: an array literal with mixed element types — every element must have the same type as the first
 ```
 
 ### A STATIC MEMBER'S VISIBILITY IS THE MEMBER'S, NOT ITS TYPE'S
@@ -3989,7 +3765,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: dir_b/specs/fragments/static-variables/error.module-scoped-static-read-different-directory.test:9:16: static 'Config.used' is module-scoped and not visible from this directory
+error E3088: dir_b/specs/static-variables/error.module-scoped-static-read-different-directory.maxon:9:16: static 'Config.used' is module-scoped and not visible from this directory
 ```
 
 <!-- test: error.static-bound-name-on-a-struct-base -->

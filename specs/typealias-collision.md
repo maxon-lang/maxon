@@ -60,7 +60,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: app/specs/fragments/typealias-collision/error.exported-typealias-collision.test:10:16: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, legacy.Score
+error E3063: app/specs/typealias-collision/error.exported-typealias-collision.maxon:10:16: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, legacy.Score
 ```
 
 
@@ -218,7 +218,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: app/specs/fragments/typealias-collision/error.three-way-ambiguous-typealias.test:13:16: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: alpha.Score, mid.Score, zulu.Score
+error E3063: app/specs/typealias-collision/error.three-way-ambiguous-typealias.maxon:13:16: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: alpha.Score, mid.Score, zulu.Score
 ```
 
 
@@ -245,7 +245,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: app/specs/fragments/typealias-collision/error.exported-function-alias-collision-is-ambiguous-at-the-reference.test:13:16: Ambiguous type name 'Step': more than one visible declaration matches it. Qualify it as one of: api.Step, legacy.Step
+error E3063: app/specs/typealias-collision/error.exported-function-alias-collision-is-ambiguous-at-the-reference.maxon:13:16: Ambiguous type name 'Step': more than one visible declaration matches it. Qualify it as one of: api.Step, legacy.Step
 ```
 
 <!-- test: error.exported-function-alias-collision-over-two-shapes-is-still-ambiguous -->
@@ -270,7 +270,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: app/specs/fragments/typealias-collision/error.exported-function-alias-collision-over-two-shapes-is-still-ambiguous.test:12:16: Ambiguous type name 'Step': more than one visible declaration matches it. Qualify it as one of: api.Step, legacy.Step
+error E3063: app/specs/typealias-collision/error.exported-function-alias-collision-over-two-shapes-is-still-ambiguous.maxon:12:16: Ambiguous type name 'Step': more than one visible declaration matches it. Qualify it as one of: api.Step, legacy.Step
 ```
 
 <!-- test: error.ambiguous-typealias-is-anchored-on-the-name-token -->
@@ -292,7 +292,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: app/specs/fragments/typealias-collision/error.ambiguous-typealias-is-anchored-on-the-name-token.test:10:36: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, legacy.Score
+error E3063: app/specs/typealias-collision/error.ambiguous-typealias-is-anchored-on-the-name-token.maxon:10:36: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, legacy.Score
 ```
 
 
@@ -316,7 +316,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: app/specs/fragments/typealias-collision/error.exported-cross-form-typealias-collision.test:10:16: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, legacy.Score
+error E3063: app/specs/typealias-collision/error.exported-cross-form-typealias-collision.maxon:10:16: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, legacy.Score
 ```
 
 

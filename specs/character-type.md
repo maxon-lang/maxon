@@ -514,7 +514,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/character-type/error.character-arithmetic-still-refused.test:4:12: Cannot operate on Character and int
+error E2004: specs/character-type/error.character-arithmetic-still-refused.maxon:4:12: Cannot operate on Character and int
 ```
 
 <!-- test: emoji-character -->
@@ -771,7 +771,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/character-type/error.otherwise-out-of-range.test:4:12: otherwise value -1 is outside the range of 'AsciiValue' (int(0 to 127))
+error E3005: specs/character-type/error.otherwise-out-of-range.maxon:4:12: otherwise value -1 is outside the range of 'AsciiValue' (int(0 to 127))
 ```
 
 <!-- test: match-escape-character -->

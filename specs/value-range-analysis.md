@@ -54,8 +54,8 @@ counter would be unknown — the refinement is the whole of what proves a loop c
   range.
 
 ⚠ A green case here proves nothing on its own — a check that is deleted was one the program never
-failed. The evidence is the committed fragments of the shape cases (no `__rc_panic` block where a check
-was proven) and the CONTROLS, each a program that must still panic because its value is NOT proven:
+failed. The evidence is the emitted code (`--emit-ir`) of the shape cases (no `__rc_panic` block where a
+check was proven), which nothing in the suite pins, and the CONTROLS, each a program that must still panic because its value is NOT proven:
 a counter walked below zero, an increment that wraps past `i64.max`, a value refined on one edge and
 used on the other, a two-sided alias whose upper bound a runtime limit can exceed. With `add`
 saturating its corners instead of going to the whole range, exactly one case moves:
@@ -64,8 +64,8 @@ saturating its corners instead of going to the whole range, exactly one case mov
 ## Tests
 
 <!-- test: a-counted-loop-index-reads-with-no-range-check -->
-The shape the pass was opened for. `total`'s loop reads `a.get(i)` for a counter from 0: the fragment
-holds no `__rc_panic` block in `total` (the `__rc_ok` label survives as the continuation's name), and
+The shape the pass was opened for. `total`'s loop reads `a.get(i)` for a counter from 0: the emitted code
+(`--emit-ir`) holds no `__rc_panic` block in `total` (the `__rc_ok` label survives as the continuation's name), and
 the bound check is the first test the access makes.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -96,7 +96,7 @@ end 'main'
 
 <!-- test: a-value-checked-once-is-known-non-negative-after -->
 `i` is a plain `Word`, so its first access must check it. The second and third accesses sit in blocks
-the first check's `__rc_ok` dominates, where `i ≥ 0` is known: `bump`'s fragment holds exactly one
+the first check's `__rc_ok` dominates, where `i ≥ 0` is known: `bump`'s emitted code (`--emit-ir`) holds exactly one
 `__rc_panic` block.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -127,7 +127,7 @@ end 'main'
 <!-- test: a-reverse-loop-proves-both-bounds -->
 The relational shape: `low` starts at 1 and grows, `high` starts at a value only known at run time
 and shrinks, and the loop runs while `low < high`. Below that test `high ≥ low + 1 ≥ 2`, so all
-four accesses need no range check: `reverseMiddle`'s fragment holds no `__rc_panic` block.
+four accesses need no range check: `reverseMiddle`'s emitted code (`--emit-ir`) holds no `__rc_panic` block.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
@@ -174,7 +174,7 @@ end 'main'
 
 <!-- test: a-user-compare-decided-by-a-counter-folds -->
 The general form, without an array: a user's own `i >= 0` inside a counted loop is decided true.
-`countNonNegative` is a leaf and is spliced into `main`, so the reading is `main`'s fragment: each
+`countNonNegative` is a leaf and is spliced into `main`, so the reading is `main`'s emitted code (`--emit-ir`): each
 inlined loop's body follows its `forhdr` with no compare against 0 between them.
 ```maxon
 typealias Word = int(i64.min to i64.max)

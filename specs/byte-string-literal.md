@@ -286,7 +286,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2045: specs/fragments/byte-string-literal/byte-string-literal.tobytearray-global-error.test:2:20: Global initializer for 'B' is not a constant expression: '.toByteArray()' cannot be evaluated at compile time
+error E2045: specs/byte-string-literal/byte-string-literal.tobytearray-global-error.maxon:2:20: Global initializer for 'B' is not a constant expression: '.toByteArray()' cannot be evaluated at compile time
 ```
 
 <!-- test: byte-string-literal.field-access -->
@@ -537,7 +537,7 @@ A detached literal's `capacity@16` is not the rdata sentinel, so its drop legiti
 the buffer — the one it allocated, never the blob. Five detach-and-drop rounds make either mistake loud:
 a missed free leaks (exit 101) and a freed blob corrupts the allocator.
 
-⚠ **ITS GOLDEN CARRIES A NARROWING GUARD IN A PROGRAM THAT NEVER MENTIONS `File`.** `stdlib/File.maxon`
+⚠ **ITS EMITTED CODE CARRIES A NARROWING GUARD IN A PROGRAM THAT NEVER MENTIONS `File`.** `stdlib/File.maxon`
 supplies `export typealias Byte = int(0 to u8.max)` (`:45`), so a `b"…"` literal's element has a DECLARED
 RANGE and `a.set(0, value: n)` — an `int` into a `Byte` slot — gets the narrowing guard. The slot before
 `__managed_set` holds `cmpRegImm32 rbx, 0` / `cmpRegImm32 rbx, 255` / `mrt_panic`, and the
@@ -842,5 +842,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: specs/fragments/byte-string-literal/error.raw-newline-keeps-diagnostic-lines-honest.test:8:9: call to undefined function 'undefinedAfterTheLiteral'
+error E3004: specs/byte-string-literal/error.raw-newline-keeps-diagnostic-lines-honest.maxon:8:9: call to undefined function 'undefinedAfterTheLiteral'
 ```

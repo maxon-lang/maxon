@@ -334,7 +334,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2054: specs/fragments/bitwise-operators/shl-count-negative.test:4:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
+error E2054: specs/bitwise-operators/shl-count-negative.maxon:4:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
 ```
 
 <!-- test: shr-count-negative -->
@@ -346,7 +346,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2054: specs/fragments/bitwise-operators/shr-count-negative.test:4:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
+error E2054: specs/bitwise-operators/shr-count-negative.maxon:4:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
 ```
 
 <!-- test: shl-count-negative-named -->
@@ -361,7 +361,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2054: specs/fragments/bitwise-operators/shl-count-negative-named.test:5:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
+error E2054: specs/bitwise-operators/shl-count-negative-named.maxon:5:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
 ```
 
 <!-- test: shl-count-negative-parenthesized -->
@@ -374,7 +374,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2054: specs/fragments/bitwise-operators/shl-count-negative-parenthesized.test:4:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
+error E2054: specs/bitwise-operators/shl-count-negative-parenthesized.maxon:4:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
 ```
 
 <!-- test: shl-count-64 -->
@@ -1699,8 +1699,8 @@ end 'main'
 
 
 <!-- test: bitwise-operators.a-counted-loop-count-is-not-proven -->
-⛔⛔ **THE COUNT A COUNTED LOOP COULD PROVE AND DELIBERATELY DOES NOT — AND THIS FRAGMENT IS THE
-DECISION.** `i` here is provably `0 … 63`, exactly the counts the instruction takes as written, but it DENOTES
+⛔⛔ **THE COUNT A COUNTED LOOP COULD PROVE AND DELIBERATELY DOES NOT — AND THE EMITTED CODE
+(`--emit-ir`) SHOWS THE DECISION.** `i` here is provably `0 … 63`, exactly the counts the instruction takes as written, but it DENOTES
 no alias — its written type is the bare `int` its bounds were written at — so `shiftCountIsProvenUnguarded`
 answers `undeclared` for it and the whole `(count and -64) != 0` saturation is emitted for a case that cannot
 happen.
@@ -1708,8 +1708,8 @@ happen.
 The counted-loop analysis gives that counter an interval, and reading it here is SOUND and deletes those
 seven ops — but the saving is inside the self-compile's noise, where the compiler's own code layout moves
 further under an unrelated edit than the elision does. The corpus's counted shift counts are few and cold,
-so it stays out until a program that pays for them exists, and the saturation below is what says so — a
-paragraph nobody checks would not.
+so it stays out until a program that pays for them exists. The case's emitted code shows the saturation;
+nothing in the suite pins it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

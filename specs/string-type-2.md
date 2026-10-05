@@ -846,7 +846,7 @@ the blob untouched for every other use.
   runs to completion: **exit 101 with stdout CORRECT** — `grow("hello")` then `print("hello")`
   prints `hello`, and doubling the pair prints `hello` twice. The leak gate's orphaned detached buffer is
   the whole signal. It does NOT print `helloXY`: `GlobalDataTable` dedupes identical BLOBS but mints a
-  record per literal OCCURRENCE (`__str_rec_1`, `__str_rec_3`, … in any golden), so the repointed record is
+  record per literal OCCURRENCE (`__str_rec_1`, `__str_rec_3`, … in the emitted code), so the repointed record is
   the writing use's own and no reader can see it.
 
 ⇒ the cases below run on EVERY target deliberately. A check that only watched for the fault would call the

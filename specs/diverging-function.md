@@ -23,7 +23,7 @@ simply not marked, and the compiler behaves exactly as it did before:
 | its body's LAST statement is `panic(…)` | this is what rules out falling off the end, which is a return |
 | its body spells no `return` and no `throw` | either is an exit path that is not the panic |
 | it declares no `throws` clause | a `try f()` with no `otherwise` RETURNS the error to the caller, and it spells no `throw` of its own |
-| its bare name is declared exactly once in the program | the fact is published under the name the source wrote, so a contested name cannot say which declaration a call reaches |
+| a call reaches it by its bare name | the fact is published under the declaration's name, and a call is asked under the name it binds: the declaration visible from the call's own file |
 
 ⚠ **The CALL must be a bare-name call statement.** A method call (`h.abort()`) and a namespace-qualified
 one (`util.abort()`) are keyed differently and are not asked — they compile exactly as they did before.
@@ -57,7 +57,7 @@ declaration is marked too, under the same whole-program sweep and the same conse
 | its body's LAST statement is `throw` | this is what rules out falling off the end, which is a return |
 | its body spells no `return` | a `return` is an exit path that is not the throw |
 | it DECLARES a `throws` clause | the tail `throw` needs one, and its absence means the scan is not reading the body it thinks it is |
-| its bare name is declared exactly once in the program | as above — a contested name cannot say which declaration a call reaches |
+| a call reaches it by its bare name | as above — a call is asked under the declaration visible from its own file |
 
 A bare `try g()` inside such a body needs no exclusion, unlike the `panic` rule's: propagating the
 callee's error is itself a THROW, so it is one more way of leaving that is not a return.
@@ -728,4 +728,51 @@ end 'main'
 ```
 ```maxoncstderr
 error E3059: <fragment>:28:14: type mismatch: 'a `try` used for its value needs a value on the error path too, but this `otherwise` handler catches the error without producing one (`otherwise ignore`, or a handler block that runs off its end) — give it a fallback value with `otherwise <expr>`, or make every path of the handler terminate (`return`/`throw`/`break`/`continue`)'
+```
+
+<!-- test: a-diverging-tail-call-binds-its-own-files-private-callee -->
+A declaration a file cannot see never counts: `a/`'s `pick` ends in a call to its own panicking `fatal`, so it needs no `return`, while `b/`'s same-named `fatal` returns normally.
+```maxon
+// --- file: a/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function fatal(tag Integer)
+	panic("fatal {tag}")
+end 'fatal'
+
+function pick(b bool) returns Integer
+	if b 'y'
+		return 6
+	end 'y'
+	fatal(9)
+end 'pick'
+
+export function runA()
+	print("a {pick(true)}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function fatal(tag Integer)
+	print("not fatal {tag}\n")
+end 'fatal'
+
+export function runB()
+	fatal(1)
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 6
+not fatal 1
 ```

@@ -50,7 +50,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/rebind-drops-the-borrowed-record.test:7:2: cannot mutate 'arr' via '=' while it is borrowed by 's' (borrowed at line 6)
+error E3070: specs/borrow-liveness/rebind-drops-the-borrowed-record.maxon:7:2: cannot mutate 'arr' via '=' while it is borrowed by 's' (borrowed at line 6)
 ```
 
 <!-- test: a-borrow-read-early-in-a-loop-body-is-live-at-a-later-write-in-it -->
@@ -104,7 +104,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/field-chain-source.test:15:10: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 14)
+error E3070: specs/borrow-liveness/field-chain-source.maxon:15:10: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 14)
 ```
 
 <!-- test: self-field-alias-source -->
@@ -135,7 +135,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/self-field-alias-source.test:13:9: cannot mutate 'items' via 'clear' while it is borrowed by 's' (borrowed at line 12)
+error E3070: specs/borrow-liveness/self-field-alias-source.maxon:13:9: cannot mutate 'items' via 'clear' while it is borrowed by 's' (borrowed at line 12)
 ```
 
 <!-- test: self-field-rebind -->
@@ -166,7 +166,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/self-field-rebind.test:13:3: cannot mutate 'items' via '=' while it is borrowed by 's' (borrowed at line 12)
+error E3070: specs/borrow-liveness/self-field-rebind.maxon:13:3: cannot mutate 'items' via '=' while it is borrowed by 's' (borrowed at line 12)
 ```
 
 <!-- test: parameter-source -->
@@ -189,7 +189,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/parameter-source.test:6:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 5)
+error E3070: specs/borrow-liveness/parameter-source.maxon:6:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 5)
 ```
 
 <!-- test: mutating-callee-argument -->
@@ -212,7 +212,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/mutating-callee-argument.test:11:2: cannot mutate 'arr' via 'grow' while it is borrowed by 's' (borrowed at line 10)
+error E3070: specs/borrow-liveness/mutating-callee-argument.maxon:11:2: cannot mutate 'arr' via 'grow' while it is borrowed by 's' (borrowed at line 10)
 ```
 
 <!-- test: mutating-callee-labelled-argument -->
@@ -238,7 +238,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/mutating-callee-labelled-argument.test:14:10: cannot mutate 'arr' via 'grow' while it is borrowed by 's' (borrowed at line 13)
+error E3070: specs/borrow-liveness/mutating-callee-labelled-argument.maxon:14:10: cannot mutate 'arr' via 'grow' while it is borrowed by 's' (borrowed at line 13)
 ```
 
 <!-- test: non-mutating-callee-argument -->
@@ -309,7 +309,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/first-is-a-borrow-source.test:5:6: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
+error E3070: specs/borrow-liveness/first-is-a-borrow-source.maxon:5:6: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
 ```
 
 <!-- test: pop-is-not-a-borrow -->
@@ -433,7 +433,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/forin-element-borrow-via-callee.test:21:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 20)
+error E3070: specs/borrow-liveness/forin-element-borrow-via-callee.maxon:21:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 20)
 ```
 
 <!-- test: forin-element-borrow-is-lexical -->
@@ -478,7 +478,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/forin-element-borrow-is-lexical.test:22:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 20)
+error E3070: specs/borrow-liveness/forin-element-borrow-is-lexical.maxon:22:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 20)
 ```
 
 <!-- test: forin-mutation-after-loop -->
@@ -614,7 +614,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/otherwise-return-preserves-the-borrow.test:5:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 4)
+error E3070: specs/borrow-liveness/otherwise-return-preserves-the-borrow.maxon:5:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 4)
 ```
 
 <!-- test: otherwise-block-preserves-the-borrow -->
@@ -633,7 +633,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/otherwise-block-preserves-the-borrow.test:7:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 4)
+error E3070: specs/borrow-liveness/otherwise-block-preserves-the-borrow.maxon:7:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 4)
 ```
 
 <!-- test: borrow-must-reach-the-binding -->
@@ -718,7 +718,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/sibling-field-shares-the-subject.test:16:10: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 15)
+error E3070: specs/borrow-liveness/sibling-field-shares-the-subject.maxon:16:10: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 15)
 ```
 
 <!-- test: ternary-merge-carries-the-borrow -->
@@ -739,7 +739,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/ternary-merge-carries-the-borrow.test:8:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 7)
+error E3070: specs/borrow-liveness/ternary-merge-carries-the-borrow.maxon:8:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 7)
 ```
 
 <!-- test: match-gives-carries-the-borrow -->
@@ -765,7 +765,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/match-gives-carries-the-borrow.test:14:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 11)
+error E3070: specs/borrow-liveness/match-gives-carries-the-borrow.maxon:14:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 11)
 ```
 
 <!-- test: match-gives-merges-every-arms-borrow -->
@@ -794,8 +794,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/match-gives-merges-every-arms-borrow.test:15:4: cannot mutate 'a' via 'clear' while it is borrowed by 's' (borrowed at line 12)
-error E3070: specs/fragments/borrow-liveness/match-gives-merges-every-arms-borrow.test:16:4: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 13)
+error E3070: specs/borrow-liveness/match-gives-merges-every-arms-borrow.maxon:15:4: cannot mutate 'a' via 'clear' while it is borrowed by 's' (borrowed at line 12)
+error E3070: specs/borrow-liveness/match-gives-merges-every-arms-borrow.maxon:16:4: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 13)
 ```
 
 <!-- test: propagating-try-carries-the-borrow -->
@@ -828,7 +828,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/propagating-try-carries-the-borrow.test:10:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 9)
+error E3070: specs/borrow-liveness/propagating-try-carries-the-borrow.maxon:10:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 9)
 ```
 
 <!-- test: var-reassigned-from-an-element-copies-it -->
@@ -913,7 +913,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-writing-its-own-field.test:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+error E3070: specs/borrow-liveness/receiver-method-writing-its-own-field.maxon:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
 ```
 
 <!-- test: receiver-method-explicit-self-spelling -->
@@ -944,7 +944,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-explicit-self-spelling.test:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+error E3070: specs/borrow-liveness/receiver-method-explicit-self-spelling.maxon:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
 ```
 
 <!-- test: receiver-method-rebinding-its-own-field -->
@@ -977,7 +977,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-rebinding-its-own-field.test:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+error E3070: specs/borrow-liveness/receiver-method-rebinding-its-own-field.maxon:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
 ```
 
 <!-- test: receiver-method-inside-a-for-loop -->
@@ -1020,7 +1020,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-inside-a-for-loop.test:22:5: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 21)
+error E3070: specs/borrow-liveness/receiver-method-inside-a-for-loop.maxon:22:5: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 21)
 ```
 
 <!-- test: receiver-method-writes-transitively -->
@@ -1056,7 +1056,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-writes-transitively.test:24:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 23)
+error E3070: specs/borrow-liveness/receiver-method-writes-transitively.maxon:24:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 23)
 ```
 
 <!-- test: receiver-method-writing-its-own-field-through-a-corpus-member -->
@@ -1104,7 +1104,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-writing-its-own-field-through-a-corpus-member.test:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+error E3070: specs/borrow-liveness/receiver-method-writing-its-own-field-through-a-corpus-member.maxon:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
 ```
 
 <!-- test: a-free-callee-writing-a-field-of-its-parameter -->
@@ -1138,7 +1138,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/a-free-callee-writing-a-field-of-its-parameter.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+error E3070: specs/borrow-liveness/a-free-callee-writing-a-field-of-its-parameter.maxon:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
 ```
 
 <!-- test: a-corpus-served-read-only-member-is-not-a-conflict -->
@@ -1298,7 +1298,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/sibling-call-on-the-enclosing-self.test:18:3: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)
+error E3070: specs/borrow-liveness/sibling-call-on-the-enclosing-self.maxon:18:3: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)
 ```
 
 <!-- test: sibling-call-explicit-self-spelling -->
@@ -1334,7 +1334,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/sibling-call-explicit-self-spelling.test:18:8: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)
+error E3070: specs/borrow-liveness/sibling-call-explicit-self-spelling.maxon:18:8: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)
 ```
 
 <!-- test: sibling-call-that-writes-nothing -->
@@ -1436,7 +1436,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/module-storage-source.test:6:4: cannot mutate 'g' via 'clear' while it is borrowed by 's' (borrowed at line 5)
+error E3070: specs/borrow-liveness/module-storage-source.maxon:6:4: cannot mutate 'g' via 'clear' while it is borrowed by 's' (borrowed at line 5)
 ```
 
 <!-- test: module-storage-rebind -->
@@ -1456,7 +1456,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/module-storage-rebind.test:8:2: cannot mutate 'g' via '=' while it is borrowed by 's' (borrowed at line 7)
+error E3070: specs/borrow-liveness/module-storage-rebind.maxon:8:2: cannot mutate 'g' via '=' while it is borrowed by 's' (borrowed at line 7)
 ```
 
 <!-- test: module-storage-to-a-mutating-callee -->
@@ -1479,7 +1479,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/module-storage-to-a-mutating-callee.test:12:2: cannot mutate 'g' via 'grow' while it is borrowed by 's' (borrowed at line 11)
+error E3070: specs/borrow-liveness/module-storage-to-a-mutating-callee.maxon:12:2: cannot mutate 'g' via 'grow' while it is borrowed by 's' (borrowed at line 11)
 ```
 
 <!-- test: forin-over-module-storage -->
@@ -1511,7 +1511,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/forin-over-module-storage.test:9:5: cannot mutate 'g' via 'clear' while it is borrowed by 'it' (borrowed at line 8)
+error E3070: specs/borrow-liveness/forin-over-module-storage.maxon:9:5: cannot mutate 'g' via 'clear' while it is borrowed by 'it' (borrowed at line 8)
 ```
 
 <!-- test: module-storage-borrow-expires -->
@@ -1635,7 +1635,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/a-field-store-in-a-callee-freeing-its-parameters-array.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+error E3070: specs/borrow-liveness/a-field-store-in-a-callee-freeing-its-parameters-array.maxon:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
 ```
 
 <!-- test: a-scalar-field-store-is-not-a-conflict -->
@@ -1699,7 +1699,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/error.a-borrow-taken-out-of-a-borrow-holds-the-root.test:6:5: cannot mutate 'xs' via 'clear' while it is borrowed by 's' (borrowed at line 5)
+error E3070: specs/borrow-liveness/error.a-borrow-taken-out-of-a-borrow-holds-the-root.maxon:6:5: cannot mutate 'xs' via 'clear' while it is borrowed by 's' (borrowed at line 5)
 ```
 
 <!-- test: a-composed-borrow-expires-at-its-own-last-use -->
@@ -1755,7 +1755,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/error.a-try-merge-keeps-every-link-of-a-composed-chain.test:19:10: cannot mutate 'p' via 'clear' while it is borrowed by 's' (borrowed at line 18)
+error E3070: specs/borrow-liveness/error.a-try-merge-keeps-every-link-of-a-composed-chain.maxon:19:10: cannot mutate 'p' via 'clear' while it is borrowed by 's' (borrowed at line 18)
 ```
 
 <!-- test: a-callee-clearing-a-managed-list-frees-a-node-handle -->
@@ -1957,7 +1957,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it.test:28:4: cannot mutate 'b' via 'reset' while it is borrowed by 's' (borrowed at line 27)
+error E3070: specs/borrow-liveness/a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it.maxon:28:4: cannot mutate 'b' via 'reset' while it is borrowed by 's' (borrowed at line 27)
 ```
 
 <!-- test: a-string-field-store-is-not-a-conflict -->
@@ -2290,7 +2290,7 @@ end 'main'
 The narrowing is the whole reason this rule is affordable, so it needs a case that fails if the rule
 stops narrowing. `measure` is handed `b.s` and nothing else: it cannot name the cell, the cell is not
 module storage, and no other argument denotes it — so nothing it can do frees the record and the
-caller owes no reference. The committed fragment's `main` carries **no `__str_retain` at all**, against
+caller owes no reference. The emitted code's `main` (`--emit-ir`) carries **no `__str_retain` at all**, against
 exactly one in the free-callee case above whose only difference is that the owner travels beside the
 field. Anchoring unconditionally instead would put one at every `f(self.field)` in the tree — most of
 the calls a compiler writes — and push the compiler's widest calls over the x64 register file (E5001),

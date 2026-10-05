@@ -1,0 +1,58 @@
+let PinRemintSpecName = "pin-remint"
+let PinRemintSpecFileName = "pin-remint.md"
+let PinRemintAbsentCase = "pin-remint.absent"
+let PinRemintPlantedCase = "pin-remint.planted"
+let PinRemintFilter = "--filter=pin-remint/"
+let PinRemintAbsentMarker = "<!-- test: pin-remint.absent -->"
+let PinRemintPlantedMarker = "<!-- test: pin-remint.planted -->"
+let MainFunctionHeader = "func @main"
+let RemintedPinCount = 2
+
+test 'update-required replaces a wrong host-lane TargetIr pin and adds a missing one, and the next run passes'
+	let staged = stagedGateFixture()
+	let specPath = staged.join(PinRemintSpecFileName)
+	plantBogusTargetIrPin(specPath)
+
+	var arguments = StringArray.create()
+	arguments.push(UpdateRequiredFlag)
+	arguments.push(PinRemintFilter)
+
+	let remint = runSpecTest(staged, includeNetwork: false, extraArguments: arguments)
+	let written = readStagedText(specPath)
+	let rerun = runSpecTest(staged, includeNetwork: false)
+	discardStaging(staged)
+
+	let said = "The file now reads:\n{written}\nThe re-mint run said:\n{everythingSaid(remint)}\nThe plain run said:\n{everythingSaid(rerun)}"
+	let lines = written.split("\n")
+	let pins = linesOpening(lines, prefix: hostTargetIrFence())
+	var broken = StringArray.create()
+
+	if pins.count() != RemintedPinCount 'wrongPinCount'
+		broken.push("the re-mint left {pins.count()} {hostTargetIrFence()} block(s), not {RemintedPinCount}: one replacing the planted pin and one added to the case that had none. {said}\n")
+	end 'wrongPinCount'
+
+	if written.contains(PlantedTargetIrLine) 'plantSurvived'
+		broken.push("the planted line '{PlantedTargetIrLine}' survived the re-mint. {said}\n")
+	end 'plantSurvived'
+
+	if written.split(MainFunctionHeader).count() - 1 != RemintedPinCount 'pinsHoldNoMain'
+		broken.push("the re-minted pins do not each hold `{MainFunctionHeader}`, the Target IR of the case's own `main`. {said}\n")
+	end 'pinsHoldNoMain'
+
+	let absentAt = firstLineOpening(lines, prefix: PinRemintAbsentMarker, said: said)
+	let plantedAt = firstLineOpening(lines, prefix: PinRemintPlantedMarker, said: said)
+	let addedAt = try pins.get(0) otherwise plantedAt
+	let replacedAt = try pins.get(1) otherwise absentAt
+
+	if not (absentAt < addedAt and addedAt < plantedAt and plantedAt < replacedAt) 'pinsMisplaced'
+		broken.push("the pins landed at lines {addedAt + 1} and {replacedAt + 1}, not one inside each case (markers at lines {absentAt + 1} and {plantedAt + 1}). {said}\n")
+	end 'pinsMisplaced'
+
+	collectNotPassed(everythingSaid(rerun), specName: PinRemintSpecName, testNames: [PinRemintAbsentCase, PinRemintPlantedCase], broken: broken)
+
+	if rerun.exitCode() != SuccessExitCode 'rerunFailed'
+		broken.push("the plain run after the re-mint exited {rerun.exitCode()}. {said}\n")
+	end 'rerunFailed'
+
+	requireNothingBroken(broken, headline: "`{UpdateRequiredFlag}` re-mints the host lane's `TargetIr` pins")
+end 'update-required replaces a wrong host-lane TargetIr pin and adds a missing one, and the next run passes'

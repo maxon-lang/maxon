@@ -145,7 +145,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/implicit-type-conversion/float-to-int-param-rejected.test:11:9: argument 'x': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: specs/implicit-type-conversion/float-to-int-param-rejected.maxon:11:9: argument 'x': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: float-to-int-param-explicit-trunc -->
@@ -186,7 +186,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/implicit-type-conversion/float-to-int-return-rejected.test:7:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: specs/implicit-type-conversion/float-to-int-return-rejected.maxon:7:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: expression-to-float-param -->
@@ -235,7 +235,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/implicit-type-conversion/no-string-to-int.test:11:9: argument type mismatch for 'x': expected 'Integer', got 'String'
+error E3005: specs/implicit-type-conversion/no-string-to-int.maxon:11:9: argument type mismatch for 'x': expected 'Integer', got 'String'
 ```
 
 <!-- test: no-bool-to-int -->
@@ -253,7 +253,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/implicit-type-conversion/no-bool-to-int.test:11:9: argument type mismatch for 'x': expected 'int', got 'bool'
+error E3005: specs/implicit-type-conversion/no-bool-to-int.maxon:11:9: argument type mismatch for 'x': expected 'int', got 'bool'
 ```
 
 <!-- test: no-int-to-bool -->
@@ -274,7 +274,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/implicit-type-conversion/no-int-to-bool.test:14:9: argument type mismatch for 'x': expected 'bool', got 'int'
+error E3005: specs/implicit-type-conversion/no-int-to-bool.maxon:14:9: argument type mismatch for 'x': expected 'bool', got 'int'
 ```
 
 <!-- test: int-literal-to-float-return -->
@@ -491,7 +491,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-literal-rejected.test:6:15: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: specs/implicit-type-conversion/float-to-int-field-literal-rejected.maxon:6:15: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: float-to-int-field-write-rejected -->
@@ -512,7 +512,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-write-rejected.test:12:4: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: specs/implicit-type-conversion/float-to-int-field-write-rejected.maxon:12:4: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: float-to-int-self-field-rejected -->
@@ -537,7 +537,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3009: specs/fragments/implicit-type-conversion/float-to-int-self-field-rejected.test:6:3: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: specs/implicit-type-conversion/float-to-int-self-field-rejected.maxon:6:3: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: float-to-int-field-default-rejected -->
@@ -557,7 +557,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-default-rejected.test:3:13: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: specs/implicit-type-conversion/float-to-int-field-default-rejected.maxon:3:13: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: float-to-int-alias-field-default-rejected -->
@@ -584,7 +584,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/implicit-type-conversion/float-to-int-alias-field-default-rejected.test:6:13: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: specs/implicit-type-conversion/float-to-int-alias-field-default-rejected.maxon:6:13: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: float-to-int-global-rejected -->
@@ -597,7 +597,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/implicit-type-conversion/float-to-int-global-rejected.test:5:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: specs/implicit-type-conversion/float-to-int-global-rejected.maxon:5:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: float-to-int-local-rejected -->
@@ -609,5 +609,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/implicit-type-conversion/float-to-int-local-rejected.test:4:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: specs/implicit-type-conversion/float-to-int-local-rejected.maxon:4:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```

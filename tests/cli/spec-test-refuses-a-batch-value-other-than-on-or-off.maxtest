@@ -1,0 +1,14 @@
+let CaseDirName = "spec-test-refuses-a-batch-value-other-than-on-or-off"
+let AcceptedExitCode = 0
+
+test 'spec-test refuses a --batch value other than on or off, and the retired golden flag, naming the option'
+	let dir = freshCaseDir(CaseDirName)
+
+	for flag in ["--batch=maybe", "--batch=", "--batch", "--rewrite-drifted-goldens"] 'eachFlag'
+		let refused = runDriver([HiddenAnchorCommand, dir.toString(), flag])
+		let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+		Expect.notEqual(refused.exitCode(), expected: AcceptedExitCode, message: "`maxon {HiddenAnchorCommand} {flag}` was accepted. {said}")
+		Expect.contains(refused.stderr, needle: flag, message: "the refusal does not name {flag}. {said}")
+	end 'eachFlag'
+end 'spec-test refuses a --batch value other than on or off, and the retired golden flag, naming the option'

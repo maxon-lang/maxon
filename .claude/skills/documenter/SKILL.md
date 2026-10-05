@@ -153,7 +153,7 @@ reason X does it", no "inherited from", no citation into a file outside this tre
 THIS code.
 
 ⚠ **But many such references encode a LIVE constraint, and deleting the whole comment breaks the
-suite.** A diagnostic's wording is often compared byte-for-byte by a spec golden. Strip the provenance
+suite.** A diagnostic's wording is often compared byte-for-byte by a spec's `maxoncstderr` block. Strip the provenance
 and keep the constraint, restated in terms of what binds now — which reads better anyway, because it no
 longer needs the reader to know where the code came from:
 
@@ -175,8 +175,8 @@ binds — name the gate. An origin goes, with nothing in its place.
 5. a **deliberate asymmetry** — two nearby sites doing different things on purpose;
 6. a **cost reason for an unobvious shape** — "asked per token on a walk that visits every token, so
    the next probe is a compare rather than a scan";
-7. a **gate that will fail** — a wording pinned byte-for-byte by a named spec file, a golden that
-   compares this output. Name the gate, never where the wording came from;
+7. a **gate that will fail** — a wording pinned byte-for-byte by a named spec file, a `TargetIr`
+   pin that compares this output. Name the gate, never where the wording came from;
 8. a **pointer to the one place a rule lives** — "see `X`, which owns the rule". The pointer only,
    never a summary of what is there;
 9. a **known unguarded failure mode of THIS code** — what it does not handle and what happens then.

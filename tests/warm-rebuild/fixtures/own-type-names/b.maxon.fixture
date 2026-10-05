@@ -1,0 +1,24 @@
+function main() returns ExitCode
+	var signals = SignalArray.create()
+	signals.push(Signal.create(300, channel: 2, shape: Waveform.square))
+
+	var probes = ProbeArray.create()
+	probes.push(Probe.create(12))
+
+	var channels = ChannelMap.create()
+	channels.upsert("left", value: 3)
+
+	let capture = Capture.signal(try signals.get(0) otherwise return 1)
+	var loud = false
+
+	match capture 'inspect'
+		signal(value) then loud = value.isLoud()
+		silence then loud = false
+	end 'inspect'
+
+	if loud and loudCount(signals) > 0 and probes.count() == 1 'aLoudSignal'
+		return 0
+	end 'aLoudSignal'
+
+	return 1
+end 'main'

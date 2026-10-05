@@ -41,7 +41,7 @@ A loop none of whose ops is `isStore` or `isCall` cannot change any location, so
 the same bytes every trip. That is a rule, not an alias analysis, and it is not an approximation of one:
 a loop holding a store, a call, an atomic or an OS primitive is refused whole and no load in it moves.
 `a-loop-that-writes-keeps-its-loads-inside` is the control, and it is a WRONG-ANSWER control rather than
-a fragment pin — drop Rule 1 and its exit code changes.
+an emitted-code difference — drop Rule 1 and its exit code changes.
 
 The rule suffices for the anchor loop because the element stride is specialized, which makes that loop
 CALL-FREE; an unspecialized `__managed_get_unchecked` in the slow arm would be a call and Rule 1 would
@@ -82,17 +82,17 @@ A hoisted value is live across the WHOLE loop where its computation would otherw
 and a range crossing a CALL is confined to the five callee-saved registers x64-windows leaves. At one end
 of that, the compiler REFUSES rather than spills, and a single reused expression hoisted across a call
 takes `generic-hash-table-regalloc`'s pressured-loop case red with `E5001`. At the other end, where the
-allocator does *not* refuse, the hoisted value is cold-spilled and reloaded: with the bound off, 48 `map`
-fragments gain **+96 `loadRegSlot` and +48 `storeSlotReg`** and every one of their frames grows. In
+allocator does *not* refuse, the hoisted value is cold-spilled and reloaded: with the bound off, the `map`
+cases' emitted code gains `loadRegSlot` and `storeSlotReg` traffic and every affected frame grows. In
 `Map.grow` the whole trade is one `leaRegRegImm32` replaced by one `loadRegSlot` — an ALU op for a memory op, which is not a win at any instruction count.
 
 It costs the anchor nothing, which is what makes it affordable: that loop is call-free, and
 `regalloc/many-call-crossing` — where nine invariant computations DO leave a loop — holds no call either.
 
 ⚠ **NO CASE BELOW GOES RED IF RULE 3 IS DELETED, and that is stated rather than left to be discovered.**
-A pressure heuristic has no wrong answer to catch it with; its only pin is the committed `map` and `url`
-fragments, which is the weaker kind of evidence by this file's own standard. `regalloc/many-call-crossing`
-is the fragment that would move if the rule were *widened* to refuse call-free loops too.
+A pressure heuristic has no wrong answer to catch it with, and nothing in the suite pins it: its effect
+is visible only in the emitted code (`--emit-ir`) of the `map` and `url` cases. `regalloc/many-call-crossing`
+is the case whose emitted code would move if the rule were *widened* to refuse call-free loops too.
 
 ### What is deliberately NOT hoisted
 
@@ -108,7 +108,7 @@ other than the loop header.
 <!-- test: an-invariant-load-leaves-the-loop -->
 The anchor. `for v in a` reads the array's LENGTH in the loop header and its BUFFER BASE in the body,
 neither of which can change while the loop runs; both move to `entry`, leaving the header a `cmp`/`jcc`
-and the body a single indexed load. The committed fragment for `@total` is the whole reading — six
+and the body a single indexed load. The emitted code (`--emit-ir`) for `@total` is the whole reading — six
 instructions on the executed path, against eight with nothing hoisted. The sum is checked so a wrong address
 or a stale length is a wrong exit code rather than a silent pass.
 ```maxon
@@ -185,7 +185,7 @@ end 'main'
 <!-- test: an-invariant-computation-leaves-the-loop -->
 Phase 1, and the case is written so a correct compiler cannot answer it by folding: `k` is fed from a
 loop counter, so `k * 31` is real arithmetic over a runtime value. Only the MULTIPLY leaves — `t + k *
-31` reads `t`, which changes every trip, and the `+ 7` after it reads that sum — so the fragment shows
+31` reads `t`, which changes every trip, and the `+ 7` after it reads that sum — so the emitted code (`--emit-ir`) shows
 one `imulRegRegImm32` in the loop's preheader and two `lea`s left in the body. That precision is the
 point: the pass moves the invariant SUBEXPRESSION, not the statement that contains it.
 ```maxon
@@ -217,7 +217,7 @@ end 'main'
 ```
 
 <!-- test: a-loop-that-writes-keeps-its-loads-inside -->
-⭐ **RULE 1's CONTROL, AND IT IS A WRONG ANSWER RATHER THAN A FRAGMENT DIFFERENCE.** The loop's exit test
+⭐ **RULE 1's CONTROL, AND IT IS A WRONG ANSWER RATHER THAN AN EMITTED-CODE DIFFERENCE.** The loop's exit test
 READS a field the loop's body WRITES, so that load is not invariant at all: hoisted, the condition would
 test the value the field held before the loop for ever. Make `loopWritesNoMemory`
 answer `true` unconditionally and this program answers `trips=5 left=2` where `trips=3 left=0` is
@@ -275,7 +275,7 @@ end 'main'
 ⭐ **RULE 2's CONTROL.** Nothing in this loop writes memory, so Rule 1 admits it and the refusal is
 entirely Rule 2's: the field read sits inside an `if` arm that does not dominate the loop's exit, and no
 load through the same address is being hoisted unconditionally, so there is no witness either. The
-committed fragment therefore shows the `loadRegBaseDisp` still inside the guarded block — a fold that
+emitted code (`--emit-ir`) therefore shows the `loadRegBaseDisp` still inside the guarded block — a fold that
 "helpfully" moved it would be speculating a dereference on the strength of nothing.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -323,7 +323,7 @@ end 'main'
 
 <!-- test: a-nested-loop-hoists-to-the-nearest-preheader -->
 Loops are processed innermost first and each loop's hoists are applied before the next is analysed, so
-an op can leave a whole NEST in one run — and the fragment shows exactly how far each kind gets.
+an op can leave a whole NEST in one run — and the emitted code (`--emit-ir`) shows exactly how far each kind gets.
 
 `k * 5` is pure, so it needs no speculation argument and climbs out of BOTH loops to `entry`. The inner
 array's length and buffer loads reach the inner loop's preheader — the outer loop's body — and stop

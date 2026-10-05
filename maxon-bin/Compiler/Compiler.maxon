@@ -140,7 +140,7 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
 	// agree on which compile they are.
 	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
-	CompilerLogRoute.current().handler.attribute(unit)
+	attributeCompilerLog(unit)
 	var spans = TraceNameArray.create()
 
 	// ⭐⭐ **WHERE A FAILED BUILD CLOSES WHAT IT LEFT OPEN.** Four stages inside phase brackets can throw —
@@ -293,15 +293,15 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// stub `mrt_start`, the allocator, the `__str_*`/`__managed_*` families) is the compiler's; the
 	// LIBRARY — every function the merged module got from `stdlib/` source — is the checkout's, and it
 	// is in this module at all only because `stdlib/` is compiled from source alongside the program. So
-	// both the fragment and `--emit-ir` show the program's own functions. `libraryFacts.libraryFunctions` is the per-function provenance the whole compiler
+	// both a `TargetIr` pin and `--emit-ir` show the program's own functions. `libraryFacts.libraryFunctions` is the per-function provenance the whole compiler
 	// asks this by (`StdlibSource.isLibraryFunction`), passed rather than re-derived.
 	//
 	// `runtimeIrNames` (`--emit-ir-runtime=`) is how a caller asks for a NAMED one of those withheld
-	// bodies anyway: it is the only route either has to a golden, and it is per-build so no fragment
-	// that does not ask for one moves a byte. The CHUNKS ride along for that same list's sake — a
+	// bodies anyway: it is the only route either has to a `TargetIr` pin, and it is per-build so no
+	// pin that does not ask for one moves a byte. The CHUNKS ride along for that same list's sake — a
 	// hand-assembled runtime piece has no `IrFunction` to print, so `printTargetModule` renders its
-	// assembled bytes instead, and this is the only place holding both the module and the chunks it was
-	// encoded into. See `printTargetModule`.
+	// assembled bytes instead, and this is the only place holding both the module and the chunks it
+	// was encoded into. See `printTargetModule`.
 	var irText = TargetIrText.notRendered
 
 	if emitIr 'emitIr'
@@ -314,9 +314,12 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// reconciliation panics compare against them), and build the tables lazily behind
 	// `compilerLogEnabled` so a build without `--log=compiler:debug` pays only for the handful of
 	// counter reads, never for formatting a row.
+	flushCompilerLog()
+
 	let total = whole.elapsed()
 	project.timings.total = PhaseCost.create(total.nanos, cpuTicks: total.cpuTicks)
 	project.memory.total = total
+	project.retiredWorkers.release()
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
 		let log = compilerLogger(CompilerLogGroup.compiler)
@@ -647,7 +650,12 @@ end 'CheckedCompile'
 // under edit and a tool asked to check a file, both of which want what was wrong; `compileToCodeResult`
 // reports and throws by design, and both of its paths leave `project.diagnostics` standing.
 module function checkWithoutWriting(project Project) returns CheckedCompile
-	let codeResult = try compileToCodeResult(project) otherwise return CheckedCompile.refused
+	let codeResult = try compileToCodeResult(project) otherwise 'refused'
+		project.retiredWorkers.release()
+		return CheckedCompile.refused
+	end 'refused'
+
+	project.retiredWorkers.release()
 	return CheckedCompile.compiled(codeResult)
 end 'checkWithoutWriting'
 
@@ -690,7 +698,7 @@ end 'writeTargetIr'
 //
 // File and IO errors (`fileNotFound`, `noSourceFiles`, `readError`, raised by `loadSourceFiles`)
 // carry no diagnostics and propagate straight to the caller, which prints a specific message.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false, session CompileSession = CompileSession.printing()) returns Project throws CompileError
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included) returns Project throws CompileError
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
 	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), debugStream: debugStream, session: session)
 
@@ -715,9 +723,30 @@ export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdl
 	//
 	// ⚠ The RUNTIME tier's share of this is billed to its own phase from inside the loader, and
 	// `compileMeasured` subtracts that row from `load`'s so the two stay disjoint.
-	try loadLibrarySources(project)
+	match library 'library'
+		included then try loadLibrarySources(project)
+		omitted then break 'library'
+	end 'library'
+
 	return project
 end 'loadProject'
+
+export enum LibraryLoad
+	included
+	omitted
+end 'LibraryLoad'
+
+export function claimsOfSources(inputPaths MaxonSourcePathArray, target Target, session CompileSession, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), defines DefineArray = DefineArray.create()) returns SourceClaims throws CompileError
+	var project = try userFilesProjectOf(inputPaths, target: target, session: session, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, compilerWrittenSources: compilerWrittenSources, defines: defines)
+	return try claimsOfUserFiles(project)
+end 'claimsOfSources'
+
+function userFilesProjectOf(inputPaths MaxonSourcePathArray, target Target, session CompileSession, stdlibDirOverride StatedText, runtimeDirOverride StatedText, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, compilerWrittenSources CompilerWrittenSourceArray, defines DefineArray) returns Project throws CompileError
+	let probe = CompileSession.create(DiagnosticSink.discarding(), fileMemos: session.fileMemos, treeLock: TreeLockHold.none())
+	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, session: probe, library: LibraryLoad.omitted)
+	project.defines = defines
+	return project
+end 'userFilesProjectOf'
 
 // ⭐ **WHICH `stdlib/` THIS COMPILE READS — the walk-up, or a directory the CALLER names.**
 //
@@ -1283,6 +1312,15 @@ type LoweredProgram
 end 'LoweredProgram'
 
 module function checkFrontEndWithoutWriting(project Project) throws CompileError
+	try checkTheFrontEnd(project) otherwise (failure) 'failed'
+		project.retiredWorkers.release()
+		throw failure
+	end 'failed'
+
+	project.retiredWorkers.release()
+end 'checkFrontEndWithoutWriting'
+
+function checkTheFrontEnd(project Project) throws CompileError
 	_ = try lowerTheProgram(project, passes: buildFrontEndLoweringPasses()) otherwise (failure) 'failed'
 		closeOpenPhaseSpans(project.openPhaseSpans, unit: project.traceUnit)
 		try rethrowUnlessRefused(failure)
@@ -1290,7 +1328,7 @@ module function checkFrontEndWithoutWriting(project Project) throws CompileError
 	end 'failed'
 
 	try reportBindingHygieneDiagnostics(project) otherwise return
-end 'checkFrontEndWithoutWriting'
+end 'checkTheFrontEnd'
 
 function rethrowUnlessRefused(failure CompileError) throws CompileError
 	match failure.failure() 'failure'
@@ -1628,8 +1666,8 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// same reason: already-lowered Std, appended after the pipeline, see this block's header. Keyed on
 	// its own `usesManagedMemory` bit (any `__managed_*` reference), which also implied `usesHeap` above (the helpers
 	// `__mm_alloc`/`__mm_free` the record and its element buffer). It installs the WHOLE managed-memory runtime as
-	// one closure — the helpers call each other, and `__`-prefixed functions are excluded from the goldens,
-	// so an all-or-nothing install is golden-neutral and needs no per-helper dependency tracking.
+	// one closure — the helpers call each other, and `__`-prefixed functions are excluded from the
+	// rendered Target IR, so an all-or-nothing install needs no per-helper dependency tracking.
 	installManagedMemoryRuntime(pipeline.stdModule, usage: usage)
 
 	// The List runtime (`__list_create`/`__list_append`/`__list_get`/…) — installed the same already-lowered
@@ -1676,8 +1714,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// a function name — and builds an impl iff the program NAMES it and does not already DEFINE it.
 	// **REFERENCED-but-undefined ⟺ INSTALLED**; see `installBuiltinConformanceRuntime`'s own header, which
 	// owns this rule, for why the "does not already define" half is load-bearing and why the walk is the wide
-	// one. Golden-neutral for every program that names no impl (the conformance-free corpus and the whole
-	// wasm suite): the walk builds nothing.
+	// one. For a program that names no impl, the walk builds nothing.
 	//
 	// ⚠ **WHICH impls those are is deliberately NOT LISTED HERE, and the omission is the point.** The roster
 	// is one (type, protocol) pair per impl in `IrInterface.isIntrinsicBuiltinConformance`, and
@@ -2188,38 +2225,6 @@ export function holdsIgnoreMarker(dir FilePath) returns bool
 	// directory name this way.
 	return File.exists(dir.join("{IgnoreMarkerName}"))
 end 'holdsIgnoreMarker'
-
-// Is `dir` excluded — by its own marker, or by one in any directory above it?
-//
-// ⚠ This is not the question `maxon build` and `maxon fmt` ask of a root they were handed, and
-// putting it back in front of either walk is what `specs/maxonignore.md` and
-// `tests/cli/build-a-named-directory-under-a-maxonignore.maxtest` refuse: a named path escapes
-// every marker. `Testing/SpecTestRunner.compilationUnitsAmong` is the one caller, and the ancestry
-// half is there for it — a staged spec fragment is asked about by path, with no walk to have pruned
-// it, and it must be asked with this predicate rather than with "did a walk return it", because a
-// walk also leaves out every file that is not a `.maxon` source, which naming does compile. See
-// there.
-export function isIgnoredDirectory(dir FilePath) returns bool
-	// Resolved first: the climb runs out of parents at a relative spelling's own first component while
-	// the directories that could hold a marker are still above it, so a relative `dir` would ask about
-	// nothing at all.
-	var current = dir.resolve(Directory.currentPath())
-
-	while true 'upwards'
-		if holdsIgnoreMarker(current) 'ignored'
-			return true
-		end 'ignored'
-
-		// The root is the last level probed: it has no parent, so the walk ends there.
-		let above = try current.parent() otherwise 'atTheRoot'
-			break
-		end 'atTheRoot'
-
-		current = above
-	end 'upwards'
-
-	return false
-end 'isIgnoredDirectory'
 
 // Read one source file and register its content with the query system. Exported so stdlib modules
 // are loaded through the identical read+register path a user file takes.

@@ -340,7 +340,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3032: specs/fragments/enum-struct-backing/error.struct-backing-mixed.test:14:2: raw value type mismatch: 'expected Meta, got int'
+error E3032: specs/enum-struct-backing/error.struct-backing-mixed.maxon:14:2: raw value type mismatch: 'expected Meta, got int'
 ```
 
 ### Error: fromRawValue blocked
@@ -367,7 +367,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/enum-struct-backing/error.struct-backing-fromRawValue.test:17:15: unknown enum case: 'fromRawValue'
+error E3034: specs/enum-struct-backing/error.struct-backing-fromRawValue.maxon:17:15: unknown enum case: 'fromRawValue'
 ```
 
 
@@ -508,7 +508,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-struct-backing/error.struct-backing-field-type.test:7:2: Unsupported: field 'label' of the `Meta` backing is declared `String`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `String`, a `Character`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of
+error E2015: specs/enum-struct-backing/error.struct-backing-field-type.maxon:7:2: Unsupported: field 'label' of the `Meta` backing is declared `String`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `String`, a `Character`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of
 ```
 
 ### Error: a payload-bearing union as a backing field
@@ -540,7 +540,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-struct-backing/error.struct-backing-boxed-union-field.test:14:2: Unsupported: field 's' of the `Meta` backing is declared `Shape`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `String`, a `Character`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of
+error E2015: specs/enum-struct-backing/error.struct-backing-boxed-union-field.maxon:14:2: Unsupported: field 's' of the `Meta` backing is declared `Shape`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `String`, a `Character`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of
 ```
 
 ### Error: a case that omits a field
@@ -567,7 +567,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-struct-backing/error.struct-backing-missing-field.test:10:2: Unsupported: field 'cost' of the `Meta` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case
+error E2015: specs/enum-struct-backing/error.struct-backing-missing-field.maxon:10:2: Unsupported: field 'cost' of the `Meta` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case
 ```
 
 ### Error: a label naming no declared field
@@ -589,7 +589,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3018: specs/fragments/enum-struct-backing/error.struct-backing-unknown-field.test:9:2: type 'Meta' has no field named 'bogus'
+error E3018: specs/enum-struct-backing/error.struct-backing-unknown-field.maxon:9:2: type 'Meta' has no field named 'bogus'
 ```
 
 ### Error: one field written twice
@@ -614,7 +614,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3018: specs/fragments/enum-struct-backing/error.struct-backing-duplicate-field.test:9:2: field 'value' of 'Meta' is initialized twice by this literal
+error E3018: specs/enum-struct-backing/error.struct-backing-duplicate-field.maxon:9:2: field 'value' of 'Meta' is initialized twice by this literal
 ```
 
 ### Error: more factory arguments than the struct has fields
@@ -639,7 +639,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-struct-backing/error.struct-backing-arity.test:9:2: Unsupported: 2 argument(s) to the `Meta` constant, which declares 1 field(s) — a factory call in this position is read as the struct LITERAL its arguments fill, so an argument past the last field names nothing
+error E2015: specs/enum-struct-backing/error.struct-backing-arity.maxon:9:2: Unsupported: 2 argument(s) to the `Meta` constant, which declares 1 field(s) — a factory call in this position is read as the struct LITERAL its arguments fill, so an argument past the last field names nothing
 ```
 
 ### Error: bare `.rawValue` on a struct-backed enum
@@ -667,5 +667,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-struct-backing/error.struct-backing-bare-rawvalue.test:14:12: Unsupported: `rawValue` on `enum Task` read as a whole value — its raw value is a `Meta` record, which the compiler selects one FIELD of at a time (`.rawValue.<field>`) rather than materializing. Materializing it here would mint an owned heap record inside an expression, and no case in `/specs/enum-struct-backing.md` asks for one
+error E2015: specs/enum-struct-backing/error.struct-backing-bare-rawvalue.maxon:14:12: Unsupported: `rawValue` on `enum Task` read as a whole value — its raw value is a `Meta` record, which the compiler selects one FIELD of at a time (`.rawValue.<field>`) rather than materializing. Materializing it here would mint an owned heap record inside an expression, and no case in `/specs/enum-struct-backing.md` asks for one
 ```

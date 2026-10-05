@@ -65,9 +65,9 @@ let MaxInlinedLeafOps = 24 as ElementIndex
 // deliberately not a knob: two budgets that both took effect would be two rules.
 let ReportedLargerLeafBudget = 32 as ElementIndex
 
-// The block labels this pass mints. They reach the committed goldens, so they are short and prefixed
-// `__il_` (inline-leaves — disjoint from `InsertRangeChecks`' `__rc_` and `InlineManagedPrimitives`'
-// `__im_`).
+// The block labels this pass mints. They reach the rendered Target IR, so they are short and
+// prefixed `__il_` (inline-leaves — disjoint from `InsertRangeChecks`' `__rc_` and
+// `InlineManagedPrimitives`' `__im_`).
 //
 // ⭐ **A COPIED block KEEPS THE CALLEE BLOCK'S OWN LABEL — except the ENTRY, and that exception is the
 // rule.** `__rc_ok`, `ifcont`, `whilehdr` are claims about a CONSTRUCT, and every one of them is still
@@ -80,6 +80,7 @@ let InlineBodyLabel = b"__il_body"
 
 typealias SiteCount = int(0 to u64.max)
 typealias SiteCountArray = Array with SiteCount
+typealias CutOffCallerSet = Set with ElementIndex
 
 // How many parameter cascades one callee carries — its arity at most, and one in nearly every case.
 typealias GuardCount = int(0 to u64.max)
@@ -524,16 +525,17 @@ type LeafPlan
 	end 'blockCountOf'
 end 'LeafPlan'
 
-function buildLeafPlan(module StdModule, namedByGolden BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
+function buildLeafPlan(module StdModule, namedByIrRequest BoolArray, meta StdOpMetaMemo, round SpliceRound, runtimeTier FunctionNameSet, byName FunctionNameIndex) returns LeafPlan
 	var plan = LeafPlan.create(module.funcCount())
 	var reference = StdFunctionReference.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
 
-		// Splicing every site of a golden-named leaf would drop the body the golden asks the printer for; a
-		// callee this round does not admit is not a leaf here either (`roundAdmitsCallee`).
-		let declined = isGoldenNamed(namedByGolden, funcIndex: funcIndex) or not roundAdmitsCallee(round, callee: func, runtimeTier: runtimeTier)
+		// Splicing every site of a leaf a ```RequiredRuntime block names would drop the body that block
+		// asks the printer for; a callee this round does not admit is not a leaf here either
+		// (`roundAdmitsCallee`).
+		let declined = isIrRequested(namedByIrRequest, funcIndex: funcIndex) or not roundAdmitsCallee(round, callee: func, runtimeTier: runtimeTier)
 		let scan = LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0) if declined else scanLeafBody(module, func: func, meta: meta, byName: byName, reference: reference)
 		plan.record(funcIndex, scan: scan, module: module, func: func)
 	end 'eachFunc'
@@ -817,10 +819,34 @@ type InlineLeafStats
 	// `ReportedLargerLeafBudget`'s reason: it is the number the row is graded on, and it should come from the
 	// compile being asked about rather than be re-derived from a corpus later.
 	export var declinedParamGuards as SiteCount
+	var callersCutOffFromAContinuation as FuncIndexArray
+	var callersCutOffNoted as CutOffCallerSet
 
 	static function create() returns InlineLeafStats
-		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, declinedParamGuards: 0}
+		return Self{inlinedSites: 0, sitesRefusedBySize: 0, sitesRefusedBySizeWithinLargerBudget: 0, selfCallSites: 0, sitesRefusedBySafePoint: 0, declinedParamGuards: 0, callersCutOffFromAContinuation: FuncIndexArray.create(), callersCutOffNoted: CutOffCallerSet.create()}
 	end 'create'
+
+	function noteCallerCutOffFromAContinuation(funcIndex ElementIndex)
+		if self.callersCutOffNoted.contains(funcIndex) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		self.callersCutOffNoted.insert(funcIndex)
+		self.callersCutOffFromAContinuation.push(funcIndex)
+	end 'noteCallerCutOffFromAContinuation'
+
+	// A splice of a callee that never returns leaves the caller's continuation unreachable, and left
+	// in place its uses sit before their defs after RPO layout, which the register allocator refuses.
+	// Run once, at the end of the pass: `CallerSiteFacts` hold block positions that a mid-wave drop
+	// would shift.
+	function dropWhatNoPathReaches(module StdModule)
+		for funcIndex in self.callersCutOffFromAContinuation 'eachCaller'
+			dropUnreachableBlocks(module, func: module.getFunc(funcIndex))
+		end 'eachCaller'
+
+		self.callersCutOffFromAContinuation = FuncIndexArray.create()
+		self.callersCutOffNoted = CutOffCallerSet.create()
+	end 'dropWhatNoPathReaches'
 
 	function noteDeclinedParamGuard()
 		self.declinedParamGuards = self.declinedParamGuards + 1
@@ -1026,26 +1052,26 @@ function inlineWithNameIndex(project Project, module StdModule, byName FunctionN
 	var def = StdDefinedValues.create()
 	var cloner = StdOpCloner.create()
 	var meta = StdOpMetaMemo.create()
-	let namedByGolden = goldenRequestedFunctions(project, module: module, byName: byName)
-	spliceCalledOnceCallees(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByGolden: namedByGolden, round: round)
-	spliceLeaves(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByGolden: namedByGolden, round: round)
+	let namedByIrRequest = irRequestedFunctions(project, module: module, byName: byName)
+	spliceCalledOnceCallees(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
+	spliceLeaves(project, module: module, byName: byName, def: def, cloner: cloner, meta: meta, namedByIrRequest: namedByIrRequest, round: round)
 end 'inlineWithNameIndex'
 
-// ⭐ **A BODY A GOLDEN REQUEST NAMES IS A REFERENCE NEITHER RULE MAY SPLICE AWAY.** `--emit-ir-runtime=`
-// (a ```RequiredRuntime block) asks the printer for that body after the pipeline; a callee whose every
-// site was spliced is dropped by dead-function elimination, and the printer would then have nothing to
-// render. Function index -> named by the request.
-function goldenRequestedFunctions(project Project, module StdModule, byName FunctionNameIndex) returns BoolArray
+// ⭐ **A BODY A ```RequiredRuntime REQUEST NAMES IS A REFERENCE NEITHER RULE MAY SPLICE AWAY.**
+// `--emit-ir-runtime=` (a ```RequiredRuntime block) asks the printer for that body after the
+// pipeline; a callee whose every site was spliced is dropped by dead-function elimination, and the
+// printer would then have nothing to render. Function index -> named by the request.
+function irRequestedFunctions(project Project, module StdModule, byName FunctionNameIndex) returns BoolArray
 	var named = BoolArray.create()
 	named.resize(module.funcCount())
 
 	for name in project.requestedRuntimeBodies 'eachRequested'
 		let funcIndex = try byName.byName.get(name.toByteArray()) otherwise continue
-		try named.set(funcIndex, value: true) otherwise panic("goldenRequestedFunctions: function index {funcIndex} is outside the {named.count()}-function module")
+		try named.set(funcIndex, value: true) otherwise panic("irRequestedFunctions: function index {funcIndex} is outside the {named.count()}-function module")
 	end 'eachRequested'
 
 	return named
-end 'goldenRequestedFunctions'
+end 'irRequestedFunctions'
 
 // ══════════════════════════════════════════════════════════════════════════
 // The leaf rule
@@ -1288,8 +1314,8 @@ function isClosedToTheCallerWalk(closed BoolArray, funcIndex ElementIndex) retur
 	return try closed.get(funcIndex) otherwise panic("isClosedToTheCallerWalk: function index {funcIndex} is outside the {closed.count()}-function module")
 end 'isClosedToTheCallerWalk'
 
-function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByGolden BoolArray, round SpliceRound)
-	let plan = buildLeafPlan(module, namedByGolden: namedByGolden, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
+function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound)
+	let plan = buildLeafPlan(module, namedByIrRequest: namedByIrRequest, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
 
 	if plan.eligibleCount == 0 'nothingToInline'
 		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
@@ -1319,7 +1345,7 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 		// ⭐ A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED — the same reachability fact
 		// `insertRangeChecks` and `inlineManagedPrimitives` skip on. Here it is purely cost:
 		// `eliminateDeadFunctions` drops the function before isel either way, and this pass registers no
-		// `.rdata`, so skipping cannot move a golden.
+		// `.rdata`, so skipping leaves the rendered Target IR unchanged.
 		if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
@@ -1334,6 +1360,7 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 		splicer.run()
 	end 'eachFunc'
 
+	stats.dropWhatNoPathReaches(module)
 	let inlined = stats.inlinedSites
 	let eligible = plan.eligibleCount
 	let sizeRefusals = stats.sitesRefusedBySize
@@ -1351,10 +1378,11 @@ end 'spliceLeaves'
 
 // ⛔⛔ **THE ROW'S PROMISE, ASKED OF THE FINISHED MODULE — AND THAT PLACEMENT IS THE WHOLE OF WHAT MAKES
 // IT UNBYPASSABLE.** `__Raw.splicedAtEverySite()` is a body saying it must not exist as a function, and
-// every rule the row does NOT override still refuses it: the safe-point boundary, a by-reference parameter,
-// the green-thread stack guard, an op the dialect will not copy, a golden request for the body itself. What
-// must never happen is that one of them refuses QUIETLY — the family would then ship at exactly the cost
-// the port was written to remove, with a call where its author promised none and nothing anywhere saying so.
+// every rule the row does NOT override still refuses it: the safe-point boundary, a by-reference
+// parameter, the green-thread stack guard, an op the dialect will not copy, a ```RequiredRuntime
+// request for the body itself. What must never happen is that one of them refuses QUIETLY — the
+// family would then ship at exactly the cost the port was written to remove, with a call where its
+// author promised none and nothing anywhere saying so.
 //
 // ⭐⭐ A check inside the pass can only see the sites the pass reached, so a narrowing of the pass takes
 // the detector away with it. This one reads the SURVIVING module, after the last splice round and after the
@@ -1485,9 +1513,9 @@ function whyTheSpliceWasRefused(project Project, module StdModule, calleeIndex E
 		return calledOnceRefusalText(CalledOnceRefusal.safePointProvenance)
 	end 'wouldWidenTheSafePoint'
 
-	if aGoldenRequestNames(project, name: module.getFunc(calleeIndex).name) 'aGoldenWantsTheBody'
-		return calledOnceRefusalText(CalledOnceRefusal.namedByGoldenRequest)
-	end 'aGoldenWantsTheBody'
+	if anIrRequestNames(project, name: module.getFunc(calleeIndex).name) 'anIrRequestWantsTheBody'
+		return calledOnceRefusalText(CalledOnceRefusal.namedByIrRequest)
+	end 'anIrRequestWantsTheBody'
 
 	return bodyOpRefusalText(module, calleeIndex: calleeIndex, byName: byName)
 end 'whyTheSpliceWasRefused'
@@ -1542,9 +1570,9 @@ function refusedOpText(op StdOp, module StdModule, byName FunctionNameIndex, ref
 	end 'reference'
 end 'refusedOpText'
 
-// Does a ```RequiredRuntime request name this body? The same roster `goldenRequestedFunctions` builds its
+// Does a ```RequiredRuntime request name this body? The same roster `irRequestedFunctions` builds its
 // column from, read the other way round for a one-off sentence.
-function aGoldenRequestNames(project Project, name ByteArray) returns bool
+function anIrRequestNames(project Project, name ByteArray) returns bool
 	for requested in project.requestedRuntimeBodies 'eachRequested'
 		if requested.toByteArray().equals(name) 'named'
 			return true
@@ -1552,7 +1580,7 @@ function aGoldenRequestNames(project Project, name ByteArray) returns bool
 	end 'eachRequested'
 
 	return false
-end 'aGoldenRequestNames'
+end 'anIrRequestNames'
 
 // ══════════════════════════════════════════════════════════════════════════
 // The called-once rule
@@ -1583,9 +1611,9 @@ enum CalledOnceRefusal
 	unsupportedOp
 	pressureBudgetExceeded
 
-	// A ```RequiredRuntime golden asks the printer for this body after the pipeline; spliced away, it
-	// would be dropped and the golden would pin nothing.
-	namedByGoldenRequest
+	// A ```RequiredRuntime block asks the printer for this body after the pipeline; spliced away, it
+	// would be dropped and the `TargetIr` pin would hold nothing of it.
+	namedByIrRequest
 
 	// Its one site lies below the caller range this round considers, so the other round decided it — see
 	// `SpliceRound`.
@@ -1608,7 +1636,7 @@ function calledOnceRefusalText(reason CalledOnceRefusal) returns String
 		entryCarriesPhis gives "its entry block carries phis"
 		unsupportedOp gives "it holds an op the splice cannot copy"
 		pressureBudgetExceeded gives "the caller's values live across the site plus the body's loop live-ins are over the register budget"
-		namedByGoldenRequest gives "a golden request names its body"
+		namedByIrRequest gives "a rendered-IR request names its body"
 		siteOutsideThisRound gives "its one site lies outside the caller range this round considers"
 		calleeOutsideThisRound gives "it is not a runtime tier body, which is the only callee the band's round joins a builder caller to"
 	end 'r'
@@ -2261,7 +2289,7 @@ end 'collectBlockReads'
 // none left unprocessed is ready, and the ready candidates of one wave are spliced caller by caller in one
 // walk of each caller. A candidate never ready when the ready list drains lies on a cycle of candidates,
 // or calls into one: the cycle's members are refused and their callers counted down, and the waves go on.
-function spliceCalledOnceCallees(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByGolden BoolArray, round SpliceRound)
+function spliceCalledOnceCallees(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound)
 	let funcCount = module.funcCount()
 	let census = CalledOnceCensus.take(project, module: module, byName: byName)
 	var refusals = OrdinalTally.create(CalledOnceRefusal.allCaseNames.count())
@@ -2291,10 +2319,10 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 			continue
 		end 'notThePairThisRoundJoins'
 
-		if isGoldenNamed(namedByGolden, funcIndex: funcIndex) 'aGoldenWantsTheBody'
-			refusals.add(CalledOnceRefusal.namedByGoldenRequest.ordinal, count: 1)
+		if isIrRequested(namedByIrRequest, funcIndex: funcIndex) 'anIrRequestWantsTheBody'
+			refusals.add(CalledOnceRefusal.namedByIrRequest.ordinal, count: 1)
 			continue
-		end 'aGoldenWantsTheBody'
+		end 'anIrRequestWantsTheBody'
 
 		if census.callerOfCallee(funcIndex) == funcIndex 'callsItself'
 			refusals.add(CalledOnceRefusal.recursive.ordinal, count: 1)
@@ -2351,6 +2379,7 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 		remaining = remaining - spliceWave(project, module: module, byName: byName, census: census, calleesOfCallers: calleesOfCallers, budget: budget, candidate: candidate, processed: processed, pendingCallees: pendingCallees, ready: ready, refusals: refusals, stats: stats, def: def, cloner: cloner, meta: meta, origins: origins, wave: wave, callerFacts: callerFacts, liveness: liveness, across: across)
 	end 'eachWave'
 
+	stats.dropWhatNoPathReaches(module)
 	let spliced = stats.inlinedSites
 	let declinedGuards = stats.declinedParamGuards
 
@@ -2384,9 +2413,9 @@ function admitCandidate(calleeIndex ElementIndex, census CalledOnceCensus, candi
 	candidateCount = candidateCount + 1
 end 'admitCandidate'
 
-function isGoldenNamed(namedByGolden BoolArray, funcIndex ElementIndex) returns bool
-	return try namedByGolden.get(funcIndex) otherwise panic("isGoldenNamed: function index {funcIndex} is outside the golden-named column")
-end 'isGoldenNamed'
+function isIrRequested(namedByIrRequest BoolArray, funcIndex ElementIndex) returns bool
+	return try namedByIrRequest.get(funcIndex) otherwise panic("isIrRequested: function index {funcIndex} is outside the IR-requested column")
+end 'isIrRequested'
 
 function isCandidate(candidate BoolArray, funcIndex ElementIndex) returns bool
 	return try candidate.get(funcIndex) otherwise panic("isCandidate: function index {funcIndex} is outside the candidate column")
@@ -2790,6 +2819,8 @@ type SiteSplicer
 	var siteCallees as FuncIndexArray
 	var contPositions as BlockPositionColumn
 	var siteBuffersSeeded as bool
+	var aReturnReachesTheContinuation as bool
+	var copiedBlockIsReachable as bool
 
 	// The def enumerator's sink, the op cloner and the variant memo, shared by every function's splices:
 	// this type is constructed per function.
@@ -2814,6 +2845,8 @@ type SiteSplicer
 			siteCallees: sharedEmptySiteCallees,
 			contPositions: sharedEmptyContPositions,
 			siteBuffersSeeded: false,
+			aReturnReachesTheContinuation: false,
+			copiedBlockIsReachable: false,
 			def: def,
 			cloner: cloner,
 			meta: meta
@@ -2963,7 +2996,7 @@ type SiteSplicer
 		// call's result id as a block arg, the function's live set does not contain it. Seeded inside
 		// that gap, the minter's floor can sit at or below the result id, and a copied body's fresh
 		// value comes back as the very id the continuation is about to define: two definitions of one
-		// value, which this tier does not refuse and no golden reads back.
+		// value, which this tier does not refuse.
 		_ = self.valueIds()
 
 		var contRefs = BlockRefArray.create()
@@ -3383,7 +3416,12 @@ type SiteSplicer
 		let spliceSite = self.func.recordInlineSite(InlineSite.create(callee, parent: self.blockAt(predRef).inlineSite, callSpan: siteSpan, calleeSourceFile: calleeFunc.sourceFilePath))
 		let blocks = self.mintCopiedBlocks(calleeFunc, guards: self.declinedGuards(calleeFunc, args: args), spliceSite: spliceSite)
 		self.attachContinuationArg(contRef, calleeFunc: calleeFunc, resultId: resultId)
+		self.aReturnReachesTheContinuation = false
 		self.copyBodies(calleeFunc, contRef: contRef, blocks: blocks, subst: subst)
+
+		if not self.aReturnReachesTheContinuation 'theCalleeNeverReturns'
+			self.stats.noteCallerCutOffFromAContinuation(self.funcIndex)
+		end 'theCalleeNeverReturns'
 
 		for local in calleeFunc.debugLocals 'eachCalleeBinding'
 			self.func.recordSplicedLocal(local.splicedCopy(subst, site: blocks.siteOf(local.inlineSite)))
@@ -3618,9 +3656,11 @@ type SiteSplicer
 	// order and skipping the same declined cascades — so the two walks pair up positionally.
 	function copyBodies(calleeFunc IrFunction, contRef ElementIndex, blocks SpliceBlocks, subst ValueIdArray)
 		var copied = 0 as ElementIndex
+		let reachable = reachableBlockPositions(self.module, func: calleeFunc)
 
 		for i in 0 upto calleeFunc.blockRefs.count() 'eachBlock'
 			let calleeBlockRef = try calleeFunc.blockRefs.get(i) otherwise panic("SiteSplicer.copyBodies: blockRefs.get OOB at {i}")
+			self.copiedBlockIsReachable = try reachable.get(i) otherwise panic("SiteSplicer.copyBodies: reachable.get OOB at {i}")
 
 			if blocks.guards.isDeclined(self.blockAt(calleeBlockRef).id) 'insideADeclinedCascade'
 				continue
@@ -3916,6 +3956,13 @@ type SiteSplicer
 
 	function returnToContinuation(freshRef ElementIndex, contRef ElementIndex, argIds ValueIdArray)
 		let contId = self.blockAt(contRef).id
+
+		// Only a reachable return counts: a callee whose tail an earlier wave cut off still holds that
+		// `ret`, and counting it would keep this caller's dead continuation alive.
+		if self.copiedBlockIsReachable 'aReturnSomePathReaches'
+			self.aReturnReachesTheContinuation = true
+		end 'aReturnSomePathReaches'
+
 		self.module.setTerminator(self.blockAt(freshRef), op: StdOp.branch(contId))
 		attachEdge(self.blockAt(freshRef), targetId: contId, argIds: argIds)
 	end 'returnToContinuation'

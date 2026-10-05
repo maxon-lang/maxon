@@ -791,15 +791,16 @@ which nothing a buffer entry does can free. `stdlib/Array.maxon`'s `clear()` —
 `managed.clear()` — opens no frame and saves no register.
 
 ⚠ **THE ELEMENT IS A `String` AND THE EXIT CODE IS PINNED, WHICH IS WHAT MAKES THIS A GATE RATHER THAN A
-GOLDEN.** `clear()` runs the element-destroy walk over the two `String`s: a reference LOST here is a double
+READING.** `clear()` runs the element-destroy walk over the two `String`s: a reference LOST here is a double
 free, a reference GAINED is a leak and **exit 101**, and neither is visible to a stdout-only case. The array
 is refilled after the clear and read back, so the walk must have destroyed exactly the two it was given.
 
-⚠ **THE FRAGMENT IS WHAT GATES THE COST.** A six-name whitelist on the door's condition moves this
-fragment — its frame grows a callee-saved register, which is where the `__mm_retain`'s result has to
-live across `__managed_clear` — while `the-value-spelling-of-the-same-field-keeps-its-reference` below
-stays **byte-identical**, which is what says the two doors are separate and not merged. Nothing in the
-suite goes red either way: this is a cost, not a semantics.
+⚠ **THE COST SHOWS ONLY IN THE EMITTED CODE (`--emit-ir`), AND NOTHING PINS IT.** A six-name whitelist on
+the door's condition changes this case's emitted code — its frame grows a callee-saved register, which is
+where the `__mm_retain`'s result has to live across `__managed_clear` — while
+`the-value-spelling-of-the-same-field-keeps-its-reference` below stays **byte-identical**, which is what
+says the two doors are separate and not merged. Nothing in the suite goes red either way: this is a cost,
+not a semantics.
 ```maxon
 typealias Slot = int(0 to 1000)
 

@@ -293,7 +293,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3068: specs/fragments/reference-identity/primitive-error.test:5:7: 'is' requires reference types (structs), not primitive values
+error E3068: specs/reference-identity/primitive-error.maxon:5:7: 'is' requires reference types (structs), not primitive values
 ```
 
 <!-- test: byte-array-constant-identity -->

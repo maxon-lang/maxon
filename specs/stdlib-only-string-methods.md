@@ -41,8 +41,7 @@ enforces it (E2053), so a positional one would make `stdlib/` refuse itself.
 receiver's own RECORD — a String record and an Array record agree on all five slots that entry reads,
 and it touches `@40` nowhere.
 
-⚠ Some case names below say "pair". They are IDs, and an id is renamed at the cost of orphaning a
-golden in every target directory; the count that matters is what the refusals themselves render.
+⚠ Some case names below say "pair". They are IDs; the count that matters is what the refusals themselves render.
 
 A user call to any of the five is refused as module-scoped and not visible from this directory
 (`E3088`).

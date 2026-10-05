@@ -54,7 +54,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3081: specs/fragments/match-payload-discard-bindings/error.all-discard-two-payloads.test:13:3: use 'two' instead of 'two(_, _)' to ignore associated values
+error E3081: specs/match-payload-discard-bindings/error.all-discard-two-payloads.maxon:13:3: use 'two' instead of 'two(_, _)' to ignore associated values
 ```
 
 <!-- test: error.all-discard-in-a-gives-arm -->
@@ -76,7 +76,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3081: specs/fragments/match-payload-discard-bindings/error.all-discard-in-a-gives-arm.test:13:3: use 'value' instead of 'value(_)' to ignore associated values
+error E3081: specs/match-payload-discard-bindings/error.all-discard-in-a-gives-arm.maxon:13:3: use 'value' instead of 'value(_)' to ignore associated values
 ```
 
 <!-- test: error.all-discard-on-a-keyword-named-case -->
@@ -97,7 +97,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3081: specs/fragments/match-payload-discard-bindings/error.all-discard-on-a-keyword-named-case.test:13:3: use 'end' instead of 'end(_, _)' to ignore associated values
+error E3081: specs/match-payload-discard-bindings/error.all-discard-on-a-keyword-named-case.maxon:13:3: use 'end' instead of 'end(_, _)' to ignore associated values
 ```
 
 <!-- test: partial-discard-is-legal -->

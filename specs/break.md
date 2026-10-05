@@ -263,7 +263,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2048: specs/fragments/break/break.error-break-own-label.test:4:9: 'break' with label 'loop' targets its own loop; use 'break' without a label, or 'break' with the label of an outer loop
+error E2048: specs/break/break.error-break-own-label.maxon:4:9: 'break' with label 'loop' targets its own loop; use 'break' without a label, or 'break' with the label of an outer loop
 ```
 
 <!-- test: break.error-continue-own-label -->
@@ -279,7 +279,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2048: specs/fragments/break/break.error-continue-own-label.test:6:12: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
+error E2048: specs/break/break.error-continue-own-label.maxon:6:12: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
 ```
 
 <!-- test: break.error-unreachable-after-break -->
@@ -306,7 +306,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3071: specs/fragments/break/break.error-unreachable-after-break.test:9:4: unreachable code after 'break'
+error E3071: specs/break/break.error-unreachable-after-break.maxon:9:4: unreachable code after 'break'
 ```
 
 <!-- test: break.error-unreachable-after-continue -->
@@ -328,5 +328,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3071: specs/fragments/break/break.error-unreachable-after-continue.test:9:4: unreachable code after 'continue'
+error E3071: specs/break/break.error-unreachable-after-continue.maxon:9:4: unreachable code after 'continue'
 ```

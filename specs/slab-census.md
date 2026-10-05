@@ -122,7 +122,7 @@ of `word and 0xFFFF`) **stays GREEN as well**, because the case asserts only tha
 exactly N and 64 widgets that all land in one wrong bucket satisfy it as well as 64 in the right one. ⇒
 **`a-tagged-population-moves-one-bucket-by-N` GATES THE WALK, NOT THE ATTRIBUTION**: what it catches is a
 tally that finds the wrong number of live slots, which is the row above it. What pins the attribution is
-this case's ```mm-trace golden, which names every box the program allocated.
+this case's ```mm-trace block, which names every box the program allocated.
 
 ⛔ *"a size-class bucket is keyed by the REQUESTED size rather than the slot size"* is not a defect this
 tier can have: the walk never sees a request, only a span's class index and the ladder's packed geometry.
@@ -715,7 +715,7 @@ something the program can observe.
 buffer that grew between the readings would free its old buffer, and a bucket that FELL would be a
 defect this case reports against a growth it caused itself.
 
-⚠ **THE POPULATION IS SMALL BECAUSE THE GOLDEN IS THE WHOLE TRACE.** A capture case commits every
+⚠ **THE POPULATION IS SMALL BECAUSE THE BLOCK IS THE WHOLE TRACE.** A capture case commits every
 `mm_` line its program produced, so the count here is the smallest one that still states the relation —
 the largest riser rises by exactly N for any N above zero.
 <!-- MmTrace -->

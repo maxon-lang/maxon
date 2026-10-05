@@ -38,7 +38,10 @@
 // `ServiceError` — the service can be gone.
 typealias StdPassReply = Promise with (StdUnitBody, ServiceError)
 typealias StdPassReplyArray = Array with StdPassReply
+typealias StdArrivedUnits = ArrivedUnits with StdModule
 typealias StdPassWorkerHandleArray = Array with StdPassWorker.handle
+
+export typealias StdPassRetirees = WorkerRetirees with StdPassWorker.handle
 
 // The per-function landing slots the drain fills in ARRIVAL order, and the fold reads in index order
 // through `LandingSlots.slotOf`.
@@ -313,10 +316,7 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 			foldWorkerReport(project, report: try await worker.report() otherwise panic("{workerGoneMessage("runStdPassesOnAWorkerPool", subject: "worker {slot}")}"), members: members, tallies: tallies)
 		end 'eachReport'
 
-		// ⛔ **EVERY HANDLE GOES BEFORE THIS FRAME DOES.** Dropping the last handle to a service closes its
-		// mailbox, which is what lets the worker's green thread finish; a handle still held at process
-		// exit is a service that never ends and an exit that never comes.
-		workers.clear()
+		project.retiredWorkers.stdPass.keep(workers)
 	end 'somethingToRun'
 
 	for funcIndex in 0 upto funcCount 'foldOriginsInIndexOrder'
@@ -453,6 +453,7 @@ function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, wor
 	var scratch = SpliceScratch.create()
 	var dispatch = PoolDispatch.create(functionOpTallies(module.functions, blocks: module.blocks), workerCount: workerCount)
 	var replies = StdPassReplyArray.create()
+	var arrivedUnits = StdArrivedUnits.create(module.funcCount(), spent: StdModule.create())
 
 	for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
 		dispatchOneStdJob(module, workers: workers, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies)
@@ -466,15 +467,28 @@ function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, wor
 		let reply = try replies.remove(ready) otherwise panic("drainTheStdPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		let body = try await reply otherwise panic("{workerGoneMessage("drainTheStdPool", subject: "the worker running function {funcIndex}")}")
-		spliceStdUnit(module, func: module.getFunc(funcIndex), body: body, scratch: scratch)
 		slots.record(job, slot: landedOrigins.count())
+		arrivedUnits.arrive(body.unitModule)
 		landedOrigins.push(body.origins)
 
-		if dispatch.hasUndispatched() 'handTheFreedWorkerTheNextJob'
+		if dispatch.hasUndispatchedFor(freedWorker) 'handTheFreedWorkerTheNextJob'
 			dispatchOneStdJob(module, workers: workers, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
 		end 'handTheFreedWorkerTheNextJob'
+
+		spliceSettledStdUnits(module, dispatch: dispatch, slots: slots, arrivedUnits: arrivedUnits, scratch: scratch)
 	end 'serveWhoeverFinishedFirst'
+
+	dispatch.requireEveryJobSettled()
 end 'drainTheStdPool'
+
+function spliceSettledStdUnits(module StdModule, dispatch PoolDispatch, slots LandingSlots, arrivedUnits StdArrivedUnits, scratch SpliceScratch)
+	while dispatch.hasNextToSettle() 'eachSettledJob'
+		let job = dispatch.takeNextToSettle()
+		let slot = slots.slotOf(job)
+		spliceStdUnit(module, func: module.getFunc(job), unitModule: arrivedUnits.unitAt(slot), scratch: scratch)
+		arrivedUnits.spend(slot)
+	end 'eachSettledJob'
+end 'spliceSettledStdUnits'
 
 // Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch` just
 // recorded the job in. The unit is built INSIDE the argument and stored nowhere, which is E3138's rule

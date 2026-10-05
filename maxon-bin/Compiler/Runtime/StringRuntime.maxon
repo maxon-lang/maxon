@@ -120,7 +120,7 @@ export let CarriageReturnByte = 13 as Byte
 // usable by any consumer that wants a NUL-terminated buffer, while `length@8` is what Maxon reads.
 // ⚠ EXPORTED — and `export` rather than `module` is the correct one, which the self-compile's own
 // visibility check confirms by NOT flagging it. The blob's READER needs the same terminator its writer
-// used: `TargetPrinter` renders a blob's text into a golden and must stop where this stops, not at the
+// used: `TargetPrinter` renders a blob's text and must stop where this stops, not at the
 // padding — and it lives in `Compiler/IR/Target/`, outside this file's `Compiler/Runtime/` subtree, which
 // is exactly the reach `module` does not have (measured: `module` here is `E2004 Undefined variable`).
 export let NulTerminator = 0 as Byte
@@ -176,7 +176,7 @@ export let BoolToStringScratchBytes = 5 as ParsedInt
 
 // The `.rdata` label prefixes for a literal's blob and its record. Distinct so a reader of the section
 // can tell the two apart; `__`-prefixed so they never collide with a user name and stay out of the
-// spec goldens (`TargetPrinter.isRuntimeFunction`'s data twin).
+// rendered Target IR (`TargetPrinter.isRuntimeFunction`'s data twin).
 let StringBlobPrefix = "__str_blob_"
 let StringRecordPrefix = "__str_rec_"
 
@@ -207,8 +207,8 @@ export let StrEqName = b"__str_eq"
 // ⚠ **`StrCopyName` IS `MmRuntime`'s, WITH ITS BUILDER** — a byte BLIT is a Std-tier operation, not
 // a String's (`Parser`'s interpolation, `GtRuntime`'s subprocess buffers, `__mm_to_cstring`'s copy
 // path). The emitted SYMBOL keeps its `__str_copy` spelling: a runtime callee's name is baked into
-// the goldens and into `RuntimeUsage`'s bit, so renaming it would be a codegen change wearing a
-// tidy-up's clothes.
+// the rendered Target IR and into `RuntimeUsage`'s bit, so renaming it would be a codegen change
+// wearing a tidy-up's clothes.
 //
 // The decimal renderer an interpolation lowers CALLS to (`Parser.emitStringInterp`), which stays: it
 // renders an integer part's text into a scratch buffer, and interpolation is this file's own subject.

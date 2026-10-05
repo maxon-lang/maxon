@@ -230,8 +230,8 @@ module type DebugStreamDecoder
 	///
 	/// The caller hands `segmentName()` to the child through `DsActivationEnvVar`. The name tables are read
 	/// HERE rather than lazily: an executable whose tables cannot be located is not one with no names in
-	/// it, it is a run that would print `tag=1` for every event and a golden that would fail without ever
-	/// saying why.
+	/// it, it is a run that would print `tag=1` for every event and a capture block that would fail
+	/// without ever saying why.
 	module static function create(target FilePath, filter FamilyFilter) returns DebugStreamDecoder throws DecoderError
 		let segment = try SharedSegment.publish(mintSharedSegmentName(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
 			throw DecoderError.segmentUnavailable(e)
@@ -616,10 +616,10 @@ end 'resolveInternedName'
 // The formatters — one line per event, and the bytes of every one are the reference's
 // ============================================================================
 
-// ⚠ **EVERY STRING BELOW IS PINNED BY COMMITTED GOLDENS MINTED THROUGH THE REFERENCE DECODER**
-// (`specs/mm-trace.md`, `tuples.md`, `debugstream-log-events.md`). A "better" spelling here is the
-// failure, not a fix — including the DOUBLE space in `dbg_free_pop` and `dbg_csx_exit`, which is the
-// reference's own column alignment against its longer siblings.
+// ⚠ **EVERY STRING BELOW IS PINNED BY COMMITTED CAPTURE BLOCKS MINTED THROUGH THE REFERENCE
+// DECODER** (`specs/mm-trace.md`, `tuples.md`, `debugstream-log-events.md`). A "better" spelling
+// here is the failure, not a fix — including the DOUBLE space in `dbg_free_pop` and
+// `dbg_csx_exit`, which is the reference's own column alignment against its longer siblings.
 
 function formatEvent(eventType EventCode, entry ByteArray, at ByteOffset, tagNames StringArray, logNames StringArray) returns String
 	return match familyOf(eventType) 'band'
@@ -824,7 +824,7 @@ function formatLogEvent(eventType EventCode, entry ByteArray, at ByteOffset, log
 end 'formatLogEvent'
 
 // A LOG_TEXT's UTF-8 tail, without the terminator the emitting call site wrote: a line this consumer prints
-// supplies its own, and a doubled one would put a blank line into every golden.
+// supplies its own, and a doubled one would put a blank line into every capture block.
 function logTextIn(entry ByteArray, at ByteOffset, byteCount BytePos) returns String
 	if not spanFitsWithin(at, count: byteCount, total: entry.count() as BytePos) 'runsPastTheEntry'
 		panic("DebugStream: a log_text entry claims {byteCount} text bytes at {at}, past the {entry.count()} bytes of the drained span — its entry_size and its length field disagree")

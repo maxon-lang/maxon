@@ -56,8 +56,8 @@ it reaches — after every rewritten candidate has had its tested slot dropped, 
 hold one (`a-candidate-inside-an-orphaned-region`).
 
 ⚠ A green case here proves nothing on its own — behaviour does not change. The evidence is the
-committed fragment of the first case (the fast arm reaches `tryok` with no `cmp` on the flag) and the
-controls below, each of which exercises a path the rewrite touches: the value taken from the slow
+emitted code (`--emit-ir`) of the first case (the fast arm reaches `tryok` with no `cmp` on the flag),
+which nothing in the suite pins, and the controls below, each of which exercises a path the rewrite touches: the value taken from the slow
 arm, the handler reached from the duplicated test, the phi of the loaded value in the continuation.
 With the "tested argument read elsewhere" refusal deleted, every case in this file fails at COMPILE
 time: the pass admits a rethrowing bare `try` inside a stdlib body every program
@@ -67,7 +67,7 @@ the function ("value … is live-in to block … but was never colored — a use
 ## Tests
 
 <!-- test: a-known-flag-skips-the-test -->
-The shape the pass was opened for. In `pick`'s fragment the fast arm loads the element and reaches
+The shape the pass was opened for. In `pick`'s emitted code (`--emit-ir`) the fast arm loads the element and reaches
 `tryok` directly — no `movRegImm32 …, 0` for the flag, no `cmpRegImm32 r10, 0`, no `critsplit` copy
 of the flag — while `__im_slow`'s call is followed by the `cmp`/`jcc` to `tryerr`.
 ```maxon

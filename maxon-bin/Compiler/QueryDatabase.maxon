@@ -102,11 +102,10 @@ end 'ModuleMemo'
 
 // --- The memo that outlives a `Project` ---
 //
-// ⭐⭐ **EVERYTHING BELOW IS A PURE FUNCTION OF A FILE'S BYTES, AND THAT IS THE WHOLE ADMISSION
-// TEST.** A `Project`-scoped memo may hold anything, because it dies with the ids and the module it
-// was derived against. One shared across `Project`s (`CompileSession.fileMemos`) may hold only what
-// carries no identity — see QueryEngine.maxon's section of the same name for the argument, and for
-// the two things that are deliberately NOT here (a parse artifact, a swept declaration).
+// A `Project`-scoped memo may hold anything, because it dies with the ids and the module it was
+// derived against. One shared across `Project`s (`CompileSession.fileMemos`) holds what carries no
+// identity, and library parses that carry a footprint of every id they embed — see
+// QueryEngine.maxon's section of the same name.
 //
 // The unit is the file's CONTENT HASH rather than its path: `tokenize` reads the bytes and nothing
 // else, so two files with the same bytes have the same tokens whatever they are called, and an
@@ -154,6 +153,131 @@ end 'SharedBuildView'
 
 export typealias SharedBuildViewArray = Array with SharedBuildView
 
+export typealias FootprintNameIdArray = Array with TypeNameId
+export typealias NameIdMap = Map with (TypeNameId, TypeNameId)
+
+export type FootprintRow
+	export let id as GenericInstanceId
+	export let baseId as TypeNameId
+	export let args as MaxonTypeArray
+	export let fixedSize as InstanceSize
+	export let speculative as bool
+	export let compiledName as ByteArray
+
+	export static function create(id GenericInstanceId, baseId TypeNameId, args MaxonTypeArray, fixedSize InstanceSize, speculative bool, compiledName ByteArray) returns FootprintRow
+		return Self{id: id, baseId: baseId, args: args, fixedSize: fixedSize, speculative: speculative, compiledName: compiledName}
+	end 'create'
+end 'FootprintRow'
+
+export typealias FootprintRowArray = Array with FootprintRow
+
+export type FootprintInterface
+	export let declIndex as ElementIndex
+	export let name as ByteArray
+
+	export static function create(declIndex ElementIndex, name ByteArray) returns FootprintInterface
+		return Self{declIndex: declIndex, name: name}
+	end 'create'
+end 'FootprintInterface'
+
+export typealias FootprintInterfaceArray = Array with FootprintInterface
+
+export type ParseFootprint
+	export var rows as FootprintRowArray
+	export var nameIds as FootprintNameIdArray
+	export var nameBytes as ByteArrayArray
+	export var interfaces as FootprintInterfaceArray
+
+	export static function create() returns ParseFootprint
+		return Self{rows: FootprintRowArray.create(), nameIds: FootprintNameIdArray.create(), nameBytes: ByteArrayArray.create(), interfaces: FootprintInterfaceArray.create()}
+	end 'create'
+end 'ParseFootprint'
+
+export type ParseRebase
+	export let names as NameIdMap
+	export let instances as GenericInstanceIdMap
+	export let interfaces as InterfaceIndexMap
+	export let nameBaseline as TypeNameId
+
+	export static function create(names NameIdMap, instances GenericInstanceIdMap, interfaces InterfaceIndexMap, nameBaseline TypeNameId) returns ParseRebase
+		return Self{names: names, instances: instances, interfaces: interfaces, nameBaseline: nameBaseline}
+	end 'create'
+end 'ParseRebase'
+
+export type RebasedParse
+	export let artifact as FileParseArtifact
+	export let rebase as ParseRebase
+
+	export static function create(artifact FileParseArtifact, rebase ParseRebase) returns RebasedParse
+		return Self{artifact: artifact, rebase: rebase}
+	end 'create'
+end 'RebasedParse'
+
+export type SharedLibraryParse
+	let variant as HashDigest
+	let key as HashDigest
+	let footprint as ParseFootprint
+	let artifact as FileParseArtifact
+
+	export static function create(variant HashDigest, key HashDigest, footprint ParseFootprint, artifact FileParseArtifact) returns SharedLibraryParse
+		return Self{variant: variant, key: key, footprint: footprint, artifact: artifact}
+	end 'create'
+
+	function rebasedOnto(signatures ProgramSignatures, overrides RowSetOverrideTable) returns RebasedParse throws SharedMemoMiss
+		let rebase = try signatures.rebaseFor(self.footprint)
+
+		if not self.toldAnswersHold(signatures, overrides: overrides) 'anAnswerMoved'
+			throw SharedMemoMiss.footprintMoved
+		end 'anAnswerMoved'
+
+		var rebasedArtifact = self.artifact.clone()
+
+		match rebasedArtifact.parseMints 'mints'
+			none then break 'mints'
+			minted(mints) then rebasedArtifact.parseMints = ParseMints.minted(try signatures.rebasedMintsAbsentFromTheBaseline(mints, rebase: rebase))
+		end 'mints'
+
+		return RebasedParse.create(rebasedArtifact, rebase: rebase)
+	end 'rebasedOnto'
+
+	function toldAnswersHold(signatures ProgramSignatures, overrides RowSetOverrideTable) returns bool
+		return match self.artifact.parseMints 'mints'
+			none gives true
+			minted(mints) gives signatures.toldAnswersHold(mints, overrides: overrides)
+		end 'mints'
+	end 'toldAnswersHold'
+
+	function answers(wantedVariant HashDigest, wantedKey HashDigest) returns bool
+		return self.variant == wantedVariant and self.key == wantedKey
+	end 'answers'
+
+	function isOfVariant(wantedVariant HashDigest) returns bool
+		return self.variant == wantedVariant
+	end 'isOfVariant'
+
+	function variantOf() returns HashDigest
+		return self.variant
+	end 'variantOf'
+end 'SharedLibraryParse'
+
+typealias SharedLibraryParseArray = Array with SharedLibraryParse
+
+export typealias PendingSharedParseMap = Map with (HashDigest, SharedLibraryParse)
+
+export union SharedParsePlan
+	unshared
+	shareable(contentHash HashDigest, variant HashDigest, key HashDigest)
+end 'SharedParsePlan'
+
+export type ParseStamp
+	export let keyHash as HashDigest
+	export let sharing as SharedParsePlan
+
+	export static function create(keyHash HashDigest, sharing SharedParsePlan) returns ParseStamp
+		return Self{keyHash: keyHash, sharing: sharing}
+	end 'create'
+end 'ParseStamp'
+
 // What one file's BYTES lex to, plus one view per build key this process has been asked about.
 //
 // The views are an ARRAY walked linearly, not a map: a process compiles for ONE target in every
@@ -163,11 +287,38 @@ export typealias SharedBuildViewArray = Array with SharedBuildView
 export type SharedFileMemo
 	// The RAW stream, build-independent: `tokenize` sees neither a target nor a flag.
 	export let tokens as TokenArray
+	export let declaredTypeNames as ByteArrayArray
 	export var views as SharedBuildViewArray
+	var parses as SharedLibraryParseArray
+
+	export function parseCount() returns ElementIndex
+		return self.parses.count()
+	end 'parseCount'
 
 	export static function create(tokens TokenArray) returns SharedFileMemo
-		return Self{tokens: tokens, views: SharedBuildViewArray.create()}
+		return Self{tokens: tokens, declaredTypeNames: declaredTypeNamesIn(tokens), views: SharedBuildViewArray.create(), parses: SharedLibraryParseArray.create()}
 	end 'create'
+
+	export function parseOf(variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable) returns RebasedParse throws SharedMemoMiss
+		for held in self.parses 'eachHeld'
+			if held.answers(variant, wantedKey: key) 'thisParse'
+				return try held.rebasedOnto(signatures, overrides: overrides)
+			end 'thisParse'
+		end 'eachHeld'
+
+		throw SharedMemoMiss.notHeld
+	end 'parseOf'
+
+	export function holdParse(held SharedLibraryParse)
+		for position in 0 upto self.parses.count() 'eachHeld'
+			if (try self.parses.get(position) otherwise panic("SharedFileMemo.holdParse: parses.get OOB at {position} below count {self.parses.count()}")).isOfVariant(held.variantOf()) 'sameVariant'
+				try self.parses.set(position, value: held) otherwise panic("SharedFileMemo.holdParse: parses.set OOB at {position} below count {self.parses.count()}")
+				return
+			end 'sameVariant'
+		end 'eachHeld'
+
+		self.parses.push(held)
+	end 'holdParse'
 
 	// This build's view, or nothing yet. A linear walk for the reason the field's comment gives:
 	// the array holds at most two elements in every driver that exists.
@@ -191,6 +342,7 @@ end 'SharedFileMemo'
 // as `TypeNameInterner.idOf`'s `unknownName` is and unlike its `unknownId`.
 export union SharedMemoMiss implements Error
 	notHeld
+	footprintMoved
 end 'SharedMemoMiss'
 
 export typealias SharedFileMemoMap = Map with (HashDigest, SharedFileMemo)
@@ -432,6 +584,12 @@ export type QueryDatabase
 	export var sharedTokenHits as QueryCount
 	export var sharedActiveTokenHits as QueryCount
 	export var sharedProducerMaskHits as QueryCount
+	export var sharedParseHits as QueryCount
+	export var sharedParseMisses as QueryCount
+	export var sharedParsePublishes as QueryCount
+	export var sharedParseDrifts as QueryCount
+	export var sharedParseReusedFiles as HashDigestSet
+	export var pendingSharedParses as PendingSharedParseMap
 
 	// `os` is the TARGET's, and it reaches only the empty signature sentinel below — see
 	// `SignatureMemo.empty`. A database is filled for one target, exactly as the `Project` that owns it is
@@ -454,7 +612,7 @@ export type QueryDatabase
 			signatureCache: SignatureMemo.empty(os),
 			allModuleCache: ModuleMemo.empty(),
 			tokenHits: 0, tokenMisses: 0,
-			sharedTokenHits: 0, sharedActiveTokenHits: 0, sharedProducerMaskHits: 0,
+			sharedTokenHits: 0, sharedActiveTokenHits: 0, sharedProducerMaskHits: 0, sharedParseHits: 0, sharedParseMisses: 0, sharedParsePublishes: 0, sharedParseDrifts: 0, sharedParseReusedFiles: HashDigestSet.create(), pendingSharedParses: PendingSharedParseMap.create(),
 			activeTokenHits: 0, activeTokenMisses: 0,
 			parseHits: 0, parseMisses: 0, parseMissPaths: ParseMissPathRoster.create(), recordParseMissPaths: false,
 			signatureHits: 0, signatureMisses: 0,
@@ -469,3 +627,27 @@ export type QueryDatabase
 		self.rowSetOverrides = RowSetOverrides.create()
 	end 'releaseFrontEndCaches'
 end 'QueryDatabase'
+
+function declaredTypeNamesIn(tokens TokenArray) returns ByteArrayArray
+	var names = ByteArrayArray.create()
+
+	for i in 0 upto tokens.count() 'eachToken'
+		let token = try tokens.get(i) otherwise panic("declaredTypeNamesIn: tokens.get OOB at {i} below count {tokens.count()}")
+
+		if not tokenKindDeclaresATypeName(token.kind) 'notADeclarationKeyword'
+			continue
+		end 'notADeclarationKeyword'
+
+		let name = try tokens.get(i + 1) otherwise break
+
+		if name.kind == TokenKind.identifier 'aDeclaredName'
+			names.push(name.value)
+		end 'aDeclaredName'
+	end 'eachToken'
+
+	return names
+end 'declaredTypeNamesIn'
+
+function tokenKindDeclaresATypeName(kind TokenKind) returns bool
+	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias
+end 'tokenKindDeclaresATypeName'

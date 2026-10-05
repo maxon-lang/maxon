@@ -361,7 +361,7 @@ type RangeCheckEmitter
 		// A site's `stdOpPos` is `lowerMaxonToStd`'s answer rather than the parser's (see `RangeSiteWalk`),
 		// and 0 is a legitimate one — so the promise is checked HERE, once per function, rather than
 		// per site: a function that reached this pass unlowered would otherwise anchor every one of its
-		// guards at the top of its block, silently, with only a golden to say so.
+		// guards at the top of its block, silently.
 		if not checks.sites.isEmpty() and not checks.positionsResolved 'unlowered'
 			panic("run: '{String.from(self.func.name)}' has {checks.sites.count()} range-check site(s) whose Std positions `lowerMaxonToStd` never filled — this pass runs over the module that lowering just produced, so every function it walks was walked there first")
 		end 'unlowered'
@@ -1573,8 +1573,8 @@ function appendZeroConst(module StdModule, block IrBlock, valueType StdType, ids
 end 'appendZeroConst'
 
 // The label this pass's continuations carry. `InlineManagedPrimitives` passes its own — the two passes
-// share the splitter below and nothing else, and a golden that named every continuation `__rc_ok` would
-// say a range check produced blocks a range check knows nothing about.
+// share the splitter below and nothing else, and rendered Target IR that named every continuation
+// `__rc_ok` would say a range check produced blocks a range check knows nothing about.
 let RangeCheckOkLabel = b"__rc_ok"
 
 // ⭐⭐ **THE BLOCK SPLIT, SHARED — AND SHARED BECAUSE THERE IS EXACTLY ONE RULE TO GET RIGHT.** Split
@@ -1588,7 +1588,7 @@ let RangeCheckOkLabel = b"__rc_ok"
 // split for different reasons and would learn about a change to it separately.
 //
 // The LABEL is the caller's, because a continuation belongs to the pass that minted it and the label
-// reaches the committed goldens.
+// reaches the rendered Target IR.
 //
 // ⚠ **WHY `InsertRangeChecks`' RETURN SITES DO NOT USE `splitChainEnd`, AND WHY NEITHER SPLIT CAN BE THE
 // OTHER.** A return site has no chain to extend (see `GuardChain`), and the block it splits can be a

@@ -71,7 +71,7 @@ does not compile at all — `type Node` itself is refused, **E4014 *"type 'Node'
 (via Node → next: Node)"*** — so `next = other` is unreachable, and the cases
 below reach their E2015 only because a parser diagnostic outranks a later-stage one. And the self-field
 store refcounts: `emitCheckedSelfFieldStore` routes through the same `emitFieldWrite`
-`p.right = …` uses, whose golden for the constructible twin (`heap-field-assignment.md`'s
+`p.right = …` uses, whose emitted code for the constructible twin (`heap-field-assignment.md`'s
 `basic-self-field-assign`) carries `__mm_incref` on the incoming value and `__mm_decref` on the one
 it displaces, in that order.
 
@@ -339,11 +339,11 @@ indirection IN; this case pins it through a struct-typed base. The
 overwritten twice so a missed decref is a leak (exit 101) rather than a number that still reads
 right. Returns `112` — `11` after the alias write, `2` after the `self.` one.
 
-⭐ **THE GOLDEN IS WHERE THE REAL ASSERTION LIVES: `Outer.setViaAlias` and `Outer.setViaSelf` emit
+⭐ **THE EMITTED CODE IS WHERE THE REAL CLAIM SHOWS: `Outer.setViaAlias` and `Outer.setViaSelf` emit
 BYTE-IDENTICAL BODIES**, instruction for instruction and register for register — one
 `loadRegBaseDisp [rcx + 0]` for the box (spilled to `slot0` across the allocation), the new `String`
 built, `__str_decref` on the one it displaces, then the store. Move-in-then-drop, one load, no
-refcount taken on the borrowed struct box. Diff those two functions when this fragment moves: the
+refcount taken on the borrowed struct box. Diff those two functions in `--emit-ir`'s output: the
 two spellings coming apart is the failure this case is watching for, and the exit code alone cannot
 see it.
 ```maxon

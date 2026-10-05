@@ -179,10 +179,9 @@ different arguments all live at the run's head at once, so the pressure the spli
 and the driver re-picks for ever (`splitLiveRanges: 'main' did not converge after … splits`). A
 forbid changes no live range and no pressure, so it cannot do that.
 
-### What the RUN proves, and what the GOLDEN proves
+### What the RUN proves, and what the EMITTED CODE shows
 
-Every test below is checked twice, and the two halves prove different things — neither substitutes
-for the other.
+The run and the emitted code say different things — neither substitutes for the other.
 
 **The run proves the allocation is CORRECT.** A store→slot→reload chain that does not preserve value
 identity — a mis-targeted store, a wrong-slot reload, a reload of a slot nothing wrote, a value left
@@ -195,12 +194,12 @@ folding the paths into one number where two errors can cancel. (They can: in
 `values-confined-by-different-calls` a *permuted* register assignment, the exact bug that test guards,
 leaves the SUM of the six arms exactly correct.)
 
-**The golden proves the allocation did not get WORSE.** The committed `.test` fragment pins *how many*
-stores and reloads each function emits and *where*, so a spill that leaks into a loop body, or a reload
-that reappears at every use, fails as a golden mismatch even though the answer is still right — a
-regression the run cannot see, because slower code still computes the right value. The golden is also
-the only check on code no run reaches (a compile-error path, an assertion's `return` arm). What it
-cannot do is tell right from wrong: it pins what the compiler emitted, not what the program means. Only
+**The emitted code shows whether the allocation got WORSE.** `--emit-ir` renders *how many* stores
+and reloads each function emits and *where*, so a spill that leaks into a loop body, or a reload that
+reappears at every use, shows there even though the answer is still right — a regression the run
+cannot see, because slower code still computes the right value. It is also the only view of code no
+run reaches (a compile-error path, an assertion's `return` arm). What it cannot do is tell right from
+wrong: it shows what the compiler emitted, not what the program means. Only
 the run does that, which is why the run must reach every branch it can.
 
 ## Tests
@@ -285,8 +284,8 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: rematerialized-constant -->
 The constant `c` is used as a division divisor (which needs a register — it cannot be
 an immediate) and is live across fourteen other values, so it would push the pool over
-its limit. Instead of spilling it, the splitter REMATERIALIZES it: the fragment
-re-emits `movRegImm32 …, 7` right before the `idiv`, with NO stack slot for it. Result
+its limit. Instead of spilling it, the splitter REMATERIALIZES it: the emitted code
+(`--emit-ir`) re-emits `movRegImm32 …, 7` right before the `idiv`, with NO stack slot for it. Result
 is `sum(1..14)/7 = 105/7 = 15`.
 ```maxon
 function rematConstant(p Integer) returns Integer
@@ -889,8 +888,8 @@ It is relieved by widening the split: `a6` is stored ONCE at its def in the entr
 0) and **every** use of it is rewritten to a reload — one before the `pre` sum, one after the call —
 so nothing reads the original and it is dead across the call. `a1`..`a5` keep the five callee-saved
 registers. The loop body grows by two loads, which is the ABI's price for a sixth live-across-call
-value, not a search: the fragment pins one `storeSlotReg` OUTSIDE the loop and exactly two
-`loadRegSlot` of that slot inside it. This must never be `E5001` — the program fits.
+value, not a search: the emitted code (`--emit-ir`) shows one `storeSlotReg` OUTSIDE the loop and
+exactly two `loadRegSlot` of that slot inside it, and nothing in the suite pins that. This must never be `E5001` — the program fits.
 
 Each iteration adds `2 × (a1+…+a6) + i` = `42 + i` to `acc`, so `i = 0, 1, 2` gives `42 + 43 + 44 = 129`.
 ```maxon
@@ -934,9 +933,9 @@ Spilling it would work and would be wrong: a constant is free to recreate. So it
 across **every** use — `movRegImm32 …, 1000` re-emitted before each `sub`, the original def dropped,
 and NO stack slot for it at all. (The narrower remat — re-emit only after the peak — cannot be used:
 `c`'s before-peak use is reachable from the call around the back edge, exactly as in the test above,
-so the original would stay live across the call.) The fragment pins two `movRegImm32 …, 1000` inside
-the loop and no slot for `c`; the three slots it does use are `pre`, `d1` and the counter `i`, all
-of them ordinary eviction-point splits.
+so the original would stay live across the call.) The emitted code (`--emit-ir`) shows two
+`movRegImm32 …, 1000` inside the loop and no slot for `c`; the three slots it does use are `pre`, `d1`
+and the counter `i`, all of them ordinary eviction-point splits. Nothing in the suite pins that.
 
 Each iteration adds `pre + d1 + d2 + r + (a1+…+a5)` to `acc`, with `d1 = d2 = 1000 - i` and
 `pre = acc + 15`: `i = 0, 1, 2` give `acc = 2030, 4059, 6087`.
@@ -981,15 +980,15 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: float-locals-read-after-each-of-two-calls -->
 Two f64 locals, each read after each of TWO calls — and neither spills at all.
 xmm6–15 are callee-saved, so both locals stay resident in registers across every call and the only
-slot traffic in the fragment is the prologue/epilogue pair that preserves xmm6/xmm7 themselves:
+slot traffic in the emitted code (`--emit-ir`) is the prologue/epilogue pair that preserves xmm6/xmm7 themselves:
 **two `storeSlotReg` at entry and two `loadRegSlot` before the `ret`, once per function**, not once
 per call.
 
 ⚠ Were every XMM caller-saved, a float live across a call would be forbidden its ENTIRE file,
 have no register left, and be FORCE-SPILLED: the same two stores, plus **one `loadRegSlot` per read**
 — four reloads here, eight in the four-call test below. That per-call bracket would make
-`regalloc:splitting` superlinear in the number of cross-call floats. Read this fragment against the
-four-call one: they are the same shape, and doubling the calls adds not a single instruction inside
+`regalloc:splitting` superlinear in the number of cross-call floats. Read this case's emitted code against
+the four-call one's: they are the same shape, and doubling the calls adds not a single instruction inside
 the body.
 
 `work` adds 1 and each round adds `trunc(1.5) + trunc(2.5)` = 3, so `acc` runs 0 → 1 → 4 → 5 → 8.
@@ -1016,8 +1015,8 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: float-locals-read-after-each-of-four-calls -->
 The same program with the call sites DOUBLED — the other half of the pair above, and the one that
-makes the property checkable rather than asserted. The two locals live in xmm6/xmm7
-across every call, so doubling the calls adds NOTHING: this fragment carries the same two
+makes the property visible in the emitted code. The two locals live in xmm6/xmm7
+across every call, so doubling the calls adds NOTHING: this case's emitted code (`--emit-ir`) carries the same two
 `storeSlotReg` and two `loadRegSlot` as the two-call test, and they are the callee-save pair rather
 than a spill. A per-call spill bracket would make the reload count follow the reads (eight here,
 four there).
@@ -1183,7 +1182,7 @@ end 'main'
 EXACTLY ten f64 locals live across a call — the width of the callee-saved XMM half (xmm6–15). None
 spills: this is the boundary case of the callee-saved half.
 
-⚠ Its fragment carries TEN `storeSlotReg` — the same entry instruction count ten VALUE SPILLS would
+⚠ Its emitted code (`--emit-ir`) carries TEN `storeSlotReg` — the same entry instruction count ten VALUE SPILLS would
 show — but they are a different kind of store, and that distinction is the whole point of the
 case. A value spill is one per local, each paired with a reload at every read, which is what a
 float live across a call would need if it were forbidden its entire file. Here the ten are the

@@ -271,7 +271,7 @@ let SlabSmallTableMaxSize = SlabSmallSizeMax - SlabSmallSizeDiv
 // --- The one `.data` word this family owns ---
 //
 // ⭐ **ALL OF THE ALLOCATOR'S MUTABLE STATE LIVES BEHIND ONE POINTER.** `.data` slots are laid out into
-// every heap program's image and are rendered into every golden fragment, so each one is a cost paid by
+// every heap program's image, so each one is a cost paid by
 // every program that allocates a single box. The mcentral heads, the mcache rows and the metadata slab's
 // bump cursor are all ARRAYS or PAIRS — none of them can live in a `.data` word anyway (`layOut` orders
 // single words in an order this table may not depend on) — so they share one lazily-committed region and
@@ -306,11 +306,11 @@ let SlabStateSchedulerOffset = ((SlabStateMetaFreeOffset as ParsedInt) + WordByt
 // word's reason. Nothing reads it; it is an address that is not zero.
 let SlabStateLockDepthSinkOffset = ((SlabStateSchedulerOffset as ParsedInt) + WordBytes) as ByteOffset
 
-// ⭐⭐ **THE GLOBAL SLOW-PATH LOCK LIVES *HERE*, IN THE STATE REGION, AND NOT IN A `.data` WORD — WHICH IS A
-// GOLDEN-FRAGMENT ARGUMENT, NOT A TIDINESS ONE.** Every committed fragment under `specs/fragments/`
-// renders the whole `data { … }` table with each label's byte OFFSET, so one new `.data` word shifts every
-// label after it and re-mints **every heap program's golden in the suite**. A CRITICAL_SECTION reached
-// through the pointer `__slab_state` already holds costs the image nothing and the fragments nothing.
+// ⭐⭐ **THE GLOBAL SLOW-PATH LOCK LIVES *HERE*, IN THE STATE REGION, AND NOT IN A `.data` WORD —
+// WHICH IS A `TargetIr`-PIN ARGUMENT, NOT A TIDINESS ONE.** Every `TargetIr` pin renders the whole
+// `data { … }` table with each label's byte OFFSET, so one new `.data` word shifts every label
+// after it and re-mints **every heap program's pin**. A CRITICAL_SECTION reached through the
+// pointer `__slab_state` already holds costs the image nothing and the pins nothing.
 //
 // ⚠ **IT IS INITIALISED INSIDE `__slab_state_base`'s COMMIT ARM, WHICH IS THE ONE PLACE THAT PROVABLY RUNS
 // BEFORE A SECOND THREAD EXISTS.** `__gt_init` allocates the scheduler's own lock and its P array through

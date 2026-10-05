@@ -67,7 +67,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/for-iterated-self-field/iterated-self-field-bare-source-bare-assign.test:18:4: cannot assign to immutable variable: 'items'
+error E2013: specs/for-iterated-self-field/iterated-self-field-bare-source-bare-assign.maxon:18:4: cannot assign to immutable variable: 'items'
 ```
 
 <!-- test: iterated-self-field-bare-source-explicit-assign -->
@@ -102,7 +102,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/for-iterated-self-field/iterated-self-field-bare-source-explicit-assign.test:18:9: cannot assign to immutable variable: 'items'
+error E2013: specs/for-iterated-self-field/iterated-self-field-bare-source-explicit-assign.maxon:18:9: cannot assign to immutable variable: 'items'
 ```
 
 <!-- test: iterated-self-field-explicit-source-bare-assign -->
@@ -138,7 +138,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/for-iterated-self-field/iterated-self-field-explicit-source-bare-assign.test:18:4: cannot assign to immutable variable: 'items'
+error E2013: specs/for-iterated-self-field/iterated-self-field-explicit-source-bare-assign.maxon:18:4: cannot assign to immutable variable: 'items'
 ```
 
 <!-- test: iterated-self-field-explicit-source-explicit-assign -->
@@ -173,7 +173,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/for-iterated-self-field/iterated-self-field-explicit-source-explicit-assign.test:18:9: cannot assign to immutable variable: 'items'
+error E2013: specs/for-iterated-self-field/iterated-self-field-explicit-source-explicit-assign.maxon:18:9: cannot assign to immutable variable: 'items'
 ```
 
 <!-- test: iterated-self-field-bare-source-bare-call -->
@@ -208,7 +208,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/for-iterated-self-field/iterated-self-field-bare-source-bare-call.test:18:10: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
+error E3019: specs/for-iterated-self-field/iterated-self-field-bare-source-bare-call.maxon:18:10: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
 ```
 
 <!-- test: iterated-self-field-bare-source-explicit-call -->
@@ -243,7 +243,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/for-iterated-self-field/iterated-self-field-bare-source-explicit-call.test:18:15: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
+error E3019: specs/for-iterated-self-field/iterated-self-field-bare-source-explicit-call.maxon:18:15: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
 ```
 
 <!-- test: iterated-self-field-explicit-source-bare-call -->
@@ -278,7 +278,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/for-iterated-self-field/iterated-self-field-explicit-source-bare-call.test:18:10: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
+error E3019: specs/for-iterated-self-field/iterated-self-field-explicit-source-bare-call.maxon:18:10: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
 ```
 
 <!-- test: iterated-self-field-explicit-source-explicit-call -->
@@ -314,7 +314,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/fragments/for-iterated-self-field/iterated-self-field-explicit-source-explicit-call.test:18:15: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
+error E3019: specs/for-iterated-self-field/iterated-self-field-explicit-source-explicit-call.maxon:18:15: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
 ```
 
 <!-- test: unrelated-self-field-stays-writable -->

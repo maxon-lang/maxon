@@ -1932,7 +1932,7 @@ end 'main'
 
 <!-- test: a-widening-cast-emits-no-guard -->
 `Narrow` provably fits `Wide`, so `n as Wide` is a retag and nothing else. `widen` is inlined, so the
-golden holds ONE emitted body and exactly ONE range cascade — the narrowing at `main`'s `as ExitCode`,
+emitted code holds ONE body and exactly ONE range cascade — the narrowing at `main`'s `as ExitCode`,
 on a lane where `ExitCode` is narrower than `Wide`. The widening cast contributes none, which is what a
 second cascade would betray.
 ```maxon
@@ -2033,7 +2033,7 @@ Stack trace:
 
 <!-- test: a-widening-return-emits-no-guard -->
 `Narrow` provably fits `Wide`, so the implicit conversion at `widen`'s `return` is a retag and nothing
-else — the golden shows no range cascade in `widen`, exactly as `a-widening-cast-emits-no-guard` shows for
+else — the emitted code shows no range cascade in `widen`, exactly as `a-widening-cast-emits-no-guard` shows for
 the written cast.
 ```maxon
 typealias Wide = int(0 to u64.max)

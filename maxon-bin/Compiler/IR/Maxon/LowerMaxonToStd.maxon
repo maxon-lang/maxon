@@ -806,12 +806,12 @@ function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalD
 		// before, and no user function is ever in either, so the ordering property this walk exists to
 		// establish is untouched for every literal a program can actually name.
 		//
-		// ⛔ **AND NO GOLDEN FRAGMENT CAN HOLD IT.** A fragment mismatch prints a `note:` and leaves the exit
-		// code at 0, so `stdlib-loading.a-stdlib-modules-literals-are-byte-neutral` reads a displaced payload
-		// without failing. What holds this door is
-		// `stdlib-loading.a-stdlib-modules-literals-cannot-reach-the-rdata-image`, whose ```RequiredRdata block
-		// pins the LINKED image from byte 0 — a tier body is built in every program, so without this door the
-		// arena's panic strings would lead the read-only image of a program that cannot allocate.
+		// ⛔ **AND NO `TargetIr` PIN CAN HOLD IT**: the Target IR names the label a payload sits under,
+		// never its bytes. What holds this door is `ir-specs/stdlib-loading.md`'s
+		// `stdlib-loading.a-stdlib-modules-literals-cannot-reach-the-rdata-image`, whose ```RequiredRdata
+		// block pins the LINKED image from byte 0 — a tier body is built in every program, so without
+		// this door the arena's panic strings would lead the read-only image of a program that cannot
+		// allocate.
 		if libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'
@@ -2923,8 +2923,8 @@ type MaxonToStdLowering
 	// correctly. A body that DID read one would have been a wild dispatch on every target.
 	//
 	// ⭐ **AN IMPL WHOSE ABI ALREADY IS THE SLOT'S GETS NO ADAPTER**, which is almost all of them — the extra
-	// call and the extra symbol are paid only where the shapes genuinely differ, so no existing dispatch and
-	// no existing golden moves for a conformer that never needed one.
+	// call and the extra symbol are paid only where the shapes genuinely differ, so no existing
+	// dispatch moves for a conformer that never needed one.
 	//
 	// A COMPILER-SYNTHESIZED impl (`int.hash`, an `__` runtime entry) is in no signature registry and is built
 	// to the requirement's shape by construction — it has no `where` clause and no type parameter to describe
@@ -5997,7 +5997,7 @@ type MaxonToStdLowering
 	// ⚠ **UNREACHED WHERE THE PARSER PROVED THE DIVISOR IS NOT `-1`.** `emitDivOrMod` routes such a `mod` to a
 	// bare `StdOp.mod` and never reaches any expansion, so a literal divisor, a folded variable, or a ranged
 	// type excluding `-1` (`int(1 to 1000)`, `int(i64.min to -2)`) pays none of these four ops. That is what
-	// keeps every existing division golden byte-identical.
+	// keeps every such division's emitted code byte-identical.
 	//
 	// ⚠⚠ **AND IT COVERS ONLY THE `mod`s A SOURCE PROGRAM WROTE.** Three COMPILER-AUTHORED builders emit
 	// `StdOp.mod` directly, past the parser and past this guard, and their safety arguments are NOT the same

@@ -65,7 +65,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/cast-target-type-resolution/error.cast-to-undeclared-type.test:3:12: Unknown type 'CompletelyMadeUpNameXyz'
+error E3011: specs/cast-target-type-resolution/error.cast-to-undeclared-type.maxon:3:12: Unknown type 'CompletelyMadeUpNameXyz'
 ```
 
 <!-- test: error.cast-to-misspelled-alias -->
@@ -81,7 +81,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/cast-target-type-resolution/error.cast-to-misspelled-alias.test:5:12: Unknown type 'Scor'
+error E3011: specs/cast-target-type-resolution/error.cast-to-misspelled-alias.maxon:5:12: Unknown type 'Scor'
 ```
 
 <!-- test: error.top-level-const-cast-to-undeclared-type -->
@@ -97,7 +97,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/cast-target-type-resolution/error.top-level-const-cast-to-undeclared-type.test:2:18: Unknown type 'CompletelyMadeUpNameXyz'
+error E3011: specs/cast-target-type-resolution/error.top-level-const-cast-to-undeclared-type.maxon:2:18: Unknown type 'CompletelyMadeUpNameXyz'
 ```
 
 <!-- test: error.cast-to-struct-type -->
@@ -117,7 +117,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/cast-target-type-resolution/error.cast-to-struct-type.test:9:12: Cannot cast from int to struct
+error E3009: specs/cast-target-type-resolution/error.cast-to-struct-type.maxon:9:12: Cannot cast from int to struct
 ```
 
 <!-- test: cast-to-alias-declared-later -->
@@ -146,7 +146,7 @@ reachable here; that fallback exists FOR this property and its header names this
 resolve to nothing, the cast would evaporate and the exit code would come out right anyway: green
 because the lookup FAILED.
 
-An exit code cannot tell the two apart, and for the CONSTANT operand below neither can a golden:
+An exit code cannot tell the two apart, and for the CONSTANT operand below neither can the emitted code:
 the value folds and a folded in-range cast emits nothing either way.
 
 ⚠ **A RUNTIME OPERAND DOES DISCRIMINATE, so only the CONSTANT one needs this case's argument.**
@@ -184,5 +184,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/cast-target-type-resolution/error.cast-to-misspelled-stdlib-typealias.test:3:12: Unknown type 'Millisecond'
+error E3011: specs/cast-target-type-resolution/error.cast-to-misspelled-stdlib-typealias.maxon:3:12: Unknown type 'Millisecond'
 ```

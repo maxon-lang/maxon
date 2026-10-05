@@ -243,7 +243,7 @@ let AtomicWordDisp = 0 as Imm32
 
 // The TEB self-pointer's offset within the Win64 TEB — `NtCurrentTeb()` reads `gs:[0x30]`. The pointer is
 // established by the OS before a thread's first instruction and is never null, which is what makes it a
-// legal answer to `StdOp.currentThreadToken`. Exported because `TargetPrinter` renders it in a golden.
+// legal answer to `StdOp.currentThreadToken`. Exported because `TargetPrinter` prints it.
 export let WindowsTebSelfPointerOffset = 0x30
 
 module let WindowsTebLastErrorOffset = 0x68 as Imm32
@@ -1825,7 +1825,7 @@ let StackGuardPageBytes = 4096 as StackSize
 // rdi/rsi/rdx/rcx/r8/r9), it is caller-saved in both, and `emitGtStackGuard` — emitted immediately
 // BEFORE this, at the same function entry — already clobbers it, so nothing live can be sitting
 // there. RAX is the register this may NOT be: it silently destroys parameter 7 of every function with
-// a frame past a page, which `specs/x64-large-frame-arg7.md` is this file's live guard against.
+// a frame past a page, which `ir-specs/x64-large-frame-arg7.md` is this file's live guard against.
 let StackProbeScratchReg = X64Register.r11
 
 // prologue: reserve the frame. A zero-size frame emits nothing (a frameless function never carries
@@ -2816,7 +2816,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// reserves a frame, so a thread whose stack would overflow grows and relocates it first. The
 	// exemption is `skipsGreenThreadStackGuard`, asked of the function's provenance and never its
 	// name; a `__destruct_<T>` cascade is scaffolding and still needs the guard (see that predicate).
-	// The guard is bytes, not a TargetOp, so the Target-IR goldens cannot see it. `x64PrologueFrameOf`
+	// The guard is bytes, not a TargetOp, so the printed Target IR omits it. `x64PrologueFrameOf`
 	// allocates a callee-saved scan, so it is asked only of a function that can be guarded.
 	let mightGuard = usesGt and not skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier)
 	var guardFrameBytes = 0 as StackSize
@@ -3220,7 +3220,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	result.inlineRanges = inlineFrames.ranges
 
 	// The chunks' own PRE-LINK bytes, for the one reader `code` cannot serve: a ```RequiredRuntime
-	// golden over a hand-assembled chunk (`mrt_panic`, `__gt_context_switch`, …), which has no
+	// block over a hand-assembled chunk (`mrt_panic`, `__gt_context_switch`, …), which has no
 	// `IrFunction` and therefore no IR body to print. See `CodeResult.codeChunks`.
 	if project.rendersTargetIr 'thePrinterWillWalkThem'
 		result.codeChunks = chunks

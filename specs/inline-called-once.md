@@ -40,10 +40,9 @@ carry that:
 Panic blocks are therefore **copied with their inline site** rather than redirected: the leaf
 inliner's slow-arm re-run is gone, and a leaf with a store and a panic is inlined whole.
 
-**Goldens are the evidence of the spliced shape.** The fragments under
-`specs/fragments/<target>/inline-called-once/` show whether a case's `main` holds a `callDirect` to the
-callee or the callee's blocks; the exit codes below are the same either way, which is what makes them
-a control on the answer and not on the shape.
+**The Target IR is the evidence of the spliced shape.** A case's `--emit-ir` output shows whether its
+`main` holds a `callDirect` to the callee or the callee's blocks; the exit codes below are the same either
+way, which is what makes them a control on the answer and not on the shape.
 
 **`wasm32-wasi` keeps the same positions in its own frame stack.** A wasm panic prints the frames each function
 recorded on entry (`StdToWasm.appendPanicRuntime`); a function holding a spliced body also records, before
@@ -57,7 +56,7 @@ the splice made on every target.
 ⭐ **THE SHAPE CASE.** `flipOnce` is `fannkuch`'s flip step — a copy loop, then a prefix reverse, both
 full of stores and `otherwise panic` arms — and `main` calls it ONCE, from inside a loop. Every rule
 the leaf inliner has refuses it (calls, size, stores beside panics); the called-once rule splices it.
-The golden is the pin; the exit code is the same as with the pass off.
+The emitted code shows the splice; the exit code is the same as with the pass off.
 
 Each round writes `round` into slot 0, so the reversed prefix is `0 to round` and the answer is the
 first two elements after the flip: 1+1, 2+1, 3+2, 4+3.
@@ -363,8 +362,8 @@ Stack trace:
 
 <!-- test: a-function-with-two-call-sites-stays-a-call -->
 ⛔ **THE SHAPE CONTROL.** `fill` is well past the leaf inliner's 24 ops and has TWO sites, so neither
-rule admits it and the golden keeps both `callDirect`s. Same source shape as the spliced cases with
-one call added, which is what makes the two goldens a matched pair.
+rule admits it and the emitted code keeps both `callDirect`s. Same source shape as the spliced cases with
+one call added, which is what makes the two cases' emitted code a matched pair.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

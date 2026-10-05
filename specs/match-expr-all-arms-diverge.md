@@ -83,7 +83,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/match-expr-all-arms-diverge/error.every-pattern-arm-panics.test:9:10: Unsupported: a match EXPRESSION whose every arm diverges — each arm ends in `panic(…)` or `throws`, so no arm reaches the merge and there is no value to give the binding or expression around it. Write it as a match STATEMENT (`then panic(…)` arms need no value), or give at least one arm a `gives`
+error E2015: specs/match-expr-all-arms-diverge/error.every-pattern-arm-panics.maxon:9:10: Unsupported: a match EXPRESSION whose every arm diverges — each arm ends in `panic(…)` or `throws`, so no arm reaches the merge and there is no value to give the binding or expression around it. Write it as a match STATEMENT (`then panic(…)` arms need no value), or give at least one arm a `gives`
 ```
 
 <!-- test: error.default-panic-is-the-only-arm -->
@@ -99,7 +99,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/match-expr-all-arms-diverge/error.default-panic-is-the-only-arm.test:4:10: Unsupported: a match EXPRESSION whose every arm diverges — each arm ends in `panic(…)` or `throws`, so no arm reaches the merge and there is no value to give the binding or expression around it. Write it as a match STATEMENT (`then panic(…)` arms need no value), or give at least one arm a `gives`
+error E2015: specs/match-expr-all-arms-diverge/error.default-panic-is-the-only-arm.maxon:4:10: Unsupported: a match EXPRESSION whose every arm diverges — each arm ends in `panic(…)` or `throws`, so no arm reaches the merge and there is no value to give the binding or expression around it. Write it as a match STATEMENT (`then panic(…)` arms need no value), or give at least one arm a `gives`
 ```
 
 <!-- test: error.every-arm-throws -->
@@ -128,7 +128,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/match-expr-all-arms-diverge/error.every-arm-throws.test:10:10: Unsupported: a match EXPRESSION whose every arm diverges — each arm ends in `panic(…)` or `throws`, so no arm reaches the merge and there is no value to give the binding or expression around it. Write it as a match STATEMENT (`then panic(…)` arms need no value), or give at least one arm a `gives`
+error E2015: specs/match-expr-all-arms-diverge/error.every-arm-throws.maxon:10:10: Unsupported: a match EXPRESSION whose every arm diverges — each arm ends in `panic(…)` or `throws`, so no arm reaches the merge and there is no value to give the binding or expression around it. Write it as a match STATEMENT (`then panic(…)` arms need no value), or give at least one arm a `gives`
 ```
 
 <!-- test: the-statement-form-the-diagnostic-names-compiles -->

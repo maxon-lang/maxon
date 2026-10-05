@@ -1,0 +1,32 @@
+let PinMismatchSpecName = "pin-mismatch"
+let PinMismatchSpecFileName = "pin-mismatch.md"
+let PinMismatchPinnedCase = "pin-mismatch.pinned"
+let PinMismatchUnpinnedCase = "pin-mismatch.unpinned"
+
+test 'a host-lane TargetIr pin that differs from the compile fails its case and shows the differing line'
+	let staged = stagedGateFixture()
+	plantBogusTargetIrPin(staged.join(PinMismatchSpecFileName))
+
+	let run = runSpecTest(staged, includeNetwork: false)
+	discardStaging(staged)
+
+	let said = everythingSaid(run)
+	let failVerdict = failVerdictPrefix(testLabel(PinMismatchSpecName, testName: PinMismatchPinnedCase))
+	var broken = StringArray.create()
+
+	if not said.contains(failVerdict) 'pinDidNotFail'
+		broken.push("'{PinMismatchPinnedCase}' carries a {hostTargetIrFence()} pin the compile cannot match and did not FAIL. Expected '{failVerdict}', and the run said:\n{said}\n")
+	end 'pinDidNotFail'
+
+	if not said.contains(PlantedTargetIrLine) 'differingLineUnshown'
+		broken.push("the failure does not show the first differing line, '{PlantedTargetIrLine}'. It said:\n{said}\n")
+	end 'differingLineUnshown'
+
+	collectNotPassed(said, specName: PinMismatchSpecName, testNames: [PinMismatchUnpinnedCase], broken: broken)
+
+	if run.exitCode() == SuccessExitCode 'mismatchDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with a failing pin in it. It said:\n{said}\n")
+	end 'mismatchDidNotCount'
+
+	requireNothingBroken(broken, headline: "a `TargetIr` pin is a gate on its own lane")
+end 'a host-lane TargetIr pin that differs from the compile fails its case and shows the differing line'

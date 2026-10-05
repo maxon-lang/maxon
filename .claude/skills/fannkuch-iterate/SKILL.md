@@ -56,8 +56,9 @@ A candidate that names no shape is not a candidate.
   change as `/land` requires. Beside it go the SOUNDNESS controls — one case per boundary the
   soundness argument names, whose answer a wrong rule would change. They are cases, and nothing else:
   ⛔ **no sabotage** — no breaking the rule or the compiler to watch a control fail (`/land`'s NO
-  MANUAL TESTS). A boundary worth guarding is a case; one that is not is not run. Goldens are
-  reference, not a gate, and their drift is committed as it lies.
+  MANUAL TESTS). A boundary worth guarding is a case; one that is not is not run. A `TargetIr`
+  pin in `ir-specs/` is a gate: an emitted-code change that moves one re-mints it with
+  `--update-required --filter=<spec>/`.
 - Every target the change touches gets the equivalent change (x64, arm64, wasm) or a stated reason.
 - ⛔ **During the round, never run the entire spec suite** (user ruling). Every spec run — yours, an
   implementer's, a reviewer's — is ONE `spec-test` over the spec files the change touches, one
@@ -159,6 +160,6 @@ The final row's note begins `HEADLINE`.
 - **Never touch the instrument to make a number look better.** Write no row you did not measure.
 - **A change to emitted runtime (`Compiler/Runtime/`, `Targets/*/*Runtime*.maxon`) shows in the
   programs the compiler builds after ONE build**, and in the compiler's own behaviour only after two.
-- **Goldens drift for reasons that are not yours.** The full battery reports drifted fragments that
-  are not this round's; drift is committed as it lies and is not a gate. Read
-  only the drift in the specs the round touches, under `--update-required` with a filter.
+- **`ir-specs/` pins move with emitted code.** A round that changes what the compiler emits re-mints
+  the pins it moves, under `--update-required` with a filter, on each lane this host runs, and reads
+  only the pins of the specs the round touches.

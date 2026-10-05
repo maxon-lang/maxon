@@ -759,7 +759,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3076: specs/fragments/lazy-static/error.struct-literal-initializer-nested-other-type.test:11:39: type 'Inner' can only be constructed from within its own methods; use a static factory method instead
+error E3076: specs/lazy-static/error.struct-literal-initializer-nested-other-type.maxon:11:39: type 'Inner' can only be constructed from within its own methods; use a static factory method instead
 ```
 
 ### Error: a struct literal at FILE scope is refused, including for the type's own name
@@ -784,7 +784,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3076: specs/fragments/lazy-static/error.struct-literal-initializer-at-file-scope.test:9:19: type 'Pair' can only be constructed from within its own methods; use a static factory method instead
+error E3076: specs/lazy-static/error.struct-literal-initializer-at-file-scope.maxon:9:19: type 'Pair' can only be constructed from within its own methods; use a static factory method instead
 ```
 
 ### Error: a struct literal's fields are LABELLED, in a static field's initializer too
@@ -815,7 +815,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lazy-static/error.struct-literal-initializer-positional-fields.test:8:27: Expected identifier but got '1'
+error E2010: specs/lazy-static/error.struct-literal-initializer-positional-fields.maxon:8:27: Expected identifier but got '1'
 ```
 
 ### Error: a static field's initializer must consume everything up to the end of its line
@@ -849,5 +849,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lazy-static/error.static-field-init-trailing-tokens.test:13:30: Expected 'end of global initializer' but got 'zzz'
+error E2010: specs/lazy-static/error.static-field-init-trailing-tokens.maxon:13:30: Expected 'end of global initializer' but got 'zzz'
 ```

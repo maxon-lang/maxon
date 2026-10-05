@@ -114,8 +114,8 @@ export typealias SpelledFieldNameArray = Array with SpelledFieldName
 // file or directory name may not contain. So the join is injective and the segment test is sound. The
 // `.`-joined spelling the language shows a user is DERIVED from this one
 // (`namespaceForModuleDirectory`) and is never what a visibility question is asked on.
-// ⚠ Exported for `Parser.sourceFileDisplayPath` — `__file__` expands to a module
-// directory joined to a file name, so the joiner it uses IS this one, and a literal `/` there would be a
+// ⚠ Exported for `ProgramSignatures.projectRelativeFileDisplay` — a file's display is its module
+// directory joined to its file name, so the joiner it uses IS this one, and a literal `/` there would be a
 // second speller of the character this whole header is an argument about.
 export let ModuleDirectorySeparator = "/"
 
@@ -306,7 +306,7 @@ end 'qualifiedCandidateName'
 // ⚠ **AN UNORDERED LIST WOULD NOT BE STABLE: `Map` is OPEN-ADDRESSED, so iteration is SLOT order —
 // a function of the hashes of two file paths.** An unsorted list would therefore reorder itself
 // when a directory is renamed, when the table grows, or on a host whose paths hash differently, and
-// the message is pinned by a golden. A diagnostic a user reads twice must read the same way twice;
+// the message is pinned. A diagnostic a user reads twice must read the same way twice;
 // sorting is the cheapest property that makes that true of a set the compiler discovered in an
 // arbitrary order.
 //
@@ -1392,7 +1392,7 @@ typealias MultiplyDeclaredAliasMap = Map with (ByteArray, RangedAliasByDeclaring
 // The names whose declarations disagree about the RANGE -> every distinct range-qualified spelling
 // of each. A strict SUBSET of `MultiplyDeclaredAliasMap`'s keys, and EMPTY for every program in the
 // corpus — see `RangedAliasRegistry.settleRangeContests` for why that emptiness is what keeps every
-// element name, every mangled symbol and every committed golden where it was.
+// element name and every mangled symbol where it was.
 typealias RangeContestedAliasMap = Map with (ByteArray, ByteArrayArray)
 
 // ⭐ THE ONE EMPTY contest map every registry is born holding — so a program with no contest, which is every
@@ -2335,8 +2335,8 @@ export type RangedAliasRegistry
 
 	// ⭐ **DOES ANY NAME IN THIS PROGRAM HAVE DECLARATIONS THAT DISAGREE ABOUT THE RANGE?** The ONE bool
 	// every scoping door short-circuits on, so an uncontested program — the whole corpus, and the compiler's
-	// own source — pays a single map-emptiness test and nothing else, and no interned element name, no
-	// mangled symbol and no committed golden can move.
+	// own source — pays a single map-emptiness test and nothing else, and no interned element name and
+	// no mangled symbol can move.
 	export function anyRangeContest() returns bool
 		return self.rangeContested.count() > 0
 	end 'anyRangeContest'
@@ -2597,7 +2597,7 @@ end 'TypeDeclKind'
 // literal at a `gives` arm — it is a real accessor, not a constant. A rung whose whole claim is
 // byte-neutral codegen does not spend 26 KB to delete five words. What holds the copies in step
 // instead is the SUITE: `specs/type-name-collision.md` pins `type`, `typealias`, `interface` and
-// `union` in a golden, and `EnumLayout.kindWord` — this function's only other reader — is golden-gated
+// `union` in `maxoncstderr` blocks, and `EnumLayout.kindWord` — its only other reader — is too,
 // for `enum` and `union` across `specs/enum-match-exhaustive.md`. Rename a keyword: those fail.
 export function typeDeclKeyword(kind TypeDeclKind) returns String
 	return match kind 'k'
@@ -2868,6 +2868,17 @@ export union TypeNameRecordOutcome
 	collides(winner TypeNameDecl)
 end 'TypeNameRecordOutcome'
 
+export type TypeNameCollision
+	export let decl as TypeNameDecl
+	export let winner as TypeNameDecl
+
+	export static function create(decl TypeNameDecl, winner TypeNameDecl) returns TypeNameCollision
+		return Self{decl: decl, winner: winner}
+	end 'create'
+end 'TypeNameCollision'
+
+export typealias TypeNameCollisionArray = Array with TypeNameCollision
+
 // ⭐ **THE TYPE-NAME REGISTRY — the ONE decider of "is this type name already declared?"** (E3006,
 // E3061). Without it, which of a `type Box` and a `typealias Box` a reference meant would be
 // decided by `denotedNamedType`'s arm order and the merge order, never by the author.
@@ -2884,8 +2895,8 @@ end 'TypeNameRecordOutcome'
 // holds, `ProgramSignatures.mangleGenericInstance` mints it behind the reserved `__` prefix
 // instead. The compiled half is therefore DISJOINT from this one by construction, so nothing here
 // is contestable and this registry has no instantiation reader at all — which is why it answers
-// only `record`. `ParseStaging.checkTypeSymbolNamespace` owns the compiled half, as a check between
-// two INSTANTIATIONS that never consults a declaration.
+// only `record` and `recordAll`. `ParseStaging.checkTypeSymbolNamespace` owns the compiled half, as
+// a check between two INSTANTIATIONS that never consults a declaration.
 export type TypeNameRegistry
 	var admission as TypeNameAdmission
 	var accepted as TypeNameDeclArray
@@ -2893,6 +2904,19 @@ export type TypeNameRegistry
 	export static function create() returns TypeNameRegistry
 		return Self{admission: TypeNameAdmission.create(), accepted: TypeNameDeclArray.create()}
 	end 'create'
+
+	export function recordAll(decls TypeNameDeclArray, directories ModuleDirectoryByFile) returns TypeNameCollisionArray
+		var collisions = TypeNameCollisionArray.create()
+
+		for decl in decls 'eachDecl'
+			match self.record(decl, directories: directories) 'collision'
+				accepted then continue
+				collides(winner) then collisions.push(TypeNameCollision.create(decl, winner: winner))
+			end 'collision'
+		end 'eachDecl'
+
+		return collisions
+	end 'recordAll'
 
 	export function record(decl TypeNameDecl, directories ModuleDirectoryByFile) returns TypeNameRecordOutcome
 		match self.admission.admit(decl.name, claim: decl.claim, id: self.accepted.count(), directories: directories) 'admission'
@@ -3984,7 +4008,7 @@ export typealias CaseIndex = int(0 to 65535) implements ElementIndex
 // declared type alone: *is this declared at an interface type?* Every field but that one takes one slot,
 // so every struct that compiled before the existential slice landed is byte-identical.
 //
-// ⭐⭐ **`specs/enum-narrow-storage.md` ASKS FOR NARROW STRUCT FIELDS AND the compiler DELIBERATELY DOES NOT GIVE
+// ⭐⭐ **`ir-specs/enum-narrow-storage.md` ASKS FOR NARROW STRUCT FIELDS AND the compiler DELIBERATELY DOES NOT GIVE
 // THEM — READ THIS BEFORE "FIXING" IT.** That spec says an enum's narrowest width applies to "memory
 // representation everywhere — struct fields, array elements, `.rdata` constants". The compiler narrows the last
 // two (`ProgramSignatures.trivialElementSlot`, and the constant blob `LayoutDescriptor.constArrayBlobOf` lays
@@ -6283,7 +6307,7 @@ end 'builtinDivisionByZeroErrorEnum'
 
 // ⭐ **WHAT `<Enum>.fromRawValue(raw)` THROWS ON A RAW VALUE NO CASE CARRIES.** The division family's twin in
 // every respect — declared in no corpus file, seeded unconditionally beside it for the same reason, and
-// payload-free so it stays golden-neutral (see `createEnumRegistry`).
+// payload-free so it emits no code (see `createEnumRegistry`).
 module function builtinEnumLookupErrorEnum() returns EnumLayout
 	var layout = EnumLayout.createCompilerOwned(EnumLookupErrorTypeName, conformsTo: builtinErrorConformance())
 
@@ -6636,12 +6660,12 @@ end 'requireCorpusDeclaredEnum'
 // with no per-reader by-name arm to add today or to forget tomorrow. Three by-name special cases were the
 // alternative, and this project's signature bug is one fact written more than once.
 //
-// It stays GOLDEN-NEUTRAL because every enum seeded here is payload-FREE: every pass that WALKS this registry
-// to EMIT something (`installUnionDestructors`, `noteDestructorUsage`, `noteCascadeUsage`) selects only unions
-// with a managed payload, so a seeded entry contributes no code to any program. **MEASURED: zero modified
-// `specs/fragments` goldens across the whole suite.** Its cost is a FLAT per-compile constant — measured
-// +68 allocations / +2,376 bytes, IDENTICAL at scale-test rung 0 and rung 5, i.e. with no growing term —
-// almost all of it the two registries' first `Map` upsert initializing their slot arrays. That constant is the
+// It EMITS NOTHING because every enum seeded here is payload-FREE: every pass that WALKS this
+// registry to EMIT something (`installUnionDestructors`, `noteDestructorUsage`, `noteCascadeUsage`)
+// selects only unions with a managed payload, so a seeded entry contributes no code to any program.
+// Its cost is a FLAT per-compile constant — measured +68 allocations / +2,376 bytes, IDENTICAL at
+// scale-test rung 0 and rung 5, i.e. with no growing term — almost all of it the two registries'
+// first `Map` upsert initializing their slot arrays. That constant is the
 // deliberate price of "every reader, no arm": demand-gating the seed would put the "is it registered yet?"
 // question back at each reader, which is the shape this exists to remove.
 //
@@ -8010,9 +8034,9 @@ export type Project
 	// is byte-identical whichever way this is set — which is the whole reason the sidecar may exist at all.
 	export var debugInfo as bool
 
-	// The withheld bodies this build was asked to print (`--emit-ir-runtime=`, a ```RequiredRuntime golden's
-	// request). A name here is a REFERENCE the inliner's census must see: a called-once callee spliced away
-	// is dropped by dead-function elimination, and the printer then has no body to render.
+	// The withheld bodies this build was asked to print (`--emit-ir-runtime=`, a ```RequiredRuntime
+	// block's request). A name here is a REFERENCE the inliner's census must see: a called-once callee
+	// spliced away is dropped by dead-function elimination, and the printer has no body to render.
 	export var requestedRuntimeBodies as RuntimeFunctionNameArray
 
 	// A caller that wants the Target IR text must set this before `compileToCodeResult` runs; the backends
@@ -8346,6 +8370,8 @@ export type Project
 	// metered at another; see PhaseProbe's header for why that is worth a type.
 	export var memory as CompileMemory
 
+	export var retiredWorkers as RetiredWorkers
+
 	// WHICH COMPILE this is, on the DebugStream wire (see DebugTrace). Every trace event this
 	// build emits carries it, so a run that compiles N units in one process reads back as N
 	// timelines instead of one shuffled pile. Derived from the compile ROOT, not handed out by a
@@ -8449,6 +8475,7 @@ export type Project
 			globalData: GlobalDataTable.create(),
 			timings: CompileTimings.create(),
 			memory: CompileMemory.create(),
+			retiredWorkers: RetiredWorkers.create(),
 			traceUnit: traceUnitOf(rootPath),
 			openPhaseSpans: TraceNameArray.create(),
 			session: session,

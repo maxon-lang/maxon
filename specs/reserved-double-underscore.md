@@ -33,7 +33,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/docs-example-1.test:3:6: identifier '__value' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/docs-example-1.maxon:3:6: identifier '__value' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 ### Why This Matters
@@ -53,7 +53,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/let-declaration.test:3:6: identifier '__foo' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/let-declaration.maxon:3:6: identifier '__foo' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: var-declaration -->
@@ -65,7 +65,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/var-declaration.test:3:6: identifier '__counter' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/var-declaration.maxon:3:6: identifier '__counter' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: function-declaration -->
@@ -79,7 +79,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/function-declaration.test:2:10: identifier '__helper' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/function-declaration.maxon:2:10: identifier '__helper' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: function-parameter -->
@@ -96,7 +96,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/function-parameter.test:4:13: identifier '__x' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/function-parameter.maxon:4:13: identifier '__x' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: type-declaration -->
@@ -111,7 +111,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/type-declaration.test:2:6: identifier '__Hidden' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/type-declaration.maxon:2:6: identifier '__Hidden' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: type-field -->
@@ -127,7 +127,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/type-field.test:3:13: identifier '__x' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/type-field.maxon:3:13: identifier '__x' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: typealias-declaration -->
@@ -139,7 +139,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/typealias-declaration.test:2:11: identifier '__Score' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/typealias-declaration.maxon:2:11: identifier '__Score' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: enum-case -->
@@ -155,7 +155,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/enum-case.test:4:2: identifier '__green' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/enum-case.maxon:4:2: identifier '__green' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: closure-parameter -->
@@ -173,7 +173,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/closure-parameter.test:9:19: identifier '__n' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/closure-parameter.maxon:9:19: identifier '__n' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: enum-name -->
@@ -191,7 +191,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/enum-name.test:2:6: identifier '__Color' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/enum-name.maxon:2:6: identifier '__Color' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: union-name -->
@@ -208,7 +208,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: specs/fragments/reserved-double-underscore/union-name.test:2:7: identifier '__Shape' is reserved: declarations starting with '__' are reserved for compiler internals
+error E2051: specs/reserved-double-underscore/union-name.maxon:2:7: identifier '__Shape' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
 <!-- test: user-file-named-builtins-is-not-exempt -->

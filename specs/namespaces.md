@@ -231,7 +231,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: app/specs/fragments/namespaces/error.cross-file-bare-name-ambiguous.test:18:9: Ambiguous bare-name call to 'duplicate': more than one visible declaration matches it. Qualify it as one of: alpha.duplicate, beta.duplicate
+error E3095: app/specs/namespaces/error.cross-file-bare-name-ambiguous.maxon:18:9: Ambiguous bare-name call to 'duplicate': more than one visible declaration matches it. Qualify it as one of: alpha.duplicate, beta.duplicate
 ```
 
 <!-- test: bare-sibling-instance-method-call-injects-self -->
@@ -482,5 +482,5 @@ export function pick(slot Slot = 90) returns Slot
 end 'pick'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/namespaces/error.root-declaration-owns-the-bare-key-parameter-defaults.test:10:10: 'pick' expects 1 argument(s) but 0 were provided
+error E3036: specs/namespaces/error.root-declaration-owns-the-bare-key-parameter-defaults.maxon:10:10: 'pick' expects 1 argument(s) but 0 were provided
 ```

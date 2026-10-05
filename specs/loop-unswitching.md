@@ -44,8 +44,8 @@ The slow version is not a fallback for a rare shape: a loop over a slice VIEW en
 view's first write detaches in the runtime exactly as before (`a-view-detaches-on-its-first-write`).
 
 ⚠ A green case here proves nothing on its own — the fast and slow versions compute the same thing.
-The evidence is the committed fragment of the first two cases (the guards and the header loads before
-the loop, a body of bound check + store and bound check + load) and the CONTROLS below, which put
+The evidence is the emitted code (`--emit-ir`) of the first two cases (the guards and the header loads before
+the loop, a body of bound check + store and bound check + load), which nothing in the suite pins, and the CONTROLS below, which put
 every path the rewrite touches under a value the program reads back: the slow version's detach, an
 out-of-bounds fallback taken inside the fast version, a loop-defined value read after the loop, a
 value carried out through two loops at once, a hoisted load read after its loop, two names for one
@@ -57,7 +57,7 @@ miscompiles itself, which is the class of defect the callee table exists to refu
 ## Tests
 
 <!-- test: a-store-loop-carries-its-shape-guards-outside -->
-The shape the pass was opened for. In `fill`'s fragment the ownership, buffer and sharing tests and
+The shape the pass was opened for. In `fill`'s emitted code (`--emit-ir`) the ownership, buffer and sharing tests and
 the `length@8`/`buffer@0` loads sit before the loop header; the body is the unsigned bound check and
 the store.
 ```maxon
@@ -163,7 +163,7 @@ end 'main'
 
 <!-- test: a-loop-that-pushes-stays-unversioned -->
 Control for the callee table. `push` may grow the buffer, so its effect is `unknown` and the loop
-is left alone; the fragment holds one copy of the loop and no `__us_test` block. The array holds an
+is left alone; the emitted code (`--emit-ir`) holds one copy of the loop and no `__us_test` block. The array holds an
 element on entry and every iteration reads slot 0 after its push: were the loop hoisted, the hoisted
 buffer would be the one a growing `push` frees, and the read would follow a stale pointer.
 ```maxon
@@ -273,7 +273,7 @@ end 'main'
 Control for the exit rule. The outer loop `push`es, so it is refused; the inner loop `set`s and is a
 candidate — but `found` is assigned inside it and read only after BOTH loops, past a `break 'outer'`
 that leaves the inner loop through the outer's exit, so no single exit of the inner loop dominates
-its reader and the inner loop is refused too. Behaviour is pinned; the fragment holds one copy.
+its reader and the inner loop is refused too. Behaviour is pinned; the emitted code (`--emit-ir`) holds one copy, and nothing in the suite pins that.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word

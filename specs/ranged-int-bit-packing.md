@@ -164,50 +164,6 @@ end 'main'
 2
 ```
 
-<!-- test: static-2bit-cast-packed -->
-```maxon
-typealias Q = int(0 to 3)
-
-function main() returns ExitCode
-	let a = [0 as Q, 1 as Q, 2 as Q, 3 as Q]
-	if a.managed.elementSize() != -2 'notPacked'
-		return 99
-	end 'notPacked'
-	var sum = 0
-	var i = 0
-	while i < 4 'read'
-		sum = sum + (try a.get(i) otherwise 0)
-		i = i + 1
-	end 'read'
-	return sum
-end 'main'
-```
-```exitcode
-6
-```
-```RequiredRdata
-u8[] 228
-```
-
-<!-- test: static-4bit-cast-packed-cross-byte -->
-```maxon
-typealias N = int(0 to 15)
-
-function main() returns ExitCode
-	let a = [1 as N, 2 as N, 3 as N, 15 as N, 8 as N]
-	if a.managed.elementSize() != -4 'notPacked'
-		return 99
-	end 'notPacked'
-	return (try a.get(0) otherwise 0) + (try a.get(3) otherwise 0) + (try a.get(4) otherwise 0)
-end 'main'
-```
-```exitcode
-24
-```
-```RequiredRdata
-u8[] 33, 243, 8
-```
-
 <!-- test: dynamic-bool-packed -->
 ```maxon
 typealias BoolArray = Array with bool
@@ -225,23 +181,6 @@ end 'main'
 ```
 ```exitcode
 5
-```
-
-<!-- test: static-bool-packed -->
-```maxon
-function main() returns ExitCode
-	let a = [true, false, true, false]
-	if a.managed.elementSize() != -1 'notPacked'
-		return 99
-	end 'notPacked'
-	return 7
-end 'main'
-```
-```exitcode
-7
-```
-```RequiredRdata
-u8[] 5
 ```
 
 <!-- test: grow-stays-packed -->

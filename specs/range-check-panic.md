@@ -254,7 +254,7 @@ Stack trace:
 
 <!-- test: range-check-panic.in-range -->
 The half that must keep working: an in-range argument passes every guard and returns normally.
-⭐ Its fragment is also where the return-guard elision is visible — `check`'s entry guard is the ONLY
+⭐ Its emitted code (`--emit-ir`) is also where the return-guard elision is visible — `check`'s entry guard is the ONLY
 cascade in the function, with no `return` cascade over the same `ValueId` against the same alias, and
 no second panic block or second `.rdata` blob. See the
 Documentation above for the four clauses that elision rests on.
@@ -318,7 +318,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-argument.test:9:10: Value 101 is outside the range of 'Percent' (int(0 to 100))
+error E3005: specs/range-check-panic/range-check-panic.error.literal-argument.maxon:9:10: Value 101 is outside the range of 'Percent' (int(0 to 100))
 ```
 
 <!-- test: range-check-panic.error.literal-argument-through-interface -->
@@ -943,7 +943,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-struct-field.test:8:17: Value 101 is outside the range of 'Percent' (int(0 to 100))
+error E3005: specs/range-check-panic/range-check-panic.error.literal-struct-field.maxon:8:17: Value 101 is outside the range of 'Percent' (int(0 to 100))
 ```
 
 <!-- test: range-check-panic.runtime-argument -->
@@ -983,8 +983,8 @@ Stack trace:
 ⭐ **THE CONTROL THAT KEEPS THE COST HONEST.** `Integer` spans the whole of `i64`, so it forbids
 nothing — and a parameter that promises nothing must gain nothing. `aliasAdmitsEveryValue` discards it
 before a cascade is ever built, so `passthrough` stays a LEAF: no `__rc_ok`, no `__rc_panic`, no `mrt_panic`
-call, and therefore no frame. Its committed fragment is the proof, and it is the reason the entry
-guard is a cost only where a range is genuinely narrowed.
+call, and therefore no frame. The emitted code (`--emit-ir`) shows it, and nothing in the suite pins it;
+that leaf is the reason the entry guard is a cost only where a range is genuinely narrowed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1052,7 +1052,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-argument-into-a-divisor.test:10:10: Value 0 is outside the range of 'NonZero' (int(1 to 9223372036854775807))
+error E3005: specs/range-check-panic/range-check-panic.error.literal-argument-into-a-divisor.maxon:10:10: Value 0 is outside the range of 'NonZero' (int(1 to 9223372036854775807))
 ```
 
 <!-- test: range-check-panic.entry-guard-on-a-parameter-no-body-reads -->
@@ -1226,8 +1226,8 @@ Stack trace:
 <!-- test: range-check-panic.return-of-a-second-ranged-parameter-is-covered-by-its-entry-guard -->
 ⭐ **THE ELISION ITSELF, and the case that says it keys on the VALUE.** `pick` returns its SECOND ranged
 parameter, so an elision that asked "does this function have a ranged parameter" and an elision that
-asked "is this value parameter 0" would both answer differently from the right one. Its FRAGMENT is the
-evidence: two entry cascades, one per parameter, and NONE at the `return`.
+asked "is this value parameter 0" would both answer differently from the right one. Its emitted code
+(`--emit-ir`) shows it, and nothing in the suite pins it: two entry cascades, one per parameter, and NONE at the `return`.
 ```maxon
 typealias SmallInt = int(0 to 10)
 
@@ -1283,7 +1283,8 @@ Stack trace:
 ⭐ **THE CONTAINED RETURN.** `pick` returns a `Byte`, `main` returns an `ExitCode`, and `int(0 to 255)` is
 inside `ExitCode`'s range on every target — strictly, under Windows' `int(0 to u32.max)`; as an equal
 range, under the `int(0 to 255)` Linux, macOS and WASI carry — so the `as ExitCode` that `main`'s
-`return` owes gets nothing on any of them. Its FRAGMENT is the evidence: `pick` keeps its own cascade
+`return` owes gets nothing on any of them. Its emitted code (`--emit-ir`) shows it, and nothing in the
+suite pins it: `pick` keeps its own cascade
 (the `Integer` it computes from is NOT inside `Byte`, so that one is earned), and `main` is a `bl` and a
 `ret`.
 ```maxon
@@ -1400,7 +1401,7 @@ Stack trace:
 ⭐ **THE OTHER DOORS ASK THE SAME QUESTION, and here the answer IS observable** — a field store and an
 array-element store take no `as`, so E3010 never stands in front of them. `Small` is inside `Wide` at
 both, and the two `return`s that hand a `Wide` back through a `returns Wide` are contained as well: the
-fragment holds no `__rc_panic` block anywhere.
+emitted code (`--emit-ir`) holds no `__rc_panic` block anywhere.
 ```maxon
 typealias Small = int(0 to 100)
 typealias Wide = int(0 to 1000)
@@ -1689,7 +1690,7 @@ has no constant for `inclusiveTopBoundWraps` to test.
 
 <!-- test: range-check-panic.a-runtime-limit-still-proves-the-floor -->
 The floor alone, from a limit whose declared range is non-negative. `i as NonNeg` cannot fail and its
-fragment carries no cascade.
+emitted code (`--emit-ir`) carries no cascade.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonNeg = int(0 to i64.max)
@@ -1714,8 +1715,8 @@ total=3
 
 <!-- test: range-check-panic.a-counted-limit-proves-the-floor -->
 ⭐ The corpus's own shape, and the one the 635 are: a `count()` is minted UNNAMED, so nothing DECLARES a
-range for it — the ceiling comes from the interval recorded where the call is emitted. Its fragment carries
-no cascade either.
+range for it — the ceiling comes from the interval recorded where the call is emitted. Its emitted code
+(`--emit-ir`) carries no cascade either.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonNeg = int(0 to i64.max)
@@ -1807,10 +1808,10 @@ Stack trace:
 climb through `i64.max` into the negative patterns with `i < limit` still holding, and a floor of 0 would
 vouch for a signed-negative value. The interval is withheld and the cast keeps its guard.
 
-⚠ **NO ANSWER CAN SHOW THIS, AND NEITHER CAN THIS CASE'S VERDICT** — the wrap is 2^63 trips away, and a
-committed fragment is REFERENCE rather than a gate (sabotage-proved: removing
-`limitStatesANonNegativeCeiling`'s bound test leaves the suite green at exit 0). What the fragment records
-is which compiler wrote it; what keeps the rule honest is the paragraph on `limitStatesANonNegativeCeiling`.
+⚠ **NO ANSWER CAN SHOW THIS, AND NEITHER CAN THIS CASE'S VERDICT** — the wrap is 2^63 trips away, and
+nothing in the suite pins the emitted code: removing `limitStatesANonNegativeCeiling`'s bound test leaves
+the suite green at exit 0. The emitted code (`--emit-ir`) shows the guard; what keeps the rule honest is
+the paragraph on `limitStatesANonNegativeCeiling`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonNeg = int(0 to i64.max)
@@ -1866,7 +1867,7 @@ total=3
 <!-- test: range-check-panic.an-inclusive-runtime-limit-proves-no-floor -->
 ⚠ The red gate for the half-open restriction. An inclusive loop steps PAST its limit, and a runtime top
 hands `inclusiveTopBoundWraps` no constant to test — so the interval is withheld whatever the limit's type
-says. The fragment carries the cascade that survives.
+says. The emitted code (`--emit-ir`) carries the cascade that survives.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonNeg = int(0 to i64.max)
@@ -1926,8 +1927,8 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.an-empty-counted-loop-proves-nothing -->
-A loop that runs no trip has no interval to state. Nothing is elided and nothing runs; the committed
-fragment carries the guard that survives.
+A loop that runs no trip has no interval to state. Nothing is elided and nothing runs; the emitted
+code (`--emit-ir`) carries the guard that survives.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias RegNum = int(0 to 63)
@@ -1950,7 +1951,8 @@ total=0
 <!-- test: range-check-panic.an-inclusive-counted-loop-to-i64-max-keeps-its-guard -->
 ⚠ An inclusive loop ending at `i64.max` never fails its own test — the step WRAPS to `i64.min`, which
 `NonNeg` does not admit — so no interval is stated and the guard stays. No answer can show that (the
-wrap is 2^63 trips away): what records it is the committed fragment, which still carries the cascade.
+wrap is 2^63 trips away): the emitted code (`--emit-ir`) carries the cascade, and nothing in the suite
+pins it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonNeg = int(0 to i64.max)

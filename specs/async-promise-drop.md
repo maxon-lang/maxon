@@ -193,8 +193,8 @@ THEN does `p = async fast()` renounce it. The `waiting` arm removes it from the 
 resumes on the stack it is suspended on, runs to completion and is reclaimed by its runner — with no hang (the
 200 ms deadline is never waited on) and no use-after-free.
 
-⭐ Its own RED reading: point `__gt_promise_drop`'s park-kind refusal at `GtParkKindTimer` instead of
-`GtParkKindMailbox` and this exits **94** where it exits 42.
+⭐ Its own RED reading: point `__gt_promise_drop`'s park-kind refusal at `GtParkKind.timer` instead of
+`GtParkKind.mailbox` and this exits **94** where it exits 42.
 ```maxon
 
 function sleeper() returns Integer

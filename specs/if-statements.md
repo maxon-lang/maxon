@@ -276,7 +276,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/if-statements/if-statements.single-line-block-rejected.test:3:14: Expected newline after block label, got 'return'
+error E2001: specs/if-statements/if-statements.single-line-block-rejected.maxon:3:14: Expected newline after block label, got 'return'
 ```
 
 <!-- test: error.mismatched-if-end-label -->

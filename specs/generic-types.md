@@ -3218,7 +3218,7 @@ edges flow from.
 
 **THERE IS NOTHING AT THE CALL TO PLACE.** The `+1` for a substituted `T` return is the CALLEE's
 (`emitOwnedValueReturn` → `coOwnBorrowedOpaque` → `__retain_type_param`), so the caller emits no promotion
-for a substituted `T` at all — this case's own committed golden shows `Box.fetch` making that call and
+for a substituted `T` at all — this case's emitted code shows `Box.fetch` making that call and
 `tryok:` holding a single `jmp trycont`.
 ```maxon
 typealias Integer = int(0 to 125)
@@ -3301,7 +3301,7 @@ v=hi
 for either instantiation: the `+1` belongs to the CALLEE, so `Box with Alpha` emits nothing after its call
 either (see `expression-form-try-over-a-substituted-return`), and `Box with Integer` and `Box with Alpha`
 are symmetric at the call. What this case holds is the ANSWER for the trivial instantiation — it compiles,
-runs and returns 9 — and its golden, which must not budge for a change that does not mean to move emission.
+runs and returns 9.
 ```maxon
 typealias Integer = int(0 to 125)
 enum Boom implements Error

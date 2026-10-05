@@ -1082,13 +1082,16 @@ export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) retur
 	var visited = BoolArray.create()
 	visited.resize(topo.numBlocks)
 	var postorder = CfgIndexArray.create()
+	postorder.reserve(topo.numBlocks)
 	rpoDfs(topo, root: 0, visited: visited, postorder: postorder)
 
 	// `oldByNew[i]` — the OLD local index of the block that lands at NEW local index `i`. Built
 	// in lockstep with `newRefs`, so it IS the permutation the block list just underwent, and
 	// `permuteTopology` re-indexes the skeleton by it rather than rebuilding it.
 	var oldByNew = CfgIndexArray.create()
+	oldByNew.reserve(topo.numBlocks)
 	var newRefs = BlockRefArray.create()
+	newRefs.reserve(topo.numBlocks)
 
 	for ri in 0 upto postorder.count() 'reverse'
 		let local = try postorder.get(postorder.count() - 1 - ri) otherwise panic("reorderFuncBlocksRpo: postorder.get OOB")
@@ -1135,6 +1138,7 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 	end 'invert'
 
 	var blockRefByLocal = BlockRefArray.create()
+	blockRefByLocal.reserve(numBlocks)
 
 	for i in 0 upto numBlocks 'permuteColumns'
 		let o = try oldByNew.get(i) otherwise panic("permuteTopology: oldByNew.get OOB")
@@ -1159,7 +1163,9 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
 	end 'remapIds'
 
 	var edgeFrom = CsrColumn.create()
+	edgeFrom.reserve(old.succ.list.count())
 	var edgeTo = CsrColumn.create()
+	edgeTo.reserve(old.succ.list.count())
 
 	for u in 0 upto numBlocks 'eachNewBlock'
 		let oldU = try oldByNew.get(u) otherwise panic("permuteTopology: oldByNew.get OOB")
@@ -1188,7 +1194,9 @@ end 'permuteTopology'
 // point — so a node is emitted to the postorder only once its whole subtree is done.
 function rpoDfs(topo FuncTopology, root ElementIndex, visited BoolArray, postorder CfgIndexArray)
 	var stackNode = CfgIndexArray.create()
+	stackNode.reserve(topo.numBlocks)
 	var stackNextSucc = CsrColumn.create()
+	stackNextSucc.reserve(topo.numBlocks)
 
 	try visited.set(root, value: true) otherwise panic("rpoDfs: visited.set(root) OOB")
 	stackNode.push(root)
@@ -1224,7 +1232,9 @@ end 'rpoDfs'
 // `FuncTopology`. The allocator's `buildFuncCfg` adds the two analyses on top.
 export function buildFuncTopology(module TargetModule, func IrFunction) returns FuncTopology
 	var blockRefByLocal = BlockRefArray.create()
+	blockRefByLocal.reserve(func.blockRefs.count())
 	var blockIdByLocal = CfgIndexArray.create()
+	blockIdByLocal.reserve(func.blockRefs.count())
 	var maxBlockId = 0 as BlockId
 
 	for blockRef in func.blockRefs 'eachRef'
@@ -1261,15 +1271,25 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 		try localByBlockId.set(bid, value: i) otherwise panic("buildFuncTopology: localByBlockId.set(bid) OOB")
 	end 'mapIds'
 
-	// Edge list (fromLocal, toLocal), then CSR for succ and its inverse for pred.
-	var edgeFrom = CsrColumn.create()
-	var edgeTo = CsrColumn.create()
-
 	// Scratch reused across every block. Created per block, it would be one heap allocation per
 	// block of every function — and the skeleton is built twice per function (the critical-edge
 	// split, then the RPO reorder), so two per block per compile for a buffer that never
 	// outlives its iteration. Same hoist-and-clear the pressure sweep's `ordered` uses.
 	var succIds = BlockIdArray.create()
+	var edgeCount = 0 as ElementIndex
+
+	for i in 0 upto numBlocks 'countEdges'
+		let block = try module.blocks.get(try blockRefByLocal.get(i) otherwise panic("buildFuncTopology: blockRefByLocal.get OOB")) otherwise panic("buildFuncTopology: block ref not in blocks")
+		succIds.clear()
+		collectBlockSuccessorIds(module, block: block, out: succIds)
+		edgeCount = edgeCount + succIds.count()
+	end 'countEdges'
+
+	// Edge list (fromLocal, toLocal), then CSR for succ and its inverse for pred.
+	var edgeFrom = CsrColumn.create()
+	edgeFrom.reserve(edgeCount)
+	var edgeTo = CsrColumn.create()
+	edgeTo.reserve(edgeCount)
 
 	for i in 0 upto numBlocks 'eachBlock'
 		let block = try module.blocks.get(try blockRefByLocal.get(i) otherwise panic("buildFuncTopology: blockRefByLocal.get OOB")) otherwise panic("buildFuncTopology: block ref not in blocks")
@@ -1957,10 +1977,12 @@ type LineWays
 		let siteSlots = func.inlineSites.count() as LineClassKey + FirstSplicedSiteSlot
 		var successors = BlockIdArray.create()
 		var entry = 0 as BlockId
+		var layout = BlockIdArray.create()
 
 		for (iter, blockRef) in func.blockRefs.withIterator() 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("LineWays.of: blockRef from func.blockRefs not in module.blocks")
 			entry = block.id if iter.index() == 0 else entry
+			layout.push(block.id)
 			let lastSpan = lastSpanOf(module, block: block)
 
 			if lastSpan != NoSpanId 'positioned'
@@ -1986,22 +2008,21 @@ type LineWays
 		classStamps.refill(classIds.count(), value: 0)
 
 		var ways = Self{successors: buildCsr(leaving, to: entering, nodeCount: func.nextBlockId as CsrIndex), predecessors: buildCsr(entering, to: leaving, nodeCount: func.nextBlockId as CsrIndex), sites: sites, lineClasses: lineClasses, spanTable: spanTable, entry: entry, frontiers: frontiers, reachesEntry: reachesEntry, classStamps: classStamps, joinGeneration: 0}
-		ways.settleFrontiers(func)
+		ways.settleFrontiers(func, layout: layout)
 
 		return ways
 	end 'of'
 
-	function settleFrontiers(func IrFunction)
+	function settleFrontiers(func IrFunction, layout BlockIdArray)
 		var queued = BoolArray.create()
 		queued.refill(func.nextBlockId, value: false)
 		var pending = CsrColumn.create()
 
-		for block in 0 upto func.nextBlockId 'eachBlock'
-			if self.positionless(block as BlockId) 'transparent'
-				pending.push(block as CsrIndex)
-				try queued.set(block as ElementIndex, value: true) otherwise panic("LineWays.settleFrontiers: block {block} is below the {func.nextBlockId} this function numbers")
-			end 'transparent'
-		end 'eachBlock'
+		// Seeded in layout order: BlockIds are creation order, so an edge-split block sits far from its
+		// flow neighbours and an id-order seed refreshes a wide join many times over.
+		for block in layout 'eachBlockInLayoutOrder'
+			self.queueIfTransparent(block, queued: queued, pending: pending)
+		end 'eachBlockInLayoutOrder'
 
 		var head = 0 as CsrIndex
 
@@ -2015,6 +2036,37 @@ type LineWays
 			end 'itChanged'
 		end 'eachChangedBlock'
 	end 'settleFrontiers'
+
+	// Compares the set of line classes, not the blocks held: `leftFromAnotherLine` reads only a
+	// frontier's classes, so a different representative of the same class is no change.
+	function frontierChanged(before BlockIdArray, after BlockIdArray) returns bool
+		if before.count() != after.count() 'aClassCameOrWent'
+			return true
+		end 'aClassCameOrWent'
+
+		self.joinGeneration = self.joinGeneration + 1
+
+		for held in before 'eachHeldBefore'
+			_ = self.claimsItsLine(held)
+		end 'eachHeldBefore'
+
+		for held in after 'eachHeldAfter'
+			if self.claimsItsLine(held) 'aClassNotHeldBefore'
+				return true
+			end 'aClassNotHeldBefore'
+		end 'eachHeldAfter'
+
+		return false
+	end 'frontierChanged'
+
+	function queueIfTransparent(block BlockId, queued BoolArray, pending CsrColumn)
+		let alreadyQueued = try queued.get(block) otherwise panic("LineWays.queueIfTransparent: block {block} is past the {queued.count()} this function numbers")
+
+		if self.positionless(block) and not alreadyQueued 'transparent'
+			pending.push(block as CsrIndex)
+			try queued.set(block, value: true) otherwise panic("LineWays.queueIfTransparent: block {block} was just read")
+		end 'transparent'
+	end 'queueIfTransparent'
 
 	function refreshedFrontier(block CsrIndex) returns bool
 		var frontier = BlockIdArray.create()
@@ -2050,7 +2102,7 @@ type LineWays
 			end 'eachArriving'
 		end 'eachWayIn'
 
-		let grew = frontier.count() != self.frontierOf(block).count() or fromEntry != self.entryReachedThrough(block)
+		let grew = self.frontierChanged(self.frontierOf(block), after: frontier) or fromEntry != self.entryReachedThrough(block)
 		try self.frontiers.set(block, value: frontier) otherwise panic("LineWays.refreshedFrontier: block {block} is past the {self.frontiers.count()} this function numbers")
 		try self.reachesEntry.set(block, value: fromEntry) otherwise panic("LineWays.refreshedFrontier: block {block} is past the {self.reachesEntry.count()} this function numbers")
 
@@ -2059,13 +2111,7 @@ type LineWays
 
 	function requeueTransparentSuccessors(block CsrIndex, queued BoolArray, pending CsrColumn)
 		for k in 0 upto self.successors.degree(block) 'eachWayOut'
-			let after = self.successors.neighbour(block, k: k)
-			let alreadyQueued = try queued.get(after) otherwise panic("LineWays.requeueTransparentSuccessors: block {after} is past the {queued.count()} this function numbers")
-
-			if self.positionless(after as BlockId) and not alreadyQueued 'waitsOnThisOne'
-				pending.push(after)
-				try queued.set(after, value: true) otherwise panic("LineWays.requeueTransparentSuccessors: block {after} was just read")
-			end 'waitsOnThisOne'
+			self.queueIfTransparent(self.successors.neighbour(block, k: k) as BlockId, queued: queued, pending: pending)
 		end 'eachWayOut'
 	end 'requeueTransparentSuccessors'
 
@@ -2616,8 +2662,7 @@ export type UseIndex
 	// ⚠ WITHOUT THE RELOAD HALF, EVERY RE-SPLIT OF A RELOAD WRITES MEMORY BACK TO MEMORY. The fresh id
 	// a split mints had no `storeSlotReg` of its own, so the next split treated it as a FIRST spill:
 	// it emitted `loadRegSlot rcx, slot22` / `storeSlotReg slot23, rcx` — a value copied out of one
-	// stack slot straight into another — and burned a second 8-byte slot on the same value. 36
-	// committed goldens carried that pair.
+	// stack slot straight into another — and burned a second 8-byte slot on the same value.
 	//
 	// ⚠ IT IS SOUND BECAUSE A SLOT BELONGS TO ONE LINEAGE. `slotForSpillOf` hands back an existing slot
 	// only to a value already resident in it, and `nextSlot` only ever increments — so the only writer
@@ -4269,7 +4314,7 @@ end 'ParamCrossForbid'
 // ⛔ **IT IS ONE FUNCTION BECAUSE A THIRD CONTRIBUTION MUST NOT BE ABLE TO REACH ONE PASS AND NOT THE
 // OTHER.** Spelled twice, adding one and forgetting the other compiles, passes every test whose split
 // count is zero, and shows up as a value coloured into a register something else already owns — a
-// silent wrong answer, at a call, in code the golden gate does not pin. `VerifyIncrementalSplit`
+// silent wrong answer, at a call, in code no `TargetIr` pin covers. `VerifyIncrementalSplit`
 // catches it and is OFF in a shipping compiler; this makes the question not arise.
 //
 // It is asked per VALUE, so `ParamCrossForbid.maskFor` answers in O(1) for the functions that have no
@@ -4825,7 +4870,7 @@ end 'transientDefOperand'
 //    parameter is unused panicked `chooseRegister` on x64, and 27 on arm64 — one past each pool. Every
 //    `__fnref_` thunk is that shape by construction, its trailing record parameter being
 //    materialized and never read, which is why an INDIRECT call panicked one arity EARLIER than a
-//    direct one: `specs/register-pressure.md`.)
+//    direct one: `ir-specs/register-pressure.md`.)
 //
 //    It is charged only when the op frees NO register OF THE DEF'S OWN FILE. A def may take the
 //    register of a use that DIES here (`allocateDef`'s `dyingRegs`), so `lea dead, a, b` with `a` dying
@@ -4920,7 +4965,7 @@ end 'opTransientDefOf'
 // ⛔ A confined census resting on `analyzeBlockPressure`'s premise that *"a transient is not a value,
 // so it is not CONFINED by anything"* sees none of this, because a reuse def IS a value. What it misses
 // is a point that overflows the callee-saved subset invisibly: the splitter relieves nothing, and the
-// colorer dies with `forbidden` covering the caller-saved half and the held set covering the rest (`specs/register-pressure.md`'s `reuse-def-confined-by-a-later-call`).
+// colorer dies with `forbidden` covering the caller-saved half and the held set covering the rest (`ir-specs/register-pressure.md`'s `reuse-def-confined-by-a-later-call`).
 //
 // The inheritance test is a MASK CONTAINMENT and therefore exact without knowing any colour yet:
 // the def can be guaranteed the input's register only when EVERY register the input may hold is one

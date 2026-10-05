@@ -16,7 +16,7 @@ A test enters mm-trace mode when it carries either a `<!-- MmTrace -->` directiv
 or an ` ```mm-trace ` block. In this mode the harness compiles the program with
 the shared-memory debug stream enabled, runs it under `maxon monitor --filter=mm`,
 and compares the decoded, normalized event trace against the ` ```mm-trace `
-golden block.
+block.
 
 ⚠ It is ONE capture mode with a FAMILY, not a mode of its own. Its sibling is `log-trace`
 (`<!-- LogTrace -->` and ` ```log-trace `), which captures the events the PROGRAM authors
@@ -25,19 +25,19 @@ through `__DebugStream` rather than the ones its memory manager emits — see
 normalizer, the `--update-required` mint and the splice are the same for both; only the
 marker, the fence, the `--filter=` and the decoded line's prefix differ.
 
-The golden is normalized so it is stable across runs and machines:
+The trace is normalized so it is stable across runs and machines:
 
 - Timestamps (`[+SSSS.mmm]`) and depth indentation are stripped, leaving the
   bare `mm_<verb> ...` payload.
 - Allocation ids (`#<id>`) are densely renumbered `1, 2, 3, …` by first
-  appearance, so the runtime's monotonic counter never leaks into the golden.
+  appearance, so the runtime's monotonic counter never leaks into the block.
 
 ⛔ Event ORDER is not normalized and is not stable on its own. Every green thread writes into one
 shared ring under one lock, so the decoded order is the order producers took that lock — which two
 threads running at once decide between them. A case whose events come from more than one green thread
 therefore pins `<!-- procs: 1 -->`: one processor is one producer, and the order becomes the program's.
 
-Regenerate the golden with `--update-required`.
+Regenerate the block with `--update-required`.
 
 ## Tests
 
@@ -50,7 +50,7 @@ scales with the number of appends.
 An `Array` **is** its `__ManagedMemory`, so wrapping each piece in `ByteArray.init(piece)` purely to hand
 it to `Array.append` would cost a 40-byte `ByteArray` record per append, and no other test can see it.
 `Array.appendMemory` takes the memory directly. **If a `ByteArray` line appears here once per `append`,
-that is the defect this golden exists to catch.**
+that is the defect this block exists to catch.**
 <!-- MmTrace -->
 ```maxon
 function main() returns ExitCode
@@ -167,7 +167,7 @@ mm_free StringRecord #2
 
 <!-- test: module-let-byte-string-read-allocates-no-record-per-read -->
 A module-scope `let` holding a byte string literal is ONE array for the whole program, so READING it must
-cost nothing. Three reads of the same global appear here and the golden is EMPTY: not one memory-manager
+cost nothing. Three reads of the same global appear here and the block is EMPTY: not one memory-manager
 event may attend them. The read is a single `.rdata` address, and an address is not an allocation.
 
 What makes that a claim worth pinning is a global with no storage. With `hasStorage == false` the binding
@@ -213,7 +213,7 @@ times. A `var` global has storage — the array is materialized ONCE at startup 
 that one record — so its whole trace is that single startup allocation, whatever the read count. It must
 STAY that way.
 
-**If this golden grows a line, the change reached the storage-backed global path**, which is not what a
+**If this block grows a line, the change reached the storage-backed global path**, which is not what a
 fix to the inlined `let` path is allowed to do.
 <!-- MmTrace -->
 ```maxon
@@ -238,14 +238,14 @@ mm_free ArrayRecord #1
 <!-- test: module-let-array-globals-cost-no-allocation-at-all -->
 A module-scope `let` holding an array LITERAL, and one holding an empty container, are both constants: their
 bytes are decided when the program is compiled and nothing about them can change while it runs. So neither
-may cost a memory-manager event, and the golden is EMPTY.
+may cost a memory-manager event, and the block is EMPTY.
 
-⭐ **NEITHER RESERVES A `.data` SLOT, AND THAT IS THE FACT THE EMPTY GOLDEN PINS.** Each is one `.rdata`
+⭐ **NEITHER RESERVES A `.data` SLOT, AND THAT IS THE FACT THE EMPTY BLOCK PINS.** Each is one `.rdata`
 record every read addresses directly, so there is no slot for `__module_init` to fill and nothing for
 `__maxon_global_cleanup` to release — the same storage model the byte-string sibling above already has. A
 slot would put a `__managed_create` back in `__module_init` and its `__managed_decref` back in the cleanup:
 one allocation and one free per global, per process, whether or not the program ever looks at it, which is
-exactly the six events this golden's emptiness refuses.
+exactly the six events this block's emptiness refuses.
 
 **A per-process cost is not a hot path, and that is not why this is pinned.** It is pinned because a global
 the compiler builds at run time is a heap record with a reference count, and a reference count is a word two
@@ -280,7 +280,7 @@ end 'main'
 <!-- test: module-let-scalar-struct-costs-no-allocation -->
 A module-scope `let` holding a struct of scalars is a constant like any other: every field is decided when
 the program is compiled, nothing about it can change while the program runs, and so it must cost no
-memory-manager event. The golden is EMPTY.
+memory-manager event. The block is EMPTY.
 
 ⭐ **THIS SHAPE CANNOT BE MARKED THE WAY THE ARRAYS ABOVE ARE, AND THAT IS WHY IT IS PINNED SEPARATELY.**
 An `Array`'s immortality is a sentinel in its own `capacity@16`, so `emitRecordIsImmortal` reads a slot the
@@ -330,7 +330,7 @@ end 'main'
 
 <!-- test: module-let-string-array-costs-no-allocation -->
 A module-scope `let` holding an array of string LITERALS is a constant twice over: the array never changes,
-and neither does any element. So it must cost nothing, and the golden is EMPTY.
+and neither does any element. So it must cost nothing, and the block is EMPTY.
 
 ⭐ **THIS IS THE SHAPE THAT NEEDS A POINTER BETWEEN TWO IMAGE OBJECTS, WHICH IS WHY IT IS PINNED APART FROM
 THE ARRAYS ABOVE.** A byte string's element bytes live in its own blob and a scalar array's live inline, so
@@ -372,7 +372,7 @@ end 'main'
 ```
 
 <!-- test: module-let-empty-map-and-set-cost-no-allocation -->
-An empty `Map` and an empty `Set` at module scope are constants, and must cost nothing. The golden is EMPTY.
+An empty `Map` and an empty `Set` at module scope are constants, and must cost nothing. The block is EMPTY.
 
 ⭐ **THIS IS THE SHAPE WHOSE COST IS NOT ITS OWN RECORD.** `Map.create()` is `return Self{}` — as trivial as
 a factory gets — but a `Map` is a struct whose four container fields carry DEFAULTS, so constructing one
@@ -419,7 +419,7 @@ end 'main'
 <!-- test: a-payload-free-union-case-let-costs-no-allocation -->
 ⭐ **A UNION CASE THAT CARRIES NOTHING IS A CONSTANT, AND A CONSTANT IS IMAGE DATA.** `Column.unwritten`
 holds a tag and no payload, so every value of it is the same value — there is nothing to construct and
-nothing a holder could write. It must cost no allocation, and the golden is EMPTY.
+nothing a holder could write. It must cost no allocation, and the block is EMPTY.
 
 ⚠ **A FIELD'S "NOTHING YET" STATE CAN NAME A PAYLOAD-FREE CASE RATHER THAN A SHARED EMPTY CONTAINER.**
 One 16-byte box is cheaper than a `Map`'s five records, but one box is not none, and the rule is that a
@@ -480,7 +480,7 @@ placed against.
 
 ⚠ **THE REFUSE DIRECTION IS ALREADY PINNED ONE CASE UP**, where `Column` declares `entries(items
 CountArray)`: a rule that read the UNION rather than the case would refuse `Column.unwritten` and turn that
-golden red. Between the two, both directions are held — and neither is held by this case alone.
+case red. Between the two, both directions are held — and neither is held by this case alone.
 <!-- MmTrace -->
 ```maxon
 typealias Tally = int(0 to 100)
@@ -565,7 +565,7 @@ end 'main'
 <!-- test: module-var-struct-of-empty-containers-still-allocates -->
 The negative control for its `let` sibling above, and the guard against over-imaging: the identical program
 with one keyword changed. A `var` is never image data — its slot is written before `main` and may be
-written again after — so all three records are still built, and this golden must keep every line the `let`
+written again after — so all three records are still built, and this block must keep every line the `let`
 case is required to lose.
 
 **If this trace ever empties, the admission rule has stopped reading mutability** and a program that

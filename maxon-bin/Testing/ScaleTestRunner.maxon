@@ -95,9 +95,9 @@
 //
 // ⚠ AT THE DEFAULT OF 1 THIS CHECK DOES NOT RUN — there is nothing to compare against. That is the
 // deliberate cost of the default (see `DefaultRepeatCount`), and `--repeat=2` is the cheapest way to
-// buy it back. It is not the only line of defence: the fragment goldens prove byte-identical codegen
-// across ~1,900 spec tests every suite run, which is a far stronger determinism gate — it simply does
-// not look at allocation COUNTS, which is precisely the gap this check covered.
+// buy it back. It is not the only line of defence: `verify-warm-rebuild`'s determinism property and
+// `scripts/fixpoint.sh` prove byte-identical codegen — neither looks at allocation COUNTS, which is
+// precisely the gap this check covers.
 
 // A rung's metrics TSV and its executable, in the corpus ROOT — NEVER inside the rung's own source
 // directory.
@@ -299,9 +299,9 @@ export let MaxRepeatCount = 25 as ScaleRepeatCount
 //
 // ⚠ TWO THINGS ARE GENUINELY GIVEN UP HERE, and neither is hidden:
 //   1. The cross-repeat EQUALITY CHECK below cannot run at 1 — a repeated compile is the only thing
-//      that can make it. Codegen determinism is still gated, far more strongly, by the fragment
-//      goldens over ~1,900 spec tests; what goes unchecked is ALLOCATION-COUNT determinism, which
-//      those goldens do not see. `--repeat=2` restores the check for anyone who wants it.
+//      that can make it. Codegen determinism is gated by the `TargetIr` pins in `ir-specs/`;
+//      what goes unchecked is ALLOCATION-COUNT determinism, which those pins do not see.
+//      `--repeat=2` restores the check for anyone who wants it.
 //   2. CPU rows logged before this date are MINIMA and rows after it are single samples, so they sit
 //      ~10% apart for no reason in the compiler. The changeover is recorded in
 //      docs/optimization-log.md at the date; do not read that step as a regression.

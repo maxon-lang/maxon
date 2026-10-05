@@ -563,7 +563,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3030: specs/fragments/constants/error.duplicate-case.test:4:2: duplicate enum case: 'red'
+error E3030: specs/constants/error.duplicate-case.maxon:4:2: duplicate enum case: 'red'
 ```
 
 <!-- test: error.duplicate-value -->
@@ -578,7 +578,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3031: specs/fragments/constants/error.duplicate-value.test:4:2: duplicate raw value: '200'
+error E3031: specs/constants/error.duplicate-value.maxon:4:2: duplicate raw value: '200'
 ```
 
 <!-- test: error.mixed-backing-types -->
@@ -593,7 +593,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3032: specs/fragments/constants/error.mixed-backing-types.test:4:2: raw value type mismatch: 'expected int, got String'
+error E3032: specs/constants/error.mixed-backing-types.maxon:4:2: raw value type mismatch: 'expected int, got String'
 ```
 
 <!-- test: arithmetic-with-int -->
@@ -750,7 +750,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/constants/error.unknown-case.test:8:11: unknown enum case: 'green'
+error E3034: specs/constants/error.unknown-case.maxon:8:11: unknown enum case: 'green'
 ```
 
 ### Raw Value Access Tests
@@ -1241,7 +1241,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3097: specs/fragments/constants/error.enum-accessor-comparison.test:10:15: cannot compare an enum's '.ordinal' with '==' — compare the value directly (e.g. `value == Type.case`), or use `match` for a union variant
+error E3097: specs/constants/error.enum-accessor-comparison.maxon:10:15: cannot compare an enum's '.ordinal' with '==' — compare the value directly (e.g. `value == Type.case`), or use `match` for a union variant
 ```
 
 ### fromRawValue Tests
@@ -1540,7 +1540,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/constants/error.fromName-invalid-case.test:8:25: no enum case named 'invalid_case_name_that_does_not_exist': 'Direction'
+error E3034: specs/constants/error.fromName-invalid-case.maxon:8:25: no enum case named 'invalid_case_name_that_does_not_exist': 'Direction'
 ```
 
 <!-- test: keyword-case-rawvalue -->

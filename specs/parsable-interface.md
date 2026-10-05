@@ -271,7 +271,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/parsable-interface/error.missing-throws.test:6:6: Method 'Value.fromString' must throw 'Error' as required by interface 'Parsable'
+error E3016: specs/parsable-interface/error.missing-throws.maxon:6:6: Method 'Value.fromString' must throw 'Error' as required by interface 'Parsable'
 ```
 
 <!-- test: error.throws-non-error-type -->
@@ -297,7 +297,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/parsable-interface/error.throws-non-error-type.test:10:6: Method 'Value.fromString' throws 'NotAnError' which does not conform to Error
+error E3016: specs/parsable-interface/error.throws-non-error-type.maxon:10:6: Method 'Value.fromString' throws 'NotAnError' which does not conform to Error
 ```
 
 <!-- test: parsable.throws-a-compiler-synthesized-error-enum -->
@@ -526,6 +526,45 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 7
+```
+
+<!-- test: another-files-bare-byte-is-the-library-byte-past-a-file-private-author-byte -->
+A declaration a file cannot see never counts in its name resolution, so `b/`'s bare `byte` is the library's while `a/` keeps its own file-private `type byte`.
+```maxon
+// --- file: a/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type byte
+	export let n as Integer
+
+	static function fromString(_ String) returns Integer
+		return 7
+	end 'fromString'
+end 'byte'
+
+export function runA()
+	print("a {byte.fromString("41")}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+export function runB()
+	let n = try byte.fromString("41") otherwise 0
+	print("b {n}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 7
+b 41
 ```
 
 <!-- test: parsable.bound-keyword-outranks-primitive-static -->

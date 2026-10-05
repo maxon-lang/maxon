@@ -1,0 +1,26 @@
+let OutsideMarkersSpecName = "outside-markers"
+let PrintedOutsideTheMarkers = "printed outside the case markers"
+
+test 'output outside the case markers fails every case of the program with a message naming the cause'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	for name in ["outside-markers.forges", "outside-markers.plain-first", "outside-markers.plain-second"] 'eachCase'
+		let failed = failVerdictPrefix(testLabel(OutsideMarkersSpecName, testName: name))
+
+		if not said.contains(failed) 'didNotFail'
+			broken.push("'{name}' shares a program whose output carries text no case marker owns, and must FAIL. Expected '{failed}', and the run said:\n{said}\n")
+		end 'didNotFail'
+	end 'eachCase'
+
+	if not said.contains(PrintedOutsideTheMarkers) 'causeUnnamed'
+		broken.push("the failures do not name the cause '{PrintedOutsideTheMarkers}'. The run said:\n{said}\n")
+	end 'causeUnnamed'
+
+	if run.exitCode() == SuccessExitCode 'failureDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with failing cases in it. It said:\n{said}\n")
+	end 'failureDidNotCount'
+
+	requireNothingBroken(broken, headline: "output outside the markers fails every case of its program")
+end 'output outside the case markers fails every case of the program with a message naming the cause'

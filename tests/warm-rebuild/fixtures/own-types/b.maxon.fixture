@@ -1,0 +1,22 @@
+function main() returns ExitCode
+	var particles = ParticleArray.create()
+	particles.push(Particle.create(600, rank: 7))
+
+	var labels = LabelMap.create()
+	labels.upsert("solid", value: 4)
+
+	let reading = Reading.count(totalWeight(particles))
+	let phase = Phase.liquid
+	var code = try labels.get("solid") otherwise 0
+
+	match reading 'inspect'
+		count(value) then code = code + value
+		missing then code = 0
+	end 'inspect'
+
+	if phase == Phase.liquid 'isLiquid'
+		code = code + 1
+	end 'isLiquid'
+
+	return code as ExitCode
+end 'main'

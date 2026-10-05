@@ -226,7 +226,7 @@ end 'emitRouteOnRefcountWord'
 // traffic columns `__Builtins.mm*()` read — are the TRACKED trio of the slab's per-row traffic columns
 // (`SlabRuntime.SlabTrafficColumn`), stepped by `__mm_alloc`/`__mm_free` on the calling thread's own row
 // and summed by a reader. A `.data` word would be one shared counter every thread steps, and every heap
-// program's golden renders the `data {` table it would sit in.
+// program's rendered Target IR shows the `data {` table it would sit in.
 //
 // ⭐⭐ **TWO LAYERS, NESTED: EVERY BOX IS ALSO A SLAB REQUEST.** The RAW trio counts every request at the
 // slab doors, boxes included; the TRACKED trio counts boxes at the box doors. The public raw readers
@@ -478,7 +478,7 @@ let RuntimeCallPrefix = b"__mm_"
 // A runtime entry point is DECLARED BY NOTHING — built at the Std tier after lowering — so the `__`
 // prefix is what makes deciding it by NAME safe: Maxon reserves `__` for compiler-internal names, so
 // no user function can collide. It is the same reservation `TargetPrinter.isRuntimeFunction` keeps the
-// runtime out of the spec goldens by.
+// runtime out of the rendered Target IR by.
 export function isRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: RuntimeCallPrefix)
 end 'isRuntimeCallee'
@@ -1294,14 +1294,14 @@ end 'emitConstReturn'
 // them, and so do `Parser`'s interpolation, `GtRuntime`'s subprocess buffers, `__mm_to_cstring`'s copy path
 // and every `emitBuildOwnedInlineString` blit — TWO files each owning "the ONE spelling" is what the header
 // below exists to prevent. The callee KEEPS its `__str_copy` spelling: a runtime symbol's name is baked
-// into goldens and into `RuntimeUsage`'s bit.
+// into the rendered Target IR and into `RuntimeUsage`'s bit.
 
 // The blit's callee name. `__`-prefixed compiler-internal (no E3004, no signature slotting) and NOT
 // `__mm_`-prefixed, so `isRuntimeCallee` leaves it out of the heap decision — it allocates nothing, and a
 // program that only blits bytes must not carry the allocator or the leak gate.
 //
 // ⚠ It is spelled `__str_copy` and stays spelled that way though it lives here now and has never been a
-// String's: the name is baked into every committed golden that installs it and into `RuntimeUsage`'s
+// String's: the name is baked into every rendered IR that installs it and into `RuntimeUsage`'s
 // `usesStrCopy` bit, so changing it would be a codegen change dressed as a rename.
 export let StrCopyName = b"__str_copy"
 
@@ -1576,7 +1576,7 @@ function buildMmAlloc(module StdModule, model MachineModel)
 	// MICRO-OPTIMISATION — IT IS THE BYTE-IDENTICAL RULE.** With no prefix word the two distances are the
 	// same number, and minting a SECOND `const HeaderBytes` for the payload offset is one more op in
 	// `__mm_alloc`: the register allocator then makes different choices and every heap program's `.text`
-	// moves, against thousands of committed fragment goldens. Under the flag the two genuinely
+	// moves. Under the flag the two genuinely
 	// differ — the total includes the prefix word, the payload offset does not — so the second constant is
 	// minted there and only there.
 	var payloadOffset = headerConst

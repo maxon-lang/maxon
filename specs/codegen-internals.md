@@ -128,128 +128,6 @@ end 'main'
 20
 ```
 
-<!-- test: rdata-constant-array-uses-rdata -->
-```maxon
-function main() returns ExitCode
-	let arr = [10, 20, 30]
-	return try arr.get(1) otherwise 0
-end 'main'
-```
-```exitcode
-20
-```
-```RequiredRdata
-i64[] 10, 20, 30
-```
-
-<!-- test: rdata-bool-array-bit-packed -->
-```maxon
-function main() returns ExitCode
-	let arr = [true, false, true, false]
-	let v0 = try arr.get(0) otherwise false
-	let v1 = try arr.get(1) otherwise true
-	let v2 = try arr.get(2) otherwise false
-	let v3 = try arr.get(3) otherwise true
-	var sum = 0
-	if v0 'c0'
-		sum = sum + 1
-	end 'c0'
-	if v1 'c1'
-		sum = sum + 1
-	end 'c1'
-	if v2 'c2'
-		sum = sum + 1
-	end 'c2'
-	if v3 'c3'
-		sum = sum + 1
-	end 'c3'
-	return sum
-end 'main'
-```
-```exitcode
-2
-```
-```RequiredRdata
-i8[] 5
-```
-
-<!-- test: rdata-byte-array-uses-i8 -->
-```maxon
-
-typealias Byte = int(0 to u8.max)
-
-function main() returns ExitCode
-	let arr = [10 as Byte, 20 as Byte, 30 as Byte]
-	let v0 = try arr.get(0) otherwise 0 as Byte
-	let v1 = try arr.get(1) otherwise 0 as Byte
-	let v2 = try arr.get(2) otherwise 0 as Byte
-	return v0 + v1 + v2
-end 'main'
-```
-```exitcode
-60
-```
-```RequiredRdata
-i8[] 10, 20, 30
-```
-
-<!-- test: rdata-typealias-byte-array-uses-i8 -->
-```maxon
-
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-
-function main() returns ExitCode
-	let arr = ByteArray from [10, 20, 30]
-	let v0 = try arr.get(0) otherwise 0 as Byte
-	let v1 = try arr.get(1) otherwise 0 as Byte
-	let v2 = try arr.get(2) otherwise 0 as Byte
-	return v0 + v1 + v2
-end 'main'
-```
-```exitcode
-60
-```
-```RequiredRdata
-i8[] 10, 20, 30
-```
-
-<!-- test: rdata-cow-mutation-copies-to-heap -->
-```maxon
-function main() returns ExitCode
-	var arr = [42]
-	try arr.set(0, value: 77) otherwise panic("test invariant: set OOB")
-	return try arr.get(0) otherwise 0
-end 'main'
-```
-```exitcode
-77
-```
-```RequiredRdata
-i64 42
-```
-
-<!-- test: rdata-cow-multiple-mutations -->
-```maxon
-function main() returns ExitCode
-	var arr = [1, 2, 3]
-	try arr.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	try arr.set(1, value: 20) otherwise panic("test invariant: set OOB")
-	try arr.set(2, value: 30) otherwise panic("test invariant: set OOB")
-	var sum = 0
-	sum = sum + (try arr.get(0) otherwise 0)
-	sum = sum + (try arr.get(1) otherwise 0)
-	sum = sum + (try arr.get(2) otherwise 0)
-	return sum
-end 'main'
-```
-```exitcode
-60
-```
-```RequiredRdata
-i64[] 1, 2, 3
-```
-
 <!-- test: rdata-non-constant-array-uses-heap -->
 ```maxon
 function main() returns ExitCode
@@ -262,59 +140,6 @@ end 'main'
 5
 ```
 
-<!-- test: rdata-global-let-array-uses-rdata -->
-```maxon
-let globalArr = [10, 20, 30]
-
-function main() returns ExitCode
-	return try globalArr.get(1) otherwise 0
-end 'main'
-```
-```exitcode
-20
-```
-```RequiredRdata
-i64[] 10, 20, 30
-```
-
-<!-- test: rdata-global-var-array-cow -->
-```maxon
-var globalArr = [1, 2, 3]
-
-function main() returns ExitCode
-	try globalArr.set(0, value: 42) otherwise panic("test invariant: set OOB")
-	return try globalArr.get(0) otherwise 0
-end 'main'
-```
-```exitcode
-42
-```
-```RequiredRdata
-i64[] 1, 2, 3
-```
-
-<!-- test: rdata-global-var-array-cow-preserves-original -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-var globalArr = [10, 20, 30]
-
-function readFirst() returns Integer
-	return try globalArr.get(0) otherwise 0
-end 'readFirst'
-
-function main() returns ExitCode
-	try globalArr.set(0, value: 99) otherwise panic("test invariant: set OOB")
-	return readFirst()
-end 'main'
-```
-```exitcode
-99
-```
-```RequiredRdata
-i64[] 10, 20, 30
-```
-
 <!-- test: rdata-dead-global-array-no-init-code -->
 ```maxon
 let unusedTable = [100, 200, 300, 400]
@@ -325,64 +150,6 @@ end 'main'
 ```
 ```exitcode
 42
-```
-
-<!-- test: managed-string-heap-string-generates-cleanup -->
-```maxon
-function main() returns ExitCode
-	let s = "this is a heap allocated string!"
-	return s.byteLength()
-end 'main'
-```
-```exitcode
-32
-```
-```RequiredRdata
-utf8 "this is a heap allocated string!\0"
-```
-
-<!-- test: managed-string-reassignment-handles-old-value -->
-```maxon
-function main() returns ExitCode
-	var s = "first heap allocated value!!"
-	s = "second heap allocated here!!"
-	return s.byteLength()
-end 'main'
-```
-```exitcode
-28
-```
-```RequiredRdata
-utf8 "first heap allocated value!!\0"
-utf8 "second heap allocated here!!\0"
-```
-
-<!-- test: managed-string-print-heap-string -->
-```maxon
-function main() returns ExitCode
-	let s = "heap allocated string here!!"
-	return s.byteLength()
-end 'main'
-```
-```exitcode
-28
-```
-```RequiredRdata
-utf8 "heap allocated string here!!\0"
-```
-
-<!-- test: managed-string-short-string-sso -->
-```maxon
-function main() returns ExitCode
-	let s = "short"
-	return s.byteLength()
-end 'main'
-```
-```exitcode
-5
-```
-```RequiredRdata
-utf8 "short\0"
 ```
 
 <!-- test: managed-string-loop-concatenation-cleanup -->
@@ -400,22 +167,6 @@ end 'main'
 ```
 ```exitcode
 5
-```
-
-<!-- test: managed-string-literal-deduplication -->
-```maxon
-function main() returns ExitCode
-	let a = "hello world"
-	let b = "hello world"
-	let c = "hello world"
-	return a.byteLength() + b.byteLength() + c.byteLength()
-end 'main'
-```
-```exitcode
-33
-```
-```RequiredRdata
-utf8 "hello world\0"
 ```
 
 <!-- test: i32-unsigned-add -->

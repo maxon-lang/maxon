@@ -591,8 +591,8 @@ semantics.
 ⛔ **Read that way, `MarkerFirst` below would report**
 *"error E3004: call to undefined function 'MarkerFirst.heldPlusOne'"*, while `HeldFirst` — the identical
 clause, reordered — compiles and runs. The whole-program re-read (`Queries.foldConformanceClauses`) is
-what makes the two spellings one program; the golden beside this case is where both
-`MarkerFirst.heldPlusOne` and `HeldFirst.heldPlusOne` are shown emitted.
+what makes the two spellings one program; this case's emitted code holds both
+`MarkerFirst.heldPlusOne` and `HeldFirst.heldPlusOne`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

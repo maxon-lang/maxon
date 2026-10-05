@@ -32,18 +32,12 @@
 # A target that RUNS and FAILS is a red gate — that is a rung-halting condition (see the rung
 # skill's HALT list), and no flag softens it.
 #
-# ⚖ AND SINCE 2026-08-02, A RED LANE IS A REAL FAILURE AND CANNOT BE ANYTHING ELSE.
+# ⚖ A RED LANE IS A REAL FAILURE AND CANNOT BE ANYTHING ELSE.
 #
 # A suite run exits non-zero ONLY for a wrong exit code, wrong stdout, a diagnostic that did not match,
-# a compile that should have succeeded, or a leak (101). Nothing about a committed golden reaches its
-# exit code or its failed count (user ruling: "the goldens are NOT supposed to be a gate, they are just
-# for reference" — see maxon-bin/Testing/GoldenCensus.maxon).
-#
-# ⛔ THIS SCRIPT'S RED WAS ONCE READ AS BOOKKEEPING, AND THAT IS THE REASON FOR THE RULING. An
-# x64-linux red here was filed as "10 stale golden mismatches + 9 others"; the 9 were nine float
-# programs exiting 1 on that target (PLAN row X5), and they went unlooked-at for a day because ten
-# pieces of golden bookkeeping in the same list looked exactly as red as they did. ⇒ A FAIL row below
-# now means a program did the wrong thing. Read the log; there is nothing in it to regenerate away.
+# a compile that should have succeeded, a leak (101), or — in `ir-specs` — a `TargetIr` pin the compiler
+# no longer renders. A FAIL row below therefore means a program did the wrong thing or the emitted code
+# moved. Read the log.
 #
 # ⭐ THE RUNG PATH DOES NOT REDO WHAT STEP 8 JUST DID (2026-07-27).
 #
@@ -99,6 +93,13 @@ WASMTIME="./vendor/wasmtime/wasmtime${MAXON_EXE_EXT}"
 
 SPEC_FILTER=()
 [ -n "$FILTER" ] && SPEC_FILTER+=("--filter=$FILTER")
+
+# The emitted-code suite, which a `--filter` cannot be applied to: a pattern naming a `specs/` case
+# selects nothing there, and a run that selects nothing is refused.
+ir_suite() {
+	[ -n "$FILTER" ] && return 0
+	"$MAXON" spec-test ir-specs "$@"
+}
 
 # One row per target: "target|verdict|detail". Printed as a matrix at the end, because a wall of
 # suite output is not a report — the question "which targets did we actually cover?" has to be
@@ -207,7 +208,7 @@ if [ "$SKIP_HOST" = 1 ]; then
 	prior_row "$HOST_TARGET" "suite — covered by the step-8 battery"
 else
 	banner "$HOST_TARGET (native) — suite"
-	if "$MAXON" spec-test ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"}; then
+	if "$MAXON" spec-test ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"} && ir_suite; then
 		row "$HOST_TARGET" "PASS" "suite"
 	else
 		fail_row "$HOST_TARGET" "suite (exit $?)"
@@ -222,7 +223,7 @@ fi
 # on a box where WSL works fine.
 banner "x64-linux (WSL) — suite"
 if [ "$IS_WINDOWS" = 1 ] && MSYS_NO_PATHCONV=1 wsl -e /bin/true >/dev/null 2>&1; then
-	if "$MAXON" spec-test --target=x64-linux ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"}; then
+	if "$MAXON" spec-test --target=x64-linux ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"} && ir_suite --target=x64-linux; then
 		row "x64-linux" "PASS" "suite via WSL"
 	else
 		fail_row "x64-linux" "suite via WSL (exit $?)"
@@ -271,9 +272,9 @@ done
 echo
 if [ "$FAILED" -gt 0 ]; then
 	echo "RED — $FAILED target(s) ran and FAILED. This is a rung-halting gate: stop and report."
-	echo "Every failure counted here is a REAL one — a wrong exit code, wrong stdout, a failed compile or"
-	echo "a leak. Goldens are reference and cannot redden a lane, so there is nothing here to regenerate"
-	echo "away: read the suite output above and find out what the program did wrong."
+	echo "Every failure counted here is a REAL one — a wrong exit code, wrong stdout, a failed compile, a"
+	echo "leak or a Target IR pin that no longer matches: read the suite output above and find out what"
+	echo "the program did wrong or what the emitted code now says."
 	exit 1
 fi
 

@@ -126,8 +126,8 @@
 // SUPERSET of what moved. A superset is CORRECT (just slower); a subset is a SILENT MISCOMPILE, which
 // is why `VerifyIncrementalSplit` exists.
 //
-// The DECISIONS are untouched. Same peak, same victim, same order, same code — the byte-exact
-// specs IR goldens do not move. The global peak is found by a TOURNAMENT over the per-block peaks
+// The DECISIONS are untouched. Same peak, same victim, same order, same code — the `TargetIr`
+// pins do not move. The global peak is found by a TOURNAMENT over the per-block peaks
 // (`PeakTree`), because a per-split fold over every block would merely MOVE the quadratic.
 //
 // ⭐ AND BLOCK GRANULARITY IS NOT ENOUGH, WHICH IS WHAT `PressureIndex` IS FOR. On a function that is
@@ -3095,7 +3095,7 @@ export type SplitDriver
 			// its loop; and an overflow whose values reach a cold RUN, because a run confines nothing
 			// (`ColdCallBracketPlan`), so a loop that fits the pool keeps its registers around its slow arm
 			// while one over the pool pays the bracket on the hot path. E5001 stays the answer for an
-			// authored loop with no cold run at all (`specs/register-pressure.md`). The fallback runs only
+			// authored loop with no cold run at all (`ir-specs/register-pressure.md`). The fallback runs only
 			// where `chooseVictim` has answered `none`, and the forced bracket makes its victim dead across
 			// the peak exactly as the cold split does, so the potential still falls every iteration.
 			if (not choiceFound(choice)) and (not hasAuthor or peakCrossesAColdRun(funcLiveness, peak: peak)) 'forcedRatherThanRefused'
@@ -6250,22 +6250,22 @@ end 'spillOneValue'
 //  • A reload that spans a call and keeps SOME register is FINE. An int live across a call is denied
 //    the 9 caller-saved registers and takes one of the 5 callee-saved; it is coloured, it is never
 //    re-picked, and there is no cascade to break. Breaking there would emit a reload per call for
-//    every spilled int in the program and buy nothing — MEASURED at 112 moved goldens, almost all of
-//    them a reload that merely moved from a callee-saved register to a caller-saved one.
+//    every spilled int in the program and buy nothing — MEASURED: almost all of what
+//    it changed was a reload that merely moved from a callee-saved register to a caller-saved one.
 //  • ⚠ AND IT MISCOMPILES. Call arguments are plain physical pre-moves (`mov rcx, a; mov rdx,
 //    b; call`) with no parallel-copy sequencer, and the allocator keeps them apart ONLY by forbidding a
 //    pre-move's register to every value live ACROSS it. A value DEFINED BETWEEN two pre-moves is live
 //    across neither, so it is forbidden nothing and can be coloured into an argument register an
 //    EARLIER pre-move already loaded. Breaking a GPR run at a pre-move puts a `loadRegSlot`
 //    exactly there. MEASURED: all nine `streaming-subprocess` tests returned the wrong answer (a
-//    `ReadFile` handed a clobbered argument reads 0 bytes and reports EOF), with the golden gate
-//    silent because the runtime's own IR is not pinned.
+//    `ReadFile` handed a clobbered argument reads 0 bytes and reports EOF), with no pin
+//    red because the runtime's own IR is not pinned.
 //
 //    ⛔ **THAT HOLE IS NOW CLOSED WHERE IT ACTUALLY WAS, AND THIS TEST IS NO LONGER WHAT STOPS IT.**
 //    `LivenessResult.establishedAtDef` forbids a value the argument registers established ahead of
 //    its def, wherever the def sits, so a `loadRegSlot` spliced between two pre-moves is safe by
 //    construction rather than by never being spliced there. This bullet is kept because the COST
-//    argument above is untouched and still decides the test — 112 moved goldens for reloads that only
+//    argument above is untouched and still decides the test — a reload per call that only
 //    changed register — and because a reader who removes it should know which of the two reasons went
 //    away. ⚠ It is NOT a second guard on one invariant: this test decides where a RUN BREAKS; the
 //    forbid decides what a DEF may take. Only the forbid is load-bearing for correctness.

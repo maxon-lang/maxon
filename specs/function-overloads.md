@@ -224,7 +224,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3007: specs/fragments/function-overloads/error.ambiguous-same-signature.test:13:9: Ambiguous overload for 'create': multiple overloads match. Candidates: (name String), (label String)
+error E3007: specs/function-overloads/error.ambiguous-same-signature.maxon:13:9: Ambiguous overload for 'create': multiple overloads match. Candidates: (name String), (label String)
 ```
 
 <!-- test: error.an-argument-from-an-undefined-call-picks-no-overload -->
@@ -242,8 +242,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/function-overloads/error.an-argument-from-an-undefined-call-picks-no-overload.test:11:9: resolving an overload of 'pick' against an argument whose type is not known — it derives from a name no file of the program declares, so no overload can be picked by it
-error E3004: specs/fragments/function-overloads/error.an-argument-from-an-undefined-call-picks-no-overload.test:11:14: call to undefined function 'undefinedAnswer'
+error E2015: specs/function-overloads/error.an-argument-from-an-undefined-call-picks-no-overload.maxon:11:9: resolving an overload of 'pick' against an argument whose type is not known — it derives from a name no file of the program declares, so no overload can be picked by it
+error E3004: specs/function-overloads/error.an-argument-from-an-undefined-call-picks-no-overload.maxon:11:14: call to undefined function 'undefinedAnswer'
 ```
 
 <!-- test: a-void-overload-beside-a-value-one-resolves-by-argument -->
@@ -313,7 +313,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/function-overloads/error.overload-redeclared-with-the-same-parameters.test:12:10: duplicate definition of function 'pick#bool' — 'pick' has more than one declaration in this program, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: specs/function-overloads/error.overload-redeclared-with-the-same-parameters.maxon:12:10: duplicate definition of function 'pick#bool' — 'pick' has more than one declaration in this program, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 <!-- test: method-type-disambiguation -->
@@ -1630,7 +1630,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: alpha/specs/fragments/function-overloads/error.a-contested-overload-set-whose-members-name-two-error-types.test:20:17: Unsupported: overloading 'alpha.want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
+error E2015: alpha/specs/function-overloads/error.a-contested-overload-set-whose-members-name-two-error-types.maxon:20:17: Unsupported: overloading 'alpha.want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
 ```
 
 <!-- test: contested-directory-overload-set-agreeing-on-defaults -->

@@ -1,0 +1,16 @@
+let InitializerAloneSpecName = "initializer-alone"
+
+test 'a case whose initializer runs code runs alone and the other run cases still batch'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: InitializerAloneSpecName, testNames: ["initializer-alone.first", "initializer-alone.prints-at-initialization", "initializer-alone.last"], broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(2, programs: 1, alone: 1), broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a case whose initializer runs code is left out of the batch")
+end 'a case whose initializer runs code runs alone and the other run cases still batch'

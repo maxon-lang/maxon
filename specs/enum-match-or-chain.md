@@ -276,7 +276,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/enum-match-or-chain/error.or-chain.overlap.test:16:3: overlapping pattern in match: 'sub' is already covered
+error E2027: specs/enum-match-or-chain/error.or-chain.overlap.maxon:16:3: overlapping pattern in match: 'sub' is already covered
 ```
 
 <!-- test: error.or-chain.not-exhaustive -->
@@ -302,5 +302,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/enum-match-or-chain/error.or-chain.not-exhaustive.test:19:2: match on union 'Op' is not exhaustive, missing: mul
+error E2026: specs/enum-match-or-chain/error.or-chain.not-exhaustive.maxon:19:2: match on union 'Op' is not exhaustive, missing: mul
 ```

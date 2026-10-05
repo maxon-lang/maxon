@@ -496,7 +496,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/array-cursor/error.cursor-advance-by-a-written-negative-step-is-refused.test:15:13: Value -2 is outside the range of 'IterStep' (int(0 to 18446744073709551615))
+error E3005: specs/array-cursor/error.cursor-advance-by-a-written-negative-step-is-refused.maxon:15:13: Value -2 is outside the range of 'IterStep' (int(0 to 18446744073709551615))
 ```
 
 ### And the mirror, so neither door is the one that was remembered
@@ -527,7 +527,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/array-cursor/error.cursor-retreat-by-a-written-negative-step-is-refused.test:15:13: Value -2 is outside the range of 'IterStep' (int(0 to 18446744073709551615))
+error E3005: specs/array-cursor/error.cursor-retreat-by-a-written-negative-step-is-refused.maxon:15:13: Value -2 is outside the range of 'IterStep' (int(0 to 18446744073709551615))
 ```
 
 ### The control: refusing the negative step did not break the positive one

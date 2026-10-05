@@ -55,7 +55,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/repro-array-union-field-reassign/match-binding-shadowing-self-field-rejected.test:18:15: local 'payload' shadows self field 'Holder.payload' — rename the local to avoid silent type confusion at every read/write keyed on the name
+error E3006: specs/repro-array-union-field-reassign/match-binding-shadowing-self-field-rejected.maxon:18:15: local 'payload' shadows self field 'Holder.payload' — rename the local to avoid silent type confusion at every read/write keyed on the name
 ```
 
 <!-- test: param-shadowing-self-field-rejected -->
@@ -82,7 +82,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/repro-array-union-field-reassign/param-shadowing-self-field-rejected.test:11:17: local 'count' shadows self field 'Counter.count' — rename the local to avoid silent type confusion at every read/write keyed on the name
+error E3006: specs/repro-array-union-field-reassign/param-shadowing-self-field-rejected.maxon:11:17: local 'count' shadows self field 'Counter.count' — rename the local to avoid silent type confusion at every read/write keyed on the name
 ```
 
 <!-- test: let-shadowing-self-field-rejected -->
@@ -108,7 +108,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/repro-array-union-field-reassign/let-shadowing-self-field-rejected.test:12:9: local 'value' shadows self field 'Holder.value' — rename the local to avoid silent type confusion at every read/write keyed on the name
+error E3006: specs/repro-array-union-field-reassign/let-shadowing-self-field-rejected.maxon:12:9: local 'value' shadows self field 'Holder.value' — rename the local to avoid silent type confusion at every read/write keyed on the name
 ```
 
 <!-- test: for-in-shadowing-self-field-rejected -->
@@ -139,5 +139,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/repro-array-union-field-reassign/for-in-shadowing-self-field-rejected.test:15:9: local 'element' shadows self field 'Holder.element' — rename the local to avoid silent type confusion at every read/write keyed on the name
+error E3006: specs/repro-array-union-field-reassign/for-in-shadowing-self-field-rejected.maxon:15:9: local 'element' shadows self field 'Holder.element' — rename the local to avoid silent type confusion at every read/write keyed on the name
 ```

@@ -244,7 +244,7 @@
 # `sched-syscall-handoff/more-blocking-file-reads-than-processors-still-finish`,
 # `sched-syscall-handoff/a-blocking-subprocess-wait-does-not-stall-a-sibling` and
 # `services/a-service-shut-down-with-async-work-in-flight`, each with
-# **0xC0000005** (an access violation, not a golden diff). All three are cases
+# **0xC0000005** (an access violation, not an output mismatch). All three are cases
 # that make REAL blocking kernel calls from concurrent green threads, which is
 # exactly the shape this program generalises.
 #

@@ -212,8 +212,8 @@ ladder built that way.
 ## Verification
 
 There is no allocation verifier pass. A wrong allocation computes a wrong answer, which running the spec
-suite catches; a worse one — an extra spill, a lost coalesce — is caught by the committed Target IR goldens,
-which pin every block of each function on every target. The allocator asserts its invariants as it runs, and
+suite catches; a worse one — an extra spill, a lost coalesce — shows in the Target IR, which the
+`TargetIr:<lane>` pins in `ir-specs/` hold block by block for the cases that carry them. The allocator asserts its invariants as it runs, and
 two compile-time constants, off in shipping builds, add exhaustive self-checks: `VerifyIncrementalSplit`
 compares every incremental repair with a full rebuild, and `VerifyOpVariantFacts` checks the per-op fact
 cache.

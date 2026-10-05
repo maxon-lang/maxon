@@ -357,7 +357,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3072: specs/fragments/managed-file/managed-file.error-direct-construction.test:3:24: '__ManagedFile' is a compiler builtin type and cannot be constructed directly
+error E3072: specs/managed-file/managed-file.error-direct-construction.maxon:3:24: '__ManagedFile' is a compiler builtin type and cannot be constructed directly
 ```
 
 <!-- test: managed-file.unknown-instance-method-is-refused-by-name -->
@@ -705,7 +705,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/managed-file/managed-file.open-read-without-try.test:3:6: throwing function requires try: 'openRead'
+error E3057: specs/managed-file/managed-file.open-read-without-try.maxon:3:6: throwing function requires try: 'openRead'
 ```
 
 <!-- test: managed-file.open-write-executable-without-try -->
@@ -723,7 +723,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/managed-file/managed-file.open-write-executable-without-try.test:3:6: throwing function requires try: 'openWriteExecutable'
+error E3057: specs/managed-file/managed-file.open-write-executable-without-try.maxon:3:6: throwing function requires try: 'openWriteExecutable'
 ```
 
 <!-- test: managed-file.read-into-a-non-owned-buffer-is-refused -->

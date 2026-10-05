@@ -157,7 +157,7 @@ excluding 0 keeps them bare. Each cast costs one `cmp`/branch against the lower 
 `int(1 to i64.max)` needs no upper check, and the bound folds into a `cmpImm`, so the COMPARE holds no
 register — plus the one `lea rN, [rM + 0]` that mints the retagged value (`emitRetaggedCastValue`, whose
 header says why an in-place re-tag is not an option). The six quotients still cross the call in the five
-callee-saved registers with no spill, which is the claim above and is what the golden shows.
+callee-saved registers with no spill, which is the claim above and is what the emitted code shows.
 ```maxon
 
 function digits6(p1 Integer, p2 Integer, p3 Integer, p4 Integer, p5 Integer, p6 Integer) returns Integer
@@ -334,7 +334,7 @@ live across the divide; and the loop counter `i` is the DIVISOR. All eleven are 
 `idiv`, so all eleven are forbidden `RAX`/`RDX`: the effective pool AT that op is `14 − 2 = 12`,
 and eleven values must fit in it. That is the reduced-pool bound with ONE register of slack — an
 off-by-one anywhere in the `implicitDefs` accounting panics the colorer, and a cold spill landing
-in the loop body is a golden mismatch.
+in the loop body shows only in the emitted code.
 The dividend is summed INSIDE the loop (`t`), not hoisted before it — that is what keeps
 `k1`..`k9` live across the back edge and therefore live across the `idiv`. Sum them outside and
 only one value would cross the divide, and the test would prove nothing.
@@ -345,7 +345,7 @@ only one value would cross the divide, and the test would prove nothing.
 ⚠ The loop counter is cast into `Positive` at the divide; an unguarded loop-carried divisor is
 E3057, and this case needs the bare `idiv` (a `try` here would add the fork's own values to a working
 set that has exactly one register of slack). The guard's `cmp` folds its bound into an immediate and so
-holds no register; the cast's retag mint takes one (`r15` in the golden), and the eleven-value set still
+holds no register; the cast's retag mint takes one (`r15` in the emitted code), and the eleven-value set still
 colors with NO spill in the loop body — which is the reduced-pool claim above, re-proven at the tighter
 bound. `i` runs 1..6, so the guard never fires.
 ```maxon

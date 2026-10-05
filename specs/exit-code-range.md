@@ -216,7 +216,7 @@ error E3005: <fragment>:7:10: Value -3 is outside the range of 'ExitCode' (int(0
 The negative control for every case above: an in-range literal is not a violation, and `7` still comes
 out of the process.
 
-⚠ **AND ITS FRAGMENT RECORDS THE PRICE, WHICH IS ZERO — for the reason this spec opens with.** `code`'s `return 7` is folded and needs no runtime check at all; `main`'s `return
+⚠ **AND ITS EMITTED CODE (`--emit-ir`) SHOWS THE PRICE, WHICH IS ZERO — for the reason this spec opens with.** `code`'s `return 7` is folded and needs no runtime check at all; `main`'s `return
 code()` returns a CALL RESULT, which no constant fold can see, so it is decided by the ordinary rule
 every ranged alias gets — and that rule (`range-check-panic.md`, *"a value the destination PROVABLY
 admits"*) answers **contained**, because the source is an `ExitCode` and the destination is an `ExitCode`,
@@ -530,12 +530,13 @@ Stack trace:
 
 <!-- test: in-range-join-is-guarded-and-passes -->
 ⛔ **THIS CASE DOES NOT ELIDE.**
-Its own committed fragment carries the `__rc_panic` block, and the emitted `matchcont` runs the full
+Its own emitted code (`--emit-ir`) carries the `__rc_panic` block, and the emitted `matchcont` runs the full
 `0 ≤ x ≤ 1000` cascade — because `a + b` denotes no alias, so the arm proves nothing and the merge keeps
 its withheld claim. That is CORRECT and is exactly why the sibling above panics on `900 + 900`. **A runtime
 case cannot see an elision at all** — an emitted guard and an elided one are the same PASS on an in-range
 value — so what it pins is the other half, and the honest half: the withheld claim does not turn a
-program the range admits into a panic. The elision control is the FRAGMENT, and the `otherwise 0` corpus.
+program the range admits into a panic. The elision itself shows only in emitted code (`--emit-ir`), and
+nothing in the suite pins it.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -605,11 +606,12 @@ fallback earns nothing — only a LITERAL fallback is checked, and only at compi
 withheld, `5000` would reach a `returns Num` caller's `return` wearing `Num`, and the guard would be elided
 on it.
 
-⚠ Its negative control is the whole `otherwise 0` corpus and its FRAGMENTS: the claim is withheld
+⚠ Its other half shows in the emitted code (`--emit-ir`) of the whole `otherwise 0` corpus, and nothing
+in the suite pins it: the claim is withheld
 per EDGE, not per construct, so a literal fallback still proves and still elides. Both halves are needed
 — guarding every `trycont` would pass this case and be wrong. ⛔ `in-range-join-is-guarded-and-passes`
 is NOT the elision half; a runtime case cannot distinguish an emitted
-guard from an elided one on a value the range admits (see its own header). Only a fragment can.
+guard from an elided one on a value the range admits (see its own header). Only the emitted code can.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias Integer = int(i64.min to i64.max)

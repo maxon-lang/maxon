@@ -136,7 +136,7 @@ pointer**, not a null slot — so an unguarded read follows it and loads `Except
 (`SchedRuntime.MOffCurrentGt`). Under `maxon monitor` that is a **SEGMENTATION FAULT** in place of exit 42,
 reported by the monitor as `1 abandoned (producer died mid-entry)`.
 
-⭐ **THE `gt=` FIELD IS NORMALIZED OUT OF THE GOLDEN, SO THE ASSERTION IS THE EXIT CODE AND THE THREE
+⭐ **THE `gt=` FIELD IS NORMALIZED OUT OF THE CAPTURE BLOCK, SO THE ASSERTION IS THE EXIT CODE AND THE THREE
 LINES BEING THERE AT ALL** — which is exactly right: what goes wrong is not a wrong thread id, it is
 the process dying while writing the entry. A run that survives to emit all three and then completes
 its `async` is the whole property.

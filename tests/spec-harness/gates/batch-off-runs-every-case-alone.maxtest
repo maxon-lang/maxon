@@ -1,0 +1,17 @@
+let BatchOffSpecName = "batch-off"
+let BatchOffFlag = "--batch=off"
+
+test 'under --batch=off every run case runs alone and earns the verdict it earns batched'
+	let run = runGateFixtureOnce([BatchOffFlag])
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: BatchOffSpecName, testNames: ["batch-off.first", "batch-off.second", "batch-off.third"], broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(0, programs: 0, alone: 3), broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "`{BatchOffFlag}` runs every case alone")
+end 'under --batch=off every run case runs alone and earns the verdict it earns batched'

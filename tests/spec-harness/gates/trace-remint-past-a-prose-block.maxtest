@@ -1,5 +1,4 @@
 let RemintSpecFileName = "remint.md"
-let UpdateRequiredFlag = "--update-required"
 let ProseBlockOpen = "```text"
 let ExitCodeBlockOpen = "```exitcode"
 let CaptureBlockOpen = "```mm-trace"
@@ -7,9 +6,6 @@ let StaleCaptureLine = "stale line the re-mint replaces"
 let SecondCaseMarker = "<!-- test: remint.replaces-a-stale-block -->"
 let LastCaseMarker = "<!-- test: remint.the-last-case -->"
 let ReMintedBlockCount = 2
-
-typealias RemintLine = int(0 to u64.max)
-typealias RemintLineArray = Array with RemintLine
 
 test 'two re-minted capture blocks land in their own cases: an insertion past a prose block, and a replacement below it'
 	let staged = stagedGateFixture()
@@ -39,20 +35,3 @@ test 'two re-minted capture blocks land in their own cases: an insertion past a 
 	Expect.isTrue(firstExitCodeAt < insertedAt and insertedAt < secondCaseAt, message: "the inserted `{CaptureBlockOpen}` block landed at line {insertedAt + 1}, not between the first case's last block (line {firstExitCodeAt + 1}) and the second case's marker (line {secondCaseAt + 1}). {said}")
 	Expect.isTrue(secondCaseAt < replacedAt and replacedAt < lastCaseAt, message: "the replacing `{CaptureBlockOpen}` block landed at line {replacedAt + 1}, not inside the second case (lines {secondCaseAt + 1} to {lastCaseAt}). {said}")
 end 'two re-minted capture blocks land in their own cases: an insertion past a prose block, and a replacement below it'
-
-function linesOpening(lines StringArray, prefix String) returns RemintLineArray
-	var found = RemintLineArray.create()
-
-	for (iter, line) in lines.withIterator() 'eachLine'
-		if line.trim().startsWith(prefix) 'hit'
-			found.push(iter.index() as RemintLine)
-		end 'hit'
-	end 'eachLine'
-
-	return found
-end 'linesOpening'
-
-function firstLineOpening(lines StringArray, prefix String, said String) returns RemintLine
-	let found = linesOpening(lines, prefix: prefix)
-	return try found.get(0) otherwise panic("spec-harness tests: the re-minted spec holds no line opening with '{prefix}'. {said}")
-end 'firstLineOpening'

@@ -1,0 +1,51 @@
+module typealias Voltage = int(0 to 480)
+module typealias Channel = int(0 to 15)
+
+module enum Waveform
+	sine
+	square
+	sawtooth
+end 'Waveform'
+
+module type Signal
+	module let volts as Voltage
+	module let channel as Channel
+	module let shape as Waveform
+
+	module static function create(volts Voltage, channel Channel, shape Waveform) returns Signal
+		return Self{volts: volts, channel: channel, shape: shape}
+	end 'create'
+
+	module function isLoud() returns bool
+		return self.volts > 240
+	end 'isLoud'
+end 'Signal'
+
+module type Probe
+	module let reading as Voltage
+
+	module static function create(reading Voltage) returns Probe
+		return Self{reading: reading}
+	end 'create'
+end 'Probe'
+
+module union Capture
+	signal(value Signal)
+	silence
+end 'Capture'
+
+module typealias SignalArray = Array with Signal
+module typealias ProbeArray = Array with Probe
+module typealias ChannelMap = Map with (String, Channel)
+
+module function loudCount(signals SignalArray) returns Voltage
+	var count = 0 as Voltage
+
+	for signal in signals 'eachSignal'
+		if signal.isLoud() 'aLoudOne'
+			count = count + 1
+		end 'aLoudOne'
+	end 'eachSignal'
+
+	return count
+end 'loudCount'

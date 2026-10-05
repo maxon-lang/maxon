@@ -38,31 +38,23 @@
 //     PURE PERMUTATION of the other order's, the same lines in a different order. Nothing computes a
 //     different answer.
 //
-//   • ⚠ EMISSION ORDER DOES. Reversing the user walk moves 14 committed cross-file fragments: 13 are
-//     `func @…` blocks in a different order, and one swaps which of two same-named FILE-PRIVATE globals
-//     gets the `$1` disambiguating suffix — both assigned by the order the files were encountered. So
-//     the emitted byte image is a function of the filesystem's order today. That is real and it is NOT
-//     repaired by sorting the input, which would only hide it: the repair belongs at the point of
-//     emission, deriving the order from something stable like the declaration name. Reported here
-//     rather than papered over.
+//   • EMISSION ORDER IS DECIDED AT THE MERGE. Function order and which of two same-named FILE-PRIVATE
+//     globals gets the `$1` suffix follow the order the merge folds the files in, and that order is
+//     `Queries.sourceFilesInEmissionOrder`'s key over each file's tier and path, never the walk's.
 //
 // ⚠ **THERE IS NO SEPARATE PARSED-STDLIB CACHE.** These files are registered as ordinary sources,
-// so the query spine's content-hash memo already covers them and a second cache would be the same
-// fact stored twice. A worker compiles thousands of programs in one process, so that memo keeps a
-// stdlib file's TOKENS for the life of its `CompileSession.fileMemos` store rather than of a
-// `Project` (QueryEngine.maxon, "The memo that outlives a `Project`"), and the loop below is what
-// admits them. The shared store sits BEHIND the per-`Project` cache and is read only on its miss,
-// and it holds only what is a pure function of the file's BYTES — never a PARSED module, which
-// carries interned ids a fold rewrites in place.
+// so the query spine's memos cover them and a second cache would be the same fact stored twice. The
+// memo that outlives a `Project` (QueryEngine.maxon) is that same spine with a longer life, and the
+// loop below is what admits these files to it.
 //
 // ⭐ THE ONE INVARIANT, WHICH OUTLIVED THE FILTER AND IS NOW THE WHOLE RULE: adding a module to
 // `stdlib/` changes NOTHING for a program that does not reach it. A program that never calls Clock must
-// compile to the exact bytes it did before `stdlib/Clock.maxon` existed — same x64 goldens, same
-// wasm/arm64 output. Two mechanisms compose to guarantee that:
+// compile to the exact bytes it did before `stdlib/Clock.maxon` existed — same x64, wasm and
+// arm64 output. Two mechanisms compose to guarantee that:
 //
 //   1. Dead-function elimination (`DeadFunctionElimination.eliminateDeadFunctions`) drops every stdlib
 //      function no reachable code calls, at the target-neutral backend entry — so an unused Clock never
-//      reaches isel/regalloc/encode and never lands in a golden, on any target.
+//      reaches isel/regalloc/encode and never lands in the emitted code, on any target.
 //
 //   2. ⚠ But DFE runs at the Std tier, AFTER `scanRuntimeUsage` has already decided which RUNTIME FLOOR
 //      the program carries (heap / GT scheduler / wall clock) by walking the MERGED MAXON MODULE.
@@ -81,27 +73,27 @@
 // (checked at the source — `helpers/url/urlHelpers.maxon`'s is `ByteValue`, a different name). A `b"…"`
 // literal's element is that same user-visible `Byte` BY DESIGN (`SignatureIndex.isByteElementName`'s
 // roster), so a byte literal's element carries declared BOUNDS and `a.set(0, value: n)` carries the
-// narrowing check they imply — which moves ONE committed golden,
-// `byte-string-literal.detached-literal-drops-clean`, in a program that never mentions `File`. The move
-// is a PURE INSERTION and the program's meaning is unchanged (its `n` is 0…4 against `0 to 255`, so the
-// guard cannot fire; same stdout, same exit code) — but the emitted bytes DID move, and the sentence
-// above says they may not.
+// narrowing check they imply — which moves the emitted code of
+// `byte-string-literal.detached-literal-drops-clean`, a program that never mentions `File`. The
+// move is a PURE INSERTION and the program's meaning is unchanged (its `n` is 0…4 against
+// `0 to 255`, so the guard cannot fire; same stdout, same exit code) — but the emitted bytes DID
+// move, and the sentence above says they may not.
 //
 // ⇒ **READ IT AS: adding a module changes nothing for a program that does not use it, EXCEPT through the
 // names it DECLARES — and a declared name is not something a program opts into.** That is not a loophole
 // to route around; it is the same door that supplies `ByteArray` to
 // `byte-string-literal.top-level-let`. A module may not be weighed on its FUNCTIONS alone: weigh every
-// DECLARATION it carries, and expect a golden to move when one of them is a name the COMPILER ITSELF
-// mints instances of.
+// DECLARATION it carries, and expect emitted code to move when one of them is a name the COMPILER
+// ITSELF mints instances of.
 //
 // ⛔ **AND `export` IS NOT THE DISCRIMINATOR — SAYING IT WAS IS A RULE THE NEXT MODULE WOULD FAIL BY.**
-// The whole-program folds that carry the golden — `RangedAliasRegistry.widenStorageBytesFor` ⇒
+// The whole-program folds that carry the move — `RangedAliasRegistry.widenStorageBytesFor` ⇒
 // `storageBytesInEveryFile` (the stride) and `record`'s `multiplyDeclared` ⇒ `settleRangeContests` (the
 // range contest) — are keyed on the NAME and consult visibility NOWHERE. They fold every declaration in
 // the program, private ones included, which holds for a USER file too.
 // ⇒ **weigh every ranged `typealias` a candidate module declares, `export`ed or not.** A module audited on
 // its `export`s alone would wave a file-private `typealias Byte = int(0 to 1000)` straight through, and it
-// would move exactly the same goldens.
+// would move exactly the same emitted code.
 //
 // ⭐ THE COLLISION RULE FOR ADDING A MODULE TO `stdlib/`. It was written when adding a module here meant
 // adding a whitelist entry, and every clause of it survives the whitelist unchanged: the loader now takes
@@ -147,9 +139,7 @@
 //     ⚠ The shadowing was NOT this file's doing and predated it: a user file declaring its own
 //     `function sleep` compiled with the declaration silently unlinked, no diagnostic and a wrong answer
 //     (measured on plain user code). The repair was to delete the bare-name builtin and let the stdlib
-//     declaration be authoritative, which moved 15 committed goldens across 7 specs — 14 gaining the
-//     call frame `@sleep` now is, and one holding the builtin's bespoke argument rejection, replaced by
-//     the ordinary one against `sleep(milliseconds Milliseconds)`. MEASURED, in a controlled A/B in one
+//     declaration be authoritative. MEASURED, in a controlled A/B in one
 //     worktree: the module costs +683 allocations / +31,308 bytes on EVERY compile, identical at rung 0
 //     and rung 5 of the scale ladder, and the emitted code of a program that never sleeps is
 //     byte-identical (`codeBytes` equal at all six rungs — DFE prunes the module it does not reach).
@@ -349,3 +339,85 @@ function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePat
 
 	return setAside
 end 'setAsideTheUsersOwnLibraryFiles'
+
+type LibraryNameRoster
+	let stamps as SourceFileStampMap
+	export let names as ByteArrayArray
+
+	static function create(stamps SourceFileStampMap, names ByteArrayArray) returns LibraryNameRoster
+		return Self{stamps: stamps, names: names}
+	end 'create'
+
+	function describes(paths MaxonSourcePathArray) returns bool
+		if paths.count() != self.stamps.count() 'anotherFileSet'
+			return false
+		end 'anotherFileSet'
+
+		for path in paths 'eachFile'
+			let stamp = try self.stamps.get(path) otherwise return false
+			let info = try File.info(path) otherwise return false
+
+			if not stamp.describes(info) 'rewritten'
+				return false
+			end 'rewritten'
+		end 'eachFile'
+
+		return true
+	end 'describes'
+end 'LibraryNameRoster'
+
+typealias LibraryNameRosterMap = Map with (String, LibraryNameRoster)
+
+var libraryNameRosters = LibraryNameRosterMap.create()
+
+// The type names `stdlib/` declares, held per process and re-read when any file's stamp stops describing
+// it. `observedAt` is sampled before any file is read, because a whole-second mtime cannot tell a
+// same-size edit made in that second (see `SourceFileStamp`).
+export function libraryDeclaredTypeNames(project Project) returns ByteArrayArray throws CompileError
+	var found = MaxonSourcePathArray.create()
+
+	if not Directory.exists(project.stdlibDir) 'theTierDidNotArrive'
+		return ByteArrayArray.create()
+	end 'theTierDidNotArrive'
+
+	_ = try collectMaxonSources(project.stdlibDir, into: found)
+	let key = project.stdlibDir.toString()
+
+	if let held = try libraryNameRosters.get(key) 'aRosterOfTheseFiles'
+		if held.describes(found) 'stillCurrent'
+			return held.names
+		end 'stillCurrent'
+	end 'aRosterOfTheseFiles'
+
+	let observedAt = WallClock.nowUnixSeconds() as Timestamp
+	var stamps = SourceFileStampMap.create()
+	var names = ByteArrayArray.create()
+
+	for path in found 'eachFile'
+		let info = try File.info(path) otherwise throw CompileError.readError(path)
+		stamps.upsert(path, value: SourceFileStamp.create(info.size, modifiedTime: info.modifiedTime, observedAt: observedAt))
+
+		let declared = try declaredTypeNamesOfLibraryFile(project, path: path)
+
+		for name in declared 'eachName'
+			names.push(name)
+		end 'eachName'
+	end 'eachFile'
+
+	libraryNameRosters.upsert(key, value: LibraryNameRoster.create(stamps, names: names))
+	return names
+end 'libraryDeclaredTypeNames'
+
+function declaredTypeNamesOfLibraryFile(project Project, path FilePath) returns ByteArrayArray throws CompileError
+	try loadOneSourceFile(project, path: path)
+	try markSharedTokenSource(project, path: path)
+
+	let contentHash = (try sourceEntryOf(project, path: path)).contentHash
+
+	let held = try sharedDeclaredTypeNamesOf(project, contentHash: contentHash) otherwise 'notHeldYet'
+		_ = try queryActiveTokens(project, path: path)
+		return try sharedDeclaredTypeNamesOf(project, contentHash: contentHash) otherwise panic("declaredTypeNamesOfLibraryFile: the store does not hold {path.toString()} right after an admitted compile lexed it")
+	end 'notHeldYet'
+
+	return held
+end 'declaredTypeNamesOfLibraryFile'

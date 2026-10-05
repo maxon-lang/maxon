@@ -270,7 +270,7 @@ Whether the arm fires during the sweep is decided by the order the files are reg
 CALLER states and the loader never sorts (`StdlibLoader`'s header states the no-sort rule). The arm is
 gated on `ProgramSignatures.allFilesFolded`, so it fires in neither order and the
 sweep records `named("IntArray")` for both — repaired identically at every read door. The alias file
-declares nothing but aliases, so the two cases' emitted IR is the SAME text: a golden that drifts apart is
+declares nothing but aliases, so the two cases' emitted IR is the SAME text: IR that differs between them is
 an order dependence.
 ```maxon
 // --- file: main.maxon
@@ -351,8 +351,7 @@ end 'main'
 ```
 
 <!-- test: cross-file-function-alias-is-a-swept-value-type-either-order -->
-⭐ **THE SAME PROGRAM WITH THE TWO FILES DECLARED THE OTHER WAY ROUND.** Same gate, same reason, and the same golden-drift
-tripwire: the alias file declares nothing but aliases, so this case's IR must read identically to its twin.
+⭐ **THE SAME PROGRAM WITH THE TWO FILES DECLARED THE OTHER WAY ROUND.** Same gate, same reason: the alias file declares nothing but aliases, so this case's IR must read identically to its twin.
 ```maxon
 // --- file: main.maxon
 function twice(n Int) returns Int

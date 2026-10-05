@@ -345,7 +345,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/match-enum-or-pattern/error.nonfirst-alternative-overlap.test:15:3: overlapping pattern in match: 'c' is already covered
+error E2027: specs/match-enum-or-pattern/error.nonfirst-alternative-overlap.maxon:15:3: overlapping pattern in match: 'c' is already covered
 ```
 
 <!-- test: error.a-payload-less-alternative-cannot-read-a-bound-name -->

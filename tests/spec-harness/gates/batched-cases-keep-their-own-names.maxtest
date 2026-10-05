@@ -1,0 +1,16 @@
+let BatchedNamesSpecName = "batched-names"
+
+test 'run cases sharing a type name batch into separate programs and each keeps its own names'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: BatchedNamesSpecName, testNames: ["batched-names.first", "batched-names.second", "batched-names.third", "batched-names.fourth"], broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(4, programs: 2, alone: 0), broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "batched cases keep their own names")
+end 'run cases sharing a type name batch into separate programs and each keeps its own names'

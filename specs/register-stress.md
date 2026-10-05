@@ -340,7 +340,7 @@ one of them gets a register and the splitter emits nothing. Add a fifth accumula
 counter becomes a sixth value with nowhere to go, which is the next test's business.
 
 A spurious store/reload here would be the OVER-spill direction, and nothing else in the corpus
-pins it: the program would still compute the right answer, and only the golden would notice.
+pins it: the program would still compute the right answer, and only the emitted code would show it.
 `a1..a4 = 1..4`, each gaining `bump(i) = i + 1` for `i = 0,1,2`, i.e. `+6`. So they end at
 `7, 8, 9, 10`, summing to 34.
 ```maxon
@@ -384,7 +384,7 @@ live across the call (the counter counts — see the test above), and only five 
 registers survive one, so three must go to memory. The placement is FORCED: the ABI made the
 decision, there is nothing to search, and Rule 2 says emit the bracket at ANY loop depth rather
 than refuse. This must NOT be E5001 and it must not panic — a store and a reload inside the loop
-body are the correct answer here, and the golden pins them.
+body are the correct answer here, and the emitted code shows them.
 `a1..a7 = 1..7`, each gaining `bump(i) = i + 1` for `i = 0,1,2`, i.e. `+6`. So they end at
 `7..13`, summing to 70.
 ```maxon

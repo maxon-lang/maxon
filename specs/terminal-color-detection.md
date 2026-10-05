@@ -25,7 +25,7 @@ is the thin wrapper the house rules forbid.
 The rule:
 
 1. **stdout is a character device.** A redirected stream is being CAPTURED — a file, a pipe, a
-   golden — and escape sequences in a capture are corruption of the thing captured.
+   spec's expected output — and escape sequences in a capture are corruption of the thing captured.
 2. **`NO_COLOR` is unset.** The user saying no across every tool at once (no-color.org). PRESENCE
    alone disables, whatever the value.
 3. **`TERM` is not `dumb`**, compared case-insensitively. The terminal itself saying it cannot render
@@ -72,8 +72,8 @@ exactly that: it is the conservative half. `HostFacility.terminalDetection` is t
 so at the declaration.
 
 ⛔ **THE FALLBACK MAY NEVER BECOME `true`.** The whole point of the question is that a REDIRECTED
-stream is being captured; a lane that guessed "yes" would put escape sequences into every golden,
-every log file and every pipe.
+stream is being captured; a lane that guessed "yes" would put escape sequences into every
+captured expected output, every log file and every pipe.
 
 ⭐ **HOW A POSIX LANE ANSWERS CONDITION 1.** `isatty(1)` on the descriptor `osStdHandle` already
 produces, mapped into the vocabulary `StdOp.osHandleFileType` speaks — `FILE_TYPE_CHAR` when it is a
@@ -99,7 +99,7 @@ answer rather than a refusal.
 THE HARNESS DOES.** A spec case's stdout is CAPTURED so the runner can compare it, which makes
 condition 1 false by construction for every case in this suite — so "a captured stream is not a
 terminal" is exactly the property a case here can assert, and it is the half that matters: it is the
-half that keeps escape sequences out of goldens, transcripts and pipes.
+half that keeps escape sequences out of expected output, transcripts and pipes.
 
 ⛔ **AND THE TRUE CASE CANNOT BE PINNED FROM HERE AT ALL.** It needs stdout attached to a character
 device, which is the one thing a runner that reads stdout cannot provide — the same structural limit

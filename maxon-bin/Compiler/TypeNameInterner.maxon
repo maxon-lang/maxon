@@ -13,6 +13,8 @@
 // it was assigned, which the merge then applies to the file's ops and registry
 // contributions.
 
+export let FileLocalNamesBase = 0 as TypeNameId
+
 export type TypeNameInterner
 	var table as NameTable
 
@@ -146,11 +148,15 @@ export type TypeNameInterner
 			mapping.push(self.table.internFrom(source.table, id: srcId))
 		end 'each'
 
-		return TypeIdRemap.create(mapping, namesBase: 0, instances: GenericInstanceIdMap.create())
+		return TypeIdRemap.create(mapping, namesBase: FileLocalNamesBase, instances: GenericInstanceIdMap.create())
 	end 'foldInto'
 end 'TypeNameInterner'
 
 export typealias GenericInstanceIdMap = Map with (GenericInstanceId, GenericInstanceId)
+export typealias ObservedNameSet = Set with TypeNameId
+export typealias InterfaceIndexMap = Map with (ElementIndex, ElementIndex)
+export typealias ObservedInterfaceSet = Set with ElementIndex
+export typealias InterfaceIndexArray = Array with ElementIndex
 
 // ⭐ **ONE RENUMBERING OF A SET OF TYPE IDS, NAMES AND INSTANCES TOGETHER.** A name id at or above `namesBase`
 // moves to `names[id - namesBase]` and one below it stays; an instance id `instances` holds moves to what it
@@ -160,10 +166,20 @@ export type TypeIdRemap
 	var names as TypeNameIdArray
 	let namesBase as TypeNameId
 	var instances as GenericInstanceIdMap
+	var interfaces as InterfaceIndexMap = InterfaceIndexMap.create()
+
+	var observing as bool = false
+	export var seenInstances as GenericInstanceIdSet = GenericInstanceIdSet.create()
+	export var seenNames as ObservedNameSet = ObservedNameSet.create()
+	export var seenInterfaces as ObservedInterfaceSet = ObservedInterfaceSet.create()
 
 	export static function create(names TypeNameIdArray, namesBase TypeNameId, instances GenericInstanceIdMap) returns TypeIdRemap
 		return Self{names: names, namesBase: namesBase, instances: instances}
 	end 'create'
+
+	export static function watching(namesBase TypeNameId) returns TypeIdRemap
+		return Self{names: TypeNameIdArray.create(), namesBase: namesBase, instances: GenericInstanceIdMap.create(), observing: true}
+	end 'watching'
 
 	// Moves no id. Its name renumbering starts past every id an interner can hand out.
 	export static function unmoved() returns TypeIdRemap
@@ -172,12 +188,18 @@ export type TypeIdRemap
 
 	// This remap's name renumbering with `moved` as its instance renumbering.
 	export function movingInstances(moved GenericInstanceIdMap) returns TypeIdRemap
-		return TypeIdRemap.create(self.names, namesBase: self.namesBase, instances: moved)
+		return TypeIdRemap.create(self.names, namesBase: self.namesBase, instances: moved).movingInterfaces(self.interfaces)
 	end 'movingInstances'
+
+	export function movingInterfaces(moved InterfaceIndexMap) returns TypeIdRemap
+		return Self{names: self.names, namesBase: self.namesBase, instances: self.instances, interfaces: moved}
+	end 'movingInterfaces'
 
 	// Does any id move? A remap that moves none is skipped whole by the merge.
 	export function movesAnything() returns bool
-		if self.instances.count() != 0 'instancesMove'
+		// A watching remap moves nothing but sees only what the walk hands it, so skipping it would take
+		// an empty footprint and let a shared parse be served with stale ids.
+		if self.observing or self.instances.count() != 0 or self.interfaces.count() != 0 'instancesMove'
 			return true
 		end 'instancesMove'
 
@@ -195,6 +217,14 @@ export type TypeIdRemap
 	end 'movesAnything'
 
 	export function applyName(id TypeNameId) returns TypeNameId
+		if self.observing 'justWatching'
+			if id < self.namesBase 'aBaselineName'
+				self.seenNames.insert(id)
+			end 'aBaselineName'
+
+			return id
+		end 'justWatching'
+
 		if id < self.namesBase 'belowTheRenumbering'
 			return id
 		end 'belowTheRenumbering'
@@ -203,8 +233,21 @@ export type TypeIdRemap
 	end 'applyName'
 
 	export function applyInstance(id GenericInstanceId) returns GenericInstanceId
+		if self.observing and id < BandInstanceIdBase 'aBaselineRow'
+			self.seenInstances.insert(id)
+		end 'aBaselineRow'
+
 		return try self.instances.get(id) otherwise id
 	end 'applyInstance'
+
+	export function applyInterface(index ElementIndex) returns ElementIndex
+		if self.observing 'justWatching'
+			self.seenInterfaces.insert(index)
+			return index
+		end 'justWatching'
+
+		return try self.interfaces.get(index) otherwise index
+	end 'applyInterface'
 end 'TypeIdRemap'
 
 // Rewrite the type ids a `MaxonType` carries through a remap. The `typeParameter` token is a digest of source

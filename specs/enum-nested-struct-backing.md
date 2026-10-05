@@ -306,7 +306,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-whole-record.test:18:20: Unsupported: field 'inner' of the `Meta` backing read as a whole value — it is declared `Inner`, a record, and the compiler selects one SCALAR field of a struct backing at a time (`.inner.<field>`) rather than materializing one. That is the refusal `rawValue` itself carries, one level in: a materialized record is an owned heap value minted inside an expression
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-whole-record.maxon:18:20: Unsupported: field 'inner' of the `Meta` backing read as a whole value — it is declared `Inner`, a record, and the compiler selects one SCALAR field of a struct backing at a time (`.inner.<field>`) rather than materializing one. That is the refusal `rawValue` itself carries, one level in: a materialized record is an owned heap value minted inside an expression
 ```
 
 ### Error: a leaf of a nested record whose declared type holds no constant
@@ -336,7 +336,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-leaf-type.test:14:2: Unsupported: field 'label' of the `Inner` backing is declared `String`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `String`, a `Character`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-leaf-type.maxon:14:2: Unsupported: field 'label' of the `Inner` backing is declared `String`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `String`, a `Character`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of
 ```
 
 ### Error: a nested constant short of one of ITS fields
@@ -365,7 +365,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-missing-nested-field.test:14:2: Unsupported: field 'm' of the `Inner` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-missing-nested-field.maxon:14:2: Unsupported: field 'm' of the `Inner` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case
 ```
 
 ### Error: a nested constant of a type the field does not declare
@@ -395,7 +395,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-wrong-nested-type.test:17:2: Unsupported: the constant written for field 'inner' of the `Meta` backing, which is declared `Inner` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-wrong-nested-type.maxon:17:2: Unsupported: the constant written for field 'inner' of the `Meta` backing, which is declared `Inner` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
 ```
 
 ### Error: a scalar written for a field declared as a record
@@ -421,7 +421,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-scalar-for-record.test:13:2: Unsupported: the constant written for field 'inner' of the `Meta` backing, which is declared `Inner` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-scalar-for-record.maxon:13:2: Unsupported: the constant written for field 'inner' of the `Meta` backing, which is declared `Inner` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
 ```
 
 ### Error: a nested constant written for a scalar field, reached by a READ first
@@ -455,7 +455,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-record-for-scalar.test:13:20: Unsupported: a nested `Inner` constant written for field 'count' of the `Meta` backing, which this read selects as a single word — a nested constant fills a field whose OWN declared type is that `type`, and this field's is not, so there is no number for the select to take
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-record-for-scalar.maxon:13:20: Unsupported: a nested `Inner` constant written for field 'count' of the `Meta` backing, which this read selects as a single word — a nested constant fills a field whose OWN declared type is that `type`, and this field's is not, so there is no number for the select to take
 ```
 
 ### Error: a label naming no field of the NESTED struct
@@ -481,7 +481,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3018: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-unknown-nested-field.test:13:2: type 'Inner' has no field named 'count'
+error E3018: specs/enum-nested-struct-backing/error.nested-struct-backing-unknown-nested-field.maxon:13:2: type 'Inner' has no field named 'count'
 ```
 
 ### Error: more arguments than the NESTED struct declares fields
@@ -518,7 +518,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-nested-arity.test:21:2: Unsupported: 3 argument(s) to the `Inner` constant, which declares 1 field(s) — a factory call in this position is read as the struct LITERAL its arguments fill, so an argument past the last field names nothing
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-nested-arity.maxon:21:2: Unsupported: 3 argument(s) to the `Inner` constant, which declares 1 field(s) — a factory call in this position is read as the struct LITERAL its arguments fill, so an argument past the last field names nothing
 ```
 
 ### Error: a field typed by a TUPLE alias
@@ -546,7 +546,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-tuple-field.test:11:2: Unsupported: the constant written for field 'pair' of the `Meta` backing, which is declared `__Tuple2.int.int` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-tuple-field.maxon:11:2: Unsupported: the constant written for field 'pair' of the `Meta` backing, which is declared `__Tuple2.int.int` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
 ```
 
 ### Error: a field typed by a LISTED STDLIB record
@@ -574,7 +574,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-characterset-field.test:10:2: Unsupported: field 'chars' of the `CharacterSet` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-characterset-field.maxon:10:2: Unsupported: field 'chars' of the `CharacterSet` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case
 ```
 
 ### Error: a field typed by a BARE generic, whose name a constant can match
@@ -603,5 +603,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-bare-generic-field.test:10:2: Unsupported: field 'managed' of the `Array` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-bare-generic-field.maxon:10:2: Unsupported: field 'managed' of the `Array` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case
 ```

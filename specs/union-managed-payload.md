@@ -3059,7 +3059,7 @@ it does not need, which is the price of a box's soleness not being transitive.
 genuinely the allocation's only reference — that is why the case is named so — but the compiler deliberately
 **does not CLAIM `sole` for it**, because proving it would need a per-box "every payload was moved in" bit
 and that would be a third ownership state (see `OwnedHeapExclusivity`). So the `__mm_incref`
-in this case's golden is CORRECT AND OWED, not a missed optimization. A future reader who takes the title as a
+in this case's emitted code is CORRECT AND OWED, not a missed optimization. A future reader who takes the title as a
 codegen claim and removes the retain re-arms the destructive write two cases above — the same inference,
 arriving through a test name instead of through a comment.
 ```maxon

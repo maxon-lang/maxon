@@ -51,7 +51,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3076: specs/fragments/struct-construction-restriction/error.external-construction.test:9:14: type 'Box' can only be constructed from within its own methods; use a static factory method instead
+error E3076: specs/struct-construction-restriction/error.external-construction.maxon:9:14: type 'Box' can only be constructed from within its own methods; use a static factory method instead
 ```
 
 <!-- test: construct-inside-factory -->

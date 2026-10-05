@@ -51,7 +51,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/duplicate-functions/error.same-file-duplicate.test:9:10: Duplicate function 'helper'
+error E3006: specs/duplicate-functions/error.same-file-duplicate.maxon:9:10: Duplicate function 'helper'
 ```
 
 <!-- test: error.same-file-duplicate-main -->
@@ -65,7 +65,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/duplicate-functions/error.same-file-duplicate-main.test:6:10: Duplicate function 'main'
+error E3006: specs/duplicate-functions/error.same-file-duplicate-main.maxon:6:10: Duplicate function 'main'
 ```
 
 <!-- test: error.multi-file-duplicate-main -->
@@ -81,5 +81,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/duplicate-functions/error.multi-file-duplicate-main.test:8:10: Duplicate function 'main'
+error E3006: specs/duplicate-functions/error.multi-file-duplicate-main.maxon:8:10: Duplicate function 'main'
 ```

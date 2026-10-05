@@ -52,7 +52,10 @@ let JobsInFlightPerWorker = 2
 // a promise declared over the bare `ServiceError` is E3098 here, because it would erase the refusal.
 typealias BackendReply = Promise with (BackendUnitReply, BackendWorker.run.errors)
 typealias BackendReplyArray = Array with BackendReply
+typealias BackendArrivedUnits = ArrivedUnits with TargetModule
 typealias BackendWorkerHandleArray = Array with BackendWorker.handle
+
+export typealias BackendRetirees = WorkerRetirees with BackendWorker.handle
 
 export typealias InFlightCount = int(0 to u64.max)
 typealias InFlightCountArray = Array with InFlightCount
@@ -92,8 +95,16 @@ export type LandingSlots
 		try self.slotOfJob.set(job, value: slot) otherwise panic("LandingSlots.record: slotOfJob.set OOB at {job} below {self.jobCount}")
 	end 'record'
 
+	export function hasLanded(job ElementIndex) returns bool
+		return self.rawSlotOf(job) != self.jobCount
+	end 'hasLanded'
+
+	function rawSlotOf(job ElementIndex) returns ElementIndex
+		return try self.slotOfJob.get(job) otherwise panic("LandingSlots.rawSlotOf: slotOfJob.get OOB at {job} below {self.jobCount}")
+	end 'rawSlotOf'
+
 	export function slotOf(job ElementIndex) returns ElementIndex
-		let slot = try self.slotOfJob.get(job) otherwise panic("LandingSlots.slotOf: slotOfJob.get OOB at {job} below {self.jobCount}")
+		let slot = self.rawSlotOf(job)
 
 		if slot == self.jobCount 'neverLanded'
 			panic("LandingSlots.slotOf: job {job} never came home from the pool — the drain awaits every reply, so a job with no landing slot is a dispatch that never happened")
@@ -109,10 +120,11 @@ union InFlightSizeBound
 end 'InFlightSizeBound'
 
 // ⭐⭐ **THE HALF OF A POOL DRAIN THAT NAMES NO MESSAGE — one record for every drain: this pool's,
-// `StdPassPool`'s and `FrontEndPool`'s.** A drain fills a pipeline of `JobsInFlightPerWorker` jobs per
-// worker longest-first, then serves whichever reply `awaitAny` answers and hands its worker the next job in
-// order. Everything in that protocol that is not the reply itself lives here: the dispatch order and how far
-// it has been consumed, and for each outstanding reply which job it is for and which worker holds it.
+// `StdPassPool`'s and `FrontEndPool`'s.** A drain fills a pipeline of `JobsInFlightPerWorker` jobs
+// per worker longest-first, then serves whichever reply `awaitAny` answers and hands its worker
+// that worker's next job. Everything in that protocol that is not the reply itself lives here: the
+// dispatch order and how far it has been consumed, and for each outstanding reply which job it is
+// for and which worker holds it.
 //
 // ⚠ **THE REPLY ARRAY STAYS WITH THE CALLER, IN THE SAME SLOT ORDER.** A reply's type names the worker's
 // message, which no shared record can be generic over. So a caller pushes its reply exactly when it takes a
@@ -125,6 +137,10 @@ export type PoolDispatch
 	var jobCount as PoolSize
 	var workerCount as PoolSize
 	var dispatched as ElementIndex
+	var handedToWorker as PoolSlotArray
+	var positionOfJob as PoolSlotArray
+	var arrivedAtPosition as BoolArray
+	var settled as ElementIndex
 	var replyJob as PoolJobArray
 	var replyWorker as PoolSlotArray
 	var replySize as PoolJobSizeArray
@@ -152,7 +168,19 @@ export type PoolDispatch
 		fillLongestFirstOrder(sizes, jobCount: jobCount, order: order, sizeInDispatchOrder: sizeInDispatchOrder)
 		var outstandingPerWorker = InFlightCountArray.create()
 		outstandingPerWorker.refill(workerCount as ElementIndex, value: 0 as InFlightCount)
-		return Self{order: order, sizeInDispatchOrder: sizeInDispatchOrder, jobCount: jobCount, workerCount: workerCount, dispatched: 0, replyJob: PoolJobArray.create(), replyWorker: PoolSlotArray.create(), replySize: PoolJobSizeArray.create(), outstandingPerWorker: outstandingPerWorker, inFlightSize: 0, sizeBound: sizeBound}
+		var handedToWorker = PoolSlotArray.create()
+		handedToWorker.refill(workerCount as ElementIndex, value: 0)
+		var positionOfJob = PoolSlotArray.create()
+		positionOfJob.refill(jobCount as ElementIndex, value: 0)
+
+		for position in 0 upto order.count() 'eachPosition'
+			let job = try order.get(position) otherwise panic("PoolDispatch.withBound: order.get OOB at {position} below {order.count()}")
+			try positionOfJob.set(job, value: position) otherwise panic("PoolDispatch.withBound: positionOfJob.set OOB at job {job} below {jobCount}")
+		end 'eachPosition'
+
+		var arrivedAtPosition = BoolArray.create()
+		arrivedAtPosition.refill(jobCount as ElementIndex, value: false)
+		return Self{handedToWorker: handedToWorker, positionOfJob: positionOfJob, arrivedAtPosition: arrivedAtPosition, settled: 0, order: order, sizeInDispatchOrder: sizeInDispatchOrder, jobCount: jobCount, workerCount: workerCount, dispatched: 0, replyJob: PoolJobArray.create(), replyWorker: PoolSlotArray.create(), replySize: PoolJobSizeArray.create(), outstandingPerWorker: outstandingPerWorker, inFlightSize: 0, sizeBound: sizeBound}
 	end 'withBound'
 
 	// How many jobs the fill hands out before the first await: the pipeline, or every job when there are
@@ -173,7 +201,7 @@ export type PoolDispatch
 	end 'fillAdmitsAnother'
 
 	export function admitsAJobFor(worker ElementIndex) returns bool
-		if not self.hasUndispatched() 'nothingLeftToHandOut'
+		if not self.hasUndispatchedFor(worker) 'nothingLeftToHandOut'
 			return false
 		end 'nothingLeftToHandOut'
 
@@ -212,16 +240,27 @@ export type PoolDispatch
 		return try (self.dispatched mod (self.workerCount as ElementIndex)) otherwise panic("PoolDispatch.fillWorker: a pool of no workers never reaches the dispatch loop")
 	end 'fillWorker'
 
-	export function hasUndispatched() returns bool
-		return self.dispatched < self.jobCount as ElementIndex
-	end 'hasUndispatched'
+	// Assigned statically, not to whichever worker frees first: a worker keeps scratch of its own, so
+	// a completion-order assignment shows up in the compile's allocation totals and identical compiles
+	// differ.
+	function positionOfNextJobFor(worker ElementIndex) returns ElementIndex
+		let handed = try self.handedToWorker.get(worker) otherwise panic("PoolDispatch.positionOfNextJobFor: worker {worker} is not one of the {self.workerCount} this pool holds")
+		return worker + handed * (self.workerCount as ElementIndex)
+	end 'positionOfNextJobFor'
+
+	export function hasUndispatchedFor(worker ElementIndex) returns bool
+		return self.positionOfNextJobFor(worker) < self.jobCount as ElementIndex
+	end 'hasUndispatchedFor'
 
 	// Take the next job in dispatch order for `worker`. The caller pushes the worker's reply now, at the
 	// slot these columns just gained.
 	export function nextJob(worker ElementIndex) returns ElementIndex
-		let job = try self.order.get(self.dispatched) otherwise panic("PoolDispatch.nextJob: the dispatch order holds {self.order.count()} job(s) and slot {self.dispatched} is past the end — ask `hasUndispatched` first")
-		let size = try self.sizeInDispatchOrder.get(self.dispatched) otherwise panic("PoolDispatch.nextJob: the size column holds {self.sizeInDispatchOrder.count()} entry(ies) against {self.order.count()} job(s) — one walk fills both")
+		let position = self.positionOfNextJobFor(worker)
+		let job = try self.order.get(position) otherwise panic("PoolDispatch.nextJob: the dispatch order holds {self.order.count()} job(s) and slot {position} is past the end — ask `hasUndispatchedFor` first")
+		let size = try self.sizeInDispatchOrder.get(position) otherwise panic("PoolDispatch.nextJob: the size column holds {self.sizeInDispatchOrder.count()} entry(ies) against {self.order.count()} job(s) — one walk fills both")
 		let held = self.outstandingOf(worker)
+		let handed = try self.handedToWorker.get(worker) otherwise panic("PoolDispatch.nextJob: worker {worker} is not one of the {self.workerCount} this pool holds")
+		try self.handedToWorker.set(worker, value: handed + 1) otherwise panic("PoolDispatch.nextJob: handedToWorker.set OOB at worker {worker} below {self.workerCount}")
 		self.dispatched = self.dispatched + 1
 		self.replyJob.push(job)
 		self.replyWorker.push(worker)
@@ -254,8 +293,38 @@ export type PoolDispatch
 		try self.outstandingPerWorker.set(worker, value: held - 1) otherwise panic("PoolDispatch.land: outstandingPerWorker.set OOB at worker {worker} below {self.workerCount}")
 		let size = try self.replySize.remove(ready) otherwise panic("PoolDispatch.land: replySize.remove({ready}) — the three columns are pushed and removed together")
 		self.inFlightSize = self.inFlightSize - size
-		return try self.replyJob.remove(ready) otherwise panic("PoolDispatch.land: replyJob.remove({ready}) — `awaitAny` answered a slot of the caller's reply array, which is in step with this one")
+		let job = try self.replyJob.remove(ready) otherwise panic("PoolDispatch.land: replyJob.remove({ready}) — `awaitAny` answered a slot of the caller's reply array, which is in step with this one")
+		let position = try self.positionOfJob.get(job) otherwise panic("PoolDispatch.land: positionOfJob.get OOB at job {job} below {self.jobCount}")
+		try self.arrivedAtPosition.set(position, value: true) otherwise panic("PoolDispatch.land: arrivedAtPosition.set OOB at position {position} below {self.jobCount}")
+		return job
 	end 'land'
+
+	// Replies are spliced in dispatch order, not arrival order: the module's arrays grow by the append
+	// sequence, so an arrival-order splice makes the allocation totals differ between identical
+	// compiles.
+	export function hasNextToSettle() returns bool
+		if self.settled >= self.jobCount as ElementIndex 'everyJobSettled'
+			return false
+		end 'everyJobSettled'
+
+		return try self.arrivedAtPosition.get(self.settled) otherwise panic("PoolDispatch.hasNextToSettle: arrivedAtPosition.get OOB at {self.settled} below {self.jobCount}")
+	end 'hasNextToSettle'
+
+	export function takeNextToSettle() returns ElementIndex
+		if not self.hasNextToSettle() 'nothingArrivedNext'
+			panic("PoolDispatch.takeNextToSettle: the job at dispatch position {self.settled} of {self.jobCount} has not landed — ask `hasNextToSettle` first")
+		end 'nothingArrivedNext'
+
+		let job = try self.order.get(self.settled) otherwise panic("PoolDispatch.takeNextToSettle: order.get OOB at {self.settled} below {self.order.count()}")
+		self.settled = self.settled + 1
+		return job
+	end 'takeNextToSettle'
+
+	export function requireEveryJobSettled()
+		if self.settled != self.jobCount as ElementIndex 'jobsLeftUnsettled'
+			panic("PoolDispatch.requireEveryJobSettled: {self.settled} of {self.jobCount} job(s) were settled — the drain ended with a reply that never landed")
+		end 'jobsLeftUnsettled'
+	end 'requireEveryJobSettled'
 end 'PoolDispatch'
 
 export enum PoolKind
@@ -517,10 +586,7 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 		compilerLogger(CompilerLogGroup.codegen).debug("regalloc pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
 	end 'debugging'
 
-	// ⛔ **EVERY HANDLE GOES BEFORE THIS FRAME DOES.** Dropping the last handle to a service closes its
-	// mailbox, which is what lets the worker's green thread finish; a handle still held at process exit
-	// is a service that never ends and an exit that never comes.
-	workers.clear()
+	project.retiredWorkers.backend.keep(workers)
 
 	if refused < funcCount 'aFunctionDidNotFitTheMachine'
 		try refuseForRegisterPressure(project, stdModule: stdModule, funcIndex: refused, target: target, abi: abi, usesGt: usesGt, pool: pool, callerSaved: callerSaved, file: file)
@@ -574,6 +640,7 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 	var refused = stdModule.funcCount()
 	var dispatch = PoolDispatch.boundedByInFlightSize(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount)
 	var replies = BackendReplyArray.create()
+	var arrivedUnits = BackendArrivedUnits.create(stdModule.funcCount(), spent: TargetModule.create())
 
 	while dispatch.fillAdmitsAnother() 'fillThePipeline'
 		dispatchOneBackendJob(stdModule, workers: workers, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies)
@@ -593,8 +660,8 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 		let reply = try replies.remove(ready) otherwise panic("drainTheBackendPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		if let answer = try await reply 'finished'
-			spliceBackendUnit(module, func: module.getFunc(funcIndex), unitModule: answer.unitModule)
 			slots.record(job, slot: landed.count())
+			arrivedUnits.arrive(answer.unitModule)
 			landed.push(answer.landing)
 		end 'finished' else (e) 'notFinished'
 			match e 'why'
@@ -606,10 +673,50 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 		while dispatch.admitsAJobFor(freedWorker) 'handTheFreedWorkerTheNextJob'
 			dispatchOneBackendJob(stdModule, workers: workers, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
 		end 'handTheFreedWorkerTheNextJob'
+
+		spliceSettledUnits(module, dispatch: dispatch, slots: slots, arrivedUnits: arrivedUnits)
 	end 'serveWhoeverFinishedFirst'
 
+	dispatch.requireEveryJobSettled()
 	return refused
 end 'drainTheBackendPool'
+
+function spliceSettledUnits(module TargetModule, dispatch PoolDispatch, slots LandingSlots, arrivedUnits BackendArrivedUnits)
+	while dispatch.hasNextToSettle() 'eachSettledJob'
+		let job = dispatch.takeNextToSettle()
+
+		if slots.hasLanded(job) 'aUnitCameHome'
+			let slot = slots.slotOf(job)
+			spliceBackendUnit(module, func: module.getFunc(job), unitModule: arrivedUnits.unitAt(slot))
+			arrivedUnits.spend(slot)
+		end 'aUnitCameHome'
+	end 'eachSettledJob'
+end 'spliceSettledUnits'
+
+export type ArrivedUnits uses Unit
+	typealias UnitColumn = Array with Unit
+
+	var units as UnitColumn
+	var spent as Unit
+
+	export static function create(capacity ElementIndex, spent Unit) returns Self
+		var units = UnitColumn.create()
+		units.reserve(capacity)
+		return Self{units: units, spent: spent}
+	end 'create'
+
+	export function arrive(unit Unit)
+		self.units.push(unit)
+	end 'arrive'
+
+	export function unitAt(slot ElementIndex) returns Unit
+		return try self.units.get(slot) otherwise panic("ArrivedUnits.unitAt: slot {slot} is past the {self.units.count()} unit(s) that arrived")
+	end 'unitAt'
+
+	export function spend(slot ElementIndex)
+		try self.units.set(slot, value: self.spent) otherwise panic("ArrivedUnits.spend: slot {slot} is past the {self.units.count()} unit(s) that arrived")
+	end 'spend'
+end 'ArrivedUnits'
 
 // Why a pool worker's reply never came, for every pool's panic: no driver drops a handle before every reply has
 // landed, so the worker's green thread ended on its own — a panic whose message is already on stderr.

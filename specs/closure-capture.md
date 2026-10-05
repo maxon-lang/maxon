@@ -718,9 +718,6 @@ env slot and subtracts `99991` back down to an exit code, so the assertion is lo
 needing `print` (which is Beyond on wasm): truncate the slot to a byte and the captured value becomes
 `100000 & 0xFF = 160`, which does not come back to `9`. **The DIFFERENCE is the point.** With the slot
 forced to one byte this case fails on its VALUE, which is behaviour and needs nothing but the exit code.
-The other two fail only as `codegen changed — golden fragment mismatch`, which is a real catch but a
-different one — it needs their fragments to already exist, and it says "something moved" rather than "the
-value is wrong".
 ⚠ `100000` is deliberately above the byte range and below 2^31, which keeps this case pinning ONE fact.
 An `ExitCode` above 2^31 reading back unsigned on every target (`3000000009` prints identically on wasm and
 x64) is a separate fact; pinning the width at that boundary would tie this assertion to it as well, so a
@@ -941,7 +938,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/closure-capture/error.a-captured-scalar-still-has-no-members.test:10:28: Unsupported: a field access or method call on the captured 'n', which is declared 'int' and not a struct type (only a struct has fields and methods)
+error E2015: specs/closure-capture/error.a-captured-scalar-still-has-no-members.maxon:10:28: Unsupported: a field access or method call on the captured 'n', which is declared 'int' and not a struct type (only a struct has fields and methods)
 ```
 
 <!-- test: closure-capture.a-closure-in-a-generic-body-is-returned -->

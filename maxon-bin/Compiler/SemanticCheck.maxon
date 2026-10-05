@@ -4198,7 +4198,7 @@ export function declaringFileList(signatures ProgramSignatures, declFilePaths Fi
 	var rendered = StringArray.create()
 
 	for declFilePath in declFilePaths 'eachDeclaringFile'
-		insertCandidateName(rendered, candidate: projectRelativeFileDisplay(signatures, declFilePath: declFilePath))
+		insertCandidateName(rendered, candidate: signatures.projectRelativeFileDisplay(declFilePath))
 	end 'eachDeclaringFile'
 
 	return joinedWith(rendered, separator: CandidateListSeparator)
@@ -4217,19 +4217,6 @@ function contestedInstanceNote(signatures ProgramSignatures, tag ValueTypeTag, n
 
 	return " (declared in {declaringFileList(signatures, declFilePaths: declFilePaths)})"
 end 'contestedInstanceNote'
-
-// The module directory joined to the file name, never the file name alone: two claimants in two directories
-// can share one file name, and a note that printed the same name twice is the contentless refusal the note
-// exists to prevent. A root file has no directory and is already unique by name.
-function projectRelativeFileDisplay(signatures ProgramSignatures, declFilePath FilePath) returns String
-	let directory = signatures.moduleDirectoryOf(declFilePath)
-
-	if directory.isEmpty() 'aRootFile'
-		return declFilePath.filename()
-	end 'aRootFile'
-
-	return "{directory}{ModuleDirectorySeparator}{declFilePath.filename()}"
-end 'projectRelativeFileDisplay'
 
 // One door. Both governing names resolve — see `TypeResolution.requireFunctionShapeOf`.
 function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
@@ -5014,7 +5001,7 @@ end 'recordCallGraphEdge'
 // the roster is the fact that was already written down. What may not be said again is that a program's verdict
 // depends on it today.
 function ioYieldingRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(GtAwaitAnyName) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee)
+	return callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(GtAwaitAnyName) or callee.equals(GtQuiesceName) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee)
 end 'ioYieldingRuntimeCallee'
 
 // The plain caller-calls-callee relation, stored so that a CSR over it lists, for each CALLEE, the functions

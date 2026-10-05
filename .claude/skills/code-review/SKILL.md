@@ -122,17 +122,16 @@ name what the change owes in your report for §6 rather than writing it. Standal
 **Check EXIT CODES. Never grep for a success string** — a past session reported a green build by
 grepping for `^error` while the real failure printed `[CMP] ERROR:`. Exit **101** = memory leak.
 
-**Golden drift is not a review item.** Fragments the runs mint, rewrite or delete need no measuring,
-investigating or explaining — they are committed as they are (step 7).
+**The `ir-specs/` Target IR pins are gates, not a review item.** A pin the change moves is re-minted
+with `--update-required --filter=<spec>/` on each lane this host runs, and the diff of the pins is the
+review of the emitted code (step 7).
 
 ## 7. Commit — STANDALONE ONLY
 
-Commit to the current branch, **including every golden the runs touched**. Give a message that
-summarizes **the change**, not what happened during the review.
+Commit to the current branch, **including every `TargetIr` pin the change re-minted**. Give a message
+that summarizes **the change**, not what happened during the review.
 
-**Golden drift goes in with it, with no further thought:** `git add -A specs/` — minted, modified and
-deleted alike, whatever moved them. Never revert it to tidy `git status`, and do not explain it in the
-message.
+**Re-minted pins go in with it:** `git add -A ir-specs/ specs/`. Never revert one to tidy `git status`.
 
 ## Rules of engagement
 

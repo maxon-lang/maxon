@@ -61,7 +61,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/unary-negation/unary-double-negate.test:4:11: Expected expression but got '-'
+error E2004: specs/unary-negation/unary-double-negate.maxon:4:11: Expected expression but got '-'
 ```
 
 <!-- test: unary-negate-expression -->
@@ -98,5 +98,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/unary-negation/unary-double-negate-float.test:4:11: Expected expression but got '-'
+error E2004: specs/unary-negation/unary-double-negate-float.maxon:4:11: Expected expression but got '-'
 ```

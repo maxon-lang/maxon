@@ -100,11 +100,12 @@ module let WorkerPersistentFlag = "--worker-persistent"
 
 module let FilterFlagPrefix = "--filter="
 
-// `module` because `SpecTestRunner.reportGoldenDrift` and `reportUnrunHere` name this flag as the
-// remedy.
+// `module` because `SpecTestRunner.targetIrOutcome` names this flag as the remedy.
 module let UpdateRequiredFlag = "--update-required"
 
-module let RewriteDriftedGoldensFlag = "--rewrite-drifted-goldens"
+let BatchFlagPrefix = "--batch="
+let BatchOnValue = "on"
+let BatchOffValue = "off"
 
 // Selects the cases marked `<!-- network: live -->`, which open a socket to a real external host. A
 // default run leaves them out: a verdict that turns on somebody else's uptime is not a claim about
@@ -133,7 +134,7 @@ module let LogFlagPrefix = "--log="
 //
 // A re-emitter passes the resolved directory, never a default the far side would re-derive from its
 // own working directory. Each flag is emitted only when set.
-module function specSelectionArgv(specDir String, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, includeNetwork bool) returns StringArray
+module function specSelectionArgv(specDir String, filterPatterns FilterPatternArray, mode SpecRunMode, includeNetwork bool) returns StringArray
 	var argv = StringArray.create()
 	argv.push(specDir)
 
@@ -141,9 +142,13 @@ module function specSelectionArgv(specDir String, filterPatterns FilterPatternAr
 		argv.push("{FilterFlagPrefix}{pattern}")
 	end 'eachPattern'
 
-	if let flag = try goldenWrites.flag() 'writesGoldens'
-		argv.push(flag)
-	end 'writesGoldens'
+	if mode.updateRequired 'remintsBlocks'
+		argv.push(UpdateRequiredFlag)
+	end 'remintsBlocks'
+
+	if not mode.batchRuns 'runsEveryCaseAlone'
+		argv.push("{BatchFlagPrefix}{BatchOffValue}")
+	end 'runsEveryCaseAlone'
 
 	if includeNetwork 'wantsLiveNetwork'
 		argv.push(NetworkFlag)
@@ -211,10 +216,10 @@ function coverageNeedsDebugInfoMessage() returns String
 	return "{CoverageFlag} requires the debug-info sidecar: the counters it emits are anonymous without the sidecar's coverage-point table, so a {MxcovDataExtension} written by this binary could never be interpreted. Drop {NoDebugInfoFlag} (or `debugInfo: false` in the `{ProjectFileExtension}` target), or drop {CoverageFlag}."
 end 'coverageNeedsDebugInfoMessage'
 
-// Names withheld functions the IR sidecar must also render: a golden otherwise shows only functions
+// Names withheld functions the IR sidecar must also render: the sidecar otherwise shows only functions
 // parsed from the program's own source, so `mrt_start`, the allocator, the `__str_*`/`__managed_*`
-// families and `stdlib/` bodies carry no golden (see `TargetPrinter.printTargetModule`). Opt-in per
-// build, so a fragment that does not ask is unchanged.
+// families and `stdlib/` bodies are absent from it (see `TargetPrinter.printTargetModule`). Opt-in per
+// build, so a build that does not ask is unchanged.
 let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 
 // One leading dash makes an argument an option. `module` because `runCoverage`'s own tail parse
@@ -293,7 +298,6 @@ function main() returns ExitCode
 		match refusal 'why'
 			unknown(spelling) then reportUnknownOption(spelling)
 			badValue(spelling) then printError("error: invalid option value: {spelling}\n")
-			conflicting(spelling, other) then printError("error: {spelling} cannot be combined with {other}\n")
 		end 'why'
 
 		return refusedCommandLineExit(args.command)
@@ -336,9 +340,7 @@ module union TargetResolution
 end 'TargetResolution'
 
 // Matched against `targetToString`, so the parser accepts exactly the spellings the printer
-// produces. `module` because `GoldenCensus.reportUncomparedGoldens` asks the same question of a
-// lane directory's name; a private copy there would quietly stop covering the next backend that
-// lands.
+// produces.
 module function parseBuildTarget(spec String) returns TargetResolution
 	for candidate in supportedTargets() 'each'
 		if targetToString(candidate) == spec 'match'
@@ -1213,7 +1215,7 @@ end 'runVerifyRecheck'
 // Every worker count, `--workers=1` included, takes the one path through the pool: a serial branch
 // would be a second implementation of running the suite, free to drift.
 function runSpecTest(args MaxonArgs) returns ExitCode
-	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon spec-test [dir] [--filter=<pattern>]... [--update-required | --rewrite-drifted-goldens] [--network] [--workers=<n>] [--target=<cpu>-<os>]") 'tooManyPaths'
+	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon spec-test [dir] [--filter=<pattern>]... [--update-required] [--batch=on|off] [--network] [--workers=<n>] [--target=<cpu>-<os>]") 'tooManyPaths'
 		return OwnFailureExit
 	end 'tooManyPaths'
 
@@ -1234,9 +1236,8 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 
 	// A worker speaks the job protocol on stdout, so this is checked before anything is printed.
 	if args.workerPersistent 'isPoolWorker'
-		// A worker asks nothing before it starts. Minting goldens for a target this host cannot execute
-		// is guarded where the writing happens: see `SpecTestRunner.writeFragmentFile`'s `mayMint`.
-		return runPersistentWorker(specDir, filterPatterns: args.filterPatterns, goldenWrites: args.goldenWrites, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
+		// A worker asks nothing before it starts.
+		return runPersistentWorker(specDir, filterPatterns: args.filterPatterns, mode: args.specRunMode(), effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
 	end 'isPoolWorker'
 
 	// Below-normal priority, so a foreground process preempts the pool, which otherwise saturates
@@ -1271,7 +1272,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// hold it yet; `requireRunnerAvailable` is the delegation's preflight, and `refuseIfStale` proves
 	// the binary that builds the guest's compiler current.
 	match runStrategyFor(effectiveTarget) 'lane'
-		inGuest then return runSuiteInGuest(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, goldenWrites: args.goldenWrites, workerCount: args.workers, workersOverridden: args.workersOverridden, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
+		inGuest then return runSuiteInGuest(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, mode: args.specRunMode(), workerCount: args.workers, workersOverridden: args.workersOverridden, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
 		individually or
 			wslBatch or
 			noneHere then break 'lane'
@@ -1412,14 +1413,14 @@ end 'backQuoted'
 
 // Separate so `runSpecTest` has one exit that releases the tree lock; see `compileAndReport`.
 function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target, treeLock TreeLockHold) returns ExitCode
-	let run = try runSpecPool(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, goldenWrites: args.goldenWrites, workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork, treeLock: treeLock) otherwise (e) 'runErr'
+	let run = try runSpecPool(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, mode: args.specRunMode(), workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork, treeLock: treeLock) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return OwnFailureExit
 	end 'runErr'
 
 	// A run fails when it selected nothing or when any one pattern did: a mistyped member of a set of
 	// patterns would otherwise run nowhere while the run exits 0, and under `--update-required` look as
-	// though it regenerated goldens.
+	// though it re-minted blocks.
 	if run.results.count() == 0 or run.unmatchedPatterns.count() > 0 'selectedNothing'
 		// Only here does the exclusion census precede the error, because it may be the only explanation:
 		// a default run's `--filter=http-client.get` selects nothing but live-network cases.
@@ -1429,7 +1430,7 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 		return OwnFailureExit
 	end 'selectedNothing'
 
-	let testsExit = reportResults(run.results)
+	let testsExit = reportResults(run.results, batch: run.batch)
 
 	// Under the verdicts rather than above them: a note printed ahead of thousands of report lines has
 	// scrolled away by the summary it qualifies. Unannounced, a green column hides claims nobody
@@ -1447,16 +1448,6 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	// because stdout must stay byte-identical between worker counts; `SuiteCpuTally.reportLine` spells
 	// the line.
 	printError("{run.cpu.reportLine(run.poolSize)}\n")
-
-	// Golden drift is reported, never judged: this finds a golden that is read and disagrees. See
-	// `SpecTestRunner.reportGoldenDrift`.
-	reportGoldenDrift(run.results)
-
-	// Goldens nothing compares, reported, never judged: goldens are reference, not a gate. On stderr
-	// and last, so it never displaces the reason a test failed. A `.test` whose case was renamed away
-	// shows in no diff, so only an enumeration finds it (`GoldenCensus`). Asked on filtered runs too,
-	// because the answer comes from the spec text.
-	reportUncomparedGoldens(specDir, effectiveTarget: effectiveTarget)
 
 	if not exitSucceeded(testsExit) 'someTestFailed'
 		return testsExit
@@ -1584,19 +1575,17 @@ function reportSignalled(executable Executable, signal SignalNumber, speaker Str
 	return OwnFailureExit
 end 'reportSignalled'
 
-// Golden drift is not in the pass/fail counts: a test whose golden no longer matches still passed,
-// so `0 failed` means the spec tests passed, and drift gets its own line.
-//
 // A case that did not run is in neither count; its own line and stderr note say why. The summary
 // line's shape is fixed — scripts read `^N passed, M failed` — so each extra count follows on a
 // line of its own.
-function reportResults(results SpecTestResultArray) returns ExitCode
+function reportResults(results SpecTestResultArray, batch BatchTally) returns ExitCode
 	for result in results 'each'
 		print("{verdictLine(result.outcome, label: testLabel(result.specName, testName: result.testName))}\n")
 	end 'each'
 
 	let tally = tallyResults(results)
 	print("\n{tally.passed} passed, {tally.failed} failed\n")
+	print("{batch.summaryLine()}\n")
 
 	// Silent at zero, like every trailer.
 	if tally.skipped > 0 'anySkipped'
@@ -1604,20 +1593,8 @@ function reportResults(results SpecTestResultArray) returns ExitCode
 	end 'anySkipped'
 
 	if tally.notRunHere > 0 'anyUnrunnable'
-		print("{tally.notRunHere} not run here — COMPILED and compared against a committed golden where one exists, but this host cannot execute them (see the note on stderr)\n")
+		print("{tally.notRunHere} not run here — COMPILED and checked against their `TargetIr` pins, but this host cannot execute them (see the note on stderr)\n")
 	end 'anyUnrunnable'
-
-	// `scripts/shared-stdlib-memo-gate.sh` reads this: without it a run that compared nothing is
-	// indistinguishable from one that compared everything.
-	if tally.compared > 0 'anyCompared'
-		print("{tally.compared} compared against a committed golden\n")
-	end 'anyCompared'
-
-	// Under the not-run lines because it qualifies neither: a drifted case is already counted in its
-	// column. The differences are in the stderr trailer.
-	if tally.drifted > 0 'anyDrifted'
-		print("{goldenDriftSummary(tally.drifted)}\n")
-	end 'anyDrifted'
 
 	// A run in which nothing ran fails, like `runSpecSuite`'s empty selection: here everything
 	// selected was skipped by the target or cannot execute on this host. It is also the backstop
@@ -1649,13 +1626,11 @@ end 'verdictLine'
 union OptionRefusal
 	unknown(spelling String)
 	badValue(spelling String)
-	conflicting(spelling String, other String)
 
 	function refusesAsUnknown(argument String) returns bool
 		return match self 'why'
 			unknown(spelling) gives spelling == argument
-			badValue or
-				conflicting gives false
+			badValue gives false
 		end 'why'
 	end 'refusesAsUnknown'
 end 'OptionRefusal'
@@ -2056,7 +2031,7 @@ enum HelpOption
 	metrics
 	specFilter
 	updateRequired
-	rewriteDriftedGoldens
+	batch
 	network
 	workers
 	rungs
@@ -2149,8 +2124,8 @@ function optionReference(option HelpOption) returns OptionReference
 		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one.", commands: [MaxonCommand.build, MaxonCommand.run, MaxonCommand.verifyRecheck], arrivals: [OptionArrival.prefixed(DefineFlagPrefix)])
 		metrics gives OptionReference.create("{MetricsFlagPrefix}<path>", description: "Write this compile's per-phase time + memory attribution to <path> as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.prefixed(MetricsFlagPrefix)])
 		specFilter gives OptionReference.create("{FilterFlagPrefix}<pattern>", description: "Run only tests whose `<spec>/<test>` label contains <pattern> (case-sensitive). A bare spec name selects that whole spec. Repeatable: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(FilterFlagPrefix)])
-		updateRequired gives OptionReference.create(UpdateRequiredFlag, description: "Rewrite the committed .test goldens instead of checking against them. Running a test proves its allocation is CORRECT; only the pinned IR proves the code did not get WORSE. REVIEW THE RESULTING DIFF. Pair it with {FilterFlagPrefix}: an unfiltered run rewrites EVERY golden in the suite.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(UpdateRequiredFlag)])
-		rewriteDriftedGoldens gives OptionReference.create(RewriteDriftedGoldensFlag, description: "Rewrite each committed .test golden that DRIFTED from what this compiler emits, for a case that passed on this host; a failing case keeps its golden. A rewritten golden is not reported as drift, and no spec file is touched: trace-capture goldens are re-minted only by {UpdateRequiredFlag}, which this flag cannot be combined with. REVIEW THE RESULTING DIFF.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(RewriteDriftedGoldensFlag)])
+		updateRequired gives OptionReference.create(UpdateRequiredFlag, description: "Re-mint the inline blocks a run checks, in the spec files themselves: the `mm-trace` / `log-trace` capture blocks, and the `TargetIr:<lane>` pin of this run's lane for every selected case of a spec that holds any pin. A pin is compiled, not run, so a lane this host cannot execute still re-mints. REVIEW THE RESULTING DIFF. Pair it with {FilterFlagPrefix}: an unfiltered run re-mints every selected case's blocks in the suite.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(UpdateRequiredFlag)])
+		batch gives OptionReference.create("{BatchFlagPrefix}{BatchOnValue}|{BatchOffValue}", description: "{BatchOnValue} (the default) compiles a spec's plain run cases into the fewest programs whose type names do not overlap and runs each once, rerunning alone any case that did not finish cleanly; {BatchOffValue} compiles and runs every case on its own. The summary line says how many run cases ran batched, in how many programs, and how many ran alone.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(BatchFlagPrefix)])
 		network gives OptionReference.create(NetworkFlag, description: "Also run the cases marked `{NetworkMarker} {NetworkLiveValue} -->`, which open a socket to a REAL EXTERNAL HOST. They are OUT of a default run because their verdict measures somebody else's uptime rather than this compiler; a default run NAMES every one it left out.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(NetworkFlag)])
 		workers gives OptionReference.create("{WorkersFlagPrefix}<n>", description: "Run the suite on <n> persistent worker subprocesses (default {defaultWorkerCount()}, this machine). 1 is this same pool with one worker in it, NOT a serial path: every worker count must print BYTE-IDENTICAL output, and that invariance is the pool's sharpest gate.", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(WorkersFlagPrefix)])
 		rungs gives OptionReference.create("{RungsFlagPrefix}<n>", description: "Climb <n> rungs (default {DefaultRungCount}, range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the program, so this is exponential in cost.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(RungsFlagPrefix)])
@@ -2479,8 +2454,10 @@ export type MaxonArgs
 
 	export var filterPatterns as FilterPatternArray
 
-	// Deliberately an explicit act: the resulting golden diff is the review.
-	export var goldenWrites as GoldenWrites
+	// Deliberately an explicit act: the resulting diff of the spec files is the review.
+	export var updateRequired as bool
+
+	export var batchRuns as bool
 
 	// 1 is the same pool with one worker in it, not a serial branch; see `runSpecTest`.
 	export var workers as WorkerCount
@@ -2562,7 +2539,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	module static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), goldenWrites: GoldenWrites.mintMissing, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
@@ -2580,15 +2557,9 @@ export type MaxonArgs
 		return false
 	end 'refusedAsUnknown'
 
-	function selectGoldenWrites(typed GoldenWrites, spelling String)
-		if self.goldenWrites != typed 'anotherMode'
-			if let earlier = try self.goldenWrites.flag() 'alreadyChosen'
-				self.refusedOptions.push(OptionRefusal.conflicting(earlier, other: spelling))
-			end 'alreadyChosen'
-		end 'anotherMode'
-
-		self.goldenWrites = typed
-	end 'selectGoldenWrites'
+	function specRunMode() returns SpecRunMode
+		return SpecRunMode.create(self.updateRequired, batchRuns: self.batchRuns)
+	end 'specRunMode'
 
 	module function positionalAt(index ElementIndex) returns String throws AbsentError
 		return try self.paths.get(index) otherwise throw AbsentError.absent
@@ -2626,7 +2597,7 @@ export type MaxonArgs
 		// The working set is one record, not a `var` per flag: a `var` assigned in one arm becomes a phi
 		// on the loop header, and one register per flag exceeds x64's GPRs (E5001) — a refusal, not a
 		// slowdown. A field store keeps the loop carrying one value, so adding a flag means adding a
-		// field, never a local. arm64's larger register pool hides this; `specs/register-pressure.md`'s
+		// field, never a local. arm64's larger register pool hides this; `ir-specs/register-pressure.md`'s
 		// `assigned-only-loop-carried-vars-overflow` pins the x64 shape.
 		var parsed = Self.create()
 
@@ -2761,10 +2732,18 @@ export type MaxonArgs
 					parsed.filterPatterns.push(pattern)
 				end 'aPattern'
 			end 'filterFlag' else if arg == UpdateRequiredFlag 'updateRequiredFlag'
-				parsed.selectGoldenWrites(GoldenWrites.updateRequired, spelling: arg)
-			end 'updateRequiredFlag' else if arg == RewriteDriftedGoldensFlag 'rewriteDriftedGoldensFlag'
-				parsed.selectGoldenWrites(GoldenWrites.rewriteDrifted, spelling: arg)
-			end 'rewriteDriftedGoldensFlag' else if arg == NetworkFlag 'networkFlag'
+				parsed.updateRequired = true
+			end 'updateRequiredFlag' else if arg.startsWith(BatchFlagPrefix) 'batchFlag'
+				let raw = optionValueOf(arg)
+
+				if raw == BatchOnValue 'batchOn'
+					parsed.batchRuns = true
+				end 'batchOn' else if raw == BatchOffValue 'batchOff'
+					parsed.batchRuns = false
+				end 'batchOff' else 'badBatchValue'
+					parsed.refusedOptions.push(OptionRefusal.badValue(arg))
+				end 'badBatchValue'
+			end 'batchFlag' else if arg == NetworkFlag 'networkFlag'
 				parsed.includeNetwork = true
 			end 'networkFlag' else if arg.startsWith(WorkersFlagPrefix) 'workersFlag'
 				let raw = optionValueOf(arg)

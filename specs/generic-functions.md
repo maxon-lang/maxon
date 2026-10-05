@@ -866,7 +866,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/generic-functions/error.an-instance-cannot-read-a-field-named-like-a-method-of-its-constraint.test:16:11: type 'Point' is not exported
+error E3008: specs/generic-functions/error.an-instance-cannot-read-a-field-named-like-a-method-of-its-constraint.maxon:16:11: type 'Point' is not exported
 ```
 
 <!-- test: an-enum-argument-is-its-callers-own-type -->
@@ -944,6 +944,92 @@ end 'main'
 error E3008: <fragment>:13:20: function 'pick' is not exported
 ```
 
+<!-- test: a-private-generic-is-bound-past-another-directorys-exported-generic-of-one-name -->
+`a/` calls its own private `larger`; the root sees only `b/`'s exported one, which returns the smaller argument so the binding shows.
+```maxon
+// --- file: a/a.maxon
+function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+export function runA()
+	print("a {larger(3, b: 7)}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+export function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return b
+	end 'first'
+
+	return a
+end 'larger'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	print("main {larger(10, b: 2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 7
+main 2
+```
+
+<!-- test: two-same-named-files-in-two-directories-each-bind-their-own-private-generic -->
+A file-private declaration coexists with anything, so two `util.maxon` files each call their own `larger`; `b/`'s returns the smaller argument so the binding shows.
+```maxon
+// --- file: a/util.maxon
+function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+export function runA()
+	let x = larger(3, b: 7)
+	let y = larger(10, b: 2)
+	print("a {x} {y}\n")
+end 'runA'
+
+// --- file: b/util.maxon
+function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return b
+	end 'first'
+
+	return a
+end 'larger'
+
+export function runB()
+	print("b {larger(larger(3, b: 9), b: 5)}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 7 10
+b 3
+```
+
 <!-- test: a-trailing-comma-after-uses-is-accepted -->
 ```maxon
 function pick(a T) uses T, returns T
@@ -987,4 +1073,48 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:11:17: call to undefined function 'nope'
+```
+
+<!-- test: two-same-named-files-in-two-directories-each-bind-their-own-module-generic -->
+The same pair at the `module` tier: one file name in two directories, one `module` generic of one name, one line and column.
+```maxon
+// --- file: a/util.maxon
+module function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+export function runA()
+	print("a {larger(3, b: 7)}\n")
+end 'runA'
+
+// --- file: b/util.maxon
+module function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+export function runB()
+	print("b {larger(larger(3, b: 9), b: 5)}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 7
+b 9
 ```

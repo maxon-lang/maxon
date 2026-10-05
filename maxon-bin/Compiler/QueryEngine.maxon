@@ -71,8 +71,7 @@ end 'forgetOneSourceFile'
 
 // --- The memo that outlives a `Project` ---
 //
-// ⭐⭐ **ONE STORE PER `CompileSession.fileMemos` OWNER, AND THE ADMISSION TEST IS "IS THIS A PURE
-// FUNCTION OF THE FILE'S BYTES".** A spec worker process, the language server's document projects
+// ⭐⭐ **ONE STORE PER `CompileSession.fileMemos` OWNER.** A spec worker process, the language server's document projects
 // and each MCP session compile many programs, and every one of them would otherwise re-lex the same
 // `stdlib/` files from scratch.
 //
@@ -81,14 +80,18 @@ end 'forgetOneSourceFile'
 // stands: nothing here is derived a second way. The per-`Project` caches remain the only thing any
 // query reads directly — a shared hit is served THROUGH them (see `Queries.queryTokens`).
 //
-// ⛔⛔ **WHAT MAY NOT GO IN HERE, AND WHY THE LINE IS EXACTLY THERE.** A `FileParseArtifact` and a
-// swept declaration are NOT pure functions of the bytes: both carry INTERNED TYPE IDS, and
-// `ParseStaging.mergeArtifact` rewrites an artifact's ids IN PLACE on its first fold and then
-// latches `typeIdsAreProjectGlobal`, an invariant that holds only while "the interner they were
-// folded into is the one still in hand". Sharing one across two `Project`s makes the second skip
-// the remap and read ids stamped for the first.
+// ⛔⛔ A library file's parse is held here, but a `FileParseArtifact` embeds index-numbered facts —
+// type-name ids, generic-instance ids, interface declaration indexes in witness ops — that the
+// asking program's own declarations shift. So each held parse carries a footprint of those facts
+// (`ParseFootprint`), and a hit is rebased onto the current program, or misses when a row or a told
+// answer moved (`sharedParseDrifts`). It is deep-cloned at the stash and at every hit: the merge
+// renumbers an artifact in place, so nothing a `Project` can reach may be the stored one.
 //
-// ⛔⛔ **AND THE DECLARATION SCAN ITSELF IS NOT A FUNCTION OF THE BYTES.**
+// Its key is the library-only signature hash (`ProgramSignatures.libraryHash`), because the
+// whole-program hash moves with every user declaration. A program that shadows or overlaps a
+// library name, or declares a runtime name, parses the library cold (`LibraryParseSharing`).
+//
+// ⛔⛔ **A SWEPT DECLARATION IS NOT HELD: THE DECLARATION SCAN IS NOT A FUNCTION OF THE BYTES.**
 // `Parser.foldDeclaredSignaturesInto` READS the whole-program index while it walks (every user file
 // is folded into it first, because the two fold loops sit either side of the stdlib/user shadow
 // contest in `Queries.queryProgramSignatures`), WRITES it (`recordTupleAlias` / `internTupleType`),
@@ -98,8 +101,8 @@ end 'forgetOneSourceFile'
 // slices, which a swept declaration shares. That changes only once the language can mark a value
 // deeply immutable, so a clone may share it.
 //
-// A TOKEN has neither problem. `Token`'s every field is a `let`, no consumer mutates a token array
-// (`filterConditionalTokens` returns its input or builds a fresh array, and
+// A TOKEN needs neither a footprint nor a clone. `Token`'s every field is a `let`, no consumer
+// mutates a token array (`filterConditionalTokens` returns its input or builds a fresh array, and
 // `Parser.shadowRenamedTokens` likewise), and a token carries no id of any kind. It is a VALUE, and
 // that is the whole safety argument.
 //
@@ -123,6 +126,16 @@ end 'forgetOneSourceFile'
 export function sharedMemoEntryCount(project Project) returns QueryCount
 	return project.session.fileMemos.count()
 end 'sharedMemoEntryCount'
+
+export function sharedParseEntryCount(project Project) returns QueryCount
+	var held = 0 as QueryCount
+
+	for (_, memo) in project.session.fileMemos 'eachMemo'
+		held = held + (memo.parseCount() as QueryCount)
+	end 'eachMemo'
+
+	return held
+end 'sharedParseEntryCount'
 
 // The two cases a bool has, as the innermost digit's radix.
 let FlagRadix = 2
@@ -156,6 +169,10 @@ end 'markSharedTokenSource'
 function heldMemoFor(project Project, contentHash HashDigest) returns SharedFileMemo throws SharedMemoMiss
 	return try project.session.fileMemos.get(contentHash) otherwise throw SharedMemoMiss.notHeld
 end 'heldMemoFor'
+
+export function sharedDeclaredTypeNamesOf(project Project, contentHash HashDigest) returns ByteArrayArray throws SharedMemoMiss
+	return (try heldMemoFor(project, contentHash: contentHash)).declaredTypeNames
+end 'sharedDeclaredTypeNamesOf'
 
 // The store's view for these bytes AND this build — `heldMemoFor` composed with `viewOf`, once,
 // because all three doors below want exactly that pair and a composition spelled three times is
@@ -317,9 +334,101 @@ end 'parseMemoKey'
 // `queryParseOps` computes it ONCE and uses that one value to both validate its memo and stamp the
 // new one, for `sourceEntryOf`'s reason: the two must be the same key, and each computation of it is
 // another `FilePath` map probe.
-export function currentParseMemoKey(project Project, path FilePath, signatureHash HashDigest, buildsBodies bool, overrides RowSetOverrideTable) returns HashDigest throws CompileError
-	return parseMemoKey((try sourceEntryOf(project, path: path)).contentHash, signatureHash: signatureHash, buildsBodies: buildsBodies, coverage: project.coverage, overridesDigest: overrides.digest)
+export function currentParseMemoKey(project Project, contentHash HashDigest, signatureHash HashDigest, buildsBodies bool, overrides RowSetOverrideTable) returns HashDigest
+	return parseMemoKey(contentHash, signatureHash: signatureHash, buildsBodies: buildsBodies, coverage: project.coverage, overridesDigest: overrides.digest)
 end 'currentParseMemoKey'
+
+let FlagSetKeySalt = 0xE7037ED1A0B428DB as HashDigest
+let FlagClearKeySalt = 0x8EBC6AF09C88C6E3 as HashDigest
+
+function mixFlag(state HashDigest, set bool) returns HashDigest
+	return Hasher.combined(state, value: FlagSetKeySalt if set else FlagClearKeySalt)
+end 'mixFlag'
+
+function sharedParseVariant(project Project, job ParseJob) returns HashDigest
+	var variant = mixBytes(buildKeyOf(project) as HashDigest, bytes: job.path.toString().toByteArray())
+	variant = mixBytes(variant, bytes: job.namespace.toByteArray())
+	variant = mixFlag(variant, set: job.buildsBodies)
+	variant = mixFlag(variant, set: job.instrumentsCoverage)
+	variant = mixFlag(variant, set: job.capturesDebugLocals)
+	variant = mixFlag(variant, set: job.isStdlibSource)
+	variant = mixFlag(variant, set: job.isRuntimeSource)
+	variant = mixFlag(variant, set: job.declaresCompilerInternalNames)
+
+	return mixFlag(variant, set: job.livesUnderStdlibDirectory)
+end 'sharedParseVariant'
+
+export function sharedParsePlanOf(project Project, job ParseJob, contentHash HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable, liveness HashDigest) returns SharedParsePlan
+	if signatures.libraryParseSharing != LibraryParseSharing.shareable or not (job.isStdlibSource or job.isRuntimeSource) or not job.compilerMintedNames.isEmpty() or not project.db.shareableTokenHashes.contains(contentHash) 'notShareable'
+		return SharedParsePlan.unshared
+	end 'notShareable'
+
+	let key = Hasher.combined(Hasher.combined(signatures.libraryHash, value: overrides.digest), value: liveness)
+
+	return SharedParsePlan.shareable(contentHash, variant: sharedParseVariant(project, job: job), key: key)
+end 'sharedParsePlanOf'
+
+export function sharedParseOf(project Project, plan SharedParsePlan, signatures ProgramSignatures, overrides RowSetOverrideTable) returns FileParseArtifact throws SharedMemoMiss
+	match plan 'plan'
+		unshared then throw SharedMemoMiss.notHeld
+		shareable(contentHash, variant, key) then return try heldParseFor(project, contentHash: contentHash, variant: variant, key: key, signatures: signatures, overrides: overrides)
+	end 'plan'
+end 'sharedParseOf'
+
+// The baseline is restored after every lookup, hit or miss: checking a held parse's told row-set
+// answers re-asks them, which writes journaled memos onto this program's index.
+function heldParseFor(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable) returns FileParseArtifact throws SharedMemoMiss
+	let rebased = try (try heldMemoFor(project, contentHash: contentHash)).parseOf(variant, key: key, signatures: signatures, overrides: overrides) otherwise (miss) 'notHeld'
+		signatures.restoreBaseline()
+		project.db.sharedParseMisses = project.db.sharedParseMisses + 1
+
+		match miss 'miss'
+			footprintMoved then project.db.sharedParseDrifts = project.db.sharedParseDrifts + 1
+			notHeld then break 'miss'
+		end 'miss'
+
+		throw miss
+	end 'notHeld'
+
+	signatures.restoreBaseline()
+	project.db.sharedParseHits = project.db.sharedParseHits + 1
+	project.db.sharedParseReusedFiles.insert(contentHash)
+	rebaseArtifact(project, artifact: rebased.artifact, rebase: rebased.rebase)
+
+	return rebased.artifact
+end 'heldParseFor'
+
+export function stashParse(project Project, plan SharedParsePlan, artifact FileParseArtifact)
+	match plan 'plan'
+		unshared then return
+		shareable(contentHash, variant, key) then stashShareableParse(project, contentHash: contentHash, variant: variant, key: key, artifact: artifact)
+	end 'plan'
+end 'stashParse'
+
+function stashShareableParse(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, artifact FileParseArtifact)
+	if artifact.diagnostics.count() != 0 or artifact.deferredParseErrors.count() != 0 'carriesFaults'
+		return
+	end 'carriesFaults'
+
+	let footprint = footprintOf(project, artifact: artifact, signatures: programSignaturesIn(project, asker: "stashShareableParse"))
+
+	project.db.pendingSharedParses.upsert(contentHash, value: SharedLibraryParse.create(variant, key: key, footprint: footprint, artifact: artifact.clone()))
+end 'stashShareableParse'
+
+export function publishStandingParses(project Project)
+	let pending = project.db.pendingSharedParses
+	var published = 0 as QueryCount
+
+	project.db.pendingSharedParses = PendingSharedParseMap.create()
+
+	for (contentHash, standing) in pending 'eachPending'
+		var memo = try heldMemoFor(project, contentHash: contentHash) otherwise panic("publishStandingParses: a parse was stashed for bytes no shared file memo holds — a shareable plan requires admitted bytes, and admitted bytes that lexed are held")
+		memo.holdParse(standing)
+		published = published + 1
+	end 'eachPending'
+
+	project.db.sharedParsePublishes = project.db.sharedParsePublishes + published
+end 'publishStandingParses'
 
 // Memoized, and it has to be. The fold is O(files) and it is asked once per file — every
 // `queryParseOps` validates the signature index before it can validate itself, and that validation

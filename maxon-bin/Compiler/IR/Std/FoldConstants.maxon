@@ -95,8 +95,7 @@
 // constant on every path into a phi is not constant to this pass, and nothing here looks through memory
 // (`classifyFoldableDef`'s memory band states why a load's result is not its global's initializer).
 //
-// ⭐ **WHY FOLDING DOES NOT COST THE SPEC FRAGMENTS THEIR CODEGEN.** Goldens are REFERENCE rather than
-// a gate (⚖ USER RULING), and the specs whose
+// ⭐ **WHY FOLDING DOES NOT COST THE SPECS THEIR CODEGEN.** The specs whose
 // SUBJECT is the emitted arithmetic take a runtime input, which is strictly better
 // testing than a literal a correct compiler is entitled to fold.
 
@@ -412,7 +411,7 @@ end 'evaluateFloatCmp'
 // ⭐ **WHY THE INTEGER ARM EXISTS AT ALL:** `-K` over a top-level or inlined constant is a `neg` of a
 // `const`, where the same value spelled `0 - K` is a `sub` of two — and the binary shape folded to one
 // `mov` while the unary keeps its instruction. Every such site IS the unary shape (`0 - x` lowers to
-// `-x`), and `top-level-let/unary-minus-in-constant`'s golden shows the cost in one line.
+// `-x`), and `top-level-let/unary-minus-in-constant`'s Target IR shows the cost in one line.
 function evaluateUnaryOp(op StdOp, resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, constMap ConstValueMap) returns StdOp
 	if stdUnaryOperandIsFloat(opcode) 'floatSource'
 		return evaluateFloatUnaryOp(op, resultId: resultId, operand: operand, opcode: opcode, operandType: operandType, constMap: constMap)
@@ -752,17 +751,15 @@ end 'edgesWithoutTarget'
 // which is the only thing that repairs the merge block's phi — nothing downstream can, because by the
 // time the allocator sees the function that edge looks exactly like a real one.
 //
-// It composes with the TARGET tier's own block drop rather than duplicating it: that pass drops what it
-// orphans — its own jump threading, and any block only unreachable once physical branches are elided —
-// which is a different set, discovered at a different time. This one is the Std tier's, and it runs only
-// on a function where a branch actually folded — here, and in `threadConstantBranches`, which orphans a
-// join block's not-taken arm the same way when every predecessor decided the branch.
+// It composes with the TARGET tier's own block drop rather than duplicating it: that pass drops
+// what it orphans — its own jump threading, and any block only unreachable once physical branches
+// are elided — which is a different set, discovered at a different time. This one is the Std
+// tier's, and it runs only on a function where a branch actually folded — here, and in
+// `threadConstantBranches`, which orphans a join block's not-taken arm the same way when every
+// predecessor decided the branch — and on a caller `InlineLeaves` cut off from a call's
+// continuation by splicing in a callee that never returns.
 //
 // Survivors keep their relative order, so nothing that depends on layout moves.
-//
-// Reachability is over the edges the terminator ops name, exactly as `buildStdSuccessorGraph` reads
-// them: a block without a terminator op is a `Terminator.dead` one, which no execution leaves, so the
-// block minted after it is reachable only through its own predecessors.
 module function dropUnreachableBlocks(module StdModule, func IrFunction)
 	let blockCount = func.blockRefs.count()
 
@@ -770,29 +767,7 @@ module function dropUnreachableBlocks(module StdModule, func IrFunction)
 		return
 	end 'noBlocks'
 
-	let byId = module.blockIndexById(func)
-	var reachable = BoolArray.create()
-	reachable.growFilled(blockCount, value: false)
-	var stack = BlockRefIndexArray.create()
-	var successors = BlockIdArray.create()
-
-	// The entry is position 0 and is reachable by definition — it is also the block that must stay
-	// first, which the ascending rebuild below preserves.
-	try reachable.set(0, value: true) otherwise panic("dropUnreachableBlocks: reachable.set OOB at the entry block")
-	stack.push(0)
-
-	while stack.count() > 0 'walk'
-		let position = try stack.pop() otherwise panic("dropUnreachableBlocks: stack.pop on a non-empty stack failed")
-		let block = module.blockAtPosition(func, position: position)
-
-		successors.clear()
-		collectStdBlockSuccessorIds(module, block: block, out: successors)
-
-		for successorId in successors 'eachSucc'
-			markReachable(reachable, stack: stack, position: try byId.get(successorId) otherwise panic("dropUnreachableBlocks: block {successorId} is a branch target of this function but is not in its blockRefs"))
-		end 'eachSucc'
-	end 'walk'
-
+	let reachable = reachableBlockPositions(module, func: func)
 	var kept = BlockRefArray.create()
 
 	for position in 0 upto blockCount 'eachBlock'
@@ -805,6 +780,35 @@ module function dropUnreachableBlocks(module StdModule, func IrFunction)
 
 	func.blockRefs = kept
 end 'dropUnreachableBlocks'
+
+// Reachability is over the edges the terminator ops name, exactly as `buildStdSuccessorGraph` reads
+// them: a block without a terminator op is a `Terminator.dead` one, which no execution leaves, so
+// the block minted after it is reachable only through its own predecessors.
+module function reachableBlockPositions(module StdModule, func IrFunction) returns BoolArray
+	let blockCount = func.blockRefs.count()
+	let byId = module.blockIndexById(func)
+	var reachable = BoolArray.create()
+	reachable.growFilled(blockCount, value: false)
+	var stack = BlockRefIndexArray.create()
+	var successors = BlockIdArray.create()
+
+	try reachable.set(0, value: true) otherwise panic("reachableBlockPositions: reachable.set OOB at the entry block")
+	stack.push(0)
+
+	while stack.count() > 0 'walk'
+		let position = try stack.pop() otherwise panic("reachableBlockPositions: stack.pop on a non-empty stack failed")
+		let block = module.blockAtPosition(func, position: position)
+
+		successors.clear()
+		collectStdBlockSuccessorIds(module, block: block, out: successors)
+
+		for successorId in successors 'eachSucc'
+			markReachable(reachable, stack: stack, position: try byId.get(successorId) otherwise panic("reachableBlockPositions: block {successorId} is a branch target of this function but is not in its blockRefs"))
+		end 'eachSucc'
+	end 'walk'
+
+	return reachable
+end 'reachableBlockPositions'
 
 // The worklist of `func.blockRefs` POSITIONS the reachability walk still owes a visit.
 typealias BlockRefIndexArray = Array with ElementIndex

@@ -349,7 +349,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3030: specs/fragments/enums-simple/error.duplicate-case.test:4:2: duplicate enum case: 'red'
+error E3030: specs/enums-simple/error.duplicate-case.maxon:4:2: duplicate enum case: 'red'
 ```
 
 <!-- test: error.unknown-enum-case -->
@@ -365,7 +365,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/enums-simple/error.unknown-enum-case.test:8:11: unknown enum case: 'green'
+error E3034: specs/enums-simple/error.unknown-enum-case.maxon:8:11: unknown enum case: 'green'
 ```
 
 <!-- test: error.duplicate-raw-value -->
@@ -380,7 +380,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3031: specs/fragments/enums-simple/error.duplicate-raw-value.test:4:2: duplicate raw value: '200'
+error E3031: specs/enums-simple/error.duplicate-raw-value.maxon:4:2: duplicate raw value: '200'
 ```
 
 <!-- test: error.raw-value-type-mismatch -->
@@ -395,7 +395,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3032: specs/fragments/enums-simple/error.raw-value-type-mismatch.test:4:2: raw value type mismatch: 'expected int, got float'
+error E3032: specs/enums-simple/error.raw-value-type-mismatch.maxon:4:2: raw value type mismatch: 'expected int, got float'
 ```
 
 <!-- test: keyword-as-case-name -->

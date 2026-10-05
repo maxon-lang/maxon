@@ -335,7 +335,7 @@ tests/
     upgrade-refuses-an-unrecognised-layout.maxtest          a flat `maxon` + `stdlib/`: refused, giving the install one-liner
     upgrade-dry-run-names-the-install.maxtest               `<root>/bin/maxon`: names THAT root, never the caller's MAXON_INSTALL, runs nothing
     upgrade-takes-no-arguments.maxtest                      a positional argument and a foreign option are both refused
-    spec-test-refuses-rewrite-drifted-goldens-with-update-required.maxtest   the two golden-writing flags together are refused, naming both
+    spec-test-refuses-a-batch-value-other-than-on-or-off.maxtest   a `--batch=` value other than on or off, and `--rewrite-drifted-goldens`, are refused, naming the option
     reference-documents-every-command.maxtest               docs/CLI_REFERENCE.md has a `###` heading naming `maxon <command>` for every command `help` documents, and spells every option it lists
     reference-documents-only-real-options.maxtest           every `--option` that document shows is listed by `help` or a subcommand's own usage (x64-windows only, as `profile` is)
     build-directory-without-output-names-the-directory.maxtest      `build <dir>` with no `--output=` writes `<dir>/<dirname><ext>`, staged outside the checkout
@@ -425,6 +425,8 @@ tests/
     WarmRebuildHarness.maxon                the shared half: the staging and the spawn
     warm-equals-cold.maxtest                `verify-warm-rebuild` holds on a program whose parses mint instances
     filed-type-reuse.maxtest                a bytes-only edit re-parses one file when a parse files a type
+    a-second-program-reuses-library-parses.maxtest    a second program in one session reuses every library parse and equals its cold compile
+    a-shadowing-program-parses-the-library-cold.maxtest a program shadowing a library type parses the library cold, still equal to cold
     fixtures/<program>/<name>.maxon.fixture stored names only - see rule 1
   mcp/
     McpHarness.maxon                        the shared half: stdio and `--http` sessions, the debug tool readers, and JSON helpers
@@ -614,10 +616,17 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   prints in front of it, which moves with every edit above it. The run must exit non-zero AND print it —
   a fixture that fails for some other reason proves nothing about its refusal.
 - **`gates/<case>/`** holds well-formed specs the harness must accept and then report something about:
-  a live-network case left out of a default run and named, an `alone` case run with nothing beside it, an
-  orphaned golden named by the census, a drifted golden named and counted, a drifted golden that
-  `--rewrite-drifted-goldens` rewrites for a passing case and leaves for a failing one, and the two marker shapes the
-  reference grammar reads. Each fixture's own preamble says what its test asserts.
+  a live-network case left out of a default run and named, an `alone` case run with nothing beside it, a
+  run that writes no `fragments/` directory and speaks of no golden, a `TargetIr` pin that fails its case
+  when it differs and that `--update-required` replaces or adds, plain run cases that batch into programs
+  by type name and keep their own names, the cases that stay out of it, `--batch=off` running every case
+  alone, a crash mid-batch attributed to its own case, a batched case's services finishing before its end
+  marker, a case that passes alone but fails batched reported as a batching gap, a case marked
+  `process: own` running in a program of its own, output outside the case markers failing every case of
+  its program, a case staged below a `.maxonignore`d directory compiling its own files, a shared library
+  parse served to a later program leaving that program's index at its baseline, and the two marker shapes the
+  reference grammar reads.
+  Each fixture's own preamble says what its test asserts.
 - **`corpus.maxtest`** holds the pairing: every fixture directory has its `<case>.maxtest` beside
   it, every test file its fixture, and every refusal fixture exactly one spec and its expectation.
 
@@ -627,26 +636,18 @@ the wrong fixture.
 
 ⛔ **EVERY FIXTURE IS COPIED UNDER THE HOST TEMP AREA BEFORE IT RUNS.** `TreeLock` takes no lock for a
 spec directory with no `stdlib/` above it, so concurrent test files and a developer's own `spec-test`
-never contend, the compiler needs no exemption for these runs, and nothing a run writes — `fragments/`,
-`.spec-tmp/`, `temp/` — lands in `tests/`. `SpecHarness` refuses to stage anywhere a `stdlib/` sits
+never contend, the compiler needs no exemption for these runs, and nothing a run writes — `.spec-tmp/`,
+`temp/` — lands in `tests/`. `SpecHarness` refuses to stage anywhere a `stdlib/` sits
 above, and refuses a fixture holding a subdirectory, so every run starts from the fixture's spec files
 and nothing else.
 
 ⚠ **THE COMPILER'S REPORT TEXT IS SPELLED HERE AS LITERALS.** A test program cannot import compiler
-source, so the verdict line, the result-note entry, the census entry and its headline, and the drift
-summary are written out in `SpecHarness.maxon` and the gate files. A rewording in `GoldenCensus` or
-`SpecTestRunner` fails this corpus, which `spec-test` does not run.
+source, so the verdict line, the result-note entry, the census entry and its headline, and the batch
+summary line are written out in `SpecHarness.maxon` and the gate files. A rewording in `SpecTestRunner`
+or `SpecBatch` fails this corpus, which `spec-test` does not run.
 
-⭐ **EVERY GATE KEEPS ITS CONTROL.** The orphan gate plants a golden its lane CAN compare and requires it
-unnamed, and requires the census headline PRESENT while orphans are planted — otherwise its clean-run
-check for the headline's absence would pass on a reworded headline. The drift gate corrupts TWO goldens,
-so "counted" is distinguishable from "noticed", and leaves a third intact that must not be named.
-
-⚠ **THE ORPHAN GATE PLANTS ON `x64-windows` ON EVERY HOST.** The census covers every lane, not the
-run's, so a fixed lane makes the same planted golden unreadable everywhere.
-
-⚠ **RUN IT AS `maxon test tests/spec-harness --timeout=15000`.** The drift gate runs `spec-test` three
-times, about 4.1 s, which leaves the 5,000 ms default no margin.
+⚠ **RUN IT AS `maxon test tests/spec-harness --timeout=15000`.** A gate that runs `spec-test` twice or
+compiles a batch takes several seconds, which leaves the 5,000 ms default no margin.
 
 ## `ladders/` — the index and the scripts it indexes
 
@@ -1204,7 +1205,7 @@ expectation containing one is built from `FilePath.separator()`.
 
 ## `warm-rebuild/` — a compile that reuses memos emits what a cold one emits, and reuses what it should
 
-Two cases, each over `maxon verify-warm-rebuild <dir>`: the driver compiles one project cold, edits the last file
+Every case runs `maxon verify-warm-rebuild <dir>` over one fixture: the driver compiles one project cold, edits the last file
 the author wrote by bytes alone, compiles the same project warm, and compares what that emits with a cold
 compile of the edited sources. A bytes-only edit rebuilds the signature index and leaves every other file's
 parse reused, so whatever a reused artifact says about the index has to mean the same thing in the rebuilt one.
@@ -1216,6 +1217,14 @@ after the reused artifact, which is where an instance id could be claimed twice.
 `filed/` (`filed-type-reuse.maxtest`) has a generic type whose only instance is an argument-inferred call, so
 the front end files it and settles the index again. The filed type is part of the key every parse memo reads, so
 the case asserts the driver's invalidation property: the edit re-parses the edited file and no other.
+
+The `a-…-reuses-library-parses` cases assert the driver's library-reuse property: in one session, later
+programs are served every library file's parse from the shared store and still emit what a cold compile of
+each emits. The case name says what its fixture's program declares: `library-reuse/` (a second program),
+`own-types/`, `own-type-names/` (type names different from the first's), `iterating/` (an interface),
+`managed-clone/` (nested managed elements cloned) and `batch-shape/` (per-case directories after a primer
+of another shape). `shadowing/` declares its own `Clock`, and its case asserts the library is parsed cold
+instead (`library parsed cold (shadowed)`).
 
 ⚠ **IT EXCEEDS THE 5,000 ms PER-FILE DEADLINE**: the driver compiles the program several times. Run the corpus
 with `--timeout=60000`. It applies rule 1's `.fixture` half only and rule 4 (the child runs in a staging

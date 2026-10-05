@@ -478,7 +478,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: app/specs/fragments/top-level-let/error.file-private-constant-cross-file.test:10:12: Undefined constant 'SECRET'
+error E2004: app/specs/top-level-let/error.file-private-constant-cross-file.maxon:10:12: Undefined constant 'SECRET'
 ```
 
 <!-- test: cross-file-exported-reads-own-private-declared-last -->
@@ -610,5 +610,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/top-level-let/error.runtime-init-trailing-tokens.test:12:22: Expected 'end of global initializer' but got 'zzz'
+error E2010: specs/top-level-let/error.runtime-init-trailing-tokens.maxon:12:22: Expected 'end of global initializer' but got 'zzz'
 ```

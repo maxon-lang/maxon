@@ -63,7 +63,8 @@ nothing, and such a site keeps both guards.
   `cmp value, 0` — the continuation is reached by one unconditional edge carrying `(value, noError)`.
 
 ⚠ A green case here proves nothing on its own — the specialization removes a guard the fast arm never
-takes on these programs. The evidence is the committed fragment (no `[<rec> + 40]` in the two first cases) and
+takes on these programs. The evidence is the emitted code (`--emit-ir`; no `[<rec> + 40]` in the two first cases), which
+nothing in the suite pins, and
 the three CONTROLS below, which fail under sabotage (the stamp applied to every typed array site,
 ignoring `containerElementOwesDrop`): the write control and the substituted-field control exit **101**
 (a leak), the read control exits **0** where 42 is the answer.

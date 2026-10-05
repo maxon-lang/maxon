@@ -17,9 +17,6 @@
 // `build` command path — arg parsing, output-path derivation — is not exercised per test; it is
 // exercised by every real `maxon build`, including the one that builds this compiler.
 //
-// What is here: the committed `.test` goldens (`checkTestFragment`), `--update-required` to
-// regenerate them, and `--filter` to scope a run to one spec or one test.
-//
 // The parallel worker pool lives next door in SpecWorkerPool.maxon. This file does not walk the
 // spec directory itself: `runOneSpec` runs exactly ONE spec, because that is the unit the pool
 // dispatches (one job, one spec, one worker). The pool builds the ordered spec list from
@@ -32,7 +29,7 @@ let SpecFileExtension = ".md"
 // range-check panic message is (`panic at <name>.test:<line>: …`), therefore reads `.test`. The
 // compiler accepts any extension for `build`; every diagnostic path is still
 // normalized to `<fragment>` for a ```maxoncstderr block (`normalizeCompilerOutput`), so this changes
-// no committed fragment. `.src`-directory multi-file staging (below) is unaffected.
+// no expectation. `.src`-directory multi-file staging (below) is unaffected.
 let MaxonFragmentExtension = ".test"
 let TempSubdirName = ".spec-tmp"
 
@@ -63,7 +60,7 @@ let RunWorkingSubdirName = "temp"
 // `build <dir> --output=<dir>` resolves the exe path back onto the source directory, the compile
 // reports success but writes no runnable file, and spawning the directory fails (126). x64-windows
 // escapes it because its `.exe` suffix makes the output land beside the directory rather than on it.
-// The suffix makes the source and the exe SIBLINGS on every host, and it never reaches a golden:
+// The suffix makes the source and the exe SIBLINGS on every host, and it never reaches an expectation:
 // every compiled path is normalized to `<fragment>`.
 let MultiFileSourceDirSuffix = ".src"
 
@@ -80,68 +77,9 @@ let StagedTierRootSuffix = ".tiers"
 
 let CarriageReturn = "\r"
 
-// Committed-fragment layout: `<specDir>/fragments/<target>/<specName>/<testName>.test`.
-//
-// ⚖ **THESE `.test` FILES ARE REFERENCE, NOT A GATE** (user ruling, 2026-08-02: *"the goldens are NOT
-// supposed to be a gate, they are just for reference"*). The emitted Target IR is still compared
-// against the committed golden on every run and every difference is still REPORTED — but the report
-// contributes NOTHING to the failed count and NOTHING to the exit code. `--update-required`
-// regenerates them, and that diff is still the review.
-//
-// ⛔ **A GATE HERE HIDES REAL DEFECTS.** MEASURED: a cross-target red filed as *"10 stale
-// golden mismatches + 9 others"* — where the 9 were nine float programs exiting 1 on x64-linux — sat
-// unread for a day because a wall of `FAIL … codegen changed` around
-// them read as bookkeeping. A suite goes red for a WRONG ANSWER — a wrong exit code, wrong stdout, a
-// failed compile, a leak — and for nothing else, so that a red can only ever mean "something is
-// broken" and never "something moved".
-//
-// ⭐ WHAT THE GOLDEN IS STILL FOR, and why it is still written and still compared. RUNNING the test
-// proves the allocation is CORRECT — a value left in the wrong register computes the wrong answer, and
-// the exit-code assertion catches it. The golden is the only record of whether the code got WORSE: an
-// extra spill, a lost coalesce, a live range needlessly widened all still return the right answer. It
-// also reaches where the run cannot — a test executes ONE path, but the golden pins every block of the
-// function. That makes it the thing you READ when you change codegen, which is exactly what a
-// reference is; what it never was is evidence that anything is broken.
-//
-// Named, not inline, because the layout + the section punctuation below are a format contract
-// shared with spec review.
-//
-// EXPORTED because `GoldenCensus` enumerates the same directory, and the one directory the goldens live
-// in must not be spelled in two files: the census would then go on describing a clean tree about a path
-// nothing writes.
-export let FragmentsSubdir = "fragments"
-
-// The extension a committed golden carries. EXPORTED for `FragmentsSubdir`'s reason and with the same
-// stakes: `GoldenCensus.reportUncomparedGoldens` ENUMERATES the goldens on disk to find the ones no
-// case reads, and it has to recognise the same files this writes. A second spelling there would make
-// the census silent about exactly the file the extension was changed for.
-export let FragmentExtension = ".test"
 let FragmentTestPrefix = "// Test: "
-let FragmentSectionSep = "---"
 
-// The RUNTIME ARGUMENTS the case's program was spawned with (an `<!-- Args: … -->` marker), written
-// only when the spec named some. The spelling and the POSITION — first line after the source's `---`,
-// ahead of `ExitCode:` — are the C# reference's (`FragmentGenerator.BuildFragmentPrelude`), which
-// writes this same line for this same reason; a second spelling of one directive's echo would be this
-// project's signature bug in the one place two compilers' goldens are read side by side.
-let ArgsLabel = "Args: "
-let ExitCodeLabel = "ExitCode: "
-
-// What follows `ExitCode: ` in the fragment of a case that pins no exit code (see `fragmentExitCodeText`).
-let UnpinnedExitCodeLabel = "unpinned"
-let CompilerErrorLabel = "CompilerError:"
-
-// Stand-in for the IR section when the compile RENDERED no Target IR — only reachable
-// if a supposed exitCode test failed to compile (the run then FAILs regardless),
-// so it is a visible signal in the fragment, never the normal path.
-//
-// ⚠ The word is RENDERED, not "written": there is no `<exe>.ir` sidecar on this path any more.
-// `--emit-ir`'s file is the COMMAND LINE's product (`Compiler.compile`); an in-process caller gets
-// the same bytes back as `CompileProduct.irText` and never touches the filesystem for them. The
-// TEXT below is unchanged all the same — it is the only line a reader of a fragment would ever see
-// this by, and MEASURED 2026-08-23 no committed golden in `specs/` contains it, so rewording it
-// would move nothing and cost the one search term anyone who has met it already knows.
-let MissingIrPlaceholder = "// (no Target IR: compile produced no sidecar)\n"
+let ReferenceFragmentExtension = ".maxon"
 
 // The placeholder that replaces a fragment's on-disk path — in captured compiler output AND in
 // the expected text — so what a ```maxoncstderr block compares is the diagnostic, not where the
@@ -187,13 +125,13 @@ let FaultRipSuffixMarker = " at rip=0x"
 // ============================================================================
 //
 // ⭐⭐ **ONE PROCESS IS BOTH ENDS, AND IT IS THIS BINARY.** A capture case (an `<!-- MmTrace -->` or
-// `<!-- LogTrace -->` marker, or either golden) is built with `--debugstream` — the compiler emits the
-// shared-memory ring PRODUCER, see `Compiler/Runtime/DebugStreamRuntime` — and RUN UNDER
+// `<!-- LogTrace -->` marker, or either capture block) is built with `--debugstream` — the compiler
+// emits the shared-memory ring PRODUCER, see `Compiler/Runtime/DebugStreamRuntime` — and RUN UNDER
 // `<this compiler> monitor --filter=<family>`, whose CONSUMER is `Debug/DebugStreamDecoder`: it creates
 // the segment, spawns the binary into it, decodes every event of that family and prints it.
 //
 // ⚠ **THE WIRE FORMAT IS STILL NOT THE COMPILER'S TO CHOOSE.** Both ends read one registry of constants and the
-// committed goldens below were minted through the BOOTSTRAP's decoder, so a byte this side disagrees about
+// committed capture blocks were minted through the BOOTSTRAP's decoder, so a byte this side disagrees about
 // is this side's defect. `tests/debug` is what gates that agreement, by running one traced binary under
 // both monitors and comparing.
 //
@@ -223,7 +161,7 @@ let MonitorTimestampEnd = "] "
 
 // Every decoded event line's payload starts with its family's prefix (`mm_alloc`, `mm_incref`, …;
 // `log_event`, `log_phase_begin`, …). Keeping only these is what makes the normalizer IDEMPOTENT: an
-// already-normalized golden line survives it unchanged, and anything that is not an event of the family —
+// already-normalized block line survives it unchanged, and anything that is not an event of the family —
 // the child's stdout, another family's event, a blank line — is dropped by the same test.
 let MmTraceEventPrefix = "mm_"
 let LogTraceEventPrefix = "log_"
@@ -241,7 +179,7 @@ let LogTraceGtTokenPrefix = "gt=0x"
 
 // The `#<id>` token the normalizer densely renumbers. A run's allocation ids are a monotonic counter over
 // the WHOLE process, so they depend on what the runtime allocated before `main` — pinning them would make
-// the golden a hostage to an unrelated rung.
+// the block a hostage to an unrelated rung.
 let MmTraceAllocIdMark = "#"
 
 // What separates the tokens of a decoded event line. The allocation id is the first token after the `#`,
@@ -252,20 +190,13 @@ let TraceTokenSeparator = " "
 // forwards into the same stream.
 let DebugStreamSummaryPrefix = "[debugstream]"
 
-// A run's raw allocation id, and the dense number the golden carries in its place.
+// A run's raw allocation id, and the dense number the block carries in its place.
 typealias MmAllocId = int(0 to u64.max)
 export typealias MmAllocIdMap = Map with (MmAllocId, MmAllocId)
 
 // The offset for a file whose line numbers ARE the fragment's — every single-file test, where the
 // compiled file IS the fragment. Named because it is a real value in the mapping, not an absence.
 let NoLineOffset = 0 as ElementIndex
-
-// The fragment directory a /specs expectation NAMES — the generic, target-free form, which every
-// ```maxoncstderr block in the corpus is authored with and the only form this runner has to
-// recognize. Nothing reads or writes this directory — see `referenceFragmentPath`. The `/specs`
-// corpus is the acceptance test,
-// so its rendering of a path is a format contract, exactly like the fence names in SpecParser.
-let ReferenceFragmentDir = "specs/fragments"
 
 // --- The cross-compile-and-run path ---
 //
@@ -276,7 +207,7 @@ let ReferenceFragmentDir = "specs/fragments"
 //
 // arm64-linux splits them: an ELF cannot be spawned on macOS (so it NEEDS
 // an external runner) but it goes through the whole register backend (so it DOES emit Target IR and
-// MUST be pinned by a golden). Under one boolean it would silently lose its golden gate. The
+// MUST be pinned by a `TargetIr` block). Under one boolean it would silently lose its pin gate. The
 // two predicates below — `needsExternalRunner` and `emitsTargetIr` — are that split, each derived
 // from the one fact it actually asks about rather than from a list of target names.
 let VendorDirName = "vendor"
@@ -303,7 +234,7 @@ let WasmtimeExitWithCodeSetting = "cli-exit-with-code=y"
 // `orb run -m <machine> <exe>` executes a binary that lives on the MAC's filesystem inside a Linux
 // VM, which mirrors the Mac's tree at IDENTICAL real paths. That mirroring is the whole reason a Linux
 // spec run works from this host with no copying, no image and no cross-mount: the compiler this
-// command builds, the specs it reads and the goldens it writes are all one tree, seen from both sides
+// command builds and the specs it reads are all one tree, seen from both sides
 // at one set of paths (`runSuiteInGuest`).
 //
 // ⚠ UNLIKE WASMTIME, `orb` IS A SYSTEM INSTALL, NOT VENDORED. There is no `vendor/` tree to walk up
@@ -470,6 +401,12 @@ function batchKeyShellVar() returns String
 	return "${BatchKeyShellName}"
 end 'batchKeyShellVar'
 
+let BatchExeShellName = "f"
+
+function batchExeShellVar() returns String
+	return "${BatchExeShellName}"
+end 'batchExeShellVar'
+
 // ⭐ **THE CASE'S `<!-- procs: N -->` COUNT, CARRIED INTO THE BATCH AS THE FIRST ARGUMENT OF EVERY CALL.**
 // The batched lane runs a whole spec's programs inside ONE `wsl` entry, so the per-child environment the
 // host lane builds with `Environment.inheritUpdating` has to be built by the SCRIPT instead — one export
@@ -553,9 +490,8 @@ let ShBackslash = "\\"
 //
 // ⚖ **THIS IS THE GATE, AND IT IS THE WHOLE GATE** (user, 2026-08-02: *"the gate is the spec tests
 // passing"*). A `fail` is an assertion about the PROGRAM that did not hold — a wrong exit code, wrong
-// stdout, a diagnostic that did not match, a compile that should have succeeded and did not. Nothing
-// about a committed golden reaches this union; drift travels beside it as `GoldenDrift`, which is a
-// different question asked of a different artifact and is REPORTED rather than judged.
+// stdout, a diagnostic that did not match, a compile that should have succeeded and did not, or a
+// `TargetIr` pin the compile no longer renders.
 //
 // ⚠ **THE TWO NOT-RUN ARMS ARE DIFFERENT FACTS AND MUST NOT BE FOLDED TOGETHER.** `skipped` is about
 // the TARGET — the compiler has no lowering for the construct, so no binary exists. `notRunHere` is
@@ -576,8 +512,8 @@ export union TestOutcome
 
 	// ⭐⭐ **COMPILED HERE, CANNOT BE EXECUTED HERE** — the case built a perfectly good binary for a
 	// target whose instruction set or loader this machine has no runner for (a Mach-O on Windows). The
-	// COMPILE half of the case was checked in full and its emitted code was compared against the
-	// committed golden; only the execution is missing, so it is neither a pass nor a fail.
+	// COMPILE half of the case was checked in full and its emitted code was compared against its
+	// `TargetIr` pin; only the execution is missing, so it is neither a pass nor a fail.
 	//
 	// ⚠ **IT CARRIES NO REASON, DELIBERATELY.** The reason is a property of the (target, host) PAIR and
 	// is identical for every case in the run — `externalRunnerFor` is the one table that states it. A
@@ -594,7 +530,7 @@ export union TestOutcome
 	end 'isPass'
 
 	// ⚠ Not `isPass()`: a `notRunHere` case compiled cleanly and emitted a full Target-IR module, and
-	// comparing that module against the golden is the only verification such a case gets on this host,
+	// comparing that module against its `TargetIr` pin is the only verification such a case gets on this host,
 	// which is much of what a cross lane is for. A `fail` is excluded because a failing test's IR is
 	// noise, and a `skipped` because nothing was emitted at all.
 	export function pinsEmittedCode() returns bool
@@ -607,88 +543,13 @@ export union TestOutcome
 	end 'pinsEmittedCode'
 end 'TestOutcome'
 
-// ⭐ What this test's committed golden had to say — the SECOND, INDEPENDENT axis, deliberately not an
-// arm of `TestOutcome`.
-//
-// The two answer different questions about different artifacts: `TestOutcome` is *"did the program do
-// what the spec says?"*, this is *"does the committed reference still describe what the compiler
-// emits?"*. Folded into one union they would share a fate, and sharing a fate is precisely what the
-// ruling above forbids — the report has to be able to say `0 failed` and `35 drifted` in the same
-// breath. This file has paid for that conflation once already: `isCrossTarget` answered three
-// different questions with one boolean until arm64-linux split them (see `needsExternalRunner`).
-//
-// ⚠ Only an outcome that PINS EMITTED CODE reaches this axis at all — `pass` and `notRunHere` — and
-// that is by construction rather than by convention: `recordFragmentAndCleanup` skips the golden step
-// entirely when behaviour already failed, because a failing test's IR is noise, and when nothing was
-// emitted. Everything else carries `notPinned`.
-//
-// ⭐⭐ **THE THREE "NO COMPARISON HAPPENED" ANSWERS ARE SEPARATE ARMS.**
-// Folded into one `none` they read as "nothing to report" and are reported as nothing — so a run
-// that MINTS sixteen hundred first-time goldens and a run that COMPARES sixteen hundred committed ones
-// print the identical trailer. Minting is not verification; a golden this host was not allowed to
-// write is not verification either; and only `matched` is. A reader has to be able to tell the three
-// apart, so the type does.
-export union GoldenDrift
-	// This case pins no golden: its verdict was a failure or a target skip, or the target emits no
-	// Target IR at all (wasm32 — see `emitsTargetIr`).
-	notPinned
-
-	// COMPARED against the committed golden, and equal. The only arm that is evidence of anything.
-	matched
-
-	// The committed golden differs from what the compiler just emitted. `detail` is the rendered
-	// difference and the golden's path — carried, not printed here, because the PARENT prints it in
-	// plan order (see `SpecWorkerPool`'s header on why a worker never reports).
-	drifted(detail String)
-
-	// There was no committed golden and this run WROTE one — a new case, or a regeneration under
-	// `--update-required`. NO PRIOR RECORD EXISTED, so nothing was checked.
-	minted
-
-	// There was no committed golden and this run was NOT ALLOWED to write one, because the verdict
-	// that would have validated it never happened here (`notRunHere`). See `recordFragmentAndCleanup`.
-	unrecorded
-
-	// The one predicate that decides the drifted set. Both readers go through it: `tallyResults`
-	// counts what it admits and `reportGoldenDrift` renders what it admits, so the number on the
-	// summary line and the entries in the trailer cannot come to describe two different sets.
-	//
-	// ⚠ The false arms are four different facts and only `matched` is verification; `notPinned`,
-	// `minted` and `unrecorded` each mean no comparison happened. This answers only about drift, and
-	// none of that may be read out of it.
-	export function isDrifted() returns bool
-		return match self 'reference'
-			drifted gives true
-			notPinned or
-				matched or
-				minted or
-				unrecorded gives false
-		end 'reference'
-	end 'isDrifted'
-
-	// Was a committed golden READ against this run's output? Held or not, a comparison happened; the other
-	// three arms are the three ways one did not. A run that compared nothing prints the same `N passed, 0
-	// failed` as one that compared everything, so this is the only number that tells them apart.
-	export function isCompared() returns bool
-		return match self 'reference'
-			matched or
-				drifted gives true
-			notPinned or
-				minted or
-				unrecorded gives false
-		end 'reference'
-	end 'isCompared'
-end 'GoldenDrift'
-
-// One test's verdict and its golden's, tagged with which spec it came from for the report.
 export type SpecTestResult
 	export let specName as String
 	export let testName as String
 	export let outcome as TestOutcome
-	export let golden as GoldenDrift
 
-	export static function create(specName String, testName String, outcome TestOutcome, golden GoldenDrift) returns SpecTestResult
-		return Self{specName: specName, testName: testName, outcome: outcome, golden: golden}
+	export static function create(specName String, testName String, outcome TestOutcome) returns SpecTestResult
+		return Self{specName: specName, testName: testName, outcome: outcome}
 	end 'create'
 end 'SpecTestResult'
 
@@ -732,7 +593,7 @@ end 'ProcessCapture'
 // — but it cannot say WHICH of the several hundred compiles that worker ran was the leaker.
 // ⇒ Per-test attribution for a leak is recovered by re-running the suspect spec under `--filter`,
 // which puts one spec's compiles in one worker.
-enum CompileVerdict
+module enum CompileVerdict
 	// The build ran to completion and wrote its executable.
 	built
 
@@ -757,7 +618,7 @@ end 'CompileVerdict'
 // one: a clean build's is the empty string, which is a real answer and not an absence — the same
 // distinction `DiagnosticSink.requireCaptured` panics to protect, since `""` is exactly what a
 // compile that said nothing legitimately returns.
-type CompileAnswer
+module type CompileAnswer
 	export let verdict as CompileVerdict
 
 	// Byte for byte what `maxon build` would have written to stderr, taken at the ONE sink every
@@ -766,7 +627,7 @@ type CompileAnswer
 	// blocks are compared against. See `compileOneTest`.
 	export let diagnostics as String
 
-	static function create(verdict CompileVerdict, diagnostics String) returns CompileAnswer
+	module static function create(verdict CompileVerdict, diagnostics String) returns CompileAnswer
 		return Self{verdict: verdict, diagnostics: diagnostics}
 	end 'create'
 
@@ -843,8 +704,8 @@ end 'runProcess'
 // measured on carries a whole worker's history of compiles rather than one, so caches and allocator
 // state differ from a one-compile process — compare only runs of this same shape.
 //
-// ⚠ IT IS AN INDICATOR, NOT A GATE. Nothing passes or fails on it, there is no budget, no golden and
-// no verdict, and none may be added — nor does `scale-test` carry such apparatus:
+// ⚠ IT IS AN INDICATOR, NOT A GATE. Nothing passes or fails on it, there is no budget, no expected
+// value and no verdict, and none may be added — nor does `scale-test` carry such apparatus:
 // a verdict over a noisy number teaches people to edit the instrument rather than explain the
 // reading (see AGENTS.md).
 //
@@ -961,28 +822,29 @@ end 'SuiteCpuTally'
 export type SpecRun
 	export let results as SpecTestResultArray
 	export let cpu as SuiteCpuTally
+	export let batch as BatchTally
 
-	export static function create(results SpecTestResultArray, cpu SuiteCpuTally) returns SpecRun
-		return Self{results: results, cpu: cpu}
+	export static function create(results SpecTestResultArray, cpu SuiteCpuTally, batch BatchTally) returns SpecRun
+		return Self{results: results, cpu: cpu, batch: batch}
 	end 'create'
 end 'SpecRun'
 
-// One test's verdict, its golden's, and what its compile cost — the same pairing as `SpecRun`, one
-// level down.
+// One test's verdict, the IR block it minted, and what its compile cost — the same pairing as `SpecRun`,
+// one level down.
 type TestRun
 	export let outcome as TestOutcome
 	export let cpu as CompileCpu
-	export let golden as GoldenDrift
+	export let minted as MintedIr
 
-	static function create(outcome TestOutcome, cpu CompileCpu, golden GoldenDrift) returns TestRun
-		return Self{outcome: outcome, cpu: cpu, golden: golden}
+	static function create(outcome TestOutcome, cpu CompileCpu, minted MintedIr) returns TestRun
+		return Self{outcome: outcome, cpu: cpu, minted: minted}
 	end 'create'
 
 	// A test that never reached a compiler: staging failed, or the output path could not be formed.
 	// Named rather than spelled at each site so "no compile happened" and "the compile reported
-	// nothing" cannot drift into two different tallies. Nothing compiled, so no golden was compared.
+	// nothing" cannot drift into two different tallies. Nothing compiled, so no Target IR was rendered.
 	static function notCompiled(reason String) returns TestRun
-		return Self{outcome: TestOutcome.fail(reason), cpu: CompileCpu.unreported, golden: GoldenDrift.notPinned}
+		return Self{outcome: TestOutcome.fail(reason), cpu: CompileCpu.unreported, minted: MintedIr.none}
 	end 'notCompiled'
 end 'TestRun'
 
@@ -994,31 +856,25 @@ end 'TestRun'
 // the listing order is also the report order.
 //
 // Three passes: compile (and decide every verdict that needs no run), execute every run the spec needs
-// together through this lane's runner (`executeRuns`), then finish each verdict against its golden. The
+// together through this lane's runner (`executeRuns`), then finish each verdict against its pin. The
 // middle pass is what lets the x64-linux lane make one `wsl` entry per spec instead of one per test
-// (`runWslBatch`).
+// (`runWslBatch`). The compile pass builds a spec's batchable run cases into shared programs
+// (`prepareBatch`, `SpecBatch`), and a case that fails batched is compiled and run alone before the
+// verdicts (`withBatchedFailuresDiagnosed`).
 //
 // `prepared` and `observations` hold exactly one entry per selected test in declaration order, a
 // `notRequired` observation included, so the third pass pairs them by index; a length that disagrees
 // panics rather than misattributing a result.
-export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap) returns SpecRun throws CompileError
+export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap) returns SpecRun throws CompileError
 	var results = SpecTestResultArray.create()
 	var cpu = SuiteCpuTally.zero()
 
 	let specPath = specDir.join("{specName}{SpecFileExtension}")
 	let parsed = try parseSpecFile(specPath, effectiveTargetKey: targetToString(effectiveTarget))
-
-	// The worker takes only the SELECTED half: the census of what was left out is the PARENT's to
-	// report, and it is built from the parent's own walk over every spec (`buildPlans`). A worker
-	// printing it would print one spec's worth of it, once per spec, onto a stream that is a wire.
 	let tests = testsThatRun(selectedTests(parsed.tests, specName: specName, filterPatterns: filterPatterns, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, assumeNativeHost: false).selected, runs: runs)
 
 	if tests.count() == 0 'selectsNothing'
-		// A spec every test of which the filter rejected. The pool never dispatches
-		// such a spec — its parent built the same list from the same function — so this is not the
-		// path a pool run takes; returning here keeps the scratch directories below from being made
-		// for a spec that would write nothing into them.
-		return SpecRun.create(results, cpu: cpu)
+		return SpecRun.create(results, cpu: cpu, batch: BatchTally.zero())
 	end 'selectsNothing'
 
 	let tempDir = specTempDirFor(specDir, specName: specName)
@@ -1027,66 +883,241 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 		throw CompileError.directoryNotFound(tempDir)
 	end 'noTempDir'
 
-	// The cwd each test binary will be spawned with — asked here rather than threaded from the parent
-	// because a WORKER is a separate process and derives it itself, exactly as it derives `tempDir`.
-	// NOT created here: it is shared by every spec, so the parent makes it once (`prepareSharedDirs`),
-	// and N workers racing a mkdir on one directory is what that arrangement exists to prevent.
 	let runWorkingDir = specRunWorkingDir()
-
-	// BOTH follow the EFFECTIVE target. The exe suffix must, so the path reconstructed to run matches
-	// what the build's `resolveOutputPath` wrote for the same `--target`.
-	//
-	// ⚠ THE FRAGMENT ROOT MUST TOO, AND IT USED TO BE HOST-KEYED. That was survivable only while the
-	// one cross target wrote no golden at all: `--target=wasm32-wasi` skipped the fragment gate, so
-	// nothing noticed the root it would have written into was the HOST's. arm64-linux writes goldens,
-	// so a host-keyed root would send arm64-linux IR into `fragments/arm64-macos/` and CLOBBER the
-	// host's committed tree — a cross run silently rewriting the goldens of a target it did not build
-	// for. The pool's `prepareSharedDirs` keys the shared root off the same effective target.
 	let exeExtension = executableExtension(effectiveTarget.os)
-	let fragmentDir = fragmentsRootDir(specDir, target: effectiveTarget).join(specName)
-
-	// mkdir -p, but ONLY for a target that has goldens. `recordFragmentAndCleanup` skips the fragment gate
-	// entirely when the target emits no Target IR, so creating the tree under wasm32-wasi would
-	// leave a directory per spec that nothing will ever write a `.test` into — empty scaffolding for
-	// a gate that does not exist. A create failure is not a test gate either way: `checkTestFragment`
-	// swallows the ensuing write error.
-	if emitsTargetIr(effectiveTarget) 'hasGoldens'
-		_ = Directory.create(fragmentDir)
-	end 'hasGoldens'
-
-	// Every capture golden this run would re-mint, collected across the verdict loop and spliced ONCE at
-	// the end. Per-SPEC rather than per-test because the file is read and written whole: N tests re-minting
-	// would otherwise be N read-modify-writes of one file, and the last would win.
-	var reminted = TraceRemintArray.create()
-
+	let specDirName = specDir.filename()
+	let actions = irActionsFor(tests, holdsPins: specHoldsAnyPin(parsed.tests), mode: mode, effectiveTarget: effectiveTarget)
+	let batch = prepareBatch(tests, actions: actions, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, mode: mode, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	var reminted = BlockRemintArray.create()
 	var prepared = PreparedTestArray.create()
 
-	for test in tests 'eachCompile'
-		prepared.push(prepareOneTest(test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, fileMemos: fileMemos))
+	for (iter, test) in tests.withIterator() 'eachCompile'
+		match batch.stepFor(iter.index()) 'batched'
+			found(step) then prepared.push(step)
+			absent then prepared.push(preparedAfterBatching(test, at: iter.index(), refusals: batch.refusals, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: irActionAt(actions, index: iter.index()), effectiveTarget: effectiveTarget, fileMemos: fileMemos))
+		end 'batched'
 	end 'eachCompile'
 
-	let observations = executeRuns(prepared, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+	var firstPass = executeRuns(prepared, batches: batch.batches, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+	let performed = withBatchedFailuresDiagnosed(firstPass, prepared: prepared, programCount: batch.batches.count(), tests: tests, actions: actions, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 
 	for (iter, test) in tests.withIterator() 'eachVerdict'
 		let step = try prepared.get(iter.index()) otherwise panic("runOneSpec: {prepared.count()} prepared tests for {tests.count()} selected — one is pushed per selected test, in one loop")
-		let observation = try observations.get(iter.index()) otherwise panic("runOneSpec: {observations.count()} run observations for {prepared.count()} prepared tests — `executeRuns` answers one per prepared test, including the ones that needed no execution")
-		let run = match step 'phase'
+		let observation = try performed.observations.get(iter.index()) otherwise panic("runOneSpec: {performed.observations.count()} run observations for {prepared.count()} prepared tests — `executeRuns` answers one per prepared test, including the ones that needed no execution")
+		let settled = match step 'phase'
 			finished(done) gives done
-			awaiting(pending) gives finishPendingRun(pending, observation: observation, fragmentDir: fragmentDir, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget)
+			awaiting(pending) gives finishPendingRun(pending, observation: observation, effectiveTarget: effectiveTarget)
 		end 'phase'
 
-		if goldenWrites.remintsTraces() 'collectTraceRemint'
+		let run = batchingGapVerdict(settled, at: iter.index(), failures: performed.batchedFailures)
+
+		releaseStep(step)
+
+		if mode.updateRequired 'collectTraceRemint'
 			collectTraceRemint(reminted, test: test, observation: observation)
 		end 'collectTraceRemint'
 
-		results.push(SpecTestResult.create(specName, testName: test.name, outcome: run.outcome, golden: run.golden))
+		collectTargetIrRemint(reminted, run: run, effectiveTarget: effectiveTarget)
+		results.push(SpecTestResult.create(specName, testName: test.name, outcome: run.outcome))
 		cpu = cpu.adding(run.cpu)
 	end 'eachVerdict'
 
-	spliceTraceGoldens(specPath, parsedText: parsed.text, reminted: reminted)
+	spliceRemintedBlocks(specPath, parsedText: parsed.text, reminted: reminted)
 
-	return SpecRun.create(results, cpu: cpu)
+	for sharedProgram in batch.batches 'eachBatch'
+		discardBuild(sharedProgram.program.writtenFiles, exePath: sharedProgram.program.exePath)
+	end 'eachBatch'
+
+	return SpecRun.create(results, cpu: cpu, batch: performed.tally)
 end 'runOneSpec'
+
+function noteFailedBatched(failed TestRunIndexArray, reasons BatchedFailureMap, pending PendingRun, at ElementIndex, observations RunObservationArray, effectiveTarget Target)
+	if not pending.via.isBatched() 'ranAlone'
+		return
+	end 'ranAlone'
+
+	match finishPendingRun(pending, observation: observationAt(observations, index: at), effectiveTarget: effectiveTarget).outcome 'outcome'
+		fail(reason) then noteBatchedFailure(failed, reasons: reasons, at: at, reason: reason)
+		pass or
+			skipped or
+			notRunHere then return
+	end 'outcome'
+end 'noteFailedBatched'
+
+function noteBatchedFailure(failed TestRunIndexArray, reasons BatchedFailureMap, at ElementIndex, reason String)
+	failed.push(at)
+	reasons.upsert(at, value: reason)
+end 'noteBatchedFailure'
+
+function batchedShare(prepared PreparedTestArray, programCount ElementIndex) returns BatchTally
+	var batched = 0 as TestTally
+	var programs = 0 as TestTally
+
+	for ordinal in 0 upto programCount 'eachProgram'
+		var members = 0 as TestTally
+
+		for step in prepared 'eachStep'
+			match step 'phase'
+				finished then continue
+				awaiting(pending) then members = members + pending.via.countedIn(ordinal)
+			end 'phase'
+		end 'eachStep'
+
+		batched = batched + members
+
+		if members > 0 'stillBatched'
+			programs = programs + 1
+		end 'stillBatched'
+	end 'eachProgram'
+
+	return BatchTally.create(batched, programs: programs, alone: 0)
+end 'batchedShare'
+
+// A batched FAIL is compiled alone only to diagnose it, never to recover it: a solo PASS becomes a FAIL
+// naming the batching gap (`batchingGapVerdict`), and a solo FAIL is the case's verdict.
+function withBatchedFailuresDiagnosed(performed RunsPerformed, prepared PreparedTestArray, programCount ElementIndex, tests SpecTestArray, actions IrActionArray, specName String, specDirName String, tempDir FilePath, exeExtension String, runWorkingDir FilePath, effectiveTarget Target, fileMemos SharedFileMemoMap) returns RunsPerformed
+	var failed = TestRunIndexArray.create()
+	var reasons = BatchedFailureMap.create()
+
+	for (iter, step) in prepared.withIterator() 'eachStep'
+		match step 'phase'
+			finished then continue
+			awaiting(pending) then noteFailedBatched(failed, reasons: reasons, pending: pending, at: iter.index(), observations: performed.observations, effectiveTarget: effectiveTarget)
+		end 'phase'
+	end 'eachStep'
+
+	if failed.isEmpty() 'nothingFailedBatched'
+		return performed
+	end 'nothingFailedBatched'
+
+	var again = PreparedTestArray.create()
+
+	for at in failed 'eachAffected'
+		let test = try tests.get(at) otherwise panic("withBatchedFailuresDiagnosed: test {at} is past the {tests.count()} the spec selected")
+		let step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: irActionAt(actions, index: at), effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		again.push(step)
+		try prepared.set(at, value: step) otherwise panic("withBatchedFailuresDiagnosed: prepared test {at} is past the {prepared.count()} the spec prepared")
+	end 'eachAffected'
+
+	let second = executeRuns(again, batches: PreparedBatchArray.create(), specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+
+	for (iter, at) in failed.withIterator() 'eachRerun'
+		try performed.observations.set(at, value: observationAt(second.observations, index: iter.index())) otherwise panic("withBatchedFailuresDiagnosed: observation {at} is past the {performed.observations.count()} the spec prepared")
+	end 'eachRerun'
+
+	let stayed = batchedShare(prepared, programCount: programCount)
+	let alone = BatchTally.create(0, programs: 0, alone: performed.tally.alone + second.tally.alone)
+	return RunsPerformed.create(performed.observations, tally: stayed.plus(alone), batchedFailures: reasons)
+end 'withBatchedFailuresDiagnosed'
+
+function batchingGapVerdict(run TestRun, at ElementIndex, failures BatchedFailureMap) returns TestRun
+	let reason = try failures.get(at) otherwise return run
+
+	return match run.outcome 'outcome'
+		pass gives TestRun.create(TestOutcome.fail("passes alone but fails batched: {reason}\nThis is a batching gap: the case needs a process of its own (`<!-- process: own -->`) or a SoloReason the batching checks lack. The runner must keep it out of batches."), cpu: run.cpu, minted: run.minted)
+		fail or
+			skipped or
+			notRunHere gives run
+	end 'outcome'
+end 'batchingGapVerdict'
+
+export type SpecRunMode
+	export let updateRequired as bool
+	export let batchRuns as bool
+
+	export static function create(updateRequired bool, batchRuns bool) returns SpecRunMode
+		return Self{updateRequired: updateRequired, batchRuns: batchRuns}
+	end 'create'
+end 'SpecRunMode'
+
+module union IrAction
+	none
+	compare(expected String)
+	mint(slice TraceSlice)
+
+	module function needsIr() returns bool
+		return match self 'action'
+			none gives false
+			compare or
+				mint gives true
+		end 'action'
+	end 'needsIr'
+end 'IrAction'
+
+typealias IrActionArray = Array with IrAction
+
+union MintedIr
+	none
+	minted(slice TraceSlice, text String)
+end 'MintedIr'
+
+union RunVia
+	alone
+	batched(program ElementIndex, caseIndex ElementIndex)
+
+	function isBatched() returns bool
+		return match self 'via'
+			alone gives false
+			batched gives true
+		end 'via'
+	end 'isBatched'
+
+	function countedIn(program ElementIndex) returns TestTally
+		return match self 'via'
+			alone gives 0
+			batched(owner, _) gives 1 if owner == program else 0
+		end 'via'
+	end 'countedIn'
+
+	function caseIn(program ElementIndex) returns BatchCaseLookup
+		return match self 'via'
+			alone gives BatchCaseLookup.elsewhere
+			batched(owner, caseIndex) gives BatchCaseLookup.found(caseIndex) if owner == program else BatchCaseLookup.elsewhere
+		end 'via'
+	end 'caseIn'
+end 'RunVia'
+
+union BatchCaseLookup
+	found(caseIndex ElementIndex)
+	elsewhere
+end 'BatchCaseLookup'
+
+function specHoldsAnyPin(tests SpecTestArray) returns bool
+	for test in tests 'eachTest'
+		if test.pinsTargetIr 'aPin'
+			return true
+		end 'aPin'
+	end 'eachTest'
+
+	return false
+end 'specHoldsAnyPin'
+
+// An unpinned case is minted a pin only in a spec that already holds one, so `--update-required`
+// over `specs/`, which carries no pins, adds none.
+function irActionFor(test SpecTest, holdsPins bool, mode SpecRunMode, effectiveTarget Target) returns IrAction
+	if not emitsTargetIr(effectiveTarget) 'noTargetIr'
+		return IrAction.none
+	end 'noTargetIr'
+
+	return match test.targetIr 'pin'
+		pinned(text, span) gives IrAction.mint(span) if mode.updateRequired else IrAction.compare(text)
+		unpinned(insertAt) gives IrAction.mint(insertAt) if mode.updateRequired and holdsPins else IrAction.none
+	end 'pin'
+end 'irActionFor'
+
+function irActionsFor(tests SpecTestArray, holdsPins bool, mode SpecRunMode, effectiveTarget Target) returns IrActionArray
+	var actions = IrActionArray.create()
+
+	for test in tests 'eachTest'
+		actions.push(irActionFor(test, holdsPins: holdsPins, mode: mode, effectiveTarget: effectiveTarget))
+	end 'eachTest'
+
+	return actions
+end 'irActionsFor'
+
+function irActionAt(actions IrActionArray, index ElementIndex) returns IrAction
+	return try actions.get(index) otherwise panic("SpecTestRunner: {actions.count()} Target IR action(s) for a spec whose test {index} is being prepared — one is made per selected test")
+end 'irActionAt'
 
 // ⭐ ONE CASE THIS RUN DELIBERATELY DID NOT SELECT, and everything the census needs to name it. A pair
 // rather than a pre-joined `"{spec}/{test}"` label, because the report's entry shape belongs to
@@ -1307,12 +1338,9 @@ function targetCanCaptureTrace(test SpecTest, effectiveTarget Target, assumeNati
 	end 'noProducer'
 
 	// ⚠⚠ **THE SECOND HALF IS A PROPERTY OF THIS HOST, WHICH MAKES IT THE ONE GATE `selectedTests` CARRIES
-	// THAT IS NOT ABOUT THE TREE — and one caller is asking about the tree.** `GoldenCensus.pinnableOn`
-	// asks this door which cases a LANE can ever compare a golden for, and says so: *"a filter is a
-	// property of one command line and this is a property of the tree"*. A golden is dead only if NO host
-	// could compare it, so a lane whose own native host would run the monitor still owns its trace
-	// goldens — and answering `false` here for it would report 22 live references as orphans under a
-	// headline that says to DELETE them.
+	// THAT IS NOT ABOUT THE TREE — and the caller that sets `assumeNativeHost` is asking about the tree.**
+	// A trace block is dead only if NO host could capture it, so a lane whose own native host would run
+	// the monitor still owns its trace blocks.
 	return assumeNativeHost or not needsExternalRunner(effectiveTarget)
 end 'targetCanCaptureTrace'
 
@@ -1368,7 +1396,7 @@ function targetCanCheckSectionPins(test SpecTest, effectiveTarget Target) return
 end 'targetCanCheckSectionPins'
 
 // What the compiler's own stderr says about whether this target could express the case AT ALL.
-union TargetRefusal
+module union TargetRefusal
 	// The compiler said something OTHER than "this target has no implementation for that": an ordinary
 	// diagnostic, a panic, a crash, or nothing at all. Whatever the verdict was, it stands.
 	notRefused
@@ -1405,7 +1433,7 @@ end 'TargetRefusal'
 //     never an exit code: a compiler that leaks exits 101 having printed the very same lines, and
 //     folding that into a skip deletes the leak gate (`CompileVerdict` owns where the leak signal
 //     goes). A `driverFailed` build is refused too: its text is not `Diagnostic.render()` output.
-function targetRefusalIn(compile CompileAnswer) returns TargetRefusal
+module function targetRefusalIn(compile CompileAnswer) returns TargetRefusal
 	let diagnosticsWereReported = match compile.verdict 'v'
 		built or
 			driverFailed gives false
@@ -1484,8 +1512,7 @@ function outcomeOrTargetSkip(outcome TestOutcome, expectation SpecExpectation, c
 	end 'refusal'
 end 'outcomeOrTargetSkip'
 
-// ⭐⭐ **EVERY RESULT IN EXACTLY ONE VERDICT COLUMN**, plus the golden's own count beside them — the two
-// axes a result carries, both read off one walk.
+// ⭐⭐ **EVERY RESULT IN EXACTLY ONE VERDICT COLUMN**, read off one walk.
 //
 // ⛔ **A TEST THAT FALLS OUT OF EVERY COLUMN HAS BEEN DROPPED FROM THE REPORT**, and a type is what makes
 // that checkable: `total()` is computed from the four columns and `SpecVerdictSelfTest` asserts it equals
@@ -1496,19 +1523,8 @@ export type ResultTally
 	export let skipped as TestTally
 	export let notRunHere as TestTally
 
-	// ⭐ **THE SECOND AXIS, AND IT IS DELIBERATELY OUTSIDE `total()`.** A golden's answer is a different
-	// question about a different artifact (`GoldenDrift`), so a drifted case is ALSO counted in whichever
-	// verdict column it earned — a passing case whose reference is stale is one pass and one drift. Adding
-	// it to the total would make the columns disagree with the result count and turn the check below into a
-	// false red.
-	export let drifted as TestTally
-
-	// How many results a committed golden was read against — `drifted` is a subset. Outside `total()` for
-	// `drifted`'s reason.
-	export let compared as TestTally
-
-	export static function create(passed TestTally, failed TestTally, skipped TestTally, notRunHere TestTally, drifted TestTally, compared TestTally) returns ResultTally
-		return Self{passed: passed, failed: failed, skipped: skipped, notRunHere: notRunHere, drifted: drifted, compared: compared}
+	export static function create(passed TestTally, failed TestTally, skipped TestTally, notRunHere TestTally) returns ResultTally
+		return Self{passed: passed, failed: failed, skipped: skipped, notRunHere: notRunHere}
 	end 'create'
 
 	export function total() returns TestTally
@@ -1524,15 +1540,11 @@ export type ResultTally
 	end 'provedNothing'
 end 'ResultTally'
 
-// The one walk. EXPORTED because the reporter prints from it and the self-test asserts on it, and a
-// second count written inside either is a count that can disagree with the one a reader sees.
 export function tallyResults(results SpecTestResultArray) returns ResultTally
 	var passed = 0 as TestTally
 	var failed = 0 as TestTally
 	var skipped = 0 as TestTally
 	var notRunHere = 0 as TestTally
-	var driftedGoldens = 0 as TestTally
-	var comparedGoldens = 0 as TestTally
 
 	for result in results 'each'
 		match result.outcome 'tally'
@@ -1541,108 +1553,10 @@ export function tallyResults(results SpecTestResultArray) returns ResultTally
 			skipped then skipped = skipped + 1
 			notRunHere then notRunHere = notRunHere + 1
 		end 'tally'
-
-		if result.golden.isCompared() 'aReferenceWasRead'
-			comparedGoldens = comparedGoldens + 1
-		end 'aReferenceWasRead'
-
-		if not result.golden.isDrifted() 'referenceStillDescribesIt'
-			continue
-		end 'referenceStillDescribesIt'
-
-		driftedGoldens = driftedGoldens + 1
 	end 'each'
 
-	return ResultTally.create(passed, failed: failed, skipped: skipped, notRunHere: notRunHere, drifted: driftedGoldens, compared: comparedGoldens)
+	return ResultTally.create(passed, failed: failed, skipped: skipped, notRunHere: notRunHere)
 end 'tallyResults'
-
-// The words the golden-drift report is recognised by, carried by both the stdout summary and the
-// stderr trailer. `tests/spec-harness/gates/drifted-golden.maxtest` spells them, and
-// `goldenDriftSummary`'s whole sentence, as literals, so rewording either fails that corpus, which
-// `spec-test` does not run.
-let GoldenDriftHeadline = "DRIFTED from what the compiler emits"
-
-// The summary line's drift clause, beside `N passed, M failed` — the "same breath" `GoldenDrift`'s header
-// asks for, and the one place it is spelled.
-//
-// ⚖ It states the ruling ON THE LINE rather than leaving it to the trailer, because this is the line a
-// reader takes the run's verdict from: a bare `35 drifted` under `0 failed` invites the reading that
-// something is wrong, and nothing is.
-export function goldenDriftSummary(drifted TestTally) returns String
-	return "{drifted} committed golden(s) OF THE CASES THIS RUN COMPARED {GoldenDriftHeadline} — GOLDENS ARE REFERENCE, NOT A GATE: nothing failed on this and the exit code is unaffected (the note on stderr has the differences)"
-end 'goldenDriftSummary'
-
-// ⭐⭐ **THE CENSUS OF REFERENCES THAT HAVE STOPPED DESCRIBING THE COMPILER — the one reader of
-// `GoldenDrift.drifted`, and the only thing in this tree that can see one.**
-//
-// ⛔ **NOTHING ELSE CAN.** The comparison happens on every run and moves no verdict, so a green suite is
-// exactly what a corpus full of stale references looks like; and a `.test` that contradicts the compiler
-// is TRACKED AND UNCHANGED, so `git status` and `git diff` are silent about it too. `GoldenCensus` asks the
-// complementary question — a golden nothing READS — and would report this file as fine, because its case
-// is declared and its lane compares it.
-//
-// ⚠ **THE FAILURE IT CATCHES IS A CASE REPLACED IN PLACE.** Rewrite a case's PROGRAM while its name stays
-// put and the fragment goes on recording the old one; two files in one corpus then make contradictory
-// claims about the same bytes, and every gate in the tree stays green.
-//
-// ⚖ REPORTED, NEVER JUDGED (user, 2026-08-02) — see `FragmentsSubdir`. It touches neither the failed count
-// nor the exit code, and the case it names is still reported as passing.
-//
-// The ENTRY carries the rendered difference `checkTestFragment` already built: the first line at which the
-// two diverge, then the golden's path. A reader who is only told a count learns that something moved and
-// has to go and find it, and a difference nobody reads is how a stale reference gets re-minted unexamined.
-//
-// SILENT at zero — the convention every trailer here follows. STDERR, because stdout is the report and
-// stays byte-identical between worker counts.
-//
-// ⚠ **THE COUNT IS OF WHAT THIS RUN COMPARED, NOT OF THE TREE**, and the headline says so: a `--filter`ed
-// run compares only what it selected, so its number is a lower bound. That is the opposite scoping from
-// `GoldenCensus`, which reads the whole corpus off the spec text and answers identically whatever ran —
-// two notes, same preamble, same indent, and a reader who took them for one scale would be wrong.
-export function reportGoldenDrift(results SpecTestResultArray)
-	let entries = goldenDriftEntries(results)
-
-	// The blank-at-zero guard and the entry loop are `reportResultNote`'s, shared with every other trailer
-	// in this column — see `IndentedReport` for why the several are one shape.
-	let headline = "note: {entries.count()} committed golden(s) OF THE CASES THIS RUN COMPARED {GoldenDriftHeadline}. GOLDENS ARE REFERENCE, NOT A GATE:\n{ResultNoteIndent}nothing failed on this and the exit code is unaffected. A filtered run compares only what it selected, so this is\n{ResultNoteIndent}a lower bound. Each entry is the FIRST line at which the committed reference and this run's emitted code\n{ResultNoteIndent}diverge, then the file. READ the difference: if the change was intended, re-mint with `{UpdateRequiredFlag}`\n{ResultNoteIndent}plus a `--filter`; if it was not, the reference is telling you what moved.\n"
-	reportResultNote(entries, headline: headline)
-end 'reportGoldenDrift'
-
-// Split from the printing so `SpecVerdictSelfTest` can assert on it. Neither the spec corpus nor
-// `tests/spec-harness` can produce a `notRunHere` result, because both run on the host lane, where
-// every case runs. On a lane this host cannot execute, the golden comparison is the only
-// verification a case gets (`TestOutcome.pinsEmittedCode`), so a walk keyed on `isPass()` would go
-// silent exactly there.
-export function goldenDriftEntries(results SpecTestResultArray) returns StringArray
-	var entries = StringArray.create()
-
-	for result in results 'each'
-		// ⭐ THE SET IS `isDrifted`'s, not a second match of this union's arms — see it for what a second
-		// one costs. `detail` ends at the golden's path with no newline of its own, and `resultNoteEntry`
-		// emits it verbatim: it cannot add one without deciding for `indentedRefusals`, which does.
-		if not result.golden.isDrifted() 'referenceStillDescribesIt'
-			continue
-		end 'referenceStillDescribesIt'
-
-		entries.push(resultNoteEntry(result.specName, testName: result.testName, detail: "{driftDetailOf(result.golden)}\n"))
-	end 'each'
-
-	return entries
-end 'goldenDriftEntries'
-
-// The rendered difference a drifted golden carries. It is reached only through `isDrifted`, which is what
-// makes the four panics honest rather than defensive: any other arm here means the predicate that chose the
-// set and the reader that renders it have come apart, which is the one failure a shared predicate exists to
-// make impossible.
-function driftDetailOf(golden GoldenDrift) returns String
-	return match golden 'reference'
-		drifted(detail) gives detail
-		notPinned panic("driftDetailOf: a golden that pins nothing reached the drift trailer — `isDrifted` admitted it and this cannot render it")
-		matched panic("driftDetailOf: a golden that MATCHED reached the drift trailer — `isDrifted` admitted it and this cannot render it")
-		minted panic("driftDetailOf: a golden this run MINTED reached the drift trailer — `isDrifted` admitted it and this cannot render it")
-		unrecorded panic("driftDetailOf: a golden this run was not allowed to write reached the drift trailer — `isDrifted` admitted it and this cannot render it")
-	end 'reference'
-end 'driftDetailOf'
 
 // The census of everything this run did not run; `targetRefusalIn`'s header says why it may never
 // be silent. It names the count, the target and the constructs, the last straight out of the
@@ -1731,7 +1645,7 @@ export function reportUnrunHere(tally ResultTally, effectiveTarget Target)
 		return
 	end 'everythingRan'
 
-	printError("note: {tally.notRunHere} case(s) COMPILED but NOT RUN on {targetToString(effectiveTarget)} — {unrunnableReasonFor(effectiveTarget)}. Their compiles ran in full, and each was compared against its committed golden WHERE THERE WAS ONE TO COMPARE: a case this host cannot run may not mint or rewrite a reference, so one that has never been pinned on this lane was compared against nothing, and under `{UpdateRequiredFlag}` NOTHING here was compared at all. Any difference that WAS found is in the golden-drift note, never in these counts. The executions are missing either way, so they are NOT PASSED.\n")
+	printError("note: {tally.notRunHere} case(s) COMPILED but NOT RUN on {targetToString(effectiveTarget)} — {unrunnableReasonFor(effectiveTarget)}. Their compiles ran in full, and each was compared against its `TargetIr` pin where it carries one for this lane. The executions are missing either way, so they are NOT PASSED.\n")
 end 'reportUnrunHere'
 
 // The one sentence saying why this host cannot execute this target, read off the one runner table.
@@ -1782,21 +1696,19 @@ end 'indentedRefusals'
 //
 // ⚠ THIS IS NOT `not emitsTargetIr`, AND CONFLATING THE TWO IS THE BUG THIS RUNG FIXES. arm64-linux
 // answers TRUE here and TRUE there: it cannot be spawned on macOS, and it is fully pinned by a
-// golden. See `buildRunCommand` for which runner each answer routes to.
+// `TargetIr` pin. See `buildRunCommand` for which runner each answer routes to.
 function needsExternalRunner(target Target) returns bool
 	let host = detectHostTarget()
 	return target.cpu != host.cpu or target.os != host.os
 end 'needsExternalRunner'
 
 // Keyed on the CPU, because that is the fact: a register backend lowers Std IR into the Target
-// dialect, and `--emit-ir` writes that dialect out as the `.ir` sidecar the `.test` fragments gate.
+// dialect, and `--emit-ir` writes that dialect out as the `.ir` sidecar a `TargetIr` pin is minted from.
 // wasm32 has no register file (`RegBits.registerFileFor` panics for it) and its backend consumes
-// the Std module directly, so there is nothing for a golden to hold. Every register backend is
+// the Std module directly, so there is nothing for a pin to hold. Every register backend is
 // true, including the ones that need an external runner.
 //
-// Exported for the same reason `fragmentsRootDir` is: both halves of the pool ask it, in different
-// processes. The parent gates `prepareSharedDirs` on it; the worker gates the `--emit-ir` flag and
-// the fragment write. A second copy in either is a copy that can disagree.
+// Exported because the parser asks it too, to refuse a `TargetIr` pin naming a lane that renders none.
 export function emitsTargetIr(target Target) returns bool
 	return match target.cpu 'cpu'
 		x64 or
@@ -1918,21 +1830,6 @@ module type FilterPatternTally
 	end 'unmatched'
 end 'FilterPatternTally'
 
-// The committed-fragment root for `target`: `<specDir>/fragments/<target>`
-// (e.g. `specs/fragments/x64-windows`). Each spec's `.test` files hang off a
-// per-spec subdirectory of this root.
-//
-// `target` is the run's EFFECTIVE target, never the host — the goldens belong to the code that was
-// GENERATED, and which machine generated it says nothing about that.
-//
-// Exported for the same reason as `specTempRootDir`: the pool creates this shared parent once,
-// in the parent process, rather than letting N workers race to make it.
-export function fragmentsRootDir(specDir FilePath, target Target) returns FilePath
-	let rel = "{FragmentsSubdir}/{targetToString(target)}"
-	let relPath = try FilePath.from(rel) otherwise panic("SpecTestRunner: fragments path '{rel}' must be a valid relative path")
-	return specDir.join(relPath)
-end 'fragmentsRootDir'
-
 // The `*.md` spec files directly under `specDir`, in directory-listing order —
 // deterministic per host filesystem (String is not Comparable, so there is no
 // portable key to sort on; NTFS returns names in a stable order).
@@ -2006,10 +1903,10 @@ typealias FragmentPathMappingArray = Array with FragmentPathMapping
 // The two shapes differ in exactly one interesting way, and it is the reason this is a type rather
 // than a path:
 //   • SINGLE-file — one `.maxon` file. The compiled file IS the fragment, so its line numbers are
-//     already the golden's.
+//     already the spec's.
 //   • MULTI-file  — a DIRECTORY of files (`// --- file:`), compiled as a project. The compiler
 //     names each file and each file's OWN line numbers, and both must be translated back onto the
-//     merged fragment before anything is compared or committed.
+//     merged fragment before anything is compared.
 type StagedTest
 	// ⭐⭐ **WHAT THE COMPILE IS POINTED AT — a LIST, because the ORDER is part of what a multi-file case
 	// SAYS.** One entry for a single-file test: the fragment. For a multi-file test, one entry
@@ -2052,18 +1949,20 @@ type StagedTest
 	// ⭐⭐ **WHICH `runtime/` THIS TEST COMPILES AGAINST — `stdlibDir`'s twin, and it does the same two
 	// jobs.** It is handed to `Compiler.compileToProduct` as `runtimeDirOverride`, AND it is the root
 	// `normalizeCompilerOutput` rewrites out of a diagnostic raised inside the tier, so a refusal in a
-	// staged runtime file renders a path a golden can carry.
+	// staged runtime file renders a path a `maxoncstderr` block can carry.
 	//
 	// ⚠ **IT IS ALWAYS EXPLICIT AND ALWAYS `stdlibDir`'s SIBLING**, for `stdlibDir`'s reason and one
 	// more of its own: the compiler reaches the tier as the library's sibling, so a pair that disagreed
 	// would compile one case's stdlib against another's runtime.
 	export let runtimeDir as String
 
+	export let specDirName as String
+
 	// What was written, so it can be removed afterwards.
 	export let writtenFiles as FilePathArray
 
-	static function create(buildTargets MaxonSourcePathArray, stdlibDir String, runtimeDir String, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
-		return Self{buildTargets: buildTargets, paths: paths, stdlibDir: stdlibDir, runtimeDir: runtimeDir, writtenFiles: writtenFiles}
+	static function create(buildTargets MaxonSourcePathArray, stdlibDir String, runtimeDir String, specDirName String, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
+		return Self{buildTargets: buildTargets, paths: paths, stdlibDir: stdlibDir, runtimeDir: runtimeDir, specDirName: specDirName, writtenFiles: writtenFiles}
 	end 'create'
 end 'StagedTest'
 
@@ -2107,10 +2006,10 @@ type CompiledTest
 	export let staged as StagedTest
 	export let compile as CompileAnswer
 	export let cpu as CompileCpu
-	export let irText as String
+	export let irText as StatedText
 	export let exePath as FilePath
 
-	static function create(test SpecTest, staged StagedTest, compile CompileAnswer, cpu CompileCpu, irText String, exePath FilePath) returns CompiledTest
+	static function create(test SpecTest, staged StagedTest, compile CompileAnswer, cpu CompileCpu, irText StatedText, exePath FilePath) returns CompiledTest
 		return Self{test: test, staged: staged, compile: compile, cpu: cpu, irText: irText, exePath: exePath}
 	end 'create'
 end 'CompiledTest'
@@ -2126,9 +2025,11 @@ type PendingRun
 	export let expected as SpecExitCode
 	export let stderr as SpecStderr
 	export let stdout as SpecStdout
+	export let action as IrAction
+	export let via as RunVia
 
-	static function create(compiled CompiledTest, expected SpecExitCode, stderr SpecStderr, stdout SpecStdout) returns PendingRun
-		return Self{compiled: compiled, expected: expected, stderr: stderr, stdout: stdout}
+	static function create(compiled CompiledTest, expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, action IrAction, via RunVia) returns PendingRun
+		return Self{compiled: compiled, expected: expected, stderr: stderr, stdout: stdout, action: action, via: via}
 	end 'create'
 end 'PendingRun'
 
@@ -2136,8 +2037,8 @@ end 'PendingRun'
 //
 // A test is `finished` when its verdict never needed the program to run — a `maxoncstderr` case, a
 // compile that failed, a `RequiredData` pin that disagreed with the linked image, a construct this
-// target refused — and those are decided, compared against their golden and cleaned up in the compile
-// pass exactly as they always were. Only `awaiting` survives into the run pass, which is why a spec of
+// target refused — and those are decided, checked against their `TargetIr` pin and cleaned up in the
+// compile pass. Only `awaiting` survives into the run pass, which is why a spec of
 // nothing but diagnostic cases costs no `wsl` entry at all.
 union PreparedTest
 	finished(run TestRun)
@@ -2146,9 +2047,188 @@ end 'PreparedTest'
 
 typealias PreparedTestArray = Array with PreparedTest
 
+union BatchStepLookup
+	found(step PreparedTest)
+	absent
+end 'BatchStepLookup'
+
+type PreparedBatch
+	export let program as BatchProgram
+	export let steps as PreparedTestArray
+
+	static function create(program BatchProgram, steps PreparedTestArray) returns PreparedBatch
+		return Self{program: program, steps: steps}
+	end 'create'
+
+	function stepAt(member ElementIndex) returns PreparedTest
+		return try self.steps.get(member) otherwise panic("PreparedBatch: member {member} has no prepared step — one is made per member")
+	end 'stepAt'
+end 'PreparedBatch'
+
+typealias PreparedBatchArray = Array with PreparedBatch
+
+type BatchedStepSite
+	export let batch as ElementIndex
+	export let member as ElementIndex
+
+	static function create(batch ElementIndex, member ElementIndex) returns BatchedStepSite
+		return Self{batch: batch, member: member}
+	end 'create'
+end 'BatchedStepSite'
+
+typealias BatchedStepSiteMap = Map with (ElementIndex, BatchedStepSite)
+
+type BatchPreparation
+	export let batches as PreparedBatchArray
+	export let refusals as BatchRefusalMap
+	let sites as BatchedStepSiteMap
+
+	static function create(batches PreparedBatchArray, refusals BatchRefusalMap) returns BatchPreparation
+		var sites = BatchedStepSiteMap.create()
+
+		for (batchIter, batch) in batches.withIterator() 'eachBatch'
+			for (memberIter, member) in batch.program.members.withIterator() 'eachMember'
+				try sites.insert(member.testIndex, value: BatchedStepSite.create(batchIter.index(), member: memberIter.index())) otherwise panic("BatchPreparation.create: test {member.testIndex} is a member of two batch programs — the partition places each case in one")
+			end 'eachMember'
+		end 'eachBatch'
+
+		return Self{batches: batches, refusals: refusals, sites: sites}
+	end 'create'
+
+	function stepFor(testIndex ElementIndex) returns BatchStepLookup
+		let site = try self.sites.get(testIndex) otherwise return BatchStepLookup.absent
+		let batch = try self.batches.get(site.batch) otherwise panic("BatchPreparation.stepFor: batch {site.batch} is past the {self.batches.count()} its site index was built from")
+		return BatchStepLookup.found(batch.stepAt(site.member))
+	end 'stepFor'
+end 'BatchPreparation'
+
+function batchableMembers(tests SpecTestArray, actions IrActionArray) returns BatchMemberArray
+	var members = BatchMemberArray.create()
+
+	for (iter, test) in tests.withIterator() 'eachTest'
+		match placementOf(test, irAction: irActionAt(actions, index: iter.index())) 'placement'
+			together(shape) then members.push(BatchMember.create(iter.index(), shape: shape))
+			apart then continue
+		end 'placement'
+	end 'eachTest'
+
+	return members
+end 'batchableMembers'
+
+function prepareBatch(tests SpecTestArray, actions IrActionArray, specName String, specDirName String, tempDir FilePath, exeExtension String, mode SpecRunMode, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchPreparation
+	var batches = PreparedBatchArray.create()
+	var refusals = BatchRefusalMap.create()
+
+	if not mode.batchRuns 'batchingOff'
+		return BatchPreparation.create(batches, refusals: refusals)
+	end 'batchingOff'
+
+	let candidates = batchableMembers(tests, actions: actions)
+
+	if candidates.count() < MinBatchedCases 'tooFewToShare'
+		return BatchPreparation.create(batches, refusals: refusals)
+	end 'tooFewToShare'
+
+	let claimed = claimedMembersOf(candidates, tests: tests, specDirName: specDirName, tempDir: tempDir, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+
+	for (iter, group) in partitionedByClaims(claimed).withIterator() 'eachProgram'
+		emitWorkerStep(WorkerStep.compile, label: "{specName}: program {iter.index()} for {group.members.count()} run case(s)")
+
+		// The ordinal is the program's position among the BUILT programs, which `RunVia.batched` indexes
+		// into, so a group that builds nothing must not take one.
+		let outcome = buildBatchDroppingRefused(tempDir, ordinal: batches.count(), tests: tests, members: group.members, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+
+		for (at, diagnostics) in outcome.refusals 'eachRefusal'
+			refusals.upsert(at, value: diagnostics)
+		end 'eachRefusal'
+
+		match outcome.build 'build'
+			notBuilt then continue
+			built(program, ticks) then batches.push(batchedAfter(program, ordinal: batches.count(), tests: tests, specName: specName, specDirName: specDirName, ticks: ticks, effectiveTarget: effectiveTarget))
+		end 'build'
+	end 'eachProgram'
+
+	return BatchPreparation.create(batches, refusals: refusals)
+end 'prepareBatch'
+
+// One front-end pass per candidate, before any program is built: it answers whether the case's
+// initializers run program code, which library names it shadows, and the names it declares and
+// mentions, from which the partition keeps conflicting cases apart. A case it keeps out runs alone.
+function claimedMembersOf(members BatchMemberArray, tests SpecTestArray, specDirName String, tempDir FilePath, effectiveTarget Target, fileMemos SharedFileMemoMap) returns ClaimedMemberArray
+	var kept = ClaimedMemberArray.create()
+
+	for member in members 'eachMember'
+		let test = try tests.get(member.testIndex) otherwise panic("claimedMembersOf: member names test {member.testIndex}, past the {tests.count()} the spec selected")
+
+		match claimedPlacementOf(member, answer: claimAnswerFor(tempDir, test: test, specDirName: specDirName, effectiveTarget: effectiveTarget, fileMemos: fileMemos)) 'placement'
+			together(claimed) then kept.push(claimed)
+			apart then continue
+		end 'placement'
+	end 'eachMember'
+
+	return kept
+end 'claimedMembersOf'
+
+function claimAnswerFor(tempDir FilePath, test SpecTest, specDirName String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns ClaimAnswer
+	match stageTest(tempDir, test: test, specDirName: specDirName) 'staging'
+		failed then return ClaimAnswer.refused
+		staged(case) then return stagedClaimAnswer(case, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	end 'staging'
+end 'claimAnswerFor'
+
+function stagedClaimAnswer(staged StagedTest, effectiveTarget Target, fileMemos SharedFileMemoMap) returns ClaimAnswer
+	let session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: TreeLockHold.none())
+	let claims = try claimsOfSources(staged.buildTargets, target: effectiveTarget, session: session, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir)) otherwise 'refused'
+		deleteWrittenFiles(staged.writtenFiles)
+		return ClaimAnswer.refused
+	end 'refused'
+
+	deleteWrittenFiles(staged.writtenFiles)
+	return ClaimAnswer.answered(claims)
+end 'stagedClaimAnswer'
+
+function batchedAfter(program BatchProgram, ordinal ElementIndex, tests SpecTestArray, specName String, specDirName String, ticks CpuTicks, effectiveTarget Target) returns PreparedBatch
+	return PreparedBatch.create(program, steps: batchSteps(program, ordinal: ordinal, tests: tests, specName: specName, specDirName: specDirName, ticks: ticks, effectiveTarget: effectiveTarget))
+end 'batchedAfter'
+
+function refusedBatchStep(step PreparedTest, diagnostics String) returns PreparedTest
+	return match step 'phase'
+		finished gives step
+		awaiting(pending) gives batchRefusalVerdict(pending, diagnostics: diagnostics)
+	end 'phase'
+end 'refusedBatchStep'
+
+function preparedAfterBatching(test SpecTest, at ElementIndex, refusals BatchRefusalMap, specName String, specDirName String, tempDir FilePath, exeExtension String, action IrAction, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
+	let step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: action, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	let diagnostics = try refusals.get(at) otherwise return step
+	return refusedBatchStep(step, diagnostics: diagnostics)
+end 'preparedAfterBatching'
+
+function batchRefusalVerdict(pending PendingRun, diagnostics String) returns PreparedTest
+	releaseCompiled(pending.compiled, via: pending.via)
+	return PreparedTest.finished(TestRun.create(TestOutcome.fail("compiles alone but the batch program refused it: the batching checks missed this case, and the runner must keep it out of the shared program (a missing placement check or a name the partition does not claim). The batch compile said:\n{diagnostics}"), cpu: pending.compiled.cpu, minted: MintedIr.none))
+end 'batchRefusalVerdict'
+
+function batchSteps(program BatchProgram, ordinal ElementIndex, tests SpecTestArray, specName String, specDirName String, ticks CpuTicks, effectiveTarget Target) returns PreparedTestArray
+	var steps = PreparedTestArray.create()
+	let cases = program.members.count() as CpuTicks
+	let share = try (ticks / cases) otherwise panic("batchSteps: a batch program has at least {MinBatchedCases} members")
+	let remainder = ticks - share * cases
+
+	for (iter, member) in program.members.withIterator() 'eachMember'
+		let test = try tests.get(member.testIndex) otherwise panic("batchSteps: batch member {iter.index()} names test {member.testIndex}, past the {tests.count()} the spec selected")
+		let own = (share + remainder) if iter.index() == 0 else share
+		let staged = StagedTest.create(MaxonSourcePathArray.create(), stdlibDir: program.stdlibDir, runtimeDir: program.runtimeDir, specDirName: specDirName, paths: FragmentPathMappingArray.create(), writtenFiles: FilePathArray.create())
+		let compiled = CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(CompileVerdict.built, diagnostics: ""), cpu: CompileCpu.reported(own), irText: StatedText.unstated, exePath: program.exePath)
+		steps.push(preparedFrom(compiled, specName: specName, action: IrAction.none, effectiveTarget: effectiveTarget, via: RunVia.batched(ordinal, caseIndex: iter.index())))
+	end 'eachMember'
+
+	return steps
+end 'batchSteps'
+
 // Compile one test in this process and take its verdict as far as it can go without running the
 // program.
-function prepareOneTest(test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, goldenWrites GoldenWrites, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
+function prepareOneTest(test SpecTest, specName String, specDirName String, tempDir FilePath, exeExtension String, action IrAction, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
 	let exeBase = tempDir.join(test.name)
 
 	// The driver appends the platform extension to the `outputOverride` value
@@ -2158,16 +2238,16 @@ function prepareOneTest(test SpecTest, specName String, tempDir FilePath, exeExt
 		return PreparedTest.finished(TestRun.notCompiled("could not form output path for {test.name}"))
 	end 'badExePath'
 
-	match stageTest(tempDir, test: test) 'staging'
+	match stageTest(tempDir, test: test, specDirName: specDirName) 'staging'
 		failed(reason) then return PreparedTest.finished(TestRun.notCompiled(reason))
-		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, fragmentDir: fragmentDir, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, action: action, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 	end 'staging'
 end 'prepareOneTest'
 
 // Compile a test whose source is already on disk and decide as much of its verdict as the compiler's
 // answer alone can decide. Split out of `prepareOneTest` only because staging can FAIL, and a union's
 // arms are the honest way to say so — the two functions are one story read top to bottom.
-function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, fragmentDir FilePath, goldenWrites GoldenWrites, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
+function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, action IrAction, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
 	// ⭐⭐ **THE BREADCRUMB, IMMEDIATELY BEFORE THE COMPILE, AND THIS IS THE WHOLE REASON IT EXISTS.**
 	// The compile runs in THIS process, so a compiler panic kills this worker and the parent never
 	// receives a single record for the job. The parent's plan tells it which tests it is owed; only
@@ -2176,9 +2256,17 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 	// `SpecWorkerPool.emitWorkerStep`.
 	emitWorkerStep(WorkerStep.compile, label: testLabel(specName, testName: test.name))
 
-	let compiled = compileOneTest(test, staged: staged, exeBase: exeBase, exePath: exePath, pinnable: emitsTargetIr(effectiveTarget), effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	let compiled = compileOneTest(test, staged: staged, exeBase: exeBase, exePath: exePath, emitIr: rendersTargetIr(test, action: action, effectiveTarget: effectiveTarget), effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 
-	return match preRunVerdict(test, specName: specName, compile: compiled.compile, staged: staged, exePath: exePath, effectiveTarget: effectiveTarget) 'verdict'
+	return preparedFrom(compiled, specName: specName, action: action, effectiveTarget: effectiveTarget, via: RunVia.alone)
+end 'compileStagedTest'
+
+function rendersTargetIr(test SpecTest, action IrAction, effectiveTarget Target) returns bool
+	return action.needsIr() or (not test.runtimeNames.isEmpty() and emitsTargetIr(effectiveTarget))
+end 'rendersTargetIr'
+
+function preparedFrom(compiled CompiledTest, specName String, action IrAction, effectiveTarget Target, via RunVia) returns PreparedTest
+	return match preRunVerdict(compiled.test, specName: specName, compile: compiled.compile, staged: compiled.staged, exePath: compiled.exePath, effectiveTarget: effectiveTarget) 'verdict'
 		// ⭐ THE ONE PLACE A CROSS-TARGET SKIP IS DECIDED, and it is here because here is where the
 		// compiler's answer first exists: `compiled.compile` has just come back, and nothing downstream
 		// re-reads its diagnostics. It wraps the verdict rather than preceding it, because a case whose
@@ -2189,10 +2277,10 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 		// `runPreconditions` yields it only for a compile that BUILT, and `targetRefusalIn` answers
 		// `notRefused` for anything but a compile that REPORTED DIAGNOSTICS. A refusal therefore cannot
 		// be reachable from a test that got as far as being run.
-		settled(outcome) gives PreparedTest.finished(recordFragmentAndCleanup(compiled, outcome: outcomeOrTargetSkip(outcome, expectation: test.expectation, compile: compiled.compile), fragmentDir: fragmentDir, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget))
-		needsExecution(expected, stderr, stdout) gives PreparedTest.awaiting(PendingRun.create(compiled, expected: expected, stderr: stderr, stdout: stdout))
+		settled(outcome) gives settledStep(compiled, outcome: outcomeOrTargetSkip(outcome, expectation: compiled.test.expectation, compile: compiled.compile), action: action, via: via, effectiveTarget: effectiveTarget)
+		needsExecution(expected, stderr, stdout) gives PreparedTest.awaiting(PendingRun.create(compiled, expected: expected, stderr: stderr, stdout: stdout, action: action, via: via))
 	end 'verdict'
-end 'compileStagedTest'
+end 'preparedFrom'
 
 // `chosenByFilter` matches `--filter` against this label, `Main.verdictLine` prints it on every
 // PASS/FAIL line, and a dead worker's breadcrumb names its step with it. A reader retypes a printed
@@ -2217,7 +2305,7 @@ end 'testLabel'
 // `metricsPath` is deliberately not passed: `--metrics`'s TSV existed on this path only so the CPU
 // total could be read back off disk, and `CompileProduct.totalCpuTicks` IS that total — the same
 // number, from the same whole-compile probe, without the file.
-function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exePath FilePath, pinnable bool, effectiveTarget Target, fileMemos SharedFileMemoMap) returns CompiledTest
+function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exePath FilePath, emitIr bool, effectiveTarget Target, fileMemos SharedFileMemoMap) returns CompiledTest
 	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: TreeLockHold.none())
 
 	// The target is stated EXPLICITLY even when it IS the host — the runner says what it is testing
@@ -2228,16 +2316,15 @@ function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exeP
 	// no printer for a name to reach. An `<!-- AsyncTrace -->` case and a capture case each ask for
 	// their producer per CASE, so no other case pays for it and an untraced program is byte-for-byte
 	// what it was.
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exeBase.toString()), emitIr: pinnable, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir), session: session) otherwise (e) 'compileFailed'
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exeBase.toString()), emitIr: emitIr, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir), session: session) otherwise (e) 'compileFailed'
 		reportCompileError(e, sink: session.diagnostics)
-		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), cpu: CompileCpu.unreported, irText: MissingIrPlaceholder, exePath: exePath)
+		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), cpu: CompileCpu.unreported, irText: StatedText.unstated, exePath: exePath)
 	end 'compileFailed'
 
-	// Unrendered IR takes the placeholder: a target that emits no Target IR (`pinnable` false) renders
-	// none, and a fragment is never written for it anyway (`recordFragmentAndCleanup`).
+	// A compile asked for no IR (`emitIr` false), or for a target that renders none, answers unstated.
 	let irText = match product.irText 'ir'
-		notRendered gives MissingIrPlaceholder
-		rendered(text) gives text
+		notRendered gives StatedText.unstated
+		rendered(text) gives StatedText.stated(text)
 	end 'ir'
 
 	return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(CompileVerdict.built, diagnostics: session.diagnostics.text()), cpu: CompileCpu.reported(product.totalCpuTicks), irText: irText, exePath: exePath)
@@ -2249,7 +2336,7 @@ end 'compileOneTest'
 // printed through the sink). Every other arm is a build that never got that far — no `Diagnostic`
 // exists for it and `Main.reportCompileError` prints a sentence of its own instead. The distinction is
 // what `targetRefusalIn` rests on; see `CompileVerdict`.
-function compileVerdictOf(e CompileError) returns CompileVerdict
+module function compileVerdictOf(e CompileError) returns CompileVerdict
 	match e.failure() 'failure'
 		reportedDiagnostics then return CompileVerdict.reportedDiagnostics
 		driverFailed then return CompileVerdict.driverFailed
@@ -2257,101 +2344,83 @@ function compileVerdictOf(e CompileError) returns CompileVerdict
 	end 'failure'
 end 'compileVerdictOf'
 
-// The last step of EVERY test, whichever pass its verdict became final in: record the fragment (or
-// don't), remove what the test wrote, and hand back the run.
-//
-// ONE function because the two callers differ only in WHEN they arrive — a `maxoncstderr` case reaches
-// it in the compile pass, an exit-code case after its program has run — and a second copy is how the
-// golden rule and the cleanup rule would come to differ between two kinds of test.
-//
-// The fragment records the emitted Target IR for REFERENCE (see `FragmentsSubdir`), and the step is
-// skipped in three cases:
-//   (0) the case was SKIPPED — no binary was linked and no IR was emitted, so there is no artifact
-//       to compare and a "golden missing" note would blame the case for the target's gap. It rides
-//       the `pinsEmittedCode` test below, which is exactly the condition;
-//   (1) BEHAVIOUR already FAILED — a failing test's IR is noise, and a note about its golden on top
-//       would bury the real failure;
-//   (2) the target emits NO Target IR (wasm32 alone — see `emitsTargetIr`), so there is nothing
-//       to record; the RUN plus the worker-count byte-identity gate are the whole check for it.
-// ⚠ The second condition is `emitsTargetIr`, NOT "is this the host". A cross target that goes
-// through a register backend — arm64-linux — is pinned exactly like a host build; it was the old
-// single `cross` boolean here that would have silently dropped its golden.
-//
-// ⭐⭐ **THE GATE IS `pinsEmittedCode`, NOT `isPass`, AND THAT DIFFERENCE IS THE WHOLE VALUE OF A LANE
-// THIS HOST CANNOT EXECUTE.** A `notRunHere` case compiled cleanly and emitted a full module; comparing
-// it against the committed golden is the only verification available for it here, and gating on `isPass`
-// threw exactly that away. What `isPass` still decides is the OTHER half — whether a case with no
-// committed golden may MINT one — because that question really is "was this verdict established here":
-//
-// ⚖ **A GOLDEN IS ONLY WORTH THE VERDICT THAT VALIDATED IT.** A `notRunHere` case never ran, so a
-// first golden minted from it
-// would record output nobody checked — and would then be the reference a LATER, genuine run on a real
-// host is compared against, silently blessing whatever it got wrong. That is not hypothetical here:
-// MEASURED on this tree, 810 committed `fragments/arm64-macos/*.test` carry `movImm x1, 4294967295`,
-// the WINDOWS `ExitCode` bound, on a target whose bound is 255 — minted from a Windows host leaking its
-// own bound through the stdlib, by a run that could not execute one of them. So the compare
-// happens and the MINT does not; the refusal is counted and named as `GoldenDrift.unrecorded`, never
-// silent. A `compilerError` case on such a target PASSES here and mints normally, which is the same
-// rule rather than an exception to it: its verdict really was established on this machine.
-function recordFragmentAndCleanup(compiled CompiledTest, outcome TestOutcome, fragmentDir FilePath, goldenWrites GoldenWrites, effectiveTarget Target) returns TestRun
-	if not outcome.pinsEmittedCode() or not emitsTargetIr(effectiveTarget) 'noFragment'
-		cleanup(compiled.staged, exePath: compiled.exePath)
-		return TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.notPinned)
-	end 'noFragment'
+function settledStep(compiled CompiledTest, outcome TestOutcome, action IrAction, via RunVia, effectiveTarget Target) returns PreparedTest
+	let run = settleTargetIr(compiled, outcome: outcome, action: action, effectiveTarget: effectiveTarget)
+	releaseCompiled(compiled, via: via)
+	return PreparedTest.finished(run)
+end 'settledStep'
 
-	let fragment = checkTestFragment(fragmentDir, test: compiled.test, compile: compiled.compile, staged: compiled.staged, irText: compiled.irText, goldenWrites: goldenWrites, mayMint: outcome.isPass())
+// Kept apart from reading the verdict, which must stay a pure query. A batched case's binary is the
+// program's, released once at the end of `runOneSpec`.
+function releaseCompiled(compiled CompiledTest, via RunVia)
+	if via.isBatched() 'sharedBinary'
+		return
+	end 'sharedBinary'
 
-	cleanup(compiled.staged, exePath: compiled.exePath)
+	discardBuild(compiled.staged.writtenFiles, exePath: compiled.exePath)
+end 'releaseCompiled'
 
-	// ⚖ ONLY ONE ARM IS A FAILURE. `compared`, `drifted`, `minted` and `unrecorded` all leave the
-	// behaviour verdict exactly as the assertions left it — the goldens are reference, reported and
-	// never judged. `notWritten` is the odd one out and stays a genuine failure: it is not a verdict
-	// about codegen at all but the harness being unable to write a file it was told to write, which is
-	// the same class as `stageTest`'s own "could not write fragment" and is failed for the same reason.
-	return match fragment 'reference'
-		compared gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.matched)
-		drifted(detail) gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.drifted(detail))
-		minted gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.minted)
-		unrecorded gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.unrecorded)
-		notWritten(reason) gives TestRun.create(TestOutcome.fail(reason), cpu: compiled.cpu, golden: GoldenDrift.notPinned)
-	end 'reference'
-end 'recordFragmentAndCleanup'
+function releaseStep(step PreparedTest)
+	match step 'phase'
+		finished then return
+		awaiting(pending) then releaseCompiled(pending.compiled, via: pending.via)
+	end 'phase'
+end 'releaseStep'
 
-// ============================================================================
-// Debug-stream capture: --update-required
-// ============================================================================
-//
-// ⭐⭐ **RE-MINTING A CAPTURE GOLDEN IS THE ONE THING `--update-required` DOES TO A SPEC FILE.** Every
-// other golden this flag regenerates is a `.test` FRAGMENT beside the suite; a capture block lives in
-// the `.md` itself, because it is an EXPECTATION a spec author reads and reviews rather than a rendering
-// of what the compiler emitted. So the diff IS the review, which is the same argument the fragment
-// goldens' own regeneration rests on.
-//
-// ⚠ **IT RE-MINTS FROM THE RUN THAT JUST HAPPENED, never from a second execution.** The trace being
-// written back is byte-for-byte the one the verdict was computed against, so a minted golden cannot
-// disagree with the run that produced it.
+function settleTargetIr(compiled CompiledTest, outcome TestOutcome, action IrAction, effectiveTarget Target) returns TestRun
+	if not outcome.pinsEmittedCode() 'nothingToPin'
+		return TestRun.create(outcome, cpu: compiled.cpu, minted: MintedIr.none)
+	end 'nothingToPin'
 
-// One golden to rewrite: the lines it replaces, WHICH FAMILY it captures, and the normalized trace
-// to put there. The family rides along because the splice has to write the matching FENCE — a
-// remint that only carried the text would put a `log` trace inside a ```mm-trace block, and the
-// next run would then read it back as the other family's golden and fail with a diff nobody could
-// explain.
-type TraceRemint
+	return match compiled.irText 'ir'
+		unstated gives withoutRenderedIr(compiled, outcome: outcome, action: action)
+		stated(text) gives againstPin(normalizedIr(text), compiled: compiled, outcome: outcome, action: action, effectiveTarget: effectiveTarget)
+	end 'ir'
+end 'settleTargetIr'
+
+function withoutRenderedIr(compiled CompiledTest, outcome TestOutcome, action IrAction) returns TestRun
+	if action.needsIr() 'owedOne'
+		return TestRun.create(TestOutcome.fail("the compile rendered no Target IR for a case that pins or re-mints it"), cpu: compiled.cpu, minted: MintedIr.none)
+	end 'owedOne'
+
+	return TestRun.create(outcome, cpu: compiled.cpu, minted: MintedIr.none)
+end 'withoutRenderedIr'
+
+function againstPin(rendered String, compiled CompiledTest, outcome TestOutcome, action IrAction, effectiveTarget Target) returns TestRun
+	return match action 'action'
+		none gives TestRun.create(outcome, cpu: compiled.cpu, minted: MintedIr.none)
+		compare(expected) gives TestRun.create(targetIrOutcome(outcome, expected: normalizedIr(expected), rendered: rendered, effectiveTarget: effectiveTarget), cpu: compiled.cpu, minted: MintedIr.none)
+		mint(slice) gives TestRun.create(outcome, cpu: compiled.cpu, minted: MintedIr.minted(slice, text: rendered))
+	end 'action'
+end 'againstPin'
+
+function targetIrOutcome(outcome TestOutcome, expected String, rendered String, effectiveTarget Target) returns TestOutcome
+	if expected == rendered 'pinHolds'
+		return outcome
+	end 'pinHolds'
+
+	return TestOutcome.fail("the {targetIrFenceFor(effectiveTarget)} pin differs from the Target IR the compiler rendered. First difference:\n{firstDifference(expected, actual: rendered)}\nRead the difference; if the change is intended, re-mint the pin with `{UpdateRequiredFlag} {FilterFlagPrefix}<spec>/`")
+end 'targetIrOutcome'
+
+function normalizedIr(text String) returns String
+	return text.replace(CarriageReturn, with: "").trimEnd(CharacterSet.newlines())
+end 'normalizedIr'
+
+type BlockRemint
 	export let slice as TraceSlice
-	export let family as TraceFamily
-	export let trace as String
+	export let fence as String
+	export let body as String
 
-	static function create(slice TraceSlice, family TraceFamily, trace String) returns TraceRemint
-		return Self{slice: slice, family: family, trace: trace}
+	static function create(slice TraceSlice, fence String, body String) returns BlockRemint
+		return Self{slice: slice, fence: fence, body: body}
 	end 'create'
-end 'TraceRemint'
+end 'BlockRemint'
 
-typealias TraceRemintArray = Array with TraceRemint
+typealias BlockRemintArray = Array with BlockRemint
 
-// Record the golden this capture case would now carry, if it is one and its program actually ran. A case
-// whose run never completed contributes nothing: minting a golden from an execution that failed to happen
-// would write an EMPTY trace over a real one, which is the "instrument that lies" failure one level up.
-function collectTraceRemint(reminted TraceRemintArray, test SpecTest, observation RunObservation)
+// Only a completed run is re-minted: one that never executed would write an empty trace over a real
+// one.
+function collectTraceRemint(reminted BlockRemintArray, test SpecTest, observation RunObservation)
 	if not traceCaptureMode(test) 'notATraceCase'
 		return
 	end 'notATraceCase'
@@ -2359,73 +2428,76 @@ function collectTraceRemint(reminted TraceRemintArray, test SpecTest, observatio
 	let family = traceCaptureFamilyOf(test.traceCapture)
 
 	match observation 'observed'
-		completed(capture) then reminted.push(TraceRemint.create(traceSliceOf(test.traceCapture), family: family, trace: normalizeTrace(capture.stdout, family: family)))
+		completed(capture) then reminted.push(BlockRemint.create(traceSliceOf(test.traceCapture), fence: traceFenceOf(family), body: normalizeTrace(capture.stdout, family: family)))
 		notRequired or
 			failed or
 			notRunnableHere then break 'observed'
 	end 'observed'
 end 'collectTraceRemint'
 
-// Write every collected golden back into the spec file. A no-op when nothing was collected — which is
-// every ordinary `--update-required` run, so a spec with no capture case is never even read.
-function spliceTraceGoldens(specPath FilePath, parsedText String, reminted TraceRemintArray)
+function collectTargetIrRemint(reminted BlockRemintArray, run TestRun, effectiveTarget Target)
+	match run.minted 'minted'
+		none then break 'minted'
+		minted(slice, text) then reminted.push(BlockRemint.create(slice, fence: targetIrFenceFor(effectiveTarget), body: text))
+	end 'minted'
+end 'collectTargetIrRemint'
+
+// Once per spec, after every verdict: the file is read and written whole, so a write per block
+// would leave only the last one standing. Every block comes from this run's own compile or
+// execution, never a second one, so a re-minted block cannot disagree with the verdict beside it.
+function spliceRemintedBlocks(specPath FilePath, parsedText String, reminted BlockRemintArray)
 	if reminted.isEmpty() 'nothingToSplice'
 		return
 	end 'nothingToSplice'
 
 	let original = try File.readText(specPath) otherwise 'unreadable'
-		panic("SpecTestRunner: could not re-read {specPath.toString()} to splice {reminted.count()} capture golden(s) into it — the file was parsed moments ago, so it is there and readable")
+		panic("SpecTestRunner: could not re-read {specPath.toString()} to splice {reminted.count()} re-minted block(s) into it — the file was parsed moments ago, so it is there and readable")
 	end 'unreadable'
 
 	if original != parsedText 'changedSinceTheParse'
-		panic("SpecTestRunner: {specPath.toString()} changed between this run's parse of it and the splice of {reminted.count()} re-minted capture golden(s). Every block is written at the line the parse found it on, so writing now would land each one at a line that no longer holds it. Re-run with --update-required once the file stops changing")
+		panic("SpecTestRunner: {specPath.toString()} changed between this run's parse of it and the splice of {reminted.count()} re-minted block(s). Every block is written at the line the parse found it on, so writing now would land each one at a line that no longer holds it. Re-run with {UpdateRequiredFlag} once the file stops changing")
 	end 'changedSinceTheParse'
 
-	// `specLinesOf` leaves a CRLF file's `\r` on every line, so the written block carries it too and
-	// the file keeps one line ending.
-	var lines = specLinesOf(original)
+	let lines = specLinesOf(original)
 	let lineTail = CarriageReturn if original.contains("{CarriageReturn}{LineSeparator}") else ""
 
-	// Bottom-first: a splice changes the line count below it, so splicing upward leaves every
-	// remaining remint's recorded slice where the parse found it.
-	reminted.sort(function(left TraceRemint, right TraceRemint) gives right.slice.blockStart.compare(left.slice.blockStart))
-
-	for remint in reminted 'eachRemint'
-		lines = spliceOneTraceGolden(lines, remint: remint, lineTail: lineTail)
-	end 'eachRemint'
-
-	try File.writeText(specPath, content: joinFrom(lines, first: 0, separator: LineSeparator)) otherwise 'unwritable'
-		panic("SpecTestRunner: could not write the re-minted capture golden(s) back to {specPath.toString()}")
-	end 'unwritable'
-end 'spliceTraceGoldens'
-
-// Replace ONE case's capture block, in the fence its FAMILY names, over the lines the parse
-// recorded (`SpecParser.TraceSlice`). A case with no block recorded an empty slice, so the splice
-// inserts one.
-function spliceOneTraceGolden(lines StringArray, remint TraceRemint, lineTail String) returns StringArray
-	let fence = traceFenceOf(remint.family)
-	let slice = remint.slice
+	reminted.sort(function(left BlockRemint, right BlockRemint) gives right.slice.blockStart.compare(left.slice.blockStart))
 
 	var out = StringArray.create()
+	var copied = 0 as ElementIndex
+	var position = reminted.count()
 
-	for i in 0 upto slice.blockStart 'beforeBlock'
-		out.push(try lines.get(i) otherwise panic("spliceOneTraceGolden: index {i} past {lines.count()} lines"))
-	end 'beforeBlock'
+	while position > 0 'eachRemintTopDown'
+		position = position - 1
+		let remint = try reminted.get(position) otherwise panic("spliceRemintedBlocks: reminted.get OOB at {position} below {reminted.count()}")
 
-	out.push("{fence}{lineTail}")
+		if remint.slice.blockStart < copied 'overlapsTheLastBlock'
+			panic("spliceRemintedBlocks: a re-minted block of {specPath.toString()} starts at line {remint.slice.blockStart}, inside the block before it, which ends at line {copied}")
+		end 'overlapsTheLastBlock'
 
-	for traceLine in specLinesOf(remint.trace) 'eachTraceLine'
-		out.push("{traceLine}{lineTail}")
-	end 'eachTraceLine'
+		copyLines(lines, first: copied, upTo: remint.slice.blockStart, into: out)
+		out.push("{remint.fence}{lineTail}")
 
-	out.push("{FenceDelimiter}{lineTail}")
+		for bodyLine in specLinesOf(remint.body) 'eachBodyLine'
+			out.push("{bodyLine}{lineTail}")
+		end 'eachBodyLine'
 
-	for i in slice.blockEnd upto lines.count() 'afterBlock'
-		out.push(try lines.get(i) otherwise panic("spliceOneTraceGolden: index {i} past {lines.count()} lines"))
-	end 'afterBlock'
+		out.push("{FenceDelimiter}{lineTail}")
+		copied = remint.slice.blockEnd
+	end 'eachRemintTopDown'
 
-	return out
-end 'spliceOneTraceGolden'
+	copyLines(lines, first: copied, upTo: lines.count(), into: out)
+
+	try File.writeText(specPath, content: joinFrom(out, first: 0, separator: LineSeparator)) otherwise 'unwritable'
+		panic("SpecTestRunner: could not write the re-minted block(s) back to {specPath.toString()}")
+	end 'unwritable'
+end 'spliceRemintedBlocks'
+
+function copyLines(lines StringArray, first ElementIndex, upTo ElementIndex, into StringArray)
+	for i in first upto upTo 'eachLine'
+		into.push(try lines.get(i) otherwise panic("copyLines: index {i} past {lines.count()} lines"))
+	end 'eachLine'
+end 'copyLines'
 
 // ============================================================================
 // Debug-stream capture: the mode question, the normalizer, and the verdict
@@ -2434,7 +2506,7 @@ end 'spliceOneTraceGolden'
 // Is this case in capture mode? Asked at the COMPILE (which flag to pass), at the RUN (whether to go
 // through the monitor) and at the target gate. One reading of the three-state field, so the three cannot
 // come to disagree about what "a capture case" is.
-function traceCaptureMode(test SpecTest) returns bool
+module function traceCaptureMode(test SpecTest) returns bool
 	return match test.traceCapture 'mode'
 		off gives false
 		unpinned or
@@ -2444,7 +2516,7 @@ end 'traceCaptureMode'
 
 // ⭐⭐ **NORMALIZE A DECODED TRACE INTO SOMETHING STABLE ACROSS RUNS AND MACHINES — AND IT IS IDEMPOTENT,
 // WHICH IS NOT A NICETY: THE SAME ROUTINE REDUCES BOTH SIDES.** The captured monitor output and the
-// AUTHORED golden go through this one function, so a golden minted from a capture compares equal to the
+// AUTHORED block go through this one function, so a block minted from a capture compares equal to the
 // next capture by construction, and there is no second, subtly different reduction for the expected side
 // to drift into. Three steps, each undoing something that is true of a RUN rather than of the PROGRAM:
 //
@@ -2492,7 +2564,7 @@ function reduceTracePayload(family TraceFamily, payload String, seen MmAllocIdMa
 end 'reduceTracePayload'
 
 // `gt=0x<hex> P<n>` removed from a decoded log line. The monitor prints both on EVERY log event — it is
-// what lets a LIVE reader demux N emitters — and a golden that pinned them would be a hostage to the
+// what lets a LIVE reader demux N emitters — and a block that pinned them would be a hostage to the
 // allocator's layout and to which processor happened to run the event.
 //
 // ⚠ **IT DROPS A TOKEN PAIR AT THE IDENTITY'S POSITION, NOT EVERY `gt=0x` IN THE LINE.** A `log_text`
@@ -2501,7 +2573,7 @@ end 'reduceTracePayload'
 // that is what the decoder's format makes it (`gt=0x{gt:x} P{pId} unit={unitId}`) — matching `P<n>` by
 // shape would also match a message that began with one.
 //
-// ⚠ It is IDEMPOTENT, which the normalizer requires of every step: an already-reduced golden line carries
+// ⚠ It is IDEMPOTENT, which the normalizer requires of every step: an already-reduced block line carries
 // no such token, so nothing is found and the line is rebuilt exactly as it came in.
 function withoutLogIdentity(payload String) returns String
 	var out = ""
@@ -2527,7 +2599,7 @@ function withoutLogIdentity(payload String) returns String
 end 'withoutLogIdentity'
 
 // One line's EVENT PAYLOAD: what follows the monitor's `[+SSSS.mmm] ` prefix and the depth indent, or the
-// bare trimmed line when there is no prefix — an already-normalized golden line, or the child's own stdout,
+// bare trimmed line when there is no prefix — an already-normalized block line, or the child's own stdout,
 // which step 1 above then drops.
 //
 // ⚠ The split rejoins everything past the FIRST separator, so a payload that itself contained `] ` would
@@ -2679,13 +2751,13 @@ function linesWithoutPrefix(text String, prefix String) returns String
 end 'linesWithoutPrefix'
 
 // ⭐ **THE CAPTURE VERDICT.** `off` asserts nothing. `unpinned` is the AUTHORING state — the case is in
-// capture mode with no golden yet — and it FAILS with the trace the run produced, quoted, so the message
+// capture mode with no block yet — and it FAILS with the trace the run produced, quoted, so the message
 // is also the block to paste (or to mint with `--update-required`). `pinned` compares both sides through
 // the one normalizer, under the family the case named.
 function checkTraceCapture(traceCapture SpecTraceCapture, monitorStdout String, monitorStderr String) returns TestOutcome
 	return match traceCapture 'mode'
 		off gives TestOutcome.pass
-		unpinned(family, _) gives TestOutcome.fail(withMonitorStderrText("this case is in capture mode (a `{traceMarkerOf(family)} -->` marker) but carries no {traceFenceOf(family)} golden, so there is nothing to compare its trace against. Run the suite with --update-required to mint one, or paste this:\n{normalizeTrace(monitorStdout, family: family)}", monitorStderr: monitorStderr))
+		unpinned(family, _) gives TestOutcome.fail(withMonitorStderrText("this case is in capture mode (a `{traceMarkerOf(family)} -->` marker) but carries no {traceFenceOf(family)} block, so there is nothing to compare its trace against. Run the suite with --update-required to mint one, or paste this:\n{normalizeTrace(monitorStdout, family: family)}", monitorStderr: monitorStderr))
 		pinned(family, expected, _) gives compareTrace(normalizeTrace(expected, family: family), actual: normalizeTrace(monitorStdout, family: family), family: family, monitorStderr: monitorStderr)
 	end 'mode'
 end 'checkTraceCapture'
@@ -2732,16 +2804,16 @@ end 'withMonitorStderrText'
 // ⚠ It does not consult `outcomeOrTargetSkip`: a test only reaches here through a compile that BUILT,
 // and a target refusal is read off a compile that REPORTED DIAGNOSTICS and printed nothing but E3104s.
 // See `compileStagedTest`'s `settled` arm, which is the only door onto that conversion.
-function finishPendingRun(pending PendingRun, observation RunObservation, fragmentDir FilePath, goldenWrites GoldenWrites, effectiveTarget Target) returns TestRun
+function finishPendingRun(pending PendingRun, observation RunObservation, effectiveTarget Target) returns TestRun
 	let outcome = checkObservedRun(pending.expected, stderr: pending.stderr, stdout: pending.stdout, observation: observation, traceCapture: pending.compiled.test.traceCapture)
-	return recordFragmentAndCleanup(pending.compiled, outcome: outcome, fragmentDir: fragmentDir, goldenWrites: goldenWrites, effectiveTarget: effectiveTarget)
+	return settleTargetIr(pending.compiled, outcome: outcome, action: pending.action, effectiveTarget: effectiveTarget)
 end 'finishPendingRun'
 
 // Write `test`'s source to disk and describe how the compiler's diagnostics map back onto the
 // merged fragment. THE one place a test's source reaches the filesystem.
-function stageTest(tempDir FilePath, test SpecTest) returns StagingResult
+function stageTest(tempDir FilePath, test SpecTest, specDirName String) returns StagingResult
 	if test.isMultiFile() 'multiFile'
-		return stageSourceFiles(tempDir, test: test)
+		return stageSourceFiles(tempDir, test: test, specDirName: specDirName)
 	end 'multiFile'
 
 	// A `// --- stdlib-overlay:` section cannot reach this branch: `SpecParser.splitSourceSections`
@@ -2755,7 +2827,7 @@ function stageTest(tempDir FilePath, test SpecTest) returns StagingResult
 
 	var paths = FragmentPathMappingArray.create()
 
-	// The compiled file IS the fragment (`fragmentSource` wrote the golden's own bytes), so its
+	// The compiled file IS the fragment (`fragmentSource` wrote the case's own bytes), so its
 	// line numbers need no translation.
 	paths.push(FragmentPathMapping.create(fragmentPath.toString(), lineOffset: NoLineOffset, sourceDirPrefix: ""))
 
@@ -2767,13 +2839,13 @@ function stageTest(tempDir FilePath, test SpecTest) returns StagingResult
 
 	let stdlibDir = try locateStdlibDir() otherwise return StagingResult.failed(missingStdlibReason())
 	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return StagingResult.failed(missingRuntimeReason())
-	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: stdlibDir.toString(), runtimeDir: runtimeDir.toString(), paths: paths, writtenFiles: written))
+	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: stdlibDir.toString(), runtimeDir: runtimeDir.toString(), specDirName: specDirName, paths: paths, writtenFiles: written))
 end 'stageTest'
 
 // Why staging stopped when the runtime tier could not be derived. `missingStdlibReason`'s twin, for that
 // function's stated reason: both staging shapes report it and the sentence has to say the same thing in
 // both.
-function missingRuntimeReason() returns String
+module function missingRuntimeReason() returns String
 	return "no runtime source tier beside the located {StdlibDirName}/, so a diagnostic raised inside it could not be rewritten to a portable path"
 end 'missingRuntimeReason'
 
@@ -2795,7 +2867,7 @@ end 'missingRuntimeReason'
 // this test would join the build silently and change what the test MEANS — and "the instrument died
 // on its own leftovers" is a failure this project has already had twice (OPEN.md #6). Whatever this
 // run did not write, this run removes.
-function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
+function stageSourceFiles(tempDir FilePath, test SpecTest, specDirName String) returns StagingResult
 	// `.src`-suffixed so it never equals `exeBase` (`<tempDir>/<name>`) — see MultiFileSourceDirSuffix.
 	let testDir = tempDir.join("{test.name}{MultiFileSourceDirSuffix}")
 
@@ -2837,7 +2909,7 @@ function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 		staged.push(path)
 	end 'eachFile'
 
-	var buildTargets = compilationUnitsAmong(staged)
+	var buildTargets = compilationUnitsAmong(staged, root: testDir)
 
 	// The checkout's own tiers, located exactly as a compile with no override would locate them — and
 	// the SOURCE a case's private copies are made from.
@@ -2852,7 +2924,7 @@ function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
 	// new — the directory is here to fix the project ROOT, not to contribute a unit.
 	buildTargets.push(testDir)
 
-	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, paths: paths, writtenFiles: written))
+	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, specDirName: specDirName, paths: paths, writtenFiles: written))
 end 'stageSourceFiles'
 
 // The tiers a case compiles against: its private copies when it declares either marker, the checkout's
@@ -2887,19 +2959,20 @@ end 'sourceTiersFor'
 // narrowing `buildTargets` to what the walk returns would drop a file the case compiles. A
 // `.maxonignore`d subtree is the one exclusion that holds on every route.
 //
-// The predicate is `Compiler.isIgnoredDirectory`, the walk's own, called rather than re-spelled — so
-// this is not a second copy of the marker rule, it is the same one asked a second time.
+// The marker probe is `Compiler.holdsIgnoreMarker`, the walk's own. The climb stops at the case's
+// staging root (`isIgnoredWithin`): a marker above it belongs to the checkout, and a checkout under
+// a `.maxonignore`d directory such as `temp/` would otherwise exclude every staged file.
 //
 // ⚠ Asked only after every file is on disk — never per file inside the staging loop. A `.maxonignore`
 // declared AFTER the file it excludes would not exist yet, and the case's meaning would depend on the
 // order its sections happen to be written in.
-function compilationUnitsAmong(staged MaxonSourcePathArray) returns MaxonSourcePathArray
+function compilationUnitsAmong(staged MaxonSourcePathArray, root FilePath) returns MaxonSourcePathArray
 	var targets = MaxonSourcePathArray.create()
 
 	for path in staged 'eachStaged'
 		let dir = try path.parent() otherwise panic("SpecTestRunner.compilationUnitsAmong: {path.toString()} has no parent directory, though `stageSourceFiles` created one to write it into")
 
-		if not isIgnoredDirectory(dir) 'inTheProgram'
+		if not isIgnoredWithin(dir, root: root) 'inTheProgram'
 			targets.push(path)
 		end 'inTheProgram'
 	end 'eachStaged'
@@ -2907,12 +2980,26 @@ function compilationUnitsAmong(staged MaxonSourcePathArray) returns MaxonSourceP
 	return targets
 end 'compilationUnitsAmong'
 
+function isIgnoredWithin(dir FilePath, root FilePath) returns bool
+	var current = dir
+
+	while not holdsIgnoreMarker(current) 'towardsTheRoot'
+		if current.equals(root) 'atTheStagingRoot'
+			return false
+		end 'atTheStagingRoot'
+
+		current = try current.parent() otherwise panic("SpecTestRunner.isIgnoredWithin: {dir.toString()} is not below the staging root {root.toString()}")
+	end 'towardsTheRoot'
+
+	return true
+end 'isIgnoredWithin'
+
 // Why staging stopped when the library could not be located. Its own function because both staging
 // shapes report it and the sentence has to say the same thing in both — and because it is worth being
 // explicit that this is a STAGING failure rather than a compile one: the compile would have failed too
 // (`CompileError.stdlibNotFound`), but it would have failed AFTER the runner had already promised it
 // could rewrite what the compiler printed.
-function missingStdlibReason() returns String
+module function missingStdlibReason() returns String
 	return "no {StdlibDirName}/ above this executable, so a diagnostic raised inside the library could not be rewritten to a portable path"
 end 'missingStdlibReason'
 
@@ -3205,169 +3292,8 @@ function isSafeRelativeName(name String) returns bool
 	return true
 end 'isSafeRelativeName'
 
-// What the fragment step concluded. Only ONE of these is a failure — see `recordFragmentAndCleanup`,
-// which is the single place that decides what each means for the test.
-//
-// ⚠ **"COMPARED" AND "WROTE" ARE SEPARATE ANSWERS**, and folding them into one `recorded` is what let a
-// run that verified nothing read exactly like a run that verified everything.
-union FragmentCheck
-	// Compared against a committed golden, and equal.
-	compared
-
-	// The committed golden and the fresh output differ. REFERENCE DRIFT: reported, never failed.
-	drifted(detail String)
-
-	// This run wrote the golden, so NOTHING WAS VERIFIED against it: there was none committed,
-	// `--update-required` asked for a fresh one, or `--rewrite-drifted-goldens` replaced one that
-	// drifted.
-	minted
-
-	// There was no committed golden and this verdict may not write one — see `recordFragmentAndCleanup`
-	// for the rule. Nothing was compared and nothing was written.
-	unrecorded
-
-	// The file could not be written. An IO failure of the harness, not a verdict about codegen.
-	notWritten(reason String)
-end 'FragmentCheck'
-
-// The committed `.test` fragment for one test — its source plus either the generated Target IR
-// (exitCode tests) or the normalized compiler error (compilerError tests) — compared against what
-// the compiler just produced.
-//
-// ⚖ IT IS A REFERENCE, NOT A GATE (see `FragmentsSubdir` for the ruling and for what a gate cost us).
-// Running the test proves the allocation is CORRECT (a value in the wrong register computes the wrong
-// answer and the exit-code assertion fails). It cannot show whether the allocation got WORSE: an extra
-// spill, a lost coalesce, a wider live range all still compute the right answer, and nothing but the
-// recorded IR can see them. So the comparison stays and every difference is REPORTED — it just does
-// not decide anything, because a difference is a change to read, not a claim that something is broken.
-//
-// It also reaches where the run cannot. A test executes ONE path; a function's other blocks are never
-// entered, so a bad allocation in them is invisible to the exit code. The fragment records the WHOLE
-// function, every block, taken or not.
-//
-// `--update-required` regenerates instead of comparing. That is still the door a change enters
-// through, and it is deliberately a door you have to open: the diff is the review.
-//
-// ⭐⭐ **A GOLDEN IS INDEPENDENT OF WHICH OTHER TESTS RAN.** The content compared (or written) here
-// comes from ONE compile of ONE test: `runOneSpec` walks its selected tests one at a time,
-// `stageTest` puts that test's source on disk alone, and one `compileToProduct` compiles it. So
-// `--filter` cannot move a byte of any fragment it does not exclude, and a FILTERED
-// `--update-required` regenerates exactly what an unfiltered one would.
-//
-// ⚠ **THE INVARIANT IS LOAD-BEARING AND NOTHING DEMONSTRATES IT** — every filtered
-// `--update-required` in the tree depends on it, and no caller makes it visible, so it can rot
-// unobserved. Contrast the C# suite, which batches a spec's
-// tests into one module and therefore does NOT have this property.
-//
-// ⚠⚠ **THAT INDEPENDENCE IS A PROPERTY OF THE COMPILER'S PER-COMPILE STATE, NOT OF PROCESS
-// ISOLATION, AND IS WORTH STATING RATHER THAN ASSUMING.** A `build` SUBPROCESS per test would make the
-// claim free — a fresh process shares nothing by construction — but hundreds of compiles run in one
-// worker, so what carries it is that each one builds
-// a fresh `Project` (`Compiler.loadProject`) and every memo, interner and counter the pipeline uses
-// hangs off THAT — nothing in the compile pipeline is module-level mutable state that outlives it.
-// MEASURED 2026-08-23 rather than asserted: `--update-required --filter=<spec>` and
-// `--update-required --filter=<spec>.<one test>` produce BYTE-IDENTICAL goldens for that test, which
-// is exactly the difference between "compiled after 130 other programs" and "compiled first".
-//
-// `mayMint` is the caller's verdict-derived permission to WRITE a first golden — see
-// `recordFragmentAndCleanup`, which is the one place it is decided. It gates every write door,
-// because a regeneration or a drift rewrite writes unvalidated content just as a first mint does.
-function checkTestFragment(fragmentDir FilePath, test SpecTest, compile CompileAnswer, staged StagedTest, irText String, goldenWrites GoldenWrites, mayMint bool) returns FragmentCheck
-	// The fragment records the CODE, so a run expectation contributes only its exit code and
-	// its IR — a pinned ```stderr is an assertion about the RUN, checked there, and adding
-	// it here would move every golden for nothing.
-	let content = match test.expectation 'e'
-		run(expected, _, _, _) gives buildExitCodeFragment(test, expected: expected, irText: irText)
-		compilerError gives buildErrorFragment(test, compile: compile, staged: staged)
-	end 'e'
-
-	let outPath = fragmentDir.join("{test.name}{FragmentExtension}")
-
-	// No committed fragment yet — a NEW test, or a lane that has never seen this case. Record it if
-	// this verdict is allowed to; there is nothing to compare against either way.
-	let committed = try File.readText(outPath) otherwise 'noGolden'
-		return writeFragmentFile(outPath, content: content, what: NewGoldenWord, mayMint: mayMint)
-	end 'noGolden'
-
-	if goldenWrites.regeneratesEveryFragment() 'regenerate'
-		return writeFragmentFile(outPath, content: content, what: UpdatedGoldenWord, mayMint: mayMint)
-	end 'regenerate'
-
-	if committed == content 'unchanged'
-		return FragmentCheck.compared
-	end 'unchanged'
-
-	// `mayMint` is asked here, not left to `writeFragmentFile`: there it would turn a drifted golden
-	// this host could not validate into `unrecorded`, and the drift would go unreported.
-	if mayMint and goldenWrites.rewritesDriftedFragments() 'rewriteDrift'
-		return writeFragmentFile(outPath, content: content, what: UpdatedGoldenWord, mayMint: mayMint)
-	end 'rewriteDrift'
-
-	return FragmentCheck.drifted("{firstDifference(committed, actual: content)}\n    {outPath.toString()}")
-end 'checkTestFragment'
-
-let NewGoldenWord = "new"
-let UpdatedGoldenWord = "updated"
-
-export enum GoldenWrites
-	mintMissing
-	rewriteDrifted
-	updateRequired
-
-	function regeneratesEveryFragment() returns bool
-		return self == Self.updateRequired
-	end 'regeneratesEveryFragment'
-
-	function rewritesDriftedFragments() returns bool
-		return match self 'mode'
-			mintMissing gives false
-			rewriteDrifted or
-				updateRequired gives true
-		end 'mode'
-	end 'rewritesDriftedFragments'
-
-	// Only `updateRequired`: a trace capture lives in the spec `.md` and is a gate, so the drift
-	// rewrite CI runs must never re-splice one.
-	function remintsTraces() returns bool
-		return self == Self.updateRequired
-	end 'remintsTraces'
-
-	export function flag() returns String throws GoldenWritesError
-		match self 'mode'
-			mintMissing then throw GoldenWritesError.defaultHasNoFlag
-			rewriteDrifted then return RewriteDriftedGoldensFlag
-			updateRequired then return UpdateRequiredFlag
-		end 'mode'
-	end 'flag'
-end 'GoldenWrites'
-
-export enum GoldenWritesError implements Error
-	defaultHasNoFlag
-end 'GoldenWritesError'
-
-// Write one golden, turning the IO failure into the arm that says so. Every write site goes through
-// it: they differ only in the word the message uses, and spelling the failure twice is how two
-// could come to disagree about whether it is a failure at all.
-//
-// ⭐ **THE MINT PERMISSION IS CHECKED HERE FOR THAT SAME REASON** — it is a rule about WRITING, and
-// this is the one place a golden is written. A first mint, an `--update-required` regeneration and
-// a drift rewrite are each a fresh reference produced from this run's compile, so each is refused
-// by exactly the verdict that could not validate one (see `recordFragmentAndCleanup`).
-function writeFragmentFile(outPath FilePath, content String, what String, mayMint bool) returns FragmentCheck
-	if not mayMint 'unvalidatedHere'
-		return FragmentCheck.unrecorded
-	end 'unvalidatedHere'
-
-	try File.writeText(outPath, content: content) otherwise 'writeFailed'
-		return FragmentCheck.notWritten("could not write {what} golden fragment {outPath.toString()}")
-	end 'writeFailed'
-
-	return FragmentCheck.minted
-end 'writeFragmentFile'
-
-// The first line at which the committed golden and the freshly generated fragment diverge, rendered
-// for the drift report. A whole-fragment dump would bury the one line that matters under a hundred
-// that did not move.
+// The first line at which a `TargetIr` pin and the Target IR the compiler rendered diverge. A
+// whole-IR dump would bury the one line that matters under a hundred that did not move.
 function firstDifference(committed String, actual String) returns String
 	let oldLines = committed.split("\n")
 	let newLines = actual.split("\n")
@@ -3378,11 +3304,11 @@ function firstDifference(committed String, actual String) returns String
 		let n = try newLines.get(i) otherwise panic("firstDifference: newLines.get OOB at {i}")
 
 		if o != n 'diverged'
-			return "    line {i + 1}:\n      golden: {o}\n      actual: {n}"
+			return "    line {i + 1}:\n      pinned: {o}\n      actual: {n}"
 		end 'diverged'
 	end 'eachLine'
 
-	return "    golden has {oldLines.count()} lines, actual has {newLines.count()} — one is a prefix of the other"
+	return "    the pin has {oldLines.count()} lines, actual has {newLines.count()} — one is a prefix of the other"
 end 'firstDifference'
 
 // The EXACT BYTES of the fragment the compiler is handed: a ONE-LINE `// Test: <name>` header,
@@ -3395,69 +3321,11 @@ end 'firstDifference'
 // line off by one.
 //
 // THE TRAILING NEWLINE IS PART OF THAT CONTRACT, not a detail of the writer. `writeFragment` writes
-// this string and NOTHING ELSE, and the golden's source section is this string and NOTHING ELSE —
-// so the file the compiler compiled and the file the golden shows are the same bytes BY
-// CONSTRUCTION. Settle the newline anywhere but here and the two drift apart the first time a spec
-// ends a fence with a blank line: the golden grows a line the compiler never saw, and a golden that
-// describes a file that was never compiled is a golden nobody can trust to explain a `line:col`.
+// this string and NOTHING ELSE, so the file the compiler compiled is this string BY CONSTRUCTION.
 function fragmentSource(test SpecTest) returns String
 	let text = "{FragmentTestPrefix}{test.name}\n{test.source}"
 	return text if text.endsWith("\n") else "{text}\n"
 end 'fragmentSource'
-
-// The shared fragment head both expectation kinds carry: the compiled fragment's bytes verbatim,
-// the section separator that closes the source block, and — for the cases that name any — the argv
-// the program was run with.
-function fragmentHeader(test SpecTest) returns String
-	return "{fragmentSource(test)}{FragmentSectionSep}\n{fragmentArgsLine(test)}"
-end 'fragmentHeader'
-
-// ⭐ WHAT THE PROGRAM WAS GIVEN — without which a golden of an argv-reading case CANNOT BE READ.
-// `abs.rt-float` and `abs.rt-negative-int` are the same five lines of source emitting the same
-// instructions (their only other difference is the filename inside a panic message), pinned to exit 5
-// and exit 42; EVERYTHING that distinguishes their ANSWERS is the argv, so a fragment omitting it puts
-// a flat contradiction in front of its reader — one program, two exit codes — and offers nothing to
-// resolve it with. `/specs` carries 51 such cases across 12 files.
-//
-// EMPTY for the ordinary case that names no arguments, which is why not one committed golden of a
-// program that reads no argv moves. A bare `Args:` line there would be a claim the spec never made —
-// the argument `fragmentExitCodeText` makes for writing `unpinned` rather than `0`.
-function fragmentArgsLine(test SpecTest) returns String
-	if test.programArgs.isEmpty() 'noArgs'
-		return ""
-	end 'noArgs'
-
-	return "{ArgsLabel}{renderProgramArgs(test.programArgs)}\n"
-end 'fragmentArgsLine'
-
-// An exitCode test's fragment: the shared head, the expected exit code, and the generated Target IR.
-//
-// ⚠ The IR arrives as BYTES rather than as a path to read now, because "now" is too late: the sidecar
-// was read in the pass that compiled it, and by here another test may already own that filename. See
-// `CompiledTest.irText`.
-function buildExitCodeFragment(test SpecTest, expected SpecExitCode, irText String) returns String
-	return "{fragmentHeader(test)}{ExitCodeLabel}{fragmentExitCodeText(expected)}\n{FragmentSectionSep}\n{irText}"
-end 'buildExitCodeFragment'
-
-// What the fragment's `ExitCode:` line says. A PINNED code renders as the number, byte-identically to
-// before `SpecExitCode` existed — every committed golden is a pinned case, so none of them moves. A case
-// that pins only a stream renders `unpinned`, which is the honest word: writing `0` there would put a
-// claim into the golden that the spec never made, and a reviewer diffing the fragment would read it as an
-// assertion.
-function fragmentExitCodeText(expected SpecExitCode) returns String
-	return match expected 'pin'
-		unpinned gives UnpinnedExitCodeLabel
-		pinned(value) gives "{value}"
-	end 'pin'
-end 'fragmentExitCodeText'
-
-// A compilerError test's fragment: the shared head plus the compiler's normalized
-// stderr (the ACTUAL diagnostic the compiler produced — what the fragment exists
-// to track — with every compiled file's path and line rewritten onto the fragment).
-function buildErrorFragment(test SpecTest, compile CompileAnswer, staged StagedTest) returns String
-	let normalizedError = normalizeCompilerOutput(compile.diagnostics, paths: staged.paths, stdlibRoot: staged.stdlibDir, runtimeRoot: staged.runtimeDir).trim()
-	return "{fragmentHeader(test)}{CompilerErrorLabel}\n{normalizedError}\n"
-end 'buildErrorFragment'
 
 // How far a test's verdict can be taken on the compiler's answer alone.
 //
@@ -3480,10 +3348,10 @@ end 'preRunVerdict'
 
 // A ```maxoncstderr test: the compile MUST fail, and its stderr must equal the expected text once
 // BOTH have had the fragment's path replaced by the stable `<fragment>` token — the actual by its
-// scratch path, the expected by the `specs/fragments/<spec>/<test>.test` path the corpus names.
+// scratch path, the expected by the `<spec directory>/<spec>/<test>.maxon` path the corpus names.
 //
 // Normalizing BOTH sides is what lets one corpus carry both spellings: an expectation names
-// `specs/fragments/<spec>/<test>.test`, and a native one names the bare `<fragment>` this runner
+// `<spec directory>/<spec>/<test>.maxon`, and a native one names the bare `<fragment>` this runner
 // prints. Neither is a claim about the language, so neither should decide whether a test passes.
 // Everything that
 // IS a claim — the code, the message, the line, the column — survives normalization untouched and
@@ -3501,7 +3369,7 @@ function checkCompilerError(expectedText String, specName String, testName Strin
 	// for the reason this whole routine is one function: what "normalized" means may not differ by side,
 	// and an expectation naming a host's absolute checkout is a mistake worth normalizing INTO agreement
 	// rather than one worth passing through so it can fail somewhere else.
-	let expected = normalizeCompilerOutput(expectedText, paths: referencePathMapping(specName, testName: testName), stdlibRoot: staged.stdlibDir, runtimeRoot: staged.runtimeDir).trim()
+	let expected = normalizeCompilerOutput(expectedText, paths: referencePathMapping(staged.specDirName, specName: specName, testName: testName), stdlibRoot: staged.stdlibDir, runtimeRoot: staged.runtimeDir).trim()
 
 	if actual == expected 'matched'
 		return TestOutcome.pass
@@ -3555,8 +3423,8 @@ union ExternalRunner
 	// Mach-O here?" — none) correctly, and is then read one level up as an answer to a DIFFERENT
 	// question: "is any of this suite checkable here?". It is not the same question and the
 	// answer is not the same either. A `--target=arm64-macos` run on Windows can COMPILE every case,
-	// decide every `compilerError` case in full, and compare every emitted module against its committed
-	// golden; only the executions are missing. Killing the run at the preflight throws all of that away,
+	// decide every `compilerError` case in full, and compare every emitted module against its `TargetIr`
+	// pin; only the executions are missing. Killing the run at the preflight throws all of that away,
 	// on the one lane that could have caught a wrong answer.
 	//
 	// `reason` is that sentence, delivered per case (as `TestOutcome.notRunHere`) and once in the
@@ -3714,7 +3582,7 @@ function findMonitorPath() returns FilePath
 end 'findMonitorPath'
 
 // `wasmtime run -S cli-exit-with-code=y <module.wasm>` — the exact command the wasm component
-// skeleton was proven under (see the contract golden). No guest argv, no `--dir`/socket preopens:
+// skeleton was proven under. No guest argv, no `--dir`/socket preopens:
 // the scalar slice does no I/O, and one `-S` setting is all the scalar surface needs.
 function buildWasmRunCommand(modulePath FilePath) returns RunCommand
 	var argv = StringArray.create()
@@ -3791,9 +3659,9 @@ end 'buildLinuxVmRunCommand'
 // ⚠ ONE machine serves BOTH Linux targets. `OrbMachineName` is aarch64 with Rosetta enabled, so an
 // x64-linux compiler runs there too; a second machine would be a second answer to "where does Linux
 // run here".
-export function runSuiteInGuest(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, workerCount WorkerCount, workersOverridden bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
+export function runSuiteInGuest(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, workerCount WorkerCount, workersOverridden bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
 	return match guestCompilerFor(harnessExe, effectiveTarget: effectiveTarget) 'compiler'
-		ready(guestExe) gives spawnGuestSuite(guestExe, specDir: specDir, filterPatterns: filterPatterns, goldenWrites: goldenWrites, workerCount: workerCount, workersOverridden: workersOverridden, includeNetwork: includeNetwork)
+		ready(guestExe) gives spawnGuestSuite(guestExe, specDir: specDir, filterPatterns: filterPatterns, mode: mode, workerCount: workerCount, workersOverridden: workersOverridden, includeNetwork: includeNetwork)
 		unavailable(reason) gives reportGuestUnavailable(reason, effectiveTarget: effectiveTarget)
 	end 'compiler'
 end 'runSuiteInGuest'
@@ -3902,13 +3770,13 @@ let GuestCompilerBuildDeadlineMs = 30 * 60 * MillisecondsPerSecond
 // terminal and a failure would arrive only after everything else. `timeoutMs: 0` for the same reason
 // the deadline above is generous — the pool inside the guest carries every bound this run needs, and a
 // second one out here could only pre-empt a report that was about to arrive.
-function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, goldenWrites GoldenWrites, workerCount WorkerCount, workersOverridden bool, includeNetwork bool) returns ExitCode
+function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, workerCount WorkerCount, workersOverridden bool, includeNetwork bool) returns ExitCode
 	let launch = buildLinuxVmRunCommand(guestExe)
 
 	var argv = StringArray.create()
 	argv.append(launch.argv)
 	argv.push(SpecTestCommandName)
-	argv.append(specSelectionArgv(specDir.toString(), filterPatterns: filterPatterns, goldenWrites: goldenWrites, includeNetwork: includeNetwork))
+	argv.append(specSelectionArgv(specDir.toString(), filterPatterns: filterPatterns, mode: mode, includeNetwork: includeNetwork))
 
 	// ⛔ **`--target` IS NEVER FORWARDED.** `detectHostTarget()` is answered at COMPILE time, so the
 	// binary crossing into the guest already reports the guest's own target as its host and takes the
@@ -4004,10 +3872,8 @@ typealias RunObservationArray = Array with RunObservation
 // streams — exactly what the pool does — do not finish in 600 s, while 200 sequential ones take 3.4 s.
 // The problem is CONCURRENCY, and batching per spec would cut the count without cutting that; one
 // entry for the whole suite removes it outright. What makes the move safe is that it changes no
-// expectation: the guest-hosted compiler was run over the whole arm64-linux lane with
-// `--update-required` and rewrote every golden to the same bytes — zero changes in
-// `specs/fragments/` — so the macOS cross-compiler and the Linux-hosted compiler emit identical
-// code and only the machine doing the emitting differs.
+// expectation: the macOS cross-compiler and the Linux-hosted compiler emit identical code, and only
+// the machine doing the emitting differs.
 export union RunStrategy
 	individually
 	wslBatch
@@ -4037,46 +3903,266 @@ end 'runStrategyFor'
 // ⚠ **THE SPEC NAME IS CARRIED IN FOR THE BREADCRUMBS AND FOR NOTHING ELSE.** The pool bounds how long
 // a worker may say NOTHING (`SpecWorkerPool.progressDeadlineMs`), so every step that can block owes it
 // a line first — and a line has to name the case it is about in the reader's own spelling.
-function executeRuns(prepared PreparedTestArray, specName String, tempDir FilePath, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
-	return match runStrategyFor(effectiveTarget) 'strategy'
-		individually gives spawnEachRun(prepared, specName: specName, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
-		wslBatch gives runWslBatch(prepared, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir)
-		noneHere gives unperformedRuns(prepared)
-		inGuest panic("SpecTestRunner: the {targetToString(effectiveTarget)} suite runs inside the {OrbMachineName} machine (see runSuiteInGuest), so nothing is staged on this host to execute — `runStrategyFor` and `Main.runSpecTest` disagree about this target")
-	end 'strategy'
+type Execution
+	export let exePath as FilePath
+	export let key as String
+	export let arguments as ProgramArgArray
+	export let procs as SpecProcs
+	export let preempt as SpecPreempt
+	export let stdin as SpecStdin
+	export let traceCapture as SpecTraceCapture
+	export let label as String
+
+	static function create(exePath FilePath, key String, arguments ProgramArgArray, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, traceCapture SpecTraceCapture, label String) returns Execution
+		return Self{exePath: exePath, key: key, arguments: arguments, procs: procs, preempt: preempt, stdin: stdin, traceCapture: traceCapture, label: label}
+	end 'create'
+end 'Execution'
+
+typealias ExecutionArray = Array with Execution
+
+function caseExecution(pending PendingRun, specName String) returns Execution
+	let test = pending.compiled.test
+	return Execution.create(pending.compiled.exePath, key: pending.compiled.exePath.filename(), arguments: test.programArgs, procs: test.procs, preempt: test.preempt, stdin: test.stdin, traceCapture: test.traceCapture, label: testLabel(specName, testName: test.name))
+end 'caseExecution'
+
+function selectedExecution(program BatchProgram, indices TestRunIndexArray, key String, label String) returns Execution
+	var arguments = ProgramArgArray.create()
+	arguments.push("{testSelectFlag()}{formatTestSelection(indices)}")
+	return Execution.create(program.exePath, key: key, arguments: arguments, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, traceCapture: SpecTraceCapture.off, label: label)
+end 'selectedExecution'
+
+type RunLane
+	export let strategy as RunStrategy
+	export let specName as String
+	export let tempDir as FilePath
+	export let runWorkingDir as FilePath
+	export let effectiveTarget as Target
+
+	static function create(strategy RunStrategy, specName String, tempDir FilePath, runWorkingDir FilePath, effectiveTarget Target) returns RunLane
+		return Self{strategy: strategy, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget}
+	end 'create'
+
+	function perform(executions ExecutionArray) returns RunObservationArray
+		if executions.isEmpty() 'nothingToRun'
+			return RunObservationArray.create()
+		end 'nothingToRun'
+
+		return match self.strategy 'strategy'
+			individually gives spawnEach(executions, runWorkingDir: self.runWorkingDir, effectiveTarget: self.effectiveTarget)
+			wslBatch gives runWslBatch(executions, specName: self.specName, tempDir: self.tempDir, runWorkingDir: self.runWorkingDir)
+			noneHere gives notRunnableHereFor(executions.count())
+			inGuest panic("SpecTestRunner: the {targetToString(self.effectiveTarget)} suite runs inside the {OrbMachineName} machine (see runSuiteInGuest), so nothing is staged on this host to execute — `runStrategyFor` and `Main.runSpecTest` disagree about this target")
+		end 'strategy'
+	end 'perform'
+end 'RunLane'
+
+type SoloRuns
+	export let executions as ExecutionArray
+	export let preparedAt as TestRunIndexArray
+
+	static function create(executions ExecutionArray, preparedAt TestRunIndexArray) returns SoloRuns
+		return Self{executions: executions, preparedAt: preparedAt}
+	end 'create'
+end 'SoloRuns'
+
+function soloRunsOf(prepared PreparedTestArray, specName String) returns SoloRuns
+	var executions = ExecutionArray.create()
+	var preparedAt = TestRunIndexArray.create()
+
+	for (iter, step) in prepared.withIterator() 'eachStep'
+		match step 'phase'
+			finished then continue
+			awaiting(pending) then pushSolo(executions, preparedAt: preparedAt, pending: pending, at: iter.index(), specName: specName)
+		end 'phase'
+	end 'eachStep'
+
+	return SoloRuns.create(executions, preparedAt: preparedAt)
+end 'soloRunsOf'
+
+function pushSolo(executions ExecutionArray, preparedAt TestRunIndexArray, pending PendingRun, at ElementIndex, specName String)
+	if pending.via.isBatched() 'sharesTheBatchBinary'
+		return
+	end 'sharesTheBatchBinary'
+
+	executions.push(caseExecution(pending, specName: specName))
+	preparedAt.push(at)
+end 'pushSolo'
+
+typealias BatchedFailureMap = Map with (ElementIndex, String)
+
+type RunsPerformed
+	export let observations as RunObservationArray
+	export let tally as BatchTally
+	export let batchedFailures as BatchedFailureMap
+
+	static function create(observations RunObservationArray, tally BatchTally, batchedFailures BatchedFailureMap) returns RunsPerformed
+		return Self{observations: observations, tally: tally, batchedFailures: batchedFailures}
+	end 'create'
+end 'RunsPerformed'
+
+function executeRuns(prepared PreparedTestArray, batches PreparedBatchArray, specName String, tempDir FilePath, runWorkingDir FilePath, effectiveTarget Target) returns RunsPerformed
+	let lane = RunLane.create(runStrategyFor(effectiveTarget), specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+	let solo = soloRunsOf(prepared, specName: specName)
+	var firstRound = solo.executions.clone()
+
+	for batch in batches 'eachBatchToStart'
+		let program = batch.program
+		firstRound.push(selectedExecution(program, indices: program.allCases(), key: program.exePath.filename(), label: "{specName}: {program.members.count()} cases in one program"))
+	end 'eachBatchToStart'
+
+	let first = lane.perform(firstRound)
+	var observations = notRequiredFor(prepared)
+	var performed = soloPerformed(first, solo: solo, observations: observations)
+
+	for (iter, batch) in batches.withIterator() 'eachBatchRun'
+		let at = (solo.executions.count() + iter.index()) as ElementIndex
+		performed = performed.plus(batchedPerformed(batch.program, ordinal: iter.index(), prepared: prepared, batchObservation: observationAt(first, index: at), lane: lane, observations: observations))
+	end 'eachBatchRun'
+
+	return RunsPerformed.create(observations, tally: performed, batchedFailures: BatchedFailureMap.create())
 end 'executeRuns'
 
-// One observation per prepared test, saying of each that its execution did not happen here. The SAME
-// walk the two executing lanes make — `finished` still answers `notRequired`, because a test whose
-// verdict was settled at its compile is not waiting on anything and must not be reported as unrun.
-function unperformedRuns(prepared PreparedTestArray) returns RunObservationArray
+function notRequiredFor(prepared PreparedTestArray) returns RunObservationArray
 	var observations = RunObservationArray.create()
 
-	for step in prepared 'eachStep'
-		observations.push(match step 'phase'
-			finished gives RunObservation.notRequired
-			awaiting gives RunObservation.notRunnableHere
-		end 'phase')
+	for _ in prepared 'eachStep'
+		observations.push(RunObservation.notRequired)
 	end 'eachStep'
 
 	return observations
-end 'unperformedRuns'
+end 'notRequiredFor'
+
+function observationAt(observations RunObservationArray, index ElementIndex) returns RunObservation
+	return try observations.get(index) otherwise panic("SpecTestRunner: {observations.count()} observation(s) for a round that asked for observation {index} — a lane answers one per execution")
+end 'observationAt'
+
+function soloPerformed(first RunObservationArray, solo SoloRuns, observations RunObservationArray) returns BatchTally
+	var alone = 0 as TestTally
+
+	for (iter, at) in solo.preparedAt.withIterator() 'eachSolo'
+		let observation = observationAt(first, index: iter.index())
+		try observations.set(at, value: observation) otherwise panic("SpecTestRunner: solo execution {iter.index()} belongs to prepared test {at}, past the {observations.count()} the spec prepared")
+
+		if wasExecuted(observation) 'ranHere'
+			alone = alone + 1
+		end 'ranHere'
+	end 'eachSolo'
+
+	return BatchTally.create(0, programs: 0, alone: alone)
+end 'soloPerformed'
+
+function wasExecuted(observation RunObservation) returns bool
+	return match observation 'observed'
+		completed or
+			failed gives true
+		notRequired or
+			notRunnableHere gives false
+	end 'observed'
+end 'wasExecuted'
+
+function batchedPerformed(program BatchProgram, ordinal ElementIndex, prepared PreparedTestArray, batchObservation RunObservation, lane RunLane, observations RunObservationArray) returns BatchTally
+	if not wasExecuted(batchObservation) 'neverRan'
+		placeBatchedObservations(prepared, ordinal: ordinal, members: notRunnableHereFor(program.members.count()), observations: observations)
+		return BatchTally.zero()
+	end 'neverRan'
+
+	let readings = match batchObservation 'observed'
+		completed(capture) gives readBatch(capture, caseCount: program.members.count(), selects: program.selects)
+		failed or
+			notRequired or
+			notRunnableHere gives unreadBatch(program.members.count(), selects: program.selects)
+	end 'observed'
+
+	var rerunCases = TestRunIndexArray.create()
+
+	for (iter, reading) in readings.withIterator() 'eachReading'
+		if reading.needsRerun() 'rerunsAlone'
+			rerunCases.push(iter.index())
+		end 'rerunsAlone'
+	end 'eachReading'
+
+	let reruns = readAloneRuns(lane.perform(rerunsOf(program, cases: rerunCases, specName: lane.specName)), cases: rerunCases)
+	placeBatchedObservations(prepared, ordinal: ordinal, members: settledMembers(readings, reruns: reruns), observations: observations)
+	return BatchTally.create(program.members.count() as TestTally, programs: 1, alone: 0)
+end 'batchedPerformed'
+
+function notRunnableHereFor(caseCount ElementIndex) returns RunObservationArray
+	var members = RunObservationArray.create()
+
+	for _ in 0 upto caseCount 'eachCase'
+		members.push(RunObservation.notRunnableHere)
+	end 'eachCase'
+
+	return members
+end 'notRunnableHereFor'
+
+function readAloneRuns(reruns RunObservationArray, cases TestRunIndexArray) returns RunObservationArray
+	var read = RunObservationArray.create()
+
+	for (iter, caseIndex) in cases.withIterator() 'eachCase'
+		read.push(readAlone(observationAt(reruns, index: iter.index()), caseIndex: caseIndex))
+	end 'eachCase'
+
+	return read
+end 'readAloneRuns'
+
+function rerunsOf(program BatchProgram, cases TestRunIndexArray, specName String) returns ExecutionArray
+	var executions = ExecutionArray.create()
+
+	for caseIndex in cases 'eachCase'
+		executions.push(selectedExecution(program, indices: soleIndex(caseIndex), key: "{program.exePath.filename()}.{caseIndex}", label: "{specName}: case {caseIndex} of the batch program, alone"))
+	end 'eachCase'
+
+	return executions
+end 'rerunsOf'
+
+function settledMembers(readings BatchReadingArray, reruns RunObservationArray) returns RunObservationArray
+	var members = RunObservationArray.create()
+	var rerunCursor = 0 as ElementIndex
+
+	for reading in readings 'eachReading'
+		match reading 'reading'
+			observed(capture) then members.push(RunObservation.completed(capture))
+			failed(reason) then members.push(RunObservation.failed(reason))
+			unobserved then members.push(observationAt(reruns, index: rerunCursor))
+		end 'reading'
+
+		if reading.needsRerun() 'consumedARerun'
+			rerunCursor = rerunCursor + 1
+		end 'consumedARerun'
+	end 'eachReading'
+
+	return members
+end 'settledMembers'
+
+function placeBatchedObservations(prepared PreparedTestArray, ordinal ElementIndex, members RunObservationArray, observations RunObservationArray)
+	for (iter, step) in prepared.withIterator() 'eachStep'
+		match step 'phase'
+			finished then continue
+			awaiting(pending) then placeBatched(pending, at: iter.index(), ordinal: ordinal, members: members, observations: observations)
+		end 'phase'
+	end 'eachStep'
+end 'placeBatchedObservations'
+
+function placeBatched(pending PendingRun, at ElementIndex, ordinal ElementIndex, members RunObservationArray, observations RunObservationArray)
+	match pending.via.caseIn(ordinal) 'placement'
+		elsewhere then return
+		found(caseIndex) then try observations.set(at, value: observationAt(members, index: caseIndex)) otherwise panic("SpecTestRunner: prepared test {at} is past the {observations.count()} observation(s) the spec prepared")
+	end 'placement'
+end 'placeBatched'
 
 // One spawn per test — the host's own binaries, and the two external runners that are not batched.
-function spawnEachRun(prepared PreparedTestArray, specName String, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
+function spawnEach(executions ExecutionArray, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
 	var observations = RunObservationArray.create()
 
-	for step in prepared 'eachStep'
-		observations.push(match step 'phase'
-			finished gives RunObservation.notRequired
-			awaiting(pending) gives spawnOneRun(pending, specName: specName, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
-		end 'phase')
-	end 'eachStep'
+	for execution in executions 'eachExecution'
+		observations.push(spawnExecution(execution, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget))
+	end 'eachExecution'
 
 	return observations
-end 'spawnEachRun'
+end 'spawnEach'
 
-function spawnOneRun(pending PendingRun, specName String, runWorkingDir FilePath, effectiveTarget Target) returns RunObservation
+function spawnExecution(execution Execution, runWorkingDir FilePath, effectiveTarget Target) returns RunObservation
 	// ⭐ THE BREADCRUMB FOR THIS STEP, IMMEDIATELY BEFORE THE SPAWN, and it is emitted HERE rather than
 	// in the loop above so that the tests that need NO execution emit none: a step line is a claim that
 	// something is about to take time, and a `finished` test takes none.
@@ -4087,22 +4173,22 @@ function spawnOneRun(pending PendingRun, specName String, runWorkingDir FilePath
 	// hang would look like a worker that stopped, and the pool would terminate it and fail every one of
 	// its tests for a failure the runner was about to name test by test. That is the nesting violation
 	// `SpecSpawnTimeoutMs`'s own header warns about, and this line is what keeps it from happening.
-	emitWorkerStep(WorkerStep.run, label: testLabel(specName, testName: pending.compiled.test.name))
+	emitWorkerStep(WorkerStep.run, label: execution.label)
 
 	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned by
 	// the host, so it goes behind the vendored wasmtime instead — what is checked afterwards is
 	// IDENTICAL either way.
-	let runCommand = buildRunCommand(pending.compiled.exePath, effectiveTarget: effectiveTarget, programArgs: pending.compiled.test.programArgs, traceCapture: pending.compiled.test.traceCapture)
+	let runCommand = buildRunCommand(execution.exePath, effectiveTarget: effectiveTarget, programArgs: execution.arguments, traceCapture: execution.traceCapture)
 
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingSubdirName`.
-	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir, environment: runEnvironmentFor(pending.compiled.test.procs, preempt: pending.compiled.test.preempt), standardInput: runStdinFor(pending.compiled.test.stdin)) otherwise (e) 'runSpawnFailed'
+	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir, environment: runEnvironmentFor(execution.procs, preempt: execution.preempt), standardInput: runStdinFor(execution.stdin)) otherwise (e) 'runSpawnFailed'
 		return RunObservation.failed(runFailureReason(e))
 	end 'runSpawnFailed'
 
 	return RunObservation.completed(spawned)
-end 'spawnOneRun'
+end 'spawnExecution'
 
 // A deadline that fired is not a spawn that failed, and calling it one sends the reader to look for a missing
 // executable. The partial output rides along because a killed run leaves no other evidence: its
@@ -4217,7 +4303,7 @@ end 'BatchLaunch'
 // path and WSL translates it, so nothing here maps a Windows path to a guest one and nothing here
 // assumes an automount root. Every binary that spec built is IN that directory, so each execution
 // inherits exactly the working directory a per-test `--cd` would give it.
-function runWslBatch(prepared PreparedTestArray, specName String, tempDir FilePath, runWorkingDir FilePath) returns RunObservationArray
+function runWslBatch(executions ExecutionArray, specName String, tempDir FilePath, runWorkingDir FilePath) returns RunObservationArray
 	let batchSubdir = batchSubdirPath()
 	let batchDir = tempDir.join(batchSubdir)
 
@@ -4225,18 +4311,15 @@ function runWslBatch(prepared PreparedTestArray, specName String, tempDir FilePa
 	// out of it. It names the batch's SIZE rather than a test, and that is not decoration: the pool's
 	// progress bound for this lane is `batchDeadlineMs` of exactly this count, so a report that reads
 	// "terminated while running <spec>: 40 executions" is read against the number that allowed it.
-	emitWorkerStep(WorkerStep.run, label: "{specName}: {pendingRunCount(prepared)} execution(s) in one {WslExecutableName} entry")
+	emitWorkerStep(WorkerStep.run, label: "{specName}: {executions.count()} execution(s) in one {WslExecutableName} entry")
 
-	let launch = launchBatch(prepared, tempDir: tempDir, batchDir: batchDir, runWorkingDir: runWorkingDir)
+	let launch = launchBatch(executions, tempDir: tempDir, batchDir: batchDir, runWorkingDir: runWorkingDir)
 
 	var observations = RunObservationArray.create()
 
-	for step in prepared 'eachStep'
-		observations.push(match step 'phase'
-			finished gives RunObservation.notRequired
-			awaiting(run) gives batchObservationFor(batchKeyFor(run.compiled), batchDir: batchDir, launch: launch)
-		end 'phase')
-	end 'eachStep'
+	for execution in executions 'eachExecution'
+		observations.push(batchObservationFor(execution.key, batchDir: batchDir, launch: launch))
+	end 'eachExecution'
 
 	// The captures have been read into the observations, so what is on disk is spent. Removed for
 	// `cleanup`'s reason and with the same best-effort rule: nothing downstream depends on it, but a
@@ -4246,33 +4329,10 @@ function runWslBatch(prepared PreparedTestArray, specName String, tempDir FilePa
 	return observations
 end 'runWslBatch'
 
-// How many of this spec's tests still need their program run — the batch's size, which is what its
-// deadline is derived from and what decides whether there is anything to enter the guest FOR.
-//
-// ⚠ COUNTED off `prepared` rather than collected into an array of its own, and that is not merely
-// taste: an `Array with PendingRun` obliges the compiler to synthesize `PendingRun.clone`, which
-// obliges `CompiledTest.clone` — which it does not generate for a struct that is nobody's array element
-// (`E9001 Function 'CompiledTest.clone' not found in module`). Reading the one array that already
-// exists copies nothing and needs nothing synthesized.
-function pendingRunCount(prepared PreparedTestArray) returns TestTally
-	var pending = 0 as TestTally
-
-	for step in prepared 'eachStep'
-		match step 'phase'
-			finished then continue
-			awaiting then pending = pending + 1
-		end 'phase'
-	end 'eachStep'
-
-	return pending
-end 'pendingRunCount'
-
 // Write the script and run it. Everything that can go wrong BEFORE the guest starts is one reason,
 // carried to every test the batch was to have run.
-function launchBatch(prepared PreparedTestArray, tempDir FilePath, batchDir FilePath, runWorkingDir FilePath) returns BatchLaunch
-	let executions = pendingRunCount(prepared)
-
-	if executions == 0 'nothingToRun'
+function launchBatch(executions ExecutionArray, tempDir FilePath, batchDir FilePath, runWorkingDir FilePath) returns BatchLaunch
+	if executions.isEmpty() 'nothingToRun'
 		// A spec of nothing but `maxoncstderr` cases runs no program at all, and must not pay a 137 ms
 		// entry to prove it. Every observation this launch is read for is `notRequired` anyway.
 		return BatchLaunch.completed(emptyBatchCapture())
@@ -4285,12 +4345,9 @@ function launchBatch(prepared PreparedTestArray, tempDir FilePath, batchDir File
 	// ⭐ DELETED BEFORE, NOT ONLY AFTER — the same rule the metrics file is deleted under, for the same
 	// reason: a run killed part-way through leaves a `.code` behind, and a test whose execution never
 	// happened would then be read as having produced whatever the last run left there.
-	for step in prepared 'eachStep'
-		match step 'phase'
-			finished then continue
-			awaiting(run) then discardBatchCaptures(batchDir, key: batchKeyFor(run.compiled))
-		end 'phase'
-	end 'eachStep'
+	for execution in executions 'eachExecution'
+		discardBatchCaptures(batchDir, key: execution.key)
+	end 'eachExecution'
 
 	// Written unconditionally rather than only when a `delayed` case is in this batch: the file is one
 	// short line, and a conditional write is a second reading of the same marker that the script's `case`
@@ -4301,7 +4358,7 @@ function launchBatch(prepared PreparedTestArray, tempDir FilePath, batchDir File
 	end 'noStdinFile'
 
 	let scriptPath = batchDir.join("{BatchScriptName}")
-	try File.writeText(scriptPath, content: batchScript(prepared, tempDir: tempDir)) otherwise 'noScript'
+	try File.writeText(scriptPath, content: batchScript(executions, tempDir: tempDir)) otherwise 'noScript'
 		return BatchLaunch.failed("could not write the batch script {scriptPath.toString()}")
 	end 'noScript'
 
@@ -4312,7 +4369,7 @@ function launchBatch(prepared PreparedTestArray, tempDir FilePath, batchDir File
 	argv.push(GuestShell)
 	argv.push("{guestSpecTempPrefix(tempDir)}{PathSeparator}{BatchSubdirName}{PathSeparator}{BatchScriptName}")
 
-	let batch = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: runWorkingDir, timeoutMs: batchDeadlineMs(executions)) otherwise (e) 'batchSpawnFailed'
+	let batch = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: runWorkingDir, timeoutMs: batchDeadlineMs(executions.count() as TestTally)) otherwise (e) 'batchSpawnFailed'
 		return BatchLaunch.failed("the batched {WslExecutableName} run failed: {e.displayReason()}")
 	end 'batchSpawnFailed'
 
@@ -4352,21 +4409,6 @@ end 'emptyBatchCapture'
 function batchSubdirPath() returns FilePath
 	return try FilePath.from(BatchSubdirName) otherwise panic("SpecTestRunner: BatchSubdirName '{BatchSubdirName}' must be a valid relative path")
 end 'batchSubdirPath'
-
-// ⭐⭐ **THE ONE NAME THE GUEST IS GIVEN, DERIVED FROM THE PATH THE COMPILE ACTUALLY PRODUCED.** The
-// script names the binary `./<this>`, and the pre-run discard, the script's redirections and the
-// read-back all key their three capture files off the same word.
-//
-// ⚠ **IT IS `exePath`'s FILENAME AND NOT `test.name`, AND THAT IS THE POINT.** `prepareOneTest` is the
-// one place that knows what the build wrote — `<name>` plus `executableExtension(effectiveTarget.os)` —
-// and a script that spelled `./<test.name>` would be a SECOND answer to that question, agreeing with
-// the first only for as long as this lane's extension stays EMPTY. Nothing would make them agree: the
-// day a batched lane has a suffix, the script names a file that does not exist and the whole spec
-// reports 127 with the guest shell's `not found` in each test's stderr. Asked of the path, there is
-// only ever one answer.
-function batchKeyFor(compiled CompiledTest) returns String
-	return compiled.exePath.filename()
-end 'batchKeyFor'
 
 // One capture file, on the HOST side. The stem-plus-extension formula is written HERE and nowhere else
 // because its other end is a shell script (`guestCapturePath`) that this process cannot type-check
@@ -4450,7 +4492,7 @@ end 'batchStderrNote'
 //
 // ⭐ **THE FUNCTION BODY IS A SUBSHELL `( … )` RATHER THAN A BRACE BLOCK.** POSIX allows either, and
 // `{`/`}` would have to be escaped in every Maxon string literal that spells this script.
-function batchScript(prepared PreparedTestArray, tempDir FilePath) returns String
+function batchScript(executions ExecutionArray, tempDir FilePath) returns String
 	var out = StringBuilder.create()
 	let scratch = guestSpecTempPrefix(tempDir)
 
@@ -4472,7 +4514,8 @@ function batchScript(prepared PreparedTestArray, tempDir FilePath) returns Strin
 	out.append("\t{BatchPreemptShellName}=$2\n")
 	out.append("\t{BatchKeyShellName}=$3\n")
 	out.append("\t{BatchStdinShellName}=$4\n")
-	out.append("\tshift 4\n")
+	out.append("\t{BatchExeShellName}=$5\n")
+	out.append("\tshift 5\n")
 
 	// ⭐ THE CASE'S OWN PROCESSOR COUNT AND PREEMPTION SWITCH, EXPORTED INTO THIS EXECUTION'S ENVIRONMENT AND
 	// NOWHERE ELSE. The function body is a SUBSHELL (see this function's header), so the exports die with the
@@ -4480,7 +4523,7 @@ function batchScript(prepared PreparedTestArray, tempDir FilePath) returns Strin
 	out.append("\t[ -z \"{batchProcsShellVar()}\" ] || export {String.from(MaxProcsEnvName)}=\"{batchProcsShellVar()}\"\n")
 	out.append("\t[ -z \"{batchPreemptShellVar()}\" ] || export {String.from(PreemptEnvName)}=\"{batchPreemptShellVar()}\"\n")
 	out.append("\tc=\"{guestCapturePath(scratch, extension: BatchStatusExtension)}\"\n")
-	out.append("\ta=\"{guestRootPath(scratch)}{PathSeparator}{batchKeyShellVar()}\"\n")
+	out.append("\ta=\"{guestRootPath(scratch)}{PathSeparator}{batchExeShellVar()}\"\n")
 	out.append("\to=\"{guestCapturePath(scratch, extension: BatchStdoutExtension)}\"\n")
 	out.append("\te=\"{guestCapturePath(scratch, extension: BatchStderrExtension)}\"\n")
 
@@ -4497,12 +4540,9 @@ function batchScript(prepared PreparedTestArray, tempDir FilePath) returns Strin
 	out.append("\t[ -f \"$c\" ] || printf %s {BatchTimedOutToken} > \"$c\"\n")
 	out.append(")\n")
 
-	for step in prepared 'eachStep'
-		match step 'phase'
-			finished then continue
-			awaiting(run) then out.append(batchCallLine(run.compiled))
-		end 'phase'
-	end 'eachStep'
+	for execution in executions 'eachExecution'
+		out.append(batchCallLine(execution))
+	end 'eachExecution'
 
 	return out.build()
 end 'batchScript'
@@ -4569,27 +4609,29 @@ end 'guestSpecTempPrefix'
 // binary, so `Args:` reaches the same argv[1..] a direct spawn would have given it. The environment tokens go
 // FIRST, before the key, because they are the script's own business and never the program's — the shell
 // function shifts them off before anything reaches the binary.
-function batchCallLine(compiled CompiledTest) returns String
+function batchCallLine(execution Execution) returns String
 	var line = StringBuilder.create()
 	line.append(BatchRunFunctionName)
 	line.append(" ")
-	line.append(shQuoted(match compiled.test.procs 'procs'
+	line.append(shQuoted(match execution.procs 'procs'
 		unset gives ""
 		pinned(count) gives "{count}"
 	end 'procs'))
 
 	line.append(" ")
-	line.append(shQuoted(match compiled.test.preempt 'preempt'
+	line.append(shQuoted(match execution.preempt 'preempt'
 		unset gives ""
 		off gives String.from(PreemptEnvOffValue)
 	end 'preempt'))
 
 	line.append(" ")
-	line.append(shQuoted(batchKeyFor(compiled)))
+	line.append(shQuoted(execution.key))
 	line.append(" ")
-	line.append(shQuoted(batchStdinToken(compiled.test.stdin)))
+	line.append(shQuoted(batchStdinToken(execution.stdin)))
+	line.append(" ")
+	line.append(shQuoted(execution.exePath.filename()))
 
-	for arg in compiled.test.programArgs 'eachArg'
+	for arg in execution.arguments 'eachArg'
 		line.append(" ")
 		line.append(shQuoted(arg))
 	end 'eachArg'
@@ -4619,17 +4661,15 @@ end 'shQuoted'
 //
 // ⛔ **A TARGET WITH NO RUNNER AT ALL IS NOT A REFUSAL HERE.** Classifying the target here and
 // PANICKING when nothing on this machine can spawn it kills a run in which every compile, every
-// `compilerError` verdict and every golden comparison is perfectly checkable. `unspawnable` is an
+// `compilerError` verdict and every `TargetIr` comparison is perfectly checkable. `unspawnable` is an
 // ANSWER the run carries through to a per-case `TestOutcome.notRunHere` (see `runStrategyFor`), so
 // there is nothing to probe and nothing to refuse: a runner that does not exist cannot be missing
 // from PATH.
 //
-// ⚠ **AND THE WORKERS DO NOT ASK.** A `probeInstalled: false` parameter reaching this refusal from
-// inside a worker would guard the wrong thing — a worker is a second door
-// onto the golden writer and a `maxoncstderr` case reaches it without launching anything. That door is
-// guarded where the writing happens instead of by refusing the run: `recordFragmentAndCleanup` mints
-// only for a verdict that was established in full on this host (`TestOutcome.pinsEmittedCode` and the
-// `mayMint` argument beside it). The guard sits on the thing it guards.
+// ⚠ **AND THE WORKERS DO NOT ASK.** A worker reaches the pin writer without launching anything, and
+// that door is guarded where the writing happens instead of by refusing the run: `settleTargetIr`
+// mints only for a verdict that was established in full on this host (`TestOutcome.pinsEmittedCode`).
+// The guard sits on the thing it guards.
 export function requireRunnerAvailable(effectiveTarget Target)
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
 		return
@@ -4851,7 +4891,7 @@ end 'runAssertions'
 // property must not report PASS.
 //
 // **IT READS THE IMAGE, NOT THE COMPILER'S OPINION OF IT**, and that is the whole value. The IR
-// fragment already pins what the compiler THINKS it laid out (`printDataSection`), and pinning that
+// Target IR already shows what the compiler THINKS it laid out (`printDataSection`), and pinning that
 // twice would prove only that the compiler agrees with itself. Reading the section back out of the
 // executable catches the layer between: a section header with a wrong RVA, a raw pointer off by an
 // alignment, an image the writer padded instead of wrote. This is a faithful port of
@@ -4983,7 +5023,7 @@ end 'checkRunStderr'
 // is the single line `hello` (a fence strips its own trailing newline). Trimming both compares `hello`
 // to `hello`. A program that `print`s `1\n` writes `1` then a newline; the block content is the line
 // `1`; trimming both compares `1` to `1`. So a `print("x")` and a `print("x\n")` case both pass their
-// block, and the newline the source chose is not something the golden has to spell — the SAME rule
+// block, and the newline the source chose is not something the block has to spell — the SAME rule
 // `checkRunStderr` already applies to a panic message.
 //
 // The `unpinned` arm is NOT "ignore stdout": it asserts the program printed NOTHING, which is what a
@@ -5073,7 +5113,7 @@ function stripFaultRipFromLine(line String) returns String
 end 'stripFaultRipFromLine'
 
 // Write the compiled fragment to `fragmentPath` — `fragmentSource` and nothing else, so the bytes
-// on disk are the bytes the golden shows (see `fragmentSource`).
+// on disk are the bytes a `maxoncstderr` block is authored against (see `fragmentSource`).
 function writeFragment(fragmentPath FilePath, test SpecTest) returns bool
 	try File.writeText(fragmentPath, content: fragmentSource(test)) otherwise return false
 	return true
@@ -5090,7 +5130,7 @@ end 'writeFragment'
 //
 // The MULTI-FILE half is what makes a ported `/specs` expectation work at all. The compiler
 // compiled `…/app/main.maxon` and reported `main.maxon:2:9`; the expectation in the corpus says
-// `specs/fragments/export-keyword/error.non-exported-function-cross-file.test:11:9`, because that
+// `specs/export-keyword/error.non-exported-function-cross-file.maxon:11:9`, because that
 // is where the line sits in the merged block a reader is looking at. The C# reference does exactly
 // this translation (`TestRunner.RewriteMultiFileErrorPaths`), and a spec expectation is not a claim
 // about where a temp file lived, so neither side of it should decide a test.
@@ -5124,7 +5164,7 @@ end 'normalizeCompilerOutput'
 // — would delete the half of the assertion that says WHICH construct in the library refused.
 function rewriteSourceTierPaths(text String, root String) returns String
 	// The token a rewritten path renders under is the root's OWN last segment, read off the root rather
-	// than named beside it: a tier whose directory and whose rendered name could disagree is a golden
+	// than named beside it: a tier whose directory and whose rendered name could disagree is an expectation
 	// pinning a path no checkout has.
 	let dirName = tierDirNameOf(root)
 
@@ -5171,12 +5211,12 @@ end 'portableLibraryTail'
 // The single mapping an EXPECTED text needs: the path a `/specs` expectation names for this test,
 // and NO renumbering (its lines are already the fragment's). An compiler-native expectation names
 // `<fragment>` already and passes through untouched.
-function referencePathMapping(specName String, testName String) returns FragmentPathMappingArray
+function referencePathMapping(specDirName String, specName String, testName String) returns FragmentPathMappingArray
 	var paths = FragmentPathMappingArray.create()
 
 	// No directory prefix: an expectation ported from `/specs` carries its own (`dir_b/<fragment>`) in
 	// the corpus text, ahead of the fragment path this replaces, and passes through untouched.
-	paths.push(FragmentPathMapping.create(referenceFragmentPath(specName, testName: testName), lineOffset: NoLineOffset, sourceDirPrefix: ""))
+	paths.push(FragmentPathMapping.create(referenceFragmentPath(specDirName, specName: specName, testName: testName), lineOffset: NoLineOffset, sourceDirPrefix: ""))
 	return paths
 end 'referencePathMapping'
 
@@ -5254,14 +5294,11 @@ end 'rewriteDiagnosticLine'
 // The path a /specs expectation names for this very test — RECONSTRUCTED, not pattern-matched
 // (The compiler has no regex, and needs none: the runner already knows the spec and test names).
 //
-// This is what makes a /specs ```maxoncstderr block portable byte-for-byte: the generic
-// `specs/fragments/` form is what every expectation in the corpus is authored with, and it is what
-// is reconstructed here. Nothing reads or writes that directory; it only has to be recognized.
-//
-// `FragmentExtension` is shared with the golden path deliberately — `.test` is one convention, not
-// two that happen to agree.
-function referenceFragmentPath(specName String, testName String) returns String
-	return "{ReferenceFragmentDir}/{specName}/{testName}{FragmentExtension}"
+// This is what makes a /specs ```maxoncstderr block portable byte-for-byte: the
+// `<spec directory>/<spec>/<test>.maxon` form is what every expectation in the corpus is authored
+// with, and it is what is reconstructed here. No file lives at that path; it only has to be recognized.
+function referenceFragmentPath(specDirName String, specName String, testName String) returns String
+	return "{specDirName}/{specName}/{testName}{ReferenceFragmentExtension}"
 end 'referenceFragmentPath'
 
 // Best-effort removal of everything this test wrote: its staged source file(s) and the produced exe.
@@ -5274,11 +5311,14 @@ end 'referenceFragmentPath'
 // `<name>.ir` and no `<name>.metrics`. A `<!-- DebugInfo -->` case DOES write a `<name>.exe.mxdbg`, and it
 // goes here with the executable it describes: the pair is written together and must not outlive it
 // separately, or the next run's `--dump-info` on a stale path would answer from a build that is gone.
-function cleanup(staged StagedTest, exePath FilePath)
-	for path in staged.writtenFiles 'eachSource'
-		try File.delete(path) otherwise ignore
-	end 'eachSource'
-
+function discardBuild(writtenFiles FilePathArray, exePath FilePath)
+	deleteWrittenFiles(writtenFiles)
 	discardDebugInfoSidecar(exePath)
 	try File.delete(exePath) otherwise ignore
-end 'cleanup'
+end 'discardBuild'
+
+function deleteWrittenFiles(writtenFiles FilePathArray)
+	for path in writtenFiles 'eachSource'
+		try File.delete(path) otherwise ignore
+	end 'eachSource'
+end 'deleteWrittenFiles'

@@ -43,7 +43,7 @@ typealias because Maxon has no typealias over a struct type — `__file__` produ
 `__file__` is deliberately **relative, not absolute**. An absolute path is a property of the
 machine that ran the compiler, not of the program: baking one into the binary makes the
 output differ between two checkouts of the same commit, which breaks byte-parity gates and
-golden transcripts. The path is spelled the same way compiler diagnostics spell theirs —
+expected-output blocks. The path is spelled the same way compiler diagnostics spell theirs —
 relative to the compile root, with `/` separators on every host.
 
 ### The call site is the whole call
@@ -304,7 +304,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2060: specs/fragments/source-location-defaults/error.line-outside-default.test:3:13: '__line__' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.
+error E2060: specs/source-location-defaults/error.line-outside-default.maxon:3:13: '__line__' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.
 ```
 
 <!-- test: error.file-outside-default -->
@@ -316,7 +316,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2060: specs/fragments/source-location-defaults/error.file-outside-default.test:3:13: '__file__' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.
+error E2060: specs/source-location-defaults/error.file-outside-default.maxon:3:13: '__file__' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.
 ```
 
 <!-- test: error.field-default -->
@@ -330,5 +330,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2060: specs/fragments/source-location-defaults/error.field-default.test:3:31: '__line__' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.
+error E2060: specs/source-location-defaults/error.field-default.maxon:3:31: '__line__' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.
 ```

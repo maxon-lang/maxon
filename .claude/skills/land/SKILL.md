@@ -219,7 +219,7 @@ the user can redirect you cheaply. If the ask is ambiguous *in a way that change
 cheapest moment to ask.
 
 - ⚠ **`git status` must be CLEAN**, so the one commit holds this change and nothing left over from
-  another. (Goldens the suite touches along the way are not a concern — §8.)
+  another.
 - **BUILD — IF, AND ONLY IF, THE BINARY IS STALE** (the check in the box under the gate table). The
   compiler binary is gitignored and nothing rebuilds it, so a stale one lies in *both* directions.
   `./maxon-bin/.maxon/maxon run build` at the repo root compiles `maxon-bin/` with the compiler already in the slot and renames the result into place. An
@@ -323,8 +323,8 @@ deliverable stays one chunk and one commit.)*
   authors every comment the change gets**, once, after the review. A reason worth keeping goes in the
   agent's REPORT, which is what §6's brief is built from.
 - **They work in the MAIN checkout, so the `maxon` MCP tools need no `repoRoot`** — and they do not
-  commit, do not `git add`, do not push, and leave every golden the runs touch exactly as it lies —
-  golden drift is not theirs to measure, investigate or worry about. You commit everything, once, at §9.
+  commit, do not `git add`, do not push, and leave every `TargetIr` pin a run re-minted exactly as it
+  lies. You commit everything, once, at §9.
 - ⛔ **`specs/` is READ-ONLY to an implementer — not one byte.** It is the canonical definition of the
   language; an edit to an existing case does not adjust a test, it redefines Maxon. §1's author is the
   one writer of cases, and a fix that would falsify another spec's committed expectation is a
@@ -508,7 +508,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 | **The tree corpora** — `./maxon-bin/.maxon/maxon test` on `tests/fmt`, `tests/spec-harness --timeout=15000` and `tests/ladders` | each `0 fail`, and read each count. These are the formatter's engine corpus, the spec harness's own refusals and gates, and the ladder index — tree-level gates `spec-test` does not run. CI runs the same three on every lane |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
 | **Seed shims** — every `scripts/seed-shim/*.patch` passes `git apply --check`, in sorted order; if the tree has any, `scripts/build-from-seed.sh` in a throwaway clone at a short path exits 0 | A shim's context lines are source text, so §6's comment edits can break one, and CI builds from the released seed. Regenerate a patch that no longer applies, then re-run the seed build |
-| **Golden drift staged, as it is** | `git add -A specs/` — whatever the runs minted, modified or deleted, with no further thought. See the box below |
+| **The IR suite** — `./maxon-bin/.maxon/maxon spec-test ir-specs`, and again with `--target=x64-linux` under WSL | `failed: 0` on each lane this host runs. A pin the change moved is re-minted with `--update-required --filter=<spec>/` on that lane and staged with the change (`git add -A ir-specs/ specs/`). See the box below |
 | **§1's count check** on the final tree | markers == ran, no name spelled twice |
 
 > ### ⭐ THE SELF-COMPILE IS THE GATE THE SUITE CANNOT SUBSTITUTE FOR
@@ -519,18 +519,13 @@ during changes; a battery run before the rebase measured a tree that no longer e
 > TYPES; run it anyway, it is a minute. An E3092 here is a declaration more visible than its uses:
 > narrow it, or land it *with* its first consumer.
 
-> ### ⭐ GOLDEN DRIFT IS NOT A CONCERN. COMMIT IT AND MOVE ON.
-> A default run MINTS a golden a case has none of, on the host where the case passed, and leaves one that
-> exists as it is: a golden whose bytes differ is REPORTED as drift, and `--update-required
-> --filter=<spec>` or `--rewrite-drifted-goldens` rewrites it. Re-mint the specs whose runtime bodies
-> your change moved on the lanes this host runs — x64-windows here, x64-linux under WSL (the
-> `compiler-workflow` skill). The arm64 lanes need nothing from you: every CI lane runs the suite with
-> `--rewrite-drifted-goldens`, and after the push CI's `record-goldens` job commits what they wrote to
-> `main` as `github-actions[bot]`. Whatever the runs minted or rewrote — by
-> your change or anyone else's — goes into the commit with `git add -A specs/`, and that is the whole of
-> it. **Do not measure it, investigate it, attribute it, explain it or review it**, and do not mention it
-> in the message. Never revert it: a `git checkout --` to tidy `git status` is the one wrong thing to do
-> with drift.
+> ### ⭐ THE IR SUITE'S PINS ARE A GATE
+> `ir-specs/` holds the corpus's emitted-code cases, and each pins the Target IR its program compiles to on
+> every native lane (` ```TargetIr:<lane> `). A pin the compiler no longer renders FAILS its case, and
+> the failure shows the first differing line. A change that moves emitted code re-mints the pins it
+> moves with `--update-required --filter=<spec>/` — a pin is COMPILED, not run, so any lane re-mints
+> on any host, `--target=arm64-macos` and `--target=arm64-linux` included — and READS the diff, which is
+> the review of the emitted code. `specs/` pins no emitted code.
 
 **A red gate STOPS the change** — and a red you did not cause still gets fixed, in its own commit,
 before yours (AGENTS.md). To attribute it: do the failures touch what you changed? Re-run **the failing
@@ -543,7 +538,7 @@ folded into the green — CI answers it after the push, and §9's report names i
 
 **ONE commit, on `main`** — this repo develops there; do not branch. The whole change lands together:
 the compiler source, the spec cases, **the documentation and the site pages it regenerates**, **every
-golden the runs touched — minted, modified or deleted** — and any `optimization-log.md` row.
+`TargetIr` pin the change re-minted** — and any `optimization-log.md` row.
 ⛔ **Not a commit per piece, and never a partial landing with the rest "to follow"** — the battery you just ran was run on the whole tree, so the whole tree is what it
 licensed you to push.
 

@@ -271,3 +271,78 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+<!-- test: panic.a-panicking-callees-result-feeds-a-later-branch -->
+The callee's body ends in `panic`, and the value it never returns is still read by a later branch; the program compiles and panics in the callee.
+```maxon
+function crash() returns ExitCode
+	print("two\n")
+	panic("planted")
+end 'crash'
+
+function main() returns ExitCode
+	let code = crash()
+	let left = "abc".byteLength()
+
+	if left != 0 'leaked'
+		print("leaked\n")
+	end 'leaked' else 'drained'
+		print("drained {code}\n")
+	end 'drained'
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+two
+```
+```stderr
+panic at panic.a-panicking-callees-result-feeds-a-later-branch.test:4: planted
+Stack trace:
+  in crash
+  in main
+  in mrt_start
+```
+
+<!-- test: panic.a-chain-of-panicking-callees-feeds-a-later-branch -->
+The panicking callee is reached through a second callee that returns its result, and that result is still read by a later branch.
+```maxon
+function crashInner() returns ExitCode
+	print("inner\n")
+	panic("planted in the inner callee")
+end 'crashInner'
+
+function crashOuter() returns ExitCode
+	return crashInner()
+end 'crashOuter'
+
+function main() returns ExitCode
+	let code = crashOuter()
+	let left = "abc".byteLength()
+
+	if left != 0 'leaked'
+		print("leaked\n")
+	end 'leaked' else 'drained'
+		print("drained {code}\n")
+	end 'drained'
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+inner
+```
+```stderr
+panic at panic.a-chain-of-panicking-callees-feeds-a-later-branch.test:4: planted in the inner callee
+Stack trace:
+  in crashInner
+  in crashOuter
+  in main
+  in mrt_start
+```

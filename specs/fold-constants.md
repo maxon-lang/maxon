@@ -32,8 +32,8 @@ that fails rather than passing quietly.
 
 ⭐ **AND THE COMPARISON ITSELF IS NOT FOLDED, WHICH IS WHY THESE CASES STILL RUN.** A call's result
 arrives in the caller as a BLOCK ARG of the inliner's continuation block (`__il_cont`), and this pass
-reads only what a `const` op materializes — it does not look through a phi. So the committed
-fragments show the folded literal being materialized and then COMPARED at run time
+reads only what a `const` op materializes — it does not look through a phi. So the emitted code
+(`--emit-ir`) shows the folded literal being materialized and then COMPARED at run time
 (`movRegImm rax, 9223372036854775805` … `cmpRegReg`), which is exactly the shape that makes a wrong
 constant an observable wrong answer instead of a compile-time tautology.
 
@@ -86,7 +86,7 @@ rounded answer, and the compiler emits that one answer on all three targets (`ro
 either one LEAVES THE WHOLE SUITE GREEN, on this lane and on wasm, because the compiler here runs on an x64 host and on x64 the folded answer and the emitted
 instruction's answer are the same number:
 
-- **The NaN decline** is visible only in `a-computed-nan-keeps-its-instruction`'s committed fragment,
+- **The NaN decline** is visible only in `a-computed-nan-keeps-its-instruction`'s emitted code (`--emit-ir`),
   where removing it deletes the `subsd`. It CANNOT be reached by a runtime assertion: no user door
   spells a NaN *constant* (there is no NaN literal, `__Builtins.bitsToFloat` is reserved), and every
   program that can make one prints `nan` and answers `y != y` true whichever payload it holds. The
@@ -109,8 +109,8 @@ wasm module fails validation on the local's class.
 Folding a `condBranch` orphans the arm it did not take, and the pass removes that arm itself (see
 `FoldConstants.dropUnreachableBlocks` for the register-allocator invariant that makes this the pass's
 own job rather than a later one's). What survives is the taken arm's ops with no compare, no
-conditional jump and no merge phi — which the committed fragment for `a-constant-condition-costs-nothing`
-is the record of.
+conditional jump and no merge phi — which the emitted code (`--emit-ir`) for
+`a-constant-condition-costs-nothing` shows.
 
 ## Tests
 
@@ -396,14 +396,14 @@ end 'main'
 The `condBranch` fold, end to end. Each folded condition costs the taken arm's ops and NOTHING
 ELSE: the condition folds to a constant, the branch becomes unconditional, the arm that can no
 longer be reached is dropped here, and `EC11`'s jump elision removes the jump that is left. In the
-committed fragment `thenArm` stores 7 and `ifelse` stores 11 with no compare, no `jcc` and no block
+emitted code (`--emit-ir`) `thenArm` stores 7 and `ifelse` stores 11 with no compare, no `jcc` and no block
 between them. A fold that picked the WRONG arm returns 1 or 2 rather than 0.
 
 ⚠ **The two `cmpRegImm32`/`jcc` pairs that DO survive are the assertions** (`taken != 7`,
 `other != 11`), and they survive on purpose: this pass is not a constant PROPAGATOR. It folds what a
 `const` op materializes, and `taken` is a value merged from two arms, not a materialized constant —
 so it stays a real comparison. That boundary is the pass header's, stated here because a reader
-counting compares in the fragment will find these two and should know which question they answer.
+counting compares in the emitted code will find these two and should know which question they answer.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 
@@ -440,7 +440,7 @@ end 'main'
 
 <!-- test: a-float-constant-expression-is-evaluated -->
 ⭐ **THE CONTROL, AND WHAT A SABOTAGE OF IT BREAKS — one field along.** The three multiplications
-and the addition below leave no `mulsd`/`addsd` in the committed fragment: each is one
+and the addition below leave no `mulsd`/`addsd` in the emitted code (`--emit-ir`): each is one
 `movsd xmm, [rip + __fconst_…]`. What discriminates the fold is the MINTED TYPE. Carry the folded
 float on a `const` typed `FoldedArithType` (i64) rather than `FoldedFloatType` (f64) and the value
 lands in the wrong register file: on this very program,
@@ -549,7 +549,7 @@ end 'main'
 The float edge that the integer `overflow-wraps-exactly-as-the-instruction-does` is the twin of:
 where an integer `add` WRAPS, a float `mul` past `f64.max` goes to `+inf` and stays there. A folder
 that refused the operation, saturated at `f64.max`, or computed in a wider format would disagree with
-`mulsd` on exactly this input. The committed fragment shows the answer arriving as a `.rdata` load of
+`mulsd` on exactly this input. The emitted code (`--emit-ir`) shows the answer arriving as a `.rdata` load of
 the infinity pattern, which is also what says the constant pool can NAME a value no literal spells.
 ```maxon
 typealias Real = float(f64.min to f64.max)
@@ -586,8 +586,8 @@ keep their instructions and the machine that runs them picks.
 ⚠ **WHAT THE CHECKS BELOW PIN IS THAT THE ANSWER IS *A* NaN — NOT THAT THE FOLD DECLINED**, and the
 difference is worth being exact about. `y != y` is true of every NaN on every target, so it stays true
 whichever payload the program ends up holding; this case stays GREEN with the
-decline removed. **What sees the decline is this case's committed FRAGMENT**, where removing it deletes
-the `subsd` — and that is the whole of the coverage, for the reason the Documentation gives: a payload
+decline removed. **What shows the decline is this case's emitted code (`--emit-ir`)**, where removing it
+deletes the `subsd` — and nothing in the suite pins it, for the reason the Documentation gives: a payload
 divergence is between two MACHINES, and no assertion runnable on one host can stage it.
 ```maxon
 typealias Real = float(f64.min to f64.max)
@@ -676,7 +676,7 @@ one bit pattern, two readings. A folder that compared the raw `ParsedInt`s would
 BACKWARDS — a double's pattern is sign-and-magnitude, so the negative side orders the wrong way round
 — and it would call `-0.0 == 0.0` false where IEEE-754 calls it true. The last pair is the payoff: a
 folded float `cmp` is a known condition, so `foldConstantBranches` folds the `if` on it and drops the
-arm not taken — `elseArm` is absent from the committed fragment entirely, and `andNotBackwards`'
+arm not taken — `elseArm` is absent from the emitted code (`--emit-ir`) entirely, and `andNotBackwards`'
 whole check with it.
 
 ⚠ **THE `xorRegImm32`/`cmpRegImm32` PAIRS THAT SURVIVE ARE THE `not`s, AND THEY SURVIVE FOR THE

@@ -1606,7 +1606,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-global-errors.test:9:2: cannot assign a value of type 'function' to global 'handler', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.capturing-closure-in-global-errors.maxon:9:2: cannot assign a value of type 'function' to global 'handler', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.capturing-closure-in-container -->
@@ -2195,7 +2195,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-to-global-errors.test:14:2: cannot assign a value of type 'function' to global 'handler', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.capturing-closure-in-ternary-to-global-errors.maxon:14:2: cannot assign a value of type 'function' to global 'handler', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.capturing-closure-in-ternary-used-in-frame -->
@@ -2351,7 +2351,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/first-class-functions/first-class-function.function-value-into-int-global-errors.test:12:2: cannot assign a value of type 'function' to global 'slot', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.function-value-into-int-global-errors.maxon:12:2: cannot assign a value of type 'function' to global 'slot', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.function-value-into-int-local-errors -->
@@ -2372,7 +2372,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/first-class-functions/first-class-function.function-value-into-int-local-errors.test:11:2: cannot assign a value of type 'function' to variable 'loc', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.function-value-into-int-local-errors.maxon:11:2: cannot assign a value of type 'function' to variable 'loc', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.capturing-closure-into-int-local-errors -->
@@ -2389,7 +2389,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/first-class-functions/first-class-function.capturing-closure-into-int-local-errors.test:8:2: cannot assign a value of type 'function' to variable 'loc', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.capturing-closure-into-int-local-errors.maxon:8:2: cannot assign a value of type 'function' to variable 'loc', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.function-value-returned-as-int-errors -->
@@ -2414,7 +2414,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/first-class-functions/first-class-function.function-value-returned-as-int-errors.test:10:2: Cannot return 'function' from function declared to return 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.function-value-returned-as-int-errors.maxon:10:2: Cannot return 'function' from function declared to return 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.function-value-as-arg-errors -->
@@ -2438,7 +2438,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/first-class-functions/first-class-function.function-value-as-arg-errors.test:14:9: cannot pass a value of type 'function' as argument 'n', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.function-value-as-arg-errors.maxon:14:9: cannot pass a value of type 'function' as argument 'n', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.function-value-into-field-errors -->
@@ -2467,7 +2467,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/first-class-functions/first-class-function.function-value-into-field-errors.test:19:4: cannot assign a value of type 'function' to field 'slot', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+error E3005: specs/first-class-functions/first-class-function.function-value-into-field-errors.maxon:19:4: cannot assign a value of type 'function' to field 'slot', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
 <!-- test: first-class-function.throwing-function-as-value-errors -->
@@ -2503,7 +2503,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3101: specs/fragments/first-class-functions/first-class-function.throwing-function-as-value-errors.test:16:10: Cannot use throwing function 'risky' as a value: it throws 'Err', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.
+error E3101: specs/first-class-functions/first-class-function.throwing-function-as-value-errors.maxon:16:10: Cannot use throwing function 'risky' as a value: it throws 'Err', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.
 ```
 
 <!-- test: first-class-function.non-throwing-function-as-value-still-works -->
@@ -3606,7 +3606,7 @@ program point, invisible to every popcount over a live set, and still occupying 
 arguments plus that one dead load is fifteen against a pool of fourteen, an overflow no live-set
 count shows, so the allocator has to count the dead def's demand itself. A DIRECT call of the same
 arity has no such def, which is what makes the boundary look like an indirect-call fact rather than
-the dead-def fact it is (see `specs/register-pressure.md`, where the same demand appears with
+the dead-def fact it is (see `ir-specs/register-pressure.md`, where the same demand appears with
 no function value anywhere). Result is `sum(1..14) = 105`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

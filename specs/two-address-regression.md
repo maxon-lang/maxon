@@ -14,18 +14,19 @@ is two-address unary. ISel does not pre-emit a seed copy `mov result, lhs` and h
 biased coloring elides it: it emits ONE reuse-def op, and the register allocator supplies
 the copy ONLY when the two-address input actually outlives the op.
 
-The structural consequence this spec locks in: a `-` or `*` over **loop-carried,
+The structural consequence this spec exercises: a `-` or `*` over **loop-carried,
 non-constant** values (a constant operand folds away to an immediate, so both operands
 must be loop-carried to stay in registers) emits **no copy at all in the loop body** —
-the reuse def coalesces into its input's register because the input dies at the op. If
-this regresses (a seed `mov` or an unnecessary reuse copy reappears in a loop), the
-fragment below changes visibly.
+the reuse def coalesces into its input's register because the input dies at the op. A
+seed `mov` or an unnecessary reuse copy in the loop is visible in the emitted code
+(`--emit-ir`) of the case below; nothing in the suite pins it.
 
 The complementary case — a two-address op whose input genuinely OUTLIVES it (`b = a -
 b` with `a` loop-invariant) — DOES need one copy, because the input must be preserved.
-That copy is correct: the program still computes the right answer, and the fragment
-below pins the single `mov` so neither a lost copy (a wrong answer) nor an extra one
-(worse code) goes unnoticed.
+That copy is correct: the program still computes the right answer, so a lost copy is a
+wrong answer the case catches. The single `mov` is visible in the emitted code
+(`--emit-ir`) of the case below; nothing in the suite pins it, so an extra one (worse
+code) is not caught.
 
 ### The reuse copy costs a REGISTER, and the pressure model has to know it
 
@@ -275,7 +276,7 @@ summed after, never touched inside), so Rule 2 permits a store in the PREHEADER 
 after the loop, with NOTHING added to the loop body. The splitter must both SEE the transient
 (the peak-finder's `reuseInputOutlivesOp` correction) and pick a victim the loop does not use.
 Miss the first and the colorer panics with no free register; miss the second and spill code
-lands in the loop body — still correct, but a golden mismatch.
+lands in the loop body — still correct, and visible only in the emitted code.
 `p = 0`: `a = 20`, `b = 5`; the loop runs `i = 0, 1, 2` giving `b = 15, 5, 15`; `k1..k11 = 1..11`
 sum to 66. So `15 + 66 = 81`.
 ```maxon
@@ -333,10 +334,10 @@ about `a` requires a callee-saved register — it is defined early, while eight 
 are still free, and `pickPreferredRegister` prefers caller-saved so a leaf function pays no
 prologue. Left alone, `a` would take one, and `d` could not follow it there.
 
-It does not, and THAT is what this test pins. The reuse hint makes `a` and `d` copy PARTNERS,
+It does not, and THAT is what this test exercises. The reuse hint makes `a` and `d` copy PARTNERS,
 and `preferredClassMask` makes a copy group adopt the scarcest class any member needs —
 so `a` is allocated **`rbx`**, callee-saved, purely because its reuse partner will need to live
-there. The fragment shows the payoff directly: `subRegReg rbx, rbx, rax`, dest == input, a clean
+there. The emitted code (`--emit-ir`) shows the payoff directly: `subRegReg rbx, rbx, rax`, dest == input, a clean
 coalesce, no copy, and `d` sits in `rbx` across the call with no spill anywhere in the function.
 The scarce-class rule is not merely saving a `mov` here; it is keeping the reuse path's true
 register demand equal to the demand the pressure model counted.

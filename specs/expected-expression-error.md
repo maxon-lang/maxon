@@ -23,7 +23,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/expected-expression-error/docs-example-1.test:3:9: Expected expression but got '*'
+error E2004: specs/expected-expression-error/docs-example-1.maxon:3:9: Expected expression but got '*'
 ```
 
 ### Notes
@@ -46,7 +46,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/expected-expression-error/return-operator-without-operand.test:3:9: Expected expression but got '*'
+error E2004: specs/expected-expression-error/return-operator-without-operand.maxon:3:9: Expected expression but got '*'
 ```
 
 <!-- test: let-rhs-missing -->
@@ -57,5 +57,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/expected-expression-error/let-rhs-missing.test:3:9: Expected expression but got '(empty)'
+error E2004: specs/expected-expression-error/let-rhs-missing.maxon:3:9: Expected expression but got '(empty)'
 ```

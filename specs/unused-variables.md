@@ -20,7 +20,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/docs-example-1.test:3:6: unused variable: 'x'
+error E3012: specs/unused-variables/docs-example-1.maxon:3:6: unused variable: 'x'
 ```
 
 ### Discarding Return Values
@@ -52,7 +52,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-var.test:4:6: unused variable: 'x'
+error E3012: specs/unused-variables/unused-var.maxon:4:6: unused variable: 'x'
 ```
 
 <!-- test: unused-let -->
@@ -64,7 +64,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-let.test:4:6: unused variable: 'x'
+error E3012: specs/unused-variables/unused-let.maxon:4:6: unused variable: 'x'
 ```
 
 <!-- test: used-var -->
@@ -100,7 +100,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/unused-variables/underscore-discard.test:4:2: expected a function call
+error E3067: specs/unused-variables/underscore-discard.maxon:4:2: expected a function call
 ```
 
 <!-- test: used-in-nested-scope -->
@@ -133,7 +133,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/tuple-destructuring-unused.test:10:10: unused variable: 'b'
+error E3012: specs/unused-variables/tuple-destructuring-unused.maxon:10:10: unused variable: 'b'
 ```
 
 <!-- test: multiple-unused-first-reported -->
@@ -146,7 +146,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/multiple-unused-first-reported.test:4:6: unused variable: 'x'
+error E3012: specs/unused-variables/multiple-unused-first-reported.maxon:4:6: unused variable: 'x'
 ```
 
 <!-- test: unused-for-in-variable -->
@@ -162,7 +162,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-for-in-variable.test:6:6: unused variable: 's'
+error E3012: specs/unused-variables/unused-for-in-variable.maxon:6:6: unused variable: 's'
 ```
 
 <!-- test: used-for-in-variable -->
@@ -209,7 +209,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-for-range-variable.test:5:6: unused variable: 'i'
+error E3012: specs/unused-variables/unused-for-range-variable.maxon:5:6: unused variable: 'i'
 ```
 
 <!-- test: unused-match-binding -->
@@ -231,7 +231,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-match-binding.test:14:9: unused variable: 'n'
+error E3012: specs/unused-variables/unused-match-binding.maxon:14:9: unused variable: 'n'
 ```
 
 <!-- test: used-match-binding -->
@@ -294,7 +294,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-closure-param.test:11:30: unused variable: 'n'
+error E3012: specs/unused-variables/unused-closure-param.maxon:11:30: unused variable: 'n'
 ```
 
 <!-- test: used-closure-param -->
@@ -359,7 +359,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-otherwise-binding.test:15:27: unused variable: 'e'
+error E3012: specs/unused-variables/unused-otherwise-binding.maxon:15:27: unused variable: 'e'
 ```
 
 <!-- test: used-otherwise-binding -->

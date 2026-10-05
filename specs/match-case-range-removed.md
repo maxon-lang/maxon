@@ -148,7 +148,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-case-range-removed/error.case-added-mid-span-is-named.test:18:2: match on union 'Op' is not exhaustive, missing: fma
+error E2026: specs/match-case-range-removed/error.case-added-mid-span-is-named.maxon:18:2: match on union 'Op' is not exhaustive, missing: fma
 ```
 
 <!-- test: error.enum-case-range -->
@@ -173,7 +173,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3146: specs/fragments/match-case-range-removed/error.enum-case-range.test:12:3: 'add to mul' is not a match pattern: name each case in an 'or'-chain, one per line
+error E3146: specs/match-case-range-removed/error.enum-case-range.maxon:12:3: 'add to mul' is not a match pattern: name each case in an 'or'-chain, one per line
 ```
 
 <!-- test: error.enum-case-range-upto -->
@@ -199,7 +199,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3146: specs/fragments/match-case-range-removed/error.enum-case-range-upto.test:12:3: 'red upto blue' is not a match pattern: name each case in an 'or'-chain, one per line
+error E3146: specs/match-case-range-removed/error.enum-case-range-upto.maxon:12:3: 'red upto blue' is not a match pattern: name each case in an 'or'-chain, one per line
 ```
 
 <!-- test: error.enum-case-range-unknown-upper -->
@@ -225,7 +225,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3146: specs/fragments/match-case-range-removed/error.enum-case-range-unknown-upper.test:12:3: 'red to nope' is not a match pattern: name each case in an 'or'-chain, one per line
+error E3146: specs/match-case-range-removed/error.enum-case-range-unknown-upper.maxon:12:3: 'red to nope' is not a match pattern: name each case in an 'or'-chain, one per line
 ```
 
 <!-- test: error.packed-or-chain -->
@@ -252,7 +252,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3147: specs/fragments/match-case-range-removed/error.packed-or-chain.test:12:10: each alternative of a match arm's 'or'-chain needs its own line: break the line after 'or'
+error E3147: specs/match-case-range-removed/error.packed-or-chain.maxon:12:10: each alternative of a match arm's 'or'-chain needs its own line: break the line after 'or'
 ```
 
 <!-- test: error.leading-or -->
@@ -280,5 +280,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/match-case-range-removed/error.leading-or.test:12:6: Expected 'then' but got 'newline'
+error E2010: specs/match-case-range-removed/error.leading-or.maxon:12:6: Expected 'then' but got 'newline'
 ```

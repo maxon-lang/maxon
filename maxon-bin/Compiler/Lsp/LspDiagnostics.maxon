@@ -197,14 +197,14 @@ extension Project
 
 		return match query 'query'
 			memoized(artifact) gives SweptParse.parsed(artifact.diagnostics)
-			needed(job, sweptTokens, overrides, keyHash) gives self.landedSweptParse(job, tokens: sweptTokens, overrides: overrides, keyHash: keyHash, signatures: signatures, reader: reader)
+			needed(job, sweptTokens, overrides, stamp) gives self.landedSweptParse(job, tokens: sweptTokens, overrides: overrides, stamp: stamp, signatures: signatures, reader: reader)
 		end 'query'
 	end 'sweptParseDiagnostics'
 
-	function landedSweptParse(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, keyHash HashDigest, signatures ProgramSignatures, reader FilePath) returns SweptParse
+	function landedSweptParse(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp, signatures ProgramSignatures, reader FilePath) returns SweptParse
 		self.diagnostics.clear()
 
-		let artifact = landParseOutcome(self, path: reader, outcome: parseFile(job, tokens: tokens, overrides: overrides, signatures: signatures), keyHash: keyHash)
+		let artifact = landParseOutcome(self, path: reader, outcome: parseFile(job, tokens: tokens, overrides: overrides, signatures: signatures), stamp: stamp)
 		var published = self.diagnostics.clone()
 		published.append(artifact.diagnostics)
 

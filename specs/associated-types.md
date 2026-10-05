@@ -188,7 +188,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/docs-example-3.test:8:6: Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
+error E3016: specs/associated-types/docs-example-3.maxon:8:6: Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
 ```
 
 ### Error: Partial Implementation
@@ -216,7 +216,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/docs-example-4.test:9:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
+error E3016: specs/associated-types/docs-example-4.maxon:9:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns Score
 ```
 
@@ -245,7 +245,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/docs-example-5.test:9:6: Partial interface implementation: type 'WrongReturn' has 1 method(s) with wrong signature:
+error E3016: specs/associated-types/docs-example-5.maxon:9:6: Partial interface implementation: type 'WrongReturn' has 1 method(s) with wrong signature:
   - produce() returns ID (expected produce() returns Weight)
 ```
 
@@ -450,7 +450,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/missing-type-binding-error.test:9:6: Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
+error E3016: specs/associated-types/missing-type-binding-error.maxon:9:6: Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
 ```
 
 
@@ -477,7 +477,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/partial-implementation-error.test:10:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
+error E3016: specs/associated-types/partial-implementation-error.maxon:10:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns Integer
 ```
 
@@ -505,7 +505,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/wrong-return-type-error.test:10:6: Partial interface implementation: type 'WrongType' has 1 method(s) with wrong signature:
+error E3016: specs/associated-types/wrong-return-type-error.maxon:10:6: Partial interface implementation: type 'WrongType' has 1 method(s) with wrong signature:
   - make() returns Integer (expected make() returns Float)
 ```
 
@@ -533,7 +533,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/wrong-param-type-error.test:10:6: Partial interface implementation: type 'WrongParam' has 1 method(s) with wrong signature:
+error E3016: specs/associated-types/wrong-param-type-error.maxon:10:6: Partial interface implementation: type 'WrongParam' has 1 method(s) with wrong signature:
   - accept(val Integer) returns Integer (expected accept(val Float) returns Integer)
 ```
 
@@ -1181,7 +1181,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/error.surplus-parenthesized-conformance-argument.test:10:6: Partial interface implementation: type 'Holder' has 1 method(s) with wrong signature:
+error E3016: specs/associated-types/error.surplus-parenthesized-conformance-argument.maxon:10:6: Partial interface implementation: type 'Holder' has 1 method(s) with wrong signature:
   - get() returns Integer (expected get() returns (Integer, Float))
 ```
 
@@ -1246,7 +1246,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2066: specs/fragments/associated-types/error.surplus-parenthesized-argument-against-no-uses.test:9:33: interface 'NoUses' declares 0 associated type(s), but this parenthesized 'with' clause binds 1
+error E2066: specs/associated-types/error.surplus-parenthesized-argument-against-no-uses.maxon:9:33: interface 'NoUses' declares 0 associated type(s), but this parenthesized 'with' clause binds 1
 ```
 
 
@@ -1287,7 +1287,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3015: specs/fragments/associated-types/error.surplus-parenthesized-argument-on-unresolvable-interface.test:10:6: type 'Holder' implements unknown interface 'Onee'
+error E3015: specs/associated-types/error.surplus-parenthesized-argument-on-unresolvable-interface.maxon:10:6: type 'Holder' implements unknown interface 'Onee'
 ```
 
 
@@ -1538,7 +1538,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2066: specs/fragments/associated-types/error.surplus-parenthesized-argument-against-an-inherited-uses-name.test:13:31: interface 'Sub' declares 0 associated type(s), but this parenthesized 'with' clause binds 1
+error E2066: specs/associated-types/error.surplus-parenthesized-argument-against-an-inherited-uses-name.maxon:13:31: interface 'Sub' declares 0 associated type(s), but this parenthesized 'with' clause binds 1
 ```
 
 
@@ -1582,7 +1582,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/error.inherited-uses-name-unparenthesized-is-still-a-signature-error.test:13:6: Partial interface implementation: type 'Impl' has 1 method(s) with wrong signature:
+error E3016: specs/associated-types/error.inherited-uses-name-unparenthesized-is-still-a-signature-error.maxon:13:6: Partial interface implementation: type 'Impl' has 1 method(s) with wrong signature:
   - get() returns Integer (expected get() returns Element)
 ```
 
@@ -1894,7 +1894,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3119: specs/fragments/associated-types/error.two-conformers-binding-one-associated-type-differently.test:21:6: 'B' binds 'Taker's associated type 'Element' to 'Score', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
+error E3119: specs/associated-types/error.two-conformers-binding-one-associated-type-differently.maxon:21:6: 'B' binds 'Taker's associated type 'Element' to 'Score', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
 ```
 
 <!-- test: associated-types.two-conformers-binding-the-same-type-still-compile -->
@@ -2039,7 +2039,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3119: specs/fragments/associated-types/error.dispatched-associated-type-bound-to-a-string-beside-an-int.test:20:6: 'TextRunner' binds 'Taker's associated type 'Element' to 'String', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
+error E3119: specs/associated-types/error.dispatched-associated-type-bound-to-a-string-beside-an-int.maxon:20:6: 'TextRunner' binds 'Taker's associated type 'Element' to 'String', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
 ```
 
 <!-- test: error.dispatched-associated-type-bound-to-a-float-beside-an-int -->
@@ -2090,7 +2090,7 @@ end 'main'
 typealias Real = float(f64.min to f64.max)
 ```
 ```maxoncstderr
-error E3119: specs/fragments/associated-types/error.dispatched-associated-type-bound-to-a-float-beside-an-int.test:20:6: 'FloatRunner' binds 'Taker's associated type 'Element' to 'float', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
+error E3119: specs/associated-types/error.dispatched-associated-type-bound-to-a-float-beside-an-int.maxon:20:6: 'FloatRunner' binds 'Taker's associated type 'Element' to 'float', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
 ```
 
 <!-- test: associated-types.disagreement-in-a-requirement-no-dispatch-reaches -->
@@ -2194,7 +2194,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a-managed-type.test:8:6: 'Runner' binds 'Maker's associated type 'Element' to 'String', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Maker with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved
+error E3120: specs/associated-types/error.associated-return-bound-to-a-managed-type.maxon:8:6: 'Runner' binds 'Maker's associated type 'Element' to 'String', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Maker with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved
 ```
 
 <!-- test: associated-types.assoc-return-bound-to-a-machine-word-still-compiles -->
@@ -2297,7 +2297,7 @@ end 'main'
 typealias Real = float(f64.min to f64.max)
 ```
 ```maxoncstderr
-error E3119: specs/fragments/associated-types/error.extends-projected-associated-type-disagreement.test:28:6: 'B' binds 'Derived's associated type 'Element' to 'float', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Derived with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
+error E3119: specs/associated-types/error.extends-projected-associated-type-disagreement.maxon:28:6: 'B' binds 'Derived's associated type 'Element' to 'float', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Derived with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
 ```
 
 <!-- test: associated-types.extends-projected-associated-type-single-conformer -->
@@ -2748,7 +2748,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a-generic-instance.test:18:6: 'Runner' binds 'Maker's associated type 'Element' to 'IntBox', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Maker with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved
+error E3120: specs/associated-types/error.associated-return-bound-to-a-generic-instance.maxon:18:6: 'Runner' binds 'Maker's associated type 'Element' to 'IntBox', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Maker with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved
 ```
 
 <!-- test: error.associated-type-bound-to-an-interface -->
@@ -2804,7 +2804,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3120: specs/fragments/associated-types/error.associated-type-bound-to-an-interface.test:24:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Shape', and 'Element' reaches the calling convention of a requirement this program DISPATCHES through a receiver that does not say which binding it holds — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type
+error E3120: specs/associated-types/error.associated-type-bound-to-an-interface.maxon:24:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Shape', and 'Element' reaches the calling convention of a requirement this program DISPATCHES through a receiver that does not say which binding it holds — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type
 ```
 
 ### ⭐⭐ A PARAMETERIZED EXISTENTIAL CARRIES ITS ARGUMENTS INTO THE SIGNATURE, AND THE WIDENING DISCHARGES THE CLAIM
@@ -2928,7 +2928,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3127: specs/fragments/associated-types/error.existential-parameter-claim-disagrees-with-the-widened-conformer.test:42:26: cannot widen 'Runner' into 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'Runner' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'
+error E3127: specs/associated-types/error.existential-parameter-claim-disagrees-with-the-widened-conformer.maxon:42:26: cannot widen 'Runner' into 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'Runner' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'
 ```
 
 <!-- test: associated-types.existential-parameter-with-a-concrete-claim-still-runs -->
@@ -3019,7 +3019,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3127: specs/fragments/associated-types/error.existential-return-claim-cannot-be-resolved-in-the-declaration-view.test:31:3: cannot return a value from 'Box.make', which is declared to return the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, and a `return` is checked once against the shared body, where no instantiation has fixed it. Write the binding the conformers declare, or take the value as a PARAMETER instead, where the call's own instance resolves it
+error E3127: specs/associated-types/error.existential-return-claim-cannot-be-resolved-in-the-declaration-view.maxon:31:3: cannot return a value from 'Box.make', which is declared to return the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, and a `return` is checked once against the shared body, where no instantiation has fixed it. Write the binding the conformers declare, or take the value as a PARAMETER instead, where the call's own instance resolves it
 ```
 
 <!-- test: associated-types.existential-field-at-an-opaque-claim-is-filled-through-a-checked-parameter -->
@@ -3399,7 +3399,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3127: specs/fragments/associated-types/error.a-generic-conformers-resolved-binding-still-has-to-match.test:44:27: cannot widen 'IntHolder' into 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'IntHolder' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'
+error E3127: specs/associated-types/error.a-generic-conformers-resolved-binding-still-has-to-match.maxon:44:27: cannot widen 'IntHolder' into 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'IntHolder' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'
 ```
 <!-- test: error.a-deferred-claim-cannot-be-filled-from-a-value-already-held-at-the-interface -->
 ⛔⛔ **THE HOLE A DEFERRED CLAIM OPENS, AND THE REASON E3127 IS NOT ONLY ABOUT CONCRETE CONFORMERS.** Every
@@ -3453,7 +3453,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3127: specs/fragments/associated-types/error.a-deferred-claim-cannot-be-filled-from-a-value-already-held-at-the-interface.test:37:26: cannot pass a value already held at the interface type 'Taker' as 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the call to settle it against. Pass the concrete conformer, or declare 't' at 'Taker' with no `with` clause
+error E3127: specs/associated-types/error.a-deferred-claim-cannot-be-filled-from-a-value-already-held-at-the-interface.maxon:37:26: cannot pass a value already held at the interface type 'Taker' as 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the call to settle it against. Pass the concrete conformer, or declare 't' at 'Taker' with no `with` clause
 ```
 
 <!-- test: associated-types.a-concrete-claim-may-still-be-filled-from-a-value-already-held-at-the-interface -->
@@ -3550,7 +3550,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3127: specs/fragments/associated-types/error.a-deferred-claim-cannot-be-laundered-through-a-return.test:42:11: cannot pass a value already held at the interface type 'Taker' as 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the call to settle it against. Pass the concrete conformer, or declare 't' at 'Taker' with no `with` clause
+error E3127: specs/associated-types/error.a-deferred-claim-cannot-be-laundered-through-a-return.maxon:42:11: cannot pass a value already held at the interface type 'Taker' as 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the call to settle it against. Pass the concrete conformer, or declare 't' at 'Taker' with no `with` clause
 ```
 
 <!-- test: associated-types.two-conformers-disagree-but-every-dispatch-site-names-its-binding -->
@@ -3766,7 +3766,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3127: specs/fragments/associated-types/error.held-position-nested-binding-disagreement.test:67:39: cannot widen 'BadBag' into 'b', which is declared at the existential type 'Bag' with its associated type 'Iter' held at 'Cursor', and that holding's own 'Item' bound to 'Integer' — 'BadBag' binds 'Iter' to 'TextCur', which binds 'Item' to 'String'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Item' to 'Integer'
+error E3127: specs/associated-types/error.held-position-nested-binding-disagreement.maxon:67:39: cannot widen 'BadBag' into 'b', which is declared at the existential type 'Bag' with its associated type 'Iter' held at 'Cursor', and that holding's own 'Item' bound to 'Integer' — 'BadBag' binds 'Iter' to 'TextCur', which binds 'Item' to 'String'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Item' to 'Integer'
 ```
 
 
@@ -4280,7 +4280,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/associated-types/error.w61.interface-alias-naming-another-interface-alias.test:6:32: Unknown type 'Holder.ElementArray'
+error E3011: specs/associated-types/error.w61.interface-alias-naming-another-interface-alias.maxon:6:32: Unknown type 'Holder.ElementArray'
 ```
 
 

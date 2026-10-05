@@ -63,8 +63,8 @@
 // allocations and 945 bytes per rung.
 //
 // Numbers like that are "bit-for-bit reproducible" only if you never delete your temp
-// directory, which is to say not reproducible at all, and committed goldens
-// gating on them fail on any machine that has never run the suite before. (Found by
+// directory, which is to say not reproducible at all, and a committed expectation
+// gating on them fails on any machine that has never run the suite before. (Found by
 // exactly the delta report this instrument prints, on a run that changed no compiler code.)
 //
 // The outputs live in the corpus ROOT, outside every rung (see ScaleTestRunner), and
@@ -263,7 +263,7 @@ let PressuredLoopsBase = 2 as KnobSize
 // cost.** Every column — allocations, bytes AND cpu — would report "nothing moved". That is the failure
 // this file's `floatSpill` knob sat in at a count too small to force a single spill.
 //
-// THE SHAPE, and every part of it is load-bearing — `specs/register-pressure.md`'s
+// THE SHAPE, and every part of it is load-bearing — `ir-specs/register-pressure.md`'s
 // `confined-reuse-defs-*` cases are the same program written by hand:
 //
 //  • `confinedUnconstrainedInts()` values that cross NO call, derived to be **x64's** whole GPR pool.
@@ -766,7 +766,7 @@ end 'tabs'
 // against a full pool of fourteen — so the loop FITS the machine, and the spills are the ABI's
 // doing, not a register shortage. Raising this to fourteen-plus would make the corpus fail to
 // compile with a register-pressure diagnostic and VOID the whole ladder. See
-// `specs/register-pressure.md`, which spells out that a forced spill across a call is not
+// `ir-specs/register-pressure.md`, which spells out that a forced spill across a call is not
 // E5001 and must never become it.
 let PressuredValuesPerLoop = 8 as KnobSize
 
@@ -1231,10 +1231,10 @@ let GenericInstanceArgShapeCount = 2 as KnobSize
 //
 // A shared generic body cannot classify its `T` return, so the CALLEE takes the `+1`
 // (`Parser.emitOwnedValueReturn` → `coOwnBorrowedOpaque` → `__retain_type_param`) and a substituted `T`
-// return leaves nothing trailing the call — `specs/generic-types.md`'s own golden's `tryok:` block is a bare
-// `jmp`. What doubles with this knob is the per-site `try` work: the fork, the flag test and the callee's
-// descriptor-gated retain. A flat column for anything trailing the call is therefore the shape's own, never
-// a cost this corpus hid.
+// return leaves nothing trailing the call — the call site's `tryok:` block is a bare `jmp`. What
+// doubles with this knob is the per-site `try` work: the fork, the flag test and the callee's
+// descriptor-gated retain. A flat column for anything trailing the call is therefore the shape's
+// own, never a cost this corpus hid.
 //
 // ⚠ **IT IS A SITE KNOB, AND THE TYPES ARE FIXED — for the Array knobs' reason.** The per-INSTANCE cost
 // (a layout descriptor, a per-instance `__destruct_<instance>`) is `genericInstances`' dimension and
@@ -1762,7 +1762,7 @@ let OpaqueCoreCalleeName = "scaleOpaqueCore"
 // prove a phi is a constant, and the compiler has no SCCP that could. So `scaleSeed()` is opaque, its
 // return value is opaque, and everything downstream that derives from it is opaque too.
 //
-// This is the same trick `specs/register-pressure.md` uses to hold 17 values live without the
+// This is the same trick `ir-specs/register-pressure.md` uses to hold 17 values live without the
 // folder eating them.
 // ⭐⭐ **THE HEADER OF A FUNCTION `z_main` CALLS — AND `z_main` IS IN ANOTHER FILE.** A cross-file
 // call to a file-private callee is E3008, so every name that lands in `drivers` (plus the seed, which

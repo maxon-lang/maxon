@@ -773,7 +773,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/enum-full/error.enum-method-non-exported-cross-file.test:18:7: function 'Signal.isOn' is not exported
+error E3008: specs/enum-full/error.enum-method-non-exported-cross-file.maxon:18:7: function 'Signal.isOn' is not exported
 ```
 
 <!-- test: union-method-no-assoc-values -->
@@ -870,7 +870,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3030: specs/fragments/enum-full/error.duplicate-case.test:4:2: duplicate enum case: 'red'
+error E3030: specs/enum-full/error.duplicate-case.maxon:4:2: duplicate enum case: 'red'
 ```
 
 <!-- test: error.unknown-enum-case -->
@@ -886,7 +886,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/enum-full/error.unknown-enum-case.test:8:11: unknown enum case: 'green'
+error E3034: specs/enum-full/error.unknown-enum-case.maxon:8:11: unknown enum case: 'green'
 ```
 
 <!-- test: error.associated-value-wrong-count -->
@@ -925,7 +925,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/enum-full/error.associated-value-type-mismatch.test:10:34: type mismatch: 'expected Integer, got String'
+error E3005: specs/enum-full/error.associated-value-type-mismatch.maxon:10:34: type mismatch: 'expected Integer, got String'
 ```
 
 <!-- test: match-enum-binding-simple -->
@@ -1057,7 +1057,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/enum-full/error.match-enum-unknown-case.test:13:3: unknown union case: 'unknown'
+error E3034: specs/enum-full/error.match-enum-unknown-case.maxon:13:3: unknown union case: 'unknown'
 ```
 
 <!-- test: error.match-discarded-bindings -->
@@ -1079,7 +1079,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3081: specs/fragments/enum-full/error.match-discarded-bindings.test:14:3: use 'value' instead of 'value(_)' to ignore associated values
+error E3081: specs/enum-full/error.match-discarded-bindings.maxon:14:3: use 'value' instead of 'value(_)' to ignore associated values
 ```
 
 <!-- test: implicit-string-backed -->
@@ -1211,7 +1211,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3031: specs/fragments/enum-full/error.duplicate-raw-value.test:4:2: duplicate raw value: '200'
+error E3031: specs/enum-full/error.duplicate-raw-value.maxon:4:2: duplicate raw value: '200'
 ```
 
 <!-- test: error.raw-value-type-mismatch -->
@@ -1226,7 +1226,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3032: specs/fragments/enum-full/error.raw-value-type-mismatch.test:4:2: raw value type mismatch: 'expected int, got String'
+error E3032: specs/enum-full/error.raw-value-type-mismatch.maxon:4:2: raw value type mismatch: 'expected int, got String'
 ```
 
 <!-- test: error.mixed-backing-types -->
@@ -1241,7 +1241,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3032: specs/fragments/enum-full/error.mixed-backing-types.test:4:2: raw value type mismatch: 'expected int, got String'
+error E3032: specs/enum-full/error.mixed-backing-types.maxon:4:2: raw value type mismatch: 'expected int, got String'
 ```
 
 <!-- test: fromName-associated-compile-time -->
@@ -1301,7 +1301,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/enum-full/error.fromName-invalid-case.test:8:25: no enum case named 'invalid_case_name_that_does_not_exist': 'Direction'
+error E3034: specs/enum-full/error.fromName-invalid-case.maxon:8:25: no enum case named 'invalid_case_name_that_does_not_exist': 'Direction'
 ```
 
 <!-- test: error.fromName-wrong-arg-count -->
@@ -1319,7 +1319,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/enum-full/error.fromName-wrong-arg-count.test:10:25: wrong argument count: 'case 'value' requires 1 associated value(s)'
+error E3036: specs/enum-full/error.fromName-wrong-arg-count.maxon:10:25: wrong argument count: 'case 'value' requires 1 associated value(s)'
 ```
 
 <!-- test: fromName-associated-runtime-empty -->
@@ -1365,7 +1365,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/enum-full/error.fromRawValue-associated-values.test:11:15: unknown union case: 'fromRawValue'
+error E3034: specs/enum-full/error.fromRawValue-associated-values.maxon:11:15: unknown union case: 'fromRawValue'
 ```
 
 ### An undefined call feeding `fromName` or `fromRawValue` is named by E3004 first
@@ -1390,8 +1390,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: specs/fragments/enum-full/error.fromName-argument-is-an-undefined-call.test:8:34: call to undefined function 'nosuchFn'
-error E3005: specs/fragments/enum-full/error.fromName-argument-is-an-undefined-call.test:8:25: type mismatch: 'expected String, got unknown'
+error E3004: specs/enum-full/error.fromName-argument-is-an-undefined-call.maxon:8:34: call to undefined function 'nosuchFn'
+error E3005: specs/enum-full/error.fromName-argument-is-an-undefined-call.maxon:8:25: type mismatch: 'expected String, got unknown'
 ```
 
 <!-- test: error.fromRawValue-argument-is-an-undefined-call -->
@@ -1410,8 +1410,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: specs/fragments/enum-full/error.fromRawValue-argument-is-an-undefined-call.test:8:38: call to undefined function 'nosuchFn'
-error E3005: specs/fragments/enum-full/error.fromRawValue-argument-is-an-undefined-call.test:8:38: type mismatch: 'expected int, got unknown'
+error E3004: specs/enum-full/error.fromRawValue-argument-is-an-undefined-call.maxon:8:38: call to undefined function 'nosuchFn'
+error E3005: specs/enum-full/error.fromRawValue-argument-is-an-undefined-call.maxon:8:38: type mismatch: 'expected int, got unknown'
 ```
 
 <!-- test: enum-member-constant -->

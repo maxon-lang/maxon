@@ -1381,7 +1381,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/where-clauses/where-clauses.error.witness-return-generic-instance.test:28:17: Unknown type 'Array_Integer'
+error E3011: specs/where-clauses/where-clauses.error.witness-return-generic-instance.maxon:28:17: Unknown type 'Array_Integer'
 ```
 
 <!-- test: where-clauses.constraint-interface-generic-alias-formal -->
@@ -1490,7 +1490,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/where-clauses/where-clauses.error.constraint-interface-unreadable.test:20:20: Unsupported: the `where` constraint interface 'Digest' does not resolve — no file in this program declares a readable `interface` of that name, so it is either misspelled or an `interface` whose own declaration fails to parse
+error E2015: specs/where-clauses/where-clauses.error.constraint-interface-unreadable.maxon:20:20: Unsupported: the `where` constraint interface 'Digest' does not resolve — no file in this program declares a readable `interface` of that name, so it is either misspelled or an `interface` whose own declaration fails to parse
 ```
 
 ### An `extends`-inherited requirement is dispatchable through the constraint that inherits it
@@ -2567,7 +2567,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3017: specs/fragments/where-clauses/where-clauses.and-violation.test:23:11: Type 'OnlyFoo' does not satisfy constraint 'Bar' required by type parameter 'T' of 'NeedsBoth'
+error E3017: specs/where-clauses/where-clauses.and-violation.maxon:23:11: Type 'OnlyFoo' does not satisfy constraint 'Bar' required by type parameter 'T' of 'NeedsBoth'
 ```
 
 ### Equality on unconstrained type parameter requires Equatable
@@ -2589,7 +2589,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/where-clauses/where-clauses.eq-requires-equatable.test:6:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
+error E3005: specs/where-clauses/where-clauses.eq-requires-equatable.maxon:6:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
 ```
 
 ### Equality on Equatable-constrained type parameter compiles
@@ -2699,7 +2699,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/where-clauses/where-clauses.error.static-without-self-return-cannot-dispatch.test:13:12: Unsupported: calling 'digest' (which dispatches through the type's `where` constraints) on a value of the enclosing type, from a `static function` that carries no witness tables of its own to forward — a static sources them from the instance it RETURNS, so declare this one `returns Self` and call the method on the result, or make it an instance method
+error E2015: specs/where-clauses/where-clauses.error.static-without-self-return-cannot-dispatch.maxon:13:12: Unsupported: calling 'digest' (which dispatches through the type's `where` constraints) on a value of the enclosing type, from a `static function` that carries no witness tables of its own to forward — a static sources them from the instance it RETURNS, so declare this one `returns Self` and call the method on the result, or make it an instance method
 ```
 
 ### An INTERFACE EXTENSION's method over a constrained conformer reserves that conformer's witnesses

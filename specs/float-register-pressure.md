@@ -33,8 +33,8 @@ colours values into the callee-saved xmm6–15, so it must reserve a frame and s
 making it **the only test in the suite that exercises the leaf branch of
 `computeFrameBytes`**. That branch reserves `alignUp(stackSize + calleeSavedXmmBytes, 16)`
 with a slot area based at `rsp`, where a caller instead places its slots above the shadow
-space. Nothing else reaches it, so a regression there moves this golden and no other — and
-without this paragraph the mismatch would read as a REX-prefix regression, which it would
+space. Nothing else reaches it, so a regression there changes this case's emitted code and no other's — and
+without this paragraph the change would read as a REX-prefix regression, which it would
 not be. If this test is ever narrowed or deleted, the leaf branch loses its only cover.
 
 <!-- test: eleven-live-floats-through-rounding-intrinsics -->

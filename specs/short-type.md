@@ -97,36 +97,6 @@ end 'main'
 300
 ```
 
-### U16 Constant Array Rdata
-
-<!-- test: short-type.u16-rdata -->
-Narrow array-element storage flows through the collection-from-array
-syntax: when `U16Array = Array with U16`, the element type `U16`
-(`int(0 to 65535)`) propagates through `ParseFromExpression` →
-`EmitArrayLiteralElements` so each integer literal is range-checked at
-compile time and re-tagged with the optimal storage kind (i16/u16). The
-constant-folding pass then lifts the array into `.rdata` with the narrow
-element width.
-
-```maxon
-typealias U16 = int(0 to 65535)
-typealias U16Array = Array with U16
-
-function main() returns ExitCode
-	let arr = U16Array from [10, 20, 30]
-	let a = try arr.get(0) otherwise 0
-	let b = try arr.get(1) otherwise 0
-	let c = try arr.get(2) otherwise 0
-	return a + b + c
-end 'main'
-```
-```exitcode
-60
-```
-```RequiredRdata
-u16[] 10, 20, 30
-```
-
 ### U16 Arithmetic Uses 32-bit Ops
 
 <!-- test: short-type.u16-arithmetic-32bit -->
@@ -147,25 +117,6 @@ end 'main'
 ```
 ```stdout
 500
-```
-
-### U16 Global Variable
-
-<!-- test: short-type.u16-global -->
-```maxon
-typealias U16 = int(0 to 65535)
-
-var counter = 42 as U16
-
-function main() returns ExitCode
-	return counter
-end 'main'
-```
-```exitcode
-42
-```
-```RequiredData
-u16 42
 ```
 
 ### U16 Global Variable Write

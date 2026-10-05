@@ -128,7 +128,7 @@ file is still refused; `c.nowMs()` on a value of the moved declaration is not.
   `stdlib-loading.md`'s `a-user-free-function-outranks-the-stdlib-modules` and
   `a-value-returning-user-free-function-outranks-a-void-stdlib-one` are the pair that RUN it — the second
   is the negative control. Where a genuine stdlib-path diagnostic does
-  arise it is documented rather than pinned as a golden, because the path is machine-dependent — the same
+  arise it is documented rather than pinned in a `maxoncstderr` block, because the path is machine-dependent — the same
   reason `stdlib-loading.md`'s collision rule gives.
 - ⚠ **A METHOD is NOT a free function, and the shadow reaches it — deliberately.** A user `Clock.nowMs`
   requires a user `type Clock`, which IS a shadow, so the stdlib method has already moved to
@@ -957,4 +957,81 @@ end 'main'
 ```maxoncstderr
 error E3008: <fragment>:2:17: type 'ParentComponentRule' is not exported
 error E3008: <fragment>:7:22: type 'stdlib.ParentComponentRule' is not exported
+```
+
+<!-- test: stdlib-user-shadows.another-files-private-function-leaves-the-library-one-visible -->
+A declaration a file cannot see never counts: `a/`'s file-private `round` answers its own call, and `b/`'s bare `round` is the library's.
+```maxon
+// --- file: a/a.maxon
+typealias Real = float(f64.min to f64.max)
+
+function round(x Real) returns Real
+	return x
+end 'round'
+
+export function runA()
+	print("a {round(2.5)}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+export function runB()
+	let x = 3.7
+	print("b {trunc(round(x))}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 2.5
+b 4
+```
+
+<!-- test: stdlib-user-shadows.two-files-private-functions-each-shadow-the-library-one-for-their-own-file -->
+Each directory's file-private `round` answers its own file's calls, and the root file, which sees neither, calls the library's.
+```maxon
+// --- file: a/a.maxon
+typealias Real = float(f64.min to f64.max)
+
+function round(x Real) returns Real
+	return x
+end 'round'
+
+export function runA()
+	print("a {round(2.5)}\n")
+end 'runA'
+
+// --- file: b/b.maxon
+typealias Real = float(f64.min to f64.max)
+
+function round(x Real) returns Real
+	return x + 1.0
+end 'round'
+
+export function runB()
+	print("b {round(2.5)}\n")
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	runA()
+	runB()
+	print("main {trunc(round(3.7))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a 2.5
+b 3.5
+main 4
 ```

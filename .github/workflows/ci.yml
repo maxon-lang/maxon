@@ -64,7 +64,6 @@ on:
       - 'scripts/build-from-seed.sh'
       - 'scripts/fetch-vendor.sh'
       - 'scripts/fixpoint.sh'
-      - 'scripts/record-goldens.sh'
       - 'scripts/lib/**'
       - 'scripts/seed-shim/**'
       - '!.github/**'
@@ -138,7 +137,13 @@ jobs:
 
       - name: Suite
         if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon spec-test --rewrite-drifted-goldens
+        run: ./maxon-bin/.maxon/maxon spec-test
+
+      # The emitted-code cases, in their own directory: every case pins the Target IR its program compiles
+      # to on this lane, and a pin the compiler no longer renders fails its case.
+      - name: IR suite
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon spec-test ir-specs
 
       # ⭐ IN THE MATRIX RATHER THAN IN A JOB OF ITS OWN, because this area is host-specific where
       # almost nothing else is: percent-decoding a uri, un-rooting a drive letter, and
@@ -155,7 +160,7 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/fmt
 
-      # Its drift gate runs `spec-test` three times, within a second of the 5 s default deadline.
+      # Its gates run `spec-test` themselves, which leaves the 5 s default deadline no margin.
       - name: Spec harness corpus
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/spec-harness --timeout=15000
@@ -215,62 +220,3 @@ jobs:
       - name: Fixpoint
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/fixpoint.sh
-
-      # The suite writes a golden only for a case that passed on this runner, so what a red run
-      # wrote is as valid as a green one's: this step runs after a red suite too, and fails only
-      # when the suite changed something other than this lane's own goldens.
-      - name: Goldens the suite wrote
-        id: goldens
-        if: always() && steps.seed.outputs.seeded == 'yes'
-        run: |
-          set -euo pipefail
-          . scripts/lib/goldens.sh
-          changes="$(goldens_stage_lane "$RUNNER_TEMP/goldens" ${{ matrix.target }})"
-          if [ -z "$changes" ]; then
-            echo "goldens=no" >> "$GITHUB_OUTPUT"
-            echo "**Goldens:** ${{ matrix.target }} wrote none" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          while read -r kind path; do
-            echo "::notice file=$path::${{ matrix.target }} wrote this golden ($kind); it is in the goldens-${{ matrix.target }} artifact"
-          done <<< "$changes"
-          echo "**Goldens:** $(printf '%s\n' "$changes" | goldens_tally)" >> "$GITHUB_STEP_SUMMARY"
-          echo "goldens=yes" >> "$GITHUB_OUTPUT"
-
-      - name: Upload the goldens
-        if: always() && steps.goldens.outputs.goldens == 'yes'
-        uses: actions/upload-artifact@v6
-        with:
-          name: goldens-${{ matrix.target }}
-          path: ${{ runner.temp }}/goldens
-          if-no-files-found: error
-
-  # Commits every lane's goldens to `main`, red lanes included, for the reason above. A push made
-  # with `GITHUB_TOKEN` starts no workflow run, so the recorded commit costs no second CI round. A
-  # branch protection rule on `main` would refuse this push.
-  #
-  # ⛔ NO `concurrency` GROUP: a fixed group lets GitHub cancel a queued `main` run, which the group
-  # at the top of this file exists to prevent. `scripts/record-goldens.sh` handles overlapping
-  # recorders with its retry loop and its staleness guard.
-  record-goldens:
-    needs: suite
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.repository == 'maxon-lang/maxon' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Download the goldens
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          . scripts/lib/goldens.sh
-          goldens_download_artifacts "$GITHUB_RUN_ID" "$RUNNER_TEMP/goldens-in"
-
-      - name: Record the goldens on main
-        run: ./scripts/record-goldens.sh "$GITHUB_SHA" "$RUNNER_TEMP/goldens-in"

@@ -21,7 +21,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/docs-example-1.test:4:2: self-assignment has no effect: 'x = x'
+error E3067: specs/self-assignment/docs-example-1.maxon:4:2: self-assignment has no effect: 'x = x'
 ```
 
 ```maxon
@@ -31,7 +31,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/docs-example-2.test:3:2: expected a function call
+error E3067: specs/self-assignment/docs-example-2.maxon:3:2: expected a function call
 ```
 
 ## Tests
@@ -46,7 +46,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/self-assignment.basic.test:5:2: self-assignment has no effect: 'x = x'
+error E3067: specs/self-assignment/self-assignment.basic.maxon:5:2: self-assignment has no effect: 'x = x'
 ```
 
 <!-- test: self-assignment.different-var -->
@@ -97,7 +97,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/self-assignment.field-self-assign.test:16:2: self-assignment has no effect: 'p.x = p.x'
+error E3067: specs/self-assignment/self-assignment.field-self-assign.maxon:16:2: self-assignment has no effect: 'p.x = p.x'
 ```
 
 <!-- test: self-assignment.discard-literal -->
@@ -109,5 +109,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/self-assignment.discard-literal.test:4:2: expected a function call
+error E3067: specs/self-assignment/self-assignment.discard-literal.maxon:4:2: expected a function call
 ```

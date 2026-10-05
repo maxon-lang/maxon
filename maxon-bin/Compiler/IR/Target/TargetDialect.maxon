@@ -1432,8 +1432,8 @@ export union TargetOp
 	//
 	// ⚠ **IT NEVER REACHES THE ENCODER.** `Arm64PrologueEpilogue`, the one pass that knows both the final
 	// frame size and the outgoing region, REWRITES each of these in place into a concrete
-	// `loadRegBaseDisp(dest, x29, frameSize - outgoing + slot*8)`. It therefore never appears in a committed
-	// fragment either (goldens are printed after that pass), and the arm64 encoder's arm for it panics
+	// `loadRegBaseDisp(dest, x29, frameSize - outgoing + slot*8)`. It therefore never appears in the
+	// printed IR either (it is printed after that pass), and the arm64 encoder's arm for it panics
 	// rather than guessing — the same "must have been rewritten by the pass that owns this fact" contract
 	// `assertNoSugarOps` states for the Std sugar band.
 	arm64LoadIncomingArg(dest TargetVReg, slot SpillSlot) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
@@ -1718,9 +1718,7 @@ export union TargetOp
 	// a load is a load.
 	//
 	// ⚠ **THE DISPLACEMENT IS CORRECT BY CONSTRUCTION AND CURRENTLY DEAD, AND THAT IS WORTH SAYING
-	// PLAINLY.** It does NOT subsume the `+ field` of a struct field read off an indexed element —
-	// MEASURED FALSE: every `loadRegBaseIndexScale` and
-	// `storeBaseIndexScaleReg` in the committed goldens carries `+ 0`, without exception. An element
+	// PLAINLY.** It does NOT subsume the `+ field` of a field read off an indexed element. An element
 	// slot of a struct-typed array holds a POINTER, so the field read is a separate `loadRegBaseDisp`
 	// off the loaded pointer and never a displacement on this operand. The field costs nothing (it
 	// shares `chooseDispMod`/`emitTrailingDisp` with the heavily-exercised unindexed path) and it is

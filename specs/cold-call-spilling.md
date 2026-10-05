@@ -45,7 +45,7 @@ or inside the arm and its reload inside the arm, at no cost to the hot path.
 Where the hot working set itself is over the pool, a loop with a cold run is not refused: the run's
 call confines those values and forces the bracket, so the region rule never turns such a loop into
 E5001. Such a loop pays what the confinement charges — a store at the def and a reload before each use,
-on the hot path — and E5001 is the answer for a loop with no cold run at all (`specs/register-pressure.md`). The unswitcher asks the same question before it hoists: a loop's
+on the hot path — and E5001 is the answer for a loop with no cold run at all (`ir-specs/register-pressure.md`). The unswitcher asks the same question before it hoists: a loop's
 live-across set plus the record fields it would hoist must fit the target's allocatable GPRs less a
 margin for in-loop temporaries (`hoistPressureBudgetFor`), or the loop is left as it is.
 
@@ -53,17 +53,17 @@ Why the rule matters: a versioned hot loop over two arrays holds two lengths, tw
 counters live across every slow arm, and confined to five registers what did not fit would be stored
 and reloaded inside the loop on every iteration, for the sake of calls that never run.
 
-`specs/register-pressure.md`'s E5001 cases are the pin on a hot call's confinement; the splitter's own spill code (store at the def, reload before each run of uses) relieves a
+`ir-specs/register-pressure.md`'s E5001 cases are the pin on a hot call's confinement; the splitter's own spill code (store at the def, reload before each run of uses) relieves a
 FULL pool and is a different mechanism.
 
 ⚠ A green case here proves nothing on its own — the bracket and the confinement compute the same
-thing. The evidence is the committed fragment of the first case (no store or reload in the loop
-body; a save/reload pair inside each slow arm) and the CONTROLS, which make a cold arm actually run
-under values live across it and read those values back afterwards. With the reload point re-storing
-instead of restoring, the six cases whose cold arm runs at their inputs
-answer wrong; the two whose arm never runs (`rotateAll`, the scratch-clobbering panic handler) stay
-green and pin the bracket's shape through their fragments alone; the managed-element and hot-call
-controls stay green because nothing is bracketed there.
+thing. The shape shows in the first case's emitted code (`--emit-ir`: no store or reload in the loop
+body; a save/reload pair inside each slow arm), which nothing in the suite pins; what the suite runs are
+the CONTROLS, which make a cold arm actually run under values live across it and read those values back
+afterwards. With the reload point re-storing instead of restoring, the six cases whose cold arm runs at
+their inputs answer wrong; the two whose arm never runs (`rotateAll`, the scratch-clobbering panic
+handler) stay green, and their bracket's shape shows only in their emitted code; the managed-element and
+hot-call controls stay green because nothing is bracketed there.
 
 ## Tests
 
@@ -211,7 +211,7 @@ end 'main'
 
 <!-- test: a-managed-element-store-arm-stays-hot -->
 Control for the heat rule. A `set` over `String` elements takes its slow arm on every write, so that
-arm is the common path and is `normal`: its fragment shows no save/reload bracket, and the values
+arm is the common path and is `normal`: its emitted code (`--emit-ir`) shows no save/reload bracket, and the values
 across it are confined. Every occupant is destroyed (no leak) and every new value is read back.
 ```maxon
 typealias Word = int(i64.min to i64.max)
@@ -289,7 +289,7 @@ the loop alone (thirteen plus the two fields it would hoist is over its budget),
 joins the set; `a` is read by the range check and the fast load on the hot path, so it is bracketed
 around the arm's call, never split; the arm's own result is stored right after its capture — before
 the flag's — and reloaded in the cold split block on its edge, so at the flag's capture the loop's
-thirteen and the flag are all that is live. The fragment holds no `storeSlotReg` or `loadRegSlot` in
+thirteen and the flag are all that is live. The emitted code (`--emit-ir`) holds no `storeSlotReg` or `loadRegSlot` in
 the loop's hot blocks
 (`forhdr`, `each`, `__rc_ok`, `__im_load`, `trycont`, `forstep`); every one is inside `__im_slow` or
 `critsplit`. `reference` is the same loop without the call.
@@ -367,7 +367,7 @@ end 'main'
 One accumulator more — fourteen values live around the loop, plus the guard's transient bound load —
 and the hot working set is over the pool. The loop is not refused: its values cross the arm's run,
 so the overflow takes the forced bracket the arm's call would have forced when it confined, and the
-fragment pins that cost on the hot path — a store at the loop header and one in the body, with their
+emitted code (`--emit-ir`) shows that cost on the hot path — a store at the loop header and one in the body, with their
 reloads in `trycont` and `forstep` — beside the arm's own bracket. The answer is read back through
 every one of them.
 ```maxon

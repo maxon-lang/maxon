@@ -121,7 +121,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-struct-to-other-struct-errors.test:23:2: cannot assign a value of type 'Other' to variable 'p', which holds 'Point'
+error E3005: specs/assignment/error.retype-struct-to-other-struct-errors.maxon:23:2: cannot assign a value of type 'Other' to variable 'p', which holds 'Point'
 ```
 
 <!-- test: error.reassign-wrong-struct -->
@@ -154,7 +154,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.reassign-wrong-struct.test:22:2: cannot assign a value of type 'BoxB' to variable 'a', which holds 'BoxA'
+error E3005: specs/assignment/error.reassign-wrong-struct.maxon:22:2: cannot assign a value of type 'BoxB' to variable 'a', which holds 'BoxA'
 ```
 
 <!-- test: error.reassign-union-as-scalar -->
@@ -185,7 +185,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.reassign-union-as-scalar.test:18:2: cannot assign a value of type 'Holder' to variable 'n', which holds 'int'
+error E3005: specs/assignment/error.reassign-union-as-scalar.maxon:18:2: cannot assign a value of type 'Holder' to variable 'n', which holds 'int'
 ```
 
 <!-- test: error.wrong-enum-into-an-enum-field -->
@@ -221,7 +221,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.wrong-enum-into-an-enum-field.test:23:4: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
+error E3005: specs/assignment/error.wrong-enum-into-an-enum-field.maxon:23:4: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
 ```
 
 <!-- test: error.wrong-enum-in-a-struct-literal-field -->
@@ -254,7 +254,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.wrong-enum-in-a-struct-literal-field.test:17:15: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
+error E3005: specs/assignment/error.wrong-enum-in-a-struct-literal-field.maxon:17:15: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
 ```
 
 ### The type rule — rejections
@@ -275,7 +275,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-local-errors.test:7:2: cannot assign a value of type 'String' to variable 'x', which holds 'int'
+error E3005: specs/assignment/error.retype-local-errors.maxon:7:2: cannot assign a value of type 'String' to variable 'x', which holds 'int'
 ```
 
 <!-- test: error.retype-global-errors -->
@@ -296,7 +296,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-global-errors.test:8:2: cannot assign a value of type 'String' to global 'g', which holds 'int'
+error E3005: specs/assignment/error.retype-global-errors.maxon:8:2: cannot assign a value of type 'String' to global 'g', which holds 'int'
 ```
 
 <!-- test: error.retype-conditional-errors -->
@@ -318,7 +318,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-conditional-errors.test:9:3: cannot assign a value of type 'String' to variable 'z', which holds 'int'
+error E3005: specs/assignment/error.retype-conditional-errors.maxon:9:3: cannot assign a value of type 'String' to variable 'z', which holds 'int'
 ```
 
 <!-- test: error.retype-in-loop-errors -->
@@ -339,7 +339,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-in-loop-errors.test:9:3: cannot assign a value of type 'String' to variable 'acc', which holds 'int'
+error E3005: specs/assignment/error.retype-in-loop-errors.maxon:9:3: cannot assign a value of type 'String' to variable 'acc', which holds 'int'
 ```
 
 <!-- test: error.retype-struct-to-int-errors -->
@@ -367,7 +367,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-struct-to-int-errors.test:15:2: cannot assign a value of type 'struct' to variable 'n', which holds 'int'
+error E3005: specs/assignment/error.retype-struct-to-int-errors.maxon:15:2: cannot assign a value of type 'struct' to variable 'n', which holds 'int'
 ```
 
 <!-- test: error.retype-struct-field-errors -->
@@ -395,7 +395,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-struct-field-errors.test:15:4: cannot assign a value of type 'String' to field 'x' of 'Point', which holds 'int'
+error E3005: specs/assignment/error.retype-struct-field-errors.maxon:15:4: cannot assign a value of type 'String' to field 'x' of 'Point', which holds 'int'
 ```
 
 ### The type rule — what stays legal
@@ -609,7 +609,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-enum-to-other-enum-errors.test:15:2: cannot assign a value of type 'Shade' to variable 'c', which holds 'Color'
+error E3005: specs/assignment/error.retype-enum-to-other-enum-errors.maxon:15:2: cannot assign a value of type 'Shade' to variable 'c', which holds 'Color'
 ```
 
 <!-- test: error.retype-enum-field-errors -->
@@ -642,7 +642,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-enum-field-errors.test:23:4: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
+error E3005: specs/assignment/error.retype-enum-field-errors.maxon:23:4: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
 ```
 
 <!-- test: error.wrong-enum-in-struct-literal-field-errors -->
@@ -674,7 +674,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.wrong-enum-in-struct-literal-field-errors.test:17:15: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
+error E3005: specs/assignment/error.wrong-enum-in-struct-literal-field-errors.maxon:17:15: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
 ```
 
 <!-- test: assign-enum-to-same-enum -->

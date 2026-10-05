@@ -49,8 +49,8 @@ let RdataPayloadAlignment = 8 as BytePos
 let PadByte = 0 as Byte
 
 // The synthetic-label prefix a dense-`match` jump table's `.rdata` blob is minted under
-// (`registerJumpTable`). Distinct from the float/String prefixes so a jump table is recognisable in a
-// fragment golden and never collides with them.
+// (`registerJumpTable`). Distinct from the float/String prefixes so a jump table is recognisable in
+// the rendered Target IR and never collides with them.
 let JumpTableLabelPrefix = "__jumptable_"
 
 // ⭐⭐ **A FLOAT ISLAND IS NAMED BY ITS VALUE — `__fconst_-5.5`, not `__fconst_1`.** It is minted HERE,
@@ -60,15 +60,14 @@ let JumpTableLabelPrefix = "__jumptable_"
 //
 // ⭐ **WHY THE VALUE AND NOT A COUNTER.** A `{prefix}{nextStringId}` mint numbers off ONE counter shared by
 // every `.rdata` prefix, so the id a float island gets is a BUILD-ORDER ARTIFACT of everything registered
-// before it: measured, listing the first stdlib module containing literals moved **317 committed
-// fragments**, and an unreachable string-returning function appended to `utf16.maxon` renumbered a
+// before it: an unreachable string-returning function appended to `utf16.maxon` renumbered a
 // two-float program's islands though no user program mentioned a string. A content-derived label cannot
-// move for a reason outside its own value — and, the point of the change, a reader of a golden fragment
-// sees the NUMBER the program is about instead of an index into a table the fragment does not
+// move for a reason outside its own value — and a reader of the rendered Target IR
+// sees the NUMBER the program is about instead of an index into a table it does not
 // print — the label reads `__float_-5.5`.
 //
 // ⚠ The text is `NumberParsing.scalarConstantText`'s — the SAME renderer an E3005 range bound and a
-// `data {}` f64 slot go through, so a label, a diagnostic and a golden's data section cannot come to
+// `data {}` f64 slot go through, so a label, a diagnostic and the data section cannot come to
 // disagree about what `3.14` is. Rendering it here with a second `float.textFromBits` call would have been
 // the same one-fact-twice as the two isels' deleted prefix constants, one line after saying so.
 //
@@ -115,7 +114,7 @@ end 'floatConstantLabel'
 // in the TEXT BAND and anything else outside it, and say which you did — a kind in the wrong group has
 // its bytes rendered as characters. The match is exhaustive either way, so a new kind cannot compile until it has been placed.
 export enum RdataPayloadKind
-	// --- TEXT: bytes a reader can read, so a golden renders them beside the label ---
+	// --- TEXT: bytes a reader can read, so the printer renders them beside the label ---
 	// A String literal's payload — its bytes and a NUL. The pad to `RdataPayloadAlignment` is the
 	// table's, applied to every kind alike by `appendRdataPayload`.
 	stringBlob
@@ -133,7 +132,7 @@ export enum RdataPayloadKind
 
 	runtimeAbortMessage
 
-	// --- STRUCTURE: bytes only a decoder can read, so a golden shows the label alone ---
+	// --- STRUCTURE: bytes only a decoder can read, so the printer shows the label alone ---
 	// A float island: eight IEEE bytes. It needs no note — its LABEL is its value
 	// (`registerFloatConstant`).
 	floatConstant
@@ -143,8 +142,8 @@ export enum RdataPayloadKind
 
 	// A byte-string / const-array literal's blob (`registerByteArrayLiteralBlob`). ⚠ NOT text: a
 	// byte-string literal holding raw bytes and an `Array with int` literal both come through here, and
-	// rendering arbitrary bytes as characters would put an escape storm in a golden that says nothing
-	// about the case it is named after.
+	// rendering arbitrary bytes as characters would put an escape storm in rendered Target IR that
+	// says nothing about the case it is named after.
 	byteArrayBlob
 
 	// A dense-`match` jump table's i32 slots, zero at registration and patched by the writer.
@@ -705,7 +704,7 @@ export type GlobalDataTable
 	// over.** That door does not advance the shared counter — which is the whole point of a value-named
 	// label — and it does not join the BYTES-keyed dedup pool, which was actively producing a wrong reading:
 	// an 8-byte float payload that byte-equals a short NUL-padded String blob was handed the STRING’s label,
-	// so **625 float-load lines across 124 committed goldens named a `__str_blob_`**
+	// so **a float load named a `__str_blob_`**
 	// (`arm64.fpLoadRdata d0, [rdata + __str_blob_44]`). Dedup is not lost — it becomes label-keyed, which is
 	// STRONGER: equal values share an island because they share a NAME, and `requireIdenticalPayload` turns a
 	// label-space collision into a panic rather than a silently shared constant. (Sabotage-verified: a mint
@@ -730,7 +729,7 @@ export type GlobalDataTable
 	// twin of `registerRdataConstant`. A descriptor's label is STRUCTURAL
 	// (`__layout_Sizer_bool`, from the instance's base + argument names), so it must be the label
 	// verbatim — not a `{prefix}{nextStringId}` mint, whose numeric suffix is a build-order artifact the
-	// golden fragments and `verify-warm-rebuild` would see move. Idempotent by LABEL: a second call for
+	// rendered IR and `verify-warm-rebuild` would see move. Idempotent by LABEL: a second call for
 	// the same instance (a descriptor referenced at two call sites) returns without re-registering.
 	//
 	// ⚠ It deliberately does NOT participate in the bytes-keyed `valueDedup` pool: a descriptor and a

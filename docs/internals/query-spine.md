@@ -66,8 +66,11 @@ tokens, so the sweep and the real parse cannot drift apart. Files are partitione
 files, then standard-library files — and within each group the order is whatever the filesystem returned.
 
 The loader does not sort files, deliberately. Sorting would not remove an order dependence, only hide it
-reliably. Where an order genuinely matters, as in the order functions are emitted, it is made canonical at
-the point of emission.
+reliably. Where an order genuinely matters it is made canonical where it is decided: the merge folds the
+files in `Queries.sourceFilesInEmissionOrder`, keyed on each file's tier (author, then standard library,
+then runtime) and its path relative to that tier's namespace anchor, compared component by component, so
+one program compiles to the same bytes on every host. An author file outside the project root keys by its
+resolved path.
 
 ## Whole-program queries under per-file ones
 
@@ -87,11 +90,17 @@ setup do mutate it, so `invalidateAllModuleCache` discards it as each compile ta
 and every expensive memo underneath survives. Parse artifacts are also rewritten on their first merge, which
 is safe only within one `Project`.
 
-Across `Project`s, only facts that are a pure function of a file's bytes are shared: the standard
-library's tokens, `#if` views and producer masks, keyed by content hash, in the store a
-`CompileSession` carries (`CompileSession.fileMemos`) — one per spec worker process, one for the
-language server's document projects, one per MCP session. Parse artifacts and swept declarations carry
-interned ids and are mutated, so they stay with their `Project`. A compile's state lives on its
+Across `Project`s, the store a `CompileSession` carries (`CompileSession.fileMemos`) — one per spec worker
+process, one for the language server's document projects, one per MCP session — holds the library's tokens,
+`#if` views and producer masks, keyed by content hash, and each library file's parse. A parse embeds
+index-numbered facts the asking program's own declarations shift (type-name ids, generic-instance ids, the
+interface indexes witness dispatches carry), so a held parse records a footprint of them, taken while its
+names are still file-local, and a hit is rebased onto the current program; a row or a told answer that moved
+is a miss. Its key is a signature hash over the library alone, since the whole-program hash moves with every
+user declaration. A held parse is deep-cloned at the stash and at every hit, because the merge renumbers an
+artifact in place. A program that shadows a library name, declares one the library means, or is rooted
+inside `stdlib/` parses the library cold. Swept declarations stay with their `Project`. A compile's state
+lives on its
 `Project` and its `CompileSession`, which lets the language server run project checks in services of
 their own beside its main loop; each store serves one compile at a time.
 
@@ -102,8 +111,12 @@ files that missed their memo on it. `MAXON_MAX_PROCS=1` gives a pool of one work
 
 - A worker parses against a private copy of the settled signature index; a write a parse has not declared
   panics.
-- Results land in source-path order on the compiling thread, never in arrival order, so the output does not
-  depend on the pool. `mergeArtifact` is the only writer of the shared `Project`.
+- Results are merged in emission order on the compiling thread, so the output is the same whatever order
+  the workers finish in. `mergeArtifact` is the only writer of the shared `Project`.
+- Every pool hands each worker a fixed share of the jobs (worker `w` takes dispatch positions `w`,
+  `w + workers`, …) and splices replies in dispatch order, because a worker's own scratch and the arrays a
+  splice grows would otherwise make a compile's allocation totals depend on which worker finished first.
+  Worker handles are released only after the compile's measurement closes.
 
 ## Verification
 
@@ -111,7 +124,8 @@ Two gates exercise the spine the spec suite cannot:
 
 - **`verify-warm-rebuild`** checks that two cold compiles are byte-identical; that re-asking every query on
   an unchanged `Project` hits every memo; that each kind of edit invalidates exactly the memos it should;
-  and that a warm compile after an edit equals a cold one.
+  that a warm compile after an edit equals a cold one; and that later programs in one session are served
+  every library parse and still equal a cold compile of each.
 - **`verify-recheck`** runs the whole pipeline repeatedly on one `Project`, as an editor does: the diagnostic
   count must be stable, an error that is fixed must stop being reported, and two live `Project`s checked in
   turn must not affect each other.

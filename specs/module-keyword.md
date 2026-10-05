@@ -71,7 +71,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/module-keyword/error.module-and-export-conflict.test:4:8: 'export' and 'module' cannot be combined
+error E2001: specs/module-keyword/error.module-and-export-conflict.maxon:4:8: 'export' and 'module' cannot be combined
 ```
 
 <!-- test: module-function-same-file -->
@@ -143,7 +143,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: dir_b/specs/fragments/module-keyword/error.module-function-different-directory.test:11:9: function 'helper' is module-scoped and not visible from this directory
+error E3088: dir_b/specs/module-keyword/error.module-function-different-directory.maxon:11:9: function 'helper' is module-scoped and not visible from this directory
 ```
 
 <!-- test: error.module-function-parent-directory -->
@@ -161,7 +161,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: specs/fragments/module-keyword/error.module-function-parent-directory.test:11:9: function 'helper' is module-scoped and not visible from this directory
+error E3088: specs/module-keyword/error.module-function-parent-directory.maxon:11:9: function 'helper' is module-scoped and not visible from this directory
 ```
 
 <!-- test: module-type-same-directory -->
@@ -315,5 +315,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: other/specs/fragments/module-keyword/error.module-let-different-directory.test:6:14: Undefined constant 'LIMIT'
+error E2004: other/specs/module-keyword/error.module-let-different-directory.maxon:6:14: Undefined constant 'LIMIT'
 ```

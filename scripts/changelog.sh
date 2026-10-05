@@ -5,7 +5,7 @@
 # ⭐⭐ **`CHANGELOG.md` IS WRITTEN BY HAND, AND THIS SCRIPT DOES NOT WRITE IT.** A changelog is for
 # people installing a compiler, and a commit subject is written for people changing one. MEASURED on
 # `v0.1.0..HEAD`: 21 commits, of which about six mean anything to a reader — the rest are CI, spec
-# goldens, docs and release tooling. Generating the entry and then correcting it would have meant
+# pins, docs and release tooling. Generating the entry and then correcting it would have meant
 # rewriting seventeen of twenty-one lines, which is hand-writing with extra ceremony.
 #
 # ⭐ **WHAT THIS EXISTS FOR IS THAT ONE FILE FEEDS THE SITE.** The maxon.dev post and the site's

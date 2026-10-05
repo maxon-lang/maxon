@@ -120,7 +120,6 @@ end 'loop'
 ## Tests
 
 <!-- test: create-zero-initialized -->
-What pins the emitted code here is this case's minted fragment golden.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -148,7 +147,6 @@ end 'main'
 ```
 
 <!-- test: set-and-get -->
-What pins the emitted code here is this case's minted fragment golden.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int

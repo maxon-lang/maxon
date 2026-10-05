@@ -36,6 +36,8 @@ typealias FrontEndReplyPromise = Promise with (FrontEndReply, ServiceError)
 typealias FrontEndReplyPromiseArray = Array with FrontEndReplyPromise
 typealias FrontEndWorkerHandleArray = Array with FrontEndWorker.handle
 
+export typealias FrontEndRetirees = WorkerRetirees with FrontEndWorker.handle
+
 // At most one: the worker state an in-process front end works with.
 typealias FrontEndWorkerStateArray = Array with FrontEndWorkerState
 
@@ -371,11 +373,8 @@ module type FrontEndPool
 		return artifacts
 	end 'parseEveryFile'
 
-	// Fold every worker's costs into the stages' rows, report the pool once, and release the workers.
-	//
-	// ⛔ **EVERY HANDLE GOES BEFORE THE FRONT END ENDS.** Dropping the last handle to a service closes its
-	// mailbox, which is what lets the worker's green thread finish; a handle still held at process exit is a
-	// service that never ends and an exit that never comes.
+	// Fold every worker's costs into the stages' rows, report the pool once, and retire the workers to
+	// `project.retiredWorkers` (see `RetiredWorkers`).
 	module function close(project Project)
 		if self.workers.count() == 0 and self.inProcess.count() == 0 'nothingRan'
 			return
@@ -414,7 +413,8 @@ module type FrontEndPool
 			self.foldCosts(project, costs: worker.costs)
 		end 'ranInProcess'
 
-		self.workers.clear()
+		project.retiredWorkers.frontEnd.keep(self.workers)
+		self.workers = FrontEndWorkerHandleArray.create()
 		self.inProcess.clear()
 		self.baseline.clear()
 		self.adopted.clear()
@@ -566,7 +566,7 @@ module type FrontEndPool
 			let answer = try await reply otherwise panic("{workerGoneMessage("FrontEndPool.drain", subject: "the worker handed file {fileIndex}")}")
 			landOutcome(answer.outcome, fileIndex: fileIndex, outcomes: outcomes, slots: slots)
 
-			if dispatch.hasUndispatched() 'handTheFreedWorkerTheNextJob'
+			if dispatch.hasUndispatchedFor(freedWorker) 'handTheFreedWorkerTheNextJob'
 				try requireStillWanted(project)
 				self.dispatchJob(input, files: files, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
 			end 'handTheFreedWorkerTheNextJob'
@@ -699,6 +699,6 @@ end 'landParses'
 function landedArtifact(project Project, query ParseQuery, fileIndex ElementIndex, outcomes FrontEndOutcomeArray, slots LandingSlots) returns FileParseArtifact
 	return match query 'query'
 		memoized(artifact) gives artifact
-		needed(_, _, _, keyHash) gives landParseOutcome(project, path: sourcePathAt(project, fileIndex: fileIndex), outcome: parseOutcomeOf(landedOutcome(outcomes, slots: slots, fileIndex: fileIndex)), keyHash: keyHash)
+		needed(_, _, _, stamp) gives landParseOutcome(project, path: sourcePathAt(project, fileIndex: fileIndex), outcome: parseOutcomeOf(landedOutcome(outcomes, slots: slots, fileIndex: fileIndex)), stamp: stamp)
 	end 'query'
 end 'landedArtifact'

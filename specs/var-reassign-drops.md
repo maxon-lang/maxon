@@ -36,7 +36,7 @@ read-only rdata), and a borrowed-to-owned one (`var s = ""; s = build(1)`) puts 
 
 `build(1)` and `build(2)` are each dropped at the reassignment that overwrites them; only
 `build(3)` reaches scope exit. The exit code balances either way (the bump allocator reclaims
-nothing), but the golden pins the three decrefs that make it a clean single-free of each.
+nothing), but the emitted code shows the three decrefs that make it a clean single-free of each.
 
 <!-- test: straight-line -->
 ```maxon

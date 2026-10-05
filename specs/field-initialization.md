@@ -171,7 +171,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/field-initialization/string-literal-field-default-errors.test:4:20: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.
+error E2004: specs/field-initialization/string-literal-field-default-errors.maxon:4:20: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.
 ```
 
 ### Error: a field declared at a TYPE PARAMETER may not carry a default, of either form
@@ -210,7 +210,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/field-initialization/type-parameter-field-expression-default-errors.test:6:24: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
+error E2015: specs/field-initialization/type-parameter-field-expression-default-errors.maxon:6:24: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
 ```
 
 The LITERAL form is the identical fault and pre-dates expression defaults entirely, so the rule is stated
@@ -235,7 +235,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/field-initialization/type-parameter-field-literal-default-errors.test:5:24: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
+error E2015: specs/field-initialization/type-parameter-field-literal-default-errors.maxon:5:24: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
 ```
 
 <!-- test: empty-literal-no-defaults-errors -->
@@ -258,7 +258,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3086: specs/fragments/field-initialization/empty-literal-no-defaults-errors.test:10:14: Fields 'x', 'y' of type 'P' are not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
+error E3086: specs/field-initialization/empty-literal-no-defaults-errors.maxon:10:14: Fields 'x', 'y' of type 'P' are not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
 ```
 
 <!-- test: missing-field-errors -->
@@ -281,7 +281,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3086: specs/fragments/field-initialization/missing-field-errors.test:10:14: Field 'y' of type 'P' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
+error E3086: specs/field-initialization/missing-field-errors.maxon:10:14: Field 'y' of type 'P' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
 ```
 
 <!-- test: missing-non-exported-errors -->
@@ -304,7 +304,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3086: specs/fragments/field-initialization/missing-non-exported-errors.test:10:14: Field 'hidden' of type 'Q' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
+error E3086: specs/field-initialization/missing-non-exported-errors.maxon:10:14: Field 'hidden' of type 'Q' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)
 ```
 
 <!-- test: factory-self-assign-straight-line -->
@@ -381,7 +381,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3086: specs/fragments/field-initialization/factory-self-assign-one-branch-errors.test:12:14: field 'value' of type 'Broken' is not definitely assigned: the 'self.value = ...' assignment does not reach this Self{...} literal on all control-flow paths
+error E3086: specs/field-initialization/factory-self-assign-one-branch-errors.maxon:12:14: field 'value' of type 'Broken' is not definitely assigned: the 'self.value = ...' assignment does not reach this Self{...} literal on all control-flow paths
 ```
 
 <!-- test: factory-self-assign-loop-only-errors -->
@@ -408,7 +408,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3086: specs/fragments/field-initialization/factory-self-assign-loop-only-errors.test:14:14: field 'value' of type 'LoopOnly' is not definitely assigned: the 'self.value = ...' assignment does not reach this Self{...} literal on all control-flow paths
+error E3086: specs/field-initialization/factory-self-assign-loop-only-errors.maxon:14:14: field 'value' of type 'LoopOnly' is not definitely assigned: the 'self.value = ...' assignment does not reach this Self{...} literal on all control-flow paths
 ```
 
 <!-- test: factory-multiple-returns -->

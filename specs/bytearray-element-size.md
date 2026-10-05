@@ -292,7 +292,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/bytearray-element-size/byte-string-literal-refused-when-byte-is-wider-than-one-byte.test:8:14: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 2-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 2 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
+error E2015: specs/bytearray-element-size/byte-string-literal-refused-when-byte-is-wider-than-one-byte.maxon:8:14: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 2-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 2 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
 ```
 
 <!-- test: byte-string-global-refused-when-byte-is-wider-than-one-byte -->
@@ -314,7 +314,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/bytearray-element-size/byte-string-global-refused-when-byte-is-wider-than-one-byte.test:5:14: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 8-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 8 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
+error E2015: specs/bytearray-element-size/byte-string-global-refused-when-byte-is-wider-than-one-byte.maxon:5:14: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 8-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 8 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
 ```
 
 <!-- test: byte-string-key-of-a-top-level-map-is-refused-when-byte-is-wider-than-one-byte -->
@@ -401,7 +401,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/byte-string-literal-refused-when-a-byte-is-outside-the-elements-range.test:10:15: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
+error E3005: specs/bytearray-element-size/byte-string-literal-refused-when-a-byte-is-outside-the-elements-range.maxon:10:15: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
 ```
 
 <!-- test: byte-string-literal-checks-every-byte-not-only-the-first -->
@@ -421,7 +421,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/byte-string-literal-checks-every-byte-not-only-the-first.test:10:15: byte 223 at offset 1 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
+error E3005: specs/bytearray-element-size/byte-string-literal-checks-every-byte-not-only-the-first.maxon:10:15: byte 223 at offset 1 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
 ```
 
 <!-- test: byte-string-literal-accepted-at-the-elements-exact-maximum -->
@@ -458,7 +458,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/byte-string-literal-refused-one-past-the-elements-maximum.test:10:15: byte 101 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
+error E3005: specs/bytearray-element-size/byte-string-literal-refused-one-past-the-elements-maximum.maxon:10:15: byte 101 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
 ```
 
 <!-- test: byte-string-literal-of-in-range-bytes-still-compiles -->
@@ -520,7 +520,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/byte-string-global-refused-when-a-byte-is-outside-the-elements-range.test:5:14: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
+error E3005: specs/bytearray-element-size/byte-string-global-refused-when-a-byte-is-outside-the-elements-range.maxon:5:14: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
 ```
 
 <!-- test: readers-own-byte-decides-which-literal-bytes-fit -->
@@ -646,7 +646,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/byte-packed-alias-is-not-interchangeable-with-byte.test:14:9: argument type mismatch for 'b': expected 'Bytes', got 'Smalls'
+error E3005: specs/bytearray-element-size/byte-packed-alias-is-not-interchangeable-with-byte.maxon:14:9: argument type mismatch for 'b': expected 'Bytes', got 'Smalls'
 ```
 
 ### ⚠ A `Byte` TWO FILES DISAGREE ABOUT IS TWO ELEMENT TYPES, NOT ONE WIDE ONE
@@ -802,7 +802,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/a-byte-two-files-disagree-about-is-two-types.test:12:9: argument type mismatch for 'b': expected 'Bytes', got 'ByteArray'
+error E3005: specs/bytearray-element-size/a-byte-two-files-disagree-about-is-two-types.maxon:12:9: argument type mismatch for 'b': expected 'Bytes', got 'ByteArray'
 ```
 
 <!-- test: an-agreeing-byte-keeps-the-bare-element-name -->
@@ -820,7 +820,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/bytearray-element-size/an-agreeing-byte-keeps-the-bare-element-name.test:10:9: argument type mismatch for 'b': expected 'Bytes', got 'int'
+error E3005: specs/bytearray-element-size/an-agreeing-byte-keeps-the-bare-element-name.maxon:10:9: argument type mismatch for 'b': expected 'Bytes', got 'int'
 ```
 
 ### ⚠ WHEN ONE NAME IS TWO TYPES, THE BARE NAME IS NOT AN ANSWER — IT IS THE ABSENCE OF ONE

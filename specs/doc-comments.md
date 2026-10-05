@@ -52,7 +52,7 @@ become the last top-level statement — nothing would be diagnosed, the exit edg
 being elided.
 
 ⚠ **`tail` is CALLED with a RUNTIME value, and neither half is incidental.** Uncalled, dead-code
-elimination drops the function before it is emitted and the golden records only `@main`. Called with
+elimination drops the function before it is emitted and the emitted code holds only `@main`. Called with
 a literal, the call inlines, the branch folds and the panic path vanishes. Either way the case would
 pass while exercising nothing: a case that cannot reach its own subject reads exactly like one that
 checked it.
@@ -61,8 +61,8 @@ checked it.
 BYTE-IDENTICAL whether the line after the `panic` is a `///` doc comment, an ordinary `//` comment,
 or nothing at all. That is the actual property: the doc comment costs no
 codegen. The exit code alone could not have shown it, because the failure this guards against is
-silent — an exit edge the emitter stops eliding, with no diagnostic anywhere. The golden below is
-what would move.
+silent — an exit edge the emitter stops eliding, with no diagnostic anywhere. The emitted IR for `tail` (`--emit-ir`) is
+what would change.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -99,7 +99,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/doc-comments/doc-comments.not-an-array-element.test:3:11: Unsupported: an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array
+error E2015: specs/doc-comments/doc-comments.not-an-array-element.maxon:3:11: Unsupported: an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array
 ```
 
 <!-- test: doc-comments.not-a-block-body -->
@@ -114,7 +114,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3082: specs/fragments/doc-comments/doc-comments.not-a-block-body.test:5:2: empty block: 'ok'
+error E3082: specs/doc-comments/doc-comments.not-a-block-body.maxon:5:2: empty block: 'ok'
 ```
 
 <!-- test: doc-comments.never-a-name -->
@@ -130,7 +130,7 @@ main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/doc-comments/doc-comments.never-a-name.test:2:10: Expected identifier but got 'a doc comment where a name belongs'
+error E2010: specs/doc-comments/doc-comments.never-a-name.maxon:2:10: Expected identifier but got 'a doc comment where a name belongs'
 ```
 
 <!-- test: doc-comments.between-declarations -->

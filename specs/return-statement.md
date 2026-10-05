@@ -50,8 +50,8 @@ end 'main'
 <!-- test: conditional-return -->
 A function with two exits must have BOTH of them executed. Written as `let x = 5; if x > 3 then
 return 1; return 0`, the condition is a constant the run always takes, so the tail `return 0` is
-compiled and never entered — its return lowering (the R8 move, the epilogue) is checked by the
-golden but never by an actual execution. Putting the branch in a helper and calling it on both
+compiled and never entered — its return lowering (the R8 move, the epilogue) is emitted
+but never checked by an actual execution. Putting the branch in a helper and calling it on both
 sides of the condition makes each exit an executed path, and each is checked alone so neither can
 mask the other.
 ```maxon

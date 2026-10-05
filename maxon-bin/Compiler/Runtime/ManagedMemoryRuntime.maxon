@@ -111,8 +111,8 @@ export let NoBufferAllocated = 0 as ParsedInt
 export let ByteStringElementSize = 1 as ParsedInt
 
 // The `.rdata` label prefix a byte-string literal's blob registers under. `__`-prefixed so it never
-// collides with a user name and stays out of the spec goldens (`isRuntimeFunction`'s data twin), and
-// distinct from `__str_blob_` so a reader of the section can tell the two apart.
+// collides with a user name and stays out of the rendered Target IR (`isRuntimeFunction`'s data
+// twin), and distinct from `__str_blob_` so a reader of the section can tell the two apart.
 let ByteArrayBlobPrefix = "__barr_blob_"
 
 // Register a byte-string literal's payload as an immortal `.rdata` blob and return its label. The bytes
@@ -827,10 +827,11 @@ end 'isOpaqueElementCopyCallee'
 // drops ONE consumed opaque type-parameter binding whose element destructor is not known statically: the
 // shared generic body owns the value (a `push`/forward feed parameter left live on some path), but the
 // destructor lives in the enclosing instance's layout descriptor. NOT `__managed_`-prefixed (it is a single value,
-// not an array operation), but `__`-prefixed so `isCompilerInternalCallee` routes its call and the golden skip
-// (`isRuntimeFunction`) hides its body. Installed under its OWN `usesDropTypeParam` bit (`installDropTypeParamRuntime`),
-// NOT `usesManagedMemory`: a bare opaque `T` FIELD reassignment emits it in an ARRAY-FREE generic struct,
-// so gating its install on the array floor would leave that call unlinked. An opaque-array program sets the bit too
+// not an array operation), but `__`-prefixed so `isCompilerInternalCallee` routes its call and the
+// print skip (`isRuntimeFunction`) hides its body. Installed under its OWN `usesDropTypeParam` bit
+// (`installDropTypeParamRuntime`), NOT `usesManagedMemory`: a bare opaque `T` FIELD reassignment
+// emits it in an ARRAY-FREE generic struct, so gating its install on the array floor would leave
+// that call unlinked. An opaque-array program sets the bit too
 // (its move-out / feed drops route through it), so ONE install covers both, exactly once.
 export let DropTypeParamName = b"__drop_type_param"
 
@@ -1149,8 +1150,8 @@ export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArra
 end 'arrayAccessorSourceMethodName'
 
 // Install the managed-memory runtime into the lowered Std module — ALL of it, when the program touches the buffer at all.
-// Golden-neutral: `__`-prefixed functions are excluded from the spec goldens (`isRuntimeFunction`), so an
-// all-or-nothing install costs nothing in the fragments and needs no per-helper dependency tracking; the
+// `__`-prefixed functions are excluded from the rendered Target IR (`isRuntimeFunction`), so an
+// all-or-nothing install costs nothing there and needs no per-helper dependency tracking; the
 // helpers call each other (`push`→`grow`→`grown_cap`→`__mm_alloc`) so a dependency graph would only re-
 // derive the closure this install already is. Appended AFTER the pipeline (like `installMmRuntime`); what
 // runs over that appended band is stated once, in `Compiler.compileToCodeResult`'s install block.
@@ -1256,7 +1257,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 
 	// The `__ManagedMemory` members with a runtime of their own — part of the all-or-nothing
 	// `usesManagedMemory` install for the reason the header gives: `__`-prefixed functions are
-	// excluded from the goldens, so an unreferenced one costs nothing a fragment can see, and these
+	// excluded from the rendered Target IR, so an unreferenced one costs nothing it shows, and these
 	// call `__managed_create`/`__managed_reserve`/`__managed_cow_detach` anyway.
 	buildManagedMemCreate(module)
 	buildManagedSetLength(module)
@@ -4448,8 +4449,8 @@ end 'buildArrayEquals'
 // net a refcount. The null-guard skips a MOVED-OUT slot (a `pop`/`remove` nulls the slot it hands out) and a
 // never-written `[length, capacity)` slot the walk never reaches (it strides only `[0, length)`, and the
 // capacity-slot invariant keeps those zero anyway). A TRIVIAL-element array has `element_destroy@40 == 0` and
-// takes the direct buffer free unchanged (no golden moves — the array helpers are `__`-prefixed, out of the
-// spec fragments, so this whole restructuring is invisible to them).
+// takes the direct buffer free unchanged (the array helpers are `__`-prefixed, out of the
+// rendered Target IR, so this whole restructuring is invisible there).
 //
 // ⭐ **THE BUFFER IS RELEASED THROUGH THE SENTINEL LADDER, NOT FREED DIRECTLY.**
 // `emitOwedAllocationBase` answers which allocation — if any — this record owes a `__mm_decref` to, and
@@ -5595,8 +5596,8 @@ export type ElementRangeLoop
 end 'ElementRangeLoop'
 
 // The four skeleton block names one action's loop wears (the caller names its own `visit`). They exist for an
-// IR dump and nothing else: a `__`-prefixed runtime body is not printed into a spec golden, so a program that
-// both clones and moves is where the two name sets earn their keep.
+// IR dump and nothing else: a `__`-prefixed runtime body is withheld from the rendered Target IR,
+// so a program that both clones and moves is where the two name sets earn their keep.
 export type ElementRangeLabels
 	export let header as ByteArray
 	export let body as ByteArray

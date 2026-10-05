@@ -1516,9 +1516,9 @@ end 'main'
 
 A constant that happens to be `>= 0` **fits** an unsigned rendering and does not **ask** for one —
 the same distinction that keeps `7 / 2` a signed divide. Both renderings agree on every value a
-non-negative constant can hold, so this case's stdout cannot tell them apart and its committed
-fragment is what records which converter was emitted. It is here so that a future widening of the
-rule from "declares it" to "fits it" moves a golden that somebody has to explain.
+non-negative constant can hold, so this case's stdout cannot tell them apart and its emitted
+code is what shows which converter was emitted. It is here so that a widening of the
+rule from "declares it" to "fits it" shows in that emitted code.
 
 <!-- test: folded-non-negative-constant-renders-signed -->
 ```maxon
@@ -1672,7 +1672,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E1006: specs/fragments/string-interpolation/error.unescaped-brace.test:3:19: Unescaped '{' in string literal — use '\{' for a literal brace
+error E1006: specs/string-interpolation/error.unescaped-brace.maxon:3:19: Unescaped '{' in string literal — use '\{' for a literal brace
 ```
 
 ### Error: An unclosed format specifier stops at the line, and does not eat the next statement
@@ -1720,7 +1720,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/string-interpolation/error.plus-on-string.test:5:12: operator '+' is not defined for type 'String'
+error E3005: specs/string-interpolation/error.plus-on-string.maxon:5:12: operator '+' is not defined for type 'String'
 ```
 
 ### Interpolation temporary is dropped per loop iteration

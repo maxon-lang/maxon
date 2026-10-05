@@ -177,7 +177,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/interface-conformance/conformance-missing-method.test:10:6: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
+error E3016: specs/interface-conformance/conformance-missing-method.maxon:10:6: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
   - increment() returns void
 ```
 
@@ -202,7 +202,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/interface-conformance/conformance-wrong-param-type.test:10:6: Partial interface implementation: type 'BadProcessor' has 1 method(s) with wrong signature:
+error E3016: specs/interface-conformance/conformance-wrong-param-type.maxon:10:6: Partial interface implementation: type 'BadProcessor' has 1 method(s) with wrong signature:
   - process(value Float) returns Integer (expected process(value Integer) returns Integer)
 ```
 
@@ -227,7 +227,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/interface-conformance/conformance-wrong-return-type.test:10:6: Partial interface implementation: type 'BadProvider' has 1 method(s) with wrong signature:
+error E3016: specs/interface-conformance/conformance-wrong-return-type.maxon:10:6: Partial interface implementation: type 'BadProvider' has 1 method(s) with wrong signature:
   - provide() returns Float (expected provide() returns Integer)
 ```
 
@@ -567,7 +567,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/interface-conformance/non-interface-method-on-conforming-type-still-errors.test:16:18: unused variable: 'unused'
+error E3012: specs/interface-conformance/non-interface-method-on-conforming-type-still-errors.maxon:16:18: unused variable: 'unused'
 ```
 
 
@@ -599,7 +599,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/interface-conformance/interface-method-local-var-still-errors.test:13:7: unused variable: 'unusedLocal'
+error E3012: specs/interface-conformance/interface-method-local-var-still-errors.maxon:13:7: unused variable: 'unusedLocal'
 ```
 
 <!-- test: interface-method-loop-variable-still-errors -->
@@ -636,7 +636,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/interface-conformance/interface-method-loop-variable-still-errors.test:14:7: unused variable: 'i'
+error E3012: specs/interface-conformance/interface-method-loop-variable-still-errors.maxon:14:7: unused variable: 'i'
 ```
 
 <!-- test: interface-impl-ignore-param-name -->
@@ -1159,9 +1159,8 @@ value the two overloads disagree about: the requirement's `label()` answers **42
 
 ⚠ **It is the reason this case exists:** with `ensureWitnessTable` minting the bare name while
 conformance accepts the mangled member, the rest of this suite stays green while this program returns
-**7**, silently. Two other cases catch that as well, one of them differently: the
-two-interface case below answers 7 where 40 is correct, and the overloaded-STATIC case — which has no
-runtime observation at all — moves its golden fragment.
+**7**, silently. The two-interface case below catches that as well, answering 7 where 40 is correct;
+the overloaded-STATIC case — which has no runtime observation at all — shows it only in its emitted code.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -1275,11 +1274,11 @@ required `static tag()` registers as `Point.tag#`, and it still satisfies the re
 
 ⚠ **A STATIC SLOT HAS NO *RUNTIME* CONTROL — the compiler has no syntax for calling a static through a constrained
 type parameter, so the slot is stamped and never read, and a wrong symbol in it cannot change an exit code.
-ITS GUARD IS THE GOLDEN FRAGMENT, and that guard is real.** The `tag` slot's relocation is also
+ITS EVIDENCE IS THE EMITTED CODE.** The `tag` slot's relocation is also
 what DCE-roots the member it names (`DeadFunctionElimination` roots every function a `pendingRdataReloc`
-targets), so the committed fragment below emits `func @Point.tag#` — the selected 0-argument member — and
-emits it *because* the slot named it. An `ensureWitnessTable` minting the bare join would redden this case as
-a golden mismatch: the reloc would name `Point.tag`, that member would be rooted instead, and `Point.tag#`
+targets), so the program below emits `func @Point.tag#` — the selected 0-argument member — and
+emits it *because* the slot named it. An `ensureWitnessTable` minting the bare join would change that:
+the reloc would name `Point.tag`, that member would be rooted instead, and `Point.tag#`
 pruned. The table IS built here (`PointBox`), so the same relocation additionally has to name a symbol the
 linker can resolve — one that does not fails in `bakeFuncAbs64Relocs`.
 ```maxon

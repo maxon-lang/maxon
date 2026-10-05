@@ -487,7 +487,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3062: specs/fragments/arrays/error.unused-array-typealias.test:3:11: unused typealias: 'IntArray'
+error E3062: specs/arrays/error.unused-array-typealias.maxon:3:11: unused typealias: 'IntArray'
 ```
 
 ### A generic-instance typealias is unreachable from another file unless it is exported
@@ -1998,7 +1998,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/arrays/multi-line-literal-empty-still-rejected.test:3:10: Unsupported: an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array
+error E2015: specs/arrays/multi-line-literal-empty-still-rejected.maxon:3:10: Unsupported: an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array
 ```
 
 ### An `as`-cast element fixes the literal's element type
