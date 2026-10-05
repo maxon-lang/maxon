@@ -440,6 +440,14 @@ the branch, because the tag is exactly what shipped.
 offer this one's changes again as new. If `main` has moved since the branch was cut, build the merge and
 run the suite before pushing it — it combines runtime work nobody has tested together.
 
+### 6. Retire the seed shims the release made dead
+
+Once the merge is pushed, fetch the new seed (`scripts/fetch-seed.sh`) and build `main` from it with every
+`scripts/seed-shim/*.patch` removed — `scripts/build-from-seed.sh` in a throwaway clone at a short path. If
+it builds, the release accepts everything the patches withdraw: delete them all in one commit on `main`. If
+it is refused, a shim withdraws something the release still does not accept — find out why before the next
+release, because that patch is the only thing keeping CI's first build alive.
+
 **For v0.1.0**, the same steps ran by hand: package each target on hardware of its own architecture,
 collect the archives into one `dist/`, then `--publish`.
 

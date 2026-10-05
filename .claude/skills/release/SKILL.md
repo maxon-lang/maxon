@@ -205,6 +205,14 @@ merge keeps the tag an ancestor of `main`; rebased copies would reappear in the 
 **Then refresh the local seed:** `scripts/fetch-seed.sh`. From here on `main` may call a `__Builtins`
 intrinsic this release introduced, which CI's seed already has and a stale `.bootstrap/` does not.
 
+## 7 · Retire the seed shims the release made dead
+
+With the new seed in `.bootstrap/`, run `scripts/build-from-seed.sh` in a throwaway clone of `main` at a
+short path with every `scripts/seed-shim/*.patch` deleted. Exit 0 ⇒ delete the patches in one commit on
+`main` (`scripts/seed-shim/README.md`: a patch is dead once a release accepts what it withdraws, and a dead
+one stops applying and hides the next genuine refusal). A refusal ⇒ a shim still withdraws something the
+release does not accept — tell the user; do not delete that patch.
+
 ## What this skill may not do
 
 - **Never create credentials, accounts or tokens**, and never ask the user to paste a secret. Secrets
