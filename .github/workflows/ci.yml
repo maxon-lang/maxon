@@ -11,9 +11,10 @@
 # ⭐ A COMMIT THAT TOUCHES NOTHING THIS WORKFLOW READS DOES NOT RUN IT. The build reads `maxon-bin/`,
 # `stdlib/`, `runtime/`, `vendor/`, `project.maxon` and the scripts re-included below; the jobs read
 # `specs/` and the `tests/` corpora they run. Everything excluded below is read by none of them — prose,
-# editor and agent config, and projects with workflows of their own. `tests/`, `examples/` and `scripts/`
+# editor and agent config, and projects with workflows of their own. `tests/` and `scripts/`
 # are excluded because no job here runs the rest of them, so a run on their change reports on code it
-# never touched; the corpora and scripts a job does run are re-included. A step that starts running
+# never touched; the corpora and scripts a job does run are re-included, and so are the website pages
+# whose snippets `tests/examples` compiles. A step that starts running
 # another script needs that script re-included here.
 #
 # ⛔ THE LIST IS EXCLUSIONS, AND A RE-INCLUSION IS WRITTEN ONLY FOR A PATH A JOB READS. A new
@@ -58,7 +59,7 @@ on:
       - 'tests/mcp/**'
       - 'tests/cli/**'
       - 'tests/build-manifest/**'
-      - '!examples/**'
+      - 'tests/examples/**'
       - '!scripts/**'
       - 'scripts/fetch-seed.sh'
       - 'scripts/build-from-seed.sh'
@@ -69,6 +70,10 @@ on:
       - 'scripts/seed-shim/**'
       - '!.github/**'
       - '.github/workflows/ci.yml'
+      - 'README.md'
+      - 'website/src/pages/index.astro'
+      - 'website/src/content/docs/docs/getting-started/first-program.md'
+      - 'website/src/content/docs/docs/getting-started/introduction.md'
   pull_request:
     paths: *ci-inputs
   workflow_dispatch:
@@ -170,6 +175,10 @@ jobs:
       - name: Ladder index
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/ladders
+
+      - name: Examples corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/examples
 
       - name: Build manifest corpus
         if: steps.seed.outputs.seeded == 'yes'

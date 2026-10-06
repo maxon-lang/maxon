@@ -279,7 +279,7 @@ facts worth knowing before you get there:
   ```
   ./maxon-bin/.maxon/maxon.exe test tests/test-command
   ```
-  ⚠ **CI runs six of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/spec-harness`, `tests/ladders`, `tests/build-manifest` and
+  ⚠ **CI runs seven of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/spec-harness`, `tests/ladders`, `tests/examples`, `tests/build-manifest` and
   `tests/cli` — plus `tests/debug`,
   `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `/land`'s battery runs `fmt`, `spec-harness`,
   `ladders` and `examples` beside the suite and the self-compile. Every other corpus runs only when someone names it.
